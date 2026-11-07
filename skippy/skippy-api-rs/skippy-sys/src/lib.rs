@@ -305,11 +305,11 @@ pub mod ffi {
             host_end: i32,
         ) -> StagedModelResult;
 
-        /// Opens stage `index` of `stages` with `rollback` planned rollback
-        /// snapshots per sequence for speculative verify (patch 0015); the
-        /// value is clamped into the loader's [2, 64] window, and 0 keeps
-        /// the native default (2).
-        fn load_staged_model_rollback(
+        /// Opens stage `index` of `stages` stating how far a verify window
+        /// may rewind recurrent state in place (patch 0015). `rollback` is
+        /// the safe enum's encoding: 0 is `None` - the session never
+        /// verifies drafts - and any other value is `InPlace(n)`.
+        fn load_staged_model_verify_rollback(
             self: Pin<&mut Bridge>,
             path: &str,
             stages: u32,

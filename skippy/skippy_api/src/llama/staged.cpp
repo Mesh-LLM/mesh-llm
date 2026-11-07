@@ -56,6 +56,17 @@ StagedModel::StagedModel(StagedModel&& other) noexcept
 
 std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& path,
                                                             const StageSpec& spec) {
+    // Verify rollback is a required input, never a default: the caller that
+    // knows the speculative plan states none() or in_place(n). Checked first
+    // so an omitted policy is refused before any file is touched.
+    const auto verify_rollback = verify_rollback_tokens_of(spec.verify_rollback);
+    if (!verify_rollback) {
+        return std::unexpected(StagedFailure{
+            .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
+            .message = verify_rollback.error(),
+        });
+    }
+
     std::vector<const char*> residents;
     residents.reserve(spec.resident_identities.size());
     for (const std::string& value : spec.resident_identities)
@@ -98,7 +109,7 @@ std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& p
         config.host_expert_layer_start = (*placement)->start;
         config.host_expert_layer_end = (*placement)->end;
     }
-    config.verify_rollback_tokens = spec.recurrent_rollback.value();
+    config.verify_rollback_tokens = *verify_rollback;
     config.ctx_size = 512;
     config.n_batch = 512;
     config.n_ubatch = 512;

@@ -21,7 +21,11 @@ std::expected<StageChain, StagedFailure> StageChain::open(const std::string& pat
     StageChain chain;
     chain.stages_.reserve(lease->configs.size());
     for (const StageLoadConfig& config : lease->configs) {
-        auto model = StagedModel::open(path, own(config));
+        StageSpec spec = own(config);
+        // Chain validation opens exactly what a plain native load would, so
+        // it carries the native default policy instead of none.
+        spec.verify_rollback = VerifyRollback::native_default();
+        auto model = StagedModel::open(path, spec);
         if (!model) return std::unexpected(model.error());
         auto session = model->create_session();
         if (!session) return std::unexpected(session.error());

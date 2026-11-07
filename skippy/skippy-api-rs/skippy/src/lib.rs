@@ -181,6 +181,54 @@ pub struct StageChain<'rt> {
     stages: usize,
 }
 
+/// How far a verify window may rewind recurrent state in place (patch 0015).
+///
+/// Caller policy, never plan output: the caller that knows the speculative
+/// plan states it, so a session cannot pick up snapshots by omission.
+/// `None` is the session that never verifies drafts - the loader opens with
+/// `n_rs_seq == 0` and a rejected window restores from checkpoint, not a
+/// snapshot. `InPlace(n)` keeps `n` prior recurrent states so a rejected
+/// draft rewinds without a refill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifyRollback {
+    /// Never verify drafts: no snapshots, checkpoint restore on rewind.
+    None,
+    /// Keep `n` prior recurrent states for in-place verify rewinds.
+    InPlace(core::num::NonZeroU32),
+}
+
+impl VerifyRollback {
+    /// The native default for a drafting session
+    /// (`SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT`): two planned snapshots.
+    pub const DEFAULT_IN_PLACE: Self = Self::InPlace(match core::num::NonZeroU32::new(2) {
+        Some(tokens) => tokens,
+        None => panic!("2 is non-zero"),
+    });
+
+    /// Chooses the policy from the speculative plan: a session that drafts
+    /// keeps snapshots in place; one that never drafts carries none.
+    pub const fn for_drafting(drafts: bool) -> Self {
+        if drafts { Self::DEFAULT_IN_PLACE } else { Self::None }
+    }
+
+    /// The native encoding for the bridge: `None` folds to 0, the value the
+    /// loader reads as "keep no snapshots".
+    pub const fn tokens(self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::InPlace(tokens) => tokens.get(),
+        }
+    }
+}
+
+impl Default for VerifyRollback {
+    /// Drafting is the common case, so the default is the native drafting
+    /// default; a non-drafting caller states `None` explicitly.
+    fn default() -> Self {
+        Self::DEFAULT_IN_PLACE
+    }
+}
+
 impl Runtime {
     pub fn open_chain(&self, path: &str, ranges: &[(i32, i32)]) -> Result<StageChain<'_>, StageError> {
         let mut flat = Vec::with_capacity(ranges.len() * 2);
@@ -309,21 +357,21 @@ impl Runtime {
         Ok(StagedModel { runtime: self, handle: result.model })
     }
 
-    /// Opens stage `index` of a `stages`-way split with `rollback` planned
-    /// rollback snapshots per sequence for in-place speculative verify
-    /// (patch 0015): how many prior recurrent states the context keeps so a
-    /// rejected draft rewinds without a refill. The depth is clamped into
-    /// the loader's [2, 64] window, and `None` keeps the native default (2).
-    /// Dense models ignore the knob; only recurrent/hybrid families read it.
-    pub fn load_stage_with_rollback_depth(
+    /// Opens stage `index` of a `stages`-way split stating how far a verify
+    /// window may rewind recurrent state in place (patch 0015). The policy
+    /// is required caller knowledge - `VerifyRollback::None` for a session
+    /// that never verifies drafts, `InPlace(n)` to keep `n` prior recurrent
+    /// states. Dense models ignore the knob; only recurrent/hybrid
+    /// families read it.
+    pub fn load_stage_with_verify_rollback(
         &self,
         path: &str,
         stages: u32,
         index: u32,
-        rollback: Option<u32>,
+        verify_rollback: VerifyRollback,
     ) -> Result<StagedModel<'_>, StageError> {
-        let depth = rollback.unwrap_or(0);
-        let result = self.lock().pin_mut().load_staged_model_rollback(path, stages, index, depth);
+        let result =
+            self.lock().pin_mut().load_staged_model_verify_rollback(path, stages, index, verify_rollback.tokens());
         if !result.ok || result.model.is_null() {
             return Err(StageError::Rejected(result.error));
         }

@@ -177,7 +177,7 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/selected_log_probs_test.cpp
       tests/host_experts_test.cpp
       tests/argmax_sampling_test.cpp
-      tests/recurrent_rollback_test.cpp
+      tests/verify_rollback_test.cpp
       tests/workload_test.cpp
       tests/rerank_template_test.cpp
       tests/rerank_prompt_test.cpp

@@ -402,7 +402,12 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
             result.error = rust::String::lossy(lease.error().message);
             return result;
         }
-        const auto spec = skippy::llama::own(lease->configs[index]);
+        auto spec = skippy::llama::own(lease->configs[index]);
+        // A plain lane is a configless native load: it states the native
+        // default rather than letting the facade pick. A caller whose
+        // session never verifies drafts passes VerifyRollback::None through
+        // the named lane instead.
+        spec.verify_rollback = skippy::VerifyRollback::native_default();
         auto model = skippy::llama::StagedModel::open(model_path, spec);
         if (!model) {
             result.error = rust::String::lossy(model.error().message);
@@ -447,6 +452,7 @@ StagedModelResult Bridge::load_staged_model_host_experts(rust::Str path, std::ui
                 return result;
             }
             auto spec = skippy::llama::own(lease->configs[index]);
+            spec.verify_rollback = skippy::VerifyRollback::native_default();
             spec.host_experts = skippy::LayerRange{host_start, host_end};
             auto model = skippy::llama::StagedModel::open(model_path, spec);
             if (!model) {
@@ -459,11 +465,11 @@ StagedModelResult Bridge::load_staged_model_host_experts(rust::Str path, std::ui
         });
 }
 
-StagedModelResult Bridge::load_staged_model_rollback(rust::Str path, std::uint32_t stages,
-                                                     std::uint32_t index,
-                                                     std::uint32_t rollback) noexcept {
+StagedModelResult Bridge::load_staged_model_verify_rollback(rust::Str path, std::uint32_t stages,
+                                                            std::uint32_t index,
+                                                            std::uint32_t rollback) noexcept {
     return guarded_message<StagedModelResult>(
-        "load_staged_model_rollback", [&]() -> StagedModelResult {
+        "load_staged_model_verify_rollback", [&]() -> StagedModelResult {
             StagedModelResult result{};
             result.ok = false;
 
@@ -491,7 +497,16 @@ StagedModelResult Bridge::load_staged_model_rollback(rust::Str path, std::uint32
                 return result;
             }
             auto spec = skippy::llama::own(lease->configs[index]);
-            spec.recurrent_rollback = skippy::RollbackTokens::from_planned(rollback);
+            // 0 is the safe enum's None, not a depth: map it to none() so a
+            // non-drafting session opens with n_rs_seq == 0 and verify falls
+            // back to checkpoint restore.
+            auto verify_rollback = rollback == 0 ? skippy::VerifyRollback::none()
+                                                 : skippy::VerifyRollback::in_place(rollback);
+            if (!verify_rollback) {
+                result.error = rust::String::lossy(verify_rollback.error());
+                return result;
+            }
+            spec.verify_rollback = *verify_rollback;
             auto model = skippy::llama::StagedModel::open(model_path, spec);
             if (!model) {
                 result.error = rust::String::lossy(model.error().message);

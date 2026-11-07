@@ -152,8 +152,8 @@ re-reading the same window each iteration):
 | `causal_scores/64` min | 10.888 ms | 10.823 ms | tie (+0.6%) |
 | `expert_placement/64` | 160.011 ms | 160.569 ms | tie (0.997x) |
 | `expert_placement/64` min | 150.380 ms | 157.008 ms | old faster (0.958x) |
-| `rollback_depth` | 157.305 ms | 158.035 ms | tie (0.995x) |
-| `rollback_depth` min | 149.510 ms | 147.963 ms | tie (1.010x) |
+| `verify_rollback` | 170.629 ms | 173.586 ms | tie (0.983x) |
+| `verify_rollback` min | 163.994 ms | 163.594 ms | tie (1.002x) |
 | `Argmax/Select/151936` | 76.706 us | 60.327 us | new faster (1.272x) |
 | `Argmax/Eligible` | 6.8 ns | 7.0 ns | tie (0.970x) |
 

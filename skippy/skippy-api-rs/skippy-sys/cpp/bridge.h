@@ -103,13 +103,16 @@ public:
     load_staged_model_host_experts(rust::Str path, std::uint32_t stages, std::uint32_t index,
                                    std::int32_t host_start, std::int32_t host_end) noexcept;
 
-    /// Opens stage `index` of `stages` with `rollback` planned rollback
-    /// snapshots per sequence for speculative verify (patch 0015); the value
-    /// is clamped into the loader's [2, 64] window, and 0 keeps the native
-    /// default (2). `SKIPPY_RS_SEQ` still overrides either, natively.
-    [[nodiscard]] StagedModelResult load_staged_model_rollback(rust::Str path, std::uint32_t stages,
-                                                               std::uint32_t index,
-                                                               std::uint32_t rollback) noexcept;
+    /// Opens stage `index` of `stages` stating how far a verify window may
+    /// rewind recurrent state in place (patch 0015). `rollback` is the safe
+    /// enum's encoding: 0 is `None` - the session never verifies drafts, the
+    /// loader keeps no snapshots and verify falls back to checkpoint
+    /// restore - and any other value is `InPlace(n)`, `n` prior recurrent
+    /// states. The policy is the caller's, never derived from model
+    /// metadata.
+    [[nodiscard]] StagedModelResult
+    load_staged_model_verify_rollback(rust::Str path, std::uint32_t stages, std::uint32_t index,
+                                      std::uint32_t rollback) noexcept;
 
     /// Opens a session on a stage.
     [[nodiscard]] StagedSessionResult create_staged_session(const StagedModel& model) noexcept;

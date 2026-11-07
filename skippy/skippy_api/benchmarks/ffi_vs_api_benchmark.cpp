@@ -23,12 +23,12 @@
 #include "llama/model_inventory.h"
 #include "llama/stage_chain.h"
 #include "normalize.h"
-#include "recurrent_rollback.h"
 #include "rerank.h"
 #include "runtime.h"
 #include "stage_load.h"
 #include "stage_sink.h"
 #include "types.h"
+#include "verify_rollback.h"
 
 #include "llama.h"
 #include "skippy.h"
@@ -1319,7 +1319,10 @@ public:
             return false;
         }
         lease_ = std::move(*lease);
-        const skippy::llama::StageSpec spec = skippy::llama::own(lease_.configs.front());
+        skippy::llama::StageSpec spec = skippy::llama::own(lease_.configs.front());
+        // A plain open states the native default, matching the FFI side's
+        // skippy_runtime_config_default().
+        spec.verify_rollback = skippy::VerifyRollback::native_default();
 
         // Same planned open on both sides: the load path is not the boundary
         // under test, and sharing it removes it from the ratio.
@@ -1598,7 +1601,7 @@ BENCHMARK(causal_scores_api)->Name("causal_scores/API")->Arg(64)->UseRealTime();
 
 // ---------------------------------------------------------------------------
 // Staged-open knobs: routed-expert host placement (patch 0013) and the
-// recurrent rollback depth (patch 0015).
+// verify-rollback policy (patch 0015).
 //
 // FFI hand-assembles the skippy_runtime_config - including the knob fields -
 // and opens through skippy_model_open; API sets the matching StageSpec
@@ -1616,7 +1619,7 @@ public:
     StagedKnobBench(const StagedKnobBench&) = delete;
     StagedKnobBench& operator=(const StagedKnobBench&) = delete;
 
-    enum class Knob { kHostExperts, kRollbackDepth };
+    enum class Knob { kHostExperts, kVerifyRollback };
     explicit StagedKnobBench(Knob knob) noexcept : knob_{knob} {}
 
     [[nodiscard]] bool setup(const std::string& path, std::string& error) {
@@ -1641,11 +1644,17 @@ public:
         }
         lease_ = std::move(*lease);
         spec_ = skippy::llama::own(lease_.configs.front());
+        spec_.verify_rollback = skippy::VerifyRollback::native_default();
         if (knob_ == Knob::kHostExperts) {
             spec_.host_experts = skippy::LayerRange{0, layers_};
         } else {
             // One snapshot per speculative window token, at the window cap.
-            spec_.recurrent_rollback = skippy::RollbackTokens::from_planned(64);
+            const auto verify = skippy::VerifyRollback::in_place(64);
+            if (!verify) {
+                error = verify.error();
+                return false;
+            }
+            spec_.verify_rollback = *verify;
         }
 
         auto source = skippy::llama::StagedModel::open(path, spec_);
@@ -1701,7 +1710,9 @@ public:
             config.host_expert_layer_start = 0;
             config.host_expert_layer_end = layers_;
         } else {
-            // Matches the API arm's RollbackTokens::from_planned(64).
+            // Matches the API arm's VerifyRollback::in_place(64); the
+            // host-experts arm keeps the config default, which is the
+            // native_default() the API arm states.
             config.verify_rollback_tokens = 64;
         }
         config.ctx_size = 512;
@@ -1925,15 +1936,15 @@ void expert_placement_api(benchmark::State& state) {
 BENCHMARK(expert_placement_ffi)->Name("expert_placement/FFI")->UseRealTime();
 BENCHMARK(expert_placement_api)->Name("expert_placement/API")->UseRealTime();
 
-void rollback_depth_ffi(benchmark::State& state) {
-    staged_open_knob_body(state, true, StagedKnobBench::Knob::kRollbackDepth, "rollback_depth");
+void verify_rollback_ffi(benchmark::State& state) {
+    staged_open_knob_body(state, true, StagedKnobBench::Knob::kVerifyRollback, "verify_rollback");
 }
-void rollback_depth_api(benchmark::State& state) {
-    staged_open_knob_body(state, false, StagedKnobBench::Knob::kRollbackDepth, "rollback_depth");
+void verify_rollback_api(benchmark::State& state) {
+    staged_open_knob_body(state, false, StagedKnobBench::Knob::kVerifyRollback, "verify_rollback");
 }
 
-BENCHMARK(rollback_depth_ffi)->Name("rollback_depth/FFI")->UseRealTime();
-BENCHMARK(rollback_depth_api)->Name("rollback_depth/API")->UseRealTime();
+BENCHMARK(verify_rollback_ffi)->Name("verify_rollback/FFI")->UseRealTime();
+BENCHMARK(verify_rollback_api)->Name("verify_rollback/API")->UseRealTime();
 
 // Our own main so a missing model is one line on stderr, and the llama-free
 // benchmarks still run: BatchBuild and Normalize need no GGUF.

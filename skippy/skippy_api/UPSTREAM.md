@@ -163,7 +163,8 @@ legitimately parse because `no_alloc` never reads data.
   measured today.
 - `params.n_rs_seq` (patch 0015) only changes context geometry on
   recurrent/hybrid families; the dense bench models never read it, so the
-  `rollback_depth` row prices the boundary threading alone. A positive-depth
-  measurement needs a recurrent GGUF fixture (RWKV/Mamba class), which the
-  loader currently rejects before the knob applies anyway - that gap is the
-  first thing to close before the row can move past `parity`.
+  `verify_rollback` row prices the boundary threading alone. A positive
+  measurement - `n_rs_seq == 0` vs `== N` opens and the checkpoint-restore
+  equivalence path - needs a recurrent GGUF fixture (RWKV/Mamba class),
+  which the loader currently rejects before the knob applies anyway - that
+  gap is the first thing to close before the row can move past `parity`.

@@ -21,8 +21,8 @@ mod common;
 
 use common::model_env;
 use skippy::{
-    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, StageError, Token, WorkloadError,
-    WorkloadInfo, WorkloadKind,
+    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, StageError, Token, VerifyRollback,
+    WorkloadError, WorkloadInfo, WorkloadKind,
 };
 
 fn optional_model_path(variable: &str) -> Option<String> {
@@ -334,11 +334,11 @@ fn host_expert_placement_matches_a_plain_staged_open_on_dense_models() {
 }
 
 #[test]
-fn rollback_depth_matches_a_plain_staged_open_on_dense_models() {
-    // Patch 0015: a deeper rollback window must not change what a dense
-    // model computes - the knob sizes speculative-verify snapshots, never
-    // the arithmetic. 65 also proves the [2, 64] clamp lets an oversized
-    // plan open instead of being rejected at the boundary.
+fn verify_rollback_matches_a_plain_staged_open_on_dense_models() {
+    // Patch 0015: the policy sizes speculative-verify snapshots, never the
+    // arithmetic - None (no snapshots, checkpoint restore on rewind) and
+    // InPlace(64) must read identically to a plain open on a dense model,
+    // which is the case the bridge's plain lanes carry.
     let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
     let runtime = Runtime::new().unwrap();
 
@@ -348,11 +348,19 @@ fn rollback_depth_matches_a_plain_staged_open_on_dense_models() {
     let selected = [Token(2), Token(1), Token(3)];
     let reference = plain_session.read_selected_log_probs(&tokens, &selected).expect("plain readout");
 
-    let deep = runtime.load_stage_with_rollback_depth(&path, 1, 0, Some(65)).expect("deep rollback stage");
-    let mut deep_session = deep.create_session().unwrap();
-    let deep_scores = deep_session.read_selected_log_probs(&tokens, &selected).expect("deep readout");
+    let none = runtime.load_stage_with_verify_rollback(&path, 1, 0, VerifyRollback::None).expect("no-rollback stage");
+    let mut none_session = none.create_session().unwrap();
+    let none_scores = none_session.read_selected_log_probs(&tokens, &selected).expect("none readout");
 
-    assert_eq!(reference, deep_scores);
+    let depth = std::num::NonZeroU32::new(64).expect("64 is non-zero");
+    let in_place = runtime
+        .load_stage_with_verify_rollback(&path, 1, 0, VerifyRollback::InPlace(depth))
+        .expect("in-place rollback stage");
+    let mut in_place_session = in_place.create_session().unwrap();
+    let in_place_scores = in_place_session.read_selected_log_probs(&tokens, &selected).expect("in-place readout");
+
+    assert_eq!(reference, none_scores);
+    assert_eq!(reference, in_place_scores);
 }
 
 #[test]
