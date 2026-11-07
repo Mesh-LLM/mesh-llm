@@ -244,9 +244,9 @@ async fn test_api_proxy_forwards_ocr_accept_to_document_ocr_endpoint() {
             body.len()
         );
         let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
-        let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
-
         assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+
+        let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
         assert!(raw.starts_with("POST /mesh/v1/documents/ocr HTTP/1.1"), "{raw}");
         let forwarded = raw.lines().any(|line| {
             line.split_once(':').is_some_and(|(name, value)| {
