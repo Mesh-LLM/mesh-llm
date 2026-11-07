@@ -550,8 +550,11 @@ ReadoutResult Bridge::staged_readout(StagedSession& session, rust::Slice<const s
             ids.push_back(static_cast<skippy::Token>(token));
 
         float scores[skippy::detail::max_selected_tokens];
-        const auto read = skippy::llama::read_selected_log_probs(
-            session.get(), fed, ids, std::span<float>(scores, ids.size()));
+        // The span's extent is the buffer's real one: an oversized selection
+        // is rejected by the facade's bound instead of a span that lies about
+        // its length steering the write past the stack buffer.
+        const auto read = skippy::llama::read_selected_log_probs(session.get(), fed, ids,
+                                                                 std::span<float>(scores));
         if (!read) {
             result.status = read.error().status;
             result.error = rust::String::lossy(read.error().message);
@@ -564,6 +567,10 @@ ReadoutResult Bridge::staged_readout(StagedSession& session, rust::Slice<const s
         result.ok = true;
         return result;
     });
+}
+
+std::int32_t Bridge::staged_batch_width(const StagedSession& session) const noexcept {
+    return skippy_session_batch_size(session.get().native());
 }
 
 StagedEmbedResult Bridge::staged_embed(StagedSession& session,

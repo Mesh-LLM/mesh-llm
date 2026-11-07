@@ -310,6 +310,15 @@ fn causal_readout_reads_bounded_unsampled_scores() {
     let oversized: Vec<Token> = vec![Token(1); 257];
     assert!(session.read_selected_log_probs(&tokens, &oversized).is_err());
     assert!(session.read_selected_log_probs(&tokens, &[]).is_err());
+
+    // The fed batch pays the session's own batch width, read from the
+    // session: one token past the width is a typed rejection naming both
+    // numbers, not an abort inside llama_decode's GGML_ASSERT.
+    let width = session.batch_width();
+    assert!(width >= tokens.len());
+    let overfeed: Vec<Token> = vec![Token(1); width + 1];
+    let error = session.read_selected_log_probs(&overfeed, &selected).unwrap_err();
+    assert!(format!("{error}").contains("batch width"), "expected a batch-width rejection, got: {error}");
 }
 
 #[test]

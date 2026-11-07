@@ -440,12 +440,21 @@ impl StagedSession<'_> {
 
     /// Reads bounded, unsampled conditional log probabilities for `selected`
     /// tokens from the final row after feeding `tokens` (patch 0011). Never
-    /// samples a token and never changes sampler history.
+    /// samples a token and never changes sampler history. Fed tokens beyond
+    /// [`StagedSession::batch_width`] are a typed rejection, never a native
+    /// abort.
     pub fn read_selected_log_probs(&mut self, tokens: &[Token], selected: &[Token]) -> Result<Vec<f32>, StageError> {
         let fed: Vec<i32> = tokens.iter().map(|token| token.0).collect();
         let ids: Vec<i32> = selected.iter().map(|token| token.0).collect();
         let result = self.model.runtime.lock().pin_mut().staged_readout(self.handle.pin_mut(), &fed, &ids);
         if result.ok { Ok(result.scores) } else { Err(StageError::Rejected(result.error)) }
+    }
+
+    /// The maximum number of tokens one readout or embed can feed. The bound
+    /// belongs to the session: the facade reads it from the session and
+    /// rejects a larger batch before any native call.
+    pub fn batch_width(&self) -> usize {
+        self.model.runtime.lock().staged_batch_width(&self.handle).max(0) as usize
     }
 }
 

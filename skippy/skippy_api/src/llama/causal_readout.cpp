@@ -1,7 +1,9 @@
 #include "llama/causal_readout.h"
 
 #include "skippy/execution.h"
+#include "skippy/runtime.h"
 
+#include <string>
 #include <vector>
 
 namespace skippy::llama {
@@ -19,6 +21,28 @@ std::expected<void, ReadoutFailure> read_selected_log_probs(StagedSession& sessi
         return std::unexpected(ReadoutFailure{
             .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
             .message = "selected readout exceeds its bound or the output is undersized",
+        });
+    }
+    // The session owns its batch width: it is read from the native session,
+    // never supplied by the caller, so every fed-token path pays this check
+    // and no caller can mislabel it with its own geometry. Feeding past the
+    // width is a GGML_ASSERT abort inside llama_decode, not an error.
+    const std::int64_t reported_width = skippy_session_batch_size(session.native());
+    if (reported_width < 0) {
+        return std::unexpected(ReadoutFailure{
+            .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
+            .message = "the session reported a negative batch width (" +
+                       std::to_string(reported_width) + ")",
+        });
+    }
+    // Bounded by the sign check above: reported_width is non-negative here,
+    // so widening it to size_t cannot change its value.
+    const auto batch_width = static_cast<std::size_t>(reported_width);
+    if (tokens.size() > batch_width) {
+        return std::unexpected(ReadoutFailure{
+            .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
+            .message = "fed tokens exceed the session batch width (" +
+                       std::to_string(tokens.size()) + " > " + std::to_string(batch_width) + ")",
         });
     }
     // The native ABI speaks int32 tokens; convert once, here, at the boundary.

@@ -37,8 +37,11 @@ struct ReadoutFailure {
 
 /// Writes `selected.size()` log probabilities into `out_scores`.
 /// `out_scores.size()` must be at least `selected.size()`, and the selection
-/// must respect `skippy::detail::max_selected_tokens`. The backend validates
-/// tokens against the vocabulary; rejections arrive as `ReadoutFailure`.
+/// must respect `skippy::detail::max_selected_tokens`. Fed tokens must fit
+/// the session's own batch width, which this boundary reads from the
+/// session — a caller cannot supply or bypass the bound. The backend
+/// validates tokens against the vocabulary; rejections arrive as
+/// `ReadoutFailure`.
 [[nodiscard]] std::expected<void, ReadoutFailure>
 read_selected_log_probs(StagedSession& session, std::span<const skippy::Token> tokens,
                         std::span<const skippy::Token> selected, std::span<float> out_scores);

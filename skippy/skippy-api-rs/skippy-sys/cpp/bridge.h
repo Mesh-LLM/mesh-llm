@@ -70,6 +70,7 @@ public:
     explicit StagedSession(skippy::llama::StagedSession session) noexcept
         : session_(std::move(session)) {}
     [[nodiscard]] skippy::llama::StagedSession& get() noexcept { return session_; }
+    [[nodiscard]] const skippy::llama::StagedSession& get() const noexcept { return session_; }
 
 private:
     skippy::llama::StagedSession session_;
@@ -128,6 +129,10 @@ public:
     [[nodiscard]] ReadoutResult staged_readout(StagedSession& session,
                                                rust::Slice<const std::int32_t> tokens,
                                                rust::Slice<const std::int32_t> selected) noexcept;
+
+    /// The session's native batch width: the fed-token bound every readout
+    /// and embed pays. Read from the session, never configured by a caller.
+    [[nodiscard]] std::int32_t staged_batch_width(const StagedSession& session) const noexcept;
 
     /// Plans `ranges` (start/end pairs) and opens one stage per range.
     [[nodiscard]] ChainResult open_chain(rust::Str path,

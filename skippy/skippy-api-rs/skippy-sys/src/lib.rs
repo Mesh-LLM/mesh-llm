@@ -337,6 +337,10 @@ pub mod ffi {
             selected: &[i32],
         ) -> ReadoutResult;
 
+        /// The session's native batch width: the fed-token bound every
+        /// readout and embed pays. Read from the session, never configured.
+        fn staged_batch_width(self: &Bridge, session: &StagedSession) -> i32;
+
         /// Reads the model's family from its GGUF architecture.
         fn model_family(self: &Bridge, path: &str) -> ModelFamily;
 
