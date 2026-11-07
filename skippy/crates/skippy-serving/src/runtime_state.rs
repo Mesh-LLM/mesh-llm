@@ -24,6 +24,7 @@ mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
 mod restore_transaction;
+mod session_end_exports;
 mod state_transfer;
 
 pub use lifecycle::{SessionLifecycleEvent, SessionLifecycleObserver};
@@ -79,6 +80,11 @@ pub struct RuntimeState {
     /// Split DFlash drafts a final stage owes stage 0 after an early verdict,
     /// by session.
     dflash_deferred_drafts: BTreeMap<String, DeferredDFlashDraft>,
+    /// Prefix-cache KV exports each session completes when it ends; see
+    /// `session_end_exports`.
+    session_end_kv_exports: BTreeMap<String, Vec<session_end_exports::SessionEndKvExport>>,
+    /// Normally ended sessions kept until their exports run.
+    parked_session_ends: Vec<session_end_exports::ParkedSessionEnd>,
     #[cfg(test)]
     modelless_for_test: bool,
     /// Lets modelless tests exercise a split DFlash final stage.
@@ -270,6 +276,8 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
             dflash_deferred_drafts: BTreeMap::new(),
+            session_end_kv_exports: BTreeMap::new(),
+            parked_session_ends: Vec::new(),
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -338,6 +346,7 @@ impl RuntimeState {
 
 impl Drop for RuntimeState {
     fn drop(&mut self) {
+        self.abandon_all_session_end_kv_exports();
         self.sessions.clear();
         self.idle_sessions.clear();
     }
@@ -426,6 +435,8 @@ fn runtime_from_loaded_model(
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
         dflash_deferred_drafts: BTreeMap::new(),
+        session_end_kv_exports: BTreeMap::new(),
+        parked_session_ends: Vec::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),

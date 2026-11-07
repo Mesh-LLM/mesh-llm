@@ -96,11 +96,12 @@ pub(super) fn handle_stop(
                     &scheduler_session_key,
                     &scheduler_message,
                     &tokens,
+                    crate::kv_integration::ExactStateKvExport::Now,
                 )
             });
             let drop_stats =
                 runtime
-                    .drop_session_timed(&scheduler_session_key)
+                    .end_session_timed(&scheduler_session_key)
                     .map_err(|error| {
                         skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })?;
@@ -110,6 +111,11 @@ pub(super) fn handle_stop(
         .context("reset binary stage session");
     drop(release);
     session_tracker.stopped(session_key);
+    // Prefix-cache exports the session owes run after the stop is ACKed.
+    let _ = iteration_scheduler.execute_runtime_detached(
+        "binary-session-end-exports",
+        crate::runtime_state::RuntimeState::complete_parked_session_ends,
+    );
     let outcome = outcome?;
     let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
     let (record, drop_stats) = outcome.value;

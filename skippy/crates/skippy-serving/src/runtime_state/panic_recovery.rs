@@ -31,6 +31,8 @@ impl PanicRecovery for RuntimeState {
     /// still held a lane fail with a missing-session error; later requests
     /// start on clean lanes.
     fn reset_after_panic(&mut self) {
+        // A panic leaves every lane suspect, so no owed export may read one.
+        self.abandon_all_session_end_kv_exports();
         let mut session_ids: Vec<String> = self.sessions.keys().cloned().collect();
         session_ids.extend(self.session_token_counts.keys().cloned());
         session_ids.sort_unstable();

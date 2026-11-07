@@ -62,6 +62,16 @@ pub enum CaptureAdmission {
     BestEffort,
 }
 
+/// When a KV-plus-recurrent capture copies its KV rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactStateKvExport {
+    /// Copy them with the recurrent state, holding the runtime.
+    Now,
+    /// Copy them when the session ends, keeping a decoding request's runtime
+    /// free. See [`KvStageIntegration::record_exact_state_at_session_end`].
+    AtSessionEnd,
+}
+
 /// Total in-flight exact-state payloads per stage — exporting, queued in the
 /// recorder channel, or held by the recorder worker. Sized as channel
 /// capacity (1) plus one worker-held record.
@@ -536,6 +546,167 @@ impl KvStageIntegration {
         l3_cost: Option<skippy_cache::policy::CostSample>,
         write_through_l3: bool,
     ) -> Result<Option<ExactStateRecord>> {
+        let Some((exact_state_payload, admission_credit)) = self.begin_exact_state_capture(
+            runtime,
+            session_id,
+            identity,
+            admission,
+            l3_cost.as_ref(),
+            write_through_l3,
+        )?
+        else {
+            return Ok(None);
+        };
+        let token_count = identity.identity.token_count;
+        let exported = match exact_state_payload {
+            StagePrefixCachePayload::FullState => {
+                runtime.export_full_state(session_id).map(|state| {
+                    (
+                        ExactStatePayload::full_state(state),
+                        ExactStateExtra::default(),
+                    )
+                })
+            }
+            StagePrefixCachePayload::KvRecurrent => (|| {
+                let kv = match runtime.export_kv_page(session_id, 0, token_count) {
+                    Ok(kv) => Some(kv),
+                    Err(error) if is_native_kv_unavailable(&error) => None,
+                    Err(error) => return Err(error),
+                };
+                let recurrent = match runtime.export_recurrent_state(session_id) {
+                    Ok(recurrent) => recurrent,
+                    // A known-dense model has no recurrent memory to export;
+                    // its snapshot is legitimately empty.
+                    Err(error)
+                        if self.dense_without_recurrent && is_recurrent_unavailable(&error) =>
+                    {
+                        Vec::new()
+                    }
+                    Err(error) => return Err(error),
+                };
+                let (kv_payload, kv_desc) =
+                    kv.map(|kv| (kv.payload, Some(kv.desc))).unwrap_or_default();
+                Ok((
+                    ExactStatePayload::kv_recurrent(kv_payload, recurrent),
+                    ExactStateExtra { kv_desc },
+                ))
+            })(),
+            StagePrefixCachePayload::Disabled | StagePrefixCachePayload::ResidentKv => {
+                #[cfg(test)]
+                crate::frontend::capture_trace::POST_DECODE_NONE_PAYLOAD_DISABLED
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                self.finish_record(&identity.page_id);
+                return Ok(None);
+            }
+        };
+        self.finish_exact_state_capture(
+            identity,
+            exported,
+            admission_credit,
+            l3_cost,
+            write_through_l3,
+        )
+    }
+
+    /// Like [`Self::record_exact_state_with_cost_and_durability`], but a
+    /// KV-plus-recurrent capture copies only the recurrent state now and the
+    /// KV rows below the boundary when the session ends.
+    ///
+    /// Copying the KV rows takes seconds at long context and holds the runtime,
+    /// so on the split decode path it stalled every token behind it. The rows
+    /// below the boundary do not change while the session lives, so the
+    /// recorded payload is the same bytes either way. Admission, the recorder
+    /// slot and the host-memory reservation are taken when the session ends,
+    /// so a waiting capture holds none of them. The record is lost if the
+    /// session is restored, imported into, trimmed below the boundary or
+    /// recovered from a panic before it ends.
+    ///
+    /// Returns whether a capture is pending.
+    pub(crate) fn record_exact_state_at_session_end(
+        self: &Arc<Self>,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        admission: CaptureAdmission,
+        l3_cost: Option<skippy_cache::policy::CostSample>,
+        write_through_l3: bool,
+    ) -> Result<bool> {
+        if self.exact_state_payload() != Some(StagePrefixCachePayload::KvRecurrent) {
+            return self
+                .record_exact_state_with_cost_and_durability(
+                    runtime,
+                    session_id,
+                    identity,
+                    admission,
+                    l3_cost,
+                    write_through_l3,
+                )
+                .map(|record| record.is_some());
+        }
+        let token_count = identity.identity.token_count;
+        if !self.should_record() || token_count < self.checkpoint_policy.min_tokens {
+            return Ok(false);
+        }
+        let recurrent = match runtime.export_recurrent_state(session_id) {
+            Ok(recurrent) => recurrent,
+            Err(error) if self.dense_without_recurrent && is_recurrent_unavailable(&error) => {
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
+        let kv = Arc::clone(self);
+        let identity = identity.clone();
+        runtime.export_kv_at_session_end(
+            session_id,
+            token_count,
+            Box::new(move |session| {
+                let Some((runtime, session_id)) = session else {
+                    return;
+                };
+                let Ok(Some((_, admission_credit))) = kv.begin_exact_state_capture(
+                    runtime,
+                    session_id,
+                    &identity,
+                    admission,
+                    l3_cost.as_ref(),
+                    write_through_l3,
+                ) else {
+                    return;
+                };
+                let exported = match runtime.export_kv_page(session_id, 0, token_count) {
+                    Ok(page) => Ok((page.payload, Some(page.desc))),
+                    Err(error) if is_native_kv_unavailable(&error) => Ok((Vec::new(), None)),
+                    Err(error) => Err(error),
+                }
+                .map(|(kv_payload, kv_desc)| {
+                    (
+                        ExactStatePayload::kv_recurrent(kv_payload, recurrent),
+                        ExactStateExtra { kv_desc },
+                    )
+                });
+                let _ = kv.finish_exact_state_capture(
+                    &identity,
+                    exported,
+                    admission_credit,
+                    l3_cost,
+                    write_through_l3,
+                );
+            }),
+        );
+        Ok(true)
+    }
+
+    /// Gate a capture and take its admission credit. `None` when nothing
+    /// should be recorded; the page is then not marked in flight.
+    fn begin_exact_state_capture(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        admission: CaptureAdmission,
+        l3_cost: Option<&skippy_cache::policy::CostSample>,
+        write_through_l3: bool,
+    ) -> Result<Option<(StagePrefixCachePayload, ExactStateAdmissionCredit)>> {
         let Some(exact_state_payload) = self.exact_state_payload() else {
             return Ok(None);
         };
@@ -622,47 +793,19 @@ impl KvStageIntegration {
             return Ok(None);
         };
         admission_credit.snapshot_reservation = reservation;
-        let exported = match exact_state_payload {
-            StagePrefixCachePayload::FullState => {
-                runtime.export_full_state(session_id).map(|state| {
-                    (
-                        ExactStatePayload::full_state(state),
-                        ExactStateExtra::default(),
-                    )
-                })
-            }
-            StagePrefixCachePayload::KvRecurrent => (|| {
-                let kv = match runtime.export_kv_page(session_id, 0, token_count) {
-                    Ok(kv) => Some(kv),
-                    Err(error) if is_native_kv_unavailable(&error) => None,
-                    Err(error) => return Err(error),
-                };
-                let recurrent = match runtime.export_recurrent_state(session_id) {
-                    Ok(recurrent) => recurrent,
-                    // A known-dense model has no recurrent memory to export;
-                    // its snapshot is legitimately empty.
-                    Err(error)
-                        if self.dense_without_recurrent && is_recurrent_unavailable(&error) =>
-                    {
-                        Vec::new()
-                    }
-                    Err(error) => return Err(error),
-                };
-                let (kv_payload, kv_desc) =
-                    kv.map(|kv| (kv.payload, Some(kv.desc))).unwrap_or_default();
-                Ok((
-                    ExactStatePayload::kv_recurrent(kv_payload, recurrent),
-                    ExactStateExtra { kv_desc },
-                ))
-            })(),
-            StagePrefixCachePayload::Disabled | StagePrefixCachePayload::ResidentKv => {
-                #[cfg(test)]
-                crate::frontend::capture_trace::POST_DECODE_NONE_PAYLOAD_DISABLED
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                self.finish_record(&identity.page_id);
-                return Ok(None);
-            }
-        };
+        Ok(Some((exact_state_payload, admission_credit)))
+    }
+
+    /// Validate an exported payload and queue it for the recorder worker.
+    fn finish_exact_state_capture(
+        &self,
+        identity: &PrefillKvIdentity,
+        exported: Result<(ExactStatePayload, ExactStateExtra)>,
+        admission_credit: ExactStateAdmissionCredit,
+        l3_cost: Option<skippy_cache::policy::CostSample>,
+        write_through_l3: bool,
+    ) -> Result<Option<ExactStateRecord>> {
+        let token_count = identity.identity.token_count;
         let (payload, extra) = match self.validate_snapshot_export(exported) {
             Ok(exported) => exported,
             Err(error) => {

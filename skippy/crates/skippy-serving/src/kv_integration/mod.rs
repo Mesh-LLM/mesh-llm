@@ -28,7 +28,7 @@ mod cache_payload;
 mod config;
 mod exact_state;
 mod snapshot_validation;
-pub(crate) use exact_state::CaptureAdmission;
+pub(crate) use exact_state::{CaptureAdmission, ExactStateKvExport};
 mod identity;
 mod l2_serving;
 pub mod lifecycle;
