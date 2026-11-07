@@ -1,4 +1,4 @@
-From 1e2577b5635355e258347ca952e6350b1b104bc1 Mon Sep 17 00:00:00 2001
+From d6bf7072dc5b664650792d48a9219d24bd6de81b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts

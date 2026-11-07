@@ -1,4 +1,4 @@
-From d8e55ece31ef51c0f3c2b3161c943454525aa1b3 Mon Sep 17 00:00:00 2001
+From 3bbc6ae1d5e79646e935f4004245d47812c48f13 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
@@ -20,7 +20,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/llama-memory-hybrid-idx.cpp         |   10 +
  src/llama-memory-hybrid-idx.h           |    4 +
  src/skippy/abi.cpp                      |   59 ++
- src/skippy/activation.cpp               | 1028 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1028 ++++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  160 +++
  src/skippy/block_boundaries.cpp         |   64 ++
@@ -47,7 +47,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  213 ++++
  src/skippy/model_load_config_internal.h |   35 +
- src/skippy/model_loading.cpp            | 1198 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1189 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
@@ -70,7 +70,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  907 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  136 +++
- src/skippy/state.cpp                    | 1189 ++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1189 +++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/state_memory.cpp             |  116 +++
@@ -79,7 +79,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16452 insertions(+), 395 deletions(-)
+ 75 files changed, 16443 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -7799,10 +7799,10 @@ index 000000000..554d2bdd3
 +skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..fc413a04e
+index 000000000..60a27669f
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1198 @@
+@@ -0,0 +1,1189 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -8505,15 +8505,6 @@ index 000000000..fc413a04e
 +        skippy_apply_context_hardware_config(config, params);
 +    }
 +    params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
-+    // CUDA flash attention produces a different first token when AFMoE is split
-+    // after layer 11. Keep the unsliced oracle on its requested setting while
-+    // staged execution uses the attention path that matches it.
-+    if (model->arch == LLM_ARCH_AFMOE && skippy_runtime_has_stage_plan(config) &&
-+            (config->layer_start > 0 || config->layer_end < model->hparams.n_layer()) &&
-+            params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED) {
-+        LLAMA_LOG_WARN("%s: disabling flash attention for staged AFMoE parity\n", __func__);
-+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
-+    }
 +    if (classifier_workload) {
 +        params.pooling_type = LLAMA_POOLING_TYPE_RANK;
 +    }

@@ -1,4 +1,4 @@
-From df7fdd97a5319508b42d026a088f411f6ead36dc Mon Sep 17 00:00:00 2001
+From 189c10f4e7edb7c05d111d909c45cd21a6e661fc Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
 Subject: [PATCH 15/15] skippy: roll back staged verify windows in place

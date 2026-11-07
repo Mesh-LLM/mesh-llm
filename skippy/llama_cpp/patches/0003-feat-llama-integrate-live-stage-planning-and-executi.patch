@@ -1,4 +1,4 @@
-From f5bb26a3258a5d63fc8691f10c13e572669f190c Mon Sep 17 00:00:00 2001
+From b95644c7d60bd3f4be31680ed9caa4db237883cc Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 03/15] feat(llama): integrate live stage planning and

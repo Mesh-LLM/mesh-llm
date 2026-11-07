@@ -1,4 +1,4 @@
-From 014f8cffa092ae0125e59a56b42a785505a451e9 Mon Sep 17 00:00:00 2001
+From d1c4aba2283569e88d02626eeba39d0b204d8028 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 04/15] feat(models): expose stage-independent graph semantics
