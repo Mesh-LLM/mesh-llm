@@ -45,10 +45,10 @@ dense contract, which records only trunk layer inputs, does not.
 ---
  src/CMakeLists.txt                          |  27 +++
  src/models/glm5-next.cpp                    |  63 +++++--
- src/skippy/tests/graph_build_inputs.cpp     | 190 ++++++++++++++++++++
+ src/skippy/tests/graph_build_inputs.cpp     | 193 ++++++++++++++++++++
  src/skippy/tests/graph_contract_cases.cmake |  32 ++++
  tests/test-llama-archs.cpp                  |   9 +-
- 5 files changed, 304 insertions(+), 17 deletions(-)
+ 5 files changed, 307 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 94f1fc871..09412c534 100644
@@ -255,7 +255,7 @@ index a1b722950..fd2e5d8dd 100644
      ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
      cb(out, "kqv_out", il);
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index f02490889..f42a2a6ee 100644
+index f02490889..02d879783 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,4 +1,5 @@
@@ -264,9 +264,11 @@ index f02490889..f42a2a6ee 100644
  #include "llama-graph.h"
  #include "llama-kv-cache-msa.h"
  #include "ggml-cpu.h"
-@@ -11,12 +12,14 @@
+@@ -10,13 +11,16 @@
+ #include "skippy/stage_slice_plan.h"
  #include "skippy/stage_realization.h"
  
++#include <algorithm>
  #include <atomic>
 +#include <cmath>
  #include <cstdint>
@@ -279,7 +281,7 @@ index f02490889..f42a2a6ee 100644
  #include <set>
  #include <stdexcept>
  #include <thread>
-@@ -897,6 +900,174 @@ static int check_execution_profile_residency() {
+@@ -897,6 +901,176 @@ static int check_execution_profile_residency() {
      return 0;
  }
  
@@ -397,7 +399,9 @@ index f02490889..f42a2a6ee 100644
 +        }
 +        splits = {{0, n_layer / 2, n_layer}, {0, n_layer / 4, n_layer / 2, 3 * n_layer / 4, n_layer}};
 +    }
-+    if (n_layer < 4 || targets.empty() || targets.back() > n_layer) {
++    const bool targets_in_range = std::all_of(targets.begin(), targets.end(),
++            [n_layer](int32_t layer) { return layer >= 0 && layer <= n_layer; });
++    if (n_layer < 4 || targets.empty() || !targets_in_range) {
 +        llama_model_free(model);
 +        return 130;
 +    }
@@ -454,7 +458,7 @@ index f02490889..f42a2a6ee 100644
  int main(int argc, char ** argv) {
      if (const int rc = check_embedding_scale_predicate()) return rc;
      if (const int rc = check_prepared_export_token_axis()) return rc;
-@@ -907,6 +1078,25 @@ int main(int argc, char ** argv) {
+@@ -907,6 +1081,25 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
