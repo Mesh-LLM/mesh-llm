@@ -18,3 +18,4 @@ mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0" }
 mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.78.0" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
+tracing = "0.1"
