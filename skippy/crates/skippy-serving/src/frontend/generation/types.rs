@@ -189,6 +189,9 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     /// attention layers slides over a window; stage 0 sends no feature rows
     /// for prompt tokens before it.
     pub(in crate::frontend) split_dflash_context_window: Option<u32>,
+    /// The most bytes of feature rows later stages add to each prompt token,
+    /// which stage 0 leaves room for when it sizes prefill frames.
+    pub(in crate::frontend) split_dflash_downstream_bytes_per_token: usize,
     /// The final stage's draft-context counters, from its latest replies.
     pub(in crate::frontend) split_dflash_health: SplitDFlashHealth,
     pub(in crate::frontend) prompt_token_ids: &'a [i32],

@@ -18,6 +18,7 @@ use skippy_runtime::{
 };
 
 mod frame_operations;
+pub(crate) use frame_operations::slice_activation_frame;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
