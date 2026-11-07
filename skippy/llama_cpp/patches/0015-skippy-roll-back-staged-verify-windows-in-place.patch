@@ -1,4 +1,4 @@
-From 870f9654fa43034b8060aec0d486c9e4e32ea4e0 Mon Sep 17 00:00:00 2001
+From a4ab2b11d8ef5273936ec9c76c5b21b5ebb9ddcf Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
 Subject: [PATCH 15/15] skippy: roll back staged verify windows in place
@@ -441,10 +441,10 @@ index d1c094548..7167e5f7a 100644
                  false,
                  SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index bcc996bb1..22269c506 100644
+index 754045162..ebf2cbcd9 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -348,6 +348,13 @@ enum skippy_status skippy_iteration_batch_sampled(
+@@ -393,6 +393,13 @@ enum skippy_status skippy_iteration_batch_sampled(
          }
      }
  

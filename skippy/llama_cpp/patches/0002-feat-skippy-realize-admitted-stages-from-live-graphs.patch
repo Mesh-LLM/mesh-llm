@@ -1,4 +1,4 @@
-From b2dddb7fe45d8c3cca7436cac0c3ffed2696e81f Mon Sep 17 00:00:00 2001
+From eeb087b59c6fa7076d91418bc22e5f9255bab107 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
@@ -34,7 +34,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  335 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  454 +++++++++
+ src/skippy/execution-batch.cpp          |  499 ++++++++++
  src/skippy/execution-single.cpp         |  642 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
@@ -79,7 +79,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16398 insertions(+), 395 deletions(-)
+ 75 files changed, 16443 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -3946,10 +3946,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..901095cab
+index 000000000..8eec3357a
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,454 @@
+@@ -0,0 +1,499 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -4108,7 +4108,7 @@ index 000000000..901095cab
 +        const size_t inner_bytes = static_cast<size_t>(part.byte_strides[token_axis]);
 +        const size_t destination_plane_bytes = inner_bytes*token_count;
 +        if (tensor == nullptr || tensor->type != static_cast<ggml_type>(part.ggml_type) ||
-+                tensor->nb[token_axis] != inner_bytes || destination_plane_bytes == 0 ||
++                destination_plane_bytes == 0 ||
 +                part.payload_bytes % destination_plane_bytes != 0) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                    "batched graph export does not match its activation descriptor");
@@ -4119,6 +4119,51 @@ index 000000000..901095cab
 +        if (tensor->ne[token_axis] != static_cast<int64_t>(offsets.back())) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                    "exported activation token axis does not cover the batched iteration");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        bool packed_inner = true;
++        for (size_t dimension = 0; dimension <= token_axis; ++dimension) {
++            packed_inner &= tensor->nb[dimension] == part.byte_strides[dimension];
++        }
++        if (!packed_inner && token_axis > 0) {
++            if (tensor->nb[0] != ggml_type_size(tensor->type) ||
++                    tensor->ne[0] < part.dimensions[0]) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                        "strided batched graph export has an invalid row layout");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            for (uint32_t dimension = 1; dimension < part.rank; ++dimension) {
++                if (dimension != token_axis && tensor->ne[dimension] != part.dimensions[dimension]) {
++                    skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                            "strided batched graph export has an invalid shape");
++                    return SKIPPY_STATUS_RUNTIME_ERROR;
++                }
++            }
++            const size_t row_bytes = ggml_row_size(tensor->type, part.dimensions[0]);
++            auto * destination = static_cast<uint8_t *>(payload) + part.payload_offset;
++            size_t destination_offset = 0;
++            for (int64_t i3 = 0; i3 < part.dimensions[3]; ++i3) {
++                for (int64_t i2 = 0; i2 < part.dimensions[2]; ++i2) {
++                    for (int64_t i1 = 0; i1 < part.dimensions[1]; ++i1) {
++                        const size_t source_offset =
++                                (static_cast<size_t>(i1) + (token_axis == 1 ? offsets[request_index] : 0))*tensor->nb[1] +
++                                (static_cast<size_t>(i2) + (token_axis == 2 ? offsets[request_index] : 0))*tensor->nb[2] +
++                                (static_cast<size_t>(i3) + (token_axis == 3 ? offsets[request_index] : 0))*tensor->nb[3];
++                        ggml_backend_tensor_get(tensor, destination + destination_offset, source_offset, row_bytes);
++                        destination_offset += row_bytes;
++                    }
++                }
++            }
++            if (destination_offset != part.payload_bytes) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                        "strided batched graph export does not match its activation descriptor");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++            continue;
++        }
++        if (!packed_inner) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                    "batched graph export has an invalid packed token axis");
 +            return SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
 +        const size_t outer_count = static_cast<size_t>(part.payload_bytes)/destination_plane_bytes;
