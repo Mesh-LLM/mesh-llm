@@ -21,7 +21,7 @@ fn canary_backend_selection_requires_a_supported_platform_and_linux_architecture
             |value| format!("export SKIPPY_CUDA_ARCHITECTURES='{value}'"),
         );
         let setup = format!(
-            "export GITHUB_ENV=\"$PWD/action.env\"\n{architectures}\nuname() {{ printf '%s\\n' '{os}'; }}"
+            "export GITHUB_ENV=\"$PWD/action.env\"\n{architectures}\nuname() {{ [[ \"$*\" == -s ]] || return 91; printf '%s\\n' '{os}'; }}"
         );
         let (status, stdout, stderr) = action_shell(&directory, &setup, field(step, "run"));
         if let Some(backend) = backend {
