@@ -1,0 +1,267 @@
+name: Public Mesh Probe
+
+# Pingdom-style check that the public console can actually serve inference.
+#
+# Every 15 minutes it runs scripts/public-mesh-probe.sh against
+# https://public.meshllm.cloud: GET /health, GET /v1/models, and a real
+# POST /v1/chat/completions with model=auto that must return 200 and a
+# non-empty reply. /health alone is not enough — it reports "ok" whenever
+# the console has peers, even while every completion fails.
+#
+# A failing probe fails the run (red in Actions). After
+# MESH_PROBE_FAILURE_THRESHOLD consecutive failing probes (default 3 ≈ 45 min)
+# it opens one GitHub issue labelled `public-mesh-down`, assigned to the
+# on-call list, and reuses that issue while the outage lasts. The first green
+# probe afterwards comments on the issue and closes it.
+#
+# Optional: when the MESH_STATUS_BUZZ_HOOK_URL / MESH_STATUS_BUZZ_HOOK_SECRET
+# secrets are set, state changes (ok -> failed, failed -> ok) are also POSTed
+# to that Buzz workflow webhook so they land in a channel.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Console base URL to probe.
+        required: false
+        default: https://public.meshllm.cloud
+      model:
+        description: Model id to request (auto routes through the mesh).
+        required: false
+        default: auto
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: public-mesh-probe
+  cancel-in-progress: false
+
+env:
+  MESH_PROBE_BASE_URL: ${{ inputs.base_url || vars.MESH_PROBE_BASE_URL || 'https://public.meshllm.cloud' }}
+  MESH_PROBE_MODEL: ${{ inputs.model || vars.MESH_PROBE_MODEL || 'auto' }}
+  MESH_PROBE_FAILURE_THRESHOLD: ${{ vars.MESH_PROBE_FAILURE_THRESHOLD || '3' }}
+  MESH_PROBE_ISSUE_ASSIGNEES: ${{ vars.MESH_PROBE_ISSUE_ASSIGNEES || 'michaelneale,i386' }}
+  MESH_PROBE_ISSUE_LABEL: public-mesh-down
+
+jobs:
+  probe:
+    name: Probe public inference
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Probe
+        id: probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          rc=0
+          MESH_PROBE_OUT="$RUNNER_TEMP/probe.json" ./scripts/public-mesh-probe.sh || rc=$?
+          state="$(jq -r .state "$RUNNER_TEMP/probe.json")"
+          # detail can carry remote error text; flatten it so it cannot break
+          # $GITHUB_OUTPUT with extra lines (e.g. a forged "state=ok").
+          detail="$(jq -r '.detail | gsub("[\r\n]+"; " ")' "$RUNNER_TEMP/probe.json")"
+          {
+            echo "state=$state"
+            echo "detail=$detail"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Public mesh probe: $state"
+            echo
+            echo "- Target: \`$MESH_PROBE_BASE_URL\` (model \`$MESH_PROBE_MODEL\`)"
+            echo "- $detail"
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/probe.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Do not fail here: the alerting steps below need to run first.
+          echo "probe exit code $rc (state=$state)"
+
+      - name: Upload probe result
+        # The artifact name records the probe outcome so later runs can
+        # distinguish a failed probe from a failed alerting step (run
+        # conclusions alone cannot: a successful probe whose issue-close or
+        # Buzz step fails still concludes "failure").
+        if: ${{ steps.probe.outputs.state != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-mesh-probe-state-${{ steps.probe.outputs.state }}
+          path: ${{ runner.temp }}/probe.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Count consecutive failures
+        id: history
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_STATE: ${{ steps.probe.outputs.state }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Previous completed scheduled runs, newest first. Only scheduled runs
+          # count so a manual dispatch against another URL cannot trip alerts.
+          previous="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/public-mesh-probe.yml/runs?event=schedule&status=completed&per_page=20" \
+            --jq '[.workflow_runs[] | select(.id != '"${GITHUB_RUN_ID}"') | {id, conclusion}]')"
+          previous_state="$(jq -r 'if length == 0 then "none" elif .[0].conclusion == "success" then "ok" else "failed" end' <<<"$previous")"
+          # Count consecutive runs whose probe itself failed. A run whose
+          # probe succeeded always concludes "success" (the final step exits
+          # non-zero only when the probe state is not ok), so it stops the
+          # count without further queries. A "failure" conclusion is
+          # ambiguous (probe vs alerting step), so it is only counted when
+          # the run's probe-result artifact also says the probe failed.
+          count="$(jq length <<<"$previous")"
+          prior_failures=0
+          for ((i = 0; i < count; i++)); do
+            conclusion="$(jq -r ".[$i].conclusion" <<<"$previous")"
+            [[ "$conclusion" == "cancelled" ]] && continue
+            if [[ "$conclusion" == "success" ]]; then
+              break
+            fi
+            run_id="$(jq -r ".[$i].id" <<<"$previous")"
+            artifact="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+              --jq '[.artifacts[].name | select(startswith("public-mesh-probe-state-"))][0] // "missing"')"
+            if [[ "$artifact" == "public-mesh-probe-state-ok" ]]; then
+              break
+            fi
+            ((prior_failures += 1))
+          done
+          if [[ "$CURRENT_STATE" == "failed" ]]; then
+            consecutive=$((prior_failures + 1))
+          else
+            consecutive=0
+          fi
+          {
+            echo "previous_state=$previous_state"
+            echo "consecutive_failures=$consecutive"
+          } >> "$GITHUB_OUTPUT"
+          echo "previous_state=$previous_state prior_failures=$prior_failures consecutive=$consecutive"
+
+      - name: Open or update the outage issue
+        if: ${{ github.event_name == 'schedule' && steps.probe.outputs.state == 'failed' && fromJSON(steps.history.outputs.consecutive_failures) >= fromJSON(env.MESH_PROBE_FAILURE_THRESHOLD) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          CONSECUTIVE: ${{ steps.history.outputs.consecutive_failures }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create "$MESH_PROBE_ISSUE_LABEL" --repo "$GITHUB_REPOSITORY" \
+            --description "Opened automatically by the Public Mesh Probe workflow" \
+            --color B60205 --force >/dev/null
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --label "$MESH_PROBE_ISSUE_LABEL" --limit 1 --json number --jq '.[0].number // empty')"
+          since="$(jq -rn '(now - 86400) | todate')"
+          recent_closed="$(gh issue list --repo "$GITHUB_REPOSITORY" --state closed \
+            --label "$MESH_PROBE_ISSUE_LABEL" --limit 1 --json number,closedAt \
+            --jq "[.[] | select(.closedAt > \"$since\")][0].number // empty")"
+          body="$(cat <<EOF
+          **Probe:** \`POST ${MESH_PROBE_BASE_URL}/v1/chat/completions\` with \`model=${MESH_PROBE_MODEL}\`
+          **Consecutive failing probes:** ${CONSECUTIVE} (every 15 min)
+          **Latest failure:** ${DETAIL}
+          **Run:** ${RUN_URL}
+
+          \`\`\`json
+          $(cat "$RUNNER_TEMP/probe.json")
+          \`\`\`
+          EOF
+          )"
+          if [[ -n "$existing" ]]; then
+            # Keep one issue per outage; add a heartbeat comment hourly at most.
+            if (( CONSECUTIVE % 4 == 0 )); then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still failing. ${body}"
+            fi
+            echo "outage issue #$existing already open"
+          elif [[ -n "$recent_closed" ]]; then
+            gh issue reopen "$recent_closed" --repo "$GITHUB_REPOSITORY" \
+              --comment "Failing again within 24 h of the last recovery. ${body}"
+            echo "reopened #$recent_closed"
+          else
+            title="Public mesh inference is down: ${MESH_PROBE_BASE_URL#https://} cannot complete model=${MESH_PROBE_MODEL}"
+            args=(--repo "$GITHUB_REPOSITORY" --title "$title" --label "$MESH_PROBE_ISSUE_LABEL" --body "$body")
+            IFS=',' read -ra assignees <<<"$MESH_PROBE_ISSUE_ASSIGNEES"
+            for a in "${assignees[@]}"; do
+              [[ -n "$a" ]] && args+=(--assignee "$a")
+            done
+            url="$(gh issue create "${args[@]}")"
+            echo "opened $url"
+            echo "### Opened $url" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Close the outage issue on recovery
+        if: ${{ github.event_name == 'schedule' && steps.probe.outputs.state == 'ok' && steps.history.outputs.previous_state == 'failed' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --label "$MESH_PROBE_ISSUE_LABEL" --limit 1 --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            evidence="$(cat <<EOF
+          **Recovered.** The scheduled probe completed a real inference request through the public console.
+
+          **Evidence:** ${DETAIL}
+          **Run:** ${RUN_URL}
+
+          \`\`\`json
+          $(cat "$RUNNER_TEMP/probe.json")
+          \`\`\`
+          EOF
+          )"
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --comment "$evidence"
+            echo "closed #$existing"
+          else
+            echo "no open outage issue to close"
+          fi
+
+      - name: Notify Buzz on state change
+        # The none -> ok case is excluded: with no earlier scheduled run the
+        # first successful probe is not a recovery and must not page anyone.
+        if: ${{ github.event_name == 'schedule' && steps.history.outputs.previous_state != steps.probe.outputs.state && !(steps.history.outputs.previous_state == 'none' && steps.probe.outputs.state == 'ok') }}
+        env:
+          HOOK_URL: ${{ secrets.MESH_STATUS_BUZZ_HOOK_URL }}
+          HOOK_SECRET: ${{ secrets.MESH_STATUS_BUZZ_HOOK_SECRET }}
+          STATE: ${{ steps.probe.outputs.state }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$HOOK_URL" || -z "$HOOK_SECRET" ]]; then
+            echo "MESH_STATUS_BUZZ_HOOK_URL / MESH_STATUS_BUZZ_HOOK_SECRET not set; skipping Buzz notification"
+            exit 0
+          fi
+          if [[ "$STATE" == "ok" ]]; then icon="🟢"; word="RECOVERED"; else icon="🔴"; word="FAILED"; fi
+          payload="$(jq -cn --arg icon "$icon" --arg state "$word" --arg detail "$DETAIL" --arg run_url "$RUN_URL" \
+            '{icon: $icon, state: $state, detail: $detail, run_url: $run_url}')"
+          code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -X POST "$HOOK_URL" \
+            -H "X-Webhook-Secret: $HOOK_SECRET" -H 'content-type: application/json' --data "$payload")"
+          echo "Buzz webhook -> HTTP $code"
+
+      - name: Fail the run when the probe failed
+        if: ${{ steps.probe.outputs.state != 'ok' }}
+        env:
+          PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
+        shell: bash
+        run: |
+          # detail is untrusted (remote error text): escape workflow-command
+          # characters before it reaches the runner's command parser.
+          detail="${PROBE_DETAIL//%/%25}"
+          detail="${detail//$'\r'/%0D}"
+          detail="${detail//$'\n'/%0A}"
+          printf '::error::Public mesh probe failed: %s\n' "$detail"
+          exit 1
