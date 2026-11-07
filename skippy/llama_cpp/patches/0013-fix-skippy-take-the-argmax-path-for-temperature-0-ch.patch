@@ -1,4 +1,4 @@
-From e3eed49b35b90f82f93a1533abbfc9e6e88ba969 Mon Sep 17 00:00:00 2001
+From 0ab00e90f370d89151198812825946b88096a453 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 29 Oct 2026 19:55:52 -0400
 Subject: [PATCH 13/15] fix(skippy): take the argmax path for temperature-0

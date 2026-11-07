@@ -1,35 +1,30 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Fri, 6 Nov 2026 16:03:03 +1100
+Date: Fri, 6 Nov 2026 10:38:07 -0800
 Subject: [PATCH] models: expose Metis16 delegated pass layers
 
-Move the physical-layer loop into its own graph member without changing graph operations. The generator can then prove the existing whole-model execution scope for this multi-pass builder.
 ---
- src/models/metis16.cpp | 165 +++++++++++++++++++++--------------------
+ src/models/metis16.cpp | 167 +++++++++++++++++++++--------------------
  src/models/models.h    |   3 +
- 2 files changed, 89 insertions(+), 79 deletions(-)
+ 2 files changed, 90 insertions(+), 80 deletions(-)
 
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
-index 4e4b032b9..23d5d19d0 100644
+index 8a433f3cc..6f0b32b54 100644
 --- a/src/models/metis16.cpp
 +++ b/src/models/metis16.cpp
-@@ -258,16 +258,97 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
+@@ -258,17 +258,98 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
      return ggml_tanh(ctx0, ggml_add(ctx0, f, model.depth_mem_route_b));
  }
  
--llama_model_metis16::graph::graph(const llama_model_metis16 & model, const llm_graph_params & params) :
--    llm_build_mamba_base(params) {
--    const int64_t n_s      = model.n_stream;
--    const int     n_p      = model.n_pass;
 +void llama_model_metis16::graph::build_pass_layers(const llama_model_metis16 & model, int p,
 +        llm_graph_input_mem_hybrid * inp, ggml_tensor * & x, ggml_tensor * & history, ggml_tensor * & cont,
 +        ggml_tensor * & summ, ggml_tensor * & ent, ggml_tensor * & conf, int & n_entry) {
-     const int     n_phys   = model.n_layer_phys;
-     const int64_t n_r      = model.n_route;
-     const int64_t n_hd     = hparams.n_embd_head_k();
-     const int64_t n_exp    = hparams.n_expert;
-     const int64_t n_used   = hparams.n_expert_used();
- 
++    const int     n_phys   = model.n_layer_phys;
++    const int64_t n_r      = model.n_route;
++    const int64_t n_hd     = hparams.n_embd_head_k();
++    const int64_t n_exp    = hparams.n_expert;
++    const int64_t n_used   = hparams.n_expert_used();
++
 +    for (int il_p = 0; il_p < n_phys; ++il_p) {
 +        const int il = p*n_phys + il_p;
 +        const auto & layer = model.layers[il];
@@ -55,7 +50,7 @@ index 4e4b032b9..23d5d19d0 100644
 +
 +            cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
 +        } else {
-+            cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
++            cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
 +        }
 +        cb(cur, "mixer_out", il);
 +        x = hc_write(mixed, layer.hc_attn_write, cur, p);
@@ -107,15 +102,21 @@ index 4e4b032b9..23d5d19d0 100644
 +    }
 +}
 +
-+llama_model_metis16::graph::graph(const llama_model_metis16 & model, const llm_graph_params & params) :
-+    llm_build_mamba_base(params) {
-+    const int64_t n_s      = model.n_stream;
-+    const int     n_p      = model.n_pass;
-+
+ llama_model_metis16::graph::graph(const llm_graph_params & params) :
+     llm_build_mamba_base(params) {
+     const auto & model = static_cast<const llama_model_metis16 &>(this->model);
+ 
+     const int64_t n_s      = model.n_stream;
+     const int     n_p      = model.n_pass;
+-    const int     n_phys   = model.n_layer_phys;
+-    const int64_t n_r      = model.n_route;
+-    const int64_t n_hd     = hparams.n_embd_head_k();
+-    const int64_t n_exp    = hparams.n_expert;
+-    const int64_t n_used   = hparams.n_expert_used();
+ 
      ggml_tensor * inpL = build_inp_embd(model.tok_embd);
      auto * inp = build_inp_mem_hybrid();
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
-@@ -286,81 +367,7 @@ llama_model_metis16::graph::graph(const llama_model_metis16 & model, const llm_g
+@@ -288,81 +369,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
          ggml_tensor * ent  = nullptr;
          ggml_tensor * conf = nullptr;
  
@@ -144,7 +145,7 @@ index 4e4b032b9..23d5d19d0 100644
 -
 -                cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
 -            } else {
--                cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
+-                cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
 -            }
 -            cb(cur, "mixer_out", il);
 -            x = hc_write(mixed, layer.hc_attn_write, cur, p);
@@ -199,13 +200,13 @@ index 4e4b032b9..23d5d19d0 100644
          // end of the pass: one more memory read, the depth head, and an entry recording where the pass left the token
          ggml_tensor * retrieved = mem_read(model, &x);
 diff --git a/src/models/models.h b/src/models/models.h
-index d9ea4af3b..bff2805fd 100644
+index 15aca9529..8c92196cd 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1878,6 +1878,9 @@ struct llama_model_metis16 : public llama_model_base {
+@@ -1817,6 +1817,9 @@ struct llama_model_metis16 : public llama_model_base {
  
      struct graph : public llm_build_mamba_base {
-         graph(const llama_model_metis16 & model, const llm_graph_params & params);
+         graph(const llm_graph_params & params);
 +        void build_pass_layers(const llama_model_metis16 & model, int p, llm_graph_input_mem_hybrid * inp,
 +                               ggml_tensor * & x, ggml_tensor * & history, ggml_tensor * & cont,
 +                               ggml_tensor * & summ, ggml_tensor * & ent, ggml_tensor * & conf, int & n_entry);

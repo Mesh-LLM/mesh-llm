@@ -1,7 +1,7 @@
-From bcd40d1a714c4c1c8644f60dc93209b3e7d59d4d Mon Sep 17 00:00:00 2001
+From 6dbffff666e80bf61a4d3f922f53cf88823b9375 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
 
 ---
  common/common.cpp                       |  109 ---
@@ -148,7 +148,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/common/common.cpp b/common/common.cpp
-index bc51de053..ae5995542 100644
+index a2801b82f..44a19e15c 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -67,14 +67,6 @@
@@ -178,7 +178,7 @@ index bc51de053..ae5995542 100644
  std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
      std::ostringstream result;
      for (size_t i = 0; i < values.size(); ++i) {
-@@ -1049,48 +1036,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
+@@ -1029,48 +1016,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
  // TTY utils
  //
  
@@ -227,7 +227,7 @@ index bc51de053..ae5995542 100644
  //
  // Model utils
  //
-@@ -1853,60 +1798,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
+@@ -1839,60 +1784,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
  // Vocab utils
  //
  
@@ -289,7 +289,7 @@ index bc51de053..ae5995542 100644
      const llama_model * model = llama_get_model(ctx);
      const llama_vocab * vocab = llama_model_get_vocab(model);
 diff --git a/common/common.h b/common/common.h
-index 303e0c293..e05854ea2 100644
+index 4005275ca..30717b05b 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -43,7 +43,7 @@
@@ -319,7 +319,7 @@ index 303e0c293..e05854ea2 100644
  
  template<class T>
  static std::vector<T> string_split(const std::string & str, char delim) {
-@@ -946,11 +946,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
+@@ -945,11 +945,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
  //
  
  // Auto-detect if colors can be enabled based on terminal and environment
@@ -334,7 +334,7 @@ index 303e0c293..e05854ea2 100644
  
  //
  // Model utils
-@@ -1172,13 +1172,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
+@@ -1171,13 +1171,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
  
  // tokenizes a string into a vector of tokens
  // should work similar to Python's `tokenizer.encode`
@@ -350,7 +350,7 @@ index 303e0c293..e05854ea2 100644
      const struct llama_vocab * vocab,
             const std::string & text,
                          bool   add_special,
-@@ -1186,12 +1186,12 @@ std::vector<llama_token> common_tokenize(
+@@ -1185,12 +1185,12 @@ std::vector<llama_token> common_tokenize(
  
  // tokenizes a token into a piece, optionally renders special/control tokens
  // should work similar to Python's `tokenizer.id_to_piece`

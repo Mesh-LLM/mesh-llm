@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/smollm3.cpp b/src/models/smollm3.cpp
-index 474093b68b9a65d11fea9200e6653c1a76098485..93014716983f4c233fdeb30733caf33f529a1bc7 100644
+index fa9e9c5395a7ad68e925267f7089f5892701e40f..4fe7a41c87083788767b759a2eed8fcfee268644 100644
 --- a/src/models/smollm3.cpp
 +++ b/src/models/smollm3.cpp
-@@ -64,6 +64,8 @@ llama_model_smollm3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -67,6 +67,8 @@ llama_model_smollm3::graph::graph(const llm_graph_params & params) : llm_graph_c
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -20,8 +20,8 @@ index 474093b68b9a65d11fea9200e6653c1a76098485..93014716983f4c233fdeb30733caf33f
 +
          ggml_tensor * inpSA = inpL;
  
-         const bool use_rope = (il + 1) % hparams.n_no_rope_layer_step != 0;
-@@ -132,6 +134,7 @@ llama_model_smollm3::graph::graph(const llama_model & model, const llm_graph_par
+         // norm
+@@ -122,6 +124,7 @@ llama_model_smollm3::graph::graph(const llm_graph_params & params) : llm_graph_c
  
          // input for next layer
          inpL = cur;

@@ -216,14 +216,14 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index e5daa38a2..80710eb3b 100644
+index 54c87b6f2..80710eb3b 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 74
+-#define SKIPPY_ABI_VERSION_PATCH 73
 +#define SKIPPY_ABI_VERSION_PATCH 75
  
  #if defined(_MSC_VER)

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/hunyuan-vl.cpp b/src/models/hunyuan-vl.cpp
-index fa7183190e47c734d8b28492703cfea35ebda0ce..9315735856b20649b042f2e4003ecdf61ac71f1b 100644
+index 219ba39bda1ac71cadaba2cb5b7637ca6a04e8a2..1edf4bbfc19e745b7867c910c0edb64a17416988 100644
 --- a/src/models/hunyuan-vl.cpp
 +++ b/src/models/hunyuan-vl.cpp
-@@ -83,6 +83,8 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
+@@ -78,6 +78,8 @@ llama_model_hunyuan_vl::graph::graph(const llm_graph_params & params) : llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index fa7183190e47c734d8b28492703cfea35ebda0ce..9315735856b20649b042f2e4003ecdf6
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -173,6 +175,7 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
+@@ -142,6 +144,7 @@ llama_model_hunyuan_vl::graph::graph(const llm_graph_params & params) : llm_grap
  
          // input for next layer
          inpL = cur;

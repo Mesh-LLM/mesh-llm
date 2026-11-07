@@ -1,4 +1,4 @@
-From 023e9af3cffb2974d4dbab81aee1e8e03ad7cea5 Mon Sep 17 00:00:00 2001
+From 06ca75d30636917f3d581de04d2c80db171a5ea1 Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
 Subject: [PATCH 10/15] feat(skippy): read selected token scores in causal

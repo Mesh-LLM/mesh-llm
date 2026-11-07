@@ -1,4 +1,4 @@
-From e0e86d66b541738a9482029a950fe2d9727b3f61 Mon Sep 17 00:00:00 2001
+From a8a90aab5403c92c9b01cbc187ea8e01f69b8358 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 01/15] feat(skippy): define graph-derived native ABI

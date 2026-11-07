@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
-index 406e2ee4c7d512c0fbac1b0348b94261cb08be8b..c737a8a04f2e717e3ba313a559b8ea6c954c977b 100644
+index a84743b7e9a10fdb89a100af55112072dc69e9de..22239ac84e6155a6ca8efbe9c25f12780bae489e 100644
 --- a/src/models/granite-switch.cpp
 +++ b/src/models/granite-switch.cpp
-@@ -316,6 +316,8 @@ llama_model_granite_switch::graph::graph(
+@@ -313,6 +313,8 @@ llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_
      ggml_tensor * cur;
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,8 +21,8 @@ index 406e2ee4c7d512c0fbac1b0348b94261cb08be8b..c737a8a04f2e717e3ba313a559b8ea6c
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -338,6 +340,7 @@ llama_model_granite_switch::graph::graph(
-         cur = build_layer_ffn(cur, inpSA, adapter_ids, model, il);
+@@ -335,6 +337,7 @@ llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_
+         cur = build_layer_ffn(cur, inpSA, adapter_ids, il);
  
          inpL = cur;
 +        end_block(inpL, il);

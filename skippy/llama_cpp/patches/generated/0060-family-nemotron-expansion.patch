@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/nemotron.cpp b/src/models/nemotron.cpp
-index 6b5b771074b77b82babb78a9897fd53d65cee2ae..eccf25efe41861161c26bccc209ac950648f86d4 100644
+index f769b25375a904aa01e44ef5ca912ff162d379d7..e27ba75b266cd5246281141d36af49cad888f000 100644
 --- a/src/models/nemotron.cpp
 +++ b/src/models/nemotron.cpp
-@@ -69,6 +69,8 @@ llama_model_nemotron::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -69,6 +69,8 @@ llama_model_nemotron::graph::graph(const llm_graph_params & params) : llm_graph_
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 6b5b771074b77b82babb78a9897fd53d65cee2ae..eccf25efe41861161c26bccc209ac950
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -133,6 +135,7 @@ llama_model_nemotron::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -124,6 +126,7 @@ llama_model_nemotron::graph::graph(const llm_graph_params & params) : llm_graph_
  
          // input for next layer
          inpL = cur;

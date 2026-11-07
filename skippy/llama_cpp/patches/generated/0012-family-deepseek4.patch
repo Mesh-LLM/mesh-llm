@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
-index 0dbc7d3cb345037f5eb1caf31eb7ee98391b5343..459af10cc78a94e1e83d9f2e4db86badeea13277 100644
+index 8a0ff1541bdbfa571d56b8868c2f3fefd70f2051..1142724a5e427d2e80805e326f864b73214bb0cd 100644
 --- a/src/models/deepseek4.cpp
 +++ b/src/models/deepseek4.cpp
-@@ -1249,6 +1249,8 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
+@@ -1244,6 +1244,8 @@ llama_model_deepseek4::graph::graph(const llm_graph_params & params) :
      cb(inpL, "hc_init", -1);
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 0dbc7d3cb345037f5eb1caf31eb7ee98391b5343..459af10cc78a94e1e83d9f2e4db86bad
          if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
              res->t_layer_inp[il] = build_hc_mean(inpL);
              cb(res->t_layer_inp[il], "layer_inp", il);
-@@ -1336,6 +1338,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
+@@ -1331,6 +1333,7 @@ llama_model_deepseek4::graph::graph(const llm_graph_params & params) :
          inpL = build_hc_post(cur, residual, ffn_hc.post, ffn_hc.comb, il);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_last", il);

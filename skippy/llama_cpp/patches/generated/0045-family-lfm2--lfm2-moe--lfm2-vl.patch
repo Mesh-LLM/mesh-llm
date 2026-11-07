@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index f7d4f95b0aab83d5d42266e3cdad425187885ad0..1e7e55eb40c76cf553357e4a29ffe6ff8ce34f0e 100644
+index 86b948cf3de9ac7a5b54f50c20377fa6011eedb4..b76f4e35026dc2ee9760298e7c260118ea40d447 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
-@@ -200,6 +200,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -208,6 +208,8 @@ llama_model_lfm2::graph<iswa>::graph(const llm_graph_params & params) :
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index f7d4f95b0aab83d5d42266e3cdad425187885ad0..1e7e55eb40c76cf553357e4a29ffe6ff
          res->t_layer_inp[il] = cur;
  
          const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
-@@ -233,6 +235,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -241,6 +243,7 @@ llama_model_lfm2::graph<iswa>::graph(const llm_graph_params & params) :
  
          cur = build_cvec(cur, il);
          cb(cur, "l_out", il);
@@ -29,7 +29,7 @@ index f7d4f95b0aab83d5d42266e3cdad425187885ad0..1e7e55eb40c76cf553357e4a29ffe6ff
      }
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
-@@ -345,6 +348,8 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
+@@ -353,6 +356,8 @@ llama_model_lfm2::graph_decision::graph_decision(const llm_graph_params & params
      res->add_input(std::move(inp_conv));
  
      for (int il = 0; il < n_layer_enc; ++il) {
@@ -38,7 +38,7 @@ index f7d4f95b0aab83d5d42266e3cdad425187885ad0..1e7e55eb40c76cf553357e4a29ffe6ff
          const auto & layer = model.layers[il];
  
          ggml_tensor * inpL = cur;
-@@ -406,6 +411,7 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
+@@ -412,6 +417,7 @@ llama_model_lfm2::graph_decision::graph_decision(const llm_graph_params & params
  
          cur = ggml_add(ctx0, cur, ffn_out);
          cb(cur, "l_out", il);

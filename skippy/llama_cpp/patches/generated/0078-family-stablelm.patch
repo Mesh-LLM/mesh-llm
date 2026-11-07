@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/stablelm.cpp b/src/models/stablelm.cpp
-index 5189a460687cb3a50d2f503b3c48467334b7ec0c..08f8e26c853e825d124e38441cf08755825e7570 100644
+index 5aec7beee520986ad6ba4c4563ad2bb7c8647517..a68cc0d623e3d48c65862e6cb739dbd93eba34a2 100644
 --- a/src/models/stablelm.cpp
 +++ b/src/models/stablelm.cpp
-@@ -66,6 +66,8 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -66,6 +66,8 @@ llama_model_stablelm::graph::graph(const llm_graph_params & params) : llm_graph_
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 5189a460687cb3a50d2f503b3c48467334b7ec0c..08f8e26c853e825d124e38441cf08755
          // norm
          cur = build_norm(inpL,
                  model.layers[il].attn_norm,
-@@ -151,6 +153,7 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -142,6 +144,7 @@ llama_model_stablelm::graph::graph(const llm_graph_params & params) : llm_graph_
  
          // input for next layer
          inpL = cur;

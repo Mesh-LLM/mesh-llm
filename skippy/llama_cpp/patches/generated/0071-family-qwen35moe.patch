@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 5c22b4ea2817537be2d0bfd2b419414e8c43b472..1938f4e721c0b29c22c8df418628e76b45e15c4d 100644
+index 925d96c0971e72baa72d68b1ac52ff081777cf2d..3ea55c725d8924dd7ee686655d4f7a81c7763180 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -176,6 +176,8 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+@@ -173,6 +173,8 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
  
      // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 5c22b4ea2817537be2d0bfd2b419414e8c43b472..1938f4e721c0b29c22c8df418628e76b
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -223,6 +225,7 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+@@ -220,6 +222,7 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
  
          // Input for next layer
          inpL = cur;

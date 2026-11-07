@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
-Date: Sat, 19 Sep 2026 18:30:01 +1000
+Date: Fri, 6 Nov 2026 10:32:22 -0800
 Subject: [PATCH] models: add inkling family support
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH] models: add inkling family support
  common/parsers/parsers.h            |   2 +
  common/parsers/sources.cmake        |   1 +
  models/templates/Inkling.jinja      | 514 +++++++++++++++++++++
- src/llama-arch.cpp                  |  16 +
+ src/llama-arch.cpp                  |  15 +
  src/llama-arch.h                    |  24 +
  src/llama-context.cpp               |   6 +
  src/llama-graph.cpp                 |  25 +-
@@ -37,7 +37,7 @@ Subject: [PATCH] models: add inkling family support
  tools/mtmd/mtmd-image.cpp           |  72 +++
  tools/mtmd/mtmd-image.h             |  20 +
  tools/mtmd/mtmd.cpp                 |  37 +-
- 33 files changed, 2066 insertions(+), 24 deletions(-)
+ 33 files changed, 2065 insertions(+), 24 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
@@ -731,19 +731,18 @@ index 000000000..95874d23d
 +{%- endif -%}
 +{#- Unsloth translation to jinja from TML's parser #}
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index b388bb541..29f38e3a1 100644
+index 05875a8a8..e659ba84a 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -176,6 +176,8 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
-     { LLM_ARCH_K2_HORIZON,       "k2-horizon"       },
+@@ -179,6 +179,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_BEAM,             "beam"             },
      { LLM_ARCH_KOLIBRI1,         "kolibri1"         },
-+    { LLM_ARCH_LIMITE,           "limite"           },
+     { LLM_ARCH_RICURSIVE,        "ricursive"        },
 +    { LLM_ARCH_INKLING,          "inkling"          },
      { LLM_ARCH_UNKNOWN,          "(unknown)"        },
  };
  
-@@ -439,6 +441,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -444,6 +445,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_LILICORR_MLP_HIDDEN_SIZE,   "lilicorr.mlp_hidden_size"  },
  
      { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
@@ -762,7 +761,7 @@ index b388bb541..29f38e3a1 100644
      // sentence-transformers dense modules feature dims
      { LLM_KV_DENSE_2_FEAT_IN,        "%s.dense_2_feat_in"  },
      { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out" },
-@@ -1388,6 +1402,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
+@@ -1396,6 +1409,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_DEEPSEEK41:
          case LLM_ARCH_MINIMAX_01:
@@ -770,27 +769,27 @@ index b388bb541..29f38e3a1 100644
              return true;
          default:
              return false;
-@@ -1482,6 +1497,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+@@ -1492,6 +1506,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
          case LLM_ARCH_KIMI_K3:
+         case LLM_ARCH_KIMI_K31:
          case LLM_ARCH_QWEN3TTS:
-         case LLM_ARCH_LIMITE:
 +        case LLM_ARCH_INKLING:
+         case LLM_ARCH_LIMITE:
              return false;
          default:
-             return true;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 38fcd1254..cbade4a80 100644
+index cd34e36a9..4ee49d708 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -180,6 +180,7 @@ enum llm_arch {
-     LLM_ARCH_BEAM,
+@@ -183,6 +183,7 @@ enum llm_arch {
      LLM_ARCH_KOLIBRI1,
      LLM_ARCH_LIMITE,
+     LLM_ARCH_RICURSIVE,
 +    LLM_ARCH_INKLING,
      LLM_ARCH_UNKNOWN,
  };
  
-@@ -487,6 +488,17 @@ enum llm_kv {
+@@ -492,6 +493,17 @@ enum llm_kv {
  
      LLM_KV_SHORTCONV_L_CACHE,
  
@@ -808,7 +807,7 @@ index 38fcd1254..cbade4a80 100644
      LLM_KV_XIELU_ALPHA_N,
      LLM_KV_XIELU_ALPHA_P,
      LLM_KV_XIELU_BETA,
-@@ -571,6 +583,10 @@ enum llm_tensor {
+@@ -576,6 +588,10 @@ enum llm_tensor {
      LLM_TENSOR_FFN_DOWN_CHEXPS,
      LLM_TENSOR_FFN_GATE_CHEXPS,
      LLM_TENSOR_FFN_UP_CHEXPS,
@@ -819,7 +818,7 @@ index 38fcd1254..cbade4a80 100644
      LLM_TENSOR_FFN_EXP_PROBS_B,
      LLM_TENSOR_FFN_EXP_PROBS_B_VL,
      LLM_TENSOR_FFN_LATENT_DOWN,
-@@ -821,6 +837,14 @@ enum llm_tensor {
+@@ -827,6 +843,14 @@ enum llm_tensor {
      LLM_TENSOR_SHORTCONV_CONV,
      LLM_TENSOR_SHORTCONV_INPROJ,
      LLM_TENSOR_SHORTCONV_OUTPROJ,
@@ -835,7 +834,7 @@ index 38fcd1254..cbade4a80 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index db0974244..b3c0d714b 100644
+index de3bc61c5..64a41fe1c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -290,6 +290,12 @@ llama_context::llama_context(
@@ -852,10 +851,10 @@ index db0974244..b3c0d714b 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 1e51356ac..35619f1e9 100644
+index 25bad9935..4a2196b4f 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3516,10 +3516,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3550,10 +3550,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -863,7 +862,7 @@ index 1e51356ac..35619f1e9 100644
 +    // backends without a fused-bias flash-attention kernel (e.g. Metal for the
 +    // banded op) can still run FA by folding the additive KQ bias into the mask
 +    const bool fold_kq_b_into_mask = cparams.flash_attn && kq_b != nullptr && kq_mask != nullptr &&
-+            arch == LLM_ARCH_INKLING;
++            model.arch == LLM_ARCH_INKLING;
 +    const bool use_flash_attn = cparams.flash_attn && (kq_b == nullptr || fold_kq_b_into_mask);
      GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
      if (use_flash_attn) {
@@ -885,7 +884,7 @@ index 1e51356ac..35619f1e9 100644
  
          if (v_trans) {
              v = ggml_transpose(ctx0, v);
-@@ -3535,10 +3552,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3569,10 +3586,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          }
  
          if (kv_rows) {
@@ -912,7 +911,7 @@ index 1a554d204..08b81a067 100644
      }
  
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index 1ac50447c..16e2de85d 100644
+index 53810f36f..e685800f3 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
 @@ -106,9 +106,17 @@ struct llama_hparams {
@@ -935,10 +934,10 @@ index 1ac50447c..16e2de85d 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 1fc209ebd..b68ba321c 100644
+index 8ded67e17..5716c04f6 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -379,6 +379,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -385,6 +385,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_k2_horizon(params);
          case LLM_ARCH_KOLIBRI1:
              return new llama_model_kolibri1(params);
@@ -947,10 +946,10 @@ index 1fc209ebd..b68ba321c 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -3370,8 +3372,19 @@ llama_memory_i * llama_model::create_memory(
-                     llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
-                     const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
-                     if (arch == LLM_ARCH_FALCON_H1) {
+@@ -3420,8 +3422,19 @@ llama_memory_i * llama_model::create_memory(
+                             return il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
+                         };
+                     } else if (arch == LLM_ARCH_FALCON_H1) {
 +                        // all layers have both an attention KV cache and a recurrent (conv) state
                          filter_attn = [&](uint32_t) { return true; };
                          filter_recr = [&](uint32_t) { return true; };
@@ -967,19 +966,19 @@ index 1fc209ebd..b68ba321c 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -3760,6 +3773,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
-         case LLM_ARCH_KIMI_LINEAR:
-         case LLM_ARCH_KIMI_K3:
+@@ -3812,6 +3825,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_KIMI_K31:
          case LLM_ARCH_GLM5_NEXT:
+         case LLM_ARCH_STARCODER:
 +        case LLM_ARCH_INKLING:
              return LLAMA_ROPE_TYPE_NONE;
  
          // use what we call a normal RoPE, operating on pairs of consecutive head values
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 2db9a5b1b..66461b5e7 100644
+index f4c6c9e73..2f4bdfe8e 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -676,6 +676,15 @@ struct llama_layer {
+@@ -679,6 +679,15 @@ struct llama_layer {
  
      struct llama_layer_nextn nextn;
  
@@ -996,7 +995,7 @@ index 2db9a5b1b..66461b5e7 100644
  };
  
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 4fc8561ee..90ec8871e 100644
+index 69379305b..2c90b2331 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -357,6 +357,16 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
@@ -1750,10 +1749,10 @@ index 000000000..f6020bedd
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index c4563fac3..fbb529b6c 100644
+index 2752afc6b..8f6c3160d 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2521,6 +2521,18 @@ struct llama_model_lfm3 : public llama_model_base {
+@@ -2429,6 +2429,18 @@ struct llama_model_lfm3 : public llama_model_base {
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
  
@@ -1769,14 +1768,14 @@ index c4563fac3..fbb529b6c 100644
 +    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 +};
 +
- 
  struct llama_model_smallthinker : public llama_model_base {
      llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/nemotron-h-moe.cpp b/src/models/nemotron-h-moe.cpp
-index a80d7970e..7b454ba00 100644
+index 35145e26d..2c51ebb7c 100644
 --- a/src/models/nemotron-h-moe.cpp
 +++ b/src/models/nemotron-h-moe.cpp
-@@ -23,7 +23,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+@@ -23,7 +23,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llm_graph_params & params
  
      // token embedding weights
      // A standalone NextN-only draft omits token_embd/output and shares the
@@ -2073,10 +2072,10 @@ index 4cc533f10..98dfc4b65 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index cef3f814b..7be707075 100644
+index dde1b03f0..d12706299 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1214,6 +1214,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -1258,6 +1258,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2088,10 +2087,10 @@ index cef3f814b..7be707075 100644
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index fc9f0bb34..37d00f7d6 100644
+index d92340f6b..10704f7c6 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
-@@ -45,6 +45,7 @@ add_library(mtmd
+@@ -49,6 +49,7 @@ add_library(mtmd
              models/granite4-vision.cpp
              models/hunyuanvl.cpp
              models/internvl.cpp
@@ -2164,10 +2163,10 @@ index 13ac5f02b..835362004 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index a5ab432bb..5c65a563a 100644
+index d4e0fc901..a6fb180d2 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
-@@ -983,6 +983,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
+@@ -982,6 +982,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
      std::unique_ptr<clip_graph> builder;
  
      switch (ctx->proj_type()) {
@@ -2178,7 +2177,7 @@ index a5ab432bb..5c65a563a 100644
          case PROJECTOR_TYPE_GEMMA3:
          case PROJECTOR_TYPE_IDEFICS3:
          case PROJECTOR_TYPE_COHERE2V:
-@@ -1559,6 +1563,21 @@ struct clip_model_loader {
+@@ -1558,6 +1562,21 @@ struct clip_model_loader {
  
              // model-specific params
              switch (model.proj_type) {
@@ -2200,7 +2199,7 @@ index a5ab432bb..5c65a563a 100644
                  case PROJECTOR_TYPE_MLP:
                  case PROJECTOR_TYPE_MLP_NORM:
                  case PROJECTOR_TYPE_LDP:
-@@ -2708,7 +2727,8 @@ struct clip_model_loader {
+@@ -2707,7 +2726,8 @@ struct clip_model_loader {
              model.proj_type != PROJECTOR_TYPE_SOPRANO &&
              model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
              model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
@@ -2210,7 +2209,7 @@ index a5ab432bb..5c65a563a 100644
  
          // layers
          const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2898,6 +2918,23 @@ struct clip_model_loader {
+@@ -2897,6 +2917,23 @@ struct clip_model_loader {
          };
  
          switch (model.proj_type) {
@@ -2234,7 +2233,7 @@ index a5ab432bb..5c65a563a 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
                  {
-@@ -4817,6 +4854,11 @@ struct clip_model_loader {
+@@ -4816,6 +4853,11 @@ struct clip_model_loader {
              LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
          }
          batch.entries.push_back(img);
@@ -2246,7 +2245,7 @@ index a5ab432bb..5c65a563a 100644
          return batch;
      }
  
-@@ -5274,6 +5316,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
+@@ -5273,6 +5315,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
      projector_type proj = ctx->proj_type();
  
      switch (proj) {
@@ -2263,7 +2262,7 @@ index a5ab432bb..5c65a563a 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -6058,6 +6110,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -6057,6 +6109,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                  tail.resize(hparams.n_embd, 0.0f);
                  set_input_f32("inp_stem_tail", tail);
              } break;
@@ -2274,7 +2273,7 @@ index a5ab432bb..5c65a563a 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -7932,6 +7988,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -7931,6 +7987,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
      switch (ctx->model.proj_type) {
@@ -2419,10 +2418,10 @@ index 3323f0e9d..bd05127da 100644
      clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
      ggml_cgraph * build() override;
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 99e19490c..6a9ba3161 100644
+index a56eda645..f24fa677c 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -567,6 +567,75 @@ static bool log_mel_spectrogram(
+@@ -566,6 +566,75 @@ static bool log_mel_spectrogram(
      return true;
  }
  

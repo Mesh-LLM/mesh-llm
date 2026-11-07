@@ -1573,6 +1573,18 @@
       "family": "metis16",
       "status": "needs_boundary_registration",
       "unsupported_reason": "multi-pass graph is supported only as a whole model; pass-local routing and memory dependencies have no partition boundary contract"
+    },
+    {
+      "llama_model": "ricursive",
+      "family": "ricursive",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "xing4-0",
+      "family": "xing4-0",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp hyper-connection decoder registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
     }
   ]
 }

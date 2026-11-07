@@ -1,4 +1,4 @@
-From aafffedf760f80e8b2a2f0acb6bb0806a91a6c41 Mon Sep 17 00:00:00 2001
+From 0b9e71f1b899c1c21797f38ef65003ee71ab4476 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
@@ -2576,7 +2576,7 @@ index 91691b223..a6d145e69 100644
      kernels/fa_f16.metal
      kernels/fa_f32.metal
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index e096d611b..f04009fdb 100644
+index 4053a624e..56b795790 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
 @@ -1,6 +1,7 @@
@@ -4107,10 +4107,10 @@ index 97250c2e8..5e02baa49 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 74d265526..99e19490c 100644
+index 9e60d9697..a56eda645 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -286,6 +286,7 @@ struct filter_params {
+@@ -285,6 +285,7 @@ struct filter_params {
      float   mel_floor       = 5.960464477539063e-08f;
      bool    mel_floor_add   = false;  // log(x + floor) instead of log(max(x, floor))
      bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
@@ -4118,7 +4118,7 @@ index 74d265526..99e19490c 100644
  };
  
  static void log_mel_spectrogram_worker_thread(int                        ith,
-@@ -330,6 +331,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
+@@ -329,6 +330,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
          // Calculate modulus^2 (power) or modulus (magnitude)
          for (int j = 0; j < n_fft_bins; j++) {
              float power = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
