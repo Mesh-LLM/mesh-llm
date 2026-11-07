@@ -276,6 +276,57 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 15,
             backends: DFlashBackends::Metal,
         },
+        // Laguna-XS-2.1 (Poolside, 33B MoE with 3B active). Poolside's draft,
+        // converted to Q8_0, reads target layers 2, 14, 26, 34 and 40 (the last
+        // layer's output) through the Laguna decoder contract. On a DGX Spark it
+        // decodes chat 1.24x faster than no speculation and coding-agent turns
+        // with 4-48K of history 2.4x faster; smaller caps help chat a little and
+        // agent turns much less. Off on Metal: Laguna's target returns NaN
+        // logits there for short prompts (f16 overflow in the MoE down
+        // projection), so there is nothing to speed up yet.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 40,
+                embedding_length: 2048,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "meshllm/Laguna-XS-2.1-DFlash-GGUF".to_string(),
+                revision: "7197343f8f8b29c3a50b72647ca4606edcfc70f1".to_string(),
+                file: "Laguna-XS-2.1-DFlash-Q8_0.gguf".to_string(),
+                sha256: "40eb6bf48f42ebc1990a0ba8c74d2070a256e7f1842a58d8aa9b195e907b04e8"
+                    .to_string(),
+                bytes: 494_735_360,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::NotMetal,
+        },
+        // Laguna-S-2.1 (Poolside, 118B MoE with 8B active). Poolside's own BF16
+        // GGUF of the draft reads target layers 2, 11, 20, 30, 39 and 48 (the
+        // last layer's output) with a 512-token sliding window. A DGX Spark
+        // decodes chat 1.45x and agent turns 1.6x faster. Community Q8_0 GGUFs
+        // without the window metadata lose all acceptance past 16K of history.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 48,
+                embedding_length: 3072,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "poolside/Laguna-S-2.1-GGUF".to_string(),
+                revision: "19036076775e9ba6758595f78af99cb976ef8ff0".to_string(),
+                file: "laguna-s-2.1-DFlash-BF16.gguf".to_string(),
+                sha256: "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4"
+                    .to_string(),
+                bytes: 2_233_764_224,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::NotMetal,
+        },
     ]
 }
 
@@ -589,7 +640,7 @@ mod tests {
 
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B and Qwen3-Coder-Next.
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Laguna-XS-2.1 and Laguna-S-2.1.
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
@@ -610,6 +661,14 @@ mod tests {
             (
                 "Qwen3-Coder-Next",
                 named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
+            ),
+            (
+                "Laguna-XS-2.1",
+                named(target_meta("laguna", 40, 2048, 256), "Laguna XS 2.1"),
+            ),
+            (
+                "Laguna-S-2.1",
+                named(target_meta("laguna", 48, 3072, 256), "Laguna S 2.1"),
             ),
         ]
     }
@@ -680,6 +739,16 @@ mod tests {
             Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
         );
         assert_eq!(repo("Qwen3-Coder-Next", false), None);
+        assert_eq!(
+            repo("Laguna-XS-2.1", false).as_deref(),
+            Some("meshllm/Laguna-XS-2.1-DFlash-GGUF")
+        );
+        assert_eq!(
+            repo("Laguna-S-2.1", false).as_deref(),
+            Some("poolside/Laguna-S-2.1-GGUF")
+        );
+        assert_eq!(repo("Laguna-XS-2.1", true), None);
+        assert_eq!(repo("Laguna-S-2.1", true), None);
     }
 
     #[test]

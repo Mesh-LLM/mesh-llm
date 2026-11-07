@@ -1132,6 +1132,8 @@ quant matches, and the draft is pinned to a Hugging Face revision and SHA-256:
 | Qwen3.6-35B-A3B | `aminya/Qwen3.6-35B-A3B-DFlash2-GGUF` | CUDA and others |
 | Qwen3.6-35B-A3B | `Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp` | Metal |
 | Qwen3-Coder-Next | `AtomicChat/Qwen3-Coder-Next-DFlash-GGUF` | Metal only |
+| Laguna-XS-2.1 | `meshllm/Laguna-XS-2.1-DFlash-GGUF` | CUDA and others |
+| Laguna-S-2.1 | `poolside/Laguna-S-2.1-GGUF` (`laguna-s-2.1-DFlash-BF16.gguf`) | CUDA and others |
 
 A load uses the draft once it is in the Hugging Face cache. A missing draft
 downloads in the background and the load does not wait for it: it serves with

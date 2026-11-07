@@ -103,6 +103,40 @@
       },
       "max_draft_tokens": 15,
       "backends": "metal"
+    },
+    {
+      "target": {
+        "architecture": "laguna",
+        "layer_count": 40,
+        "embedding_length": 2048,
+        "expert_count": 256
+      },
+      "draft": {
+        "repo": "meshllm/Laguna-XS-2.1-DFlash-GGUF",
+        "revision": "7197343f8f8b29c3a50b72647ca4606edcfc70f1",
+        "file": "Laguna-XS-2.1-DFlash-Q8_0.gguf",
+        "sha256": "40eb6bf48f42ebc1990a0ba8c74d2070a256e7f1842a58d8aa9b195e907b04e8",
+        "bytes": 494735360
+      },
+      "max_draft_tokens": 15,
+      "backends": "not-metal"
+    },
+    {
+      "target": {
+        "architecture": "laguna",
+        "layer_count": 48,
+        "embedding_length": 3072,
+        "expert_count": 256
+      },
+      "draft": {
+        "repo": "poolside/Laguna-S-2.1-GGUF",
+        "revision": "19036076775e9ba6758595f78af99cb976ef8ff0",
+        "file": "laguna-s-2.1-DFlash-BF16.gguf",
+        "sha256": "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4",
+        "bytes": 2233764224
+      },
+      "max_draft_tokens": 15,
+      "backends": "not-metal"
     }
   ]
 }
