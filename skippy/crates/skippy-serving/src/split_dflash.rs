@@ -359,7 +359,7 @@ mod tests {
             settled_feature_encoding(&DFlashFeatureEncoding::READABLE),
             Some(SPLIT_FEATURE_ENCODING)
         );
-        // A final stage that predates Q4 reads Q8.
+        // A final stage that does not read Q4 gets Q8.
         assert_eq!(
             settled_feature_encoding(&[DFlashFeatureEncoding::Bf16, DFlashFeatureEncoding::Q8]),
             Some(DFlashFeatureEncoding::Q8)
