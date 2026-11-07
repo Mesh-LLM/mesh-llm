@@ -31,8 +31,9 @@ pub struct RuntimeLaunchOverrides {
     pub n_threads: Option<usize>,
     pub n_threads_batch: Option<usize>,
     pub mtp_source: MtpSource,
-    /// Recurrent rollback depth the speculative plan needs; `0` keeps the
-    /// native default.
+    /// Recurrent rollback depth the speculative plan needs; `0` reserves no
+    /// rollback snapshots and verify windows restore a checkpoint instead
+    /// (the value crosses to the native config verbatim).
     pub verify_rollback_tokens: u32,
 }
 

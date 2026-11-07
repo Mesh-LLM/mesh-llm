@@ -1,3 +1,11 @@
+//! Runtime configuration that crosses to the native staged runtime.
+//!
+//! Rule: a doc claim about a sentinel or default value is made only where a
+//! test constructs that value and asserts what crosses (`as_raw()`); the doc
+//! names its witness. `verify_rollback_tokens` is the corrected case — its
+//! zero-value doc once claimed `0` "keeps the native default" while the value
+//! crosses verbatim and the native contract (patch 0015) reserves no
+//! snapshots and restores a checkpoint instead.
 use std::ffi::CString;
 use std::ptr;
 
@@ -153,7 +161,11 @@ pub struct RuntimeConfig {
     pub host_expert_layers: Option<HostExpertLayers>,
     /// Recurrent-state rollback depth for recurrent and hybrid models. A
     /// speculative plan sets it to its largest verify window so verify rolls
-    /// back in place; `0` keeps the native default.
+    /// back in place. `0` reserves no rollback snapshots and verify windows
+    /// restore a checkpoint instead (native patch 0015): the value crosses
+    /// verbatim, so the native default (2, also this `Default`) applies only
+    /// to a config-less load. Witness:
+    /// `verify_rollback_tokens_zero_passes_through_verbatim`.
     pub verify_rollback_tokens: u32,
 }
 
@@ -633,6 +645,23 @@ mod tests {
         assert!(!auto_raw.raw.has_mmap_override);
         assert!(!auto_raw.raw.use_mmap);
         assert!(!auto_raw.raw.use_mlock);
+
+        Ok(())
+    }
+
+    #[test]
+    fn verify_rollback_tokens_zero_passes_through_verbatim() -> anyhow::Result<()> {
+        // The zero-value doc (no snapshots; checkpoint restore under native
+        // patch 0015) holds only because the value crosses untouched.
+        let disabled = RuntimeConfig {
+            verify_rollback_tokens: 0,
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(disabled.as_raw()?.raw.verify_rollback_tokens, 0);
+
+        let defaulted = RuntimeConfig::default();
+        assert_eq!(defaulted.verify_rollback_tokens, 2);
+        assert_eq!(defaulted.as_raw()?.raw.verify_rollback_tokens, 2);
 
         Ok(())
     }
