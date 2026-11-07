@@ -2,13 +2,14 @@
 //!
 //! Rows travel as Q8 blocks by default: 32 values share an F16 scale, as in
 //! ggml's Q8_0, which is about half the bytes of BF16. A block keeps an
-//! outlier channel from flattening the rest of its row. The draft only
-//! proposes tokens the target then verifies, so feature precision can change
-//! acceptance but never output. `SKIPPY_DFLASH_FEATURE_ENCODING=bf16` sends
-//! BF16 rows instead; receivers read either.
+//! outlier channel from flattening the rest of its row. Q4 blocks halve that
+//! again. The draft only proposes tokens the target then verifies, so feature
+//! precision can change acceptance but never output.
+//! `SKIPPY_DFLASH_FEATURE_ENCODING=bf16|q8|q4` picks what this process sends;
+//! receivers read all three.
 //!
-//! A Q8 part is an I32 part of packed rows, so activation codecs and the
-//! native runtime carry it through untouched like any other opaque part.
+//! A Q8 or Q4 part is an I32 part of packed rows, so activation codecs and
+//! the native runtime carry it through untouched like any other opaque part.
 
 use std::sync::OnceLock;
 
@@ -27,8 +28,16 @@ const FEATURE_IDENTITY_PREFIX: &[u8] = b"skippy.dflash.layer_inp.";
 /// follows in decimal, since the packed rows do not show their width.
 const Q8_FEATURE_IDENTITY_PREFIX: &[u8] = b"skippy.dflash.q8.";
 
-/// Values that share one scale in a Q8-block row.
+/// Identity prefix of a Q4-block DFlash feature part; `<layer>.<width>`
+/// follows, as for Q8.
+const Q4_FEATURE_IDENTITY_PREFIX: &[u8] = b"skippy.dflash.q4.";
+
+/// Values that share one scale in a Q8- or Q4-block row.
 const Q8_BLOCK: usize = 32;
+
+/// The largest magnitude a Q4 value takes: values are -7..=7 steps of the
+/// block scale, stored offset by 8 in a nibble.
+const Q4_LEVELS: f32 = 7.0;
 
 /// Environment override for how this stage encodes the rows it sends.
 const FEATURE_ENCODING_ENV: &str = "SKIPPY_DFLASH_FEATURE_ENCODING";
@@ -42,6 +51,9 @@ pub enum DFlashFeatureEncoding {
     /// bytes, in an I32 part.
     #[default]
     Q8,
+    /// Blocks of 32 values at four bits each with an F16 scale each, rows
+    /// padded to four bytes, in an I32 part.
+    Q4,
 }
 
 impl DFlashFeatureEncoding {
@@ -53,10 +65,11 @@ impl DFlashFeatureEncoding {
             let value = std::env::var(FEATURE_ENCODING_ENV).unwrap_or_default();
             match value.trim().to_ascii_lowercase().as_str() {
                 "" | "q8" => Self::Q8,
+                "q4" => Self::Q4,
                 "bf16" => Self::Bf16,
                 other => {
                     crate::write_native_log_note(format!(
-                        "{FEATURE_ENCODING_ENV}={other} is not bf16 or q8; sending q8"
+                        "{FEATURE_ENCODING_ENV}={other} is not bf16, q8 or q4; sending q8"
                     ));
                     Self::Q8
                 }
@@ -69,6 +82,21 @@ impl DFlashFeatureEncoding {
         match self {
             Self::Bf16 => n_embd * 2,
             Self::Q8 => (n_embd.div_ceil(Q8_BLOCK) * 2 + n_embd).next_multiple_of(4),
+            Self::Q4 => {
+                let full = n_embd / Q8_BLOCK;
+                let tail = n_embd % Q8_BLOCK;
+                let tail_bytes = if tail == 0 { 0 } else { 2 + tail.div_ceil(2) };
+                (full * (2 + Q8_BLOCK / 2) + tail_bytes).next_multiple_of(4)
+            }
+        }
+    }
+
+    /// The identity prefix of a packed-block part in this encoding.
+    fn block_identity_prefix(self) -> Option<&'static [u8]> {
+        match self {
+            Self::Bf16 => None,
+            Self::Q8 => Some(Q8_FEATURE_IDENTITY_PREFIX),
+            Self::Q4 => Some(Q4_FEATURE_IDENTITY_PREFIX),
         }
     }
 }
@@ -85,19 +113,30 @@ pub fn dflash_feature_identity(layer: u32) -> [u8; ACTIVATION_IDENTITY_BYTES] {
 
 /// Activation part identity carrying the Q8-block input rows, `n_embd` wide,
 /// of target layer `layer`.
-pub(super) fn q8_feature_identity(
+#[cfg(test)]
+fn q8_feature_identity(layer: u32, n_embd: usize) -> Result<[u8; ACTIVATION_IDENTITY_BYTES]> {
+    block_feature_identity(DFlashFeatureEncoding::Q8, layer, n_embd)
+}
+
+/// Activation part identity carrying the packed-block input rows, `n_embd`
+/// wide, of target layer `layer` in `encoding`.
+pub(super) fn block_feature_identity(
+    encoding: DFlashFeatureEncoding,
     layer: u32,
     n_embd: usize,
 ) -> Result<[u8; ACTIVATION_IDENTITY_BYTES]> {
+    let prefix = encoding
+        .block_identity_prefix()
+        .ok_or_else(|| anyhow::anyhow!("{encoding:?} feature rows are not packed blocks"))?;
     let mut identity = [0_u8; ACTIVATION_IDENTITY_BYTES];
     let suffix = format!("{layer}.{n_embd}");
-    let end = Q8_FEATURE_IDENTITY_PREFIX.len() + suffix.len();
+    let end = prefix.len() + suffix.len();
     ensure!(
         end <= ACTIVATION_IDENTITY_BYTES,
-        "Q8 feature identity for layer {layer} of width {n_embd} does not fit"
+        "{encoding:?} feature identity for layer {layer} of width {n_embd} does not fit"
     );
-    identity[..Q8_FEATURE_IDENTITY_PREFIX.len()].copy_from_slice(Q8_FEATURE_IDENTITY_PREFIX);
-    identity[Q8_FEATURE_IDENTITY_PREFIX.len()..end].copy_from_slice(suffix.as_bytes());
+    identity[..prefix.len()].copy_from_slice(prefix);
+    identity[prefix.len()..end].copy_from_slice(suffix.as_bytes());
     Ok(identity)
 }
 
@@ -117,19 +156,24 @@ fn identity_suffix<'a>(
     std::str::from_utf8(&suffix[..end]).ok()
 }
 
-/// What a DFlash feature part carries: its layer, its encoding, and for Q8
-/// rows their width.
+/// What a DFlash feature part carries: its layer, its encoding, and for
+/// packed-block rows their width.
 pub(super) fn dflash_feature_part(
     identity: &[u8; ACTIVATION_IDENTITY_BYTES],
 ) -> Option<(u32, DFlashFeatureEncoding, Option<usize>)> {
     if let Some(suffix) = identity_suffix(identity, FEATURE_IDENTITY_PREFIX) {
         return Some((suffix.parse().ok()?, DFlashFeatureEncoding::Bf16, None));
     }
-    let suffix = identity_suffix(identity, Q8_FEATURE_IDENTITY_PREFIX)?;
+    let (encoding, suffix) = [DFlashFeatureEncoding::Q8, DFlashFeatureEncoding::Q4]
+        .into_iter()
+        .find_map(|encoding| {
+            identity_suffix(identity, encoding.block_identity_prefix()?)
+                .map(|suffix| (encoding, suffix))
+        })?;
     let (layer, width) = suffix.split_once('.')?;
     Some((
         layer.parse().ok()?,
-        DFlashFeatureEncoding::Q8,
+        encoding,
         Some(width.parse().ok().filter(|width| *width > 0)?),
     ))
 }
@@ -234,6 +278,66 @@ pub(super) fn encode_q8_rows(values: &[f32], n_embd: usize, out: &mut Vec<u8>) {
     }
 }
 
+/// Encodes rows of `n_embd` values as Q4 blocks: per block of up to 32
+/// values, an F16 scale and four bits a value (two values a byte, the first
+/// in the low nibble), with each row padded to four bytes. A value is a
+/// signed step in -7..=7 stored plus 8. A value that is not finite encodes as
+/// zero.
+pub(super) fn encode_q4_rows(values: &[f32], n_embd: usize, out: &mut Vec<u8>) {
+    let row_bytes = DFlashFeatureEncoding::Q4.row_bytes(n_embd);
+    out.reserve(values.len().div_ceil(n_embd.max(1)) * row_bytes);
+    for row in values.chunks(n_embd.max(1)) {
+        let row_start = out.len();
+        for block in row.chunks(Q8_BLOCK) {
+            let amax = block
+                .iter()
+                .filter(|value| value.is_finite())
+                .fold(0.0_f32, |amax, value| amax.max(value.abs()));
+            let scale_bits = f16_from_nonnegative(amax / Q4_LEVELS);
+            let scale = f16_to_f32(scale_bits);
+            let inverse = if scale > 0.0 { scale.recip() } else { 0.0 };
+            out.extend_from_slice(&scale_bits.to_le_bytes());
+            let nibble = |value: f32| {
+                let step = if value.is_finite() {
+                    (value * inverse).round().clamp(-Q4_LEVELS, Q4_LEVELS)
+                } else {
+                    0.0
+                };
+                (step as i8 + 8) as u8
+            };
+            out.extend(block.chunks(2).map(|pair| {
+                nibble(pair[0]) | (pair.get(1).map_or(8, |&value| nibble(value)) << 4)
+            }));
+        }
+        out.resize(row_start + row_bytes, 0);
+    }
+}
+
+/// Decodes rows `encode_q4_rows` wrote; the caller checked the length.
+pub(super) fn decode_q4_rows(bytes: &[u8], n_embd: usize) -> Vec<f32> {
+    let row_bytes = DFlashFeatureEncoding::Q4.row_bytes(n_embd);
+    let mut values = Vec::with_capacity(bytes.len() / row_bytes.max(1) * n_embd);
+    for row in bytes.chunks_exact(row_bytes.max(1)) {
+        let mut offset = 0;
+        let mut remaining = n_embd;
+        while remaining > 0 {
+            let len = remaining.min(Q8_BLOCK);
+            let scale = f16_to_f32(u16::from_le_bytes([row[offset], row[offset + 1]]));
+            let packed = &row[offset + 2..offset + 2 + len.div_ceil(2)];
+            values.extend(
+                packed
+                    .iter()
+                    .flat_map(|&byte| [byte & 0x0f, byte >> 4])
+                    .take(len)
+                    .map(|nibble| f32::from(i8::try_from(nibble).unwrap_or(8) - 8) * scale),
+            );
+            offset += 2 + len.div_ceil(2);
+            remaining -= len;
+        }
+    }
+    values
+}
+
 /// Decodes rows `encode_q8_rows` wrote; the caller checked the length.
 pub(super) fn decode_q8_rows(bytes: &[u8], n_embd: usize) -> Vec<f32> {
     let row_bytes = DFlashFeatureEncoding::Q8.row_bytes(n_embd);
@@ -332,6 +436,63 @@ mod tests {
         assert_eq!(DFlashFeatureEncoding::Q8.row_bytes(5120), 5440);
         // Two blocks of 32 and 1 values, padded to a word.
         assert_eq!(DFlashFeatureEncoding::Q8.row_bytes(33), 40);
+    }
+
+    #[test]
+    fn q4_rows_keep_every_value_within_half_a_step_of_its_block() {
+        for n_embd in [1, 31, 32, 33, 2560, 5120] {
+            let rows = 3;
+            let values = (0..rows * n_embd)
+                .map(|index| {
+                    let value = ((index * 7919) % 1000) as f32 / 100.0 - 5.0;
+                    if index % 97 == 5 {
+                        value * 400.0
+                    } else {
+                        value
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut bytes = Vec::new();
+            encode_q4_rows(&values, n_embd, &mut bytes);
+            assert_eq!(
+                bytes.len(),
+                rows * DFlashFeatureEncoding::Q4.row_bytes(n_embd)
+            );
+            let decoded = decode_q4_rows(&bytes, n_embd);
+            assert_eq!(decoded.len(), values.len());
+            for (got_row, want_row) in decoded.chunks(n_embd).zip(values.chunks(n_embd)) {
+                for (got, want) in got_row.chunks(Q8_BLOCK).zip(want_row.chunks(Q8_BLOCK)) {
+                    let amax = want
+                        .iter()
+                        .fold(0.0_f32, |amax, value| amax.max(value.abs()));
+                    let bound = amax / (2.0 * Q4_LEVELS) + amax * f32::powi(2.0, -10);
+                    for (got, want) in got.iter().zip(want) {
+                        assert!((got - want).abs() <= bound, "{n_embd}: {got} vs {want}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn q4_rows_take_about_half_the_bytes_of_q8() {
+        assert_eq!(DFlashFeatureEncoding::Q4.row_bytes(5120), 2880);
+        assert_eq!(DFlashFeatureEncoding::Q4.row_bytes(2560), 1440);
+        // A block of 32 (18 bytes) and one of 1 (3 bytes), padded to a word.
+        assert_eq!(DFlashFeatureEncoding::Q4.row_bytes(33), 24);
+        let mut bytes = Vec::new();
+        encode_q4_rows(&[f32::NAN, 1.0, -7.0], 3, &mut bytes);
+        assert_eq!(decode_q4_rows(&bytes, 3), vec![0.0, 1.0, -7.0]);
+    }
+
+    #[test]
+    fn q4_identities_name_their_layer_and_width() {
+        let identity = block_feature_identity(DFlashFeatureEncoding::Q4, 17, 5120).unwrap();
+        assert_eq!(
+            dflash_feature_part(&identity),
+            Some((17, DFlashFeatureEncoding::Q4, Some(5120)))
+        );
+        assert!(block_feature_identity(DFlashFeatureEncoding::Bf16, 17, 5120).is_err());
     }
 
     #[test]
