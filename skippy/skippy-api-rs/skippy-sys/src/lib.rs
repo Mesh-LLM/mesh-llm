@@ -216,6 +216,15 @@ pub mod ffi {
         dimensions: usize,
     }
 
+    /// Selected log-probability readout from a staged session (patch 0011).
+    #[derive(Debug)]
+    struct ReadoutResult {
+        ok: bool,
+        error: String,
+        status: i32,
+        scores: Vec<f32>,
+    }
+
     /// Outcome of validating a stage chain.
     #[derive(Debug)]
     struct ChainValidation {
@@ -285,6 +294,29 @@ pub mod ffi {
         /// Opens stage `index` of `stages` over the model at `path`.
         fn load_staged_model(self: Pin<&mut Bridge>, path: &str, stages: u32, index: u32) -> StagedModelResult;
 
+        /// Opens stage `index` of `stages` with routed-expert blocks
+        /// `[host_start, host_end)` placed in host memory (patch 0013).
+        fn load_staged_model_host_experts(
+            self: Pin<&mut Bridge>,
+            path: &str,
+            stages: u32,
+            index: u32,
+            host_start: i32,
+            host_end: i32,
+        ) -> StagedModelResult;
+
+        /// Opens stage `index` of `stages` stating how far a verify window
+        /// may rewind recurrent state in place (patch 0015). `rollback` is
+        /// the safe enum's encoding: 0 is `None` - the session never
+        /// verifies drafts - and any other value is `InPlace(n)`.
+        fn load_staged_model_verify_rollback(
+            self: Pin<&mut Bridge>,
+            path: &str,
+            stages: u32,
+            index: u32,
+            rollback: u32,
+        ) -> StagedModelResult;
+
         /// Opens a session on a stage.
         fn create_staged_session(self: Pin<&mut Bridge>, model: &StagedModel) -> StagedSessionResult;
 
@@ -295,6 +327,15 @@ pub mod ffi {
             tokens: &[i32],
             output: &mut [f32],
         ) -> StagedEmbedResult;
+
+        /// Reads bounded, unsampled log probabilities for `selected` tokens
+        /// from the final row after feeding `tokens` (patch 0011).
+        fn staged_readout(
+            self: Pin<&mut Bridge>,
+            session: Pin<&mut StagedSession>,
+            tokens: &[i32],
+            selected: &[i32],
+        ) -> ReadoutResult;
 
         /// Reads the model's family from its GGUF architecture.
         fn model_family(self: &Bridge, path: &str) -> ModelFamily;

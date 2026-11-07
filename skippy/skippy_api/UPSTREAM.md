@@ -152,3 +152,19 @@ Result: zero crashes, zero ASan reports, all cases rejected with diagnostics
 except the wrap-to-zero family — which parses and trips UBSan at
 `ggml.c:1289` (the entry above). Data-section truncations (metadata complete)
 legitimately parse because `no_alloc` never reads data.
+
+- `skippy_apply_host_expert_placement` silently drops a malformed block range
+  (negative start, inverted end, span past the cap): the caller cannot tell a
+  placed range from a dropped knob. A status return — or an
+  `out_placed_blocks` — would let ABI consumers reject caller bugs instead of
+  guessing; the facade re-validates at its boundary for exactly this reason
+  (patch 0013 port). Positive routed-expert coverage also needs a MoE GGUF
+  fixture; every local bench model is dense, so the knob is inert where it is
+  measured today.
+- `params.n_rs_seq` (patch 0015) only changes context geometry on
+  recurrent/hybrid families; the dense bench models never read it, so the
+  `verify_rollback` row prices the boundary threading alone. A positive
+  measurement - `n_rs_seq == 0` vs `== N` opens and the checkpoint-restore
+  equivalence path - needs a recurrent GGUF fixture (RWKV/Mamba class),
+  which the loader currently rejects before the knob applies anyway - that
+  gap is the first thing to close before the row can move past `parity`.

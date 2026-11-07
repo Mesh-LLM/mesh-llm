@@ -93,7 +93,7 @@ fn open(
         ctx_size: CTX_SIZE,
         n_gpu_layers: n_gpu_layers(),
         load_mode: RuntimeLoadMode::RuntimeSlice,
-        recurrent_rollback_tokens: rollback_tokens,
+        verify_rollback_tokens: rollback_tokens,
         ..RuntimeConfig::default()
     };
     if let Some(plan) = plan {

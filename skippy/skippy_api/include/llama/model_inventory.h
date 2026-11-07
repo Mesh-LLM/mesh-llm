@@ -667,6 +667,23 @@ inline std::int32_t layer_count_from(std::span<const TensorInfo> tensors) {
     return layers;
 }
 
+/// The model's embedding width: `token_embd.weight`'s first dimension, which
+/// is the size every embed output buffer must hold. A file without that
+/// tensor, or with a non-positive or `int32`-overflowing width, yields 0,
+/// which callers treat as "cannot embed" rather than guessing a size — the
+/// names and dimensions are file-controlled and never trusted to be sane.
+inline std::int32_t embedding_size_from(std::span<const TensorInfo> tensors) {
+    for (const TensorInfo& tensor : tensors) {
+        if (tensor.name != "token_embd.weight") continue;
+        if (tensor.dimension_count < 1) break;
+        const std::int64_t width = tensor.dimensions.front();
+        // Bounded against int32_t just above, so the narrowing is safe.
+        if (width <= 0 || width > std::numeric_limits<std::int32_t>::max()) break;
+        return static_cast<std::int32_t>(width);
+    }
+    return 0;
+}
+
 /// Memoises a per-file-version computation without a mutex: readers snapshot
 /// an atomic index of results and never block; a miss computes outside any
 /// critical section and publishes copy-on-write with a compare-and-swap. The

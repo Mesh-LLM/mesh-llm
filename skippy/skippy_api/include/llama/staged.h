@@ -76,6 +76,11 @@ public:
     [[nodiscard]] std::expected<std::uint32_t, StagedFailure>
     embed(std::span<const llama_token> tokens, std::span<float> output);
 
+    /// Clears recorded tokens and KV state so the session can be re-fed from
+    /// position zero. Reads advance positions like any iteration, so callers
+    /// that re-read a fixed window need this between reads.
+    [[nodiscard]] std::expected<void, StagedFailure> reset();
+
     [[nodiscard]] skippy_session* native() const noexcept { return session_; }
 
 private:

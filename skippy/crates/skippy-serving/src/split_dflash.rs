@@ -90,7 +90,7 @@ impl SplitDFlashStage {
 
     /// Recurrent rollback depth every stage needs to verify the longest block
     /// in place: every drafted token plus the anchor.
-    pub fn recurrent_rollback_tokens(&self) -> u32 {
+    pub fn verify_rollback_tokens(&self) -> u32 {
         let drafted = self.max_draft_tokens.unwrap_or(UNCAPPED_DRAFT_TOKENS);
         u32::try_from(drafted.saturating_add(1)).unwrap_or(u32::MAX)
     }
@@ -511,7 +511,7 @@ mod tests {
             max_draft_tokens: cap,
             ..SplitDFlashStage::default()
         };
-        assert_eq!(stage(Some(7)).recurrent_rollback_tokens(), 8);
-        assert_eq!(stage(None).recurrent_rollback_tokens(), 16);
+        assert_eq!(stage(Some(7)).verify_rollback_tokens(), 8);
+        assert_eq!(stage(None).verify_rollback_tokens(), 16);
     }
 }

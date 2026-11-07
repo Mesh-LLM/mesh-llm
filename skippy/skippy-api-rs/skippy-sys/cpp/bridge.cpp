@@ -8,9 +8,11 @@
 #include "encode.h"
 #include "family.h"
 #include "llama/backend.h"
+#include "llama/causal_readout.h"
 #include "llama/model_inventory.h"
 #include "llama/stage_planner.h"
 #include "rerank.h"
+#include "selected_log_probs.h"
 #include "types.h"
 #include "workload.h"
 #include "workload_error.h"
@@ -400,7 +402,12 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
             result.error = rust::String::lossy(lease.error().message);
             return result;
         }
-        const auto spec = skippy::llama::own(lease->configs[index]);
+        auto spec = skippy::llama::own(lease->configs[index]);
+        // A plain lane is a configless native load: it states the native
+        // default rather than letting the facade pick. A caller whose
+        // session never verifies drafts passes VerifyRollback::None through
+        // the named lane instead.
+        spec.verify_rollback = skippy::VerifyRollback::native_default();
         auto model = skippy::llama::StagedModel::open(model_path, spec);
         if (!model) {
             result.error = rust::String::lossy(model.error().message);
@@ -410,6 +417,105 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
         result.model = std::make_unique<StagedModel>(std::move(*model));
         return result;
     });
+}
+
+StagedModelResult Bridge::load_staged_model_host_experts(rust::Str path, std::uint32_t stages,
+                                                         std::uint32_t index,
+                                                         std::int32_t host_start,
+                                                         std::int32_t host_end) noexcept {
+    return guarded_message<StagedModelResult>(
+        "load_staged_model_host_experts", [&]() -> StagedModelResult {
+            StagedModelResult result{};
+            result.ok = false;
+
+            const std::string model_path(path);
+            auto inventory = skippy::probe::cached_inventory(model_path);
+            if (!inventory) {
+                result.error = rust::String::lossy(inventory.error());
+                return result;
+            }
+            const auto layers = skippy::probe::layer_count_from(*inventory);
+            const auto ranges = split_layers(layers, stages);
+            if (!ranges) {
+                result.error = rust::String::lossy(ranges.error());
+                return result;
+            }
+            if (index >= ranges->size()) {
+                result.error = rust::String::lossy("stage index is out of range");
+                return result;
+            }
+
+            auto lease =
+                skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, *ranges);
+            if (!lease) {
+                result.error = rust::String::lossy(lease.error().message);
+                return result;
+            }
+            auto spec = skippy::llama::own(lease->configs[index]);
+            spec.verify_rollback = skippy::VerifyRollback::native_default();
+            spec.host_experts = skippy::LayerRange{host_start, host_end};
+            auto model = skippy::llama::StagedModel::open(model_path, spec);
+            if (!model) {
+                result.error = rust::String::lossy(model.error().message);
+                return result;
+            }
+            result.ok = true;
+            result.model = std::make_unique<StagedModel>(std::move(*model));
+            return result;
+        });
+}
+
+StagedModelResult Bridge::load_staged_model_verify_rollback(rust::Str path, std::uint32_t stages,
+                                                            std::uint32_t index,
+                                                            std::uint32_t rollback) noexcept {
+    return guarded_message<StagedModelResult>(
+        "load_staged_model_verify_rollback", [&]() -> StagedModelResult {
+            StagedModelResult result{};
+            result.ok = false;
+
+            const std::string model_path(path);
+            auto inventory = skippy::probe::cached_inventory(model_path);
+            if (!inventory) {
+                result.error = rust::String::lossy(inventory.error());
+                return result;
+            }
+            const auto layers = skippy::probe::layer_count_from(*inventory);
+            const auto ranges = split_layers(layers, stages);
+            if (!ranges) {
+                result.error = rust::String::lossy(ranges.error());
+                return result;
+            }
+            if (index >= ranges->size()) {
+                result.error = rust::String::lossy("stage index is out of range");
+                return result;
+            }
+
+            auto lease =
+                skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, *ranges);
+            if (!lease) {
+                result.error = rust::String::lossy(lease.error().message);
+                return result;
+            }
+            auto spec = skippy::llama::own(lease->configs[index]);
+            // 0 is the safe enum's None, not a depth: map it to none() so a
+            // non-drafting session opens with n_rs_seq == 0 and verify falls
+            // back to checkpoint restore.
+            auto verify_rollback = rollback == 0 ? skippy::VerifyRollback::none()
+                                                 : skippy::VerifyRollback::in_place(rollback);
+            if (!verify_rollback) {
+                result.error = rust::String::lossy(verify_rollback.error());
+                return result;
+            }
+            spec.verify_rollback = *verify_rollback;
+            auto model = skippy::llama::StagedModel::open(model_path, spec);
+            if (!model) {
+                result.error = rust::String::lossy(model.error().message);
+                return result;
+            }
+            result.ok = true;
+            result.model = std::make_unique<StagedModel>(std::move(*model));
+            return result;
+        });
 }
 
 StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noexcept {
@@ -426,6 +532,39 @@ StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noex
             result.session = std::make_unique<StagedSession>(std::move(*session));
             return result;
         });
+}
+
+ReadoutResult Bridge::staged_readout(StagedSession& session, rust::Slice<const std::int32_t> tokens,
+                                     rust::Slice<const std::int32_t> selected) noexcept {
+    return guarded_message<ReadoutResult>("staged_readout", [&]() -> ReadoutResult {
+        ReadoutResult result{};
+        result.ok = false;
+
+        // Scoped enums: convert the int32 wire values once, at this boundary.
+        std::vector<skippy::Token> fed;
+        fed.reserve(tokens.size());
+        for (const std::int32_t token : tokens)
+            fed.push_back(static_cast<skippy::Token>(token));
+        std::vector<skippy::Token> ids;
+        ids.reserve(selected.size());
+        for (const std::int32_t token : selected)
+            ids.push_back(static_cast<skippy::Token>(token));
+
+        float scores[skippy::detail::max_selected_tokens];
+        const auto read = skippy::llama::read_selected_log_probs(
+            session.get(), fed, ids, std::span<float>(scores, ids.size()));
+        if (!read) {
+            result.status = read.error().status;
+            result.error = rust::String::lossy(read.error().message);
+            return result;
+        }
+        result.scores.reserve(ids.size());
+        for (std::size_t index = 0; index < ids.size(); ++index) {
+            result.scores.push_back(scores[index]);
+        }
+        result.ok = true;
+        return result;
+    });
 }
 
 StagedEmbedResult Bridge::staged_embed(StagedSession& session,

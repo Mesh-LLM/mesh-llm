@@ -1,8 +1,8 @@
 # skippy_api
 
 A C++23 façade over the patched llama.cpp stage runtime for the non-chat
-workloads — embedding, reranking, and encoder prompt — with no chat or
-generation paths in it.
+workloads — embedding, reranking, encoder prompt, and bounded causal
+log-prob readouts — with no chat or generation paths in it.
 
 ```
 include/            public headers; the only part consumers include
@@ -12,6 +12,7 @@ include/            public headers; the only part consumers include
   embed.h             embed() and embed_batch()
   rerank.h            rerank() and rerank_batch()
   encode.h            encode_prompt()
+  selected_log_probs.h  bounded selected-token log-probs (patch 0011 pure half)
   llama/              the only code that includes llama.h
 src/                implementations
 tests/              mocked unit tests (no llama)
@@ -67,11 +68,25 @@ them writes, across layers 0-23, `recurrent=false`. Same model, stage `[0,12)`:
 48 effects and a frontier of 1 value. BERT-family models report no state
 effects at all — they hold no KV — which is the correct answer, not a gap.
 
+## Patch coverage
+
+What each patch in `skippy/llama_cpp/patches` contributed here. Verdicts live
+in `benchmarks/cases.txt`; "—" means nothing ports into the façade.
+
+| patch | what it is | what ported |
+|---|---|---|
+| 0011 causal token score readouts | unsampled `skippy_iteration_batch_sampled` readout, `skippy_session_reset` | `include/selected_log_probs.h` (pure, 256-bound log-softmax), `llama/causal_readout.h` (`read_selected_log_probs`), `StagedSession::reset`, Rust `StagedSession::read_selected_log_probs` |
+| 0012 grammar literal lazy triggers | grammar engine matches literal lazy triggers without compiling a regex | — the grammar matcher is llama-internal; the façade never links or drives it |
+| 0013 routed-expert host placement | `skippy_runtime_config.host_expert_layer_start/end`, block-range → tensor-override placement | `include/host_experts.h` (pure range validation, 4096-block cap), `StageSpec::host_experts`, `StagedModel::open` threads the pair, Rust `load_stage_with_host_experts`; plain `Model` loads keep no placement (raw-llama reference path) |
+| 0014 temperature-0 argmax fast path | `skippy_sampling_selects_argmax`, `skippy_prepare_argmax_plan`, `skippy_select_unique_argmax` | `include/argmax_sampling.h` (pure eligibility + bias-plan mirror, no sampler linkage), Rust surface intentionally absent - the facade never links a sampler |
+| 0015 verify rollback policy | `skippy_runtime_config.verify_rollback_tokens`, `SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT` (2); 0 = no snapshots, verify falls back to checkpoint restore — no clamp, no env override | `include/verify_rollback.h` (`VerifyRollback`: `none()` / `in_place(n)`, `in_place(0)` rejected), `StageSpec::verify_rollback` is required input — `StagedModel::open` refuses a spec without it; Rust `VerifyRollback` enum + `load_stage_with_verify_rollback`, plain bridge lanes state `native_default()` |
+| 0016 staged verify windows roll back in place | verify windows rewind recurrent state in place, `skippy_session_verify_rollback_counts` reads the rewind budget | — verify windows are driven by the serving layer's speculative loop, never by the façade; the counts entry point has no façade consumer |
+
 ## Checkpoint workflow
 
 ```bash
-just skippy-api-verify <embed.gguf> <reranker.gguf>   # format, tidy, tests
-just skippy-api-checkpoint "feat(skippy-api): ..." <embed.gguf> <reranker.gguf>
+just skippy-api-verify <embed.gguf> <reranker.gguf> <causal.gguf>   # format, tidy, tests
+just skippy-api-checkpoint "feat(skippy-api): ..." <embed.gguf> <reranker.gguf> <causal.gguf>
 ```
 
 `verify` is the gate CI-equivalent for this tree; `checkpoint` runs it, stages

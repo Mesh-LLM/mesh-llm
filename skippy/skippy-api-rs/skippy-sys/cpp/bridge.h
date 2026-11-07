@@ -37,6 +37,7 @@ struct StagedModelResult;
 struct StagedSessionResult;
 struct ChainResult;
 struct ChainRunResult;
+struct ReadoutResult;
 struct StagedEmbedResult;
 enum class ModelFamily : ::std::uint8_t;
 struct EncodeResult;
@@ -95,6 +96,24 @@ public:
     [[nodiscard]] StagedModelResult load_staged_model(rust::Str path, std::uint32_t stages,
                                                       std::uint32_t index) noexcept;
 
+    /// Opens stage `index` of `stages` with routed-expert blocks
+    /// `[host_start, host_end)` placed in host memory (patch 0013); a range
+    /// that fails the loader's guards is rejected with the rule it broke.
+    [[nodiscard]] StagedModelResult
+    load_staged_model_host_experts(rust::Str path, std::uint32_t stages, std::uint32_t index,
+                                   std::int32_t host_start, std::int32_t host_end) noexcept;
+
+    /// Opens stage `index` of `stages` stating how far a verify window may
+    /// rewind recurrent state in place (patch 0015). `rollback` is the safe
+    /// enum's encoding: 0 is `None` - the session never verifies drafts, the
+    /// loader keeps no snapshots and verify falls back to checkpoint
+    /// restore - and any other value is `InPlace(n)`, `n` prior recurrent
+    /// states. The policy is the caller's, never derived from model
+    /// metadata.
+    [[nodiscard]] StagedModelResult
+    load_staged_model_verify_rollback(rust::Str path, std::uint32_t stages, std::uint32_t index,
+                                      std::uint32_t rollback) noexcept;
+
     /// Opens a session on a stage.
     [[nodiscard]] StagedSessionResult create_staged_session(const StagedModel& model) noexcept;
 
@@ -102,6 +121,13 @@ public:
     [[nodiscard]] StagedEmbedResult staged_embed(StagedSession& session,
                                                  rust::Slice<const std::int32_t> tokens,
                                                  rust::Slice<float> output) noexcept;
+
+    /// Reads bounded, unsampled log probabilities for `selected` tokens from
+    /// the final row after feeding `tokens` (patch 0011). Never samples and
+    /// never changes sampler history.
+    [[nodiscard]] ReadoutResult staged_readout(StagedSession& session,
+                                               rust::Slice<const std::int32_t> tokens,
+                                               rust::Slice<const std::int32_t> selected) noexcept;
 
     /// Plans `ranges` (start/end pairs) and opens one stage per range.
     [[nodiscard]] ChainResult open_chain(rust::Str path,

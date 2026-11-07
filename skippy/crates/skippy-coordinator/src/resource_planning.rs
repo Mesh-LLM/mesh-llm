@@ -196,7 +196,7 @@ pub struct PlannedSpeculativeDraft {
     pub weight_bytes: u64,
     /// Recurrent rollback depth (`n_rs_seq`) the target needs to verify the
     /// draft's longest window in place.
-    pub recurrent_rollback_tokens: u32,
+    pub verify_rollback_tokens: u32,
     /// KV bytes the draft context holds per target-context token per lane.
     /// The draft context is sized to the target's, so its KV grows with the
     /// planned context and is charged beside the target's KV.
@@ -346,7 +346,7 @@ fn speculative_draft_bytes(
     let Some(draft) = draft else {
         return 0;
     };
-    let planes = u64::from(draft.recurrent_rollback_tokens).saturating_add(1);
+    let planes = u64::from(draft.verify_rollback_tokens).saturating_add(1);
     let extra_planes = planes.saturating_sub(DEFAULT_RECURRENT_STATE_PLANES);
     let native_sequences = (slots as u64).saturating_mul(2).max(2);
     let rollback_bytes = metadata

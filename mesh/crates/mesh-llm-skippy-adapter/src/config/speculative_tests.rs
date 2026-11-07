@@ -1334,7 +1334,7 @@ fn a_known_pairing_replaces_automatic_native_mtp() {
     // The pairing's block caps the backend default, and rollback follows it.
     let cap = if cfg!(target_os = "macos") { 6 } else { 7 };
     assert_eq!(dflash.max_draft_tokens, Some(cap));
-    assert_eq!(dflash.recurrent_rollback_tokens(), cap as u32 + 1);
+    assert_eq!(dflash.verify_rollback_tokens(), cap as u32 + 1);
     let draft = temp_model_file_with_architecture("dflash");
     resolved.speculative.set_default_dflash_draft(draft.path());
     let args = resolved.to_embedded_openai_args(0, false).unwrap();

@@ -52,7 +52,7 @@ pub struct DFlashProposalConfig {
 impl DFlashProposalConfig {
     /// Recurrent rollback depth the target needs to verify the longest
     /// window in place: every drafted token plus the anchor.
-    pub fn recurrent_rollback_tokens(&self) -> u32 {
+    pub fn verify_rollback_tokens(&self) -> u32 {
         let drafted = self.max_draft_tokens.unwrap_or(UNCAPPED_DRAFT_TOKENS);
         u32::try_from(drafted.saturating_add(1)).unwrap_or(u32::MAX)
     }
@@ -143,7 +143,7 @@ mod tests {
         let dflash = plan.dflash.as_mut().unwrap();
         for (cap, depth) in [(Some(15), 16), (Some(6), 7), (None, 16)] {
             dflash.max_draft_tokens = cap;
-            assert_eq!(dflash.recurrent_rollback_tokens(), depth, "{cap:?}");
+            assert_eq!(dflash.verify_rollback_tokens(), depth, "{cap:?}");
         }
     }
 

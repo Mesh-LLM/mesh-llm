@@ -96,7 +96,7 @@ pub(super) fn planned_default_dflash_draft(
     )
     .ok()?;
     let dflash = resolved.speculative.decode.dflash.as_ref()?;
-    let recurrent_rollback_tokens = dflash.recurrent_rollback_tokens();
+    let verify_rollback_tokens = dflash.verify_rollback_tokens();
     let (path, weight_bytes, default) = match resolved.speculative.default_dflash.as_ref() {
         Some(chosen) => {
             // A draft that is not cached yet downloads in the background; this
@@ -127,7 +127,7 @@ pub(super) fn planned_default_dflash_draft(
     Some(PlannedDFlashDraft {
         draft: PlannedSpeculativeDraft {
             weight_bytes,
-            recurrent_rollback_tokens,
+            verify_rollback_tokens,
             kv_bytes_per_token,
             compute_bytes,
         },
@@ -196,7 +196,7 @@ mod tests {
         };
         let draft = PlannedSpeculativeDraft {
             weight_bytes: 1_383_768_224,
-            recurrent_rollback_tokens: 16,
+            verify_rollback_tokens: 16,
             kv_bytes_per_token: 0,
             compute_bytes: 0,
         };

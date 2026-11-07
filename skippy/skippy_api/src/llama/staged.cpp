@@ -1,5 +1,7 @@
 #include "llama/staged.h"
 
+#include "host_experts.h"
+
 #include <algorithm>
 #include <iterator>
 #include <utility>
@@ -54,6 +56,17 @@ StagedModel::StagedModel(StagedModel&& other) noexcept
 
 std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& path,
                                                             const StageSpec& spec) {
+    // Verify rollback is a required input, never a default: the caller that
+    // knows the speculative plan states none() or in_place(n). Checked first
+    // so an omitted policy is refused before any file is touched.
+    const auto verify_rollback = verify_rollback_tokens_of(spec.verify_rollback);
+    if (!verify_rollback) {
+        return std::unexpected(StagedFailure{
+            .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
+            .message = verify_rollback.error(),
+        });
+    }
+
     std::vector<const char*> residents;
     residents.reserve(spec.resident_identities.size());
     for (const std::string& value : spec.resident_identities)
@@ -76,10 +89,27 @@ std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& p
     for (const std::string& value : spec.export_bindings)
         export_bindings.push_back(value.c_str());
 
+    // The native loader silently drops a placement range that fails its
+    // guards, so the facade validates first and refuses to forward one —
+    // a caller bug must not look like a decision to keep experts on the
+    // accelerator.
+    const auto placement = skippy::host_expert_placement(spec.host_experts);
+    if (!placement) {
+        return std::unexpected(StagedFailure{
+            .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
+            .message = skippy::describe(placement.error()),
+        });
+    }
+
     auto config = skippy_runtime_config_default();
     config.stage_index = spec.stage_index;
     config.layer_start = spec.layers.start;
     config.layer_end = spec.layers.end;
+    if (placement->has_value()) {
+        config.host_expert_layer_start = (*placement)->start;
+        config.host_expert_layer_end = (*placement)->end;
+    }
+    config.verify_rollback_tokens = *verify_rollback;
     config.ctx_size = 512;
     config.n_batch = 512;
     config.n_ubatch = 512;
@@ -129,6 +159,13 @@ StagedSession::embed(std::span<const llama_token> tokens, std::span<float> outpu
         session_, tokens.data(), tokens.size(), output.data(), output.size(), &written, &error);
     if (status != SKIPPY_STATUS_OK) return std::unexpected(failure(status, error));
     return static_cast<std::uint32_t>(written);
+}
+
+std::expected<void, StagedFailure> StagedSession::reset() {
+    skippy_error* error = nullptr;
+    const skippy_status status = skippy_session_reset(session_, &error);
+    if (status != SKIPPY_STATUS_OK) return std::unexpected(failure(status, error));
+    return {};
 }
 
 } // namespace skippy::llama

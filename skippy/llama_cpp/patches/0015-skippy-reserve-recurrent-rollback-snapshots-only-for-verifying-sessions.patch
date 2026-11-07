@@ -1,23 +1,29 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
-Subject: [PATCH] skippy: size recurrent rollback for speculative verify
+Subject: [PATCH] skippy: reserve recurrent rollback snapshots only for
+ verifying sessions
 
-Recurrent and hybrid targets verify a speculative window in place only when
-the context keeps a rollback snapshot per window token (n_rs_seq); otherwise
-verify falls back to a host copy. skippy_runtime_config gains
-recurrent_rollback_tokens so the caller can size n_rs_seq from its attached
-speculative plan instead of raising it for every model: each snapshot is
-another copy of the recurrent state per sequence. 0 keeps the default of 2,
-and SKIPPY_RS_SEQ still overrides it.
+Recurrent and hybrid models opened with at least two rollback snapshots
+per sequence (n_rs_seq), so a verify window could rewind in place instead
+of restoring a host checkpoint. Every decode step then wrote each
+recurrent layer's conv state once per snapshot group whether or not the
+session ever verified drafts: 48 extra copies in every Qwen3.5-4B decode
+graph.
+
+skippy_runtime_config.verify_rollback_tokens now says how many trailing
+tokens a verify window may rewind in place; 0 reserves no snapshots and
+verify windows restore a checkpoint instead. skippy_runtime_config_default
+and a load without a config keep SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT,
+the two snapshots every load reserved before.
 
 Sampled verify also gets cheaper: a sampling chain retired by sampled verify
 stays retired until the session resets, and upstream's per-sequence
 backend-sampling output limit is restored.
 ---
- include/skippy/runtime.h     | 4 ++++
+ include/skippy/runtime.h     | 7 +++++++
  src/llama-context.cpp        | 7 ++++---
- src/skippy/model_loading.cpp | 8 +++++++-
+ src/skippy/model_loading.cpp | 5 ++++-
  src/skippy/sampling.cpp      | 4 +++-
  src/skippy/session.cpp       | 1 +
  5 files changed, 19 insertions(+), 5 deletions(-)
@@ -26,17 +32,20 @@ diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 index bc4da9a07..b570682ef 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
-@@ -123,6 +123,10 @@ struct skippy_runtime_config {
+@@ -123,6 +123,12 @@ struct skippy_runtime_config {
      int32_t host_expert_layer_start;
      /** @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator, and a range wider than 4096 blocks is ignored the same way: no supported model approaches that block count, and the bound keeps override construction proportional to the model. Routing and precision are unchanged; only weight placement differs. */
      int32_t host_expert_layer_end;
 +
-+    // Speculative-decoding controls resolved from the attached plan.
-+    /** @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. Verifying an N-token speculative window in place needs at least N. 0 keeps the default of 2; `SKIPPY_RS_SEQ` overrides either. */
-+    uint32_t recurrent_rollback_tokens;
++    /** @brief Trailing tokens a verify window may rewind recurrent and hybrid state by in place; 0 when the session never verifies drafts. Each one keeps another snapshot of every recurrent state, which every decode step writes. */
++    uint32_t verify_rollback_tokens;
  };
++
++/** @brief The verify_rollback_tokens of skippy_runtime_config_default, and of a load without a config. */
++#define SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT 2
  
  /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
+ LLAMA_API struct skippy_runtime_config skippy_runtime_config_default(void);
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
 index 4d198295f..b5b6d0670 100644
 --- a/src/llama-context.cpp
@@ -59,18 +68,21 @@ diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 index 7305cc529..db5a69e38 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -733,7 +733,13 @@ enum skippy_status skippy_finish_model_open(
+@@ -590,6 +590,7 @@ struct skippy_runtime_config skippy_runtime_config_default(void) {
+     config.swa_full = SKIPPY_TRISTATE_AUTO;
+     config.op_offload = SKIPPY_TRISTATE_AUTO;
+     config.split_mode = SKIPPY_TRISTATE_AUTO;
++    config.verify_rollback_tokens = SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT;
+     return config;
+ }
+ 
+@@ -733,7 +734,8 @@ enum skippy_status skippy_finish_model_open(
      }
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
 -        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
-+        // Rollback snapshots for in-place speculative verify: a window of N
-+        // tokens needs N, or verify falls back to a host copy. Each snapshot
-+        // is another copy of the recurrent state per sequence, so the caller
-+        // sizes it from its speculative plan. SKIPPY_RS_SEQ overrides it.
-+        const uint32_t planned_rs_seq = config != nullptr ? config->recurrent_rollback_tokens : 0;
-+        const uint32_t default_rs_seq = std::min<uint32_t>(std::max<uint32_t>(planned_rs_seq, 2), 64);
-+        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, skippy_env_u32("SKIPPY_RS_SEQ", default_rs_seq, 2, 64));
++        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq,
++                config != nullptr ? config->verify_rollback_tokens : SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT);
          params.kv_unified = true;
      }
      // Multi-lane activation exports rely on the shared KV pool's batch order.
@@ -103,4 +115,3 @@ index 36c972d92..4741f55cb 100644
      session->sampling_backend_verifying = false;
 -- 
 2.54.0 (Apple Git-157)
-

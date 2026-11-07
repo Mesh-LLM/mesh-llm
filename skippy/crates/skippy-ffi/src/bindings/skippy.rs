@@ -17,6 +17,7 @@ pub const SKIPPY_SAMPLING_FLAG_IGNORE_EOS: u32 = 2;
 pub const SKIPPY_SAMPLING_FLAG_LOGPROBS: u32 = 4;
 pub const SKIPPY_GLM_DSA_POLICY_PROFILE_NONE: u32 = 0;
 pub const SKIPPY_GLM_DSA_POLICY_PROFILE_V1: u32 = 1;
+pub const SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT: u32 = 2;
 pub const SKIPPY_TRISTATE_AUTO: i32 = -1;
 pub const SKIPPY_TRISTATE_FALSE: u32 = 0;
 pub const SKIPPY_TRISTATE_TRUE: u32 = 1;
@@ -493,8 +494,8 @@ pub struct skippy_runtime_config {
     pub host_expert_layer_start: i32,
     #[doc = " @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator, and a range wider than 4096 blocks is ignored the same way: no supported model approaches that block count, and the bound keeps override construction proportional to the model. Routing and precision are unchanged; only weight placement differs."]
     pub host_expert_layer_end: i32,
-    #[doc = " @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. Verifying an N-token speculative window in place needs at least N. 0 keeps the default of 2; `SKIPPY_RS_SEQ` overrides either."]
-    pub recurrent_rollback_tokens: u32,
+    #[doc = " @brief Trailing tokens a verify window may rewind recurrent and hybrid state by in place; 0 when the session never verifies drafts. Each one keeps another snapshot of every recurrent state, which every decode step writes."]
+    pub verify_rollback_tokens: u32,
 }
 unsafe extern "C" {
     #[doc = " @brief Returns a C-safe runtime configuration with all derived-default controls set to auto."]

@@ -464,4 +464,37 @@ TEST(InventoryParser, Sha256MatchesReferenceDigests) {
     }
 }
 
+TEST(InventoryParser, EmbeddingSizeReadsTokenEmbWidth) {
+    using skippy::probe::TensorInfo;
+    std::vector<TensorInfo> tensors;
+    TensorInfo emb{};
+    emb.name = "token_embd.weight";
+    emb.dimension_count = 2;
+    emb.dimensions = {896, 151936, 0, 0};
+    tensors.push_back(emb);
+    EXPECT_EQ(skippy::probe::embedding_size_from(tensors), 896);
+}
+
+TEST(InventoryParser, EmbeddingSizeIsZeroWithoutTheTensor) {
+    using skippy::probe::TensorInfo;
+    std::vector<TensorInfo> tensors;
+    TensorInfo other{};
+    other.name = "output.weight";
+    other.dimension_count = 2;
+    other.dimensions = {151936, 896, 0, 0};
+    tensors.push_back(other);
+    EXPECT_EQ(skippy::probe::embedding_size_from(tensors), 0);
+}
+
+TEST(InventoryParser, EmbeddingSizeRejectsNonsenseWidths) {
+    using skippy::probe::TensorInfo;
+    TensorInfo emb{};
+    emb.name = "token_embd.weight";
+    emb.dimension_count = 1;
+    emb.dimensions = {-4, 0, 0, 0};
+    EXPECT_EQ(skippy::probe::embedding_size_from({&emb, 1}), 0);
+    emb.dimensions = {std::numeric_limits<std::int64_t>::max(), 0, 0, 0};
+    EXPECT_EQ(skippy::probe::embedding_size_from({&emb, 1}), 0);
+}
+
 } // namespace

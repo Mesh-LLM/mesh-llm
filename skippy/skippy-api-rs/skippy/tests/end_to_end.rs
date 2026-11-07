@@ -21,8 +21,8 @@ mod common;
 
 use common::model_env;
 use skippy::{
-    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, StageError, Token, WorkloadError,
-    WorkloadInfo, WorkloadKind,
+    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, StageError, Token, VerifyRollback,
+    WorkloadError, WorkloadInfo, WorkloadKind,
 };
 
 fn optional_model_path(variable: &str) -> Option<String> {
@@ -286,6 +286,105 @@ fn reranker_is_classified_as_rank_pooled_with_one_classifier_output() {
     // A classifier head is not an embedding width.
     assert_eq!(info.embedding_pooling, None);
     assert_eq!(info.output_dimensions, 0);
+}
+
+#[test]
+fn causal_readout_reads_bounded_unsampled_scores() {
+    // Patch 0011: a decoder-only stage reads selected final-row log
+    // probabilities without sampling. Scores are finite, non-positive log
+    // probabilities, and selections beyond the bounded maximum or empty
+    // selections are rejected.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+    let model = runtime.load_stage(&path, 1, 0).expect("whole-model stage");
+    let mut session = model.create_session().unwrap();
+
+    let tokens = [Token(1), Token(2), Token(3)];
+    let selected = [Token(2), Token(1), Token(3)];
+    let scores = session.read_selected_log_probs(&tokens, &selected).expect("readout");
+
+    assert_eq!(scores.len(), 3);
+    assert!(scores.iter().all(|score| score.is_finite()));
+    assert!(scores.iter().all(|score| *score <= 0.0));
+
+    let oversized: Vec<Token> = vec![Token(1); 257];
+    assert!(session.read_selected_log_probs(&tokens, &oversized).is_err());
+    assert!(session.read_selected_log_probs(&tokens, &[]).is_err());
+}
+
+#[test]
+fn host_expert_placement_matches_a_plain_staged_open_on_dense_models() {
+    // Patch 0013: a placed open and a plain open must produce identical
+    // readouts on a dense model - the knob may change where routed experts
+    // live, never what the model computes.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+
+    let plain = runtime.load_stage(&path, 1, 0).expect("plain stage");
+    let mut plain_session = plain.create_session().unwrap();
+    let tokens = [Token(1), Token(2), Token(3)];
+    let selected = [Token(2), Token(1), Token(3)];
+    let reference = plain_session.read_selected_log_probs(&tokens, &selected).expect("plain readout");
+
+    let placed = runtime.load_stage_with_host_experts(&path, 1, 0, Some((0, 64))).expect("placed stage");
+    let mut placed_session = placed.create_session().unwrap();
+    let placed_scores = placed_session.read_selected_log_probs(&tokens, &selected).expect("placed readout");
+
+    assert_eq!(reference, placed_scores);
+}
+
+#[test]
+fn verify_rollback_matches_a_plain_staged_open_on_dense_models() {
+    // Patch 0015: the policy sizes speculative-verify snapshots, never the
+    // arithmetic - None (no snapshots, checkpoint restore on rewind) and
+    // InPlace(64) must read identically to a plain open on a dense model,
+    // which is the case the bridge's plain lanes carry.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+
+    let plain = runtime.load_stage(&path, 1, 0).expect("plain stage");
+    let mut plain_session = plain.create_session().unwrap();
+    let tokens = [Token(1), Token(2), Token(3)];
+    let selected = [Token(2), Token(1), Token(3)];
+    let reference = plain_session.read_selected_log_probs(&tokens, &selected).expect("plain readout");
+
+    let none = runtime.load_stage_with_verify_rollback(&path, 1, 0, VerifyRollback::None).expect("no-rollback stage");
+    let mut none_session = none.create_session().unwrap();
+    let none_scores = none_session.read_selected_log_probs(&tokens, &selected).expect("none readout");
+
+    let depth = std::num::NonZeroU32::new(64).expect("64 is non-zero");
+    let in_place = runtime
+        .load_stage_with_verify_rollback(&path, 1, 0, VerifyRollback::InPlace(depth))
+        .expect("in-place rollback stage");
+    let mut in_place_session = in_place.create_session().unwrap();
+    let in_place_scores = in_place_session.read_selected_log_probs(&tokens, &selected).expect("in-place readout");
+
+    assert_eq!(reference, none_scores);
+    assert_eq!(reference, in_place_scores);
+}
+
+#[test]
+fn host_expert_placement_rejects_malformed_ranges_with_a_reason() {
+    // The native loader silently drops a malformed placement range; the
+    // facade must reject it with the rule it broke instead.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+
+    let negative = runtime.load_stage_with_host_experts(&path, 1, 0, Some((-1, 4)));
+    let inverted = runtime.load_stage_with_host_experts(&path, 1, 0, Some((8, 4)));
+    let overspan = runtime.load_stage_with_host_experts(&path, 1, 0, Some((0, 4097)));
+
+    for rejected in [negative, inverted, overspan] {
+        match rejected {
+            Ok(_) => panic!("malformed placement must not open"),
+            Err(error) => {
+                assert!(!error.to_string().is_empty(), "a refusal carries a reason");
+            }
+        }
+    }
+
+    // An empty range is a valid "off", not an error.
+    runtime.load_stage_with_host_experts(&path, 1, 0, None).expect("no placement is a valid open");
 }
 
 #[test]

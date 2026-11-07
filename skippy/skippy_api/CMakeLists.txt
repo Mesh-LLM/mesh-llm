@@ -68,6 +68,9 @@ endif()
 add_library(skippy_core STATIC
     src/runtime.cpp
     src/normalize.cpp
+    src/selected_log_probs.cpp
+    src/host_experts.cpp
+    src/argmax_sampling.cpp
     src/stage_plan.cpp
     src/execution_contract.cpp
     src/family.cpp
@@ -111,6 +114,7 @@ if(SKIPPY_BUILD_LLAMA)
 
   add_library(skippy_llama STATIC
     src/llama/backend.cpp
+    src/llama/causal_readout.cpp
     src/llama/model_inventory.cpp
     src/llama/batch.cpp
     src/llama/stage_planner.cpp
@@ -170,6 +174,10 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/selector_test.cpp
       tests/batch_test.cpp
       tests/normalize_test.cpp
+      tests/selected_log_probs_test.cpp
+      tests/host_experts_test.cpp
+      tests/argmax_sampling_test.cpp
+      tests/verify_rollback_test.cpp
       tests/workload_test.cpp
       tests/rerank_template_test.cpp
       tests/rerank_prompt_test.cpp
@@ -270,11 +278,13 @@ option(SKIPPY_API_BUILD_FFI_BENCHMARKS
     add_executable(skippy_api_ffi_benchmarks
         benchmarks/ffi_vs_api_benchmark.cpp
         benchmarks/stage_plan_benchmark.cpp
+        benchmarks/argmax_benchmark.cpp
       )
     target_compile_options(skippy_api_ffi_benchmarks PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_include_directories(skippy_api_ffi_benchmarks PRIVATE
         "${SKIPPY_LLAMA_SOURCE_DIR}/include"
         "${SKIPPY_LLAMA_SOURCE_DIR}/common"
+        "${SKIPPY_LLAMA_SOURCE_DIR}/src/skippy"
       )
     target_link_libraries(skippy_api_ffi_benchmarks
         PRIVATE Skippy::Api benchmark::benchmark

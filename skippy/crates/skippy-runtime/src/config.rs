@@ -154,7 +154,7 @@ pub struct RuntimeConfig {
     /// Recurrent-state rollback depth for recurrent and hybrid models. A
     /// speculative plan sets it to its largest verify window so verify rolls
     /// back in place; `0` keeps the native default.
-    pub recurrent_rollback_tokens: u32,
+    pub verify_rollback_tokens: u32,
 }
 
 /// Half-open absolute block range `[start, end)` whose routed-expert tensors
@@ -431,7 +431,7 @@ impl RuntimeConfig {
                     .transpose()
                     .context("host_expert_layers.end exceeds i32")?
                     .unwrap_or(0),
-                recurrent_rollback_tokens: self.recurrent_rollback_tokens,
+                verify_rollback_tokens: self.verify_rollback_tokens,
             },
             _selected_backend_device: selected_backend_device,
             _resident_tensor_names: resident_tensor_names,
@@ -555,7 +555,7 @@ impl Default for RuntimeConfig {
             main_gpu: None,
             split_mode: SplitMode::Auto,
             host_expert_layers: None,
-            recurrent_rollback_tokens: 0,
+            verify_rollback_tokens: 2,
         }
     }
 }

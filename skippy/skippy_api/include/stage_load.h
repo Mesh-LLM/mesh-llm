@@ -15,6 +15,8 @@
 
 #include "stage_plan.h"
 
+#include "verify_rollback.h"
+
 #include <cstdint>
 #include <expected>
 #include <string>
@@ -59,6 +61,18 @@ struct StageLoadConfig {
     struct Spec {
         std::int32_t stage_index = 0;
         LayerRange layers;
+        /// Caller policy, never plan output: the blocks whose routed experts
+        /// (patch 0013) load into host memory. Empty means off. `StagedModel::
+        /// open` validates it and refuses to forward a range the native
+        /// loader would silently drop.
+        LayerRange host_experts;
+        /// Caller policy, never plan output: how far a verify window may
+        /// rewind recurrent state in place (patch 0015). Required —
+        /// `StagedModel::open` refuses a spec that does not state one, so a
+        /// non-drafting session cannot pick up snapshots by omission. State
+        /// `VerifyRollback::none()` for that; the decision belongs to the
+        /// caller that knows the speculative plan, never to model metadata.
+        std::optional<VerifyRollback> verify_rollback;
         std::string execution_contract;
         std::vector<std::string> resident_identities;
         std::vector<std::string> import_identities;

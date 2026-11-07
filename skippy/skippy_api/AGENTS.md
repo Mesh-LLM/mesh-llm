@@ -583,6 +583,16 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   "born red on the real artefact" — the first fixture is the tree's own violation, run on the gate's
   toolchain, and `std::` names are matched with `hasName`/`hasAnyName`.
 
+- **A staged open admits the causal readout workload, not embed.** The 0013
+  harness first gated its placed-open A/B on `skippy_session_embed`; every
+  iteration died with `ERROR OCCURRED: 'non-chat workloads currently require a
+  full model'` because the staged loader opens the readout path for a slice,
+  and embed is a whole-model workload. Cause: the workload an open admits is a
+  property of the stage program, not of the session calls you make on it, and
+  no mocked test sees it. Rule: gate staged-open rows on
+  `read_selected_log_probs` (the workload the stage program admits); embed
+  gates belong to whole-model `Model` benches.
+
 ## Where things stand
 
 See `README.md` for the patch coverage table and the current benchmark verdicts.
