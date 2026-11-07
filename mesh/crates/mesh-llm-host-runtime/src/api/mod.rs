@@ -709,6 +709,7 @@ impl MeshApi {
                     "compute_busy_nanos": stage0.map_or(status.compute_busy_nanos, |c| c.busy_nanos),
                     "compute_operations": stage0.map_or(status.compute_operations, |c| c.operations),
                     "compute_decode_tokens": stage0.map_or(status.compute_decode_tokens, |c| c.decode_tokens),
+                    "compute_verify_tokens": stage0.map_or(status.compute_verify_tokens, |c| c.verify_tokens),
                 })
             })
             .collect::<Vec<_>>();

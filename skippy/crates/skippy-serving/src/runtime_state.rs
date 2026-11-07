@@ -730,6 +730,7 @@ mod tests {
                 busy_nanos: 2_000_000,
                 operations: 1,
                 decode_tokens: 3,
+                verify_tokens: 0,
             }
         );
     }

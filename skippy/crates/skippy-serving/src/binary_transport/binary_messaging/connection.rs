@@ -619,6 +619,8 @@ fn handle_binary_connection_messages(
                     // One decode step for this stage's compute meter. A batched decode
                     // frame is counted by the scheduler that runs it.
                     let decode_step = is_decode_step_frame(message.kind);
+                    let verify_tokens = (message.kind == WireMessageKind::VerifyWindow)
+                        .then_some(executable_token_ids.len() as u64);
                     let scheduler_session_key = session_key.clone();
                     let scheduler_token_ids = executable_token_ids.to_vec();
                     let scheduler_kv = kv.cloned();
@@ -702,6 +704,9 @@ fn handle_binary_connection_messages(
                             );
                             if decode_step {
                                 runtime.compute_meter().record_decode_tokens(1);
+                            }
+                            if let Some(tokens) = verify_tokens {
+                                runtime.compute_meter().record_verify_tokens(tokens);
                             }
                             let draft_follows =
                                 runtime.dflash_draft_deferred(&scheduler_session_key);

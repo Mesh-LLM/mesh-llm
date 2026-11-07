@@ -216,6 +216,13 @@ impl StageOpenAiBackend {
                 )
                 .map_err(openai_backend_error)?
                 .2;
+                // Stage 0's half of the meter's verify count; its decode steps are
+                // counted by the scheduler.
+                if scheduler_message.kind == WireMessageKind::VerifyWindow {
+                    runtime
+                        .compute_meter()
+                        .record_verify_tokens(scheduler_token_ids.len() as u64);
+                }
                 Ok((align, output))
             },
         )?;
