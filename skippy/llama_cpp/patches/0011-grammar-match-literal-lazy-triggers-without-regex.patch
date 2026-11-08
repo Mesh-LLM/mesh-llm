@@ -1,4 +1,4 @@
-From 00e7b5b903df1a53e127efb0b1665dd05d442728 Mon Sep 17 00:00:00 2001
+From 226b8235805069906d79cc3e923ba939fdaedb34 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
 Subject: [PATCH 11/15] grammar: match literal lazy triggers without regex
