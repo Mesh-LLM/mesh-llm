@@ -159,6 +159,87 @@ fn entry(name: String, shape: &[u64]) -> DynResult<TensorEntry> {
     Ok(TensorEntry { name, dims, kind })
 }
 
+/// The dimensions the checkpoint's tensors must agree with.
+struct Shape {
+    layers: u64,
+    heads: u64,
+    kv_heads: u64,
+    head_dim: u64,
+    aux: u64,
+}
+
+/// Checks the checkpoint holds exactly the tensors a Laguna drafter of this
+/// config has, each with its shape, so a hash-matching output is also one
+/// the DFlash loader accepts.
+fn check_inventory(config: &Json, checkpoint: &Safetensors, shape: Shape) -> DynResult<()> {
+    let hidden = u64_of(config, "hidden_size")?;
+    let ffn = u64_of(config, "intermediate_size")?;
+    let Shape {
+        layers,
+        heads,
+        kv_heads,
+        head_dim,
+        aux,
+    } = shape;
+    if [hidden, ffn, heads, kv_heads, head_dim, aux, layers].contains(&0) {
+        return Err("draft config.json has a zero dimension".into());
+    }
+    let mut expected: Vec<(String, Vec<Vec<u64>>)> = vec![
+        ("fc.weight".into(), vec![vec![hidden, aux * hidden]]),
+        ("hidden_norm.weight".into(), vec![vec![hidden]]),
+        ("norm.weight".into(), vec![vec![hidden]]),
+    ];
+    for i in 0..aux {
+        expected.push((format!("aux_hidden_norms.{i}.weight"), vec![vec![hidden]]));
+    }
+    for layer in 0..layers {
+        let tensor = |suffix: &str| format!("layers.{layer}.{suffix}.weight");
+        expected.extend([
+            (tensor("input_layernorm"), vec![vec![hidden]]),
+            (tensor("post_attention_layernorm"), vec![vec![hidden]]),
+            (tensor("mlp.down_proj"), vec![vec![hidden, ffn]]),
+            (tensor("mlp.gate_proj"), vec![vec![ffn, hidden]]),
+            (tensor("mlp.up_proj"), vec![vec![ffn, hidden]]),
+            // Per-head or per-element gating.
+            (
+                tensor("self_attn.g_proj"),
+                vec![vec![heads, hidden], vec![heads * head_dim, hidden]],
+            ),
+            (tensor("self_attn.q_norm"), vec![vec![head_dim]]),
+            (tensor("self_attn.k_norm"), vec![vec![head_dim]]),
+            (
+                tensor("self_attn.o_proj"),
+                vec![vec![hidden, heads * head_dim]],
+            ),
+            (
+                tensor("self_attn.qkv_proj"),
+                vec![vec![(heads + 2 * kv_heads) * head_dim, hidden]],
+            ),
+        ]);
+    }
+    for (name, shapes) in &expected {
+        let info = checkpoint
+            .tensors()
+            .get(name)
+            .ok_or_else(|| format!("the checkpoint has no {name}"))?;
+        if !shapes.contains(&info.shape) {
+            return Err(format!(
+                "{name} has shape {:?}, expected {:?}",
+                info.shape, shapes[0]
+            )
+            .into());
+        }
+    }
+    if let Some(extra) = checkpoint
+        .tensors()
+        .keys()
+        .find(|name| !expected.iter().any(|(expected, _)| expected == *name))
+    {
+        return Err(format!("unexpected draft tensor {extra}").into());
+    }
+    Ok(())
+}
+
 pub(super) fn plan(source: &Path, checkpoint: &Safetensors, name: &str) -> DynResult<Plan> {
     let bytes = std::fs::read(source.join("config.json"))?;
     let config: Json = serde_json::from_slice(&bytes)?;
@@ -218,11 +299,23 @@ pub(super) fn plan(source: &Path, checkpoint: &Safetensors, name: &str) -> DynRe
         .ok_or("dflash_config needs target_layer_ids")?
         .iter()
         .map(|id| {
-            id.as_i64()
-                .map(|id| id as i32 + 1)
+            id.as_u64()
+                .and_then(|id| i32::try_from(id).ok())
+                .and_then(|id| id.checked_add(1))
                 .ok_or("bad target layer id")
         })
         .collect::<Result<_, _>>()?;
+    check_inventory(
+        &config,
+        checkpoint,
+        Shape {
+            layers,
+            heads,
+            kv_heads,
+            head_dim,
+            aux: target_layers.len() as u64,
+        },
+    )?;
 
     let parameters: u64 = checkpoint
         .tensors()
@@ -393,7 +486,10 @@ pub(super) fn plan(source: &Path, checkpoint: &Safetensors, name: &str) -> DynRe
     let mask_token_id = dflash
         .get("mask_token_id")
         .and_then(Json::as_u64)
-        .map(|id| u32::try_from(id).map_err(|_| "mask_token_id does not fit in u32"))
+        .map(|id| match u32::try_from(id) {
+            Ok(id) if (id as usize) < vocab_size => Ok(id),
+            _ => Err("mask_token_id is outside the vocabulary"),
+        })
         .transpose()?;
     Ok(Plan {
         metadata,

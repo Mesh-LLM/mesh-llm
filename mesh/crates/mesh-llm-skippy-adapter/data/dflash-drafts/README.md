@@ -19,12 +19,19 @@ runtime needs.
   "source": {
     "repo": "poolside/Laguna-XS-2.1-DFlash",
     "revision": "<40-character commit>",
-    "files": [{ "path": "model.safetensors", "sha256": "<sha256>" }]
+    "files": [
+      { "path": "config.json", "sha256": "<sha256>" },
+      { "path": "model.safetensors", "sha256": "<sha256>" }
+    ]
   },
   "target_model": {
     "repo": "poolside/Laguna-XS-2.1",
     "revision": "<40-character commit>",
-    "files": [{ "path": "tokenizer.json", "sha256": "<sha256>" }]
+    "files": [
+      { "path": "config.json", "sha256": "<sha256>" },
+      { "path": "tokenizer.json", "sha256": "<sha256>" },
+      { "path": "tokenizer_config.json", "sha256": "<sha256>" }
+    ]
   },
   "convert": { "converter": "dflash-laguna", "outtype": "q8_0" },
   "output": {
@@ -39,7 +46,9 @@ runtime needs.
 - `source` and `target_model` list every file the converter reads, pinned by
   revision and SHA-256. The converter hashes each before reading it.
   `target_model` holds the target's `config.json`, `tokenizer.json` and
-  `tokenizer_config.json`: DFlash drafts share the target's vocabulary.
+  `tokenizer_config.json`: DFlash drafts share the target's vocabulary. Only
+  listed files are read; list `chat_template.jinja` too if the tokenizer
+  config has no template.
 - `convert` names the conversion `cargo xtool models dflash-draft-convert`
   performs. `dflash-laguna` writes Poolside's Laguna drafters
   (`DFlashLagunaForCausalLM`) the way the patched llama.cpp converter does,

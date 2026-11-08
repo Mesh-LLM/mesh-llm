@@ -192,7 +192,11 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         .ok_or("source directory has no name")?
         .replace('-', " ");
     let partial = args.output.with_extension("gguf.partial");
-    convert(&args.source, target, &name, &partial)?;
+    if let Err(error) = convert(&args.source, target, &target_files, &name, &partial) {
+        // A failed write leaves a large partial file; remove it, keep the error.
+        let _ = std::fs::remove_file(&partial);
+        return Err(error);
+    }
     let (sha256, bytes) = file_sha256(&partial)?;
     println!(
         "{}",
@@ -211,12 +215,19 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
 }
 
 /// Converts a Laguna DFlash drafter in `source`, with the target's tokenizer
-/// in `target`, to GGUF at `output`.
-pub(super) fn convert(source: &Path, target: &Path, name: &str, output: &Path) -> DynResult<()> {
+/// in `target` (of which only the `target_files` are read), to GGUF at
+/// `output`.
+pub(super) fn convert(
+    source: &Path,
+    target: &Path,
+    target_files: &[String],
+    name: &str,
+    output: &Path,
+) -> DynResult<()> {
     let mut checkpoint = safetensors::Safetensors::open(&source.join("model.safetensors"))?;
     let plan = laguna::plan(source, &checkpoint, name)?;
     let mut metadata = plan.metadata;
-    metadata.extend(vocab::metadata(target, plan.vocab_size)?);
+    metadata.extend(vocab::metadata(target, target_files, plan.vocab_size)?);
     // The draft's own mask token wins over the tokenizer's, in its place.
     if let Some(mask) = plan.mask_token_id {
         let key = "tokenizer.ggml.mask_token_id";
@@ -246,7 +257,9 @@ pub(super) fn convert(source: &Path, target: &Path, name: &str, output: &Path) -
             }
             laguna::Source::Rows { name, start, rows } => {
                 let all = checkpoint.read_f32(name)?;
-                let width = all.len() as u64 / checkpoint.tensors()[name].shape[0];
+                let width = (all.len() as u64)
+                    .checked_div(checkpoint.tensors()[name].shape[0])
+                    .ok_or_else(|| format!("{name}: fused qkv tensor has no rows"))?;
                 all[(start * width) as usize..((start + rows) * width) as usize].to_vec()
             }
         };

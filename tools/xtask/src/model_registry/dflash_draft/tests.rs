@@ -153,9 +153,27 @@ fn fixture(dir: &Path, config: &serde_json::Value) -> (std::path::PathBuf, std::
         json!({"model_type": "laguna"}).to_string(),
     )
     .unwrap();
+    write_tokenizer(&target, |_| {});
     std::fs::write(
-        target.join("tokenizer.json"),
-        json!({
+        target.join("tokenizer_config.json"),
+        json!({"bos_token": "<EOS>", "eos_token": "<EOS>", "mask_token": "<MASK>", "chat_template": "{{ x }}"})
+            .to_string(),
+    )
+    .unwrap();
+    (source, target)
+}
+
+/// The fixture's target files, as a manifest would list them.
+fn target_files() -> Vec<String> {
+    ["config.json", "tokenizer.json", "tokenizer_config.json"]
+        .map(String::from)
+        .to_vec()
+}
+
+/// Writes a small byte-level BPE tokenizer with Laguna's preprocessing,
+/// after `edit`.
+fn write_tokenizer(target: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let mut tokenizer = json!({
             "model": {"type": "BPE", "vocab": {"a": 2, "b": 3, "ab": 5}, "merges": [["a", "b"]]},
             "decoder": {"type": "ByteLevel"},
             "added_tokens": [
@@ -170,17 +188,14 @@ fn fixture(dir: &Path, config: &serde_json::Value) -> (std::path::PathBuf, std::
                 "pair": [{"SpecialToken": {"id": "<EOS>"}}, {"Sequence": {"id": "A"}},
                          {"SpecialToken": {"id": "<EOS>"}}, {"Sequence": {"id": "B"}}]
             }
-        })
-        .to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        target.join("tokenizer_config.json"),
-        json!({"bos_token": "<EOS>", "eos_token": "<EOS>", "mask_token": "<MASK>", "chat_template": "{{ x }}"})
-            .to_string(),
-    )
-    .unwrap();
-    (source, target)
+    });
+    let preprocessing: serde_json::Value =
+        serde_json::from_str(vocab::LAGUNA_PREPROCESSING).unwrap();
+    for key in ["normalizer", "pre_tokenizer"] {
+        tokenizer[key] = preprocessing[key].clone();
+    }
+    edit(&mut tokenizer);
+    std::fs::write(target.join("tokenizer.json"), tokenizer.to_string()).unwrap();
 }
 
 /// A tensor as a GGUF lists it: name, dims and type id.
@@ -246,7 +261,14 @@ fn a_laguna_drafter_converts_to_the_dflash_layout() {
     let dir = tempfile::tempdir().unwrap();
     let (source, target) = fixture(dir.path(), &draft_config());
     let output = dir.path().join("out.gguf");
-    convert(&source, &target, "Tiny Laguna DFlash", &output).unwrap();
+    convert(
+        &source,
+        &target,
+        &target_files(),
+        "Tiny Laguna DFlash",
+        &output,
+    )
+    .unwrap();
     let (keys, tensors) = read_header(&output);
     assert_eq!(
         keys,
@@ -341,7 +363,7 @@ fn the_fused_qkv_splits_by_rows() {
 fn the_tokenizer_follows_llama_cpp_types_and_special_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let (_, target) = fixture(dir.path(), &draft_config());
-    let metadata = vocab::metadata(&target, 8).unwrap();
+    let metadata = vocab::metadata(&target, &target_files(), 8).unwrap();
     let get = |key: &str| {
         metadata
             .iter()
@@ -389,7 +411,7 @@ fn the_tokenizer_follows_llama_cpp_types_and_special_tokens() {
         Some(gguf::Value::Str("{{ x }}".into()))
     );
     assert!(
-        vocab::metadata(&target, 6).is_err(),
+        vocab::metadata(&target, &target_files(), 6).is_err(),
         "ids beyond vocab_size"
     );
 }
@@ -409,7 +431,10 @@ fn an_unknown_tokenizer_or_config_is_refused() {
         json!({"model_type": "qwen3"}).to_string(),
     )
     .unwrap();
-    let error = vocab::metadata(&target, 8).err().unwrap().to_string();
+    let error = vocab::metadata(&target, &target_files(), 8)
+        .err()
+        .unwrap()
+        .to_string();
     assert!(error.contains("qwen3"), "{error}");
 }
 
@@ -460,7 +485,14 @@ fn the_output_is_kept_only_if_it_matches_the_manifest() {
     let dir = tempfile::tempdir().unwrap();
     let (source, target) = fixture(dir.path(), &draft_config());
     let reference = dir.path().join("reference.gguf");
-    convert(&source, &target, "Tiny Laguna DFlash", &reference).unwrap();
+    convert(
+        &source,
+        &target,
+        &target_files(),
+        "Tiny Laguna DFlash",
+        &reference,
+    )
+    .unwrap();
     let (sha256, bytes) = file_sha256(&reference).unwrap();
     let output = dir.path().join("tiny.gguf");
 
@@ -491,4 +523,105 @@ fn a_source_that_differs_from_the_manifest_is_refused() {
         .to_string();
     assert!(error.contains("tokenizer_config.json"), "{error}");
     assert!(!output.exists());
+}
+
+#[test]
+fn a_checkpoint_that_differs_from_its_config_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (source, _) = fixture(dir.path(), &draft_config());
+    let checkpoint = Safetensors::open(&source.join("model.safetensors")).unwrap();
+
+    // A layer the config names but the checkpoint lacks.
+    let mut config = draft_config();
+    config["num_hidden_layers"] = json!(2);
+    config["layer_types"] = json!(["sliding_attention", "sliding_attention"]);
+    std::fs::write(source.join("config.json"), config.to_string()).unwrap();
+    let error = plan(&source, &checkpoint, "x").err().unwrap().to_string();
+    assert!(error.contains("layers.1."), "{error}");
+
+    // A width the tensors do not have.
+    let mut config = draft_config();
+    config["hidden_size"] = json!(32);
+    std::fs::write(source.join("config.json"), config.to_string()).unwrap();
+    let error = plan(&source, &checkpoint, "x").err().unwrap().to_string();
+    assert!(error.contains("shape"), "{error}");
+
+    // A mask token outside the vocabulary, and a layer id that overflows.
+    for (key, value) in [
+        ("mask_token_id", json!(8)),
+        ("target_layer_ids", json!([0, 2147483647])),
+    ] {
+        let mut config = draft_config();
+        config["dflash_config"][key] = value;
+        std::fs::write(source.join("config.json"), config.to_string()).unwrap();
+        assert!(plan(&source, &checkpoint, "x").is_err(), "{key}");
+    }
+}
+
+#[test]
+fn tokenizers_llama_cpp_would_treat_differently_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, target) = fixture(dir.path(), &draft_config());
+
+    // Another splitting expression is not llama.cpp's laguna pre-tokenizer.
+    write_tokenizer(&target, |t| {
+        t["pre_tokenizer"]["pretokenizers"][1]["pattern"]["Regex"] = json!("\\s+");
+    });
+    let error = vocab::metadata(&target, &target_files(), 8)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("pre-tokenizer"), "{error}");
+
+    // An interior special token in the single template, and a pair that is
+    // only the boundary token, are refused rather than mis-converted.
+    write_tokenizer(&target, |t| {
+        t["post_processor"]["single"] = json!([
+            {"SpecialToken": {"id": "<EOS>"}}, {"Sequence": {"id": "A"}},
+            {"SpecialToken": {"id": "<MASK>"}}, {"Sequence": {"id": "A"}}
+        ]);
+    });
+    assert!(vocab::metadata(&target, &target_files(), 8).is_err());
+    write_tokenizer(&target, |t| {
+        t["post_processor"]["single"] = json!([
+            {"SpecialToken": {"id": "<EOS>"}}, {"Sequence": {"id": "A"}}, {"SpecialToken": {"id": "<EOS>"}}
+        ]);
+        t["post_processor"]["pair"] = json!([{"SpecialToken": {"id": "<EOS>"}}]);
+    });
+    assert!(vocab::metadata(&target, &target_files(), 8).is_err());
+
+    // A template that adds nothing is accepted.
+    write_tokenizer(&target, |t| {
+        t["post_processor"]["single"] = json!([{"Sequence": {"id": "A"}}]);
+        t["post_processor"]["pair"] = json!([{"Sequence": {"id": "A"}}, {"SpecialToken": {"id": "<EOS>"}}, {"Sequence": {"id": "B"}}]);
+    });
+    let metadata = vocab::metadata(&target, &target_files(), 8).unwrap();
+    assert!(
+        !metadata
+            .iter()
+            .any(|(key, _)| key == "tokenizer.ggml.add_bos_token")
+    );
+}
+
+#[test]
+fn an_unlisted_chat_template_file_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, target) = fixture(dir.path(), &draft_config());
+    std::fs::write(
+        target.join("tokenizer_config.json"),
+        json!({"bos_token": "<EOS>", "eos_token": "<EOS>"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(target.join("chat_template.jinja"), "{{ y }}").unwrap();
+    let template = |listed: &[String]| {
+        vocab::metadata(&target, listed, 8)
+            .unwrap()
+            .into_iter()
+            .find(|(key, _)| key == "tokenizer.chat_template")
+            .map(|(_, value)| value)
+    };
+    assert_eq!(template(&target_files()), None);
+    let mut listed = target_files();
+    listed.push("chat_template.jinja".into());
+    assert_eq!(template(&listed), Some(gguf::Value::Str("{{ y }}".into())));
 }

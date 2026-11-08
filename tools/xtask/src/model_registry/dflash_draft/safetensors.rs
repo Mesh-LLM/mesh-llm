@@ -101,7 +101,7 @@ impl Safetensors {
                 .iter()
                 .try_fold(dtype.size(), |acc, dim| acc.checked_mul(*dim))
                 .ok_or_else(|| format!("{name}: shape overflows"))?;
-            if end - start != bytes || data_start + end > file_len {
+            if end - start != bytes || end > file_len - data_start {
                 return Err(format!("{name}: data does not match its shape").into());
             }
             tensors.insert(

@@ -15,14 +15,62 @@ const CONTROL: i32 = 3;
 const USER_DEFINED: i32 = 4;
 const UNUSED: i32 = 5;
 
-/// `tokenizer.ggml.pre` by the target's `model_type`. llama.cpp derives it
-/// from a hash of the tokenizer's output; add a model here only with a
-/// conversion that checks against llama.cpp's.
-fn pre_tokenizer(model_type: &str) -> DynResult<&'static str> {
-    match model_type {
-        "laguna" => Ok("laguna"),
-        other => Err(format!("no tokenizer.ggml.pre known for model_type {other:?}").into()),
+/// Laguna's `normalizer` and `pre_tokenizer`, as in poolside/Laguna-XS-2.1's
+/// tokenizer.json. llama.cpp's `laguna` pre-tokenizer implements exactly this.
+pub(super) const LAGUNA_PREPROCESSING: &str = r#"{
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Sequence",
+    "pretokenizers": [
+      {
+        "type": "Split",
+        "pattern": {
+          "Regex": "(?:\\r?\\n)+(?!\\r?\\n)"
+        },
+        "behavior": "MergedWithNext",
+        "invert": false
+      },
+      {
+        "type": "Split",
+        "pattern": {
+          "Regex": "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+        },
+        "behavior": "Isolated",
+        "invert": false
+      },
+      {
+        "type": "ByteLevel",
+        "add_prefix_space": false,
+        "trim_offsets": true,
+        "use_regex": false
+      }
+    ]
+  }
+}"#;
+
+/// `tokenizer.ggml.pre` for the target. llama.cpp derives it from a hash of
+/// the tokenizer's output; this names it by `model_type` and checks the
+/// tokenizer splits text the way that pre-tokenizer does. Add a model here
+/// only with a conversion checked against llama.cpp's.
+fn pre_tokenizer(model_type: &str, tokenizer: &Json) -> DynResult<&'static str> {
+    let (pre, expected) = match model_type {
+        "laguna" => ("laguna", LAGUNA_PREPROCESSING),
+        other => {
+            return Err(format!("no tokenizer.ggml.pre known for model_type {other:?}").into());
+        }
+    };
+    let expected: Json = serde_json::from_str(expected)?;
+    let actual = serde_json::json!({
+        "normalizer": tokenizer.get("normalizer").cloned().unwrap_or(Json::Null),
+        "pre_tokenizer": tokenizer.get("pre_tokenizer").cloned().unwrap_or(Json::Null),
+    });
+    if actual != expected {
+        return Err(format!(
+            "the {model_type} tokenizer normalizes or splits text differently from llama.cpp's {pre:?} pre-tokenizer"
+        )
+        .into());
     }
+    Ok(pre)
 }
 
 fn read_json(path: &Path) -> DynResult<Json> {
@@ -46,8 +94,13 @@ fn looks_special(token: &str) -> bool {
 }
 
 /// Tokenizer metadata in llama.cpp's key order. `target` holds the target's
-/// `config.json`, `tokenizer.json` and `tokenizer_config.json`.
-pub(super) fn metadata(target: &Path, vocab_size: usize) -> DynResult<Vec<(String, Value)>> {
+/// `config.json`, `tokenizer.json` and `tokenizer_config.json`; `listed` names
+/// the files the manifest pins there, the only ones read.
+pub(super) fn metadata(
+    target: &Path,
+    listed: &[String],
+    vocab_size: usize,
+) -> DynResult<Vec<(String, Value)>> {
     let config = read_json(&target.join("config.json"))?;
     let tokenizer = read_json(&target.join("tokenizer.json"))?;
     let tokenizer_config = read_json(&target.join("tokenizer_config.json"))?;
@@ -158,7 +211,7 @@ pub(super) fn metadata(target: &Path, vocab_size: usize) -> DynResult<Vec<(Strin
         ),
         (
             "tokenizer.ggml.pre".to_string(),
-            Value::Str(pre_tokenizer(model_type)?.into()),
+            Value::Str(pre_tokenizer(model_type, &tokenizer)?.into()),
         ),
         ("tokenizer.ggml.tokens".to_string(), Value::Strs(tokens)),
         ("tokenizer.ggml.token_type".to_string(), Value::I32s(types)),
@@ -217,13 +270,12 @@ pub(super) fn metadata(target: &Path, vocab_size: usize) -> DynResult<Vec<(Strin
     let template = match tokenizer_config.get("chat_template") {
         Some(Json::String(template)) => Some(template.clone()),
         Some(_) => return Err("only a single string chat_template is supported".into()),
-        None => {
-            let jinja = target.join("chat_template.jinja");
-            jinja
-                .is_file()
-                .then(|| std::fs::read_to_string(&jinja))
-                .transpose()?
+        // llama.cpp falls back to chat_template.jinja; read it only if the
+        // manifest pins it.
+        None if listed.iter().any(|file| file == "chat_template.jinja") => {
+            Some(std::fs::read_to_string(target.join("chat_template.jinja"))?)
         }
+        None => None,
     };
     if let Some(template) = template {
         out.push(("tokenizer.chat_template".to_string(), Value::Str(template)));
@@ -267,11 +319,13 @@ fn add_special_tokens(
                 .cloned()
                 .unwrap_or_default();
             // The supported shape: [BOS?] A [EOS?] and [BOS?] A [SEP] B [EOS?].
-            if single.len() < 2 {
+            let first = single.first().and_then(special);
+            let last = single.last().and_then(special).filter(|_| single.len() > 1);
+            let body =
+                &single[usize::from(first.is_some())..single.len() - usize::from(last.is_some())];
+            if body.len() != 1 || sequence(&body[0]) != Some("A") {
                 return Err("unsupported TemplateProcessing<single>".into());
             }
-            let first = special(&single[0]);
-            let last = special(&single[single.len() - 1]);
             if let Some(first) = first {
                 if Some(first) != bos {
                     return Err("TemplateProcessing starts with a token other than bos".into());
@@ -291,7 +345,9 @@ fn add_special_tokens(
                 } else {
                     pair.len()
                 };
-                let inner = &pair[start..stop];
+                let inner = pair
+                    .get(start..stop)
+                    .ok_or("unsupported TemplateProcessing<pair>")?;
                 if inner.len() < 3
                     || sequence(&inner[0]) != Some("A")
                     || sequence(&inner[inner.len() - 1]) != Some("B")
