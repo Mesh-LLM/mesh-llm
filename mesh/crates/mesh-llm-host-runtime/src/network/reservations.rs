@@ -156,6 +156,16 @@ impl RoutingReservations {
         let second = crate::network::router::weighted_index(&weights, rng.next_f64());
         if second == first || placements[second].rank > placements[first].rank {
             // Pressure and locality may not promote a lower-ranked target.
+            tracing::debug!(
+                model,
+                first = ?candidates[first],
+                second = ?candidates[second],
+                first_capacity = placements[first].capacity,
+                second_capacity = placements[second].capacity,
+                first_rank = placements[first].rank,
+                second_rank = placements[second].rank,
+                "two-choice host pick: second draw not eligible"
+            );
             return Some(candidates[first].clone());
         }
         let counts = self.counts.lock().unwrap();
@@ -194,6 +204,19 @@ impl RoutingReservations {
         } else {
             first
         };
+        tracing::debug!(
+            model,
+            first = ?candidates[first],
+            second = ?candidates[second],
+            winner = ?candidates[winner],
+            first_capacity = placements[first].capacity,
+            second_capacity = placements[second].capacity,
+            first_rank = placements[first].rank,
+            second_rank = placements[second].rank,
+            first_in_flight = load(first),
+            second_in_flight = load(second),
+            "two-choice host pick"
+        );
         Some(candidates[winner].clone())
     }
 
