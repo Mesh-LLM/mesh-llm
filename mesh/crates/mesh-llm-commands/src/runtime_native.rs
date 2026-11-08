@@ -339,6 +339,7 @@ fn cli_download_progress(json_output: bool) -> Option<NativeRuntimeDownloadProgr
     }))
 }
 
+/// Formats a byte count with binary units (B, KiB, MiB, GiB), one decimal above bytes.
 pub(crate) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes as f64;
@@ -549,6 +550,9 @@ mod tests {
         assert_eq!(human_bytes(1024), "1.0 KiB");
         assert_eq!(human_bytes(3 * 1024 * 1024 + 512 * 1024), "3.5 MiB");
         assert_eq!(human_bytes(2 * 1024 * 1024 * 1024), "2.0 GiB");
+        // One byte below a threshold keeps the lower unit (rounds up to 1024.0).
+        assert_eq!(human_bytes(1024 * 1024 - 1), "1024.0 KiB");
+        assert_eq!(human_bytes(1024 * 1024 * 1024 - 1), "1024.0 MiB");
     }
     use skippy_native_runtime::{
         CandidateEvaluation, CandidateRejection, NativeRuntimeArtifact, NativeRuntimeBackend,
