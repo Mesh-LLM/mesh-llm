@@ -1,4 +1,4 @@
-From 978bf84564e8d26abab47b25a295c67c07381e9f Mon Sep 17 00:00:00 2001
+From b779e79d6529a8bd334a894d0493af45818dc22e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
@@ -10,12 +10,12 @@ Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
  common/chat-diff-analyzer.cpp              |  10 +-
  common/chat-peg-parser.cpp                 |  15 +-
  common/chat-peg-parser.h                   |   2 +-
- common/chat.cpp                            | 126 +++-
+ common/chat.cpp                            |  36 +-
  common/chat.h                              |   6 +-
  common/ngram-cache.cpp                     | 158 ++++-
  common/peg-parser.cpp                      | 337 ++++++++++
  common/peg-parser.h                        |   8 +
- common/reasoning-budget.cpp                | 119 ++--
+ common/reasoning-budget.cpp                | 138 +++--
  common/reasoning-budget.h                  |  16 +-
  common/stage-chat.cpp                      | 363 +++++++++++
  ggml/cmake/common.cmake                    |   9 +-
@@ -27,15 +27,15 @@ Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
- ggml/src/ggml-metal/ggml-metal-device.m    | 452 +++++++++++++-
+ ggml/src/ggml-metal/ggml-metal-device.m    | 482 ++++++++++++++-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
  src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
  tools/mtmd/clip.cpp                        |   3 +
  tools/mtmd/mtmd-audio.h                    |   1 +
- tools/mtmd/mtmd-helper.cpp                 |  35 +-
+ tools/mtmd/mtmd-helper.cpp                 |  41 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3170 insertions(+), 147 deletions(-)
+ 31 files changed, 3130 insertions(+), 152 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -288,10 +288,10 @@ index a7e370578..39ffa20f1 100644
  
      template_params params_content_only;
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index 74b81dcdd..ec9836787 100644
+index 21620a7a4..45b4099d1 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
-@@ -386,11 +386,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -387,11 +387,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
      }
  
      if (is_arg_name && current_tool) {
@@ -305,7 +305,7 @@ index 74b81dcdd..ec9836787 100644
          ++arg_count;
  
          auto & target = args_target();
-@@ -672,10 +673,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
+@@ -673,10 +674,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
          // Arguments — either wrapped in args_key or parsed directly
          common_peg_parser args_parser = eps();
          if (args_key.empty()) {
@@ -318,7 +318,7 @@ index 74b81dcdd..ec9836787 100644
          }
          inner_fields.push_back(args_parser);
  
-@@ -737,7 +738,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
+@@ -738,7 +739,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
          auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                            atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
@@ -327,7 +327,7 @@ index 74b81dcdd..ec9836787 100644
  
          auto nested_object = literal("{") + space() +
                              nested_name + space() + literal(",") + space() +
-@@ -793,7 +794,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -794,7 +795,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
  
      auto tool_choices    = choice();
      auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -338,7 +338,7 @@ index 74b81dcdd..ec9836787 100644
  
      for (size_t i = 0; i < tools.size(); i++) {
          const auto & tool_def = tools[i];
-@@ -807,7 +810,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -808,7 +811,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
          auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto tool_args_ = args_key_parser + space() + literal(":") + space() +
@@ -368,7 +368,7 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 5f956e64e..94bcaef71 100644
+index 5f956e64e..6910aa61a 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -203,6 +203,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
@@ -414,100 +414,10 @@ index 5f956e64e..94bcaef71 100644
              if (message.contains("reasoning_content")) {
                  msg.reasoning_content = message.at("reasoning_content");
              }
-@@ -796,6 +799,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
+@@ -796,6 +799,23 @@ std::string common_chat_format_example(const struct common_chat_templates *
      "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
      "{%- endif -%}"
  
-+// Fallback copied from the official zai-org/GLM-4.7-Flash chat_template.jinja.
-+// In particular, the generation-prompt branch that emits a leading </think>
-+// when enable_thinking=false is upstream GLM template behavior, not skippy policy.
-+static const char * GLM_4_7_FALLBACK_TEMPLATE_SRC = R"jinja([gMASK]<sop>
-+{%- if tools -%}
-+<|system|>
-+# Tools
-+
-+You may call one or more functions to assist with the user query.
-+
-+You are provided with function signatures within <tools></tools> XML tags:
-+<tools>
-+{% for tool in tools %}
-+{{ tool | tojson(ensure_ascii=False) }}
-+{% endfor %}
-+</tools>
-+
-+For each function call, output the function name and arguments within the following XML format:
-+<tool_call>{function-name}<arg_key>{arg-key-1}</arg_key><arg_value>{arg-value-1}</arg_value><arg_key>{arg-key-2}</arg_key><arg_value>{arg-value-2}</arg_value>...</tool_call>{%- endif -%}
-+{%- macro visible_text(content) -%}
-+    {%- if content is string -%}
-+        {{- content }}
-+    {%- elif content is iterable and content is not mapping -%}
-+        {%- for item in content -%}
-+            {%- if item is mapping and item.type == 'text' -%}
-+                {{- item.text }}
-+            {%- elif item is string -%}
-+                {{- item }}
-+            {%- endif -%}
-+        {%- endfor -%}
-+    {%- else -%}
-+        {{- content }}
-+    {%- endif -%}
-+{%- endmacro -%}
-+{%- set ns = namespace(last_user_index=-1) %}
-+{%- for m in messages %}
-+    {%- if m.role == 'user' %}
-+        {% set ns.last_user_index = loop.index0 -%}
-+    {%- endif %}
-+{%- endfor %}
-+{% for m in messages %}
-+{%- if m.role == 'user' -%}<|user|>{{ visible_text(m.content) }}
-+{%- elif m.role == 'assistant' -%}
-+<|assistant|>
-+{%- set reasoning_content = '' %}
-+{%- set content = visible_text(m.content) %}
-+{%- if m.reasoning_content is string %}
-+    {%- set reasoning_content = m.reasoning_content %}
-+{%- else %}
-+    {%- if '</think>' in content %}
-+        {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-+        {%- set content = content.split('</think>')[-1].lstrip('\n') %}
-+    {%- endif %}
-+{%- endif %}
-+{%- if ((clear_thinking is defined and not clear_thinking) or loop.index0 > ns.last_user_index) and reasoning_content -%}
-+{{ '<think>' + reasoning_content.strip() +  '</think>'}}
-+{%- else -%}
-+{{ '</think>' }}
-+{%- endif -%}
-+{%- if content.strip() -%}
-+{{ content.strip() }}
-+{%- endif -%}
-+{% if m.tool_calls %}
-+{% for tc in m.tool_calls %}
-+{%- if tc.function %}
-+    {%- set tc = tc.function %}
-+{%- endif %}
-+{{- '<tool_call>' + tc.name -}}
-+{% set _args = tc.arguments %}{% for k, v in _args.items() %}<arg_key>{{ k }}</arg_key><arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>{% endfor %}</tool_call>{% endfor %}
-+{% endif %}
-+{%- elif m.role == 'tool' -%}
-+{%- if m.content is string -%}
-+{%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
-+    {{- '<|observation|>' }}
-+{%- endif %}
-+{{- '<tool_response>' }}
-+{{- m.content }}
-+{{- '</tool_response>' }}
-+{%- else -%}
-+<|observation|>{% for tr in m.content %}
-+<tool_response>{{ tr.output if tr.output is defined else tr }}</tool_response>{% endfor -%}
-+{% endif -%}
-+{%- elif m.role == 'system' -%}
-+<|system|>{{ visible_text(m.content) }}
-+{%- endif -%}
-+{%- endfor -%}
-+{%- if add_generation_prompt -%}
-+    <|assistant|>{{- '</think>' if (enable_thinking is defined and not enable_thinking) else '<think>' -}}
-+{%- endif -%})jinja";
-+
 +static std::string common_chat_vocab_piece(const struct llama_vocab * vocab, llama_token token) {
 +    return token == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, token, true);
 +}
@@ -528,13 +438,13 @@ index 5f956e64e..94bcaef71 100644
  void common_chat_templates_free(struct common_chat_templates * tmpls) {
      delete tmpls;
  }
-@@ -904,6 +1014,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+@@ -904,6 +924,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
      } else {
          default_template_src = chat_template_override;
      }
 +    if (default_template_src.empty() && template_tool_use_src.empty() && common_chat_model_has_glm4_vocab(model)) {
-+        LOG_DBG("%s: using built-in GLM 4.7 fallback chat template\n", __func__);
-+        default_template_src = GLM_4_7_FALLBACK_TEMPLATE_SRC;
++        throw std::runtime_error(
++            "GLM vocabulary does not identify a chat-template version; provide tokenizer.chat_template metadata or an explicit chat template");
 +    }
      if (default_template_src.empty() || default_template_src == "chatml") {
          if (!template_tool_use_src.empty()) {
@@ -1138,7 +1048,7 @@ index 46df99875..5b41e7eba 100644
  
    private:
 diff --git a/common/reasoning-budget.cpp b/common/reasoning-budget.cpp
-index 81b7c3e56..6a8006881 100644
+index 81b7c3e56..674bb914d 100644
 --- a/common/reasoning-budget.cpp
 +++ b/common/reasoning-budget.cpp
 @@ -1,9 +1,4 @@
@@ -1197,7 +1107,8 @@ index 81b7c3e56..6a8006881 100644
 +        recent.push_back(token);
 +        if (recent.size() > max_length) {
 +            recent.erase(recent.begin());
-+        }
+         }
+-        return p;
 +        int32_t match = -1;
 +        size_t match_length = 0;
 +        for (size_t i = 0; i < seqs.size(); ++i) {
@@ -1207,8 +1118,7 @@ index 81b7c3e56..6a8006881 100644
 +                match = static_cast<int32_t>(i);
 +                match_length = seq.size();
 +            }
-         }
--        return p;
++        }
 +        if (match >= 0) {
 +            recent.clear();
 +        }
@@ -1258,7 +1168,15 @@ index 81b7c3e56..6a8006881 100644
  
      int32_t budget;           // maximum tokens in reasoning block
      int32_t remaining;        // tokens remaining in budget
-@@ -80,12 +112,9 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+@@ -63,6 +95,7 @@ struct common_reasoning_budget_ctx {
+ 
+     // for forcing
+     size_t force_pos;         // next position in forced_tokens to force
++    bool forcing_started;       // distinguishes generated forcing from prompt-history accepts
+ 
+     int32_t end_match;        // index into end_matcher.seqs of the sequence that transitioned to DONE, -1 if none
+ };
+@@ -80,12 +113,10 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
              if (ctx->start_matcher.advance(token) >= 0) {
                  ctx->state = REASONING_BUDGET_COUNTING;
                  ctx->remaining = ctx->budget;
@@ -1268,10 +1186,11 @@ index 81b7c3e56..6a8006881 100644
                      ctx->state = REASONING_BUDGET_FORCING;
                      ctx->force_pos = 0;
 -                    COM_TRC("%s", "budget=0, forcing immediately\n");
++                    ctx->forcing_started = false;
                  }
              }
              break;
-@@ -97,14 +126,13 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+@@ -97,22 +128,21 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
              if (match >= 0) {
                  ctx->state = REASONING_BUDGET_DONE;
                  ctx->end_match = match;
@@ -1288,17 +1207,20 @@ index 81b7c3e56..6a8006881 100644
              }
  
              if (ctx->state == REASONING_BUDGET_WAITING_UTF8) {
-@@ -112,7 +140,6 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+                 if (utf8_complete) {
                      ctx->state = REASONING_BUDGET_FORCING;
                      ctx->force_pos = 0;
++                    ctx->forcing_started = false;
                      ctx->end_matcher.reset();
 -                    COM_TRC("%s", "UTF-8 complete, now forcing end sequence\n");
                  }
              } else if (ctx->state == REASONING_BUDGET_COUNTING) {
                  ctx->remaining--;
-@@ -121,11 +148,9 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+@@ -120,12 +150,11 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+                     if (utf8_complete) {
                          ctx->state = REASONING_BUDGET_FORCING;
                          ctx->force_pos = 0;
++                        ctx->forcing_started = false;
                          ctx->end_matcher.reset();
 -                        COM_TRC("%s", "budget exhausted, forcing end sequence\n");
                      } else {
@@ -1308,15 +1230,24 @@ index 81b7c3e56..6a8006881 100644
                      }
                  }
              }
-@@ -140,7 +165,6 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
-             if (match >= 0 || ctx->force_pos >= ctx->forced_tokens.size()) {
-                 ctx->state = REASONING_BUDGET_DONE;
+@@ -136,11 +165,12 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+             // track the end sequence within forced_tokens so it is also reported on DONE
+             const int32_t match = ctx->end_matcher.advance(token);
+             ctx->force_pos++;
+-            // an end tag that is already in the prompt (e.g. "<think></think>") also ends forcing
+-            if (match >= 0 || ctx->force_pos >= ctx->forced_tokens.size()) {
+-                ctx->state = REASONING_BUDGET_DONE;
++            if (match >= 0) {
                  ctx->end_match = match;
 -                COM_TRC("%s", "forced sequence complete, done\n");
++            }
++            // Prompt history can already close the block. Generated forcing must also emit its suffix.
++            if ((!ctx->forcing_started && match >= 0) || ctx->force_pos >= ctx->forced_tokens.size()) {
++                ctx->state = REASONING_BUDGET_DONE;
              }
              break;
          }
-@@ -152,12 +176,9 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+@@ -152,12 +182,10 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
                  ctx->remaining = ctx->budget;
                  ctx->end_matcher.reset();
                  ctx->end_match = -1;
@@ -1326,10 +1257,24 @@ index 81b7c3e56..6a8006881 100644
                      ctx->state = REASONING_BUDGET_FORCING;
                      ctx->force_pos = 0;
 -                    COM_TRC("%s", "budget=0, forcing immediately\n");
++                    ctx->forcing_started = false;
                  }
              }
              break;
-@@ -197,8 +218,8 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
+@@ -176,6 +204,7 @@ static void common_reasoning_budget_apply(struct llama_sampler * smpl, llama_tok
+         return;
+     }
+ 
++    ctx->forcing_started = true;
+     const llama_token forced = ctx->forced_tokens[ctx->force_pos];
+ 
+     // set all logits to -inf except the forced token
+@@ -193,12 +222,13 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
+     ctx->start_matcher.reset();
+     ctx->end_matcher.reset();
+     ctx->force_pos = 0;
++    ctx->forcing_started = false;
+     ctx->end_match = -1;
  }
  
  static struct llama_sampler * common_reasoning_budget_init_state(
@@ -1340,7 +1285,7 @@ index 81b7c3e56..6a8006881 100644
          int32_t budget, common_reasoning_budget_state initial_state);
  
  static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl);
-@@ -233,9 +254,9 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
+@@ -233,9 +263,9 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
  
  static struct llama_sampler * common_reasoning_budget_init_state(
          const struct llama_vocab        * vocab,
@@ -1353,7 +1298,15 @@ index 81b7c3e56..6a8006881 100644
          int32_t                           budget,
          common_reasoning_budget_state     initial_state) {
      // promote COUNTING with budget <= 0 to FORCING
-@@ -261,9 +282,9 @@ static struct llama_sampler * common_reasoning_budget_init_state(
+@@ -254,6 +284,7 @@ static struct llama_sampler * common_reasoning_budget_init_state(
+             /* .remaining     = */ budget,
+             /* .state         = */ initial_state,
+             /* .force_pos     = */ 0,
++            /* .forcing_started = */ false,
+             /* .end_match     = */ -1,
+         }
+     );
+@@ -261,9 +292,9 @@ static struct llama_sampler * common_reasoning_budget_init_state(
  
  struct llama_sampler * common_reasoning_budget_init(
          const struct llama_vocab        * vocab,
@@ -1366,7 +1319,7 @@ index 81b7c3e56..6a8006881 100644
          int32_t                           budget,
          common_reasoning_budget_state     initial_state) {
      return common_reasoning_budget_init_state(vocab, start_seqs, end_seqs, forced_tokens, budget, initial_state);
-@@ -276,7 +297,7 @@ common_reasoning_budget_state common_reasoning_budget_get_state(const struct lla
+@@ -276,13 +307,13 @@ common_reasoning_budget_state common_reasoning_budget_get_state(const struct lla
      return ((const common_reasoning_budget_ctx *)smpl->ctx)->state;
  }
  
@@ -1375,9 +1328,18 @@ index 81b7c3e56..6a8006881 100644
      if (!smpl) {
          return nullptr;
      }
-@@ -305,7 +326,5 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
+ 
+     const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
+-    if (ctx->end_match < 0) {
++    if (ctx->state != REASONING_BUDGET_DONE || ctx->end_match < 0) {
+         return nullptr;
+     }
+ 
+@@ -304,8 +335,7 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
+ 
      ctx->state = REASONING_BUDGET_FORCING;
      ctx->force_pos = 0;
++    ctx->forcing_started = false;
      ctx->end_matcher.reset();
 -    COM_TRC("%s", "forced into forcing state (manual transition)\n");
 -
@@ -1852,7 +1814,7 @@ index afb86338a..0427fda49 100644
      // Backend registry
      //
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 92a53bf38..40e0c80d9 100644
+index 92a53bf38..9c8980505 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -1485,14 +1485,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
@@ -1871,7 +1833,7 @@ index 92a53bf38..40e0c80d9 100644
 +    const size_t max_splits = (size_t) std::max(graph->n_nodes + graph->n_leafs, 1);
 +    const size_t context_buffer_size = max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) +
 +        ggml_graph_overhead_custom(graph->size, false);
-+    if (sched->context_buffer_size < context_buffer_size) {
++    if (sched->context_buffer == nullptr || sched->context_buffer_size < context_buffer_size) {
 +        free(sched->context_buffer);
 +        sched->context_buffer = (char *) malloc(context_buffer_size);
 +        sched->context_buffer_size = context_buffer_size;
@@ -2602,7 +2564,7 @@ index 4053a624e..56b795790 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 5e6099ce1..c97bc5380 100644
+index 5e6099ce1..8c21125d5 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2622,7 +2584,7 @@ index 5e6099ce1..c97bc5380 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -2634,7 +2596,7 @@ index 5e6099ce1..c97bc5380 100644
      NSLock * lock;
  };
  
-@@ -209,6 +217,98 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
+@@ -209,6 +217,117 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
      options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
  }
  
@@ -2648,6 +2610,25 @@ index 5e6099ce1..c97bc5380 100644
 +    }
 +    return h;
 +}
++
++#if !GGML_METAL_EMBED_LIBRARY
++// Precompiled libraries have no source string: include the actual bytes in the same cache key.
++static bool ggml_metal_pso_hash_library(NSURL * url, uint64_t * hash) {
++    const char * dir = getenv("GGML_METAL_PIPELINE_CACHE_DIR");
++    if (!dir || !dir[0]) {
++        return false;
++    }
++    NSData * data = [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:NULL];
++    if (!data) {
++        GGML_LOG_WARN("%s: cannot fingerprint '%s'; pipeline cache disabled\n", __func__, url.path.UTF8String);
++        return false;
++    }
++    const uint64_t size = data.length;
++    *hash = ggml_metal_fnv1a64(*hash, &size, sizeof(size));
++    *hash = ggml_metal_fnv1a64(*hash, data.bytes, data.length);
++    return true;
++}
++#endif
 +
 +// Attach an on-disk MTLBinaryArchive to the library so pipeline compilation
 +// can load previously compiled pipeline states and append new ones. The file
@@ -2733,7 +2714,7 @@ index 5e6099ce1..c97bc5380 100644
  // Parse a `#include "name"` line. Returns the quoted name in *include_name on
  // success. Whitespace-tolerant; ignores `#include <...>` (system headers).
  static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
-@@ -319,12 +419,14 @@ static bool ggml_metal_library_compile_all(
+@@ -319,12 +438,14 @@ static bool ggml_metal_library_compile_all(
          id<MTLDevice> device,
          NSDictionary * prep,
          NSString * (^source_for_kind)(int kind, NSError ** err),
@@ -2749,7 +2730,7 @@ index 5e6099ce1..c97bc5380 100644
  
      dispatch_group_t group = dispatch_group_create();
      dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-@@ -343,6 +445,11 @@ static bool ggml_metal_library_compile_all(
+@@ -343,6 +464,11 @@ static bool ggml_metal_library_compile_all(
                  return;
              }
  
@@ -2761,7 +2742,7 @@ index 5e6099ce1..c97bc5380 100644
              id<MTLLibrary> lib = nil;
  
              @autoreleasepool {
-@@ -377,6 +484,18 @@ static bool ggml_metal_library_compile_all(
+@@ -377,6 +503,18 @@ static bool ggml_metal_library_compile_all(
  
      const bool ok = !atomic_load(&any_failure);
  
@@ -2780,7 +2761,7 @@ index 5e6099ce1..c97bc5380 100644
      if (ok) {
          const int64_t t_total = ggml_time_us() - t_start;
          int64_t t_max = 0;
-@@ -484,19 +603,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -484,19 +622,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
  #undef X
      };
  
@@ -2805,17 +2786,40 @@ index 5e6099ce1..c97bc5380 100644
      return res;
  #else
  #ifdef SWIFT_PACKAGE
-@@ -548,6 +671,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -523,6 +665,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+             return NULL;
+         }
+ 
++        uint64_t library_hash = 0xcbf29ce484222325ULL;
++        bool library_hash_ready = ggml_metal_pso_hash_library(libURL, &library_hash);
++
+         // the tensor API kernels are built into a separate metallib
+         if (ggml_metal_device_get_props(dev)->has_tensor) {
+             NSString * path_mm = ggml_metal_find_metallib(bundle, @"ggml-tensor");
+@@ -538,6 +683,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+             if (lib_mm) {
+                 GGML_LOG_INFO("%s: loaded '%s'\n", __func__, [path_mm UTF8String]);
+ 
++                if (library_hash_ready) {
++                    library_hash_ready = ggml_metal_pso_hash_library(
++                            [NSURL fileURLWithPath:path_mm], &library_hash);
++                }
+                 res->objs[GGML_METAL_LIB_MUL_MM] = [lib_mm retain];
+                 res->override_fns                = [[NSSet setWithArray:[lib_mm functionNames]] retain];
+             } else {
+@@ -548,6 +697,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          }
  
          GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
 +
-+        ggml_metal_pso_cache_setup(res, device, prep, 0);
++        if (library_hash_ready) {
++            ggml_metal_pso_cache_setup(res, device, prep, library_hash);
++        }
 +
          return res;
      }
  
-@@ -582,10 +708,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -582,10 +736,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          path_per_kind[kind] = [path_source retain];
      }
  
@@ -2828,7 +2832,7 @@ index 5e6099ce1..c97bc5380 100644
  
      for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
          [path_per_kind[kind] release];
-@@ -597,6 +724,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -597,6 +752,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          return NULL;
      }
  
@@ -2837,7 +2841,7 @@ index 5e6099ce1..c97bc5380 100644
      return res;
  #endif
  }
-@@ -691,6 +820,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+@@ -691,6 +848,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
  
      ggml_metal_pipelines_free(lib->pipelines);
  
@@ -2852,7 +2856,7 @@ index 5e6099ce1..c97bc5380 100644
      [lib->lock release];
  
      free(lib);
-@@ -784,7 +921,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+@@ -784,7 +949,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
          }
  
          id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
@@ -2886,7 +2890,7 @@ index 5e6099ce1..c97bc5380 100644
  
          [mtl_function release];
  
-@@ -1793,6 +1955,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1793,6 +1983,31 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -2900,8 +2904,10 @@ index 5e6099ce1..c97bc5380 100644
 +                                      (dk == 64  && dv == 64)  ||
 +                                      (dk == 72  && dv == 72)  ||
 +                                      (dk == 80  && dv == 80)  ||
++                                      (dk == 96  && dv == 64)  ||
 +                                      (dk == 96  && dv == 96)  ||
 +                                      (dk == 112 && dv == 112) ||
++                                      (dk == 128 && dv == 96)  ||
 +                                      (dk == 128 && dv == 128) ||
 +                                      (dk == 192 && dv == 128) ||
 +                                      (dk == 192 && dv == 192) ||
@@ -2916,7 +2922,7 @@ index 5e6099ce1..c97bc5380 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2762,3 +2947,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2762,3 +2977,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -4135,10 +4141,30 @@ index c0751b5e6..ebe4f6397 100644
  
      const mtmd_audio_cache * cache = nullptr;
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index d86537e55..7594cee65 100644
+index d86537e55..4bfc58d79 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
-@@ -209,6 +209,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -141,6 +141,11 @@ int32_t mtmd_helper_decode_image_chunk(
+     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
+ 
+     int32_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
++    const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
++    if (use_non_causal && (n_tokens > n_batch || n_tokens > static_cast<int32_t>(llama_n_ubatch(lctx)))) {
++        LOG_ERR("non-causal image requires one batch and microbatch for all %d tokens\n", n_tokens);
++        return -1;
++    }
+     int32_t i_batch = 0;
+     int32_t n_img_batches = (n_tokens + n_batch - 1) / n_batch;
+     decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
+@@ -165,7 +170,6 @@ int32_t mtmd_helper_decode_image_chunk(
+         batch_embd.set_position_normal(n_past, seq_id);
+     }
+ 
+-    const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
+     const scope_non_causal non_causal(lctx, use_non_causal);
+ 
+     while (i_batch < n_img_batches) { // split into batches
+@@ -209,6 +213,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          int32_t n_batch,
          bool logits_last,
          llama_pos * new_n_past) {
@@ -4164,7 +4190,7 @@ index d86537e55..7594cee65 100644
      GGML_ASSERT(n_batch > 0);
      int32_t ret;
      auto chunk_type = mtmd_input_chunk_get_type(chunk);
-@@ -239,6 +258,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -239,6 +262,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                  LOG_ERR("failed to decode text\n");
                  return ret;
              }
@@ -4174,7 +4200,7 @@ index d86537e55..7594cee65 100644
              *new_n_past += n_added;
          }
  
-@@ -257,7 +279,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -257,7 +283,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
  
          float * embd = mtmd_get_output_embd(ctx);
@@ -4221,6 +4247,3 @@ index a9ffdf71e..ab65ceb32 100644
  // one decoded sub-batch of embeddings, passed to mtmd_helper_post_decode_callback
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
--- 
-2.54.0 (Apple Git-157)
-

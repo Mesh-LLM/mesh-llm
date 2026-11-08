@@ -1,4 +1,4 @@
-From aacf40b2b02c6323c68aa6564778867ff3ff6f5e Mon Sep 17 00:00:00 2001
+From 5379c658181b619a90ac7abea47eb277b3115e24 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
@@ -25,7 +25,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/abi.cpp                      |   59 ++
  src/skippy/activation.cpp               | 1028 ++++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
- src/skippy/activation_layout.cpp        |  160 +++
+ src/skippy/activation_layout.cpp        |  164 ++++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
  src/skippy/chat_sampling.cpp            |   75 ++
@@ -83,7 +83,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
  tests/test-batch-alloc.cpp              |   21 +
- 79 files changed, 16480 insertions(+), 407 deletions(-)
+ 79 files changed, 16484 insertions(+), 407 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -2773,10 +2773,10 @@ index 000000000..29674ebda
 +        skippy_error ** out_error);
 diff --git a/src/skippy/activation_layout.cpp b/src/skippy/activation_layout.cpp
 new file mode 100644
-index 000000000..27bf26f5b
+index 000000000..0cb2181df
 --- /dev/null
 +++ b/src/skippy/activation_layout.cpp
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,164 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -2911,6 +2911,10 @@ index 000000000..27bf26f5b
 +        size_t output_payload_capacity,
 +        size_t * out_output_payload_bytes,
 +        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || session->stage_model == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and context are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
 +    if (token_count == 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count must be greater than zero");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
@@ -4063,7 +4067,7 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..8eec3357a
+index 000000000..2b9593e0c
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
 @@ -0,0 +1,499 @@
@@ -4261,14 +4265,14 @@ index 000000000..8eec3357a
 +            size_t destination_offset = 0;
 +            for (int64_t i3 = 0; i3 < part.dimensions[3]; ++i3) {
 +                for (int64_t i2 = 0; i2 < part.dimensions[2]; ++i2) {
-+                    for (int64_t i1 = 0; i1 < part.dimensions[1]; ++i1) {
-+                        const size_t source_offset =
-+                                (static_cast<size_t>(i1) + (token_axis == 1 ? offsets[request_index] : 0))*tensor->nb[1] +
-+                                (static_cast<size_t>(i2) + (token_axis == 2 ? offsets[request_index] : 0))*tensor->nb[2] +
-+                                (static_cast<size_t>(i3) + (token_axis == 3 ? offsets[request_index] : 0))*tensor->nb[3];
-+                        ggml_backend_tensor_get(tensor, destination + destination_offset, source_offset, row_bytes);
-+                        destination_offset += row_bytes;
-+                    }
++                    const size_t source_offset =
++                            (token_axis == 1 ? offsets[request_index] : 0)*tensor->nb[1] +
++                            (static_cast<size_t>(i2) + (token_axis == 2 ? offsets[request_index] : 0))*tensor->nb[2] +
++                            (static_cast<size_t>(i3) + (token_axis == 3 ? offsets[request_index] : 0))*tensor->nb[3];
++                    // One strided transfer per plane avoids a GPU synchronization for every token row.
++                    ggml_backend_tensor_get_2d(tensor, destination + destination_offset, source_offset,
++                            row_bytes, part.dimensions[1], tensor->nb[1], row_bytes);
++                    destination_offset += row_bytes*static_cast<size_t>(part.dimensions[1]);
 +                }
 +            }
 +            if (destination_offset != part.payload_bytes) {
@@ -17942,6 +17946,3 @@ index c41e91d61..eee60d81d 100644
      t.test("token_batch_explicit_fields", [&](testing & t) {
          llama_token  token[3]    = { 5, 6, 7 };
          llama_pos    pos[3]      = { 3, 4, 5 };
--- 
-2.54.0 (Apple Git-157)
-
