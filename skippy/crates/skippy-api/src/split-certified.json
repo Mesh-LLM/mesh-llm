@@ -3,7 +3,7 @@
   "native_recipe": {
     "llama_upstream_sha": "372dc5ca157276beb6c67b2e92477e8d662e964a",
     "skippy_abi": "0.1.79",
-    "patch_queue_sha256": "5febf0a5cec69c0fd811cd7f620b12e89a34fe308f87c79d2cb0bd77f0fee50a"
+    "patch_queue_sha256": "2892dc03dfc798232bd82f3be42f7213d9b316481fcc2781c8118cbd4dd3663b"
   },
   "architectures": [
     "afmoe",
@@ -63,6 +63,7 @@
     "maincoder",
     "mamba",
     "mellum",
+    "metis16",
     "mimo2",
     "minicpm",
     "minicpm3",

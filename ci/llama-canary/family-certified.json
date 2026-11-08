@@ -1026,6 +1026,16 @@
       "notes": "Pinned lfm3 GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
     },
     {
+      "family": "metis16",
+      "class": "causal_generation",
+      "architecture": "metis16",
+      "profile": "full",
+      "artifact": {"repo": "Lernex/Metis-1.6-Praxis-GGUF", "revision": "5b44a4ac85b9f825bd9d5d3d4cf69130f9736a95", "files": ["Metis-1.6-Praxis-Q4_K_M.gguf"], "file_integrity": {"Metis-1.6-Praxis-Q4_K_M.gguf": {"size_bytes": 2019139168, "blob_id": "7cc00783ff19e42ed4aa04048796e2c975d0b975525c13abed317c33cb6ce6f0"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 8192, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 2019139168},
+      "notes": "Metis 1.6 Praxis; generated stage boundaries; whole-model, single-step, three-stage chain, and state handoff passed on James-lab Spark at 93d8dbe44"
+    },
+    {
       "family": "sensenova-u1",
       "class": "causal_generation",
       "architecture": "sensenova_u1",
