@@ -1027,9 +1027,11 @@ impl Node {
         remote: EndpointId,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node.handle_plugin_channel_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin channel stream error from {}: {error}",
@@ -1044,9 +1046,11 @@ impl Node {
         remote: EndpointId,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node.handle_plugin_bulk_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin bulk stream error from {}: {error}",
@@ -1061,9 +1065,11 @@ impl Node {
         remote: EndpointId,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node.handle_plugin_mesh_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin mesh stream error from {}: {error}",
@@ -1124,9 +1130,9 @@ impl Node {
             STREAM_PEER_DOWN => self.spawn_peer_down_stream(remote, recv),
             STREAM_PEER_LEAVING => self.spawn_peer_leaving_stream(remote, recv),
             STREAM_DIRECT_PATH_REQUEST => self.spawn_direct_path_request_stream(remote, recv),
-            STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv),
-            STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv),
-            STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv),
+            STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv, slot),
+            STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv, slot),
+            STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv, slot),
             STREAM_SUBPROTOCOL => self.spawn_subprotocol_stream(remote, send, recv),
             other => tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short()),
         }
