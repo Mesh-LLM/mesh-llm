@@ -1,18 +1,27 @@
-From f30442a407f7e4fb8ce8099f42b9631511de7333 Mon Sep 17 00:00:00 2001
+From c42d702f3d69dca01cd722f0ca7364439c264606 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Mon, 9 Nov 2026 06:39:47 +1100
+Date: Mon, 9 Nov 2026 07:09:49 +1100
 Subject: [PATCH] models: expose Metis16 virtual decoder layers
 
 ---
- src/models/metis16.cpp | 266 +++++++++++++++++++++++------------------
+ src/models/metis16.cpp | 275 +++++++++++++++++++++++------------------
  src/models/models.h    |  10 ++
- 2 files changed, 158 insertions(+), 118 deletions(-)
+ 2 files changed, 167 insertions(+), 118 deletions(-)
 
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
-index 8a433f3cc..d79985497 100644
+index 8a433f3cc..c83b713a4 100644
 --- a/src/models/metis16.cpp
 +++ b/src/models/metis16.cpp
-@@ -258,133 +258,164 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
+@@ -241,6 +241,8 @@ void llama_model_metis16::graph::mem_write(const llama_model_metis16 & model, gg
+     v = ggml_reshape_3d(ctx0, v, 1, n_m, n_tokens);
+     bank_k  = bank_k  ? ggml_concat(ctx0, bank_k,  k, 1) : k;
+     bank_vt = bank_vt ? ggml_concat(ctx0, bank_vt, v, 0) : v;
++    cb(bank_k, "depth_mem_keys", entry);
++    cb(bank_vt, "depth_mem_values", entry);
+ }
+ 
+ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis16 & model, ggml_tensor * state,
+@@ -258,133 +260,171 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
      return ggml_tanh(ctx0, ggml_add(ctx0, f, model.depth_mem_route_b));
  }
  
@@ -98,6 +107,8 @@ index 8a433f3cc..d79985497 100644
 +        summ = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, rows, ggml_reshape_3d(ctx0, weights, n_used, 1, n_tokens)), n_r,
 +                               n_tokens);
 +
++        cb(summ, "route_summary", il);
++
 +        if (writes) {
 +            ggml_tensor * probs = ggml_soft_max(ctx0, logits);
 +            ent  = ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, ggml_log(ctx0, ggml_clamp(ctx0, probs, 1.0e-9f, 1.0f))));
@@ -105,6 +116,8 @@ index 8a433f3cc..d79985497 100644
 +            conf = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, probs, 1, n_exp, n_tokens),
 +                                 ggml_reshape_2d(ctx0, ggml_argmax(ctx0, probs), 1, n_tokens));
 +            conf = ggml_reshape_2d(ctx0, conf, 1, n_tokens);
++            cb(ent, "route_entropy", il);
++            cb(conf, "route_confidence", il);
 +        }
 +    }
 +    x = hc_write(mixed, layer.hc_ffn_write, cur, p);
@@ -112,6 +125,7 @@ index 8a433f3cc..d79985497 100644
 +
 +    history = history ? ggml_add(ctx0, ggml_scale(ctx0, history, 0.5f), ggml_scale(ctx0, summ, 0.5f)) :
 +                        ggml_scale(ctx0, summ, 0.5f);
++    cb(history, "route_history", il);
 +
 +    if (is_attn) {
 +        mem_write(model, x, summ, ent, conf, cont, n_entry++);
@@ -227,6 +241,7 @@ index 8a433f3cc..d79985497 100644
 -            if (is_attn) {
 -                mem_write(model, x, summ, ent, conf, cont, n_entry++);
 -            }
++    cb(prev_state, "previous_pass_state", -1);
 +    ggml_tensor * history    = nullptr;  // routing history, [n_route, n_tokens]
 +    ggml_tensor * cont       = nullptr;  // depth head reading of the last pass, [1, n_tokens]
 +    int           n_entry    = 0;
@@ -289,12 +304,13 @@ index 8a433f3cc..d79985497 100644
 +
 +            mem_write(model, x, summ, ent, conf, cont, n_entry++);
 +            prev_state = state;
++            cb(prev_state, "previous_pass_state", il);
 +        }
 +        cb(x, "l_out", il);
      }
  
      ggml_tensor * cur = stream_mean(x);
-@@ -399,5 +430,4 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
+@@ -399,5 +439,4 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
      cur = build_lora_mm(model.output, cur);
      cb(cur, "result_output", -1);
      res->t_logits = cur;

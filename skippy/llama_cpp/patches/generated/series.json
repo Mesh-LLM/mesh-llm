@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "cf21099aab1628b0ecf56c1cae6728c4a498011b55a0a8cb821f3d2739801aea",
+  "full_patch_sha256": "3fd927830f148c36b22922dab591f1f6b33e4384f943e4421dd46255911a9ccd",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -588,7 +588,7 @@
         "metis16"
       ],
       "file": "0058-family-metis16.patch",
-      "sha256": "4e66c6f2c09c5890078f37a1462cedbda031d82f922e4de08fc4aa8b94040d3c",
+      "sha256": "8ee988c4e46a4a185967aa185f6fd6b3fc70b2e2c55f6cd806734513903003ac",
       "sources": [
         "src/models/metis16.cpp"
       ]
