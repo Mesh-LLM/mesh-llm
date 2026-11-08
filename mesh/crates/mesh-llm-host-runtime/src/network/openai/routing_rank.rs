@@ -124,6 +124,43 @@ fn sort_ranked_targets<T>(targets: &mut [RankedTarget<T>]) {
 pub(super) struct RankedCandidates<T> {
     pub(super) ordered: Vec<T>,
     pub(super) equivalent_prefix: usize,
+    /// Per-target draw inputs for the two-choice host pick.
+    pub(super) placements: std::collections::HashMap<T, PlacementWeight>,
+}
+
+/// What the two-choice host draw knows about one target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlacementWeight {
+    /// Capacity draw weight ([`crate::network::router::placement_weight`]).
+    pub(crate) capacity: f64,
+    /// Measured RTT to the target; `Some(0)` for local, `None` when unknown.
+    pub(crate) rtt_ms: Option<u32>,
+}
+
+impl PlacementWeight {
+    /// Capacity scaled by the bounded locality tiebreak.
+    pub(crate) fn draw_weight(&self) -> f64 {
+        self.capacity * crate::network::router::locality_factor(self.rtt_ms)
+    }
+}
+
+fn placement_weight_for(throughput: Option<TargetThroughputRank>) -> PlacementWeight {
+    PlacementWeight {
+        capacity: crate::network::router::placement_weight(
+            throughput.map(|rank| rank.avg_tokens_per_second_milli as f64 / 1000.0),
+            throughput.map(|rank| rank.throughput_samples).unwrap_or(0),
+        ),
+        rtt_ms: None,
+    }
+}
+
+fn placements_for<T: Clone + std::hash::Hash + Eq>(
+    candidates: &[(T, Option<u32>, Option<TargetThroughputRank>)],
+) -> std::collections::HashMap<T, PlacementWeight> {
+    candidates
+        .iter()
+        .map(|(candidate, _, throughput)| (candidate.clone(), placement_weight_for(*throughput)))
+        .collect()
 }
 
 fn equivalent_prefix_len<T>(targets: &[RankedTarget<T>]) -> usize {
@@ -137,10 +174,11 @@ fn equivalent_prefix_len<T>(targets: &[RankedTarget<T>]) -> usize {
         .count()
 }
 
-pub(super) fn rank_candidates_by_context_and_throughput<T: Clone>(
+pub(super) fn rank_candidates_by_context_and_throughput<T: Clone + std::hash::Hash + Eq>(
     candidates: &[(T, Option<u32>, Option<TargetThroughputRank>)],
     required_tokens: Option<u32>,
 ) -> RankedCandidates<T> {
+    let placements = placements_for(candidates);
     let ranked = candidates
         .iter()
         .enumerate()
@@ -161,6 +199,7 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone>(
         return RankedCandidates {
             ordered: ranked.into_iter().map(|ranked| ranked.candidate).collect(),
             equivalent_prefix,
+            placements,
         };
     };
 
@@ -178,6 +217,7 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone>(
         return RankedCandidates {
             ordered: Vec::new(),
             equivalent_prefix: 0,
+            placements,
         };
     }
 
@@ -195,11 +235,12 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone>(
             .map(|ranked| ranked.candidate)
             .collect(),
         equivalent_prefix,
+        placements,
     }
 }
 
 #[cfg(test)]
-fn reorder_candidates_by_context_and_throughput<T: Clone>(
+fn reorder_candidates_by_context_and_throughput<T: Clone + std::hash::Hash + Eq>(
     candidates: &[(T, Option<u32>, Option<TargetThroughputRank>)],
     required_tokens: Option<u32>,
 ) -> Vec<T> {
@@ -229,7 +270,7 @@ fn local_target_throughput_rank(
         })
 }
 
-async fn remote_target_throughput_rank(
+pub(super) async fn remote_target_throughput_rank(
     node: &mesh::Node,
     model: &str,
     peer_id: iroh::EndpointId,
@@ -268,7 +309,13 @@ pub(super) async fn rank_remote_hosts_by_context(
             remote_target_throughput_rank(node, model, *host).await,
         ));
     }
-    rank_candidates_by_context_and_throughput(&candidates, required_tokens)
+    let mut ranked = rank_candidates_by_context_and_throughput(&candidates, required_tokens);
+    for host in hosts {
+        if let Some(placement) = ranked.placements.get_mut(host) {
+            placement.rtt_ms = node.peer_rtt_ms(host).await;
+        }
+    }
+    ranked
 }
 
 #[cfg(test)]
@@ -306,7 +353,18 @@ pub(super) async fn rank_targets_by_context(
         };
         candidates.push((target.clone(), context_length, throughput));
     }
-    rank_candidates_by_context_and_throughput(&candidates, required_tokens)
+    let mut ranked = rank_candidates_by_context_and_throughput(&candidates, required_tokens);
+    for target in targets {
+        let rtt_ms = match target {
+            election::InferenceTarget::Local(_) => Some(0),
+            election::InferenceTarget::Remote(peer_id) => node.peer_rtt_ms(peer_id).await,
+            election::InferenceTarget::None => None,
+        };
+        if let Some(placement) = ranked.placements.get_mut(target) {
+            placement.rtt_ms = rtt_ms;
+        }
+    }
+    ranked
 }
 
 #[cfg(test)]

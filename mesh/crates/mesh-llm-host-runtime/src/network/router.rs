@@ -35,41 +35,34 @@ pub(crate) fn filter_media_compatible_candidates<'a>(
 
 /// A candidate model in the auto-routing pool.
 ///
-/// `tps_hint` and `throughput_samples` come from the node's locally
-/// observed `RoutingMetrics`. They are `None` / `0` when we've never
-/// successfully completed a token-bearing request against this model
-/// (cold start, brand-new peer) — such candidates get a neutral weight
-/// so they still participate in routing while accumulating data.
+/// `capacity` and `replicas` summarise the model's routable placements (hosts
+/// that serve it right now, this node included). Each placement contributes
+/// [`placement_weight`] of its measured tok/s — neutral when unmeasured — so a
+/// model's draw weight is its total serving capacity, not its name.
 #[derive(Clone, Debug)]
 pub struct RoutingCandidate<'a> {
     pub name: &'a str,
     pub caps: crate::models::ModelCapabilities,
     /// Total model parameter count in billions, when advertised.
     pub parameter_count_b: Option<f64>,
-    /// Locally observed throughput in tokens/sec. `None` if no
-    /// throughput-bearing attempts have completed for this model yet.
-    pub tps_hint: Option<f64>,
-    /// How many throughput samples back `tps_hint`. Used to decide
-    /// whether we trust the hint or treat the model as "cold".
-    pub throughput_samples: u64,
-    /// Routable hosts serving this model right now (at least 1). The model's
-    /// draw weight is per-host throughput times this count, so capacity, not
-    /// the number of distinct names, decides the share each model receives.
+    /// Routable placements of this model (at least 1). Exploration draws a
+    /// placement uniformly, so it is replica-aware too.
     pub replicas: usize,
+    /// Sum of [`placement_weight`] over the placements; the model's draw weight.
+    pub capacity: f64,
 }
 
 impl<'a> RoutingCandidate<'a> {
-    /// Build a candidate without any throughput hint. Useful for
-    /// pre-startup paths or test fixtures.
+    /// Build a candidate for one unmeasured placement. Useful for pre-startup
+    /// paths or test fixtures.
     #[cfg(test)]
     pub fn unscored(name: &'a str, caps: crate::models::ModelCapabilities) -> Self {
         Self {
             name,
             caps,
             parameter_count_b: None,
-            tps_hint: None,
-            throughput_samples: 0,
             replicas: 1,
+            capacity: TPS_NEUTRAL_WEIGHT,
         }
     }
 }
@@ -93,10 +86,40 @@ const TPS_WEIGHT_MAX: f64 = 100.0;
 /// range so a cold model is treated as "average" against scored peers.
 const TPS_NEUTRAL_WEIGHT: f64 = 25.0;
 
-/// Probability of ignoring weights and picking uniformly. Keeps the
-/// system from locking onto stale rankings and gives cold models a
+/// Probability of ignoring capacity and drawing a placement uniformly. Keeps
+/// the system from locking onto stale rankings and gives cold placements a
 /// guaranteed share of traffic so they accumulate data.
 const EXPLORATION_PROBABILITY: f64 = 0.15;
+
+/// Draw weight of one placement (one host serving one model) from its measured
+/// throughput. Below `TPS_MIN_SAMPLES` the placement is cold and neutral; above,
+/// the mean tok/s clamped to `TPS_WEIGHT_MIN..=TPS_WEIGHT_MAX` so a catastrophic
+/// host is never fully starved and a single very fast host cannot monopolise.
+pub(crate) fn placement_weight(tps: Option<f64>, samples: u64) -> f64 {
+    if samples >= TPS_MIN_SAMPLES {
+        tps.filter(|tps| tps.is_finite() && *tps > 0.0)
+            .unwrap_or(TPS_NEUTRAL_WEIGHT)
+            .clamp(TPS_WEIGHT_MIN, TPS_WEIGHT_MAX)
+    } else {
+        TPS_NEUTRAL_WEIGHT
+    }
+}
+
+/// Weight of a target in the two-choice host draw: capacity scaled by distance.
+/// Latency is a tiebreak factor only (direct/≤50 ms ×1 … ≥300 ms ×0.5, never 0):
+/// LLM latency is dominated by generation, and a "nearest first" primary key
+/// would concentrate every nearby client on the same host.
+pub(crate) fn locality_factor(rtt_ms: Option<u32>) -> f64 {
+    const NEAR_MS: f64 = 50.0;
+    const FAR_MS: f64 = 300.0;
+    match rtt_ms {
+        None => 1.0,
+        Some(rtt) => {
+            let excess = ((f64::from(rtt) - NEAR_MS) / (FAR_MS - NEAR_MS)).clamp(0.0, 1.0);
+            1.0 - 0.5 * excess
+        }
+    }
+}
 
 /// Pick the best model for a classified request using gossiped capabilities
 /// and locally observed throughput.
@@ -159,52 +182,47 @@ pub fn pick_model_classified<'a>(
     None
 }
 
-/// Compute the routing weight for a single candidate. See the module-level
-/// `TPS_*` constants for the rationale on each clamp.
+/// Routing weight of a model: its total placement capacity, floored so a
+/// candidate can never drop out of the draw entirely.
 fn candidate_weight(candidate: &RoutingCandidate<'_>) -> f64 {
-    let per_host = if candidate.throughput_samples >= TPS_MIN_SAMPLES {
-        candidate
-            .tps_hint
-            .unwrap_or(TPS_NEUTRAL_WEIGHT)
-            .clamp(TPS_WEIGHT_MIN, TPS_WEIGHT_MAX)
+    if candidate.capacity.is_finite() && candidate.capacity >= TPS_WEIGHT_MIN {
+        candidate.capacity
     } else {
-        TPS_NEUTRAL_WEIGHT
-    };
-    per_host * candidate.replicas.max(1) as f64
+        TPS_WEIGHT_MIN
+    }
 }
 
-/// Pick one candidate from a non-empty slice using tok/s-weighted draw,
-/// with `EXPLORATION_PROBABILITY` chance of a uniform pick.
+/// Draw one index from `weights` (all finite, non-negative, not all zero).
+pub(crate) fn weighted_index(weights: &[f64], roll: f64) -> usize {
+    let total: f64 = weights.iter().sum();
+    let pick = roll * total;
+    let mut acc = 0.0;
+    for (index, weight) in weights.iter().enumerate() {
+        acc += weight;
+        if pick < acc {
+            return index;
+        }
+    }
+    weights.len().saturating_sub(1)
+}
+
+/// Pick one candidate from a non-empty slice: with `EXPLORATION_PROBABILITY`
+/// a uniformly drawn placement (so a model's exploration share is its replica
+/// share), otherwise a capacity-weighted draw.
 fn pick_weighted<'a>(candidates: &[&RoutingCandidate<'a>], seed: u64) -> &'a str {
     debug_assert!(!candidates.is_empty(), "pick_weighted requires non-empty");
 
     let mut rng = SplitMix64::new(seed);
 
-    // Exploration branch: ignore weights, pick uniformly. Keeps the
-    // system from locking onto stale rankings.
-    if rng.next_f64() < EXPLORATION_PROBABILITY {
-        let idx = (rng.next_u64() as usize) % candidates.len();
-        return candidates[idx].name;
-    }
-
-    let total_weight: f64 = candidates.iter().map(|c| candidate_weight(c)).sum();
-    // Defensive: if all weights are somehow zero (shouldn't happen given
-    // TPS_WEIGHT_MIN > 0), fall back to a uniform pick.
-    if total_weight <= 0.0 {
-        let idx = (rng.next_u64() as usize) % candidates.len();
-        return candidates[idx].name;
-    }
-
-    let pick = rng.next_f64() * total_weight;
-    let mut acc = 0.0;
-    for c in candidates {
-        acc += candidate_weight(c);
-        if pick < acc {
-            return c.name;
-        }
-    }
-    // Numerical tail: pick the last candidate.
-    candidates[candidates.len() - 1].name
+    let weights: Vec<f64> = if rng.next_f64() < EXPLORATION_PROBABILITY {
+        candidates
+            .iter()
+            .map(|c| c.replicas.max(1) as f64)
+            .collect()
+    } else {
+        candidates.iter().map(|c| candidate_weight(c)).collect()
+    };
+    candidates[weighted_index(&weights, rng.next_f64())].name
 }
 
 fn is_small_parameter_model(candidate: &RoutingCandidate<'_>) -> bool {
@@ -217,19 +235,19 @@ fn is_small_parameter_model(candidate: &RoutingCandidate<'_>) -> bool {
 /// Small deterministic PRNG so a single seed drives both the
 /// exploration coin flip and the weighted draw. Avoids pulling in a
 /// rand dependency just for routing.
-struct SplitMix64 {
+pub(crate) struct SplitMix64 {
     state: u64,
 }
 
 impl SplitMix64 {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         // Avoid the zero state which gives a degenerate sequence.
         Self {
             state: seed.wrapping_add(0x9E37_79B9_7F4A_7C15),
         }
     }
 
-    fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -237,7 +255,7 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
-    fn next_f64(&mut self) -> f64 {
+    pub(crate) fn next_f64(&mut self) -> f64 {
         // Use the top 53 bits for a uniform float in [0, 1).
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
@@ -781,7 +799,7 @@ mod tests {
 
     // ── tok/s-aware weighting ────────────────────────────────────────
 
-    /// Helper: build a scored candidate.
+    /// Helper: build a candidate with one measured placement.
     fn scored<'a>(
         name: &'a str,
         caps: crate::models::ModelCapabilities,
@@ -792,31 +810,70 @@ mod tests {
             name,
             caps,
             parameter_count_b: None,
-            tps_hint: Some(tps),
-            throughput_samples: samples,
             replicas: 1,
+            capacity: placement_weight(Some(tps), samples),
         }
+    }
+
+    /// Helper: `hosts` equal-speed placements of one model.
+    fn replicated<'a>(name: &'a str, hosts: usize, tps: f64) -> RoutingCandidate<'a> {
+        let mut candidate = scored(name, crate::models::ModelCapabilities::default(), tps, 10);
+        candidate.replicas = hosts;
+        candidate.capacity = placement_weight(Some(tps), 10) * hosts as f64;
+        candidate
     }
 
     #[test]
     fn replica_count_multiplies_a_models_share() {
         // Same per-host speed and tier: the model served by four hosts should
-        // be drawn about four times as often as the one on a single host.
-        let caps = crate::models::ModelCapabilities::default();
-        let mut four = scored("replicated-70b", caps, 20.0, 10);
-        four.replicas = 4;
-        let one = scored("lone-70b", caps, 20.0, 10);
-        let counts = count_picks(&[four, one], 4000);
+        // be drawn about four times as often as the one on a single host, on
+        // both the capacity draw and the (placement-uniform) exploration draw.
+        let counts = count_picks(
+            &[
+                replicated("replicated-70b", 4, 20.0),
+                replicated("lone-70b", 1, 20.0),
+            ],
+            4000,
+        );
         let replicated = counts.get("replicated-70b") as f64;
         let lone = counts.get("lone-70b") as f64;
-        // Weighted share 4/5 on 85% of draws plus 1/2 on the 15% uniform
-        // exploration draws = 0.755 of all picks (was 0.5 when names, not
-        // capacity, set the share).
         let share = replicated / (replicated + lone);
         assert!(
-            (0.70..0.81).contains(&share),
-            "expected ~75% of picks for the replicated model, got {replicated}:{lone}"
+            (0.76..0.84).contains(&share),
+            "expected ~80% of picks for the replicated model, got {replicated}:{lone}"
         );
+    }
+
+    #[test]
+    fn strongly_skewed_replicas_keep_per_host_traffic_even() {
+        // Twenty equal-speed replicas against one lone host: each host should
+        // see about the same traffic (1/21 each), so the lone host is not
+        // handed a multiple of a replica's load by name-uniform exploration.
+        let counts = count_picks(
+            &[
+                replicated("fleet-70b", 20, 20.0),
+                replicated("lone-70b", 1, 20.0),
+            ],
+            6300,
+        );
+        let fleet = counts.get("fleet-70b") as f64;
+        let lone = counts.get("lone-70b") as f64;
+        let per_fleet_host = fleet / 20.0;
+        let ratio = lone / per_fleet_host;
+        assert!(
+            (0.6..1.5).contains(&ratio),
+            "lone host should get ~1x a replica's traffic, got {ratio:.2}x (lone={lone}, fleet={fleet})"
+        );
+    }
+
+    #[test]
+    fn locality_factor_is_a_bounded_tiebreak() {
+        assert_eq!(locality_factor(None), 1.0);
+        assert_eq!(locality_factor(Some(0)), 1.0);
+        assert_eq!(locality_factor(Some(50)), 1.0);
+        assert!((locality_factor(Some(175)) - 0.75).abs() < 1e-9);
+        assert_eq!(locality_factor(Some(300)), 0.5);
+        assert_eq!(locality_factor(Some(5000)), 0.5);
     }
 
     fn count_picks(available: &[RoutingCandidate<'_>], iterations: usize) -> HashMapCounts {

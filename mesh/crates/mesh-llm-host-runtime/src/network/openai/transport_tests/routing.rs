@@ -22,6 +22,7 @@ fn mesh_request_plan_with_equivalents(
         auto_session_key: None,
         equivalent_hosts,
         target_hosts,
+        placements: Default::default(),
         affinity_applied,
     }
 }
@@ -267,21 +268,46 @@ fn passive_mesh_plan_spreads_overlap_and_releases_both_reservations() {
 
 #[test]
 fn mesh_plan_pressure_never_promotes_a_lower_throughput_ranked_host() {
-    // The fast host forms its own throughput tier (equivalent_hosts = 1).
-    // Concurrent unaffined requests must all keep the fast host first even
-    // though the slower host has zero in-flight reservations.
+    // The fast host forms its own throughput tier (equivalent_hosts = 1) and
+    // weighs five times the slow one. New sessions reach the slow host only by
+    // its capacity share of the draw; a request in flight on the fast host
+    // must not hand the slow host the rest, even though it has zero in-flight
+    // reservations.
     let fast = iroh::EndpointId::from(iroh::SecretKey::generate().public());
     let slow = iroh::EndpointId::from(iroh::SecretKey::generate().public());
-    let plan = mesh_request_plan_with_equivalents("test", 1, vec![fast, slow], false);
+    let mut plan = mesh_request_plan_with_equivalents("test", 1, vec![fast, slow], false);
+    let weight = |capacity: f64| PlacementWeight {
+        capacity,
+        rtt_ms: None,
+    };
+    plan.placements.insert(fast, weight(100.0));
+    plan.placements.insert(slow, weight(20.0));
     let affinity = AffinityRouter::new();
 
-    let (first_order, first_reservation) = reserve_mesh_request_target(&plan, &affinity);
-    let (second_order, second_reservation) = reserve_mesh_request_target(&plan, &affinity);
-
-    assert_eq!(first_order, vec![fast, slow]);
-    assert_eq!(second_order, vec![fast, slow]);
-    drop(first_reservation);
-    drop(second_reservation);
+    let fast_target = election::InferenceTarget::Remote(fast);
+    let (_, held_on_fast) = affinity
+        .reserve_route(
+            "test",
+            std::slice::from_ref(&fast_target),
+            1,
+            &fast_target,
+            true,
+        )
+        .expect("reservation on the fast host");
+    let mut slow_first = 0usize;
+    for _ in 0..300 {
+        let (order, reservation) = reserve_mesh_request_target(&plan, &affinity);
+        if order[0] == slow {
+            slow_first += 1;
+        }
+        drop(reservation);
+    }
+    let slow_share = slow_first as f64 / 300.0;
+    assert!(
+        (0.06..0.32).contains(&slow_share),
+        "slow host should get only its capacity share (~1/6), got {slow_share}"
+    );
+    drop(held_on_fast);
     assert_eq!(affinity.stats_snapshot().reservation_active, 0);
 }
 
@@ -474,7 +500,7 @@ async fn prefix_kill_switch_prevents_cache_evidence_reordering() -> Result<()> {
     });
     node.insert_test_peer(peer).await;
 
-    let (ordered, _) =
+    let (ordered, _, _) =
         order_mesh_target_hosts(&node, Some(model), None, &mut prepared, &affinity).await;
 
     assert_eq!(ordered, vec![peer_id]);

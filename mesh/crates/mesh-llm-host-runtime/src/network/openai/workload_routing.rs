@@ -301,40 +301,72 @@ pub(super) fn is_binary_task_path(path: &str) -> bool {
 }
 
 /// Pick metadata from a descriptor that supports this request, not whichever
-/// peer happened to gossip the model name first.
+/// peer happened to gossip the model name first. Capacity sums the measured
+/// throughput of every routable placement (this node included) so the draw is
+/// proportional to serving capacity, not to the number of distinct names.
 pub(super) async fn routing_candidates<'a>(
     node: &mesh::Node,
     models: &'a [String],
     path: &str,
     descriptors: &[ServedModelDescriptor],
 ) -> Vec<crate::network::router::RoutingCandidate<'a>> {
-    let metrics = node.routing_metrics();
-    let replicas = node.replica_counts_for_models(models).await;
-    models
+    let placements = node.placements_for_models(models).await;
+    let mut candidates = Vec::with_capacity(models.len());
+    for model in models
         .iter()
         .filter(|model| model_satisfies_request(model, path, descriptors))
-        .map(|model| {
-            let descriptor = descriptor_for_request(model, path, descriptors);
-            let caps = descriptor.map_or_else(
-                || super::routing_rank::capabilities_for_model(model, descriptors),
-                |descriptor| descriptor.capabilities,
-            );
-            let (tps_hint, throughput_samples) = metrics
-                .tps_for_model(model)
-                .map(|(tps, samples)| (Some(tps), samples))
-                .unwrap_or((None, 0));
-            crate::network::router::RoutingCandidate {
-                name: model,
-                caps,
-                parameter_count_b: descriptor
-                    .and_then(|descriptor| descriptor.metadata.as_ref())
-                    .and_then(|metadata| metadata.parameter_count_b),
-                tps_hint,
-                throughput_samples,
-                replicas: replicas.get(model.as_str()).copied().unwrap_or(1).max(1),
-            }
-        })
-        .collect()
+    {
+        let descriptor = descriptor_for_request(model, path, descriptors);
+        let caps = descriptor.map_or_else(
+            || super::routing_rank::capabilities_for_model(model, descriptors),
+            |descriptor| descriptor.capabilities,
+        );
+        let placement = placements.get(model.as_str()).cloned().unwrap_or_default();
+        let capacity = model_capacity(node, model, &placement).await;
+        candidates.push(crate::network::router::RoutingCandidate {
+            name: model,
+            caps,
+            parameter_count_b: descriptor
+                .and_then(|descriptor| descriptor.metadata.as_ref())
+                .and_then(|metadata| metadata.parameter_count_b),
+            replicas: placement.count(),
+            capacity,
+        });
+    }
+    candidates
+}
+
+/// Sum of per-placement draw weights for `model`. A placement's weight comes
+/// from this node's own samples against that host when it has enough, else the
+/// host's gossiped throughput hint, else the neutral cold weight; a model with
+/// no visible placement keeps one neutral placement so it is still drawn.
+pub(super) async fn model_capacity(
+    node: &mesh::Node,
+    model: &str,
+    placement: &crate::mesh::ModelPlacements,
+) -> f64 {
+    use crate::network::router::placement_weight;
+    let mut capacity = 0.0;
+    if placement.local {
+        let (tps, samples) = node
+            .routing_metrics()
+            .tps_for_model(model)
+            .map(|(tps, samples)| (Some(tps), samples))
+            .unwrap_or((None, 0));
+        capacity += placement_weight(tps, samples);
+    }
+    for peer in &placement.remote {
+        let rank = super::routing_rank::remote_target_throughput_rank(node, model, *peer).await;
+        capacity += placement_weight(
+            rank.map(|rank| rank.avg_tokens_per_second_milli as f64 / 1000.0),
+            rank.map(|rank| rank.throughput_samples).unwrap_or(0),
+        );
+    }
+    if placement.local || !placement.remote.is_empty() {
+        capacity
+    } else {
+        placement_weight(None, 0)
+    }
 }
 
 /// Filter each candidate against its own advertisement before routing decisions.

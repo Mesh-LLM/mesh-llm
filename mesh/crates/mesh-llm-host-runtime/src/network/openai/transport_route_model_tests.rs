@@ -10,6 +10,7 @@ fn reservation_does_not_reintroduce_target_cooled_during_cache_lookup() {
     let ranked = RankedCandidates {
         ordered: vec![first.clone(), second.clone()],
         equivalent_prefix: 2,
+        placements: Default::default(),
     };
     let (_, pressure) = affinity
         .reserve_route("qwen", &ranked.ordered, 2, &second, true)
@@ -49,6 +50,7 @@ fn refreshed_spread_window_does_not_admit_lower_ranked_fallback() {
         let ranked = RankedCandidates {
             ordered: vec![first.clone(), second.clone(), fallback.clone()],
             equivalent_prefix,
+            placements: Default::default(),
         };
         let (_, _pressure) = affinity
             .reserve_route("qwen", &ranked.ordered, 3, &second, true)
@@ -77,6 +79,7 @@ fn refreshed_route_preserves_healthy_cache_and_session_affinity_under_pressure()
             election::InferenceTarget::Local(9002),
         ],
         equivalent_prefix: 2,
+        placements: Default::default(),
     };
     let body = serde_json::json!({"user": "same-session"});
     for (parsed_body, cache_target) in
@@ -111,6 +114,7 @@ fn refreshed_route_keeps_all_cooling_availability_fallback() {
             election::InferenceTarget::Local(9002),
         ],
         equivalent_prefix: 2,
+        placements: Default::default(),
     };
     for target in &ranked.ordered {
         affinity.record_target_outcome(Some("qwen"), target, TargetHealthOutcome::Timeout);
@@ -137,6 +141,7 @@ fn empty_refreshed_route_does_not_reserve() {
             &RankedCandidates {
                 ordered: vec![],
                 equivalent_prefix: 0,
+                placements: Default::default(),
             },
             "qwen",
             None,
@@ -805,6 +810,7 @@ fn automatic_reservation_never_restores_all_cooling_placements() {
     let ranked = RankedCandidates {
         ordered: vec![election::InferenceTarget::Local(9001)],
         equivalent_prefix: 1,
+        placements: Default::default(),
     };
     // The candidate snapshot was healthy before the asynchronous cache lookup.
     assert_eq!(

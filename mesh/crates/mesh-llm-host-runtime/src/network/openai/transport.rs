@@ -41,7 +41,8 @@ use super::response::{
 #[cfg(test)]
 use super::routing_rank::order_remote_hosts_by_context;
 use super::routing_rank::{
-    cached_auto_model_satisfies_media_requirements, move_target_first, rank_remote_hosts_by_context,
+    PlacementWeight, cached_auto_model_satisfies_media_requirements, move_target_first,
+    rank_remote_hosts_by_context,
 };
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
@@ -301,6 +302,8 @@ struct MeshRequestPlan {
     /// Leading run of `target_hosts` whose throughput rank ties with the best
     /// one; reservation spreading is confined to this run.
     equivalent_hosts: usize,
+    /// Capacity and RTT per host for the two-choice pick of new sessions.
+    placements: std::collections::HashMap<iroh::EndpointId, PlacementWeight>,
     affinity_applied: bool,
 }
 
@@ -600,7 +603,7 @@ async fn build_mesh_request_plan(
         &resolved_hosts,
         affinity,
     );
-    let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
+    let (target_hosts, equivalent_hosts, placements) = order_mesh_target_hosts(
         node,
         effective_model.as_deref(),
         required_tokens,
@@ -613,6 +616,7 @@ async fn build_mesh_request_plan(
         auto_session_key,
         target_hosts,
         equivalent_hosts,
+        placements,
         affinity_applied: prepared.affinity_applied,
     })
 }
@@ -661,7 +665,11 @@ async fn order_mesh_target_hosts(
     required_tokens: Option<u32>,
     prepared: &mut PreparedTargets,
     affinity: &AffinityRouter,
-) -> (Vec<iroh::EndpointId>, usize) {
+) -> (
+    Vec<iroh::EndpointId>,
+    usize,
+    std::collections::HashMap<iroh::EndpointId, PlacementWeight>,
+) {
     let target_hosts: Vec<iroh::EndpointId> = prepared
         .ordered
         .iter()
@@ -672,10 +680,11 @@ async fn order_mesh_target_hosts(
         .collect();
     let Some(name) = effective_model else {
         let hosts_len = target_hosts.len();
-        return (target_hosts, hosts_len);
+        return (target_hosts, hosts_len, Default::default());
     };
     let ranked = rank_remote_hosts_by_context(node, name, required_tokens, &target_hosts).await;
     let equivalent_hosts = ranked.equivalent_prefix;
+    let placements = ranked.placements;
     let mut ordered = ranked.ordered;
     if affinity.prefix_enabled()
         && let Some(prefix_hash) = prepared.prefix_hash
@@ -708,7 +717,7 @@ async fn order_mesh_target_hosts(
             move_target_first(&mut ordered, cache_host);
         }
     }
-    (ordered, equivalent_hosts)
+    (ordered, equivalent_hosts, placements)
 }
 
 async fn handle_mesh_request_failure(
@@ -876,12 +885,25 @@ fn reserve_mesh_request_target(
             .copied()
             .map(election::InferenceTarget::Remote)
             .collect::<Vec<_>>();
-        let preferred = candidates.first()?;
+        let preferred = if plan.affinity_applied {
+            candidates.first()?.clone()
+        } else {
+            // New session: two-choice draw weighted by capacity × locality,
+            // fewer local in-flight wins; see `RoutingReservations::two_choice`.
+            affinity.two_choice_target(model, &candidates, |target| match target {
+                election::InferenceTarget::Remote(host) => plan
+                    .placements
+                    .get(host)
+                    .map(|placement| (placement.draw_weight(), placement.rtt_ms))
+                    .unwrap_or((1.0, None)),
+                _ => (1.0, None),
+            })?
+        };
         let (selected, reservation) = affinity.reserve_route(
             model,
             &candidates,
             plan.equivalent_hosts,
-            preferred,
+            &preferred,
             plan.affinity_applied,
         )?;
         if let election::InferenceTarget::Remote(selected_host) = selected {

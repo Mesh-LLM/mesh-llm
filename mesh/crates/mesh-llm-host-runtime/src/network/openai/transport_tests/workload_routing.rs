@@ -493,3 +493,101 @@ async fn host_dispatch_rejects_local_legacy_target_without_capable_replicas() {
         .expect("response");
     assert!(response.starts_with("HTTP/1.1 503"));
 }
+
+#[tokio::test]
+/// Capacity counts this node when it serves the model, and drops paused and
+/// operator-blocked peers; a client node contributes no local placement.
+async fn placements_count_local_host_and_skip_paused_and_blocked_peers() {
+    use crate::proto::node::InferenceAdmissionState;
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    let models = vec![MODEL.to_string()];
+    let placements = node.placements_for_models(&models).await;
+    assert_eq!(placements[MODEL], mesh::ModelPlacements::default());
+    assert_eq!(
+        placements[MODEL].count(),
+        1,
+        "no placement still gets one neutral draw"
+    );
+
+    // Local only.
+    node.set_hosted_models(vec![MODEL.to_string()]).await;
+    let placements = node.placements_for_models(&models).await;
+    assert!(placements[MODEL].local && placements[MODEL].remote.is_empty());
+    assert_eq!(placements[MODEL].count(), 1);
+
+    // Local + remote.
+    let remote = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let placements = node.placements_for_models(&models).await;
+    assert!(placements[MODEL].local);
+    assert_eq!(placements[MODEL].remote, vec![remote]);
+    assert_eq!(placements[MODEL].count(), 2);
+
+    // A paused peer and a deprioritized peer: only the deprioritized one counts.
+    let paused_id = iroh::SecretKey::generate().public();
+    let mut paused = test_peer_serving_model(paused_id, MODEL);
+    paused.inference_admission_state = Some(InferenceAdmissionState::RemotePaused);
+    node.insert_test_peer(paused).await;
+    let deprioritized_id = iroh::SecretKey::generate().public();
+    let mut deprioritized = test_peer_serving_model(deprioritized_id, MODEL);
+    deprioritized.inference_admission_state = Some(InferenceAdmissionState::AcceptingDeprioritized);
+    node.insert_test_peer(deprioritized).await;
+    let placements = node.placements_for_models(&models).await;
+    assert!(!placements[MODEL].remote.contains(&paused_id));
+    assert!(placements[MODEL].remote.contains(&deprioritized_id));
+    assert_eq!(placements[MODEL].count(), 3);
+
+    // Blocking the first remote removes it.
+    node.peer_blocks
+        .block(
+            &remote,
+            crate::network::peer_blocks::BlockLength::UntilUndone,
+            crate::network::peer_blocks::Requester::Operator,
+            None,
+            crate::network::peer_blocks::now_ms(),
+        )
+        .expect("block");
+    let placements = node.placements_for_models(&models).await;
+    assert!(!placements[MODEL].remote.contains(&remote));
+    assert_eq!(placements[MODEL].count(), 2);
+
+    // Remote only, as seen from a client node: no local placement even though
+    // the client lists the model.
+    let client = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("client");
+    client.set_hosted_models(vec![MODEL.to_string()]).await;
+    let remote = peer(&client, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let placements = client.placements_for_models(&models).await;
+    assert!(!placements[MODEL].local);
+    assert_eq!(placements[MODEL].remote, vec![remote]);
+}
+
+#[tokio::test]
+/// The model draw weight sums one neutral weight per unmeasured placement, so a
+/// model on this host plus one peer weighs twice a model on a single peer.
+async fn routing_candidates_weight_local_plus_remote_as_two_placements() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    node.set_hosted_models(vec![MODEL.to_string()]).await;
+    peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let lone = "lone-model";
+    let lone_id = iroh::SecretKey::generate().public();
+    node.insert_test_peer(test_peer_serving_model(lone_id, lone))
+        .await;
+    let models = vec![MODEL.to_string(), lone.to_string()];
+    let candidates =
+        workload_routing::routing_candidates(&node, &models, "/v1/chat/completions", &[]).await;
+    let by_name = |name: &str| {
+        candidates
+            .iter()
+            .find(|candidate| candidate.name == name)
+            .unwrap_or_else(|| panic!("candidate {name}"))
+            .clone()
+    };
+    assert_eq!(by_name(MODEL).replicas, 2);
+    assert_eq!(by_name(lone).replicas, 1);
+    assert!((by_name(MODEL).capacity - 2.0 * by_name(lone).capacity).abs() < 1e-9);
+}

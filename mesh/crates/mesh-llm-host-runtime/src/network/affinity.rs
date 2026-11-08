@@ -167,6 +167,22 @@ impl AffinityRouter {
             .reserve(model, candidates, spread_limit, preferred, affinity_applied)
     }
 
+    /// Two-choice host pick over `candidates` for a request without affinity;
+    /// see [`RoutingReservations::two_choice`].
+    pub(crate) fn two_choice_target(
+        &self,
+        model: &str,
+        candidates: &[election::InferenceTarget],
+        weight_of: impl Fn(&election::InferenceTarget) -> (f64, Option<u32>),
+    ) -> Option<election::InferenceTarget> {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        self.reservations
+            .two_choice(model, candidates, weight_of, seed)
+    }
+
     /// Look up a previously-classified model name for an auto-routed session.
     ///
     /// Auto routing classifies each request and picks a model. Without

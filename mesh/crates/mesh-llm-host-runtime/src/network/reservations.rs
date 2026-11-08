@@ -3,6 +3,7 @@
 
 use crate::inference::election;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -28,6 +29,8 @@ fn decrement(counts: &mut HashMap<ReservationKey, usize>, key: &ReservationKey) 
 #[derive(Clone, Default)]
 pub(crate) struct RoutingReservations {
     counts: ReservationCounts,
+    /// Shared round-robin position for equal-weight two-choice first draws.
+    round_robin: Arc<AtomicU64>,
 }
 
 impl RoutingReservations {
@@ -97,6 +100,84 @@ impl RoutingReservations {
                 key,
             },
         ))
+    }
+
+    /// Power-of-two-choices host pick for requests without affinity.
+    ///
+    /// `candidates` arrive in rank order (better first). The first draw is
+    /// proportional to `weight_of` (capacity × locality) when the weights
+    /// differ, and round-robin when they are all equal, so equal hosts share
+    /// evenly and a faster host carries proportionally more. A second draw
+    /// from the remaining candidates may replace the first when it has fewer
+    /// local in-flight requests, or on a load tie when it is near and the
+    /// first is far — but only if it is not ranked below the first: pressure
+    /// never redirects a request to a measurably slower or smaller-context
+    /// target. One load comparison stops a gateway herding onto a host whose
+    /// gossiped speed is stale. `None` only when `candidates` is empty.
+    pub(crate) fn two_choice(
+        &self,
+        model: &str,
+        candidates: &[election::InferenceTarget],
+        weight_of: impl Fn(&election::InferenceTarget) -> (f64, Option<u32>),
+        seed: u64,
+    ) -> Option<election::InferenceTarget> {
+        if candidates.is_empty() {
+            return None;
+        }
+        if candidates.len() == 1 {
+            return Some(candidates[0].clone());
+        }
+        let mut rng = crate::network::router::SplitMix64::new(seed);
+        let mut weights: Vec<f64> = candidates
+            .iter()
+            .map(|candidate| {
+                let (weight, _) = weight_of(candidate);
+                if weight.is_finite() && weight > 0.0 {
+                    weight
+                } else {
+                    f64::MIN_POSITIVE
+                }
+            })
+            .collect();
+        let all_equal = weights
+            .iter()
+            .all(|weight| (weight - weights[0]).abs() <= f64::EPSILON * weights[0]);
+        let first = if all_equal {
+            self.round_robin.fetch_add(1, Ordering::Relaxed) as usize % candidates.len()
+        } else {
+            crate::network::router::weighted_index(&weights, rng.next_f64())
+        };
+        weights[first] = 0.0;
+        let second = crate::network::router::weighted_index(&weights, rng.next_f64());
+        if second >= first {
+            // The second draw is ranked below the first (or is the first):
+            // pressure and locality may not promote a lower-ranked target.
+            return Some(candidates[first].clone());
+        }
+        let counts = self.counts.lock().unwrap();
+        let load = |index: usize| {
+            counts
+                .get(&ReservationKey {
+                    model: model.to_string(),
+                    target: candidates[index].clone(),
+                })
+                .copied()
+                .unwrap_or(0)
+        };
+        // Locality breaks a load tie only across a material gap (far = the
+        // locality factor is below 0.75, about >175 ms RTT); among nearby
+        // hosts the first draw stands, so a crowd of idle clients does not
+        // all converge on whichever host is marginally closest.
+        let far = |index: usize| {
+            crate::network::router::locality_factor(weight_of(&candidates[index]).1) < 0.75
+        };
+        let key = |index: usize| (load(index), far(index));
+        let winner = if key(second) < key(first) {
+            second
+        } else {
+            first
+        };
+        Some(candidates[winner].clone())
     }
 
     /// Total in-flight reservations across all models and targets.
@@ -187,6 +268,112 @@ mod tests {
             *counts.entry(port).or_insert(0) += 1;
         }
         counts
+    }
+
+    fn two_choice_tally(
+        reservations: &RoutingReservations,
+        targets: &[election::InferenceTarget],
+        weight_of: impl Fn(&election::InferenceTarget) -> (f64, Option<u32>),
+        draws: u64,
+    ) -> BTreeMap<u16, usize> {
+        let mut counts = BTreeMap::new();
+        for seed in 0..draws {
+            let election::InferenceTarget::Local(port) = reservations
+                .two_choice("model", targets, &weight_of, seed.wrapping_mul(0x9E37_79B9))
+                .expect("pick")
+            else {
+                panic!("expected local target");
+            };
+            *counts.entry(port).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    #[test]
+    fn two_choice_follows_capacity_when_idle() {
+        // 80 vs 20 tok/s, nobody busy: the fast host carries about 80 %.
+        let reservations = RoutingReservations::default();
+        let targets = vec![local(1), local(2)];
+        let weight = |target: &election::InferenceTarget| match target {
+            election::InferenceTarget::Local(1) => (80.0, None),
+            _ => (20.0, None),
+        };
+        let counts = two_choice_tally(&reservations, &targets, weight, 2000);
+        let fast = counts[&1] as f64 / 2000.0;
+        assert!((0.74..0.86).contains(&fast), "fast share {fast}");
+    }
+
+    #[test]
+    fn two_choice_prefers_the_less_loaded_of_the_pair() {
+        // Same capacity, the higher-ranked host already has a request in
+        // flight from this gateway: new sessions still reach it only by the
+        // round-robin first draw that pressure may not move downward, while
+        // the idle one is never displaced.
+        let reservations = RoutingReservations::default();
+        let targets = vec![local(1), local(2)];
+        let (_, _held) = reservations
+            .reserve("model", &targets, 1, &targets[0], true)
+            .expect("reserve");
+        let counts = two_choice_tally(&reservations, &targets, |_| (50.0, None), 200);
+        assert_eq!(counts[&1], 100, "{counts:?}");
+        assert_eq!(counts[&2], 100, "{counts:?}");
+        // Pressure on the lower-ranked host moves its draws up to the idle,
+        // higher-ranked one.
+        let reservations = RoutingReservations::default();
+        let (_, _held) = reservations
+            .reserve("model", &targets, 1, &targets[1], true)
+            .expect("reserve");
+        let counts = two_choice_tally(&reservations, &targets, |_| (50.0, None), 200);
+        assert_eq!(counts[&1], 200, "{counts:?}");
+    }
+
+    #[test]
+    fn two_choice_breaks_a_load_tie_toward_the_near_host_only_across_a_real_gap() {
+        let reservations = RoutingReservations::default();
+        let targets = vec![local(1), local(2)];
+        // Equal capacity, 20 ms vs 250 ms (relay-grade): the far host is the
+        // lower-ranked candidate, so the near one wins every idle pair.
+        let counts = two_choice_tally(
+            &reservations,
+            &targets,
+            |target| match target {
+                election::InferenceTarget::Local(2) => (50.0, Some(250)),
+                _ => (50.0, Some(20)),
+            },
+            200,
+        );
+        assert_eq!(
+            counts.get(&2),
+            None,
+            "far host must lose idle pairs: {counts:?}"
+        );
+        // 20 ms vs 60 ms: both near, the round-robin first draw stands.
+        let counts = two_choice_tally(
+            &reservations,
+            &targets,
+            |target| match target {
+                election::InferenceTarget::Local(2) => (50.0, Some(60)),
+                _ => (50.0, Some(20)),
+            },
+            400,
+        );
+        assert!(
+            counts[&1] > 120 && counts[&2] > 120,
+            "nearby hosts share: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn two_choice_single_candidate_and_empty() {
+        let reservations = RoutingReservations::default();
+        assert_eq!(
+            reservations.two_choice("model", &[local(7)], |_| (1.0, None), 1),
+            Some(local(7))
+        );
+        assert_eq!(
+            reservations.two_choice("model", &[], |_| (1.0, None), 1),
+            None
+        );
     }
 
     #[test]

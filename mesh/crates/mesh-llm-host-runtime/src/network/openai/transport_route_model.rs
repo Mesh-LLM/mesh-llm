@@ -497,6 +497,20 @@ fn select_and_reserve_model_route_with_health(
     if matches!(selection.target, election::InferenceTarget::None) {
         return None;
     }
+    // No affinity: replace the round-robin default with the two-choice draw
+    // (capacity × locality weighted, fewer local in-flight wins) so a faster
+    // or nearer replica carries proportionally more of the new sessions.
+    if !selection.affinity_applied
+        && let Some(target) = affinity.two_choice_target(model, &ordered, |target| {
+            ranked
+                .placements
+                .get(target)
+                .map(|placement| (placement.draw_weight(), placement.rtt_ms))
+                .unwrap_or((1.0, None))
+        })
+    {
+        selection.target = target;
+    }
     // Health policy can remove or reorder candidates, so the original
     // equivalent run can shrink or disappear. Never let its old length admit
     // a lower-ranked fallback.
