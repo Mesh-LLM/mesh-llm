@@ -5723,7 +5723,7 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 175626404864,
           "minimum_runner_memory_gib": 256,
-          "startup_timeout_secs": 900
+          "startup_timeout_secs": 1800
         },
         "notes": "Muse Spark MoE; pinned Q8 projector exercises local and split image smoke; first full certification pending",
         "class": "causal_generation",
