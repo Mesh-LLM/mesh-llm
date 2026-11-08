@@ -765,14 +765,25 @@ Release efficiency TODOs:
   canary. QA: verify all host/runtime hashes, no-driver readiness, SDK resources,
   and per-phase timings on Linux amd64/arm64, macOS, and Windows.
 
+Protected `main` requires the complete version update to land through a PR
+with successful checks before dispatch. The workflow reapplies the same script
+idempotently and pushes the unchanged commit. If version preparation has not
+landed, branch rules can reject the workflow's new version commit; the release
+process does not bypass those rules.
+
 `scripts/release-version.sh` is the single owner of the tracked release-version
 surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
-every release job that can reach cargo — including the canary-skipped
-`metadata` and `publish` jobs — initializes sccache before its first cargo
-call. The artifact-only composition jobs never call cargo, and `tools/xtask`
-enforces both halves. On a non-canary `release.yml` dispatch, the metadata job
-applies that script, creates a linear release-source commit when needed, and
-fast-forwards `main` before the build graph begins. `just release` only
+every release job that can reach cargo — including `metadata`, which runs on
+canary dispatches too, and the canary-skipped `publish` and `release_notes`
+jobs — initializes sccache before its first cargo call. The artifact-only
+composition jobs never call cargo, and `tools/xtask` enforces both halves. The
+Cargo-reach check recognizes direct `cargo` invocations and the named helpers
+`release-version.sh`, `publish-crates.sh`, `release-notes-generate.sh` and
+`package-release.sh`; other scripts that invoke Cargo are not covered unless the
+validator is extended to detect them. On a non-canary `release.yml` dispatch,
+metadata reapplies the prepared version. If a diff remains, it attempts a new
+release-source commit and main push; protected `main` rejects that unreviewed
+update before the build graph begins. `just release` only
 performs local preflight, dispatches that workflow, and waits for its result.
 Canary dispatches do not mutate `main` or publish. Release tags and releases are immutable on
 the manual release path: a non-canary dispatch refuses an already-existing tag
@@ -822,9 +833,12 @@ graph is the evidence for that version-only source commit.
 
 After a stable release publishes, the `release_notes` job regroups the
 GitHub-generated body into Keep a Changelog sections through the Rust `cargo
-xtool release` notes-link, notes-classify and notes-regroup commands. A deterministic pass
-classifies each entry from the Conventional Commits type on the canonical
-squash-merge commit between the comparison base and the tag; an optional agent
+xtool release` notes-link, notes-classify and notes-regroup commands. The job
+uses the pinned Rust toolchain and job-local sccache initialized before the
+notes helper runs. The release compiler contract checks this helper's indirect
+Cargo calls. The deterministic pass classifies each entry from the Conventional
+Commits type on the canonical squash-merge commit between the comparison base
+and the tag; an optional agent
 review pass then reclassifies what commit metadata could not place. Both passes
 render through the same validator, which refuses a plan that does not cover the
 published body exactly, and the job re-verifies the live body after editing.
@@ -843,6 +857,8 @@ That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
 
+The non-canary path below assumes the version-preparation PR has merged.
+
 ```mermaid
 flowchart TD
     JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch"]
@@ -850,8 +866,8 @@ flowchart TD
     DISPATCH --> META["Resolve version and highest prior stable notes tag"]
     META --> PATH{"Canary?"}
     PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update main"]
-    PATH -- "non-canary dispatch" --> BUMP["Run release-version.sh"]
-    BUMP --> VERSION_COMMIT["Commit tracked version surface<br/>fast-forward main"]
+    PATH -- "non-canary dispatch" --> BUMP["Reapply release-version.sh"]
+    BUMP --> VERSION_COMMIT["Use prepared main SHA<br/>unchanged main push"]
     CANARY --> BUILD["Build, compose, and smoke artifact matrix"]
     VERSION_COMMIT --> BUILD
     BUILD --> PUBLISHABLE{"Canary?"}
