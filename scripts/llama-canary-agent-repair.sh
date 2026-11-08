@@ -965,6 +965,12 @@ fi
 
 load_candidate_bundle
 trap cleanup_verification_worktree EXIT
+if [[ ( "$HARNESS_MODE" == verify-build || "$HARNESS_MODE" == native-build ) &&
+    "$CANDIDATE_BASE_HEAD" != "${CANARY_MESH_SOURCE:-$BASE_HEAD}" &&
+    "$CERTIFIED_SHA" != "${CANARY_MESH_SOURCE:-$BASE_HEAD}" ]]; then
+  echo "bundle candidate is not based on the frozen selected source" >&2
+  exit 1
+fi
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
 if [[ "$HARNESS_MODE" == verify ]]; then
