@@ -45,7 +45,8 @@ fn direct_convert_native_preflight_resolves_auto_output_type() {
         .expect("manifest_path should be a string");
     assert!(
         Path::new(manifest_path)
-            .ends_with(Path::new("checkpoint").join(".checkpoint-bf16.bf16.skippy-convert.json")),
+            .ends_with(Path::new("checkpoint").join(".checkpoint-bf16.bf16.skippy-convert.json"))
+            && manifest_path.ends_with(".checkpoint-bf16.bf16.skippy-convert.json"),
         "native auto output should resolve to bf16 manifest path, got {manifest_path}"
     );
 
