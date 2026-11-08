@@ -916,6 +916,8 @@ pub(crate) struct DFlashSessionLink {
     /// The draft's layer read from this stage's input activation, and the
     /// target width.
     pub(crate) input_layer: Option<(u32, usize)>,
+    /// The width of the feature rows the draft reads, when it is attached.
+    pub(crate) feature_width: Option<usize>,
     /// The target positions this lane's draft holds.
     context: DraftContext,
     stats: DFlashDraftStats,
@@ -926,17 +928,19 @@ pub(crate) struct DFlashSessionLink {
 
 impl DFlashSessionLink {
     pub(crate) fn new(draft: &Arc<Mutex<DFlashDraft>>, seq_id: i32) -> Option<Self> {
-        let (owns_lane, input_layer) = {
+        let (owns_lane, input_layer, feature_width) = {
             let draft = lock_draft(draft);
             (
                 draft.owns_lane(seq_id),
                 draft.input_layer.map(|layer| (layer, draft.n_embd_target)),
+                draft.n_embd_target,
             )
         };
         owns_lane.then(|| Self {
             draft: Arc::downgrade(draft),
             seq_id,
             input_layer,
+            feature_width: Some(feature_width),
             context: DraftContext::empty(),
             stats: DFlashDraftStats::default(),
             defer_next_ingest: false,
@@ -951,6 +955,7 @@ impl DFlashSessionLink {
             draft: Weak::new(),
             seq_id,
             input_layer: None,
+            feature_width: None,
             context: DraftContext::empty(),
             stats: DFlashDraftStats::default(),
             defer_next_ingest: false,
