@@ -4916,6 +4916,7 @@ dependencies = [
  "mesh-llm-identity",
  "mesh-llm-log-store",
  "mesh-llm-membership",
+ "mesh-llm-moa-plugin",
  "mesh-llm-node",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
@@ -5046,6 +5047,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "mesh-llm-moa-plugin"
+version = "0.78.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "mesh-llm-plugin",
+ "mesh-mixture-of-agents",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -5310,6 +5323,19 @@ dependencies = [
 [[package]]
 name = "mesh-llm-wallet"
 version = "0.78.0"
+
+[[package]]
+name = "mesh-mixture-of-agents"
+version = "0.78.0"
+dependencies = [
+ "async-trait",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "skippy-guardrails",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "mesh-native-serving-plugin-api"

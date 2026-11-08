@@ -248,7 +248,7 @@ policy; it does not inherit the SDK's allowlist. Neither API treats multiple
   same scoped admission. Actual model support remains the native backend's
   responsibility. This first slice does not configure multimodal projectors,
   standalone Whisper/Laya backends, live transcription (`/v1/realtime`),
-  split placements, optional MoA plugin execution, plugin hooks,
+  split placements, MoA, plugin hooks,
   System One, or token-counting endpoints.
 - The control surface is CLI plus authenticated local HTTP, not the ordinary
   web console/config editor. No UI setting or persistent config migration is

@@ -185,9 +185,12 @@ Hugging Face, resolve the cache symlink before passing the path:
 
 Send `model: "mesh"` (or the compatibility alias `auto`) to select one
 capability-compatible model. Streaming and non-streaming requests both use
-core single-model routing by default. Mixture-of-Agents is being extracted to
-the optional `Mesh-LLM/moa-plugin` repository; it is not installed by default.
-An installed virtual-model plugin can override non-streaming text chat.
+core single-model routing by default. The Mixture-of-Agents committee
+(`crates/mesh-llm-moa-plugin`) ships in the binary but is **off by default**;
+enable it with a `[[plugins]]` entry named `mesh-moa` in `mesh.toml`, and
+non-streaming text chat to `mesh` is then answered by the committee instead
+(see [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md)). Any
+installed virtual-model plugin can override `mesh` the same way.
 
 ## Supported model families
 

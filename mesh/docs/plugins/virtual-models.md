@@ -203,11 +203,20 @@ async fn handle_mesh_agent(
 }
 ```
 
-The optional `Mesh-LLM/moa-plugin` is being extracted from core; its previous
-implementation is preserved at `3c90d58d9`. Core advertises `mesh` as an
-automatic single-model directive independently of any plugin. An installed
-plugin can override non-streaming text chat, while streaming and media use
-core routing. Operator-blocked peers are omitted from candidate snapshots.
+The built-in Mixture-of-Agents plugin in `crates/mesh-llm-moa-plugin/src/lib.rs`
+is the complete conformance example. It is compiled into `mesh-llm` but
+**not registered by default**: core advertises `mesh` as an automatic
+single-model directive independently of any plugin. Operators opt in with
+
+```toml
+[[plugins]]
+name = "mesh-moa"
+```
+
+in `mesh.toml` (only `enabled` may be set on this entry, as for `blobstore`);
+the committee then overrides non-streaming text chat to `mesh`, while
+streaming and media keep core routing. Operator-blocked peers are omitted
+from candidate snapshots.
 
 Host inference accepts concrete model ids by default. `single_model_only`
 defaults to `false` when omitted, preserving existing plugin JSON requests.

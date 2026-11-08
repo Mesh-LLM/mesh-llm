@@ -198,7 +198,7 @@ For terminal restoration QA:
 ### 0d. Agent tool-call reliability
 
 Run the direct tool-call probe when changing OpenAI chat-completions routing,
-agent integrations, installed virtual-model plugin behavior, or anything that may affect
+agent integrations, MoA reducer behavior, or anything that may affect
 `tools` / `tool_calls` / tool-result continuation:
 
 ```bash

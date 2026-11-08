@@ -859,6 +859,24 @@ pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     });
 }
 
+/// In-process runners for built-in plugins the operator enabled in `mesh.toml`.
+///
+/// The Mixture-of-Agents committee (`mesh-moa`) is compiled in but off by
+/// default; `resolve_plugins` lists it only when a `[[plugins]]` entry names it.
+fn builtin_in_process_plugins(resolved: &plugin::ResolvedPlugins) -> plugin::InProcessPlugins {
+    let in_process = plugin::InProcessPlugins::default();
+    if !resolved
+        .externals
+        .iter()
+        .any(|spec| spec.name == plugin::MOA_PLUGIN_ID)
+    {
+        return in_process;
+    }
+    let moa_runner: plugin::InProcessPluginRunner =
+        std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
+    in_process.with(plugin::MOA_PLUGIN_ID, moa_runner)
+}
+
 /// Start the ordinary node, attach its binary proof before accepting peers,
 /// and install its stage-control and plugin services with startup failure cleanup.
 pub(super) async fn start_run_auto_node_and_plugins(
@@ -915,10 +933,11 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .await;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
-    let plugin_manager = match plugin::PluginManager::start(
+    let plugin_manager = match plugin::PluginManager::start_with_in_process(
         resolved_plugins,
         plugin_host_mode(options),
         plugin_mesh_tx,
+        builtin_in_process_plugins(resolved_plugins),
     )
     .await
     {
@@ -1963,12 +1982,91 @@ mod tests {
         RunAutoContext, cleanup_run_auto_runtime_event_stack,
         install_run_auto_runtime_event_stack_with_selector, run_auto,
     };
-    use crate::plugin::{BLOBSTORE_PLUGIN_ID, MeshConfig, PluginConfigEntry};
+    use crate::plugin::{BLOBSTORE_PLUGIN_ID, MOA_PLUGIN_ID, MeshConfig, PluginConfigEntry};
     use crate::runtime::RuntimeOptions;
     use crate::runtime_events::engine::RuntimeEventEngine;
     use crate::runtime_events::{
         clear_runtime_event_engine, install_runtime_event_engine, runtime_event_engine,
     };
+
+    fn builtin_toggle_entry(name: &str, enabled: Option<bool>) -> PluginConfigEntry {
+        PluginConfigEntry {
+            operation_bindings: Vec::new(),
+            name: name.into(),
+            enabled,
+            web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
+            allow_inference_observation: None,
+            openai_exchange_grant: None,
+            command: None,
+            args: Vec::new(),
+            url: None,
+            models: None,
+            settings: Default::default(),
+            startup: Default::default(),
+        }
+    }
+
+    /// The production path from `mesh.toml` to a registered virtual model:
+    /// `resolve_plugins` -> `builtin_in_process_plugins` -> `PluginManager`.
+    async fn virtual_models_for(config: &MeshConfig) -> Vec<String> {
+        let host_mode = crate::plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        };
+        let resolved = crate::plugin::resolve_plugins(config, host_mode).unwrap();
+        let (mesh_tx, mut mesh_rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move { while mesh_rx.recv().await.is_some() {} });
+        let manager = crate::plugin::PluginManager::start_with_in_process(
+            &resolved,
+            host_mode,
+            mesh_tx,
+            super::builtin_in_process_plugins(&resolved),
+        )
+        .await
+        .expect("plugin manager starts");
+        let mut models: Vec<String> = manager
+            .virtual_models()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|route| route.model_id)
+            .collect();
+        manager.shutdown().await;
+        models.sort();
+        models
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn builtin_moa_registers_virtual_mesh_only_when_configured() {
+        let default_config = MeshConfig {
+            plugins: vec![builtin_toggle_entry(BLOBSTORE_PLUGIN_ID, Some(false))],
+            ..MeshConfig::default()
+        };
+        assert!(
+            virtual_models_for(&default_config).await.is_empty(),
+            "no entry: `mesh` stays a core single-model directive"
+        );
+
+        let enabled = MeshConfig {
+            plugins: vec![
+                builtin_toggle_entry(BLOBSTORE_PLUGIN_ID, Some(false)),
+                builtin_toggle_entry(MOA_PLUGIN_ID, None),
+            ],
+            ..MeshConfig::default()
+        };
+        assert_eq!(virtual_models_for(&enabled).await, vec!["mesh".to_string()]);
+
+        let disabled = MeshConfig {
+            plugins: vec![
+                builtin_toggle_entry(BLOBSTORE_PLUGIN_ID, Some(false)),
+                builtin_toggle_entry(MOA_PLUGIN_ID, Some(false)),
+            ],
+            ..MeshConfig::default()
+        };
+        assert!(virtual_models_for(&disabled).await.is_empty());
+    }
 
     #[test]
     #[serial_test::serial(runtime_event_engine_state)]

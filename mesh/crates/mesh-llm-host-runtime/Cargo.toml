@@ -31,6 +31,7 @@ claude-live-model-integration = ["claude-code-integration"]
 workspace = true
 
 [dependencies]
+mesh-llm-moa-plugin = { path = "../mesh-llm-moa-plugin", version = "0.78.0" }
 mesh-llm-control-api = { path = "../mesh-llm-control-api", version = "0.78.0" }
 mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0" }
 mesh-llm-transport = { path = "../mesh-llm-transport", version = "0.78.0" }

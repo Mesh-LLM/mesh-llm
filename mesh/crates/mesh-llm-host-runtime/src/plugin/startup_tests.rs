@@ -377,3 +377,78 @@ async fn lazy_start_plugin_does_not_block_manager_startup() {
             .contains("lazy")
     );
 }
+
+fn builtin_toggle_entry(name: &str, enabled: Option<bool>) -> PluginConfigEntry {
+    PluginConfigEntry {
+        operation_bindings: Vec::new(),
+        name: name.into(),
+        enabled,
+        web_ui_enabled: None,
+        web_ui_primary_tab: None,
+        allow_peer_blocks: None,
+        allow_inference_observation: None,
+        openai_exchange_grant: None,
+        command: None,
+        args: Vec::new(),
+        url: None,
+        models: None,
+        settings: Default::default(),
+        startup: PluginStartupConfig::default(),
+    }
+}
+
+fn resolves_moa(config: &MeshConfig) -> bool {
+    resolve_plugins(config, private_host_mode())
+        .unwrap()
+        .externals
+        .iter()
+        .any(|spec| spec.name == MOA_PLUGIN_ID)
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_moa_plugin_is_off_unless_configured() {
+    let default_config = MeshConfig::default();
+    assert!(
+        !resolves_moa(&default_config),
+        "mesh stays a single-model directive without a `mesh-moa` entry"
+    );
+
+    let listed = MeshConfig {
+        plugins: vec![builtin_toggle_entry(MOA_PLUGIN_ID, None)],
+        ..MeshConfig::default()
+    };
+    assert!(
+        resolves_moa(&listed),
+        "listing the entry enables the committee"
+    );
+    let resolved = resolve_plugins(&listed, private_host_mode()).unwrap();
+    let spec = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == MOA_PLUGIN_ID)
+        .unwrap();
+    assert!(spec.command.is_empty(), "served in-process, not as a child");
+    assert!(!spec.startup.optional);
+
+    let disabled = MeshConfig {
+        plugins: vec![builtin_toggle_entry(MOA_PLUGIN_ID, Some(false))],
+        ..MeshConfig::default()
+    };
+    assert!(!resolves_moa(&disabled));
+
+    let mut misconfigured = builtin_toggle_entry(MOA_PLUGIN_ID, None);
+    misconfigured.command = Some("mesh-llm-plugin-moa".into());
+    let error = resolve_plugins(
+        &MeshConfig {
+            plugins: vec![misconfigured],
+            ..MeshConfig::default()
+        },
+        private_host_mode(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("only `enabled` may be set"),
+        "unexpected error: {error}"
+    );
+}

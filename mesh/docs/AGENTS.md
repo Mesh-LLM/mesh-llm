@@ -212,7 +212,7 @@ You can switch models interactively with `Ctrl+M` inside Pi. Pi also supports
 ## Tool-call reliability probe
 
 Use the lightweight QA probe before or after changes that affect agent routing,
-OpenAI chat-completions, tool-call translation, or installed virtual-model plugin behavior:
+OpenAI chat-completions, tool-call translation, or MoA reducer behavior:
 
 ```bash
 cargo xtool automation stability tool-call \
