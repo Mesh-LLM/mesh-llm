@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 496758edf6baa6855541004c10c9988f201c893c Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:27:44 +1100
 Subject: [PATCH] skippy: add clef joint decision reads
@@ -202,7 +202,7 @@ index 93232a2b8..d2ab5d538 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index e0f14f76f..e138d05d8 100644
+index 0e619d785..c2238097e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -97,6 +97,8 @@ add_library(llama
@@ -775,5 +775,5 @@ index 000000000..6ccd39221
 +    });
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

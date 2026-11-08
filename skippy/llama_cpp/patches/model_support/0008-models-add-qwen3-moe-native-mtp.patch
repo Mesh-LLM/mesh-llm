@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From f9c1f4d5a6b910791c62db5654904900cd86d20b Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 6 Nov 2026 10:37:00 -0800
 Subject: [PATCH] models: add Qwen3-MoE native MTP
@@ -13,7 +13,7 @@ Subject: [PATCH] models: add Qwen3-MoE native MTP
  6 files changed, 331 insertions(+), 19 deletions(-)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
-index e6456e5a5..98d3f3dcb 100644
+index 7c9744f51..e678bd042 100644
 --- a/conversion/qwen.py
 +++ b/conversion/qwen.py
 @@ -277,12 +277,110 @@ class Qwen3Model(Qwen2Model):
@@ -128,10 +128,10 @@ index e6456e5a5..98d3f3dcb 100644
      def set_vocab(self):
          # deal with intern-s1
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index cdcccd4be..7c6e0f436 100644
+index 61c51c8fd..bf964a0dc 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -3253,6 +3253,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -3256,6 +3256,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_GATE_EXP,
          MODEL_TENSOR.FFN_DOWN_EXP,
          MODEL_TENSOR.FFN_UP_EXP,
@@ -149,10 +149,10 @@ index cdcccd4be..7c6e0f436 100644
  
      MODEL_ARCH.FLINT: [
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 91c7aad92..c4712cad1 100644
+index db01bc2f5..eab1c3a46 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -255,6 +255,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -256,6 +256,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
          "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)
@@ -478,5 +478,5 @@ index d7d1a9024..89b5135a4 100644
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

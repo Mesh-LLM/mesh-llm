@@ -1,4 +1,4 @@
-From a8a90aab5403c92c9b01cbc187ea8e01f69b8358 Mon Sep 17 00:00:00 2001
+From 3424455e99f043132ea9db15ed0561980154bf03 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 01/15] feat(skippy): define graph-derived native ABI
@@ -2245,5 +2245,5 @@ index 000000000..6aff32414
 +
 +#endif  // SKIPPY_WORKLOADS_H
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

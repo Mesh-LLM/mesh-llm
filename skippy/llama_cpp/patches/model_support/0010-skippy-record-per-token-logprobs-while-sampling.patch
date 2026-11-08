@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 76c1598c4144f104a0b8946f6533619fd9ad6b33 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -144,7 +144,7 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 62694667f..94f1fc871 100644
+index ea0cdd178..beded64e4 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -84,6 +84,7 @@ add_library(llama
@@ -375,5 +375,5 @@ index d3de66cbe..3ca967bf3 100644
  
  namespace {
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

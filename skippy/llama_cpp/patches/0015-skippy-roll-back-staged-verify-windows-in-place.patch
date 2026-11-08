@@ -1,4 +1,4 @@
-From 8eb84ec5461cfc6d67b7dd59207efd5330061a24 Mon Sep 17 00:00:00 2001
+From 5860b0129db46ab79eda25f0d7205b6326df2761 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
 Subject: [PATCH 15/15] skippy: roll back staged verify windows in place
@@ -101,7 +101,7 @@ index 1cfaaa5c6..e8d0874a1 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 93b538b0e..c505659cd 100644
+index cd2b536f6..4f4fc1cd1 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -59,6 +59,7 @@ add_library(llama
@@ -112,7 +112,7 @@ index 93b538b0e..c505659cd 100644
              skippy/workloads.cpp
              skippy/abi.cpp
              skippy/block_boundaries.cpp
-@@ -412,6 +413,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -413,6 +414,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
          FIXTURES_SETUP skippy-model-loader-fixtures)
  
@@ -1274,5 +1274,5 @@ index d09acccb4..8d68604c3 100644
      return 0;
  }
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

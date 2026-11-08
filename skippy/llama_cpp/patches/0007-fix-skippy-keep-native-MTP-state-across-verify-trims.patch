@@ -1,4 +1,4 @@
-From b76ca5df7c05d6ea559c48f8b197c77f921733cc Mon Sep 17 00:00:00 2001
+From b454e8f89e0cc2e30d4845ddfc45c77b9ec71701 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
 Subject: [PATCH 07/15] fix(skippy): keep native MTP state across verify trims
@@ -269,5 +269,5 @@ index 0812485d7..bb3c0e621 100644
                  return status;
              }
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

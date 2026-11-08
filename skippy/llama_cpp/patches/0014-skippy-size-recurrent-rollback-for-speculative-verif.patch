@@ -1,4 +1,4 @@
-From 7988adb6e820446d26fc6d4c5aed96ed883e5f59 Mon Sep 17 00:00:00 2001
+From 99891a53bd163329170b5a12f59f9b820651fa33 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
 Subject: [PATCH 14/15] skippy: size recurrent rollback for speculative verify
@@ -38,10 +38,10 @@ index bc4da9a07..b570682ef 100644
  
  /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 90ecd188f..94a0ea10d 100644
+index c9a0a226b..3257d7f2c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2205,9 +2205,10 @@ int llama_context::decode(
+@@ -2206,9 +2206,10 @@ int llama_context::decode(
                  // are limited to one output row; a sampler on some other
                  // sequence of this context must not reject a multi-output
                  // batch (e.g. speculative verification) for this one.
@@ -102,5 +102,5 @@ index 36c972d92..4741f55cb 100644
      skippy_mtp_clear_session_state(session);
      session->sampling_backend_verifying = false;
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

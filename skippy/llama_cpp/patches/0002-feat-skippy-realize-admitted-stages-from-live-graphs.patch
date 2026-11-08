@@ -1,4 +1,4 @@
-From c9baa131b754bc66f86950c540f2ca3d086e84ae Mon Sep 17 00:00:00 2001
+From aacf40b2b02c6323c68aa6564778867ff3ff6f5e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
@@ -152,7 +152,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/common/common.cpp b/common/common.cpp
-index a2801b82f..44a19e15c 100644
+index 75fd39665..87d0f90e8 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -67,14 +67,6 @@
@@ -231,7 +231,7 @@ index a2801b82f..44a19e15c 100644
  //
  // Model utils
  //
-@@ -1839,60 +1784,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
+@@ -1840,60 +1785,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
  // Vocab utils
  //
  
@@ -293,7 +293,7 @@ index a2801b82f..44a19e15c 100644
      const llama_model * model = llama_get_model(ctx);
      const llama_vocab * vocab = llama_model_get_vocab(model);
 diff --git a/common/common.h b/common/common.h
-index 4005275ca..30717b05b 100644
+index 84abddc76..a045c13c7 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -43,7 +43,7 @@
@@ -314,7 +314,7 @@ index 4005275ca..30717b05b 100644
  };
  
  struct common_params_model {
-@@ -817,7 +817,7 @@ std::string string_repeat(const std::string & str, size_t n);
+@@ -818,7 +818,7 @@ std::string string_repeat(const std::string & str, size_t n);
  
  void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
  
@@ -323,7 +323,7 @@ index 4005275ca..30717b05b 100644
  
  template<class T>
  static std::vector<T> string_split(const std::string & str, char delim) {
-@@ -945,11 +945,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
+@@ -946,11 +946,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
  //
  
  // Auto-detect if colors can be enabled based on terminal and environment
@@ -338,7 +338,7 @@ index 4005275ca..30717b05b 100644
  
  //
  // Model utils
-@@ -1171,13 +1171,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
+@@ -1172,13 +1172,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
  
  // tokenizes a string into a vector of tokens
  // should work similar to Python's `tokenizer.encode`
@@ -354,7 +354,7 @@ index 4005275ca..30717b05b 100644
      const struct llama_vocab * vocab,
             const std::string & text,
                          bool   add_special,
-@@ -1185,12 +1185,12 @@ std::vector<llama_token> common_tokenize(
+@@ -1186,12 +1186,12 @@ std::vector<llama_token> common_tokenize(
  
  // tokenizes a token into a piece, optionally renders special/control tokens
  // should work similar to Python's `tokenizer.id_to_piece`
@@ -1528,10 +1528,10 @@ index d2361396c..0e4567d75 100644
 +    static void init(llama_batch_ext & batch_ext, const llama_batch & batch_inp, size_t n_embd_row = 0, bool activation_positions = false);
  };
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index f6e7e9ca2..3a926a3f1 100644
+index a450d8257..9011bef0d 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2061,7 +2061,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2062,7 +2062,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          }
      }
  
@@ -17943,5 +17943,5 @@ index c41e91d61..eee60d81d 100644
          llama_token  token[3]    = { 5, 6, 7 };
          llama_pos    pos[3]      = { 3, 4, 5 };
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

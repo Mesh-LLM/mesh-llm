@@ -1,4 +1,4 @@
-From c0770c8b47396e6800106daebb99740e52462a2b Mon Sep 17 00:00:00 2001
+From ac4ea3ffde8e7490bf9ac265464fdbb588f39f70 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
@@ -10692,5 +10692,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

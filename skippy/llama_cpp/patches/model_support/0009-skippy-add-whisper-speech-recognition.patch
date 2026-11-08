@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From d96bec3062e9d6b566576d2e0a11ccc00b24abf6 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -238,7 +238,7 @@ index 54c87b6f2..80710eb3b 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c4712cad1..62694667f 100644
+index eab1c3a46..ea0cdd178 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -97,6 +97,7 @@ add_library(llama
@@ -260,7 +260,7 @@ index c4712cad1..62694667f 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -169,6 +174,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -170,6 +175,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -788,5 +788,5 @@ index 000000000..680549066
 +    delete result;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

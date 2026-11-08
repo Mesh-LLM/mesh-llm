@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 8c0afc6c5f7a3c4f68d89c2fb01963776caa086a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 21 Sep 2026 05:48:09 +1000
 Subject: [PATCH] fix(kimi-k3): name residual checkpoint activation ports
@@ -20,5 +20,5 @@ index 57b950e39..3a6ddaf0e 100644
          }
  
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

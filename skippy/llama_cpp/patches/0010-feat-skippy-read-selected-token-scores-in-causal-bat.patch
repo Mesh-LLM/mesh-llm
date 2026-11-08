@@ -1,4 +1,4 @@
-From b2def250e75994b4efec0ce1725f06d6391f3662 Mon Sep 17 00:00:00 2001
+From e009a217e0a36096cb552eb12baf04f0e30dbcf8 Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
 Subject: [PATCH 10/15] feat(skippy): read selected token scores in causal
@@ -55,10 +55,10 @@ index 7098677d8..bf9fb497c 100644
  
  /**
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 5e02baa49..48f8964a9 100644
+index 0a5980aaa..c7a99d16c 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -167,6 +167,10 @@ endif()
+@@ -168,6 +168,10 @@ endif()
  if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
@@ -248,5 +248,5 @@ index 000000000..d33237d1a
 +    return 0;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

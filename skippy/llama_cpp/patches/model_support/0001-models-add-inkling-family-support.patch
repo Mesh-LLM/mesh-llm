@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From a594e99136a8c49942bb6b77c4949b6569fcb868 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 6 Nov 2026 10:32:22 -0800
 Subject: [PATCH] models: add inkling family support
@@ -32,12 +32,12 @@ Subject: [PATCH] models: add inkling family support
  tools/mtmd/clip.cpp                 |  62 ++-
  tools/mtmd/models/inkling.cpp       | 105 +++++
  tools/mtmd/models/models.h          |  11 +
- tools/mtmd/mtmd-audio.cpp           |  69 +++
- tools/mtmd/mtmd-audio.h             |  10 +
+ tools/mtmd/mtmd-audio.cpp           |  72 +++
+ tools/mtmd/mtmd-audio.h             |  12 +
  tools/mtmd/mtmd-image.cpp           |  72 +++
  tools/mtmd/mtmd-image.h             |  20 +
  tools/mtmd/mtmd.cpp                 |  37 +-
- 33 files changed, 2065 insertions(+), 24 deletions(-)
+ 33 files changed, 2070 insertions(+), 24 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
@@ -834,7 +834,7 @@ index cd34e36a9..4ee49d708 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 183f76c8f..f1ec4e911 100644
+index 3257d7f2c..b5bb1cac5 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -290,6 +290,12 @@ llama_context::llama_context(
@@ -851,10 +851,10 @@ index 183f76c8f..f1ec4e911 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 25bad9935..4a2196b4f 100644
+index 4ed2b669f..ca460424b 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3550,10 +3550,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3578,10 +3578,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -884,7 +884,7 @@ index 25bad9935..4a2196b4f 100644
  
          if (v_trans) {
              v = ggml_transpose(ctx0, v);
-@@ -3569,10 +3586,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3597,10 +3614,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          }
  
          if (kv_rows) {
@@ -2087,7 +2087,7 @@ index dde1b03f0..d12706299 100644
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index d92340f6b..10704f7c6 100644
+index fd8b24efd..7bf7efd9d 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
 @@ -49,6 +49,7 @@ add_library(mtmd
@@ -2099,10 +2099,10 @@ index d92340f6b..10704f7c6 100644
              models/kimik25.cpp
              models/nemotron-v2-vl.cpp
 diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
-index cd7359e1d..6b0d3a7c5 100644
+index 8a4098da8..8d00d23bc 100644
 --- a/tools/mtmd/clip-impl.h
 +++ b/tools/mtmd/clip-impl.h
-@@ -421,6 +421,13 @@
+@@ -422,6 +422,13 @@
  #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
  #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
  
@@ -2116,7 +2116,7 @@ index cd7359e1d..6b0d3a7c5 100644
  // mobilenetv5 (gemma3n) definitions
  #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
  #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
-@@ -527,6 +534,7 @@ struct clip_gen_state {
+@@ -528,6 +535,7 @@ struct clip_gen_state {
  struct clip_ctx;
  
  enum projector_type {
@@ -2124,7 +2124,7 @@ index cd7359e1d..6b0d3a7c5 100644
      PROJECTOR_TYPE_MLP,
      PROJECTOR_TYPE_MLP_NORM,
      PROJECTOR_TYPE_LDP,
-@@ -613,6 +621,7 @@ enum projector_type {
+@@ -615,6 +623,7 @@ enum projector_type {
  };
  
  static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
@@ -2133,7 +2133,7 @@ index cd7359e1d..6b0d3a7c5 100644
      { PROJECTOR_TYPE_LDP,               "ldp" },
      { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
 diff --git a/tools/mtmd/clip-model.h b/tools/mtmd/clip-model.h
-index 13ac5f02b..835362004 100644
+index f50fc40b9..68200a705 100644
 --- a/tools/mtmd/clip-model.h
 +++ b/tools/mtmd/clip-model.h
 @@ -610,6 +610,12 @@ struct clip_code2wav {
@@ -2149,7 +2149,7 @@ index 13ac5f02b..835362004 100644
  };
  
  struct clip_chatterbox {
-@@ -876,6 +882,12 @@ struct clip_model {
+@@ -877,6 +883,12 @@ struct clip_model {
      ggml_tensor * norm_embd_w = nullptr;
      ggml_tensor * norm_embd_b = nullptr;
  
@@ -2163,10 +2163,10 @@ index 13ac5f02b..835362004 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index d4e0fc901..a6fb180d2 100644
+index e91305f56..50672be9a 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
-@@ -982,6 +982,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
+@@ -1026,6 +1026,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
      std::unique_ptr<clip_graph> builder;
  
      switch (ctx->proj_type()) {
@@ -2177,7 +2177,7 @@ index d4e0fc901..a6fb180d2 100644
          case PROJECTOR_TYPE_GEMMA3:
          case PROJECTOR_TYPE_IDEFICS3:
          case PROJECTOR_TYPE_COHERE2V:
-@@ -1558,6 +1562,21 @@ struct clip_model_loader {
+@@ -1606,6 +1610,21 @@ struct clip_model_loader {
  
              // model-specific params
              switch (model.proj_type) {
@@ -2199,7 +2199,7 @@ index d4e0fc901..a6fb180d2 100644
                  case PROJECTOR_TYPE_MLP:
                  case PROJECTOR_TYPE_MLP_NORM:
                  case PROJECTOR_TYPE_LDP:
-@@ -2707,7 +2726,8 @@ struct clip_model_loader {
+@@ -2767,7 +2786,8 @@ struct clip_model_loader {
              model.proj_type != PROJECTOR_TYPE_SOPRANO &&
              model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
              model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
@@ -2209,7 +2209,7 @@ index d4e0fc901..a6fb180d2 100644
  
          // layers
          const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2897,6 +2917,23 @@ struct clip_model_loader {
+@@ -2957,6 +2977,23 @@ struct clip_model_loader {
          };
  
          switch (model.proj_type) {
@@ -2233,7 +2233,7 @@ index d4e0fc901..a6fb180d2 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
                  {
-@@ -4816,6 +4853,11 @@ struct clip_model_loader {
+@@ -4890,6 +4927,11 @@ struct clip_model_loader {
              LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
          }
          batch.entries.push_back(img);
@@ -2245,7 +2245,7 @@ index d4e0fc901..a6fb180d2 100644
          return batch;
      }
  
-@@ -5273,6 +5315,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
+@@ -5354,6 +5396,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
      projector_type proj = ctx->proj_type();
  
      switch (proj) {
@@ -2262,7 +2262,7 @@ index d4e0fc901..a6fb180d2 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -6057,6 +6109,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -6278,6 +6330,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                  tail.resize(hparams.n_embd, 0.0f);
                  set_input_f32("inp_stem_tail", tail);
              } break;
@@ -2273,7 +2273,7 @@ index d4e0fc901..a6fb180d2 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -7931,6 +7987,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -8165,6 +8221,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
      switch (ctx->model.proj_type) {
@@ -2396,7 +2396,7 @@ index 000000000..c04a8c989
 +    return gf;
 +}
 diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-index 3323f0e9d..bd05127da 100644
+index 8487a0042..d5b7864fd 100644
 --- a/tools/mtmd/models/models.h
 +++ b/tools/mtmd/models/models.h
 @@ -18,6 +18,17 @@ struct clip_graph_siglip : clip_graph {
@@ -2418,10 +2418,10 @@ index 3323f0e9d..bd05127da 100644
      clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
      ggml_cgraph * build() override;
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index a56eda645..f24fa677c 100644
+index 60087b16d..243284605 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -566,6 +566,75 @@ static bool log_mel_spectrogram(
+@@ -496,6 +496,78 @@ static bool log_mel_spectrogram(
      return true;
  }
  
@@ -2433,12 +2433,26 @@ index a56eda645..f24fa677c 100644
 +    cache.fill_mel_filterbank_matrix(
 +        hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
 +        0.0f, -1.0f, true, 1.0f, false);
++
++    mel_config.n_mel            = hparams.n_mel_bins;
++    mel_config.n_fft_bins       = 1 + hparams.audio_n_fft / 2;
++    mel_config.hann_window_size = hparams.audio_window_len;
++    mel_config.hop_length       = hparams.audio_hop_len;
++    mel_config.sample_rate      = hparams.audio_sample_rate;
++    mel_config.no_padding       = true;
++    mel_config.use_natural_log  = false;
++    mel_config.use_magnitude    = true;
++    mel_config.mel_floor        = 1e-10f;
++    mel_config.power_floor      = 1e-10f; // reference clamps |X|^2 before sqrt
++    mel_config.n_threads        = 4;
++    mel_config.cache            = &cache;
 +}
 +
-+bool mtmd_audio_preprocessor_inkling::preprocess(
++bool mtmd_audio_preprocessor_inkling::process(
 +        const float * samples,
 +        size_t n_samples,
-+        std::vector<mtmd_audio_mel> & output) const {
++        std::vector<mtmd_audio_mel> & output,
++        bool shape_only) const {
 +    if (n_samples == 0) {
 +        return false;
 +    }
@@ -2454,40 +2468,29 @@ index a56eda645..f24fa677c 100644
 +    std::vector<float> padded(left_pad + n_samples + right_pad, 0.0f);
 +    std::copy(samples, samples + n_samples, padded.begin() + left_pad);
 +
-+    filter_params params;
-+    params.n_mel            = hparams.n_mel_bins;
-+    params.n_fft_bins       = 1 + hparams.audio_n_fft / 2;
-+    params.hann_window_size = hparams.audio_window_len;
-+    params.hop_length       = hparams.audio_hop_len;
-+    params.sample_rate      = hparams.audio_sample_rate;
-+    params.no_padding       = true;
-+    params.use_natural_log  = false;
-+    params.use_magnitude    = true;
-+    params.mel_floor        = 1e-10f;
-+    params.power_floor      = 1e-10f; // reference clamps |X|^2 before sqrt
-+
 +    mtmd_audio_mel dmel;
 +    if (!log_mel_spectrogram(
-+            padded.data(), static_cast<int>(padded.size()), 4,
-+            params, cache, dmel)) {
++            padded.data(), static_cast<int>(padded.size()), mel_config, shape_only, dmel)) {
 +        return false;
 +    }
 +    dmel.n_len_org = static_cast<int64_t>(n_samples);
 +
 +    // nearest of 16 float64 centers over [-7,2]; strict '<' keeps the lower bin on midpoints (torch.argmin)
-+    for (float & value_f32 : dmel.data) {
-+        const double value = std::max(-7.0, std::min(2.0, static_cast<double>(value_f32)));
-+        int best = 0;
-+        double best_dist = INFINITY;
-+        for (int bin = 0; bin < 16; ++bin) {
-+            const double center = -7.0 + 9.0 * static_cast<double>(bin) / 15.0;
-+            const double dist = std::abs(value - center);
-+            if (dist < best_dist) {
-+                best = bin;
-+                best_dist = dist;
++    if (!shape_only) {
++        for (float & value_f32 : dmel.data) {
++            const double value = std::max(-7.0, std::min(2.0, static_cast<double>(value_f32)));
++            int best = 0;
++            double best_dist = INFINITY;
++            for (int bin = 0; bin < 16; ++bin) {
++                const double center = -7.0 + 9.0 * static_cast<double>(bin) / 15.0;
++                const double dist = std::abs(value - center);
++                if (dist < best_dist) {
++                    best = bin;
++                    best_dist = dist;
++                }
 +            }
++            value_f32 = static_cast<float>(best);
 +        }
-+        value_f32 = static_cast<float>(best);
 +    }
 +
 +    output.push_back(std::move(dmel));
@@ -2498,18 +2501,20 @@ index a56eda645..f24fa677c 100644
  // mtmd_audio_preprocessor_whisper
  //
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index ca95b217f..4b4195dce 100644
+index ebe4f6397..826c811c7 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
-@@ -79,6 +79,16 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
-     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+@@ -130,6 +130,18 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
+     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
  };
  
 +// Inkling dMel: 100 ms Slaney-mel magnitude windows at a 50 ms hop, quantized to 16 bins.
 +struct mtmd_audio_preprocessor_inkling : mtmd_audio_preprocessor {
 +    mtmd_audio_preprocessor_inkling(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
 +    void initialize() override;
-+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
++
++  protected:
++    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 +
 +private:
 +    mtmd_audio_cache cache;
@@ -2517,7 +2522,7 @@ index ca95b217f..4b4195dce 100644
 +
  struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
      mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
-     mtmd_audio_preprocessor_conformer(const clip_hparams & hparams) : mtmd_audio_preprocessor(hparams) {}
+     mtmd_audio_preprocessor_conformer(const clip_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
 diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
 index 8c0f433e3..1626e8576 100644
 --- a/tools/mtmd/mtmd-image.cpp
@@ -2640,10 +2645,10 @@ index 6eb49ca34..042ec3536 100644
  // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
  // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-index 990ca042c..81920bb39 100644
+index 538f90013..16842c535 100644
 --- a/tools/mtmd/mtmd.cpp
 +++ b/tools/mtmd/mtmd.cpp
-@@ -738,6 +738,12 @@ struct mtmd_context {
+@@ -752,6 +752,12 @@ struct mtmd_context {
          projector_type proj = clip_get_projector_type(ctx_v);
  
          switch (proj) {
@@ -2656,7 +2661,7 @@ index 990ca042c..81920bb39 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
              case PROJECTOR_TYPE_LDP:
-@@ -1101,6 +1107,13 @@ struct mtmd_context {
+@@ -1116,6 +1122,13 @@ struct mtmd_context {
  
          // set preprocessor
          switch (proj) {
@@ -2670,7 +2675,7 @@ index 990ca042c..81920bb39 100644
              case PROJECTOR_TYPE_QWEN2A:
              case PROJECTOR_TYPE_QWEN25O:
                  {
-@@ -1745,23 +1758,35 @@ struct mtmd_tokenizer {
+@@ -1761,23 +1774,35 @@ struct mtmd_tokenizer {
                  }
  
                  size_t n_tokens = 0;
@@ -2713,5 +2718,5 @@ index 990ca042c..81920bb39 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 
