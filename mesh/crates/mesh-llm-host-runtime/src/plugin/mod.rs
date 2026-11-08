@@ -94,12 +94,6 @@ pub use self::config::{
 pub(crate) use self::config::{HardwareConfig, ModelConfigDefaults, SkippyConfig};
 #[cfg(test)]
 pub(crate) use self::config::{ModelFitConfig, RequestDefaultsConfig, ThroughputConfig};
-#[cfg(test)]
-pub(crate) use self::config::{
-    assert_mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges,
-    assert_mesh_requirements_config_rejects_non_ed25519_signer_key,
-    assert_mesh_requirements_config_rejects_required_attestation_without_signer_keys,
-};
 pub(crate) use self::config::{
     mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
     mesh_requirements_validation_error, validate_config_diagnostics_with_installed_plugin_schemas,

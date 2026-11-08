@@ -1769,3 +1769,18 @@ fn integrated_invalid_fixture_reports_batch_then_pinned_device_paths() {
         "models[0].hardware.device must be set to a non-empty value when gpu.assignment = \"pinned\""
     );
 }
+
+#[test]
+fn mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges() {
+    assert_mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges();
+}
+
+#[test]
+fn mesh_requirements_config_rejects_required_attestation_without_signer_keys() {
+    assert_mesh_requirements_config_rejects_required_attestation_without_signer_keys();
+}
+
+#[test]
+fn mesh_requirements_config_rejects_non_ed25519_signer_key() {
+    assert_mesh_requirements_config_rejects_non_ed25519_signer_key();
+}

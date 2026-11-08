@@ -607,4 +607,42 @@ async fn live_logging_limit_application_updates_the_installed_service() {
 }
 
 #[cfg(test)]
-include!("exact_test_wrappers.rs");
+#[tokio::test]
+#[serial_test::serial]
+async fn client_mode_does_not_require_a_native_runtime() {
+    let mut config = tempfile::NamedTempFile::new().expect("isolated client config");
+    std::io::Write::write_all(&mut config, b"[logging]\nenabled = false\n").unwrap();
+    let client = RuntimeOptions {
+        client: true,
+        config: Some(config.path().to_path_buf()),
+        ..Default::default()
+    };
+    initialize_host_runtime_for_options(&client)
+        .await
+        .expect("client initializes without native libraries");
+
+    let plugin = RuntimeOptions {
+        plugin: Some("blobstore".to_string()),
+        ..Default::default()
+    };
+    initialize_host_runtime_for_options(&plugin)
+        .await
+        .expect("plugin worker initializes without native libraries");
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn plugin_mode_skips_malformed_host_config() {
+    let mut malformed_config = tempfile::NamedTempFile::new().expect("create malformed config");
+    std::io::Write::write_all(&mut malformed_config, b"[logging\n")
+        .expect("write malformed config");
+    let plugin = RuntimeOptions {
+        plugin: Some("blobstore".to_string()),
+        config: Some(malformed_config.path().to_path_buf()),
+        ..Default::default()
+    };
+
+    initialize_host_runtime_for_options(&plugin)
+        .await
+        .expect("plugin mode should not load host config");
+}
