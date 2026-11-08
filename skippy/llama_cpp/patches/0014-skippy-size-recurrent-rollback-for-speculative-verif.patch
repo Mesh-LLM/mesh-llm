@@ -1,4 +1,4 @@
-From 82876e171d0969dbb0d92de2d14b30c6eecd5a59 Mon Sep 17 00:00:00 2001
+From 66f7593e4aa9bb3aca3be36e26282df5ab0e4cb5 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
 Subject: [PATCH 14/15] skippy: size recurrent rollback for speculative verify
@@ -38,7 +38,7 @@ index bc4da9a07..b570682ef 100644
  
  /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 5794e7905..accc8a2e9 100644
+index a235234e1..183f76c8f 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -2205,9 +2205,10 @@ int llama_context::decode(

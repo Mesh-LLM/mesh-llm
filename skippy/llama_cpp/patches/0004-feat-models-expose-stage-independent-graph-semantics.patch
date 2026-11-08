@@ -1,10 +1,11 @@
-From 7864e891b5b481a11babb965c4b2756a1e367341 Mon Sep 17 00:00:00 2001
+From 685ee1d398ee5c5fcf21f7a5bc323ce5158f7809 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 04/15] feat(models): expose stage-independent graph semantics
 
 ---
- src/llama-context.cpp            |  10 +
+ src/llama-context.cpp            |  19 +-
+ src/llama-context.h              |   3 +-
  src/llama-graph.cpp              | 782 +++++++++++++++++++++++++++----
  src/llama-graph.h                | 215 ++++++++-
  src/llama-kv-cache.cpp           |  18 -
@@ -43,13 +44,50 @@ Subject: [PATCH 04/15] feat(models): expose stage-independent graph semantics
  src/models/rwkv6.cpp             |   2 +-
  src/models/rwkv7-base.cpp        |   9 +-
  src/skippy/stage_realization.cpp |  15 +-
- 39 files changed, 1335 insertions(+), 325 deletions(-)
+ 40 files changed, 1342 insertions(+), 330 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 2658379ba..5794e7905 100644
+index 2658379ba..a235234e1 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -3274,6 +3274,15 @@ llm_graph_params llama_context::graph_params(
+@@ -721,7 +721,7 @@ void llama_context::resolve_fused_ops(
+ 
+         const uint32_t n_tokens_probe = probe.n_tokens_per_seq*n_seqs;
+ 
+-        auto * gf = graph_reserve(n_tokens_probe, n_seqs, n_tokens_probe, mctx, true, nullptr, graph_build_inputs);
++        auto * gf = graph_reserve(n_tokens_probe, n_seqs, n_tokens_probe, mctx, true, nullptr, graph_build_inputs, false, false);
+         if (!gf) {
+             throw std::runtime_error(std::string("failed to reserve graph for ") + probe.name + " check");
+         }
+@@ -3057,7 +3057,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+                                            bool                              split_only,
+                                            size_t *                          sizes,
+                                            const skippy_graph_build_inputs & graph_build_inputs,
+-                                           bool                              embedding_input) {
++                                           bool                              embedding_input,
++                                           bool                              observe_activation) {
+     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+     GGML_ASSERT(n_outputs >= 1);
+ 
+@@ -3206,7 +3207,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+             }
+         }
+     };
+-    if (!res->get_skippy_activation_imports().empty()) {
++    if (observe_activation && !res->get_skippy_activation_imports().empty()) {
+         observe_frontier(res->get_skippy_activation_imports(), input_activation_frontier_observed,
+                 input_activation_frontier_stable, input_activation_frontier);
+         const ggml_tensor * boundary = res->get_skippy_activation_input();
+@@ -3228,7 +3229,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+         }
+     }
+ 
+-    if (!res->get_skippy_activation_exports().empty()) {
++    if (observe_activation && !res->get_skippy_activation_exports().empty()) {
+         observe_frontier(res->get_skippy_activation_exports(), activation_frontier_observed,
+                 activation_frontier_stable, activation_frontier);
+         const ggml_tensor * boundary = res->get_skippy_activation_output();
+@@ -3274,6 +3275,15 @@ llm_graph_params llama_context::graph_params(
              const llama_memory_context_i * mctx,
                            llm_graph_type   gtype,
              const skippy_graph_build_inputs & graph_build_inputs) const {
@@ -65,7 +103,7 @@ index 2658379ba..5794e7905 100644
      std::vector<int32_t> export_token_axes;
      // Reservation observes the frontier with multiple tokens. Reuse those
      // axes during decode, where singleton checkpoint/token dimensions can be
-@@ -3303,6 +3312,7 @@ llm_graph_params llama_context::graph_params(
+@@ -3303,6 +3313,7 @@ llm_graph_params llama_context::graph_params(
          /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
          /*.samplers    =*/ sampling.samplers,
          /*.build_inputs=*/ graph_build_inputs,
@@ -73,6 +111,20 @@ index 2658379ba..5794e7905 100644
          /*.activation_export_token_axes=*/ std::move(export_token_axes),
          /*.computation_generation=*/ computation_generation,
          /*.n_outputs   =*/ n_outputs,
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 12771e390..791072aeb 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -322,7 +322,8 @@ public:
+                                 bool                              split_only         = false,
+                                 size_t *                          sizes              = nullptr,
+                                 const skippy_graph_build_inputs & graph_build_inputs = {},
+-                                bool                              embedding_input    = false);
++                                bool                              embedding_input    = false,
++                                bool                              observe_activation = true);
+ 
+     bool get_activation_boundary(enum ggml_type & type, uint64_t & elements_per_token, uint64_t & bytes_per_token) const;
+     bool get_input_activation_boundary(enum ggml_type & type, uint64_t & elements_per_token, uint64_t & bytes_per_token) const;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
 index d1ee7c090..25bad9935 100644
 --- a/src/llama-graph.cpp
