@@ -347,3 +347,58 @@ async fn request_allow_then_selected_rejection_retains_admission_but_reports_typ
         manager.shutdown().await;
     }
 }
+
+/// A candidate the plugin refused must not leave the exchange marked denied
+/// when a later candidate was admitted (skip-to-next-peer on a NO).
+#[tokio::test]
+async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
+    let (manager, seen) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(1, false).await;
+    let (session, admission) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "skip-then-admit".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(admission.error_status().is_none());
+    let mut statuses = Vec::new();
+    for attempt in 1..=2 {
+        let mut selected = request_event(
+            "skip-then-admit".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        let result = manager
+            .selected_exchange_phase(session.observation_id(), selected)
+            .await;
+        statuses.push(result.error_status());
+    }
+    assert_eq!(statuses, vec![Some(403), None]);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    let state = state.lock().unwrap();
+    assert!(!state.denied, "the admitted attempt decides the exchange");
+    assert_eq!(state.attempt_history.len(), 2);
+}

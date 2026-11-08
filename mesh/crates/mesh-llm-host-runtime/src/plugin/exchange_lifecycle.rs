@@ -232,7 +232,9 @@ impl PluginManager {
         let mut state = state.lock().unwrap();
         state.incomplete |= result.incomplete;
         state.required_failure |= result.required_failure;
-        state.denied |= result.denied;
+        // The latest selected route decides: an earlier candidate's deny must not
+        // mark an exchange that a later candidate admitted.
+        state.denied = result.denied;
         state.evidence_unavailable |= result.evidence_unavailable;
         state.internal_hook_failure |= result.internal_hook_failure;
         let headers_complete =

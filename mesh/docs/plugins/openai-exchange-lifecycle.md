@@ -58,6 +58,13 @@ selected phase names the backend in `target` and, for a remote peer, carries
 serving node's `request_received` and terminal events use for
 `requested_by_node_id`. It is absent for a local or URL backend.
 
+When a mesh route has several candidates, a `deny` at the selected phase rules
+out that candidate only: the host asks about the next one, with the next
+`attempt` number, and the client gets the denial only if no candidate is
+admitted. A hook failure, or a deny combined with a required-hook failure, still
+ends the request. `admission_denied` on the terminal event reflects the last
+selected attempt; `attempt_history` lists every attempt.
+
 Both sides explicitly list allowed endpoints, phases, and headers. Independent
 booleans control `request_body`, `effective_request_body`, `response_body`,
 `admission`, `metadata`, `read_identity_bundle`, and `delegate_signing_key`.
