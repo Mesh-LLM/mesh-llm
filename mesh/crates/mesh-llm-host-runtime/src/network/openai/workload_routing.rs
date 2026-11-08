@@ -151,6 +151,43 @@ pub(super) async fn mesh_candidates(
 /// local, 10/10 public-id picks went remote, two-choice never ran). Fold the
 /// public id into the identity so the model is one candidate whose placements
 /// cover every host.
+/// The public ids in `models` that fold into a listed local identity without
+/// losing a placement: every host reachable under the public id is also
+/// reachable under the identity. A peer whose own runtime name differs from
+/// this node's is reachable only under the public id (peer discovery projects
+/// its runtime name to the public id, `mesh::peer_state::routable_models`),
+/// so that public id stays a candidate of its own rather than losing the peer.
+pub(super) async fn folded_public_aliases(
+    node: &mesh::Node,
+    models: &[String],
+    descriptors: &[ServedModelDescriptor],
+) -> Vec<String> {
+    let mut folded = Vec::new();
+    for name in models {
+        if !is_public_alias_of_local_model(name, models, descriptors) {
+            continue;
+        }
+        let hosts_under_public_id = node.hosts_for_model(name).await;
+        let identities = descriptors.iter().filter_map(|descriptor| {
+            (descriptor.identity.model_name != *name
+                && descriptor_matches_routable_name(descriptor, name)
+                && models.contains(&descriptor.identity.model_name))
+            .then_some(descriptor.identity.model_name.as_str())
+        });
+        let mut hosts_under_identities = Vec::new();
+        for identity in identities {
+            hosts_under_identities.extend(node.hosts_for_model(identity).await);
+        }
+        if hosts_under_public_id
+            .iter()
+            .all(|host| hosts_under_identities.contains(host))
+        {
+            folded.push(name.clone());
+        }
+    }
+    folded
+}
+
 pub(super) fn is_public_alias_of_local_model(
     name: &str,
     models: &[String],
@@ -363,10 +400,11 @@ pub(super) async fn routing_candidates<'a>(
     descriptors: &[ServedModelDescriptor],
 ) -> Vec<crate::network::router::RoutingCandidate<'a>> {
     let placements = node.placements_for_models(models).await;
+    let folded = folded_public_aliases(node, models, descriptors).await;
     let mut candidates = Vec::with_capacity(models.len());
     for model in models
         .iter()
-        .filter(|model| !is_public_alias_of_local_model(model, models, descriptors))
+        .filter(|model| !folded.contains(model))
         .filter(|model| model_satisfies_request(model, path, descriptors))
     {
         let descriptor = descriptor_for_request(model, path, descriptors);

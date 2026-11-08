@@ -13,7 +13,10 @@ pub(in crate::network::openai) fn duplicate_descriptor(model: &str) -> mesh::Ser
         ..Default::default()
     }
 }
-pub(super) fn duplicate_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+pub(in crate::network::openai) fn duplicate_peer(
+    peer_id: iroh::EndpointId,
+    model: &str,
+) -> mesh::PeerInfo {
     mesh::PeerInfo {
         id: peer_id,
         addr: iroh::EndpointAddr {

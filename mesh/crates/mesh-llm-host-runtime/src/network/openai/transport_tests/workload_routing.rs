@@ -151,6 +151,48 @@ fn public_alias_of_a_local_model_folds_into_its_identity() {
 }
 
 #[tokio::test]
+/// The public id folds into the local identity only while every peer behind it
+/// is also reachable under that identity. A peer whose runtime name differs
+/// (A on this node, B on the peer, both public id P) is reachable under P
+/// alone, so P stays a candidate and that placement is not lost.
+async fn public_alias_stays_when_a_peer_is_reachable_only_under_it() {
+    use super::durable_artifacts::duplicate_alias_repro::{duplicate_descriptor, duplicate_peer};
+    let local = "Falcon-H1-1.5B-Instruct-Q4_K_M".to_string();
+    let peer_runtime = "falcon-h1-1.5b-instruct-q4_k_m.gguf".to_string();
+    let public = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M".to_string();
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    node.set_hosted_models(vec![local.clone()]).await;
+    let descriptors = vec![duplicate_descriptor(&local)];
+    node.set_served_model_descriptors(descriptors.clone()).await;
+    let models = vec![local.clone(), public.clone()];
+
+    let same_identity = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("peer");
+    node.insert_test_peer(duplicate_peer(same_identity.id(), &local))
+        .await;
+    assert_eq!(
+        workload_routing::folded_public_aliases(&node, &models, &descriptors).await,
+        vec![public.clone()],
+        "a peer with the same runtime identity is reachable under it"
+    );
+
+    let other_identity = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("peer");
+    node.insert_test_peer(duplicate_peer(other_identity.id(), &peer_runtime))
+        .await;
+    assert!(
+        workload_routing::folded_public_aliases(&node, &models, &descriptors)
+            .await
+            .is_empty(),
+        "a peer reachable only under the public id keeps it listed"
+    );
+}
+
+#[tokio::test]
 /// A user tag on stateless work must not create generation-session affinity.
 async fn stateless_user_metadata_does_not_disable_replica_reservation_spreading() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
