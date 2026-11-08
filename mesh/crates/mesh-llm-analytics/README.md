@@ -43,6 +43,10 @@ disables reporting regardless of all of them.
 | `client.rs` | PostHog batch payload construction and delivery |
 | `notice.rs` | The first-run disclosure |
 
+Serving events (`inference_request`, `inference_route`, `mesh_links`) are
+built in `mesh-llm-host-runtime`'s `inference_analytics`, from figures the
+skippy frontend hands over through `skippy_serving::generation_stats`.
+
 ## Verifying what a build sends
 
 ```bash

@@ -11,6 +11,7 @@ pub mod config_schema;
 pub mod crypto;
 pub mod discovery;
 pub mod inference;
+mod inference_analytics;
 mod logging;
 mod mesh;
 pub mod models;

@@ -423,6 +423,10 @@ pub(in crate::frontend) struct GeneratedText {
     /// One entry per completion token, when the request asked for logprobs.
     pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
     pub(in crate::frontend) activation_wire: Option<ActivationWireStats>,
+    /// Filled in once the generation finishes, and handed to the stats
+    /// observer after admission has been timed. `None` when no observer is
+    /// installed.
+    pub(in crate::frontend) generation_stats: Option<crate::generation_stats::GenerationStats>,
 }
 
 /// Encoded activation bytes stage 0 wrote to the next stage for one response:
