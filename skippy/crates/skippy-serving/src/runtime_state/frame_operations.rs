@@ -957,7 +957,7 @@ fn split_activation_frame(
     Ok(Some(frames))
 }
 
-fn slice_activation_frame(
+pub(crate) fn slice_activation_frame(
     input: &ActivationFrame,
     token_start: usize,
     token_count: usize,

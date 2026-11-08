@@ -160,11 +160,11 @@ deadline handling.
 ## Notes
 
 - `serve --stage-transport binary` is the tuned binary stage-to-stage path.
-- Binary stages participate in the breaking generation-15 stage protocol.
-  Stage compatibility requires the complete `stage-generation-15` control,
+- Binary stages participate in the breaking generation-16 stage protocol.
+  Stage compatibility requires the complete `stage-generation-16` control,
   status-list, strict-content-identity, stage-admission, and stale-window-discard
   bundle, including bounded causal decision readouts. Older peers are rejected
-  during split planning rather than being mixed into a generation-15 topology.
+  during split planning rather than being mixed into a generation-16 topology.
 - Binary stages accept upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the

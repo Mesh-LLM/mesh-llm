@@ -11,9 +11,6 @@ use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use std::net::TcpStream;
 
-mod frame_budget;
-pub(super) use frame_budget::bounded_chunk_size;
-
 pub(super) fn prefill_chunk_end(
     pos_start: usize,
     chunk_size: usize,
@@ -343,6 +340,82 @@ impl PrefillChunkPlanner {
         };
         self.next_adaptive_size = self.next_adaptive_size.saturating_add(*step).min(*max);
     }
+}
+
+/// Replies the next stage owes stage 0 for the prefill frames sent ahead of
+/// it, and how stage 0 waited for them over one prefill.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PrefillReplyCredits {
+    pub(super) pending: usize,
+    pub(super) pending_max: usize,
+    pub(super) credit_waits: usize,
+    pub(super) deferred_drained: usize,
+}
+
+/// What sending one prefill chunk's frames cost.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PrefillFramesSent {
+    pub(super) activation_bytes: usize,
+    pub(super) write_ms: f64,
+    pub(super) downstream_wait_ms: f64,
+    pub(super) credit_waits: usize,
+    pub(super) deferred_drained: usize,
+}
+
+/// Sends one prefill chunk's frames downstream in order. With a reply credit
+/// limit, a frame is written only once fewer than that many replies are
+/// outstanding; without one, every frame waits for its own acknowledgement.
+/// `write` writes one frame.
+pub(super) fn send_prefill_frames(
+    downstream: &mut TcpStream,
+    frames: &[skippy_protocol::binary::StageWireMessage],
+    credit_limit: usize,
+    credits: &mut PrefillReplyCredits,
+    chain_stats: &mut StageReplyStats,
+    mut write: impl FnMut(
+        &mut TcpStream,
+        &skippy_protocol::binary::StageWireMessage,
+    ) -> InferenceResult<()>,
+) -> InferenceResult<PrefillFramesSent> {
+    let mut sent = PrefillFramesSent::default();
+    for frame in frames {
+        sent.activation_bytes = sent.activation_bytes.saturating_add(frame.activation.len());
+        if credit_limit == 0 {
+            let write_timer = PhaseTimer::start();
+            write(&mut *downstream, frame)?;
+            sent.write_ms += write_timer.elapsed_ms();
+            let wait_timer = PhaseTimer::start();
+            let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+            sent.downstream_wait_ms += wait_timer.elapsed_ms();
+            if reply.kind != WireReplyKind::Ack {
+                return Err(InferenceError::backend(format!(
+                    "expected prefill ACK from downstream, got {:?}",
+                    reply.kind
+                )));
+            }
+            chain_stats.merge(reply.stats);
+            continue;
+        }
+        while credits.pending >= credit_limit {
+            credits.credit_waits = credits.credit_waits.saturating_add(1);
+            sent.credit_waits = sent.credit_waits.saturating_add(1);
+            let drained =
+                drain_one_embedded_prefill_reply(downstream, &mut credits.pending, chain_stats)?;
+            credits.deferred_drained = credits
+                .deferred_drained
+                .saturating_add(drained.drained_replies);
+            sent.deferred_drained = sent
+                .deferred_drained
+                .saturating_add(drained.drained_replies);
+            sent.downstream_wait_ms += drained.downstream_wait_ms;
+        }
+        let write_timer = PhaseTimer::start();
+        write(&mut *downstream, frame)?;
+        sent.write_ms += write_timer.elapsed_ms();
+        credits.pending = credits.pending.saturating_add(1);
+        credits.pending_max = credits.pending_max.max(credits.pending);
+    }
+    Ok(sent)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
