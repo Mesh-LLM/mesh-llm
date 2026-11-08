@@ -87,6 +87,9 @@ fn build_accelerator_sources_linux_x86_64_release_isa_is_explicit_and_portable()
         .split("\nfi")
         .next()
         .unwrap();
+    assert!(linux_x86_64.contains("LLAMA_GGML_NATIVE_NORMALIZED"));
+    assert!(bash.contains("sed -e 's/^[[:space:]]*//'"));
+    assert!(bash.contains("tr '[:lower:]' '[:upper:]'"));
     assert!(linux_x86_64.contains("OFF|NO|FALSE|N|0|IGNORE|NOTFOUND"));
     for argument in [
         "-DGGML_SSE42=ON",
