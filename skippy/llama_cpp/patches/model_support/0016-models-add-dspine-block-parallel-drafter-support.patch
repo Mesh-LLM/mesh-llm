@@ -1,4 +1,4 @@
-From f414b0cfaeca5635e99a7c76d10c8c4d1cc8e4db Mon Sep 17 00:00:00 2001
+From cbc9f186c14bc6bcc2ce95ed705f9c9ecfb77ebd Mon Sep 17 00:00:00 2001
 From: AjHomelab <31621065+Ajay9o9@users.noreply.github.com>
 Date: Mon, 9 Nov 2026 07:03:22 +1100
 Subject: [PATCH] dflash : add DSpine draft model support
@@ -8,7 +8,7 @@ queue, with a zero-lattice fallback for probe/chunked (non-block-shaped)
 batches so the nextn readout stays defined, and a docs/speculative.md
 section for the DFlash2-detected DSpine path.
 ---
- conversion/qwen.py             |  69 +++++++++++++
+ conversion/qwen.py             |  77 ++++++++++++++
  docs/speculative.md            |  33 ++++++
  gguf-py/gguf/constants.py      |  18 ++++
  gguf-py/gguf/tensor_mapping.py |  24 +++++
@@ -17,13 +17,13 @@ section for the DFlash2-detected DSpine path.
  src/llama-model.h              |  10 ++
  src/llama-quant.cpp            |   5 +
  src/models/dflash.cpp          | 184 +++++++++++++++++++++++++++++++++
- 9 files changed, 361 insertions(+)
+ 9 files changed, 369 insertions(+)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
-index 7c9744f51..3f3640e40 100644
+index 7c9744f51..2265485fb 100644
 --- a/conversion/qwen.py
 +++ b/conversion/qwen.py
-@@ -920,6 +920,37 @@ class DFlashModel(Qwen3Model):
+@@ -920,6 +920,45 @@ class DFlashModel(Qwen3Model):
              head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
              self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
  
@@ -48,12 +48,20 @@ index 7c9744f51..3f3640e40 100644
 +        if list(cfg.get("selected_prefix_feature_layers", [])) != list(range(1, n_layer + 1)):
 +            raise ValueError("DSpine: every draft layer must carry a bridge write")
 +        second = self.hparams.get("code_bridge_second_pass", {})
-+        if second.get("mode") != "serial_table" or int(second.get("first_exact", -1)) != n_layer - 1:
-+            raise ValueError("DSpine: only the serial_table refinement of the last write is supported")
-+        top_k = int(second["head_topk"])
 +        refine = cfg.get("selected_prefix_last_write_refine")
-+        if refine is not None and (refine.get("kind") != "exact_sender" or int(refine.get("head_topk", top_k)) != top_k):
-+            raise ValueError("DSpine: unsupported selected_prefix_last_write_refine")
++        if second:
++            if second.get("mode") != "serial_table" or int(second.get("first_exact", -1)) != n_layer - 1:
++                raise ValueError("DSpine: only the serial_table refinement of the last write is supported")
++            top_k = int(second["head_topk"])
++            if refine is not None and (refine.get("kind") != "exact_sender" or int(refine.get("head_topk", top_k)) != top_k):
++                raise ValueError("DSpine: unsupported selected_prefix_last_write_refine")
++        else:
++            # released checkpoints (e.g. tencent/Qwen3-8B-DSpine-b16) declare no
++            # second_pass block; the exact_sender last-write refinement is the
++            # serial table over the last bridge write
++            if refine is None or refine.get("kind") != "exact_sender":
++                raise ValueError("DSpine: only exact_sender last-write refinement is supported")
++            top_k = int(refine["head_topk"])
 +        if top_k < 2 or top_k * (top_k + 1) > self.hparams["hidden_size"]:
 +            raise ValueError("DSpine: head_topk does not fit the lattice rows")
 +        return top_k
@@ -61,7 +69,7 @@ index 7c9744f51..3f3640e40 100644
      def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
          yield from super().generate_extra_tensors()
  
-@@ -1017,6 +1048,44 @@ class DFlashModel(Qwen3Model):
+@@ -1017,6 +1056,44 @@ class DFlashModel(Qwen3Model):
          ):
              name += ".weight"
  
