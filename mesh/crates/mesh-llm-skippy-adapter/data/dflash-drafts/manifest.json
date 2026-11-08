@@ -1,4 +1,35 @@
 {
   "schema_version": 1,
-  "drafts": []
+  "drafts": [
+    {
+      "name": "Laguna-XS-2.1-DFlash-Q8_0",
+      "source": {
+        "repo": "poolside/Laguna-XS-2.1-DFlash",
+        "revision": "5c36361aab23c8ed3afbd079c10c426b677bc607",
+        "files": [
+          { "path": "config.json", "sha256": "22bdc5fd9fd41dc6945523fd504f1b70809af0f5ab26c09716e33616033ecf9a" },
+          { "path": "model.safetensors", "sha256": "0b51e20d76200a80e636414f45fb51a5c0e13b0852d977ba2db788214c68f6b8" }
+        ]
+      },
+      "target_model": {
+        "repo": "poolside/Laguna-XS-2.1",
+        "revision": "c5f36269bbdbd3f27fddc9a9f9dbae0cf2cf57db",
+        "files": [
+          { "path": "config.json", "sha256": "de84031daa00903361001b0ed684aba7e574952f51de84fdc3da6d6239b451ea" },
+          { "path": "tokenizer.json", "sha256": "807c53a95141e77c14e45f68c51db3f84d2ea6b555a6ea832bc99c88dae6a279" },
+          { "path": "tokenizer_config.json", "sha256": "faf352639727d5f21d017ed014b28f2951557da280819b681c404fdc131101ee" }
+        ]
+      },
+      "convert": {
+        "converter": "dflash-laguna",
+        "outtype": "q8_0"
+      },
+      "output": {
+        "repo": "meshllm/Laguna-XS-2.1-DFlash-Q8_0-GGUF",
+        "file": "Laguna-XS-2.1-DFlash-Q8_0.gguf",
+        "sha256": "015e033295b5b4fa6bf04230092cafecd7f84e05d01c190785723c436c3a8b3d",
+        "bytes": 494735328
+      }
+    }
+  ]
 }
