@@ -296,6 +296,7 @@ if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
       # its build host. This AVX baseline runs on Sandy Bridge CPUs such as the
       # i7-2600K while keeping the CPU path usable without native tuning.
       CMAKE_ARGS+=(
+        -DGGML_NATIVE=OFF
         -DGGML_SSE42=ON
         -DGGML_AVX=ON
         -DGGML_AVX_VNNI=OFF

@@ -244,6 +244,13 @@ fn linux_x86_64_cmake_false_native_values_are_normalized_before_matching() {
             fixture.log().contains("-DGGML_SSE42=ON"),
             "portable baseline missing for {value:?}"
         );
+        let log = fixture.log();
+        let original = format!("-DGGML_NATIVE={value}");
+        assert!(
+            log.find(&original).unwrap() < log.rfind("-DGGML_NATIVE=OFF").unwrap(),
+            "canonical native setting must override {value:?}"
+        );
+        assert!(fixture.stamp().contains("cmake-arg=-DGGML_NATIVE=OFF"));
     }
 }
 #[test]
