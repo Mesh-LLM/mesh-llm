@@ -617,6 +617,13 @@ async fn client_mode_does_not_require_a_native_runtime() {
         config: Some(config.path().to_path_buf()),
         ..Default::default()
     };
+    #[cfg(feature = "dynamic-native-runtime")]
+    let attempts = || {
+        system::native_runtime::STARTUP_RESOLUTION_ATTEMPTS
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    #[cfg(feature = "dynamic-native-runtime")]
+    let attempts_before = attempts();
     initialize_host_runtime_for_options(&client)
         .await
         .expect("client initializes without native libraries");
@@ -628,6 +635,12 @@ async fn client_mode_does_not_require_a_native_runtime() {
     initialize_host_runtime_for_options(&plugin)
         .await
         .expect("plugin worker initializes without native libraries");
+    #[cfg(feature = "dynamic-native-runtime")]
+    assert_eq!(
+        attempts(),
+        attempts_before,
+        "client and plugin startup must not resolve a native runtime"
+    );
 }
 
 #[cfg(test)]
