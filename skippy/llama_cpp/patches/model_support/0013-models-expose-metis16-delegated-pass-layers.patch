@@ -1,18 +1,54 @@
-From c42d702f3d69dca01cd722f0ca7364439c264606 Mon Sep 17 00:00:00 2001
+From 835db9ff5625dc0235585ea526e788fd7c654184 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 07:09:49 +1100
 Subject: [PATCH] models: expose Metis16 virtual decoder layers
 
 ---
- src/models/metis16.cpp | 275 +++++++++++++++++++++++------------------
+ src/models/metis16.cpp | 287 +++++++++++++++++++++++------------------
  src/models/models.h    |  10 ++
- 2 files changed, 167 insertions(+), 118 deletions(-)
+ 2 files changed, 172 insertions(+), 125 deletions(-)
 
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
-index 8a433f3cc..c83b713a4 100644
+index 8a433f3cc..f482ff224 100644
 --- a/src/models/metis16.cpp
 +++ b/src/models/metis16.cpp
-@@ -241,6 +241,8 @@ void llama_model_metis16::graph::mem_write(const llama_model_metis16 & model, gg
+@@ -171,7 +171,7 @@ std::unique_ptr<llm_graph_context> llama_model_metis16::build_arch_graph(const l
+ 
+ // streams are kept stream-innermost: [n_stream, n_embd, n_tokens]
+ ggml_tensor * llama_model_metis16::graph::stream_mean(ggml_tensor * x) const {
+-    ggml_tensor * mean = ggml_mean(ctx0, ggml_reshape_2d(ctx0, x, x->ne[0], x->ne[1]*x->ne[2]));
++    ggml_tensor * mean = ggml_mean(ctx0, x);
+     return ggml_reshape_2d(ctx0, mean, x->ne[1], x->ne[2]);
+ }
+ 
+@@ -179,22 +179,20 @@ ggml_tensor * llama_model_metis16::graph::stream_mean(ggml_tensor * x) const {
+ ggml_tensor * llama_model_metis16::graph::hc_read(ggml_tensor * x, ggml_tensor * mix, ggml_tensor * read, ggml_tensor * norm,
+         int p, ggml_tensor ** mixed, int il) const {
+     const int64_t n_s = x->ne[0];
+-    ggml_tensor * x2 = ggml_reshape_2d(ctx0, x, n_s, x->ne[1]*x->ne[2]);
+ 
+     ggml_tensor * m = ggml_view_2d(ctx0, mix, n_s, n_s, mix->nb[1], p*mix->nb[2]);
+-    *mixed = ggml_mul_mat(ctx0, m, x2);
++    *mixed = ggml_mul_mat(ctx0, m, x);
+ 
+     ggml_tensor * r   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, read, n_s, p*read->nb[1]), n_s, 1);
+-    ggml_tensor * src = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, r, x2), x->ne[1], x->ne[2]);
++    ggml_tensor * src = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, r, x), x->ne[1], x->ne[2]);
+     return build_norm(src, norm, NULL, LLM_NORM_RMS, il);
+ }
+ 
+ ggml_tensor * llama_model_metis16::graph::hc_write(ggml_tensor * mixed, ggml_tensor * write, ggml_tensor * update, int p) const {
+     const int64_t n_s = mixed->ne[0];
+     ggml_tensor * w   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, write, n_s, p*write->nb[1]), 1, n_s);
+-    ggml_tensor * u   = ggml_reshape_2d(ctx0, update, 1, update->ne[0]*update->ne[1]);
+-    ggml_tensor * out = ggml_add(ctx0, mixed, ggml_mul_mat(ctx0, w, u));
+-    return ggml_reshape_3d(ctx0, out, n_s, update->ne[0], update->ne[1]);
++    ggml_tensor * u   = ggml_reshape_3d(ctx0, update, 1, update->ne[0], update->ne[1]);
++    return ggml_add(ctx0, mixed, ggml_mul_mat(ctx0, w, u));
+ }
+ 
+ // blends the retrieved entries into the streams; returns their summary
+@@ -241,6 +239,8 @@ void llama_model_metis16::graph::mem_write(const llama_model_metis16 & model, gg
      v = ggml_reshape_3d(ctx0, v, 1, n_m, n_tokens);
      bank_k  = bank_k  ? ggml_concat(ctx0, bank_k,  k, 1) : k;
      bank_vt = bank_vt ? ggml_concat(ctx0, bank_vt, v, 0) : v;
@@ -21,7 +57,7 @@ index 8a433f3cc..c83b713a4 100644
  }
  
  ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis16 & model, ggml_tensor * state,
-@@ -258,133 +260,171 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
+@@ -258,133 +258,171 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
      return ggml_tanh(ctx0, ggml_add(ctx0, f, model.depth_mem_route_b));
  }
  
@@ -310,7 +346,7 @@ index 8a433f3cc..c83b713a4 100644
      }
  
      ggml_tensor * cur = stream_mean(x);
-@@ -399,5 +439,4 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
+@@ -399,5 +437,4 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
      cur = build_lora_mm(model.output, cur);
      cb(cur, "result_output", -1);
      res->t_logits = cur;

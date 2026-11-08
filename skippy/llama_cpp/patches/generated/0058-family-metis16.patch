@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
-index c83b713a4d0e7c3f3887c7513a7053dbb5841ec2..946f06c3a1dab61a8f36f5eee0711c764612a97a 100644
+index f482ff224785ef153a1a10bdf39362205fb48e14..a62f8f950174905828001a54da12ec23a0d34b47 100644
 --- a/src/models/metis16.cpp
 +++ b/src/models/metis16.cpp
-@@ -390,6 +390,8 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_m
+@@ -388,6 +388,8 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_m
      ggml_tensor * ent  = nullptr;
      ggml_tensor * conf = nullptr;
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index c83b713a4d0e7c3f3887c7513a7053dbb5841ec2..946f06c3a1dab61a8f36f5eee0711c76
  
          const int p = il / n_phys;
          if (il % n_phys == 0) {
-@@ -425,6 +427,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_m
+@@ -423,6 +425,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_m
              cb(prev_state, "previous_pass_state", il);
          }
          cb(x, "l_out", il);
