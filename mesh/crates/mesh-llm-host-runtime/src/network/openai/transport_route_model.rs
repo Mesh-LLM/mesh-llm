@@ -129,22 +129,13 @@ async fn cache_target_for_request(
     node: &mesh::Node,
     affinity: &AffinityRouter,
     model: &str,
-    prefix_hash: Option<u64>,
+    affinity_body: Option<&serde_json::Value>,
     candidates: &[election::InferenceTarget],
 ) -> Option<election::InferenceTarget> {
-    let prefix_hash = prefix_hash?;
-    if let Some(target) = affinity.lookup_cache_lease(model, prefix_hash, candidates) {
-        return Some(target);
-    }
-
-    let lease_epoch = affinity.cache_lease_epoch();
-    let selected = node
-        .select_cache_target(model, prefix_hash, candidates)
-        .await;
-    if let Some(target) = selected.as_ref() {
-        affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
-    }
-    selected
+    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body)?;
+    let request = crate::network::affinity::request_cost_input(affinity_body);
+    node.cache_target_with_lease(affinity, model, prefix_hash, candidates, request)
+        .await
 }
 
 async fn execution_candidates(
@@ -268,9 +259,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     route_observer.route_selected(Some(model));
 
     let affinity_body = super::super::workload_routing::affinity_body(request);
-    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
     let cache_target =
-        cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
+        cache_target_for_request(&node, affinity, model, affinity_body, &ordered_candidates).await;
     let Some(ReservedModelRoute {
         selection,
         ordered,
@@ -873,6 +863,11 @@ mod tests {
         assert_eq!(affinity.stats_snapshot().reservation_active, 0);
     }
 
+    /// A request whose shared scaffold covers the 512 cached tokens.
+    fn cached_request() -> mesh_llm_routing::request_cost::RequestCostInput {
+        mesh_llm_routing::request_cost::RequestCostInput::heuristic(1_024, 512)
+    }
+
     async fn cache_context(
         prefix_hash: u64,
         target: election::InferenceTarget,
@@ -908,6 +903,7 @@ mod tests {
         let (node, affinity, target, selection, state) =
             cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
             node: &node,
@@ -930,8 +926,13 @@ mod tests {
         );
 
         assert_eq!(
-            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
-                .await,
+            node.select_cache_target(
+                "qwen",
+                prefix_hash,
+                std::slice::from_ref(&target),
+                cached_request(),
+            )
+            .await,
             None
         );
         assert_eq!(
@@ -949,6 +950,7 @@ mod tests {
         let (node, affinity, target, selection, state) = cache_context(prefix_hash, remote).await;
         let local = election::InferenceTarget::Local(9337);
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
             node: &node,
@@ -975,8 +977,13 @@ mod tests {
             None
         );
         assert_eq!(
-            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&local))
-                .await,
+            node.select_cache_target(
+                "qwen",
+                prefix_hash,
+                std::slice::from_ref(&local),
+                cached_request(),
+            )
+            .await,
             Some(local)
         );
     }
@@ -987,6 +994,7 @@ mod tests {
         let (node, affinity, target, selection, state) =
             cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
             node: &node,
@@ -1009,8 +1017,13 @@ mod tests {
         );
 
         assert_eq!(
-            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
-                .await,
+            node.select_cache_target(
+                "qwen",
+                prefix_hash,
+                std::slice::from_ref(&target),
+                cached_request(),
+            )
+            .await,
             Some(target.clone())
         );
         assert_eq!(

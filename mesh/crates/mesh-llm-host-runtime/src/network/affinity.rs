@@ -5,6 +5,10 @@ use crate::network::reservations::{RoutingReservation, RoutingReservations};
 use crate::network::target_health::{TargetHealth, TargetHealthOutcome, TargetReputationStats};
 use iroh::EndpointId;
 use mesh_llm_routing::affinity as shared_affinity;
+use mesh_llm_routing::request_cost;
+
+/// Smallest credited prefix that lets a cache hit override normal routing.
+const MIN_SAVED_TOKENS: u32 = mesh_llm_routing::cache_aware::DEFAULT_MIN_SAVED_TOKENS;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -435,6 +439,12 @@ pub(crate) fn cache_prefix_hash(parsed_body: Option<&Value>) -> Option<u64> {
     routing_keys(parsed_body).prefix_hash
 }
 
+/// Size of this request and of the prefix it provably shares, with the same
+/// scaffold rule as `routing_keys`, so the credited prefix is what was hashed.
+pub(crate) fn request_cost_input(parsed_body: Option<&Value>) -> request_cost::RequestCostInput {
+    request_cost::request_cost_input_from_body(parsed_body, true)
+}
+
 impl crate::mesh::Node {
     /// Record only provider-confirmed local L1 reuse. A successful request with
     /// zero cached tokens is intentionally not evidence of residency.
@@ -507,54 +517,100 @@ impl crate::mesh::Node {
             .invalidate(model, prefix_hash)
     }
 
+    /// Choose a cache target for this request, honouring a short lease only
+    /// for a request that could earn cache credit at all. Shared by the model
+    /// route and the remote-host ordering, so both apply the same estimate.
+    pub(crate) async fn cache_target_with_lease(
+        &self,
+        affinity: &AffinityRouter,
+        model: &str,
+        prefix_hash: u64,
+        candidates: &[election::InferenceTarget],
+        request: request_cost::RequestCostInput,
+    ) -> Option<election::InferenceTarget> {
+        if !request_cost::can_earn_cache_credit(request, MIN_SAVED_TOKENS) {
+            return None;
+        }
+        if let Some(target) = affinity.lookup_cache_lease(model, prefix_hash, candidates) {
+            return Some(target);
+        }
+        let lease_epoch = affinity.cache_lease_epoch();
+        let selected = self
+            .select_cache_target(model, prefix_hash, candidates, request)
+            .await;
+        if let Some(target) = selected.as_ref() {
+            affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
+        }
+        selected
+    }
+
     /// Probe bounded local and peer advertisements for the exact request
-    /// prefix. Missing, expired, or malformed evidence simply preserves normal
-    /// candidate order.
+    /// prefix, and route to a hit only when, for this request, it is cheaper
+    /// than serving it cold on any candidate, the hit's own included
+    /// (`request_cost::decide_cache_route`). Missing, expired, unmeasured or
+    /// incomparable evidence preserves normal candidate order.
     pub(crate) async fn select_cache_target(
         &self,
         model: &str,
         prefix_hash: u64,
         candidates: &[election::InferenceTarget],
+        request: request_cost::RequestCostInput,
     ) -> Option<election::InferenceTarget> {
-        let local_evidence = self
-            .cache_affinity_inventory
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .probe_local(model, prefix_hash);
-        let now_unix_ms = crate::mesh::current_time_unix_ms();
-        let state = self.state.lock().await;
-        let evidence: Vec<_> = candidates
-            .iter()
-            .filter_map(|target| {
-                let entry = match target {
-                    election::InferenceTarget::Local(_) => local_evidence.clone(),
-                    election::InferenceTarget::Remote(peer_id) => state
-                        .peers
-                        .get(peer_id)
-                        .and_then(|peer| peer.cache_affinity.as_ref())
-                        .and_then(|advertisement| {
-                            advertisement.probe(model, prefix_hash, now_unix_ms)
-                        }),
-                    election::InferenceTarget::None => None,
-                }?;
-                Some(mesh_llm_routing::cache_aware::TargetCacheEvidence {
-                    target: target.clone(),
-                    entry,
-                })
-            })
-            .collect();
-        drop(state);
+        if !request_cost::can_earn_cache_credit(request, MIN_SAVED_TOKENS) {
+            return None;
+        }
+        let (local_evidence, local_rate) = {
+            let mut inventory = self
+                .cache_affinity_inventory
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (
+                inventory.probe_local(model, prefix_hash),
+                inventory.model_prefill_micros_per_token(model),
+            )
+        };
         let mut spread_candidates = candidates.to_vec();
         if !spread_candidates.is_empty() {
             let offset = prefix_hash as usize % spread_candidates.len();
             spread_candidates.rotate_left(offset);
         }
-        let selected = mesh_llm_routing::cache_aware::select_cache_target(
-            &spread_candidates,
-            &evidence,
-            mesh_llm_routing::cache_aware::CacheAwareConfig::default(),
-        );
-        selected.map(|evidence| evidence.target)
+        let now_unix_ms = crate::mesh::current_time_unix_ms();
+        let state = self.state.lock().await;
+        let inputs: Vec<_> = spread_candidates
+            .iter()
+            .filter_map(|target| {
+                let (entry, rate) = match target {
+                    election::InferenceTarget::Local(_) => (local_evidence.clone(), local_rate),
+                    election::InferenceTarget::Remote(peer_id) => {
+                        let advertisement = state
+                            .peers
+                            .get(peer_id)
+                            .and_then(|peer| peer.cache_affinity.as_ref());
+                        (
+                            advertisement.and_then(|advertisement| {
+                                advertisement.probe(model, prefix_hash, now_unix_ms)
+                            }),
+                            advertisement.and_then(|advertisement| {
+                                advertisement.model_prefill_micros_per_token(model, now_unix_ms)
+                            }),
+                        )
+                    }
+                    election::InferenceTarget::None => return None,
+                };
+                Some(request_cost::candidate_cost_input(
+                    target.clone(),
+                    entry.as_ref(),
+                    rate,
+                ))
+            })
+            .collect();
+        drop(state);
+        let decision = request_cost::decide_cache_route(request, &inputs, MIN_SAVED_TOKENS);
+        tracing::debug!(model, ?decision, "cache route decision");
+        match decision {
+            request_cost::CacheRouteDecision::CacheHitWins { target, .. } => Some(target),
+            _ => None,
+        }
     }
 }
 
@@ -884,11 +940,45 @@ mod tests {
         let candidates = vec![remote(1), election::InferenceTarget::Local(9337)];
 
         node.record_local_cache_hit("qwen", 0xfeed_beef, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
 
+        // 512 of 1,024 tokens credited: 0.512 s warm plus the 256-token
+        // margin beats 1.024 s cold; the remote has no rate to compare.
         assert_eq!(
-            node.select_cache_target("qwen", 0xfeed_beef, &candidates)
-                .await,
+            node.select_cache_target(
+                "qwen",
+                0xfeed_beef,
+                &candidates,
+                request_cost::RequestCostInput::heuristic(1_024, 512),
+            )
+            .await,
             Some(election::InferenceTarget::Local(9337))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unmeasured_local_hit_does_not_override_routing() {
+        let node =
+            crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Host { http_port: 9337 })
+                .await
+                .expect("test node");
+        let candidates = vec![remote(1), election::InferenceTarget::Local(9337)];
+
+        // A hit with no prefill rate cannot be costed, so it is no evidence of
+        // an advantage, and a request sharing too little earns no credit.
+        node.record_local_cache_hit("qwen", 0xfeed_beef, 512, 24, 0);
+        let request = request_cost::RequestCostInput::heuristic(1_024, 512);
+        assert_eq!(
+            node.select_cache_target("qwen", 0xfeed_beef, &candidates, request)
+                .await,
+            None
+        );
+        node.observe_local_prefill_cost("qwen", Some(1_000));
+        let short_shared = request_cost::RequestCostInput::heuristic(1_024, MIN_SAVED_TOKENS - 1);
+        assert_eq!(
+            node.select_cache_target("qwen", 0xfeed_beef, &candidates, short_shared)
+                .await,
+            None
         );
     }
 
@@ -901,11 +991,17 @@ mod tests {
         let candidates = vec![remote(1), election::InferenceTarget::Local(9337)];
 
         node.record_local_cache_hit("qwen", 0xfeed_beef, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         assert!(node.invalidate_local_cache_evidence("qwen", 0xfeed_beef));
 
         assert_eq!(
-            node.select_cache_target("qwen", 0xfeed_beef, &candidates)
-                .await,
+            node.select_cache_target(
+                "qwen",
+                0xfeed_beef,
+                &candidates,
+                request_cost::RequestCostInput::heuristic(1_024, 512),
+            )
+            .await,
             None
         );
     }

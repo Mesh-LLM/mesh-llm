@@ -7,6 +7,7 @@
 
 use crate::InferenceTarget;
 use crate::affinity::{prompt_bytes_from_body, scaffold_prefix_from_body};
+use crate::cache_inventory::CacheAffinityEntry;
 use serde_json::Value;
 
 /// Typical bytes per token for prompt text, used to size the whole prompt.
@@ -71,6 +72,20 @@ pub struct RequestCostInput {
     pub reusable_prefix_tokens: Option<u32>,
 }
 
+impl RequestCostInput {
+    /// A request sized by the byte heuristic, for callers and tests that
+    /// already hold the counts.
+    pub fn heuristic(prompt_tokens: u32, reusable_prefix_tokens: u32) -> Self {
+        Self {
+            prompt_tokens: Some(TokenEstimate {
+                tokens: prompt_tokens,
+                source: TokenSource::Heuristic,
+            }),
+            reusable_prefix_tokens: Some(reusable_prefix_tokens),
+        }
+    }
+}
+
 /// Positive cache evidence a candidate advertised for this prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CachedPrefix {
@@ -85,6 +100,45 @@ pub struct CandidateCostInput {
     pub queue_micros: Option<u64>,
     pub prefill_micros_per_token: Option<u64>,
     pub cached: Option<CachedPrefix>,
+}
+
+/// The router has no current per-candidate queue estimate yet: the only queue
+/// figure, an entry's `queue_delay_micros`, is the wait seen when that hit was
+/// recorded. Every candidate gets this same term, so queueing does not change
+/// the comparison either way, and reservation spreading still balances load.
+/// A measured current wait replaces it.
+pub const QUEUE_NOT_MODELED_MICROS: u64 = 0;
+
+/// Costing input for one candidate from what routing holds locally: its
+/// positive cache entry for this prefix, if any, and its per-model prefill
+/// rate. Without a model rate, a measured rate on the entry is used.
+pub fn candidate_cost_input(
+    target: InferenceTarget,
+    entry: Option<&CacheAffinityEntry>,
+    model_prefill_micros_per_token: Option<u64>,
+) -> CandidateCostInput {
+    let entry_rate = entry
+        .map(|entry| entry.prefill_micros_per_token)
+        .filter(|rate| *rate > 0);
+    CandidateCostInput {
+        target,
+        queue_micros: Some(QUEUE_NOT_MODELED_MICROS),
+        prefill_micros_per_token: model_prefill_micros_per_token.or(entry_rate),
+        cached: entry.map(|entry| CachedPrefix {
+            matched_tokens: entry.matched_tokens,
+            restore_micros: Some(entry.restore_micros),
+        }),
+    }
+}
+
+/// Whether this request shares enough with any cached prefix for a hit to be
+/// credited at all. A shorter or unknown shared prefix cannot earn the minimum
+/// credit, so neither a cache lease nor cache evidence applies to it.
+pub fn can_earn_cache_credit(request: RequestCostInput, min_saved_tokens: u32) -> bool {
+    request.prompt_tokens.is_some()
+        && request
+            .reusable_prefix_tokens
+            .is_some_and(|tokens| tokens >= min_saved_tokens)
 }
 
 /// The first component that kept an estimate from being made.
@@ -501,5 +555,62 @@ mod tests {
     fn a_zero_token_prompt_costs_only_the_wait() {
         let cost = cold_cost(request(0, 0), &cold(1, 5_000, 1_000)).unwrap();
         assert_eq!(cost.micros, 5_000);
+    }
+
+    fn entry(matched_tokens: u32, rate: u64) -> CacheAffinityEntry {
+        CacheAffinityEntry {
+            model: "m".into(),
+            prefix_digest: [0; crate::cache_inventory::CACHE_AFFINITY_DIGEST_BYTES],
+            matched_tokens,
+            suffix_prefill_tokens: 0,
+            tier: crate::cache_inventory::CacheTier::L1,
+            restore_micros: 7,
+            queue_delay_micros: 9_999,
+            prefill_micros_per_token: rate,
+        }
+    }
+
+    #[test]
+    fn candidate_input_takes_the_model_rate_then_a_measured_entry_rate() {
+        let hit = entry(512, 300);
+        let input = candidate_cost_input(remote(1), Some(&hit), Some(200));
+        assert_eq!(input.prefill_micros_per_token, Some(200));
+        assert_eq!(
+            input.cached,
+            Some(CachedPrefix {
+                matched_tokens: 512,
+                restore_micros: Some(7),
+            })
+        );
+        // The hit-time queue sample is not a current wait.
+        assert_eq!(input.queue_micros, Some(QUEUE_NOT_MODELED_MICROS));
+        assert_eq!(
+            candidate_cost_input(remote(1), Some(&hit), None).prefill_micros_per_token,
+            Some(300)
+        );
+        // An unmeasured (0) entry rate is no rate.
+        assert_eq!(
+            candidate_cost_input(remote(1), Some(&entry(512, 0)), None).prefill_micros_per_token,
+            None
+        );
+        let cold = candidate_cost_input(remote(2), None, Some(250));
+        assert_eq!(cold.cached, None);
+        assert_eq!(cold.prefill_micros_per_token, Some(250));
+    }
+
+    #[test]
+    fn only_a_request_sharing_the_minimum_can_earn_credit() {
+        assert!(can_earn_cache_credit(request(4_096, 256), 256));
+        assert!(!can_earn_cache_credit(request(4_096, 255), 256));
+        let unknown = RequestCostInput {
+            prompt_tokens: None,
+            reusable_prefix_tokens: Some(1_024),
+        };
+        assert!(!can_earn_cache_credit(unknown, 256));
+        let unsized_prefix = RequestCostInput {
+            reusable_prefix_tokens: None,
+            ..request(4_096, 0)
+        };
+        assert!(!can_earn_cache_credit(unsized_prefix, 256));
     }
 }

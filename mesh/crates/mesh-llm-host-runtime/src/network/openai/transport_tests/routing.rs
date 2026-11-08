@@ -474,12 +474,98 @@ async fn prefix_kill_switch_prevents_cache_evidence_reordering() -> Result<()> {
     });
     node.insert_test_peer(peer).await;
 
-    let (ordered, _) =
-        order_mesh_target_hosts(&node, Some(model), None, &mut prepared, &affinity).await;
+    let (ordered, _) = order_mesh_target_hosts(
+        &node,
+        Some(model),
+        None,
+        &mut prepared,
+        &affinity,
+        mesh_llm_routing::request_cost::RequestCostInput::heuristic(1_024, 512),
+    )
+    .await;
 
     assert_eq!(ordered, vec![peer_id]);
     assert!(prepared.cache_target.is_none());
     assert_eq!(affinity.stats_snapshot().prefix_lookups, 0);
+    Ok(())
+}
+
+/// The issue's fixture: 4,096 prompt tokens, 1,024 provably shared. A hit on a
+/// peer prefilling at 2 ms/token costs 6.144 s (plus the 256-token margin),
+/// while a peer that holds nothing for this prefix but prefills at 0.25
+/// ms/token serves it cold in 1.024 s. The hit only wins once the cold peer is
+/// slower than the warm one's estimate.
+#[tokio::test]
+async fn a_slow_cache_hit_loses_to_a_faster_cold_peer() -> Result<()> {
+    use mesh_llm_routing::cache_inventory::{
+        CACHE_AFFINITY_SALT_BYTES, CacheAffinityAdvertisement, CacheAffinityEntry, CacheTier,
+        prefix_digest,
+    };
+    use mesh_llm_routing::request_cost::RequestCostInput;
+
+    let model = "acme/code-model:Q4_K_M";
+    let warm_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let cold_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let salt = [5; CACHE_AFFINITY_SALT_BYTES];
+    let advertisement =
+        |prefix_hash: u64, matched_tokens: u32, rate: u64| CacheAffinityAdvertisement {
+            salt,
+            epoch: 1,
+            generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+            ttl_ms: 120_000,
+            entries: vec![CacheAffinityEntry {
+                model: model.to_string(),
+                prefix_digest: prefix_digest(&salt, model, prefix_hash),
+                matched_tokens,
+                suffix_prefill_tokens: 0,
+                tier: CacheTier::L1,
+                restore_micros: 0,
+                queue_delay_micros: 0,
+                prefill_micros_per_token: rate,
+            }],
+        };
+
+    for (cold_rate, expect_hit) in [(250, false), (4_000, true)] {
+        let node = test_node_with_remote_models(&[(model, warm_peer), (model, cold_peer)]).await;
+        let affinity = AffinityRouter::new();
+        let mut request = unparsed_chat_request(model);
+        let mut prepared = prepare_mesh_targets(
+            &mut request,
+            Some(model),
+            &[warm_peer, cold_peer],
+            &affinity,
+        );
+        let prefix_hash = prepared.prefix_hash.expect("derived prefix");
+        let mut warm = test_peer_serving_model(warm_peer, model);
+        warm.cache_affinity = Some(advertisement(prefix_hash, 1_024, 2_000));
+        node.insert_test_peer(warm).await;
+        // The cold peer's only entry is for another prefix: it carries its
+        // prefill rate, not a hit for this request.
+        let mut cold = test_peer_serving_model(cold_peer, model);
+        cold.cache_affinity = Some(advertisement(prefix_hash ^ 1, 1_024, cold_rate));
+        node.insert_test_peer(cold).await;
+
+        let (ordered, _) = order_mesh_target_hosts(
+            &node,
+            Some(model),
+            None,
+            &mut prepared,
+            &affinity,
+            RequestCostInput::heuristic(4_096, 1_024),
+        )
+        .await;
+
+        if expect_hit {
+            assert_eq!(
+                prepared.cache_target,
+                Some(election::InferenceTarget::Remote(warm_peer))
+            );
+            assert_eq!(ordered.first(), Some(&warm_peer));
+        } else {
+            assert_eq!(prepared.cache_target, None, "cold rate {cold_rate}");
+            assert!(!prepared.affinity_applied);
+        }
+    }
     Ok(())
 }
 
