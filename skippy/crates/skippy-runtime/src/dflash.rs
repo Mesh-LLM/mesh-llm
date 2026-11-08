@@ -1133,6 +1133,10 @@ impl StageSession {
     }
 
     fn dflash_after_target(&mut self, rows: DecodedRows<'_>, phase: TargetPhase) {
+        if self.dflash_unattended() {
+            self.dflash_after_unattended(rows.span().1);
+            return;
+        }
         let (span_row, span_count) = rows.span();
         let remote = match self.dflash_split.as_mut() {
             Some(split) => {
@@ -1230,6 +1234,34 @@ impl StageSession {
         link.finish_ingest(injected, end);
     }
 
+    /// Rows of the last target decode that the draft never attends: nothing
+    /// is captured or ingested for them. A drafting stage drops whatever its
+    /// draft held, all of it older still, and starts a new run after these
+    /// rows, which is not a loss.
+    fn dflash_after_unattended(&mut self, rows: usize) {
+        if let Some(split) = self.dflash_split.as_mut() {
+            split.drop_unattended_rows();
+        }
+        if self.dflash.is_none() {
+            return;
+        }
+        let end = self.native_position().ok();
+        let Some(link) = self.dflash.as_mut() else {
+            return;
+        };
+        link.pending = None;
+        link.defer_next_ingest = false;
+        link.with_draft(|draft, seq_id| draft.clear(seq_id));
+        let count = u64::try_from(rows).unwrap_or(u64::MAX);
+        match end.filter(|end| *end >= count) {
+            Some(end) => link.context.restarted_at(end),
+            None => {
+                write_native_log_note("dflash unattended rows: target position unknown");
+                link.context.lose(count);
+            }
+        }
+    }
+
     /// Keeps the draft cache no longer than a rewound target session.
     pub(crate) fn dflash_after_rewind(&mut self) {
         if self.dflash.is_none() {
@@ -1303,6 +1335,7 @@ impl StageSession {
         }
         if let Some(split) = self.dflash_split.as_mut() {
             split.rows_dropped = 0;
+            split.unattended = false;
         }
     }
 }
@@ -1397,6 +1430,14 @@ fn refresh_target_program(session: &StageSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every runtime the host ships carries the draft-context entry points,
+    /// whichever C++ decoration its toolchain gives the `llama-ext.h` ones.
+    #[test]
+    fn the_loaded_runtime_exports_the_draft_context_api() {
+        crate::test_support::require_native_runtime();
+        assert!(skippy_ffi::llama_draft::llama_draft_api().is_some());
+    }
 
     #[test]
     fn a_poisoned_lock_is_reset_and_reusable() {

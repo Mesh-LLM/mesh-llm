@@ -291,4 +291,9 @@ pub(crate) struct StageStatusSnapshot {
     /// layers the draft reads. `None` when the stage drafts nothing, so the
     /// coordinator serves stage 0 without DFlash.
     pub(crate) dflash_target_layers: Option<Vec<u32>>,
+    /// With those layers: how many positions back the draft attends, when
+    /// every draft attention layer slides over a window. Stage 0 then sends
+    /// no feature rows for prompt tokens before it. `None` when any layer
+    /// attends the whole context.
+    pub(crate) dflash_context_window: Option<u32>,
 }

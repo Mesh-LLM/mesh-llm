@@ -600,6 +600,7 @@ pub(crate) fn run_binary_stage_message(
     input: Option<&ActivationFrame>,
     options: BinaryStageExecutionOptions,
 ) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
+    runtime.dflash_split_mark_unattended(session_id, message.state.split_dflash_unattended_rows());
     runtime.dflash_split_input(session_id, input);
     // A draft owed for an earlier window is moot once the next message lands.
     runtime.dflash_take_deferred_draft(session_id);
@@ -608,7 +609,7 @@ pub(crate) fn run_binary_stage_message(
     if early_verdict {
         runtime.dflash_defer_next_ingest(session_id);
     }
-    let (predicted, mut predicted_tokens, mut output, mut draft) = execute_binary_stage_message(
+    let executed = execute_binary_stage_message(
         runtime,
         session_id,
         message,
@@ -616,7 +617,12 @@ pub(crate) fn run_binary_stage_message(
         input,
         options,
         dflash_tokens > 0,
-    )?;
+    );
+    if executed.is_err() {
+        // The frame never leaves, so its mark must not reach a later message.
+        runtime.dflash_split_mark_unattended(session_id, false);
+    }
+    let (predicted, mut predicted_tokens, mut output, mut draft) = executed?;
     runtime.dflash_split_output(session_id, &mut output);
     if early_verdict {
         // The verdict goes back first; the caller drafts with

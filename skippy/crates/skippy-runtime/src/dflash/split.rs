@@ -452,6 +452,9 @@ pub(crate) struct DFlashSplitSession {
     pub(crate) remote: Option<(DFlashFeatureRows, usize)>,
     /// Token rows whose captured features this stage could not forward.
     pub(crate) rows_dropped: u64,
+    /// The next message's rows lie before the draft's attention window: no
+    /// stage forwards their features and the draft does not ingest them.
+    pub(crate) unattended: bool,
 }
 
 impl DFlashSplitSession {
@@ -501,6 +504,13 @@ impl DFlashSplitSession {
         }
     }
 
+    /// Forgets rows held for a message outside the draft window; the mark
+    /// itself stays until the frame leaves.
+    pub(crate) fn drop_unattended_rows(&mut self) {
+        self.captured = None;
+        self.remote = None;
+    }
+
     pub(crate) fn clear(&mut self) {
         self.captured = None;
         self.received_input = None;
@@ -509,6 +519,31 @@ impl DFlashSplitSession {
 }
 
 impl StageSession {
+    /// Marks the rows of this session's next message as outside the final
+    /// stage's DFlash draft window, or not. A draft whose every attention
+    /// layer slides over a window of `n` positions never attends a prompt row
+    /// `n` or more positions before the first token it drafts after, so stage
+    /// 0 marks the prefill chunks that hold only such rows. A capturing stage
+    /// then forwards no feature rows for them, and a drafting final stage
+    /// skips ingesting them and starts its context after them. The mark
+    /// lasts for one message; a no-op on a session outside split DFlash.
+    pub fn dflash_mark_unattended(&mut self, unattended: bool) {
+        if self.dflash.is_none() && self.dflash_split.is_none() {
+            return;
+        }
+        self.dflash_split
+            .get_or_insert_with(Default::default)
+            .unattended = unattended;
+    }
+
+    /// Whether this session's next message is marked as outside the draft
+    /// window.
+    pub(crate) fn dflash_unattended(&self) -> bool {
+        self.dflash_split
+            .as_ref()
+            .is_some_and(|split| split.unattended)
+    }
+
     /// Hands the draft the feature rows an earlier stage sent with the input
     /// of this session's next decode.
     pub fn dflash_set_remote_features(&mut self, rows: Option<DFlashFeatureRows>) {
@@ -538,6 +573,14 @@ impl StageSession {
     /// layer's rows. Malformed rows are dropped and reported; the draft then
     /// finds them missing.
     pub fn dflash_receive_input(&mut self, input: Option<&ActivationFrame>) -> Result<()> {
+        if self.dflash_unattended() {
+            // Nothing is read for rows outside the draft window.
+            if let Some(split) = self.dflash_split.as_mut() {
+                split.remote = None;
+                split.received_input = None;
+            }
+            return Ok(());
+        }
         if let Some(link) = self.dflash.as_ref() {
             let input_layer = link.input_layer;
             let (rows, error) = match input.map(DFlashFeatureRows::from_frame).transpose() {
@@ -589,6 +632,13 @@ impl StageSession {
         let Some(split) = self.dflash_split.as_mut() else {
             return Ok(());
         };
+        if std::mem::take(&mut split.unattended) {
+            // The draft never attends these rows; nothing was captured for
+            // them and nothing goes with the frame.
+            split.captured = None;
+            split.received_input = None;
+            return Ok(());
+        }
         let tokens = usize::try_from(frame.desc.token_count).context("frame tokens")?;
         let mut rows = split.captured.take();
         if let Some(rows) = rows.as_mut() {
@@ -861,6 +911,71 @@ mod tests {
         let mut next = frame(1);
         session.dflash_forward_captured(&mut next).unwrap();
         assert_eq!(DFlashFeatureRows::from_frame(&next).unwrap(), None);
+    }
+
+    #[test]
+    fn rows_outside_the_draft_window_leave_without_features() {
+        let mut rows = DFlashFeatureRows::new(1, 2);
+        rows.insert(2, vec![1.0, 2.0]).unwrap();
+        let mut session = session_with_captured(rows);
+        session.dflash_mark_unattended(true);
+        let mut chunk = frame(2);
+        let before = chunk.clone();
+
+        session.dflash_forward_captured(&mut chunk).unwrap();
+
+        assert_eq!(chunk.payload, before.payload);
+        assert_eq!(chunk.desc.part_count, 1);
+        // Skipped on purpose, so not counted as rows the draft lost.
+        assert_eq!(session.dflash_rows_dropped(), 0);
+        // The mark lasts one message: the next frame carries its rows again.
+        let mut later = DFlashFeatureRows::new(1, 1);
+        later.insert(2, vec![3.0]).unwrap();
+        session.dflash_split.as_mut().unwrap().captured = Some(later);
+        let mut next = frame(1);
+        session.dflash_forward_captured(&mut next).unwrap();
+        let forwarded = DFlashFeatureRows::from_frame(&next).unwrap().unwrap();
+        assert_close(forwarded.rows_of(2, 0, 1).unwrap(), &[3.0]);
+    }
+
+    #[test]
+    fn a_drafting_stage_reads_no_rows_for_an_unattended_message() {
+        let mut session = StageSession::detached_dflash_for_test();
+        let mut rows = DFlashFeatureRows::new(1, 2);
+        rows.insert(2, vec![1.0, 2.0]).unwrap();
+        let mut input = frame(2);
+        rows.append_to_frame_as(&mut input, DFlashFeatureEncoding::Bf16)
+            .unwrap();
+
+        session.dflash_mark_unattended(true);
+        session.dflash_receive_input(Some(&input)).unwrap();
+        assert_eq!(session.dflash_remote_features_for_test(), None);
+
+        session.dflash_mark_unattended(false);
+        session.dflash_receive_input(Some(&input)).unwrap();
+        assert_eq!(session.dflash_remote_features_for_test(), Some(&rows));
+    }
+
+    #[test]
+    fn a_new_request_on_the_lane_starts_unmarked() {
+        let mut session = session_with_captured(DFlashFeatureRows::new(1, 0));
+        session.dflash_mark_unattended(true);
+        session.dflash_reset_health();
+        assert!(!session.dflash_unattended());
+    }
+
+    #[test]
+    fn a_session_outside_split_dflash_ignores_the_mark() {
+        let mut session = StageSession {
+            raw: std::ptr::null_mut(),
+            token_count: 0,
+            terminal_stage: false,
+            batched_activation_exports: true,
+            dflash: None,
+            dflash_split: None,
+        };
+        session.dflash_mark_unattended(true);
+        assert!(session.dflash_split.is_none());
     }
 
     #[test]

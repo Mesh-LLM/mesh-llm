@@ -490,25 +490,27 @@ pub(crate) fn llama_model_meta_val_str_fn() -> Option<LlamaModelMetaValStrFn> {
     })
 }
 
-/// Upstream draft-context entry points. Optional as a set: a runtime that does
-/// not export every one of them cannot host an external draft context.
-///
-/// The `src/llama-ext.h` entry points keep C++ linkage, so they resolve by
-/// their Itanium-mangled names; the mangling encodes the parameter types, so
-/// an upstream signature change fails lookup instead of miscalling. MSVC
-/// mangles differently, so Windows runtimes report the API as unavailable.
-#[cfg(windows)]
-pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
-    None
+/// A `src/llama-ext.h` entry point. These keep C++ linkage, so they resolve by
+/// their decorated name: Itanium for GCC, Clang and MinGW builds, MSVC for
+/// MSVC-ABI Windows builds. Both decorations encode the parameter types, so an
+/// upstream signature change fails lookup instead of miscalling.
+struct CppEntryPoint {
+    itanium: &'static [u8],
+    msvc: &'static [u8],
+}
+
+impl Symbols {
+    fn lookup_cpp<Sym>(&self, entry: CppEntryPoint) -> Option<Sym>
+    where
+        Sym: Copy + 'static,
+    {
+        self.lookup_optional(entry.itanium)
+            .or_else(|| self.lookup_optional(entry.msvc))
+    }
 }
 
 /// Upstream draft-context entry points. Optional as a set: a runtime that does
 /// not export every one of them cannot host an external draft context.
-///
-/// The `src/llama-ext.h` entry points keep C++ linkage, so they resolve by
-/// their Itanium-mangled names; the mangling encodes the parameter types, so
-/// an upstream signature change fails lookup instead of miscalling.
-#[cfg(not(windows))]
 pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
     static CACHE: OnceLock<Option<LlamaDraftApi>> = OnceLock::new();
     CACHE
@@ -537,20 +539,34 @@ pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
                 vocab_n_tokens: symbols.lookup_optional(b"llama_vocab_n_tokens\0")?,
                 vocab_mask: symbols.lookup_optional(b"llama_vocab_mask\0")?,
                 set_causal_attn: symbols.lookup_optional(b"llama_set_causal_attn\0")?,
-                set_embeddings_nextn: symbols
-                    .lookup_optional(b"_Z26llama_set_embeddings_nextnP13llama_contextbb\0")?,
-                get_embeddings_nextn: symbols
-                    .lookup_optional(b"_Z26llama_get_embeddings_nextnP13llama_context\0")?,
-                set_embeddings_layer_inp: symbols
-                    .lookup_optional(b"_Z30llama_set_embeddings_layer_inpP13llama_contextjb\0")?,
-                get_embeddings_layer_inp: symbols
-                    .lookup_optional(b"_Z30llama_get_embeddings_layer_inpP13llama_contextj\0")?,
-                model_target_layer_ids: symbols
-                    .lookup_optional(b"_Z28llama_model_target_layer_idsPK11llama_model\0")?,
-                model_target_layer_ids_n: symbols
-                    .lookup_optional(b"_Z30llama_model_target_layer_ids_nPK11llama_model\0")?,
-                model_dflash_selector_top_k: symbols
-                    .lookup_optional(b"_Z33llama_model_dflash_selector_top_kPK11llama_model\0")?,
+                set_embeddings_nextn: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z26llama_set_embeddings_nextnP13llama_contextbb\0",
+                    msvc: b"?llama_set_embeddings_nextn@@YAXPEAUllama_context@@_N1@Z\0",
+                })?,
+                get_embeddings_nextn: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z26llama_get_embeddings_nextnP13llama_context\0",
+                    msvc: b"?llama_get_embeddings_nextn@@YAPEAMPEAUllama_context@@@Z\0",
+                })?,
+                set_embeddings_layer_inp: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z30llama_set_embeddings_layer_inpP13llama_contextjb\0",
+                    msvc: b"?llama_set_embeddings_layer_inp@@YAXPEAUllama_context@@I_N@Z\0",
+                })?,
+                get_embeddings_layer_inp: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z30llama_get_embeddings_layer_inpP13llama_contextj\0",
+                    msvc: b"?llama_get_embeddings_layer_inp@@YAPEAMPEAUllama_context@@I@Z\0",
+                })?,
+                model_target_layer_ids: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z28llama_model_target_layer_idsPK11llama_model\0",
+                    msvc: b"?llama_model_target_layer_ids@@YAPEBHPEBUllama_model@@@Z\0",
+                })?,
+                model_target_layer_ids_n: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z30llama_model_target_layer_ids_nPK11llama_model\0",
+                    msvc: b"?llama_model_target_layer_ids_n@@YAIPEBUllama_model@@@Z\0",
+                })?,
+                model_dflash_selector_top_k: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z33llama_model_dflash_selector_top_kPK11llama_model\0",
+                    msvc: b"?llama_model_dflash_selector_top_k@@YAHPEBUllama_model@@@Z\0",
+                })?,
                 backend_dev_by_name: symbols.lookup_optional(b"ggml_backend_dev_by_name\0")?,
             })
         })
