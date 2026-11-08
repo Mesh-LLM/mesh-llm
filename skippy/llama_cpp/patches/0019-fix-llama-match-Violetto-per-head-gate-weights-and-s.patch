@@ -1,0 +1,51 @@
+From 00e0fb7c96a21de306ea3152cb26b5050b65f1ba Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 02:34:44 +1100
+Subject: [PATCH] fix(llama): match Violetto per-head gate weights and scaling
+
+---
+ src/models/limite.cpp | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/src/models/limite.cpp b/src/models/limite.cpp
+index c5c90a1fa..8a02ba8b0 100644
+--- a/src/models/limite.cpp
++++ b/src/models/limite.cpp
+@@ -55,8 +55,9 @@ void llama_model_limite::load_arch_tensors(llama_model_loader &) {
+         create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
+         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+ 
+-        layer.wqkv_gate      = create_tensor(tn(LLM_TENSOR_ATTN_GATE,      "weight", i), {n_embd, n_head},    TENSOR_NOT_REQUIRED);
+-        layer.attn_ve_gate   = create_tensor(tn(LLM_TENSOR_ATTN_VE_GATE,   "weight", i), {n_embd, n_head_kv}, TENSOR_NOT_REQUIRED);
++        layer.wqkv_gate      = create_tensor(tn(LLM_TENSOR_ATTN_GATE,      "weight", i), {n_embd_head_k, n_head}, TENSOR_NOT_REQUIRED);
++        // Violetto's VE gate reads the first 12 input channels for each KV head.
++        layer.attn_ve_gate   = create_tensor(tn(LLM_TENSOR_ATTN_VE_GATE,   "weight", i), {12, n_head_kv}, TENSOR_NOT_REQUIRED);
+         layer.attn_xsa_alpha = create_tensor(tn(LLM_TENSOR_ATTN_XSA_ALPHA, "weight", i), {n_head},            TENSOR_NOT_REQUIRED);
+ 
+         layer.attn_resid_scale = create_tensor(tn(LLM_TENSOR_ATTN_RESID_SCALE, "weight", i), {1}, 0);
+@@ -166,7 +167,8 @@ llama_model_limite::graph::graph(const llm_graph_params & params) : llm_graph_co
+             auto [Qcur, Kcur, Vcur] = build_qkv(layer, attn_in, n_embd_head, n_head, n_head_kv, il);
+ 
+             if (layer.attn_ve_gate) {
+-                ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(layer.attn_ve_gate, attn_in));
++                ggml_tensor * ve_in = ggml_view_2d(ctx0, attn_in, 12, n_tokens, attn_in->nb[1], 0);
++                ggml_tensor * gate = ggml_scale(ctx0, ggml_sigmoid(ctx0, build_lora_mm(layer.attn_ve_gate, ve_in)), 2.0f);
+                 gate = ggml_reshape_3d(ctx0, gate, 1, n_head_kv, n_tokens);
+ 
+                 Vcur = ggml_add(ctx0, Vcur, ggml_mul(ctx0, inp_ve, gate));
+@@ -208,8 +210,10 @@ llama_model_limite::graph::graph(const llm_graph_params & params) : llm_graph_co
+             cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head, n_tokens);
+ 
+             if (layer.wqkv_gate) {
+-                ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, attn_in));
+-                cur = ggml_mul(ctx0, cur, ggml_reshape_3d(ctx0, gate, 1, n_head, n_tokens));
++                ggml_tensor * gate_in = ggml_reshape_3d(ctx0, attn_in, n_embd_head, n_head, n_tokens);
++                ggml_tensor * gate = ggml_sum_rows(ctx0, ggml_mul(ctx0, gate_in, layer.wqkv_gate));
++                gate = ggml_scale(ctx0, ggml_sigmoid(ctx0, gate), 2.0f);
++                cur = ggml_mul(ctx0, cur, gate);
+                 cb(cur, "attn_gated", il);
+             }
+ 
+-- 
+2.56.0
+
