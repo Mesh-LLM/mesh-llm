@@ -30,7 +30,7 @@ env:
   CARGO_PROFILE_RELEASE_DEBUG: "0"
   CARGO_PROFILE_BENCH_DEBUG: "0"
   PAIRINGS_DIR: mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings
-  PAIRINGS_PIN_SOURCE: mesh/crates/mesh-llm-skippy-adapter/src/config/dflash_catalog.rs
+  PAIRINGS_PIN_SOURCE: mesh/crates/mesh-llm-skippy-adapter/src/config/dflash_index.rs
   PAIRINGS_REPO: meshllm/dflash-pairings
 
 jobs:

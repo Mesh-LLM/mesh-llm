@@ -1,5 +1,6 @@
 mod dflash;
 mod dflash_catalog;
+mod dflash_index;
 mod request_defaults;
 mod resolution;
 mod speculative;
@@ -32,10 +33,12 @@ mod hardware_tests;
 mod hardware_translation_tests;
 
 pub use dflash_catalog::{
-    DFLASH_PAIRING_INDEX_REPO, DFLASH_PAIRING_INDEX_SHA256, DFlashBackends, DFlashDraft,
-    DFlashPairing, DFlashPairingIndex, DFlashPairingIndexPin, DFlashPairingSource, DFlashTarget,
-    DefaultDFlash, check_split_dflash_draft, dflash_draft_cache_path,
-    dflash_pairing_index_installed, install_dflash_pairing_index, load_dflash_pairing_index,
+    DFlashBackends, DFlashDraft, DFlashPairing, DFlashPairingIndex, DFlashPairingSource,
+    DFlashTarget, DefaultDFlash, check_split_dflash_draft, dflash_draft_cache_path,
+    dflash_pairing_index_installed, install_dflash_pairing_index,
+};
+pub use dflash_index::{
+    DFLASH_PAIRING_INDEX_REPO, DFLASH_PAIRING_INDEX_SHA256, DFlashPairingIndexPin,
 };
 #[cfg(test)]
 pub(crate) use resolution::resolve_skippy_config;

@@ -1630,7 +1630,7 @@ fn the_published_index_resolves_every_default_as_the_table_does() {
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("data/dflash-pairings/index.json"),
         std::path::PathBuf::from,
     );
-    let index = super::dflash_catalog::load_dflash_pairing_index(&path).unwrap();
+    let index = super::dflash_index::load_dflash_pairing_index(&path).unwrap();
     let metal = cfg!(target_os = "macos");
     let (_plain_directory, plain) = default_dflash_target();
     let (_mtp_directory, with_mtp) = native_mtp_target();
