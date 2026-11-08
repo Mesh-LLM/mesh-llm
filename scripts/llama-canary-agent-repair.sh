@@ -231,7 +231,8 @@ verification_source_inspection() {
   repair_workload_controller_unchanged || return 1
   transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/independent-verification.XXXXXXXX")" || return 1
   input="$transaction_root/input.json"
-  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+  # Selected-source builds use the recovery commit as BASE_HEAD; the verifier runs from frozen main.
+  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "${CANARY_CONTROLLER_SHA:-$BASE_HEAD}" \
     --arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
     --arg base "$CANDIDATE_BASE_HEAD" --arg candidate "$CERTIFIED_SHA" --arg tree "$VERIFICATION_TREE" \
     '{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},
