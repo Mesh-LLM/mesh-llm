@@ -44,6 +44,15 @@ fn release_notes_helper_requires_prior_cache_setup() {
             toolchain,
             "      - uses: dtolnay/rust-toolchain@pin\n        continue-on-error: true\n",
         ),
+        source
+            .replace(
+                toolchain,
+                "      - uses: dtolnay/rust-toolchain@pin\n        if: github.event_name == 'push'\n",
+            )
+            .replace(
+                "      - run: scripts/release-notes-generate.sh\n",
+                "      - run: scripts/release-notes-generate.sh\n        if: github.event_name == 'push'\n      - run: scripts/release-notes-generate.sh\n",
+            ),
     ] {
         assert!(
             check(Path::new("."), &invalid)
@@ -53,6 +62,21 @@ fn release_notes_helper_requires_prior_cache_setup() {
             "{invalid}"
         );
     }
+}
+
+#[test]
+fn release_notes_helper_accepts_any_earlier_covering_toolchain() {
+    let source = VALID
+        .replace("metadata:", "release_notes:")
+        .replace(
+            "cargo fmt --all --check",
+            "scripts/release-notes-generate.sh",
+        )
+        .replace(
+            "    steps:\n",
+            "    steps:\n      - uses: dtolnay/rust-toolchain@pin\n        if: github.event_name == 'push'\n      - uses: dtolnay/rust-toolchain@pin\n",
+        );
+    check(Path::new("."), &source).unwrap();
 }
 
 #[test]

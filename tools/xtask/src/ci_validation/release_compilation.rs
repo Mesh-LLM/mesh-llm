@@ -136,23 +136,22 @@ fn check_setup(document: &Node, job: &Node, callers: &[(usize, &Node)]) -> DynRe
 }
 
 fn check_notes_toolchain(job: &Node) -> DynResult<()> {
-    let Some(helper) = steps(job)
-        .iter()
-        .position(|step| executable_run(step).contains("scripts/release-notes-generate.sh"))
-    else {
-        return Ok(());
-    };
-    let caller = &steps(job)[helper];
-    let Some(toolchain) = steps(job)[..helper].iter().find(|step| {
-        field(step, "uses").is_some_and(|uses| uses.starts_with("dtolnay/rust-toolchain@"))
-    }) else {
-        return Err("release notes helper runs before the pinned Rust toolchain".into());
-    };
-    if suppressed(toolchain) || !covers(toolchain, caller) {
-        return Err(
-            "pinned Rust toolchain condition or failure suppression does not cover the release notes helper"
-                .into(),
-        );
+    let job_steps = steps(job);
+    for (helper, caller) in job_steps.iter().enumerate() {
+        if !executable_run(caller).contains("scripts/release-notes-generate.sh") {
+            continue;
+        }
+        let covered = job_steps[..helper].iter().any(|step| {
+            field(step, "uses").is_some_and(|uses| uses.starts_with("dtolnay/rust-toolchain@"))
+                && !suppressed(step)
+                && covers(step, caller)
+        });
+        if !covered {
+            return Err(
+                "release notes helper has no earlier pinned Rust toolchain that covers its condition without suppressing failure"
+                    .into(),
+            );
+        }
     }
     Ok(())
 }
