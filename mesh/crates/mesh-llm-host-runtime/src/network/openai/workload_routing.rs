@@ -116,6 +116,58 @@ pub(super) async fn ingress_candidates(
     eligible_targets(node, model, path, &remote).await
 }
 
+/// Every placement of `model` this node may dispatch to: its own eligible
+/// targets first, then every eligible peer. Automatic routing draws its host
+/// from this set so a request that arrived at a slow host can still land on a
+/// faster peer in proportion to capacity; a named model keeps the local-first
+/// [`ingress_candidates`] contract.
+pub(super) async fn mesh_candidates(
+    node: &mesh::Node,
+    model: &str,
+    path: &str,
+    targets: &crate::inference::election::ModelTargets,
+) -> Vec<InferenceTarget> {
+    let mut candidates = eligible_targets(node, model, path, &targets.candidates(model))
+        .await
+        .into_iter()
+        .filter(|target| !matches!(target, InferenceTarget::None))
+        .collect::<Vec<_>>();
+    let remote = node
+        .hosts_for_model(model)
+        .await
+        .into_iter()
+        .map(InferenceTarget::Remote)
+        .filter(|target| !candidates.contains(target))
+        .collect::<Vec<_>>();
+    candidates.extend(eligible_targets(node, model, path, &remote).await);
+    candidates
+}
+
+/// A peer advertises a model under its public id while this node serves the
+/// same model under its runtime identity, so the automatic candidate list sees
+/// one model twice: the identity (whose targets are local) and the public id
+/// (whose targets are the peers). Drawing between the two names decided the
+/// host before the host picker ran (lab, 2026-11-08: 10/10 identity picks went
+/// local, 10/10 public-id picks went remote, two-choice never ran). Fold the
+/// public id into the identity so the model is one candidate whose placements
+/// cover every host.
+pub(super) fn is_public_alias_of_local_model(
+    name: &str,
+    models: &[String],
+    descriptors: &[ServedModelDescriptor],
+) -> bool {
+    if descriptors
+        .iter()
+        .any(|descriptor| descriptor.identity.model_name == name)
+    {
+        return false;
+    }
+    descriptors.iter().any(|descriptor| {
+        descriptor_matches_routable_name(descriptor, name)
+            && models.contains(&descriptor.identity.model_name)
+    })
+}
+
 /// Preserve absent legacy chat metadata, but never authorize an unknown class.
 fn class_is_compatible(
     requested: ModelWorkloadClass,
@@ -314,6 +366,7 @@ pub(super) async fn routing_candidates<'a>(
     let mut candidates = Vec::with_capacity(models.len());
     for model in models
         .iter()
+        .filter(|model| !is_public_alias_of_local_model(model, models, descriptors))
         .filter(|model| model_satisfies_request(model, path, descriptors))
     {
         let descriptor = descriptor_for_request(model, path, descriptors);

@@ -35,9 +35,12 @@ pub(crate) struct RoutingReservations {
 }
 
 impl RoutingReservations {
-    /// Choose and reserve a target in one critical section. Existing affinity
-    /// stays authoritative; otherwise the current picker result is the stable
-    /// tie-breaker among targets with the fewest local in-flight requests.
+    /// Choose and reserve a target in one critical section. A pinned
+    /// `preferred` (`affinity_applied`: session/cache affinity, or a
+    /// [`Self::two_choice`] draw that already weighed load per unit of
+    /// capacity) is reserved as-is; otherwise the current picker result is the
+    /// stable tie-breaker among targets with the fewest local in-flight
+    /// requests.
     ///
     /// `spread_limit` bounds spreading to the leading `candidates[..limit]`,
     /// which callers set to the run of throughput-equivalent targets at the
@@ -180,10 +183,8 @@ impl RoutingReservations {
         };
         // Load is in-flight requests per unit of capacity, not a raw count: a
         // host measured at 3× the speed is only "busier" once it holds more
-        // than 3× the requests. Comparing raw counts equalised in-flight
-        // across unequal hosts, which pulled a synchronized burst toward a
-        // 50/50 split regardless of capacity (lab, 2026-11-08: a 3:1 pair
-        // settled at 62–69 % on the fast host instead of ~75 %). Equal
+        // than 3× the requests, so a synchronized burst keeps its capacity
+        // share instead of equalising in-flight across unequal hosts. Equal
         // capacities reduce to the plain count comparison.
         let relative_load = |index: usize| {
             let capacity = placements[index].capacity;
@@ -377,6 +378,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn pinned_two_choice_pick_survives_reservation() {
+        // Same rank class, 3:1 capacity, fast host holding 2 against the slow
+        // host's 1: per unit of capacity the fast host is the lighter one, so
+        // the draw keeps it. Reserving that pick within an equivalent prefix
+        // of 2 must not hand it to the slow host for having the fewer raw
+        // in-flight requests; only an unpinned round-robin default spreads.
+        let targets = vec![local(1), local(2)];
+        let weight = |target: &election::InferenceTarget| match target {
+            election::InferenceTarget::Local(1) => placement(75.0, None, 0),
+            _ => placement(25.0, None, 0),
+        };
+        let reservations = RoutingReservations::default();
+        let held = vec![
+            reservations.reserve("model", &targets, 2, &targets[0], true),
+            reservations.reserve("model", &targets, 2, &targets[0], true),
+            reservations.reserve("model", &targets, 2, &targets[1], true),
+        ];
+        for seed in 0..200u64 {
+            let picked = reservations
+                .two_choice("model", &targets, weight, seed.wrapping_mul(0x9E37_79B9))
+                .expect("pick");
+            assert_eq!(picked, targets[0], "seed {seed}");
+            let (reserved, guard) = reservations
+                .reserve("model", &targets, 2, &picked, true)
+                .expect("reserve");
+            assert_eq!(reserved, picked, "pinned pick re-spread at seed {seed}");
+            drop(guard);
+        }
+        let (spread, _guard) = reservations
+            .reserve("model", &targets, 2, &targets[0], false)
+            .expect("reserve");
+        assert_eq!(
+            spread, targets[1],
+            "an unpinned default still spreads by raw count"
+        );
+        drop(held);
     }
 
     #[test]

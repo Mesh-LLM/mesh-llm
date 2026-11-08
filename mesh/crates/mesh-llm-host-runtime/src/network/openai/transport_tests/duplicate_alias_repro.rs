@@ -2,7 +2,7 @@
 use super::*;
 const INTERNAL: &str = "Falcon-H1-1.5B-Instruct-Q4_K_M";
 const PUBLIC: &str = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M";
-pub(super) fn duplicate_descriptor(model: &str) -> mesh::ServedModelDescriptor {
+pub(in crate::network::openai) fn duplicate_descriptor(model: &str) -> mesh::ServedModelDescriptor {
     mesh::ServedModelDescriptor {
         identity: mesh::ServedModelIdentity {
             model_name: model.to_owned(),

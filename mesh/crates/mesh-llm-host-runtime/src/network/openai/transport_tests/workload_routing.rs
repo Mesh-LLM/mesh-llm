@@ -82,6 +82,75 @@ async fn explicit_ingress_falls_back_to_capable_remote_when_local_workload_is_in
 }
 
 #[tokio::test]
+/// Automatic routing draws its host over every placement: the local target
+/// stays first and every capable peer follows, so a request that reached the
+/// slow host can still land on a faster peer; the named-model contract stays
+/// local-first.
+async fn mesh_candidates_cover_local_and_remote_placements() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    let remote = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    node.set_served_model_descriptors(vec![descriptor(
+        Some(ModelWorkloadClass::CausalGeneration),
+        false,
+    )])
+    .await;
+    let mut targets = election::ModelTargets::default();
+    targets
+        .targets
+        .insert(MODEL.into(), vec![election::InferenceTarget::Local(9337)]);
+    let path = "/v1/chat/completions";
+    assert_eq!(
+        workload_routing::mesh_candidates(&node, MODEL, path, &targets).await,
+        vec![
+            election::InferenceTarget::Local(9337),
+            election::InferenceTarget::Remote(remote)
+        ]
+    );
+    assert_eq!(
+        workload_routing::ingress_candidates(&node, MODEL, path, &targets).await,
+        vec![election::InferenceTarget::Local(9337)]
+    );
+}
+
+#[test]
+/// A peer advertises the model this node serves under its public id, so the
+/// automatic candidate list would hold the same model twice: the identity
+/// (local targets) and the public id (peer targets). The public id folds into
+/// the identity; a public id with no local identity in the list, and a second
+/// distinct identity, stay separate candidates.
+fn public_alias_of_a_local_model_folds_into_its_identity() {
+    use super::durable_artifacts::duplicate_alias_repro::duplicate_descriptor;
+    let identity = "Falcon-H1-1.5B-Instruct-Q4_K_M".to_string();
+    let public = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M".to_string();
+    let other = "Qwen2.5-3B-Instruct-Q6_K".to_string();
+    let descriptors = vec![duplicate_descriptor(&identity)];
+    let both = vec![identity.clone(), public.clone(), other.clone()];
+    assert!(workload_routing::is_public_alias_of_local_model(
+        &public,
+        &both,
+        &descriptors
+    ));
+    assert!(!workload_routing::is_public_alias_of_local_model(
+        &identity,
+        &both,
+        &descriptors
+    ));
+    assert!(!workload_routing::is_public_alias_of_local_model(
+        &other,
+        &both,
+        &descriptors
+    ));
+    let public_only = vec![public.clone(), other];
+    assert!(!workload_routing::is_public_alias_of_local_model(
+        &public,
+        &public_only,
+        &descriptors
+    ));
+}
+
+#[tokio::test]
 /// A user tag on stateless work must not create generation-session affinity.
 async fn stateless_user_metadata_does_not_disable_replica_reservation_spreading() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)

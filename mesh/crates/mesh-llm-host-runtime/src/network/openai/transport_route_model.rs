@@ -166,6 +166,16 @@ async fn execution_candidates(
             .collect::<Vec<_>>();
         super::super::workload_routing::eligible_targets(node, model, &request.client_path, &local)
             .await
+    } else if request
+        .model_name
+        .as_deref()
+        .is_none_or(super::super::automatic::is_directive)
+    {
+        // Automatic routing chose the model; the host is drawn over every
+        // placement, this node's and its peers', so capacity decides the
+        // split instead of whichever node the request happened to reach.
+        super::super::workload_routing::mesh_candidates(node, model, &request.client_path, targets)
+            .await
     } else {
         super::super::workload_routing::ingress_candidates(
             node,
@@ -501,6 +511,7 @@ fn select_and_reserve_model_route_with_health(
     // No affinity: replace the round-robin default with the two-choice draw
     // (capacity × locality weighted, fewer local in-flight wins) so a faster
     // or nearer replica carries proportionally more of the new sessions.
+    let mut pinned = selection.affinity_applied;
     if !selection.affinity_applied
         && let Some(target) = affinity.two_choice_target(model, &ordered, |target| {
             ranked
@@ -511,6 +522,9 @@ fn select_and_reserve_model_route_with_health(
         })
     {
         selection.target = target;
+        // The draw already weighed load per unit of capacity; the
+        // reservation must not re-spread it by raw in-flight count.
+        pinned = true;
     }
     // Health policy can remove or reorder candidates, so the original
     // equivalent run can shrink or disappear. Never let its old length admit
@@ -519,13 +533,8 @@ fn select_and_reserve_model_route_with_health(
         .iter()
         .take_while(|candidate| ranked.ordered[..ranked.equivalent_prefix].contains(candidate))
         .count();
-    let (target, reservation) = affinity.reserve_route(
-        model,
-        &ordered,
-        spread_limit,
-        &selection.target,
-        selection.affinity_applied,
-    )?;
+    let (target, reservation) =
+        affinity.reserve_route(model, &ordered, spread_limit, &selection.target, pinned)?;
     selection.target = target;
     move_target_first(&mut ordered, &selection.target);
     Some(ReservedModelRoute {

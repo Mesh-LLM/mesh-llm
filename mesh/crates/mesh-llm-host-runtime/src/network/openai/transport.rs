@@ -899,13 +899,11 @@ fn reserve_mesh_request_target(
                 _ => PlacementWeight::unmeasured(),
             })?
         };
-        let (selected, reservation) = affinity.reserve_route(
-            model,
-            &candidates,
-            plan.equivalent_hosts,
-            &preferred,
-            plan.affinity_applied,
-        )?;
+        // Affinity pins its host; so does the two-choice draw, which already
+        // weighed load per unit of capacity and must not be re-spread by the
+        // reservation's raw in-flight scan.
+        let (selected, reservation) =
+            affinity.reserve_route(model, &candidates, plan.equivalent_hosts, &preferred, true)?;
         if let election::InferenceTarget::Remote(selected_host) = selected {
             move_target_first(&mut target_hosts, &selected_host);
         }
