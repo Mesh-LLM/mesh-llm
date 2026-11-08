@@ -13,6 +13,8 @@ OpenAI-compatible API at `http://localhost:9337/v1`. Start one node, add more
 nodes later, and let the mesh decide whether a model runs locally, routes to a
 peer, or uses Skippy stage splits for models that are too large for one box.
 
+[![LFX Health Score](https://insights.linuxfoundation.org/api/badge/health-score?project=mesh-llm-mesh-llm)](https://insights.linuxfoundation.org/project/mesh-llm-mesh-llm)
+
 ## Mesh and standalone Skippy
 
 [Skippy](skippy/README.md) owns model management, native inference, split
