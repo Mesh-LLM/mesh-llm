@@ -105,6 +105,45 @@ pub(crate) fn placement_weight(tps: Option<f64>, samples: u64) -> f64 {
     }
 }
 
+/// What the two-choice host draw knows about one target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlacementWeight {
+    /// Capacity draw weight ([`placement_weight`]).
+    pub(crate) capacity: f64,
+    /// Measured RTT to the target; `Some(0)` for local, `None` when unknown.
+    pub(crate) rtt_ms: Option<u32>,
+    /// Dense rank class in the candidate order: `0` is the best class, and
+    /// targets sharing a class are measurement-equivalent (same context tier,
+    /// same throughput rank key). Position in a list is not a rank: equivalent
+    /// targets keep stable input order, so pressure and locality may move a
+    /// request between any two targets of one class but never to a higher
+    /// class number.
+    pub(crate) rank: usize,
+}
+
+impl PlacementWeight {
+    /// A target the ranking never saw: neutral capacity, unknown distance,
+    /// and the worst rank class, so pressure can move a request off it but
+    /// never onto it ahead of a target the ranking did measure.
+    pub(crate) fn unmeasured() -> Self {
+        Self {
+            capacity: placement_weight(None, 0),
+            rtt_ms: None,
+            rank: usize::MAX,
+        }
+    }
+
+    /// Capacity scaled by the bounded locality tiebreak.
+    pub(crate) fn draw_weight(&self) -> f64 {
+        self.capacity * locality_factor(self.rtt_ms)
+    }
+
+    /// Below the material locality gap (factor < 0.75, about >175 ms RTT).
+    pub(crate) fn is_far(&self) -> bool {
+        locality_factor(self.rtt_ms) < 0.75
+    }
+}
+
 /// Weight of a target in the two-choice host draw: capacity scaled by distance.
 /// Latency is a tiebreak factor only (direct/≤50 ms ×1 … ≥300 ms ×0.5, never 0):
 /// LLM latency is dominated by generation, and a "nearest first" primary key

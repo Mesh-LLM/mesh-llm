@@ -124,43 +124,77 @@ fn sort_ranked_targets<T>(targets: &mut [RankedTarget<T>]) {
 pub(super) struct RankedCandidates<T> {
     pub(super) ordered: Vec<T>,
     pub(super) equivalent_prefix: usize,
-    /// Per-target draw inputs for the two-choice host pick.
+    /// Per-target draw inputs for the two-choice host pick, including each
+    /// target's dense rank class in `ordered`.
     pub(super) placements: std::collections::HashMap<T, PlacementWeight>,
 }
 
-/// What the two-choice host draw knows about one target.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PlacementWeight {
-    /// Capacity draw weight ([`crate::network::router::placement_weight`]).
-    pub(crate) capacity: f64,
-    /// Measured RTT to the target; `Some(0)` for local, `None` when unknown.
-    pub(crate) rtt_ms: Option<u32>,
-}
+use crate::network::router::PlacementWeight;
 
-impl PlacementWeight {
-    /// Capacity scaled by the bounded locality tiebreak.
-    pub(crate) fn draw_weight(&self) -> f64 {
-        self.capacity * crate::network::router::locality_factor(self.rtt_ms)
+#[cfg(test)]
+impl<T: Clone + std::hash::Hash + Eq> RankedCandidates<T> {
+    /// Fixture whose leading `equivalent_prefix` targets share rank class 0
+    /// and every later target is strictly worse than the one before it, all
+    /// at neutral capacity.
+    pub(crate) fn with_equivalent_prefix(ordered: Vec<T>, equivalent_prefix: usize) -> Self {
+        let placements = ordered
+            .iter()
+            .enumerate()
+            .map(|(index, target)| {
+                (
+                    target.clone(),
+                    PlacementWeight {
+                        rank: (index + 1).saturating_sub(equivalent_prefix),
+                        ..PlacementWeight::unmeasured()
+                    },
+                )
+            })
+            .collect();
+        Self {
+            ordered,
+            equivalent_prefix,
+            placements,
+        }
     }
 }
 
-fn placement_weight_for(throughput: Option<TargetThroughputRank>) -> PlacementWeight {
+fn placement_weight_for(throughput: Option<TargetThroughputRank>, rank: usize) -> PlacementWeight {
     PlacementWeight {
         capacity: crate::network::router::placement_weight(
             throughput.map(|rank| rank.avg_tokens_per_second_milli as f64 / 1000.0),
             throughput.map(|rank| rank.throughput_samples).unwrap_or(0),
         ),
         rtt_ms: None,
+        rank,
     }
 }
 
+/// Dense rank classes over consecutive tiers of sorted targets: targets with
+/// equal throughput rank keys inside one tier share a class; every tier
+/// boundary and every key change starts the next class.
 fn placements_for<T: Clone + std::hash::Hash + Eq>(
-    candidates: &[(T, Option<u32>, Option<TargetThroughputRank>)],
+    tiers: &[&[RankedTarget<T>]],
 ) -> std::collections::HashMap<T, PlacementWeight> {
-    candidates
-        .iter()
-        .map(|(candidate, _, throughput)| (candidate.clone(), placement_weight_for(*throughput)))
-        .collect()
+    let mut placements = std::collections::HashMap::new();
+    let mut rank = 0usize;
+    for tier in tiers {
+        let mut previous_key: Option<ThroughputRankKey> = None;
+        for target in tier.iter() {
+            let key = target_throughput_rank_key(target.throughput);
+            if previous_key.is_some_and(|previous| previous != key) {
+                rank += 1;
+            }
+            previous_key = Some(key);
+            placements.insert(
+                target.candidate.clone(),
+                placement_weight_for(target.throughput, rank),
+            );
+        }
+        if previous_key.is_some() {
+            rank += 1;
+        }
+    }
+    placements
 }
 
 fn equivalent_prefix_len<T>(targets: &[RankedTarget<T>]) -> usize {
@@ -178,7 +212,6 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone + std::hash::Ha
     candidates: &[(T, Option<u32>, Option<TargetThroughputRank>)],
     required_tokens: Option<u32>,
 ) -> RankedCandidates<T> {
-    let placements = placements_for(candidates);
     let ranked = candidates
         .iter()
         .enumerate()
@@ -196,6 +229,7 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone + std::hash::Ha
         let mut ranked = ranked;
         sort_ranked_targets(&mut ranked);
         let equivalent_prefix = equivalent_prefix_len(&ranked);
+        let placements = placements_for(&[ranked.as_slice()]);
         return RankedCandidates {
             ordered: ranked.into_iter().map(|ranked| ranked.candidate).collect(),
             equivalent_prefix,
@@ -217,7 +251,7 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone + std::hash::Ha
         return RankedCandidates {
             ordered: Vec::new(),
             equivalent_prefix: 0,
-            placements,
+            placements: Default::default(),
         };
     }
 
@@ -228,6 +262,7 @@ pub(super) fn rank_candidates_by_context_and_throughput<T: Clone + std::hash::Ha
     } else {
         equivalent_prefix_len(&adequate)
     };
+    let placements = placements_for(&[adequate.as_slice(), unknown.as_slice()]);
     RankedCandidates {
         ordered: adequate
             .into_iter()
@@ -263,6 +298,25 @@ fn local_target_throughput_rank(
     };
     node.routing_metrics()
         .throughput_hint_for_target(model, attempt_target)
+        .map(|hint| TargetThroughputRank {
+            avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
+            throughput_samples: hint.throughput_samples,
+            local_observation: true,
+        })
+}
+
+/// This host's own serving throughput for `model`: the same local-target-only
+/// evidence it advertises to peers (`advertisable_model_throughput`), never the
+/// model-wide aggregate that also counts what this node observed while
+/// routing to other hosts.
+pub(super) fn local_serving_throughput_rank(
+    node: &mesh::Node,
+    model: &str,
+) -> Option<TargetThroughputRank> {
+    node.routing_metrics()
+        .advertisable_model_throughput(std::slice::from_ref(&model.to_string()))
+        .into_iter()
+        .find(|hint| hint.model_name == model)
         .map(|hint| TargetThroughputRank {
             avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
             throughput_samples: hint.throughput_samples,
@@ -631,6 +685,37 @@ mod tests {
             throughput_samples: 4,
             local_observation: false,
         })
+    }
+
+    #[test]
+    fn rank_classes_follow_measurements_not_positions() {
+        // Two tied fast targets share class 0 whatever their input order; the
+        // slower one is class 1; the unknown-context tier starts a new class
+        // even when its throughput ties the best adequate target; two
+        // unmeasured targets inside one tier share a class.
+        for order in [[0usize, 1, 2, 3, 4], [1, 0, 3, 2, 4]] {
+            let specs = [
+                ("fast-a", Some(8_192), throughput(40_000)),
+                ("fast-b", Some(8_192), throughput(40_000)),
+                ("slow", Some(8_192), throughput(10_000)),
+                ("unknown-ctx-fast", None, throughput(40_000)),
+                ("unknown-ctx-cold", None, None),
+            ];
+            let candidates: Vec<_> = order.iter().map(|index| specs[*index]).collect();
+            let ranked = rank_candidates_by_context_and_throughput(&candidates, Some(4_096));
+            let rank = |name: &str| ranked.placements[name].rank;
+            assert_eq!(rank("fast-a"), 0);
+            assert_eq!(rank("fast-b"), 0);
+            assert_eq!(rank("slow"), 1);
+            assert_eq!(rank("unknown-ctx-fast"), 2);
+            assert_eq!(rank("unknown-ctx-cold"), 3);
+            assert_eq!(ranked.equivalent_prefix, 2);
+            assert_eq!(ranked.ordered[2], "slow");
+        }
+        let cold = [("a", None, None), ("b", None, None)];
+        let ranked = rank_candidates_by_context_and_throughput(&cold, None);
+        assert_eq!(ranked.placements["a"].rank, 0);
+        assert_eq!(ranked.placements["b"].rank, 0);
     }
 
     #[test]

@@ -7,11 +7,7 @@ fn reservation_does_not_reintroduce_target_cooled_during_cache_lookup() {
     let affinity = AffinityRouter::with_config(true, true);
     let first = election::InferenceTarget::Local(9001);
     let second = election::InferenceTarget::Local(9002);
-    let ranked = RankedCandidates {
-        ordered: vec![first.clone(), second.clone()],
-        equivalent_prefix: 2,
-        placements: Default::default(),
-    };
+    let ranked = RankedCandidates::with_equivalent_prefix(vec![first.clone(), second.clone()], 2);
     let (_, pressure) = affinity
         .reserve_route("qwen", &ranked.ordered, 2, &second, true)
         .unwrap();
@@ -40,6 +36,60 @@ fn reservation_does_not_reintroduce_target_cooled_during_cache_lookup() {
 }
 
 #[test]
+fn equivalent_local_targets_route_around_the_busy_one_in_any_list_order() {
+    // Three equivalent targets; the busy one may sit in any slot, including
+    // the first. New sessions reach only the idle two, about evenly.
+    let targets: Vec<_> = (9001..=9003)
+        .map(election::InferenceTarget::Local)
+        .collect();
+    for busy_slot in 0..3 {
+        let affinity = AffinityRouter::new();
+        let ranked = RankedCandidates::with_equivalent_prefix(targets.clone(), 3);
+        let (_, held) = affinity
+            .reserve_route(
+                "qwen",
+                std::slice::from_ref(&targets[busy_slot]),
+                1,
+                &targets[busy_slot],
+                true,
+            )
+            .unwrap();
+        let mut counts = std::collections::HashMap::new();
+        for _ in 0..300 {
+            let route = select_and_reserve_model_route(
+                &election::ModelTargets::default(),
+                &ranked,
+                "qwen",
+                None,
+                &affinity,
+                None,
+            )
+            .unwrap();
+            assert_eq!(route.ordered[0], route.selection.target);
+            *counts
+                .entry(route.selection.target.clone())
+                .or_insert(0usize) += 1;
+        }
+        assert_eq!(
+            counts.get(&targets[busy_slot]),
+            None,
+            "busy slot {busy_slot} took new sessions: {counts:?}"
+        );
+        for (slot, target) in targets.iter().enumerate() {
+            if slot != busy_slot {
+                let count = counts.get(target).copied().unwrap_or(0);
+                assert!(
+                    (110..=190).contains(&count),
+                    "idle slot {slot} should take about half: {counts:?}"
+                );
+            }
+        }
+        drop(held);
+        assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+}
+
+#[test]
 fn refreshed_spread_window_does_not_admit_lower_ranked_fallback() {
     let first = election::InferenceTarget::Local(9001);
     let second = election::InferenceTarget::Local(9002);
@@ -47,11 +97,10 @@ fn refreshed_spread_window_does_not_admit_lower_ranked_fallback() {
     // Cover both a shortened equivalent run and one removed entirely.
     for equivalent_prefix in [2, 1] {
         let affinity = AffinityRouter::new();
-        let ranked = RankedCandidates {
-            ordered: vec![first.clone(), second.clone(), fallback.clone()],
+        let ranked = RankedCandidates::with_equivalent_prefix(
+            vec![first.clone(), second.clone(), fallback.clone()],
             equivalent_prefix,
-            placements: Default::default(),
-        };
+        );
         let (_, _pressure) = affinity
             .reserve_route("qwen", &ranked.ordered, 3, &second, true)
             .unwrap();
@@ -73,14 +122,13 @@ fn refreshed_spread_window_does_not_admit_lower_ranked_fallback() {
 #[test]
 fn refreshed_route_preserves_healthy_cache_and_session_affinity_under_pressure() {
     let affinity = AffinityRouter::with_config(true, true);
-    let ranked = RankedCandidates {
-        ordered: vec![
+    let ranked = RankedCandidates::with_equivalent_prefix(
+        vec![
             election::InferenceTarget::Local(9001),
             election::InferenceTarget::Local(9002),
         ],
-        equivalent_prefix: 2,
-        placements: Default::default(),
-    };
+        2,
+    );
     let body = serde_json::json!({"user": "same-session"});
     for (parsed_body, cache_target) in
         [(None, Some(ranked.ordered[0].clone())), (Some(&body), None)]
@@ -108,14 +156,13 @@ fn refreshed_route_preserves_healthy_cache_and_session_affinity_under_pressure()
 #[test]
 fn refreshed_route_keeps_all_cooling_availability_fallback() {
     let affinity = AffinityRouter::new();
-    let ranked = RankedCandidates {
-        ordered: vec![
+    let ranked = RankedCandidates::with_equivalent_prefix(
+        vec![
             election::InferenceTarget::Local(9001),
             election::InferenceTarget::Local(9002),
         ],
-        equivalent_prefix: 2,
-        placements: Default::default(),
-    };
+        2,
+    );
     for target in &ranked.ordered {
         affinity.record_target_outcome(Some("qwen"), target, TargetHealthOutcome::Timeout);
     }
@@ -138,11 +185,7 @@ fn empty_refreshed_route_does_not_reserve() {
     assert!(
         select_and_reserve_model_route(
             &election::ModelTargets::default(),
-            &RankedCandidates {
-                ordered: vec![],
-                equivalent_prefix: 0,
-                placements: Default::default(),
-            },
+            &RankedCandidates::with_equivalent_prefix(vec![], 0,),
             "qwen",
             None,
             &affinity,
@@ -807,11 +850,8 @@ async fn a_model_served_only_by_a_gated_replica_still_relays_the_402() {
 #[test]
 fn automatic_reservation_never_restores_all_cooling_placements() {
     let affinity = AffinityRouter::with_config(true, true);
-    let ranked = RankedCandidates {
-        ordered: vec![election::InferenceTarget::Local(9001)],
-        equivalent_prefix: 1,
-        placements: Default::default(),
-    };
+    let ranked =
+        RankedCandidates::with_equivalent_prefix(vec![election::InferenceTarget::Local(9001)], 1);
     // The candidate snapshot was healthy before the asynchronous cache lookup.
     assert_eq!(
         affinity.route_strict_eligible_candidates("qwen", &ranked.ordered),

@@ -336,31 +336,34 @@ pub(super) async fn routing_candidates<'a>(
     candidates
 }
 
-/// Sum of per-placement draw weights for `model`. A placement's weight comes
-/// from this node's own samples against that host when it has enough, else the
-/// host's gossiped throughput hint, else the neutral cold weight; a model with
-/// no visible placement keeps one neutral placement so it is still drawn.
+/// Sum of per-placement draw weights for `model`. The local placement weighs
+/// this host's own serving samples only (what it advertises to peers), so
+/// requests this node routed to other hosts never speed up or slow down its
+/// own weight; a remote placement weighs this node's own samples against that
+/// host when it has enough, else the host's gossiped throughput hint, else the
+/// neutral cold weight. A model with no visible placement keeps one neutral
+/// placement so it is still drawn.
 pub(super) async fn model_capacity(
     node: &mesh::Node,
     model: &str,
     placement: &crate::mesh::ModelPlacements,
 ) -> f64 {
     use crate::network::router::placement_weight;
-    let mut capacity = 0.0;
-    if placement.local {
-        let (tps, samples) = node
-            .routing_metrics()
-            .tps_for_model(model)
-            .map(|(tps, samples)| (Some(tps), samples))
-            .unwrap_or((None, 0));
-        capacity += placement_weight(tps, samples);
-    }
-    for peer in &placement.remote {
-        let rank = super::routing_rank::remote_target_throughput_rank(node, model, *peer).await;
-        capacity += placement_weight(
+    let weight_of = |rank: Option<super::routing_rank::TargetThroughputRank>| {
+        placement_weight(
             rank.map(|rank| rank.avg_tokens_per_second_milli as f64 / 1000.0),
             rank.map(|rank| rank.throughput_samples).unwrap_or(0),
-        );
+        )
+    };
+    let mut capacity = 0.0;
+    if placement.local {
+        capacity += weight_of(super::routing_rank::local_serving_throughput_rank(
+            node, model,
+        ));
+    }
+    for peer in &placement.remote {
+        capacity +=
+            weight_of(super::routing_rank::remote_target_throughput_rank(node, model, *peer).await);
     }
     if placement.local || !placement.remote.is_empty() {
         capacity

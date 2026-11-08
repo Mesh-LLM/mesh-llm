@@ -591,3 +591,71 @@ async fn routing_candidates_weight_local_plus_remote_as_two_placements() {
     assert_eq!(by_name(lone).replicas, 1);
     assert!((by_name(MODEL).capacity - 2.0 * by_name(lone).capacity).abs() < 1e-9);
 }
+
+/// Record `samples` successful attempts of `tokens` completion tokens over one
+/// second each, i.e. `tokens` tok/s, against `target`.
+fn record_throughput(
+    node: &mesh::Node,
+    target: &election::InferenceTarget,
+    tokens: u64,
+    samples: usize,
+) {
+    for _ in 0..samples {
+        node.record_inference_attempt(
+            Some(MODEL),
+            target,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            crate::network::metrics::AttemptOutcome::Success,
+            Some(tokens),
+        );
+    }
+}
+
+#[tokio::test]
+/// The local placement weighs only this host's own serving samples. Samples
+/// this node recorded while routing to a peer belong to that peer's
+/// placement; they neither inflate nor dilute the local weight.
+async fn local_placement_weight_uses_local_target_evidence_only() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    node.set_hosted_models(vec![MODEL.to_string()]).await;
+    let remote = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let models = vec![MODEL.to_string()];
+    let placement = node.placements_for_models(&models).await[MODEL].clone();
+    assert!(placement.local && placement.remote == vec![remote]);
+
+    // Only the remote has samples: the local host stays at the neutral cold
+    // weight instead of borrowing the peer's speed.
+    record_throughput(&node, &election::InferenceTarget::Remote(remote), 80, 3);
+    let capacity = workload_routing::model_capacity(&node, MODEL, &placement).await;
+    let neutral = crate::network::router::placement_weight(None, 0);
+    assert!(
+        (capacity - (neutral + 80.0)).abs() < 1e-9,
+        "remote-only samples: local must stay neutral, got {capacity}"
+    );
+
+    // Slow local host, fast peer, more peer samples than local ones: each
+    // placement weighs its own measured speed. The model-wide aggregate
+    // ((3·10 + 6·80) / 9 ≈ 56.7 per placement) would weigh the pair ~113.
+    record_throughput(&node, &election::InferenceTarget::Local(9001), 10, 3);
+    record_throughput(&node, &election::InferenceTarget::Remote(remote), 80, 3);
+    let capacity = workload_routing::model_capacity(&node, MODEL, &placement).await;
+    assert!(
+        (capacity - (10.0 + 80.0)).abs() < 1e-9,
+        "local 10 tok/s + remote 80 tok/s, got {capacity}"
+    );
+
+    // Local-only placement with a fast peer's samples on record for the same
+    // model: the local weight is still this host's own 10 tok/s.
+    let local_only = mesh::ModelPlacements {
+        local: true,
+        remote: Vec::new(),
+    };
+    let capacity = workload_routing::model_capacity(&node, MODEL, &local_only).await;
+    assert!(
+        (capacity - 10.0).abs() < 1e-9,
+        "local-only weight must be this host's own speed, got {capacity}"
+    );
+}

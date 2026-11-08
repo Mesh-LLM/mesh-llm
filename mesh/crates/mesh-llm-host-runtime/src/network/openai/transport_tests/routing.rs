@@ -17,12 +17,27 @@ fn mesh_request_plan_with_equivalents(
     target_hosts: Vec<iroh::EndpointId>,
     affinity_applied: bool,
 ) -> MeshRequestPlan {
+    let placements = target_hosts
+        .iter()
+        .enumerate()
+        .map(|(index, host)| {
+            (
+                *host,
+                PlacementWeight {
+                    // Leading `equivalent_hosts` share class 0; each later
+                    // host is strictly worse than the one before it.
+                    rank: (index + 1).saturating_sub(equivalent_hosts),
+                    ..PlacementWeight::unmeasured()
+                },
+            )
+        })
+        .collect();
     MeshRequestPlan {
         effective_model: Some(model.to_string()),
         auto_session_key: None,
         equivalent_hosts,
         target_hosts,
-        placements: Default::default(),
+        placements,
         affinity_applied,
     }
 }
@@ -276,12 +291,13 @@ fn mesh_plan_pressure_never_promotes_a_lower_throughput_ranked_host() {
     let fast = iroh::EndpointId::from(iroh::SecretKey::generate().public());
     let slow = iroh::EndpointId::from(iroh::SecretKey::generate().public());
     let mut plan = mesh_request_plan_with_equivalents("test", 1, vec![fast, slow], false);
-    let weight = |capacity: f64| PlacementWeight {
+    let weight = |capacity: f64, rank: usize| PlacementWeight {
         capacity,
         rtt_ms: None,
+        rank,
     };
-    plan.placements.insert(fast, weight(100.0));
-    plan.placements.insert(slow, weight(20.0));
+    plan.placements.insert(fast, weight(100.0, 0));
+    plan.placements.insert(slow, weight(20.0, 1));
     let affinity = AffinityRouter::new();
 
     let fast_target = election::InferenceTarget::Remote(fast);
@@ -309,6 +325,89 @@ fn mesh_plan_pressure_never_promotes_a_lower_throughput_ranked_host() {
     );
     drop(held_on_fast);
     assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+}
+
+#[test]
+fn mesh_plan_three_equivalent_hosts_route_around_the_busy_one_in_any_list_order() {
+    // Three measurement-equivalent hosts. Whichever list slot the host with a
+    // request in flight occupies — including the first — new sessions go to
+    // the two idle hosts and split between them; the busy host is never
+    // handed a new session while an equivalent idle one exists.
+    let hosts: Vec<_> = (0..3)
+        .map(|_| iroh::EndpointId::from(iroh::SecretKey::generate().public()))
+        .collect();
+    for busy_slot in 0..3 {
+        let plan = mesh_request_plan("test", hosts.clone(), false);
+        let affinity = AffinityRouter::new();
+        let busy = election::InferenceTarget::Remote(hosts[busy_slot]);
+        let (_, held) = affinity
+            .reserve_route("test", std::slice::from_ref(&busy), 1, &busy, true)
+            .expect("reservation on the busy host");
+        let mut first_counts = std::collections::HashMap::new();
+        for _ in 0..300 {
+            let (order, reservation) = reserve_mesh_request_target(&plan, &affinity);
+            *first_counts.entry(order[0]).or_insert(0usize) += 1;
+            drop(reservation);
+        }
+        assert_eq!(
+            first_counts.get(&hosts[busy_slot]),
+            None,
+            "busy host in slot {busy_slot} took new sessions: {first_counts:?}"
+        );
+        for (slot, host) in hosts.iter().enumerate() {
+            if slot != busy_slot {
+                let count = first_counts.get(host).copied().unwrap_or(0);
+                assert!(
+                    (110..=190).contains(&count),
+                    "idle slot {slot} should take about half: {first_counts:?}"
+                );
+            }
+        }
+        drop(held);
+        assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+}
+
+#[test]
+fn mesh_plan_near_host_wins_idle_ties_against_far_equivalents_in_any_list_order() {
+    // Equal capacity and rank; one host is on the LAN, two are relay-grade
+    // far. The near host wins every idle pair it is drawn into, so it carries
+    // most new sessions, while the far hosts still get their draws when they
+    // are paired with each other — in either list order.
+    let near = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let far_a = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let far_b = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    for order in [vec![near, far_a, far_b], vec![far_a, far_b, near]] {
+        let mut plan = mesh_request_plan("test", order, false);
+        for (host, rtt_ms) in [(near, 20), (far_a, 250), (far_b, 260)] {
+            plan.placements.insert(
+                host,
+                PlacementWeight {
+                    capacity: 50.0,
+                    rtt_ms: Some(rtt_ms),
+                    rank: 0,
+                },
+            );
+        }
+        let affinity = AffinityRouter::new();
+        let mut first_counts = std::collections::HashMap::new();
+        for _ in 0..600 {
+            let (order, reservation) = reserve_mesh_request_target(&plan, &affinity);
+            *first_counts.entry(order[0]).or_insert(0usize) += 1;
+            drop(reservation);
+        }
+        let near_share = first_counts.get(&near).copied().unwrap_or(0) as f64 / 600.0;
+        assert!(
+            (0.7..0.95).contains(&near_share),
+            "near host should win idle pairs, got {near_share}: {first_counts:?}"
+        );
+        for far in [far_a, far_b] {
+            assert!(
+                first_counts.get(&far).copied().unwrap_or(0) > 0,
+                "far hosts keep a share of the draws: {first_counts:?}"
+            );
+        }
+    }
 }
 
 #[test]

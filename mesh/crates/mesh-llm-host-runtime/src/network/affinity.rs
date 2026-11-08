@@ -173,7 +173,7 @@ impl AffinityRouter {
         &self,
         model: &str,
         candidates: &[election::InferenceTarget],
-        weight_of: impl Fn(&election::InferenceTarget) -> (f64, Option<u32>),
+        weight_of: impl Fn(&election::InferenceTarget) -> crate::network::router::PlacementWeight,
     ) -> Option<election::InferenceTarget> {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

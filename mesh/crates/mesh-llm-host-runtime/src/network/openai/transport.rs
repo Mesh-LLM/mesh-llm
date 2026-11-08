@@ -41,9 +41,9 @@ use super::response::{
 #[cfg(test)]
 use super::routing_rank::order_remote_hosts_by_context;
 use super::routing_rank::{
-    PlacementWeight, cached_auto_model_satisfies_media_requirements, move_target_first,
-    rank_remote_hosts_by_context,
+    cached_auto_model_satisfies_media_requirements, move_target_first, rank_remote_hosts_by_context,
 };
+use crate::network::router::PlacementWeight;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 
@@ -894,9 +894,9 @@ fn reserve_mesh_request_target(
                 election::InferenceTarget::Remote(host) => plan
                     .placements
                     .get(host)
-                    .map(|placement| (placement.draw_weight(), placement.rtt_ms))
-                    .unwrap_or((1.0, None)),
-                _ => (1.0, None),
+                    .copied()
+                    .unwrap_or_else(PlacementWeight::unmeasured),
+                _ => PlacementWeight::unmeasured(),
             })?
         };
         let (selected, reservation) = affinity.reserve_route(

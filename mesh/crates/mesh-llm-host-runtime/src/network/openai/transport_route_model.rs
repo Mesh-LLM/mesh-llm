@@ -4,6 +4,7 @@ mod exhaustion;
 use super::*;
 use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_context};
 use crate::network::reservations::RoutingReservation;
+use crate::network::router::PlacementWeight;
 
 pub(crate) struct RouteModelRequestContext<'a> {
     /// Peer ingress may execute local targets only, never discover a fallback peer.
@@ -505,8 +506,8 @@ fn select_and_reserve_model_route_with_health(
             ranked
                 .placements
                 .get(target)
-                .map(|placement| (placement.draw_weight(), placement.rtt_ms))
-                .unwrap_or((1.0, None))
+                .copied()
+                .unwrap_or_else(PlacementWeight::unmeasured)
         })
     {
         selection.target = target;
