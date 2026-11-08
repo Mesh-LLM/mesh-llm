@@ -201,6 +201,19 @@ fn linux_x86_64_default_pins_a_sandy_bridge_compatible_isa_in_configure_and_stam
     }
 }
 #[test]
+fn linux_x86_64_cmake_false_native_value_pins_the_portable_isa_baseline() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .env("LLAMA_STAGE_GGML_NATIVE", "FALSE")
+            .output()
+            .unwrap(),
+    );
+    assert!(fixture.log().contains("-DGGML_SSE42=ON"));
+    assert!(fixture.log().contains("-DGGML_AVX2=OFF"));
+}
+#[test]
 fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
     let fixture = Fixture::new(true);
     success(
@@ -211,7 +224,21 @@ fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
             .unwrap(),
     );
     assert!(fixture.log().contains("-DGGML_NATIVE=ON"));
-    assert!(!fixture.log().contains("-DGGML_AVX2=OFF"));
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(!fixture.log().contains(argument), "unexpected portable ISA argument {argument}");
+    }
 }
 #[test]
 fn linux_non_x86_64_build_does_not_receive_x86_isa_flags() {
@@ -223,7 +250,21 @@ fn linux_non_x86_64_build_does_not_receive_x86_isa_flags() {
             .output()
             .unwrap(),
     );
-    assert!(!fixture.log().contains("-DGGML_AVX2=OFF"));
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(!fixture.log().contains(argument), "unexpected x86 ISA argument {argument}");
+    }
 }
 #[test]
 fn cuda_enables_graph_capture() {

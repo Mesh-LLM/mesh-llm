@@ -289,8 +289,8 @@ CMAKE_ARGS=(
   -DMTMD_VIDEO=OFF
 )
 if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
-  case "$LLAMA_GGML_NATIVE" in
-    OFF|off|0)
+  case "${LLAMA_GGML_NATIVE^^}" in
+    OFF|NO|FALSE|N|0|IGNORE|NOTFOUND|*-NOTFOUND|'')
       # The distributed Linux runtime must not inherit AVX2-class flags from
       # its build host. This AVX baseline runs on Sandy Bridge CPUs such as the
       # i7-2600K while keeping the CPU path usable without native tuning.
