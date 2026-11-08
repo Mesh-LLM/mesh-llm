@@ -447,6 +447,8 @@ it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
+Bundle-backed native builds inspect parity against the admitted exact candidate;
+the controller parity inventory checks only the frozen selected source.
 
 The family matrix is submitted in ascending estimated model bytes, with family
 name breaking ties. Balanced shard membership remains unchanged. This puts
