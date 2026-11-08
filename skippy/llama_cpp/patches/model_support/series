@@ -13,3 +13,4 @@
 0013-models-expose-metis16-delegated-pass-layers.patch
 0014-models-support-kolibri-biased-logit-sigmoid-routing.patch
 0015-tests-model-kolibri-biased-logit-router-fixture.patch
+0016-models-admit-legacy-clover-shared-expert-metadata.patch

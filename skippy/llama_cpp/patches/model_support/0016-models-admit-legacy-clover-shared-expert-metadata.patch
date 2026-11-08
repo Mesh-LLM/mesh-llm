@@ -1,0 +1,43 @@
+From 6d097bf6cba4ae85b8d93ec19175f32913c4264c Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 03:18:41 +1100
+Subject: [PATCH] models: admit legacy Clover shared expert metadata
+
+---
+ src/models/clover-moe.cpp  | 4 +++-
+ tests/test-llama-archs.cpp | 4 +++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/models/clover-moe.cpp b/src/models/clover-moe.cpp
+index 6adfda85f..f42a63a41 100644
+--- a/src/models/clover-moe.cpp
++++ b/src/models/clover-moe.cpp
+@@ -7,7 +7,9 @@ void llama_model_clover_moe::load_arch_hparams(llama_model_loader & ml) {
+     }
+ 
+     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
+-    ml.get_key(LLM_KV_EXPERT_SHARED_COUNT, hparams.n_expert_shared);
++    // Early Clover GGUFs carry the shared expert tensors and width but omit the count.
++    hparams.n_expert_shared = 1;
++    ml.get_key(LLM_KV_EXPERT_SHARED_COUNT, hparams.n_expert_shared, false);
+     if (hparams.n_expert_shared > 0) {
+         ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
+     }
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 5e2c717c7..658a9932e 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -792,7 +792,9 @@ static gguf_context_ptr get_gguf_ctx(
+         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
+         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
+         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
+-        ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
++        if (arch != LLM_ARCH_CLOVER_MOE) {
++            ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT, uint32_t(1));
++        }
+ 
+         uint32_t gating_func = 2;
+         switch (arch) {
+-- 
+2.56.0
+
