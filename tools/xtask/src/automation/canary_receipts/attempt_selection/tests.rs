@@ -44,6 +44,80 @@ fn selected(result: &str, state: &str) -> Value {
     value
 }
 #[test]
+fn recovered_same_candidate_retry_skips_verification_and_can_publish() {
+    let mut repair = green("failure", 'a');
+    repair["outputs"]["retry_recovered"] = json!("true");
+    let skipped = json!({"result":"skipped","outputs":{}});
+    let decision = attempt(true, repair.clone(), skipped.clone()).unwrap();
+    assert_eq!(decision["state"], "green");
+    assert_eq!(decision["package"], "producer-package");
+    let value = json!({
+        "repair_1":repair, "verify_1":skipped,
+        "attempt_1":{"result":"success","outputs":decision}
+    });
+    assert_eq!(
+        final_outputs(
+            true,
+            true,
+            &"c".repeat(40),
+            JobResult::Success,
+            value.clone()
+        )
+        .unwrap()["publish"],
+        "true"
+    );
+    let attempts = decode(&value.to_string()).unwrap();
+    assert_eq!(
+        select_final(
+            true,
+            false,
+            &"a".repeat(40),
+            JobResult::Success,
+            &attempts,
+            true
+        )
+        .unwrap()
+        .outputs()["publish"],
+        "true"
+    );
+}
+
+#[test]
+fn skipped_verification_requires_complete_recovery_and_valid_candidate_identity() {
+    let skipped = json!({"result":"skipped","outputs":{}});
+    for marker in ["", "false"] {
+        let mut repair = green("failure", 'a');
+        repair["outputs"]["retry_recovered"] = json!(marker);
+        assert_eq!(
+            attempt(true, repair, skipped.clone()).unwrap()["state"],
+            "failed"
+        );
+    }
+    let mut repair = green("failure", 'a');
+    repair["outputs"]["retry_recovered"] = json!("true");
+    for key in ["package", "identity", "head", "branch"] {
+        let mut invalid = repair.clone();
+        invalid["outputs"][key] = json!("");
+        assert!(attempt(true, invalid, skipped.clone()).is_err(), "{key}");
+    }
+    for (key, value) in [
+        ("green", "false"),
+        ("repairable", "true"),
+        ("retry_recovered", "TRUE"),
+    ] {
+        let mut invalid = repair.clone();
+        invalid["outputs"][key] = json!(value);
+        assert!(attempt(true, invalid, skipped.clone()).is_err(), "{key}");
+    }
+    for result in ["failure", "cancelled"] {
+        assert_eq!(
+            attempt(true, repair.clone(), json!({"result":result,"outputs":{}})).unwrap()["state"],
+            "failed"
+        );
+    }
+}
+
+#[test]
 fn reconciled_green_survives_earlier_failed_nested_jobs_and_uses_verifier_identity() {
     let mut verified = green("failure", 'a');
     verified["outputs"]["package"] = json!("independent-package");
