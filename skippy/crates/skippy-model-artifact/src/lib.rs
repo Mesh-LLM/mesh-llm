@@ -7,6 +7,24 @@ pub mod selection;
 
 use std::path::Path;
 
+/// Parses `https://huggingface.co/<owner>/<repo>/resolve/<rev>/<file>` (https or http).
+/// Rejects any empty part and a repo without an owner.
+pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
+    let tail = url
+        .strip_prefix("https://huggingface.co/")
+        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
+    let (repo, rest) = tail.split_once("/resolve/")?;
+    let (owner, name) = repo.split_once('/')?;
+    let (revision, file) = rest.split_once('/')?;
+    if [owner, name, revision, file]
+        .iter()
+        .any(|part| part.is_empty())
+    {
+        return None;
+    }
+    Some((repo, Some(revision), file))
+}
+
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -639,5 +657,38 @@ mod tests {
             error.to_string(),
             "no model artifact matching selector 'Q5_K_M' in repository"
         );
+    }
+}
+
+#[cfg(test)]
+mod hf_resolve_url_tests {
+    use super::parse_hf_resolve_url_parts;
+
+    #[test]
+    fn parses_https_and_http_urls() {
+        let expected = Some(("org/repo", Some("main"), "dir/m.gguf"));
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co/org/repo/resolve/main/dir/m.gguf"),
+            expected
+        );
+        assert_eq!(
+            parse_hf_resolve_url_parts("http://huggingface.co/org/repo/resolve/main/dir/m.gguf"),
+            expected
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_urls() {
+        for url in [
+            "https://huggingface.co/org/repo/resolve/main/",
+            "https://huggingface.co/org/repo/resolve/main",
+            "https://huggingface.co/org/repo/resolve//m.gguf",
+            "https://huggingface.co/gpt2/resolve/main/m.gguf",
+            "https://huggingface.co//repo/resolve/main/m.gguf",
+            "https://huggingface.co/org//resolve/main/m.gguf",
+            "https://example.com/org/repo/resolve/main/m.gguf",
+        ] {
+            assert_eq!(parse_hf_resolve_url_parts(url), None, "{url}");
+        }
     }
 }

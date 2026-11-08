@@ -1,4 +1,5 @@
 use serde::Deserialize;
+pub use skippy_model_artifact::parse_hf_resolve_url_parts;
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -83,21 +84,6 @@ pub fn find_model(query: &str) -> Option<&'static CatalogModel> {
                 .iter()
                 .find(|m| m.name.to_lowercase().contains(&q))
         })
-}
-
-pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
-    let tail = url
-        .strip_prefix("https://huggingface.co/")
-        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
-    let (repo, rest) = tail.split_once("/resolve/")?;
-    if !repo.contains('/') {
-        return None;
-    }
-    let (revision, file) = rest.split_once('/')?;
-    if file.is_empty() {
-        return None;
-    }
-    Some((repo, Some(revision), file))
 }
 
 pub fn huggingface_repo_url(url: &str) -> Option<String> {

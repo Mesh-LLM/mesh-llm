@@ -68,17 +68,10 @@ pub fn parse_hf_ref_parts(input: &str) -> Option<(String, Option<String>, String
 }
 
 pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(String, Option<String>, String)> {
-    let path = url
-        .strip_prefix("https://huggingface.co/")
-        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
-    let (repo, rest) = path.split_once("/resolve/")?;
-    let (revision, file) = rest.split_once('/')?;
-    if repo.is_empty() || revision.is_empty() || file.is_empty() {
-        return None;
-    }
+    let (repo, revision, file) = mesh_llm_types::mesh::parse_hf_resolve_url_parts(url)?;
     Some((
         repo.to_string(),
-        Some(revision.to_string()),
+        revision.map(str::to_string),
         file.to_string(),
     ))
 }
@@ -102,21 +95,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_url_supports_top_level_hugging_face_repository() {
-        // Given: a resolve URL for a top-level Hugging Face repository.
-        let url = "https://huggingface.co/gpt2/resolve/main/model.safetensors";
-
-        // When: the URL identity is parsed.
-        let parts = parse_hf_resolve_url_parts(url);
-
-        // Then: the repository, revision, and artifact are preserved.
+    fn resolve_url_rejects_repository_without_owner() {
         assert_eq!(
-            parts,
-            Some((
-                "gpt2".to_string(),
-                Some("main".to_string()),
-                "model.safetensors".to_string(),
-            ))
+            parse_hf_resolve_url_parts(
+                "https://huggingface.co/gpt2/resolve/main/model.safetensors"
+            ),
+            None
         );
     }
 }

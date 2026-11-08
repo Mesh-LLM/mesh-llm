@@ -3,7 +3,9 @@ pub use mesh_llm_types::models::capabilities::{CapabilityLevel, ModelCapabilitie
 use mesh_llm_types::models::capabilities::{merge_config_signals, merge_name_signals};
 use serde::Deserialize;
 use serde_json::Value;
-use skippy_model_artifact::{ModelFormat, ResolvedModelArtifact, resolve_model_artifact_ref};
+use skippy_model_artifact::{
+    ModelFormat, ResolvedModelArtifact, parse_hf_resolve_url_parts, resolve_model_artifact_ref,
+};
 use skippy_model_hf::HfModelRepository;
 use skippy_model_ref::{
     format_model_ref, normalize_gguf_distribution_id, quant_selector_from_gguf_file,
@@ -573,15 +575,6 @@ fn catalog_download_ref_and_kind(model: &CatalogModel) -> (String, ModelKind) {
     (model.name.clone(), kind_for_file(&model.file))
 }
 
-fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
-    let tail = url
-        .strip_prefix("https://huggingface.co/")
-        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
-    let (repo, rest) = tail.split_once("/resolve/")?;
-    let (revision, file) = rest.split_once('/')?;
-    Some((repo, Some(revision), file))
-}
-
 fn kind_for_path(path: &Path) -> ModelKind {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -726,6 +719,21 @@ fn format_size_label(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_model_with_empty_file_url_has_no_download_ref() {
+        let model = CatalogModel {
+            name: "m".into(),
+            file: "m.gguf".into(),
+            url: "https://huggingface.co/org/repo/resolve/main/".into(),
+            size: String::new(),
+            description: String::new(),
+            draft: None,
+            extra_files: vec![],
+            mmproj: None,
+        };
+        assert_eq!(catalog_download_ref_and_kind(&model).0, "m");
+    }
 
     #[test]
     fn scan_installed_models_finds_hf_snapshot_gguf() {
