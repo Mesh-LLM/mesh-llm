@@ -1022,6 +1022,7 @@ impl Node {
         });
     }
 
+    /// Handles a plugin channel stream, holding its connection slot until done.
     pub(crate) fn spawn_plugin_channel_stream(
         &self,
         remote: EndpointId,
@@ -1041,6 +1042,7 @@ impl Node {
         });
     }
 
+    /// Handles a plugin bulk-transfer stream, holding its connection slot until done.
     pub(crate) fn spawn_plugin_bulk_stream(
         &self,
         remote: EndpointId,
@@ -1060,6 +1062,7 @@ impl Node {
         });
     }
 
+    /// Handles a plugin mesh stream, holding its connection slot until done.
     pub(crate) fn spawn_plugin_mesh_stream(
         &self,
         remote: EndpointId,

@@ -53,6 +53,7 @@ pub(crate) enum SlotClaim {
 }
 
 impl PreAdmissionSlots {
+    /// Creates the control and plugin slot pools for one connection.
     pub(crate) fn new() -> Self {
         Self {
             control: Arc::new(Semaphore::new(MAX_PRE_ADMISSION_STREAMS_PER_CONNECTION)),
@@ -60,6 +61,7 @@ impl PreAdmissionSlots {
         }
     }
 
+    /// Claims a slot from the pool matching `stream_type`, if that type is limited.
     pub(crate) fn claim(&self, stream_type: u8) -> SlotClaim {
         let slots = match stream_type {
             STREAM_GOSSIP | STREAM_ROUTE_REQUEST => &self.control,
