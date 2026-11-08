@@ -17,15 +17,32 @@ fn hex_pin(value: &str, length: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-/// A path in the Linux job container, so absolute means a leading `/`
-/// whatever the submitting host is: `Path::is_absolute` would also want a
-/// drive on Windows and refuse every `/models/...` mount.
+/// The components of a path in the Linux job container, whatever the
+/// submitting host is: split on `/` only, so a `\` stays part of a name as it
+/// does in the container, and empty and `.` components dropped as
+/// `Path::components` does on Unix. On Windows `Path` would also split on `\`
+/// and want a drive to call `/models/...` absolute.
+fn container_components(value: &str) -> impl Iterator<Item = &str> {
+    value.split('/').filter(|c| !c.is_empty() && *c != ".")
+}
+/// Whether container path `path` is `prefix` or below it, by whole
+/// components, like `Path::starts_with` on Unix.
+pub(super) fn within(path: &str, prefix: &str) -> bool {
+    let mut rest = container_components(path);
+    path.starts_with('/') == prefix.starts_with('/')
+        && container_components(prefix).all(|c| rest.next() == Some(c))
+}
+/// Whether container path `path` is strictly below `prefix`.
+pub(super) fn inside(path: &str, prefix: &str) -> bool {
+    let mut rest = container_components(path);
+    path.starts_with('/') == prefix.starts_with('/')
+        && container_components(prefix).all(|c| rest.next() == Some(c))
+        && rest.next().is_some()
+}
+/// An absolute container path without `..`.
 pub(super) fn absolute(value: &str) -> bool {
-    let path = Path::new(value);
     value.starts_with('/')
-        && path
-            .components()
-            .all(|c| !matches!(c, Component::ParentDir | Component::CurDir))
+        && container_components(value).all(|c| c != "..")
         && value.len() <= 4096
         && !value.chars().any(char::is_control)
 }
@@ -33,12 +50,7 @@ pub(super) fn artifact(value: &Value, mounts: &[ModelMount], mounted: bool) -> R
     let path = text(value, "path")?;
     if !absolute(path)
         || !hex_pin(text(value, "sha256")?, 64)
-        || (mounted
-            && !mounts.iter().any(|m| {
-                Path::new(path)
-                    .strip_prefix(&m.mount_path)
-                    .is_ok_and(|p| !p.as_os_str().is_empty())
-            }))
+        || (mounted && !mounts.iter().any(|m| inside(path, &m.mount_path)))
     {
         bail!("native delivery artifact path/pin/mount refused");
     }
@@ -62,11 +74,11 @@ pub(super) fn mounts_admitted(mounts: &[ModelMount]) -> Result<()> {
         if !repo_ok
             || !hex_pin(&mount.revision, 40)
             || !absolute(&mount.mount_path)
-            || !Path::new(&mount.mount_path).starts_with("/models")
+            || !within(&mount.mount_path, "/models")
             || mount.mount_path == "/models"
             || mounts[..i].iter().any(|prior| {
-                Path::new(&mount.mount_path).starts_with(&prior.mount_path)
-                    || Path::new(&prior.mount_path).starts_with(&mount.mount_path)
+                within(&mount.mount_path, &prior.mount_path)
+                    || within(&prior.mount_path, &mount.mount_path)
             })
         {
             bail!("native delivery requires isolated immutable model mounts");
@@ -144,7 +156,7 @@ pub(super) fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) ->
     resource(&request, plan, 86400)?;
     artifact(&request["runner"], mounts, false)?;
     let runner = text(&request["runner"], "path")?;
-    if Path::new(runner).starts_with("/work") || Path::new(runner).starts_with("/models") {
+    if within(runner, "/work") || within(runner, "/models") {
         bail!("native runner must be supplied by image outside mutable work/model mounts");
     }
     let cert = &request["certification"];
@@ -203,8 +215,8 @@ pub(super) fn export(export: &Value, mounts: &[ModelMount], timeout_seconds: u64
     artifact(&export["helper"], mounts, false)?;
     artifact(&export["helper_source"], mounts, false)?;
     for key in ["helper", "helper_source"] {
-        let p = Path::new(text(&export[key], "path")?);
-        if p.starts_with("/work") || p.starts_with("/models") {
+        let p = text(&export[key], "path")?;
+        if within(p, "/work") || within(p, "/models") {
             bail!("publication helper must be supplied outside mutable job roots");
         }
     }
@@ -216,4 +228,41 @@ pub(super) fn export(export: &Value, mounts: &[ModelMount], timeout_seconds: u64
         bail!("native delivery durable receipt/explicit secret configuration refused");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod container_path_tests {
+    use super::{ModelMount, absolute, inside, mounts_admitted, within};
+
+    #[test]
+    fn container_paths_split_on_slash_only_on_every_host() {
+        assert!(absolute("/models/a/./b"));
+        assert!(!absolute("/models/../work"));
+        assert!(!absolute("models/a"));
+        // A `\` is part of a name in the Linux container.
+        assert!(absolute(r"/models/a\..\b"));
+        assert!(within("/models/a", "/models"));
+        assert!(within("//models//a", "/models"));
+        assert!(within("/models", "/models"));
+        assert!(!within(r"/models\outside", "/models"));
+        assert!(!within("/modelsx", "/models"));
+        assert!(!within("models/a", "/models"));
+        assert!(inside("/models/a/./b", "/models/a"));
+        assert!(!inside("/models/a", "/models/a"));
+        assert!(!inside(r"/models/a\b", "/models/a"));
+    }
+
+    #[test]
+    fn a_mount_roster_is_checked_with_linux_paths() {
+        let mount = |path: &str| ModelMount {
+            repo: "org/model".to_string(),
+            revision: "a".repeat(40),
+            mount_path: path.to_string(),
+        };
+        // Separate directories in the container, so not overlapping.
+        assert!(mounts_admitted(&[mount("/models/foo"), mount(r"/models/foo\bar")]).is_ok());
+        assert!(mounts_admitted(&[mount("/models/foo"), mount("/models/foo/bar")]).is_err());
+        // A sibling of `/models` in the container, not a mount below it.
+        assert!(mounts_admitted(&[mount(r"/models\outside")]).is_err());
+    }
 }
