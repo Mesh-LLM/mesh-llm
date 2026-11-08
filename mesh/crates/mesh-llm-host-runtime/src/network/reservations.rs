@@ -111,9 +111,9 @@ impl RoutingReservations {
     /// draw is proportional to capacity × locality when the draw weights
     /// differ, and round-robin when they are all equal, so equal hosts share
     /// evenly and a faster host carries proportionally more. A second draw
-    /// from the remaining candidates may replace the first when it has fewer
-    /// local in-flight requests, or on a load tie when it is near and the
-    /// first is far — but never when its rank class is worse than the first's:
+    /// from the remaining candidates may replace the first when it carries
+    /// fewer local in-flight requests per unit of capacity, or on a load tie
+    /// when it is near and the first is far — but never when its rank class is worse than the first's:
     /// pressure never redirects a request to a measurably slower or
     /// smaller-context target. One load comparison stops a gateway herding
     /// onto a host whose gossiped speed is stale. `None` only when
@@ -168,11 +168,27 @@ impl RoutingReservations {
                 .copied()
                 .unwrap_or(0)
         };
+        // Load is in-flight requests per unit of capacity, not a raw count: a
+        // host measured at 3× the speed is only "busier" once it holds more
+        // than 3× the requests. Comparing raw counts equalised in-flight
+        // across unequal hosts, which pulled a synchronized burst toward a
+        // 50/50 split regardless of capacity (lab, 2026-11-08: a 3:1 pair
+        // settled at 62–69 % on the fast host instead of ~75 %). Equal
+        // capacities reduce to the plain count comparison.
+        let relative_load = |index: usize| {
+            let capacity = placements[index].capacity;
+            let capacity = if capacity.is_finite() && capacity > 0.0 {
+                capacity
+            } else {
+                f64::MIN_POSITIVE
+            };
+            load(index) as f64 / capacity
+        };
         // Locality breaks a load tie only across a material gap (far = the
         // locality factor is below 0.75, about >175 ms RTT); among nearby
         // hosts the first draw stands, so a crowd of idle clients does not
         // all converge on whichever host is marginally closest.
-        let key = |index: usize| (load(index), placements[index].is_far());
+        let key = |index: usize| (relative_load(index), placements[index].is_far());
         let winner = if key(second) < key(first) {
             second
         } else {
@@ -338,6 +354,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn two_choice_compares_load_per_unit_of_capacity() {
+        // Host 1 is measured at 3× host 2 (same rank class: say both have
+        // samples that round to one class in the caller). Holding 2 requests
+        // against 1 leaves it the *less* loaded host per unit of capacity
+        // (2/3 < 1/1), so every pair resolves to it; holding 4 against 1
+        // (4/3 > 1/1) hands the pairs that draw host 2 second over to host 2.
+        let targets = vec![local(1), local(2)];
+        let weight = |target: &election::InferenceTarget| match target {
+            election::InferenceTarget::Local(1) => placement(75.0, None, 0),
+            _ => placement(25.0, None, 0),
+        };
+        let reservations = RoutingReservations::default();
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            held.push(reservations.reserve("model", &targets, 2, &targets[0], true));
+        }
+        held.push(reservations.reserve("model", &targets, 2, &targets[1], true));
+        let counts = two_choice_tally(&reservations, &targets, weight, 400);
+        assert_eq!(
+            counts.get(&2),
+            None,
+            "a fast host under proportionally lighter load keeps every pair: {counts:?}"
+        );
+        for _ in 0..2 {
+            held.push(reservations.reserve("model", &targets, 2, &targets[0], true));
+        }
+        let counts = two_choice_tally(&reservations, &targets, weight, 400);
+        let slow = counts.get(&2).copied().unwrap_or(0);
+        assert!(
+            (300..=400).contains(&slow),
+            "once the fast host is busier per unit of capacity the pairs move: {counts:?}"
+        );
+        drop(held);
     }
 
     #[test]
