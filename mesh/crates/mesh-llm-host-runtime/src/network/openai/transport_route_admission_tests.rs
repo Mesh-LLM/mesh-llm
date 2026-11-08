@@ -136,7 +136,15 @@ async fn a_no_on_the_first_candidate_routes_to_the_next_peer() {
 async fn a_no_on_every_candidate_returns_the_deny_once_none_admits() {
     let (response, contacted, seen) = route(u64::MAX, false).await;
     assert!(response.starts_with("HTTP/1.1 403"), "got: {response}");
-    assert!(response.contains("plugin_policy_denied"));
+    // The last deny's status and body, exactly as a single-candidate route sends.
+    let body: serde_json::Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"error":{
+            "message":"OpenAI plugin admission rejected the selected route",
+            "type":"permission_error","code":"plugin_policy_denied"}})
+    );
     assert_eq!(response.matches("HTTP/1.1").count(), 1);
     assert_eq!(contacted, 0);
     assert_eq!(seen.len(), 2, "every candidate was asked before giving up");

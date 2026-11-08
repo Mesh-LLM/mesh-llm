@@ -383,7 +383,7 @@ async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
         selected["attempt"] = json!(attempt);
         selected["target"] = json!(format!("peer-{attempt}"));
         let result = manager
-            .selected_exchange_phase(session.observation_id(), selected)
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, attempt == 1)
             .await;
         statuses.push(result.error_status());
     }
@@ -401,4 +401,27 @@ async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
     let state = state.lock().unwrap();
     assert!(!state.denied, "the admitted attempt decides the exchange");
     assert_eq!(state.attempt_history.len(), 2);
+    assert_eq!(state.attempt_history[0]["admission_denied"], true);
+    assert!(state.attempt_history[1].get("admission_denied").is_none());
+}
+
+#[test]
+fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
+    let deny = |required_failure, deny_status| PhaseResult {
+        denied: true,
+        required_failure,
+        deny_status,
+        ..Default::default()
+    };
+    assert!(deny(false, None).is_candidate_deny());
+    assert!(deny(false, Some(402)).is_candidate_deny());
+    assert!(!deny(true, None).is_candidate_deny());
+    assert!(
+        !PhaseResult {
+            required_failure: true,
+            ..Default::default()
+        }
+        .is_candidate_deny()
+    );
+    assert!(!PhaseResult::default().is_candidate_deny());
 }

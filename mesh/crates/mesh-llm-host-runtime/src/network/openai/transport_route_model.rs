@@ -308,7 +308,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         // peer's capsule_id and misattribute it to this attempt.
         clear_peer_capsule(peer_capsule_id);
         reservation.transfer_to(&target);
-        state.attempts += 1;
         let attempt_started = Instant::now();
         let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
         match super::super::exchange_admission::admit_selected_candidate(
@@ -318,7 +317,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             Some(model),
             "mesh",
             super::super::exchange_admission::SelectedRouteTarget::Mesh(&target),
-            state.attempts,
+            idx + 1,
             idx + 1 < total_targets,
         )
         .await
@@ -328,6 +327,9 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             SelectedRouteAdmission::NextCandidate => continue,
             SelectedRouteAdmission::Rejected(outcome) => return outcome,
         }
+        // Only a contacted candidate is an attempt: a skipped one must not
+        // turn an all-timeouts route into a 503 or inflate attempt metrics.
+        state.attempts += 1;
         let attempt_result = route_attempt_for_target(
             &node,
             &mut tcp_stream,

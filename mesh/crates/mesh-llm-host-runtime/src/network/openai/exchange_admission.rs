@@ -134,10 +134,14 @@ async fn apply_selected_route_policy(
     more_candidates: bool,
 ) -> SelectedRouteAdmission {
     let result = match &request.exchange_observation_id {
-        Some(id) => manager.selected_exchange_phase(id, event).await,
+        Some(id) => {
+            manager
+                .selected_exchange_phase_for_candidate(id, event, more_candidates)
+                .await
+        }
         None => manager.exchange_phase(event).await,
     };
-    if more_candidates && result.denied && !result.required_failure {
+    if more_candidates && result.is_candidate_deny() {
         return SelectedRouteAdmission::NextCandidate;
     }
     if let Err(error) = stream.add_response_metadata(result.headers.clone()) {
