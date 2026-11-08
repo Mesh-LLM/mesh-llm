@@ -238,7 +238,7 @@ cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
-Only two green passes permit the isolated GitHub-hosted macOS publisher to create a PR to `main`
+Only two green passes permit the managed lab publisher to create a PR to `main`
 with that exact commit. Both modes keep its existing pin and never invoke Goose.
 The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
@@ -500,7 +500,7 @@ prepare/build failures under the existing 11.5-hour coding-admission and
 failure starts a new bounded session on the next attempt after restoring the
 exact prior candidate as uncommitted changes on the frozen base. Every edit
 invalidates all prior family results. Candidates are local, uncertified commits
-until both full family passes are green. The separate GitHub-hosted macOS publisher
+until both full family passes are green. The separate managed lab publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level

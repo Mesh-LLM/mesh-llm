@@ -428,7 +428,16 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         field(publish, "if"),
         "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}"
     );
-    assert_eq!(field(publish, "runs-on"), "macos-15");
+    assert_eq!(
+        publish.get("runs-on").unwrap().list(),
+        vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus"
+        ]
+    );
     let (_, action) = named(publish, "id", "publish");
     assert_eq!(field(action, "run"), "scripts/llama-canary-publish.sh");
     assert_eq!(
@@ -829,16 +838,33 @@ fn actual_scheduled_alert_reconciles_first_failure_repeated_failure_and_recovery
         needs(alert),
         BTreeSet::from(["resolve", "result", "publish-certified-canary"])
     );
-    assert_eq!(field(alert, "runs-on"), "macos-15");
-    assert_eq!(field(alert, "timeout-minutes"), "5");
+    assert_eq!(
+        alert.get("runs-on").unwrap().list(),
+        vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus"
+        ]
+    );
+    assert_eq!(field(alert, "timeout-minutes"), "15");
     let permissions = alert.get("permissions").unwrap();
     assert_eq!(field(permissions, "actions"), "read");
     assert_eq!(field(permissions, "issues"), "write");
-    assert!(steps(alert).iter().all(|s| {
-        s.get("uses")
-            .and_then(Node::text)
-            .is_none_or(|s| !s.starts_with("actions/checkout@"))
-    }));
+    let (_, checkout) = named(
+        alert,
+        "uses",
+        "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+    );
+    assert_eq!(
+        field(checkout.get("with").unwrap(), "ref"),
+        "${{ github.sha }}"
+    );
+    assert_eq!(
+        field(checkout.get("with").unwrap(), "persist-credentials"),
+        "false"
+    );
     let (_, step) = named(alert, "name", "Reconcile consecutive-failure alert");
     assert_eq!(field(step, "continue-on-error"), "true");
     let script = field(step.get("with").unwrap(), "script");

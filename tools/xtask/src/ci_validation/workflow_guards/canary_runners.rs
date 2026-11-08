@@ -59,18 +59,21 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         }
     }
     for name in ["publish-certified-canary", "alert-consecutive-failures"] {
-        h::binding(h::job(caller, name)?, "runs-on", "macos-15")?;
+        let job = h::job(caller, name)?;
+        if job.get("runs-on").map(Node::list) != Some(BOOTSTRAP_RUNNER.split(',').collect()) {
+            return Err(format!("{name} must use the closed managed runner pool").into());
+        }
+        let (_, prepare) = h::step(
+            h::steps(job)?,
+            "uses",
+            "./.github/actions/prepare-automation",
+        )?;
+        h::binding(
+            h::member(prepare, "with")?,
+            "runner-profile",
+            CONTROL_PROFILE,
+        )?;
     }
-    let (_, publisher_prepare) = h::step(
-        h::steps(h::job(caller, "publish-certified-canary")?)?,
-        "uses",
-        "./.github/actions/prepare-automation",
-    )?;
-    h::binding(
-        h::member(publisher_prepare, "with")?,
-        "runner-profile",
-        "image",
-    )?;
     h::binding(h::job(pass, "build")?, "runs-on", PASS_MAC_RUNNER)?;
     h::binding(h::job(pass, "build_linux")?, "runs-on", PASS_LINUX_RUNNER)?;
     for name in ["family", "retry_family"] {

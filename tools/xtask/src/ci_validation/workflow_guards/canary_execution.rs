@@ -234,7 +234,7 @@ pub(super) fn publication(job: &Node) -> DynResult<()> {
         steps,
         "${{ needs.resolve.outputs.source }}",
         verify,
-        "image",
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
     )?;
     download(
         steps,

@@ -505,7 +505,7 @@ jobs:
   publish-certified-canary:
     needs: [resolve, result]
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}
-    runs-on: macos-15
+    runs-on: [self-hosted, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
     timeout-minutes: 30
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -521,7 +521,9 @@ jobs:
       - name: Prepare frozen controller automation for publication verification
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: image
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.result.outputs.package }}
@@ -557,12 +559,18 @@ jobs:
           CANARY_PR_BODY: ${{ runner.temp }}/certified-canary/pr-body.md
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
         run: scripts/llama-canary-publish.sh
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
   alert-consecutive-failures:
     name: Alert after consecutive scheduled failures
     if: ${{ !cancelled() && github.event_name == 'schedule' }}
     needs: [resolve, result, publish-certified-canary]
-    runs-on: macos-15
-    timeout-minutes: 5
+    runs-on: [self-hosted, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
@@ -573,6 +581,16 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prepare protected controller for managed-runner cleanup
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Reconcile consecutive-failure alert
         continue-on-error: true
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
@@ -659,3 +677,9 @@ jobs:
                 labels: ['component: ci'],
               });
             }
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false

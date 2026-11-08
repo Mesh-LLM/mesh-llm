@@ -68,9 +68,11 @@ Persistent canary jobs use the runner OS's `preinstalled-macos` or
 package combination, aggregation, and reconciliation use the protected 128 GiB
 managed pool; the initial resolver uses those literal closed labels before it
 can emit placement outputs. The credentialed publisher and scheduled alert use
-isolated GitHub-hosted macOS runners. No Llama Upgrade job uses GitHub-hosted
-Ubuntu. Persistent control jobs use the typed `canary-controller`
-finalizer and retain produced handoffs if upload fails. The native producers
+the same closed managed lab pool. No Llama Upgrade job uses a GitHub-hosted
+runner. Persistent control jobs use the typed `canary-controller` finalizer;
+failed uploads leave the local handoff intact for same-job diagnosis. A failed
+upload blocks the pass, and a rerun reconstructs the handoff from its uploaded
+producer inputs. The native producers
 request their OS and at least 128 GiB; preflight, family and infrastructure-retry jobs request
 the controller's memory tier without an OS or machine type. The worker restores
 the matching native payload from one candidate-bound combined package. Backend
@@ -833,7 +835,7 @@ invalidates all family results. A complete green candidate pass must be
 followed by a fresh independent build and complete per-family pass on the same
 commit. A managed aggregate
 rejects missing, duplicate, failed, cancelled, or mismatched results. Only the
-final hosted publisher receives the repair credential, and a failed or
+final managed lab publisher receives the repair credential, and a failed or
 exhausted pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
