@@ -186,20 +186,7 @@ pub(super) fn display_list(values: &[String]) -> String {
     values.join(", ")
 }
 
-pub(super) fn format_bytes(bytes: u64) -> String {
-    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-    const MIB: f64 = 1024.0 * 1024.0;
-    const KIB: f64 = 1024.0;
-    if bytes >= 1024 * 1024 * 1024 {
-        format!("{:.1} GiB", bytes as f64 / GIB)
-    } else if bytes >= 1024 * 1024 {
-        format!("{:.1} MiB", bytes as f64 / MIB)
-    } else if bytes >= 1024 {
-        format!("{:.1} KiB", bytes as f64 / KIB)
-    } else {
-        format!("{bytes} B")
-    }
-}
+pub(super) use crate::runtime_native::human_bytes as format_bytes;
 
 pub(super) fn format_optional_bytes(bytes: Option<u64>) -> String {
     bytes.map(format_bytes).unwrap_or_else(|| "0 B".to_string())
