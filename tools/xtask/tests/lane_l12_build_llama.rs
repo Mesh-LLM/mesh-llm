@@ -34,7 +34,7 @@ impl Fixture {
         );
         write_tool(
             &tools.join("uname"),
-            "#!/bin/sh\nprintf '%s\\n' \"$FIXTURE_OS\"\n",
+            "#!/bin/sh\ncase \"$1\" in -m) printf '%s\\n' \"$FIXTURE_ARCH\" ;; *) printf '%s\\n' \"$FIXTURE_OS\" ;; esac\n",
         );
         write_tool(
             &tools.join("nvcc"),
@@ -75,6 +75,7 @@ impl Fixture {
                 format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", self.tools.display()),
             )
             .env("FIXTURE_OS", os)
+            .env("FIXTURE_ARCH", "x86_64")
             .env("LLAMA_WORKDIR", &self.work)
             .env("LLAMA_STAGE_BUILD_DIR", &self.build)
             .env("LLAMA_STAGE_BACKEND", "cpu")
@@ -171,6 +172,58 @@ fn linux_omits_macos_target() {
             .unwrap(),
     );
     assert!(!fixture.log().contains("CMAKE_OSX_DEPLOYMENT_TARGET"));
+}
+#[test]
+fn linux_x86_64_default_pins_a_sandy_bridge_compatible_isa_in_configure_and_stamp() {
+    let fixture = Fixture::new(true);
+    success(fixture.command("Linux").output().unwrap());
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(
+            fixture.log().contains(argument),
+            "missing configure argument {argument}"
+        );
+        assert!(
+            fixture.stamp().contains(&format!("cmake-arg={argument}")),
+            "missing build-stamp argument {argument}"
+        );
+    }
+}
+#[test]
+fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .env("LLAMA_STAGE_GGML_NATIVE", "ON")
+            .output()
+            .unwrap(),
+    );
+    assert!(fixture.log().contains("-DGGML_NATIVE=ON"));
+    assert!(!fixture.log().contains("-DGGML_AVX2=OFF"));
+}
+#[test]
+fn linux_non_x86_64_build_does_not_receive_x86_isa_flags() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .env("FIXTURE_ARCH", "aarch64")
+            .output()
+            .unwrap(),
+    );
+    assert!(!fixture.log().contains("-DGGML_AVX2=OFF"));
 }
 #[test]
 fn cuda_enables_graph_capture() {
