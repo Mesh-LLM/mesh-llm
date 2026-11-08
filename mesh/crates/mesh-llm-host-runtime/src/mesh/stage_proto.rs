@@ -138,6 +138,7 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         compute_busy_nanos: 0,
         compute_operations: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
     }
 }
 
@@ -836,6 +837,7 @@ pub(super) fn stage_control_unavailable_response(
                 compute_busy_nanos: 0,
                 compute_operations: 0,
                 dflash_target_layers: None,
+                dflash_context_window: None,
             }
         }
         crate::inference::skippy::StageControlRequest::Status(_) => {
@@ -919,6 +921,7 @@ pub(crate) fn stage_status_from_load(
         compute_busy_nanos: 0,
         compute_operations: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
     }
 }
 
@@ -1207,9 +1210,12 @@ pub(super) fn stage_status_to_proto(
         ) as i32,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
-        dflash_draft: status
-            .dflash_target_layers
-            .map(|target_layers| skippy_stage_proto::StageDFlashDraftStatus { target_layers }),
+        dflash_draft: status.dflash_target_layers.map(|target_layers| {
+            skippy_stage_proto::StageDFlashDraftStatus {
+                target_layers,
+                context_window: status.dflash_context_window,
+            }
+        }),
     }
 }
 
@@ -1289,6 +1295,10 @@ pub(super) fn stage_status_from_proto(
         lease_until_unix_ms: status.lease_until_unix_ms,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        dflash_context_window: status
+            .dflash_draft
+            .as_ref()
+            .and_then(|draft| draft.context_window),
         dflash_target_layers: status.dflash_draft.map(|draft| draft.target_layers),
     })
 }

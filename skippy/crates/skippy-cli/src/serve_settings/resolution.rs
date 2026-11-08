@@ -300,6 +300,7 @@ impl ServeSettings {
                             draft_model_path: path.to_path_buf(),
                             max_draft_tokens: None,
                             target_layers: Vec::new(),
+                            context_window: None,
                         });
                     }
                 }
