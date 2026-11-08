@@ -400,8 +400,4 @@ available, and whether the node was private, published, or joined with `--auto`.
 
 ## Support
 
-<a href="https://spiral.xyz">
-  <img alt="Spiral" src="https://spiral.xyz/images/spiral-logo.svg" width="128">
-</a>
-
 The Mesh LLM project thanks [spiral.xyz](https://spiral.xyz) for their support.

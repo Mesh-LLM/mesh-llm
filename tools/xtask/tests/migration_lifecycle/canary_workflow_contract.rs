@@ -1,4 +1,7 @@
 //! Parsed current canary graph and authority contracts; no hosted execution proof.
+#[path = "canary_workflow_contract/backend_selection.rs"]
+mod backend_selection;
+
 use crate::workflow_yaml::{self, Node};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 fn root() -> PathBuf {
@@ -428,7 +431,16 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         field(publish, "if"),
         "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}"
     );
-    assert_eq!(field(publish, "runs-on"), "ubuntu-24.04");
+    assert_eq!(
+        publish.get("runs-on").unwrap().list(),
+        vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus"
+        ]
+    );
     let (_, action) = named(publish, "id", "publish");
     assert_eq!(field(action, "run"), "scripts/llama-canary-publish.sh");
     assert_eq!(
@@ -663,6 +675,12 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let (backend, _) = named(build, "uses", "./.github/actions/select-canary-backend");
     let (consume, _) = named(build, "id", "build");
     assert!(setup < backend && backend < consume);
+    for job in [build, family, jobs.get("retry_family").unwrap()] {
+        let (setup, _) = named(job, "uses", "./.github/actions/setup-canary-runner");
+        let (backend, _) = named(job, "uses", "./.github/actions/select-canary-backend");
+        let (prepare, _) = named(job, "uses", "./.github/actions/prepare-automation");
+        assert!(setup < backend && backend < prepare);
+    }
     let build_env = build.get("env").unwrap();
     assert!(
         build_env.get("LLAMA_STAGE_BACKEND").is_none(),
@@ -678,34 +696,6 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
             && certification.contains("\"--plan\".into()")
             && certification.contains("\"--shard-index\".into()")
     );
-}
-#[test]
-fn canary_backend_selection_requires_a_supported_platform_and_linux_architectures() {
-    let action = document(".github/actions/select-canary-backend/action.yml");
-    let (_, step) = named(action.get("runs").unwrap(), "name", "Detect stage backend");
-    for (os, architectures, backend) in [
-        ("Darwin", "", Some("metal")),
-        ("Linux", "90", Some("cuda")),
-        ("Linux", "", None),
-        ("Windows", "90", None),
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path().canonicalize().unwrap();
-        let setup = format!(
-            "export GITHUB_ENV=\"$PWD/action.env\"\nexport SKIPPY_CUDA_ARCHITECTURES='{architectures}'\nuname() {{ printf '%s\\n' '{os}'; }}"
-        );
-        let (status, _, stderr) = action_shell(&directory, &setup, field(step, "run"));
-        if let Some(backend) = backend {
-            assert_eq!(status, 0, "{}", String::from_utf8_lossy(&stderr));
-            assert_eq!(
-                fs::read_to_string(directory.join("action.env")).unwrap(),
-                format!("LLAMA_STAGE_BACKEND={backend}\n")
-            );
-        } else {
-            assert_eq!(status, 1, "{os}");
-            assert!(!directory.join("action.env").exists());
-        }
-    }
 }
 fn setup_observers() -> &'static str {
     r#"
@@ -829,16 +819,33 @@ fn actual_scheduled_alert_reconciles_first_failure_repeated_failure_and_recovery
         needs(alert),
         BTreeSet::from(["resolve", "result", "publish-certified-canary"])
     );
-    assert_eq!(field(alert, "runs-on"), "ubuntu-24.04");
-    assert_eq!(field(alert, "timeout-minutes"), "5");
+    assert_eq!(
+        alert.get("runs-on").unwrap().list(),
+        vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus"
+        ]
+    );
+    assert_eq!(field(alert, "timeout-minutes"), "15");
     let permissions = alert.get("permissions").unwrap();
     assert_eq!(field(permissions, "actions"), "read");
     assert_eq!(field(permissions, "issues"), "write");
-    assert!(steps(alert).iter().all(|s| {
-        s.get("uses")
-            .and_then(Node::text)
-            .is_none_or(|s| !s.starts_with("actions/checkout@"))
-    }));
+    let (_, checkout) = named(
+        alert,
+        "uses",
+        "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+    );
+    assert_eq!(
+        field(checkout.get("with").unwrap(), "ref"),
+        "${{ github.sha }}"
+    );
+    assert_eq!(
+        field(checkout.get("with").unwrap(), "persist-credentials"),
+        "false"
+    );
     let (_, step) = named(alert, "name", "Reconcile consecutive-failure alert");
     assert_eq!(field(step, "continue-on-error"), "true");
     let script = field(step.get("with").unwrap(), "script");

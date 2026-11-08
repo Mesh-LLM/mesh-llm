@@ -364,6 +364,8 @@ unsafe extern "C" {
     pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
     #[link_name = "_Z30llama_get_embeddings_layer_inpP13llama_contextj"]
     pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "_Z25llama_layer_inp_publishedP13llama_contextj"]
+    pub fn llama_layer_inp_published(ctx: *mut Opaque, lid: u32) -> bool;
     #[link_name = "_Z28llama_model_target_layer_idsPK11llama_model"]
     pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
     #[link_name = "_Z30llama_model_target_layer_ids_nPK11llama_model"]
@@ -382,6 +384,8 @@ unsafe extern "C" {
     pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
     #[link_name = "?llama_get_embeddings_layer_inp@@YAPEAMPEAUllama_context@@I@Z"]
     pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "?llama_layer_inp_published@@YA_NPEAUllama_context@@I@Z"]
+    pub fn llama_layer_inp_published(ctx: *mut Opaque, lid: u32) -> bool;
     #[link_name = "?llama_model_target_layer_ids@@YAPEBHPEBUllama_model@@@Z"]
     pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
     #[link_name = "?llama_model_target_layer_ids_n@@YAIPEBUllama_model@@@Z"]

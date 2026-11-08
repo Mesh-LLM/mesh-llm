@@ -425,7 +425,7 @@ fn run_binary_stage(
     boundary_observer: impl FnOnce(
         Option<ActivationBoundaryDesc>,
         Option<ActivationBoundaryDesc>,
-        Option<Vec<u32>>,
+        Option<crate::split_dflash::SplitDFlashAttached>,
     ),
 ) -> Result<Option<EmbeddedFrontendTask>> {
     options.tuning.validate()?;
@@ -509,9 +509,9 @@ fn run_binary_stage(
         loaded => loaded?,
     }
     .context("binary stage server requires model_path")?;
-    // The draft's target layers once this final stage has attached it, which
-    // the stage reports so stage 0 knows whether it can drive DFlash.
-    let split_dflash_target_layers = split_dflash.as_ref().and_then(|plan| {
+    // The draft this final stage attached, which the stage reports so stage
+    // 0 knows whether it can drive DFlash and which feature rows it reads.
+    let split_dflash_attached = split_dflash.as_ref().and_then(|plan| {
         crate::split_dflash::attach_split_dflash(
             &mut lock_runtime(&runtime),
             &config,
@@ -607,7 +607,7 @@ fn run_binary_stage(
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
-    boundary_observer(input_boundary, output_boundary, split_dflash_target_layers);
+    boundary_observer(input_boundary, output_boundary, split_dflash_attached);
     let frontend_task = public_frontend::start(public_frontend::PublicFrontendLaunch {
         config: config.clone(),
         runtime: runtime.clone(),

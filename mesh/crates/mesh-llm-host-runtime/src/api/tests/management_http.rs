@@ -514,6 +514,7 @@ fn health_test_stage_status(
         shutdown_generation: 1,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
     }
 }
 

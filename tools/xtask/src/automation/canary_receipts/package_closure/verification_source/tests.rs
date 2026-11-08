@@ -200,7 +200,8 @@ fn tracked_staged_and_untracked_candidate_changes_and_controller_changes_are_rej
     assert!(process::operation(|| fixture.authority.validate()).is_err());
     process::text(root, &["reset", "--hard", "--quiet", "HEAD"]).unwrap();
     fs::write(root.join("untracked-source.rs"), "mutated\n").unwrap();
-    assert!(process::operation(|| fixture.authority.validate()).is_err());
+    let error = process::operation(|| fixture.authority.validate()).unwrap_err();
+    assert!(error.to_string().contains("untracked-source.rs"));
     fs::remove_file(root.join("untracked-source.rs")).unwrap();
     fs::write(
         fixture.authority.controller.root.join("src/lib.rs"),

@@ -128,6 +128,25 @@ pub(super) struct SplitDFlashFallback {
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
 }
 
+/// How earlier stages encode feature rows for a final stage that reported
+/// reading `reported`; `None` when it reads nothing they send.
+fn final_stage_feature_encoding(
+    reported: &[String],
+) -> Option<skippy_runtime::DFlashFeatureEncoding> {
+    let readable: Vec<_> = reported
+        .iter()
+        .filter_map(|name| skippy_runtime::DFlashFeatureEncoding::parse(name))
+        .collect();
+    let encoding = skippy_serving::split_dflash::settled_feature_encoding(&readable);
+    if encoding.is_none() {
+        tracing::warn!(
+            ?reported,
+            "split DFlash: the final stage reads no feature encoding this stage sends"
+        );
+    }
+    encoding
+}
+
 impl SplitGenerationLoadSettings<'_> {
     /// Settles the split DFlash plan with what the final stage, which loads
     /// first, reported: the target layers of the draft it attached, or `None`
@@ -135,17 +154,34 @@ impl SplitGenerationLoadSettings<'_> {
     /// attach). Without a draft the remaining stages capture nothing and
     /// stage 0 serves the fallback plan, so native MTP stays on where the
     /// draft replaced it.
-    pub(super) fn settle_split_dflash(&mut self, final_stage_target_layers: Option<&[u32]>) {
+    pub(super) fn settle_split_dflash(
+        &mut self,
+        final_stage_target_layers: Option<&[u32]>,
+        final_stage_context_window: Option<u32>,
+        final_stage_feature_encodings: &[String],
+    ) {
+        if self.split_dflash.is_none() {
+            return;
+        }
+        let encoding = final_stage_feature_encoding(final_stage_feature_encodings);
         let Some(plan) = self.split_dflash.as_mut() else {
             return;
         };
-        if let Some(layers) = final_stage_target_layers.filter(|layers| !layers.is_empty()) {
+        if let Some(layers) = final_stage_target_layers
+            .filter(|layers| !layers.is_empty())
+            .filter(|_| encoding.is_some())
+        {
             plan.target_layers = layers.to_vec();
+            plan.feature_encoding = encoding;
             if let Some(dflash) = self.embedded_openai.speculative.dflash.as_mut() {
                 dflash.target_layers = layers.to_vec();
+                dflash.context_window = final_stage_context_window;
+                dflash.feature_encoding = encoding.map(|encoding| encoding.as_str().to_string());
             }
             tracing::info!(
                 target_layers = ?layers,
+                context_window = ?final_stage_context_window,
+                feature_encoding = encoding.map(|encoding| encoding.as_str()),
                 "split DFlash: the final stage attached its draft"
             );
             return;
@@ -763,7 +799,11 @@ pub(super) async fn load_downstream_split_runtime_stages(
         // The final stage loads first; whether it attached its DFlash draft
         // decides what every other stage, and stage 0, serve.
         if load.downstream.is_none() {
-            settings.settle_split_dflash(ready.status.dflash_target_layers.as_deref());
+            settings.settle_split_dflash(
+                ready.status.dflash_target_layers.as_deref(),
+                ready.status.dflash_context_window,
+                &ready.status.dflash_feature_encodings,
+            );
         }
         ready_by_stage.insert(stage.stage_id.clone(), ready.status);
     }

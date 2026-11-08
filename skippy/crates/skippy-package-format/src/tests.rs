@@ -1402,7 +1402,7 @@ fn a_dflash_proposer_must_be_pinned_and_fit_its_block() {
     }
     for (field, value) in [
         ("target_layers", serde_json::json!([])),
-        ("target_layers", serde_json::json!([0, 3])),
+        ("target_layers", serde_json::json!([0, 2])),
         ("block_size", serde_json::json!(1)),
         ("block_size", serde_json::json!(32)),
         ("max_draft_tokens", serde_json::json!(8)),
@@ -1419,6 +1419,17 @@ fn a_dflash_proposer_must_be_pinned_and_fit_its_block() {
             "{field} = {value}: {error}"
         );
     }
+}
+
+#[test]
+fn a_dflash_proposer_may_read_the_output_head_input() {
+    // The fixture has one layer; layer 1 is its output, the head's input,
+    // which Nemotron-3.5 drafts read.
+    let mut proposer = dflash_proposer_json();
+    proposer["target_layers"] = serde_json::json!([0, 1]);
+    manifest_with_generation(dflash_generation(proposer))
+        .validate()
+        .unwrap();
 }
 
 #[test]

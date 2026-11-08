@@ -125,12 +125,18 @@ run_early_native_certification() {
   # One exact candidate on the producer backend, with representatives for split parity,
   # recurrent and MoE replay, both encode-only startup classes, T5 ordering,
   # and an actual image response. The full roster remains the promotion gate.
-  run_verification_logged "early real-model native certification" "$CERTIFY_LOG" env \
-    FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID}-early" \
-    FAMILY_BATTERY_MM_TEST_BIN="$mm_test_bin" \
-    "${workload_env[@]}" \
-    scripts/skippy-family-battery.sh --skip-build \
-      --families llama,mamba2,deepseek2,nomic-bert-embedding,jina-bert-v2-rerank,t5-encoder-decoder,qwen3-vl
+  # Test processes may write relative scratch files. Keep their working
+  # directory under ignored run state so the committed candidate stays clean.
+  mkdir -p "$STATE_DIR/early-battery-cwd"
+  (
+    cd "$STATE_DIR/early-battery-cwd" || exit 1
+    run_verification_logged "early real-model native certification" "$CERTIFY_LOG" env \
+      FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID}-early" \
+      FAMILY_BATTERY_MM_TEST_BIN="$mm_test_bin" \
+      "${workload_env[@]}" \
+      "$ROOT/scripts/skippy-family-battery.sh" --skip-build \
+        --families llama,mamba2,deepseek2,nomic-bert-embedding,jina-bert-v2-rerank,t5-encoder-decoder,qwen3-vl
+  )
 }
 
 run_candidate_gates() {
@@ -166,7 +172,12 @@ run_candidate_gates() {
   run_full_build || return $?
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_early_native_certification || return 1
-    controller_parity_inventory
+    if [[ ( "$HARNESS_MODE" == verify-build || "$HARNESS_MODE" == native-build ) &&
+        -n "${CANARY_INPUT_BUNDLE:-}" ]]; then
+      verification_source_inspection verification-parity-inventory "$CERTIFY_LOG"
+    else
+      controller_parity_inventory
+    fi
   else
     run_certification
   fi

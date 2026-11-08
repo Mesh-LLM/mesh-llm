@@ -181,6 +181,11 @@ impl StageOpenAiBackend {
                     exact_checkpoint_boundary,
                     durable_exact_checkpoint_boundary,
                 );
+                // Prompt rows the final stage's DFlash draft never attends.
+                let unattended_until = super::prefill::split_dflash_unattended_until(
+                    prefill_tokens.len(),
+                    request.split_dflash_context_window,
+                );
                 let mut chunk_index = 0usize;
                 while pos_start < prefill_tokens.len() {
                     if request
@@ -222,16 +227,22 @@ impl StageOpenAiBackend {
                         )
                         .map_err(openai_backend_error)?;
                     }
-                    let end = prefill_chunk_end(
+                    let mut end = prefill_chunk_end(
                         pos_start,
                         chunk_size,
                         prefill_tokens.len(),
                         exact_checkpoint_boundary,
                     );
+                    // A chunk ends where the draft's window starts, so every
+                    // chunk is wholly inside it or wholly before it.
+                    let unattended = unattended_until.is_some_and(|until| pos_start < until);
+                    if let Some(until) = unattended_until.filter(|_| unattended) {
+                        end = end.min(until);
+                    }
                     let chunk = &prefill_tokens[pos_start..end];
                     prefill_min_chunk_size = prefill_min_chunk_size.min(chunk.len());
                     prefill_max_chunk_size = prefill_max_chunk_size.max(chunk.len());
-                    let message = embedded_prefill_message(OpenAiPrefillChunk {
+                    let mut message = embedded_prefill_message(OpenAiPrefillChunk {
                         seq_id: chunk_index,
                         pos_start,
                         prefill_token_count,
@@ -239,6 +250,7 @@ impl StageOpenAiBackend {
                         request_id,
                         session_id,
                     })?;
+                    message.state.set_split_dflash_unattended_rows(unattended);
                     let stage0_timer = PhaseTimer::start();
                     let pending_prefill_replies_before = pending_prefill_replies;
                     // A stage-0 activation hit skips stage 0's compute, which

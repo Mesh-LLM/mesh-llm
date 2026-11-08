@@ -159,7 +159,9 @@ fn actual_matrix_and_literal_runner_routes_are_included_without_freezing_job_cou
         .get("jobs")
         .unwrap();
     assert!(persistent_runner(jobs.get("family").unwrap()));
-    assert!(!persistent_runner(jobs.get("aggregate").unwrap()));
+    for name in ["combine", "aggregate", "reconcile"] {
+        assert!(persistent_runner(jobs.get(name).unwrap()), "{name}");
+    }
 }
 
 fn prepared_jobs() -> [(&'static str, &'static str); 4] {

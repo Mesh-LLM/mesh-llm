@@ -133,8 +133,10 @@ DFlash GGUF trained for that target, and a runtime that exports the upstream
 draft-context API, under Itanium or MSVC C++ names. It drafts for greedy and sampled
 requests; requests that ask for logprobs decode normally. Block length adapts
 to measured verify cost and acceptance, up to `--dflash-max-tokens`;
-`SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap. DSpark and
-LiliCorr drafts are rejected. DFlash is opt-in: `--dflash-max-tokens` without
+`SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap. DSpark
+drafts (DFlash with a Markov head) run the same way. LiliCorr drafts are rejected
+unless `SKIPPY_DFLASH_LILICORR_HEADLESS=1`, which runs one as plain DFlash without
+its correlation head. DFlash is opt-in: `--dflash-max-tokens` without
 `--speculative-strategy dflash` is an error, but a `--speculative-config` plan
 that already has a `dflash` field runs under `auto`.
 

@@ -600,6 +600,7 @@ pub(crate) fn run_binary_stage_message(
     input: Option<&ActivationFrame>,
     options: BinaryStageExecutionOptions,
 ) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
+    runtime.dflash_split_mark_unattended(session_id, message.state.split_dflash_unattended_rows());
     runtime.dflash_split_input(session_id, input);
     // A draft owed for an earlier window is moot once the next message lands.
     runtime.dflash_take_deferred_draft(session_id);
@@ -608,7 +609,7 @@ pub(crate) fn run_binary_stage_message(
     if early_verdict {
         runtime.dflash_defer_next_ingest(session_id);
     }
-    let (predicted, mut predicted_tokens, mut output, mut draft) = execute_binary_stage_message(
+    let executed = execute_binary_stage_message(
         runtime,
         session_id,
         message,
@@ -616,7 +617,12 @@ pub(crate) fn run_binary_stage_message(
         input,
         options,
         dflash_tokens > 0,
-    )?;
+    );
+    if executed.is_err() {
+        // The frame never leaves, so its mark must not reach a later message.
+        runtime.dflash_split_mark_unattended(session_id, false);
+    }
+    let (predicted, mut predicted_tokens, mut output, mut draft) = executed?;
     runtime.dflash_split_output(session_id, &mut output);
     if early_verdict {
         // The verdict goes back first; the caller drafts with
@@ -920,6 +926,19 @@ pub(in crate::binary_transport) fn last_stage_decode_batch_enabled(planned: Opti
     )
 }
 
+/// A frame that runs one serial decode step on this stage, as stage 0's
+/// scheduler counts one per decode request. A verify window is not one.
+pub(in crate::binary_transport) fn is_decode_step_frame(kind: WireMessageKind) -> bool {
+    matches!(
+        kind,
+        WireMessageKind::DecodeEmbd
+            | WireMessageKind::DecodeReadout
+            | WireMessageKind::DecodeLightCtx
+            | WireMessageKind::DecodeReplayEmbd
+            | WireMessageKind::DecodeReplayFinalEmbd
+    )
+}
+
 pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
     config: &StageConfig,
     message: &StageWireMessage,
@@ -931,15 +950,7 @@ pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
         return false;
     }
 
-    matches!(
-        message.kind,
-        WireMessageKind::DecodeEmbd
-            | WireMessageKind::DecodeReadout
-            | WireMessageKind::DecodeLightCtx
-            | WireMessageKind::DecodeReplayEmbd
-            | WireMessageKind::DecodeReplayFinalEmbd
-    ) && message.token_count == 1
-        && token_ids.len() == 1
+    is_decode_step_frame(message.kind) && message.token_count == 1 && token_ids.len() == 1
 }
 
 pub(in crate::binary_transport) fn input_activation_frame(
@@ -1195,9 +1206,9 @@ mod tests {
         BinaryStageExecutionOptions, DeferredDFlashDraft, RuntimeState,
         decode_record_tokens_sideband, dflash_early_verdict,
         first_decode_message_with_full_prompt_sideband, is_decode_frame_batch_candidate,
-        prefix_cache_test_config, run_binary_stage_message, run_deferred_dflash_draft,
-        stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
-        token_sideband_or_fill, warm_downstream_is_healthy,
+        is_decode_step_frame, prefix_cache_test_config, run_binary_stage_message,
+        run_deferred_dflash_draft, stage_output_activation_capacity, take_ready_downstream,
+        take_warm_or_connect_downstream, token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
     };
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
@@ -1633,6 +1644,27 @@ mod tests {
             !is_decode_frame_batch_candidate(&config, &message, &[104], true, true),
             "native MTP drafts only come from the unbatched final-stage path"
         );
+    }
+
+    #[test]
+    fn decode_steps_are_decode_frames_not_verify_windows_or_prefill() {
+        for kind in [
+            WireMessageKind::DecodeEmbd,
+            WireMessageKind::DecodeReadout,
+            WireMessageKind::DecodeLightCtx,
+            WireMessageKind::DecodeReplayEmbd,
+            WireMessageKind::DecodeReplayFinalEmbd,
+        ] {
+            assert!(is_decode_step_frame(kind), "{kind:?}");
+        }
+        for kind in [
+            WireMessageKind::VerifyWindow,
+            WireMessageKind::PrefillEmbd,
+            WireMessageKind::PrefillFinalEmbd,
+            WireMessageKind::Stop,
+        ] {
+            assert!(!is_decode_step_frame(kind), "{kind:?}");
+        }
     }
 }
 

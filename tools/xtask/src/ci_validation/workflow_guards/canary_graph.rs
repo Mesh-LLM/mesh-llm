@@ -119,7 +119,7 @@ fn result(job: &Node) -> DynResult<()> {
         ],
     )?;
     h::before(resolution, controller)?;
-    selector_preparation(job, steps, controller, decision)
+    selector_preparation(job, steps, controller, decision, false)
 }
 
 fn preflight(job: &Node) -> DynResult<()> {
@@ -324,7 +324,7 @@ fn select_attempt(attempt: &Node, repair_name: &str, verify_name: &str) -> DynRe
     if repair_name == "repair_1" {
         selected_publication_flag(command)?;
     }
-    selector_preparation(attempt, steps, checkout, select)?;
+    selector_preparation(attempt, steps, checkout, select, true)?;
     let env = h::member(command, "env")?;
     h::binding(env, "CHANGED", "${{ needs.resolve.outputs.changed }}")?;
     h::binding(
@@ -373,8 +373,25 @@ fn selector_preparation(
     steps: &[Node],
     checkout: usize,
     decision: usize,
+    resolved_runner: bool,
 ) -> DynResult<()> {
-    h::binding(job, "runs-on", "ubuntu-24.04")?;
+    let literal = job.get("runs-on").map(Node::list)
+        == Some(vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus",
+        ]);
+    let selected = h::binding(
+        job,
+        "runs-on",
+        "${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}",
+    )
+    .is_ok();
+    if !(if resolved_runner { selected } else { literal }) {
+        return Err("canary final selector must run even if source resolution fails".into());
+    }
     let preparations = steps
         .iter()
         .enumerate()
@@ -392,7 +409,11 @@ fn selector_preparation(
         return Err("selector preparation must run unconditionally and fail closed".into());
     }
     let inputs = h::member(step, "with")?;
-    h::binding(inputs, "runner-profile", "hosted-bare")?;
+    h::binding(
+        inputs,
+        "runner-profile",
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     h::binding(inputs, "allow_depot_remote_cache", "false")?;
     h::binding(inputs, "allow_native_github_cache", "false")?;
     h::before(checkout, *prepare)?;

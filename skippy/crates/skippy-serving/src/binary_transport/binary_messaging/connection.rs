@@ -50,7 +50,7 @@ use crate::binary_transport::stage_execution::nanos_delta_ms;
 use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
 use crate::binary_transport::stage_execution::{
-    is_decode_frame_batch_candidate, last_stage_decode_batch_enabled,
+    is_decode_frame_batch_candidate, is_decode_step_frame, last_stage_decode_batch_enabled,
 };
 use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
@@ -616,6 +616,9 @@ fn handle_binary_connection_messages(
                     let has_downstream = config.downstream.is_some();
                     let sample_prefill_final =
                         message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
+                    // One decode step for this stage's compute meter. A batched decode
+                    // frame is counted by the scheduler that runs it.
+                    let decode_step = is_decode_step_frame(message.kind);
                     let scheduler_session_key = session_key.clone();
                     let scheduler_token_ids = executable_token_ids.to_vec();
                     let scheduler_kv = kv.cloned();
@@ -697,6 +700,9 @@ fn handle_binary_connection_messages(
                                 &scheduler_session_key,
                                 scheduler_message.state,
                             );
+                            if decode_step {
+                                runtime.compute_meter().record_decode_tokens(1);
+                            }
                             let draft_follows =
                                 runtime.dflash_draft_deferred(&scheduler_session_key);
                             let sessions_after =

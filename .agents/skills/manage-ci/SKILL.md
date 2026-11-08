@@ -64,8 +64,16 @@ measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
 Persistent canary jobs use the runner OS's `preinstalled-macos` or
-`preinstalled-linux` automation profile. The native producers request their OS
-and at least 128 GiB; preflight, family and infrastructure-retry jobs request
+`preinstalled-linux` automation profile. The resolver, attempt selectors,
+package combination, aggregation, and reconciliation use the protected 128 GiB
+managed pool; the initial resolver uses those literal closed labels before it
+can emit placement outputs. The credentialed publisher and scheduled alert use
+the same closed managed lab pool. No Llama Upgrade job uses a GitHub-hosted
+runner. Persistent control jobs use the typed `canary-controller` finalizer;
+failed uploads leave the local handoff intact for same-job diagnosis. A failed
+upload blocks the pass, and a rerun reconstructs the handoff from its uploaded
+producer inputs. The native producers
+request their OS and at least 128 GiB; preflight, family and infrastructure-retry jobs request
 the controller's memory tier without an OS or machine type. The worker restores
 the matching native payload from one candidate-bound combined package. Backend
 selection uses Metal on macOS and CUDA on Linux; the Linux image must carry a
@@ -541,7 +549,8 @@ checked-in expiry are the maintainer-controlled approval boundary.
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
 - Every `release.yml` job that can reach cargo — directly, or through
-  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  `scripts/release-version.sh`, `scripts/publish-crates.sh`, or
+  `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
   before its first compiler probe, because `.cargo/config.toml` makes sccache
   the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
@@ -680,6 +689,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- When protected `main` requires pull requests and checks, prepare the complete
+  version update with `scripts/release-version.sh` in a reviewed PR before
+  dispatching a release. The workflow must reapply it idempotently. Do not
+  bypass branch rules to make its version-preparation push succeed.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
@@ -766,8 +779,12 @@ Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
 
-The trusted-main canary releases both native build runners before scheduling
-one job per certified family. The combined handoff binds one source, plan and
+The trusted-main canary runs macOS and Linux native producers concurrently for
+the first unchanged selected-source certification pass. Both independently
+build the frozen commit, and combination requires matching source, plan and
+candidate receipts. Changed-pin repair and independent verification keep the
+Mac-to-Linux candidate dependency. Both native build runners are released before
+scheduling one job per certified family. The combined handoff binds one source, plan and
 manifest to separate macOS and Linux executable sets; each worker chooses its
 set after memory-only placement and never rebuilds.
 The immutable model cache remains offline and read-only. One workflow-level
@@ -825,9 +842,9 @@ restores the prior candidate as uncommitted changes on the frozen base and
 starts a new bounded session that must read the supplied evidence. Every edit
 invalidates all family results. A complete green candidate pass must be
 followed by a fresh independent build and complete per-family pass on the same
-commit. A hosted aggregate
+commit. A managed aggregate
 rejects missing, duplicate, failed, cancelled, or mismatched results. Only the
-final hosted publisher receives the repair credential, and a failed or
+final managed lab publisher receives the repair credential, and a failed or
 exhausted pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
@@ -876,7 +893,7 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-GitHub failed-job reruns retain attempt-labelled evidence. The hosted aggregate
+GitHub failed-job reruns retain attempt-labelled evidence. The managed aggregate
 classifies newest candidate failures separately from runner/workflow failures.
 It emits a digest-bound classification artifact for either a candidate repair
 or the one targeted infrastructure recheck. Reconciliation combines retained

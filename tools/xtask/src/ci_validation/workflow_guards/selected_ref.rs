@@ -28,7 +28,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let steps = h::steps(job)?;
     let checkout = h::checkout(steps, "${{ github.sha }}", None)?;
     let (bootstrap, prepare) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
-    h::binding(h::member(prepare, "with")?, "runner-profile", "hosted-bare")?;
+    h::binding(
+        h::member(prepare, "with")?,
+        "runner-profile",
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     let (resolve, step) = h::step(steps, "id", "resolve")?;
     let (upstream, selection) = h::step(steps, "id", "upstream")?;
     if !(checkout < bootstrap && bootstrap < upstream && upstream < resolve) {

@@ -195,7 +195,7 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted upstream selection step receives
+without falling back to `master`. The managed upstream selection step receives
 the workflow's read-only GitHub token through `GH_TOKEN`.
 Runner placement uses managed memory labels without a runner API query. Workers
 receive no GitHub token.
@@ -238,7 +238,7 @@ cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
-Only two green passes permit the hosted publisher to create a PR to `main`
+Only two green passes permit the managed lab publisher to create a PR to `main`
 with that exact commit. Both modes keep its existing pin and never invoke Goose.
 The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
@@ -288,9 +288,12 @@ pipeline. Packages bind both the controller and selected base; changed candidate
 must be direct children of that base with an admitted bundle. Certify modes still
 reject upstream overrides and preserve the selected commit unchanged.
 
-`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
-build → hosted package combination → memory-tier family matrix → hosted
-aggregate. The protected controller prepares automation and invokes `canary-receipts build`
+`llama-canary-family-pass.yml` runs macOS and Linux native builds concurrently
+for the first unchanged selected-source certification pass. Changed-pin repair
+and independent verification still build Mac first, then pass its exact candidate
+package to Linux. Both paths join at managed package combination, followed by
+the memory-tier family matrix and managed aggregate. The protected controller
+prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
 Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
 manifests, enumerating source paths or hashing source diffs. Diagnostics remain
@@ -350,6 +353,8 @@ completion and waits for live members to stop before handing the workspace back.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
+Bundle-backed native builds inspect parity against the admitted exact candidate;
+the controller parity inventory checks only the frozen selected source.
 
 The family matrix is submitted in ascending estimated model bytes, with family
 name breaking ties. Balanced shard membership remains unchanged. This puts
@@ -371,7 +376,7 @@ Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
 Reruns retain attempt-labelled family/build history. These diagnostics never
-substitute for either complete certification pass. The hosted aggregate emits
+substitute for either complete certification pass. The managed aggregate emits
 a digest-bound classification artifact for candidate repair or a single
 targeted infrastructure recheck. That recheck runs only the runner/workflow-
 failed or missing families against the same producer package, without Goose or
@@ -500,7 +505,7 @@ prepare/build failures under the existing 11.5-hour coding-admission and
 failure starts a new bounded session on the next attempt after restoring the
 exact prior candidate as uncommitted changes on the frozen base. Every edit
 invalidates all prior family results. Candidates are local, uncertified commits
-until both full family passes are green. The separate GitHub-hosted publisher
+until both full family passes are green. The separate managed lab publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level
@@ -529,7 +534,9 @@ checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
 `libllama.so`), then supplies that library directory to Cargo's package
 verification. The resume workflow uses the same release-archive contract.
 
-The `release_notes` job runs after a successful stable publish with
+The `release_notes` job initializes the Rust toolchain and sccache with both
+remote caches disabled before invoking its Cargo-backed notes helper. It runs
+after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog
 sections through `scripts/release-notes-generate.sh`, which calls `cargo xtool
 release notes-link`, `notes-classify`, and `notes-regroup`. The deterministic
