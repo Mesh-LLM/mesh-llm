@@ -189,6 +189,13 @@ pub struct BufferedHttpRequest {
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
+    /// Set once automatic routing (`mesh`/`auto` or no model) resolved this
+    /// request. The resolved model is written back into the body, so the model
+    /// name alone can no longer tell an automatic request from a named one;
+    /// host selection reads this flag instead (lab, 2026-11-08: inferring it
+    /// from the rewritten name sent every automatic request down the
+    /// named-model local-first path).
+    pub automatic_route: bool,
 }
 
 impl BufferedHttpRequest {
@@ -525,6 +532,7 @@ where
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
+        automatic_route: false,
     })
 }
 

@@ -43,6 +43,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 
@@ -219,6 +220,7 @@ fn dispatch_kind_request(
         response_adapter,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 
@@ -317,6 +319,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
     let decision = AutoRouteDecision {
         effective_model: None,
@@ -1241,6 +1244,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     // Confirm the nonce header round-trips through the raw bytes before the
@@ -1411,6 +1415,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     // Confirm both headers are readable before the routing function runs.
@@ -1604,6 +1609,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     let values = request.twin_bracket_header_values().unwrap();
@@ -1930,6 +1936,7 @@ pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 
@@ -2354,6 +2361,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     let ctx = IngressRouteContext {
@@ -2662,6 +2670,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
     let peer_hex = "ab".repeat(32);
     let outcome = proxy::RouteDispatchOutcome::Responded(200);

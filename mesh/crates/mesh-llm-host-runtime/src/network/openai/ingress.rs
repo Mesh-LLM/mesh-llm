@@ -459,7 +459,7 @@ async fn auto_route_model_has_ready_ingress_target(
 /// predicate below would match and then rewrite, diverging the wire identity
 /// from the authoritative expected identity. `transport.rs` carries the same
 /// guard for the same reason.
-fn maybe_enable_auto_route_hooks(
+pub(super) fn maybe_enable_auto_route_hooks(
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
 ) {
@@ -473,6 +473,7 @@ fn maybe_enable_auto_route_hooks(
     if !is_automatic {
         return;
     }
+    request.automatic_route = true;
     proxy::inject_skippy_hooks_flag(&mut request.raw, true);
     // The directive itself is not a model. PluginOverride mode keeps it in the body
     // for the installed virtual-model plugin; only a resolved concrete model gets written back.

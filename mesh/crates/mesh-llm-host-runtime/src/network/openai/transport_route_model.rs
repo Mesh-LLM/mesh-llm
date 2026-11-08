@@ -151,7 +151,7 @@ async fn cache_target_for_request(
     selected
 }
 
-async fn execution_candidates(
+pub(super) async fn execution_candidates(
     node: &mesh::Node,
     model: &str,
     request: &BufferedHttpRequest,
@@ -166,14 +166,17 @@ async fn execution_candidates(
             .collect::<Vec<_>>();
         super::super::workload_routing::eligible_targets(node, model, &request.client_path, &local)
             .await
-    } else if request
-        .model_name
-        .as_deref()
-        .is_none_or(super::super::automatic::is_directive)
+    } else if request.automatic_route
+        || request
+            .model_name
+            .as_deref()
+            .is_none_or(super::super::automatic::is_directive)
     {
         // Automatic routing chose the model; the host is drawn over every
         // placement, this node's and its peers', so capacity decides the
         // split instead of whichever node the request happened to reach.
+        // The flag, not the name: ingress already rewrote the directive into
+        // the resolved model's name before this point.
         super::super::workload_routing::mesh_candidates(node, model, &request.client_path, targets)
             .await
     } else {

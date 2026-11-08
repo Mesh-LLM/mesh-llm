@@ -114,6 +114,49 @@ async fn mesh_candidates_cover_local_and_remote_placements() {
     );
 }
 
+#[tokio::test]
+/// The live automatic path: ingress resolves `mesh` to the concrete model and
+/// writes that name back into the request before host selection runs, so the
+/// name no longer says the request was automatic. Host selection must still
+/// draw over this node and its peers — from the automatic-route flag — or
+/// every automatic request takes the named-model local-first path (lab,
+/// 2026-11-08: 0 of 100 automatic requests left the origin node).
+async fn automatic_request_keeps_mesh_candidates_after_model_rewrite() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    let remote = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    node.set_served_model_descriptors(vec![descriptor(
+        Some(ModelWorkloadClass::CausalGeneration),
+        false,
+    )])
+    .await;
+    let mut targets = election::ModelTargets::default();
+    targets
+        .targets
+        .insert(MODEL.into(), vec![election::InferenceTarget::Local(9337)]);
+    let path = "/v1/chat/completions";
+    let mut automatic = request(path, "mesh");
+    crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut automatic, Some(MODEL));
+    assert_eq!(automatic.model_name.as_deref(), Some(MODEL));
+    assert!(automatic.automatic_route);
+    assert_eq!(
+        super::super::route_model::execution_candidates(&node, MODEL, &automatic, &targets, false)
+            .await,
+        vec![
+            election::InferenceTarget::Local(9337),
+            election::InferenceTarget::Remote(remote)
+        ]
+    );
+    let named = request(path, MODEL);
+    assert!(!named.automatic_route);
+    assert_eq!(
+        super::super::route_model::execution_candidates(&node, MODEL, &named, &targets, false)
+            .await,
+        vec![election::InferenceTarget::Local(9337)]
+    );
+}
+
 #[test]
 /// A peer advertises the model this node serves under its public id, so the
 /// automatic candidate list would hold the same model twice: the identity
@@ -286,6 +329,7 @@ fn request(path: &str, model: &str) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 

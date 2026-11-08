@@ -568,6 +568,7 @@ async fn build_mesh_request_plan(
     }
     rewrite_effective_model(request, effective_model.as_deref());
     if is_auto_request {
+        request.automatic_route = true;
         inject_skippy_hooks_flag(&mut request.raw, true);
     }
     if track_demand && let Some(name) = effective_model.as_deref() {
