@@ -209,11 +209,11 @@ is the complete conformance example. It is compiled into `mesh-llm` but
 single-model directive independently of any plugin. Operators opt in with
 
 ```toml
-[[plugins]]
+[[plugin]]
 name = "mesh-moa"
 ```
 
-in `mesh.toml` (only `enabled` may be set on this entry, as for `blobstore`);
+in `~/.mesh-llm/config.toml` (or the file passed with `--config`; only `enabled` may be set on this entry, as for `blobstore`);
 the committee then overrides non-streaming text chat to `mesh`, while
 streaming and media keep core routing. Operator-blocked peers are omitted
 from candidate snapshots.

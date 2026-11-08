@@ -859,10 +859,10 @@ pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     });
 }
 
-/// In-process runners for built-in plugins the operator enabled in `mesh.toml`.
+/// In-process runners for built-in plugins the operator enabled in `config.toml`.
 ///
 /// The Mixture-of-Agents committee (`mesh-moa`) is compiled in but off by
-/// default; `resolve_plugins` lists it only when a `[[plugins]]` entry names it.
+/// default; `resolve_plugins` lists it only when a `[[plugin]]` entry names it.
 fn builtin_in_process_plugins(resolved: &plugin::ResolvedPlugins) -> plugin::InProcessPlugins {
     let in_process = plugin::InProcessPlugins::default();
     if !resolved
@@ -2008,7 +2008,7 @@ mod tests {
         }
     }
 
-    /// The production path from `mesh.toml` to a registered virtual model:
+    /// The production path from `config.toml` to a registered virtual model:
     /// `resolve_plugins` -> `builtin_in_process_plugins` -> `PluginManager`.
     async fn virtual_models_for(config: &MeshConfig) -> Vec<String> {
         let host_mode = crate::plugin::PluginHostMode {

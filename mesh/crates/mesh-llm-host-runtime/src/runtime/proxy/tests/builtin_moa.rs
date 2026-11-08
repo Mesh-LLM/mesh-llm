@@ -1,5 +1,5 @@
 // Built-in Mixture-of-Agents plugin, started explicitly by these tests: the
-// runtime registers it only when `[[plugins]] name = "mesh-moa"` is configured.
+// runtime registers it only when `[[plugin]] name = "mesh-moa"` is configured.
 
 #[tokio::test]
 async fn test_builtin_moa_all_small_pool_routes_direct_through_plugin_api() {
