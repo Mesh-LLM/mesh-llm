@@ -1,4 +1,4 @@
-From 5860b0129db46ab79eda25f0d7205b6326df2761 Mon Sep 17 00:00:00 2001
+From 234e975ad1c4608297d7bf5c81be7d7fed957f57 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
 Subject: [PATCH 15/15] skippy: roll back staged verify windows in place
@@ -50,13 +50,14 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  src/skippy/execution-single.cpp               |   5 +
  src/skippy/runtime_support.h                  |   7 +
  src/skippy/runtime_types.h                    |  17 +
- src/skippy/session.cpp                        |   6 +-
+ src/skippy/session.cpp                        |  13 +-
  src/skippy/state.cpp                          |  56 ++-
+ src/skippy/tests/sampling_history.cpp         |  33 ++
  src/skippy/tests/verify_rollback.cpp          | 320 ++++++++++++++++++
  src/skippy/verify_window.cpp                  | 210 ++++++++++++
  src/skippy/verify_window.h                    |  38 +++
  ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
- 15 files changed, 800 insertions(+), 76 deletions(-)
+ 16 files changed, 839 insertions(+), 77 deletions(-)
  create mode 100644 src/skippy/tests/verify_rollback.cpp
  create mode 100644 src/skippy/verify_window.cpp
  create mode 100644 src/skippy/verify_window.h
@@ -441,7 +442,7 @@ index d1c094548..7167e5f7a 100644
                  false,
                  SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index 754045162..ebf2cbcd9 100644
+index 86ea1ed55..40faff815 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -393,6 +393,13 @@ enum skippy_status skippy_iteration_batch_sampled(
@@ -526,10 +527,31 @@ index 46e907aa0..ec9fb94b1 100644
 +    uint64_t verify_windows_checkpointed = 0;
  };
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 4741f55cb..a9251d2c9 100644
+index 4741f55cb..9d0ba6ee5 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -241,7 +241,7 @@ enum skippy_status skippy_session_set_position(
+@@ -190,7 +190,7 @@ int32_t skippy_session_batch_size(
+ enum skippy_status skippy_session_begin_external_decode(
+         struct skippy_session * session,
+         struct skippy_error ** out_error) {
+-    if (session == nullptr || session->stage_model == nullptr) {
++    if (session == nullptr || session->ctx == nullptr || session->stage_model == nullptr) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+@@ -198,6 +198,11 @@ enum skippy_status skippy_session_begin_external_decode(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "another external decode session is already active on this thread");
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    // Caller-managed decodes overwrite the same rollback snapshots as ordinary native decodes.
++    const auto status = skippy_settle_inplace_verify_window(session, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
+     session->pending_activation_exports.clear();
+ 
+     g_skippy_external_decode_session = session;
+@@ -241,7 +246,7 @@ enum skippy_status skippy_session_set_position(
          session->signal_history.resize(static_cast<size_t>(n_past));
      }
      skippy_mtp_clear_session_state(session);
@@ -538,7 +560,7 @@ index 4741f55cb..a9251d2c9 100644
      return skippy_success(out_error);
  }
  
-@@ -396,7 +396,9 @@ enum skippy_status skippy_session_reset(
+@@ -396,7 +401,9 @@ enum skippy_status skippy_session_reset(
      session->sampling_backend_verifying = false;
      session->sampling_backend_row_invalid = true;
      session->reset_required = false;
@@ -661,6 +683,57 @@ index 15c48419d..45a53c4ba 100644
      return skippy_success(out_error);
  }
  
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+index 4100856f3..ee3be20b8 100644
+--- a/src/skippy/tests/sampling_history.cpp
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -263,6 +263,38 @@ void verify_restore_keeps_sampler(skippy_model * model) {
+     release(session);
+ }
+ 
++void external_decode_protects_verify_window(skippy_model * model) {
++    const auto sampling = sampling_config();
++    const std::vector<llama_token> prefix(8, 1);
++    auto * session = create(model);
++    prefill(session, prefix);
++    const std::vector<llama_token> window{2, 42};
++    llama_token predicted[2]{};
++    size_t predicted_count = 0;
++    size_t bytes = 0;
++    skippy_error * error = nullptr;
++    auto status = skippy_verify_tokens_frame_sampled(session, window.data(), window.size(), &sampling,
++            nullptr, nullptr, nullptr, nullptr, 0, &bytes,
++            predicted, 2, &predicted_count, 0, nullptr, &error);
++    ok(status, error);
++    CHECK(predicted_count == 2);
++    const bool held_in_place = skippy_verify_window_can_roll_back_in_place(session, window.size());
++    CHECK(session->inplace_verify_window.valid == held_in_place);
++    CHECK(session->verify_checkpoints.size() == (held_in_place ? 0 : 1));
++    error = nullptr;
++    status = skippy_session_begin_external_decode(session, &error);
++    ok(status, error);
++    CHECK(!session->inplace_verify_window.valid && session->verify_checkpoints.size() == 1);
++    error = nullptr;
++    status = skippy_session_end_external_decode(session, &error);
++    ok(status, error);
++    error = nullptr;
++    status = skippy_trim_session(session, prefix.size() + 1, &error);
++    ok(status, error);
++    CHECK(session->n_past == static_cast<int32_t>(prefix.size() + 1));
++    release(session);
++}
++
+ void penalty_restore(skippy_model * model, bool full) {
+     auto sampling = sampling_config();
+     sampling.penalty_last_n = 512;
+@@ -614,6 +646,7 @@ int main(int argc, char ** argv) {
+             if (require_recurrent) {
+                 // Only recurrent memory restores verify windows from a checkpoint.
+                 verify_restore_keeps_sampler(model);
++                external_decode_protects_verify_window(model);
+             }
+             adapter_contracts(model);
+         }
 diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
 new file mode 100644
 index 000000000..d61e314a6
@@ -1273,6 +1346,3 @@ index d09acccb4..8d68604c3 100644
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 30, 4, &retired)) return 10;
      return 0;
  }
--- 
-2.54.0 (Apple Git-157)
-

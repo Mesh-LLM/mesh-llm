@@ -1,4 +1,4 @@
-From ac4ea3ffde8e7490bf9ac265464fdbb588f39f70 Mon Sep 17 00:00:00 2001
+From 428a845a224e3677b44c0a06127f01881550f9f3 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
@@ -23,13 +23,14 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1198 ++++++++++++
- tests/CMakeLists.txt                          |   28 +
+ tests/CMakeLists.txt                          |   31 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  189 +-
  tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-graph-contract-fixture.h           |  155 ++
  tests/test-llama-archs.cpp                    |  351 +++-
- tests/test-reasoning-budget.cpp               |    1 +
+ tests/test-reasoning-budget.cpp               |   24 +
+ tests/test-skippy-activation-validation.cpp   |   18 +
  tests/test-skippy-cachegen-import.cpp         |  347 ++++
  tests/test-skippy-cachegen-metal.cpp          |  399 ++++
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
@@ -39,7 +40,7 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 35 files changed, 10079 insertions(+), 30 deletions(-)
+ 36 files changed, 10123 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
@@ -61,6 +62,7 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/stage_slice_plan.cpp
  create mode 100644 tests/test-deepseek4-mtp.h
  create mode 100644 tests/test-graph-contract-fixture.h
+ create mode 100644 tests/test-skippy-activation-validation.cpp
  create mode 100644 tests/test-skippy-cachegen-import.cpp
  create mode 100644 tests/test-skippy-cachegen-metal.cpp
  create mode 100644 tests/test-skippy-kv-cells-contiguous.cpp
@@ -7673,14 +7675,15 @@ index 000000000..8336599ac
 +    return result;
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 4224a15ae..65108c82a 100644
+index 4224a15ae..f393c6edc 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -181,7 +181,15 @@ set(LLAMA_CONTEXT_TEST_SRC
+@@ -181,7 +181,16 @@ set(LLAMA_CONTEXT_TEST_SRC
  )
  llama_build(${LLAMA_CONTEXT_TEST_SRC})
  
 +llama_build_and_test(test-skippy-rerank-template.cpp)
++llama_build_and_test(test-skippy-activation-validation.cpp)
 +
  if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 +    llama_build_and_test(test-skippy-cachegen-import.cpp)
@@ -7692,30 +7695,32 @@ index 4224a15ae..65108c82a 100644
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
      llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
-@@ -253,6 +261,22 @@ set_tests_properties(test-generate-models PROPERTIES
+@@ -253,6 +262,24 @@ set_tests_properties(test-generate-models PROPERTIES
      FIXTURES_SETUP generate-models
  )
  
-+llama_build_and_test(
-+    test-skippy-model-loader-accounting.cpp
-+    LABEL main
-+    ARGS "${MODEL_DIR}/gemma-dense.gguf"
-+)
-+target_include_directories(test-skippy-model-loader-accounting PRIVATE ${PROJECT_SOURCE_DIR}/src)
-+set_tests_properties(test-skippy-model-loader-accounting PROPERTIES FIXTURES_REQUIRED generate-models)
++if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
++    llama_build_and_test(
++        test-skippy-model-loader-accounting.cpp
++        LABEL main
++        ARGS "${MODEL_DIR}/gemma-dense.gguf"
++    )
++    target_include_directories(test-skippy-model-loader-accounting PRIVATE ${PROJECT_SOURCE_DIR}/src)
++    set_tests_properties(test-skippy-model-loader-accounting PROPERTIES FIXTURES_REQUIRED generate-models)
 +
-+llama_test(
-+    test-skippy-model-loader-accounting
-+    NAME test-skippy-model-loader-accounting-moe
-+    LABEL main
-+    ARGS "${MODEL_DIR}/qwen2moe-moe.gguf"
-+)
-+set_tests_properties(test-skippy-model-loader-accounting-moe PROPERTIES FIXTURES_REQUIRED generate-models)
++    llama_test(
++        test-skippy-model-loader-accounting
++        NAME test-skippy-model-loader-accounting-moe
++        LABEL main
++        ARGS "${MODEL_DIR}/qwen2moe-moe.gguf"
++    )
++    set_tests_properties(test-skippy-model-loader-accounting-moe PROPERTIES FIXTURES_REQUIRED generate-models)
++endif()
 +
  # Target model for test-speculative-rejection-sampling
  set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
  file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")
-@@ -299,6 +323,10 @@ llama_test_cmd(python3
+@@ -299,6 +326,10 @@ llama_test_cmd(python3
  llama_build_and_test(test-json-schema.cpp  LABEL behavior)
  llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
  llama_build_and_test(test-chat-template.cpp  LABEL behavior)
@@ -8864,7 +8869,7 @@ index ea9afd660..dde1b03f0 100644
          if (kv_shift) {
              return test_kv_shift(arch_filter, seed, stdev, verbosity);
 diff --git a/tests/test-reasoning-budget.cpp b/tests/test-reasoning-budget.cpp
-index a50a10824..4ea8006d4 100644
+index a50a10824..e87e0b064 100644
 --- a/tests/test-reasoning-budget.cpp
 +++ b/tests/test-reasoning-budget.cpp
 @@ -1,5 +1,6 @@
@@ -8874,6 +8879,60 @@ index a50a10824..4ea8006d4 100644
  
  #include "llama.h"
  #include "ggml.h"
+@@ -333,6 +334,29 @@ static void test_reasoning_budget_end_match() {
+         llama_sampler_free(sampler);
+     }
+ 
++    // A generated end tag can prefix the forced sequence; its formatting suffix must still be forced.
++    {
++        auto * sampler = common_reasoning_budget_init(
++                nullptr, start, {{101}}, {101, 102, 103}, 0, REASONING_BUDGET_FORCING);
++        for (llama_token token : {101, 102, 103}) {
++            llama_token_data candidates[] = {{101, 0.0f, 0.0f}, {102, 0.0f, 0.0f}, {103, 0.0f, 0.0f}};
++            llama_token_data_array view = {candidates, 3, -1, false};
++            llama_sampler_apply(sampler, &view);
++            for (const auto & candidate : candidates) {
++                GGML_ASSERT(std::isfinite(candidate.logit) == (candidate.id == token));
++            }
++            llama_sampler_accept(sampler, token);
++            if (token != 103) {
++                GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_FORCING);
++                GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
++            }
++        }
++        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
++        const auto * matched = common_reasoning_budget_get_end_match(sampler);
++        GGML_ASSERT(matched != nullptr && *matched == llama_tokens({101}));
++        llama_sampler_free(sampler);
++    }
++
+     // forced_tokens not ending with a known end sequence records nothing
+     {
+         auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102}, 0, REASONING_BUDGET_FORCING);
+diff --git a/tests/test-skippy-activation-validation.cpp b/tests/test-skippy-activation-validation.cpp
+new file mode 100644
+index 000000000..7466f03c1
+--- /dev/null
++++ b/tests/test-skippy-activation-validation.cpp
+@@ -0,0 +1,18 @@
++#include "skippy.h"
++
++#include <cstdio>
++
++int main() {
++    skippy_activation_desc descriptor{};
++    size_t bytes = 0;
++    skippy_error * error = nullptr;
++    const auto status = skippy_session_copy_output_activation_frame(
++            nullptr, 1, &descriptor, nullptr, 0, &bytes, &error);
++    const bool rejected = status == SKIPPY_STATUS_INVALID_ARGUMENT && error != nullptr;
++    skippy_error_free(error);
++    if (!rejected) {
++        std::fprintf(stderr, "null activation session was not rejected before live-frame capture\n");
++        return 1;
++    }
++    return 0;
++}
 diff --git a/tests/test-skippy-cachegen-import.cpp b/tests/test-skippy-cachegen-import.cpp
 new file mode 100644
 index 000000000..43cc3f7d6
@@ -10691,6 +10750,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-

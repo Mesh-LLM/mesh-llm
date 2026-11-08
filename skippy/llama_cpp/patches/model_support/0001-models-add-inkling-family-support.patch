@@ -1,53 +1,56 @@
-From a594e99136a8c49942bb6b77c4949b6569fcb868 Mon Sep 17 00:00:00 2001
+From 90cd3297774d1ea878c6ed437ac25dfdfd30a0b2 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 6 Nov 2026 10:32:22 -0800
 Subject: [PATCH] models: add inkling family support
 
 ---
- common/chat.cpp                     |   8 +
- common/parsers/inkling.cpp          | 117 +++++
- common/parsers/parsers.h            |   2 +
- common/parsers/sources.cmake        |   1 +
- models/templates/Inkling.jinja      | 514 +++++++++++++++++++++
- src/llama-arch.cpp                  |  15 +
- src/llama-arch.h                    |  24 +
- src/llama-context.cpp               |   6 +
- src/llama-graph.cpp                 |  25 +-
- src/llama-hparams.cpp               |   2 +-
- src/llama-hparams.h                 |  10 +-
- src/llama-model.cpp                 |  14 +
- src/llama-model.h                   |   9 +
- src/llama-quant.cpp                 |  10 +
- src/llama-vocab.cpp                 |  10 +
- src/llama-vocab.h                   |   1 +
- src/models/inkling.cpp              | 687 ++++++++++++++++++++++++++++
- src/models/models.h                 |  12 +
- src/models/nemotron-h-moe.cpp       |   2 +-
- src/skippy/speculative_decoding.cpp |  93 +++-
- tests/test-chat.cpp                 | 115 +++++
- tests/test-llama-archs.cpp          |   4 +
- tools/mtmd/CMakeLists.txt           |   1 +
- tools/mtmd/clip-impl.h              |   9 +
- tools/mtmd/clip-model.h             |  12 +
- tools/mtmd/clip.cpp                 |  62 ++-
- tools/mtmd/models/inkling.cpp       | 105 +++++
- tools/mtmd/models/models.h          |  11 +
- tools/mtmd/mtmd-audio.cpp           |  72 +++
- tools/mtmd/mtmd-audio.h             |  12 +
- tools/mtmd/mtmd-image.cpp           |  72 +++
- tools/mtmd/mtmd-image.h             |  20 +
- tools/mtmd/mtmd.cpp                 |  37 +-
- 33 files changed, 2070 insertions(+), 24 deletions(-)
+ common/chat.cpp                      |   8 +
+ common/parsers/inkling.cpp           | 117 +++++
+ common/parsers/parsers.h             |   2 +
+ common/parsers/sources.cmake         |   1 +
+ models/templates/Inkling.jinja       | 514 ++++++++++++++++++++
+ src/llama-arch.cpp                   |  15 +
+ src/llama-arch.h                     |  24 +
+ src/llama-context.cpp                |   6 +
+ src/llama-graph.cpp                  |  25 +-
+ src/llama-hparams.cpp                |   2 +-
+ src/llama-hparams.h                  |  10 +-
+ src/llama-kv-cache.cpp               |  24 +-
+ src/llama-kv-cache.h                 |   4 +-
+ src/llama-model.cpp                  |  14 +
+ src/llama-model.h                    |   9 +
+ src/llama-quant.cpp                  |  10 +
+ src/llama-vocab.cpp                  |  10 +
+ src/llama-vocab.h                    |   1 +
+ src/models/inkling.cpp               | 691 +++++++++++++++++++++++++++
+ src/models/models.h                  |  12 +
+ src/models/nemotron-h-moe.cpp        |   2 +-
+ src/skippy/speculative_decoding.cpp  |  93 +++-
+ tests/test-chat.cpp                  | 115 +++++
+ tests/test-llama-archs.cpp           |   4 +
+ tests/test-skippy-kv-page-export.cpp |  58 +++
+ tools/mtmd/CMakeLists.txt            |   1 +
+ tools/mtmd/clip-impl.h               |   9 +
+ tools/mtmd/clip-model.h              |  12 +
+ tools/mtmd/clip.cpp                  |  62 ++-
+ tools/mtmd/models/inkling.cpp        | 105 ++++
+ tools/mtmd/models/models.h           |  11 +
+ tools/mtmd/mtmd-audio.cpp            |  72 +++
+ tools/mtmd/mtmd-audio.h              |  12 +
+ tools/mtmd/mtmd-image.cpp            |  72 +++
+ tools/mtmd/mtmd-image.h              |  20 +
+ tools/mtmd/mtmd.cpp                  |  37 +-
+ 36 files changed, 2152 insertions(+), 32 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
  create mode 100644 tools/mtmd/models/inkling.cpp
 
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 94bcaef71..123441218 100644
+index 6910aa61a..8b05c8aaa 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -1455,6 +1455,14 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
+@@ -1365,6 +1365,14 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
          return common_chat_params_init_cohere2moe;
      }
  
@@ -933,6 +936,84 @@ index 53810f36f..e685800f3 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index fd12f9966..8a655a138 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -3268,7 +3268,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
+     }
+ }
+ 
+-void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
++void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows) const {
+     const int64_t n_tokens = ubatch->n_tokens;
+ 
+     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+@@ -3278,7 +3278,16 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+     const int64_t n_kv = dst->ne[0];
+     GGML_ASSERT(dst->ne[1] == n_tokens);
+ 
+-    // [n_kv, n_tokens] in GLOBAL token order (stream-major, same as the KQ mask)
++    const int32_t * row_ids = nullptr;
++    int64_t n_slices = 1;
++    if (rows != nullptr) {
++        GGML_ASSERT(ggml_backend_buffer_is_host(rows->buffer));
++        GGML_ASSERT(rows->ne[0] == n_kv && rows->ne[1] > 0 && n_tokens % rows->ne[1] == 0);
++        row_ids = static_cast<const int32_t *>(rows->data);
++        n_slices = rows->ne[1];
++    }
++
++    // Each slice must use the same physical-cell order and padding as its attention mask.
+     for (int64_t i = 0; i < n_tokens; ++i) {
+         const llama_seq_id seq_id = ubatch->seq_id[i][0];
+ 
+@@ -3289,8 +3298,10 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+         for (int64_t j = 0; j < n_kv; ++j) {
+             // use the ACTUAL absolute position in the KV cell; physical slot order is not monotonic
+             int32_t rel = (int32_t) extent; // zero-bias column
+-            if (!cells.is_empty(j)) {
+-                const llama_pos d = p1 - cells.pos_get(j);
++            const int64_t slice = row_ids != nullptr ? i / (n_tokens / n_slices) : 0;
++            const int32_t cell = row_ids != nullptr ? row_ids[slice*n_kv + j] : static_cast<int32_t>(j);
++            if (cell >= 0 && !cells.is_empty(cell)) {
++                const llama_pos d = p1 - cells.pos_get(cell);
+                 if (d >= 0 && d < (llama_pos) extent) {
+                     rel = (int32_t) d;
+                 }
+@@ -4537,8 +4548,9 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+     kv->set_input_pos_bucket(dst, ubatch);
+ }
+ 
+-void llama_kv_cache_context::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
+-    kv->set_input_pos_rel_flat(dst, ubatch, extent);
++void llama_kv_cache_context::set_input_pos_rel_flat(
++        ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows) const {
++    kv->set_input_pos_rel_flat(dst, ubatch, extent, rows);
+ }
+ 
+ void llama_kv_cache_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 874c3739d..7189c4447 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -299,7 +299,7 @@ public:
+ 
+     // inkling: fill dst I32 [n_kv, n_tokens] with flat rel-bias gather indices,
+     // idx(i, j) = i*(extent + 1) + rel; empty/out-of-band cells map to the zero-bias column `extent`
+-    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
++    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows = nullptr) const;
+ 
+     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
+     bool has_cell_ext() const;
+@@ -520,7 +520,7 @@ public:
+     void set_input_k_shift   (ggml_tensor * dst) const;
+     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
+     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+-    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const; // inkling
++    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows = nullptr) const; // inkling
+ 
+     // see llama_kv_cache::get_prev_tokens()
+     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
 index 8ded67e17..5716c04f6 100644
 --- a/src/llama-model.cpp
@@ -1057,10 +1138,10 @@ index 1ae5b65f6..29190ca38 100644
  // HF Metaspace pre-tokenizer prepend_scheme
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
 new file mode 100644
-index 000000000..f6020bedd
+index 000000000..c6c9e223a
 --- /dev/null
 +++ b/src/models/inkling.cpp
-@@ -0,0 +1,687 @@
+@@ -0,0 +1,691 @@
 +// Inkling (PRIVATE arch): hybrid iSWA attention + per-layer packed shortconv state; see INKLING_DESIGN.md.
 +
 +#include "models.h"
@@ -1230,11 +1311,11 @@ index 000000000..f6020bedd
 +        }
 +
 +        if (rel_idx) {
-+            mctx->get_attn()->get_base()->set_input_pos_rel_flat(rel_idx, ubatch, hparams.inkling_rel_extent);
++            mctx->get_attn()->get_base()->set_input_pos_rel_flat(rel_idx, ubatch, hparams.inkling_rel_extent, rel_rows);
 +        }
 +
 +        if (rel_idx_swa) {
-+            mctx->get_attn()->get_swa()->set_input_pos_rel_flat(rel_idx_swa, ubatch, hparams.inkling_rel_extent_swa);
++            mctx->get_attn()->get_swa()->set_input_pos_rel_flat(rel_idx_swa, ubatch, hparams.inkling_rel_extent_swa, rel_rows_swa);
 +        }
 +
 +        if (vocab_mask) {
@@ -1267,6 +1348,8 @@ index 000000000..f6020bedd
 +    ggml_tensor * tau         = nullptr; // F32 [1, 1, n_tokens]
 +    ggml_tensor * rel_idx     = nullptr; // I32 [n_kv_base, n_tokens]
 +    ggml_tensor * rel_idx_swa = nullptr; // I32 [n_kv_swa, n_tokens]
++    ggml_tensor * rel_rows    = nullptr; // Physical KV cell lists for the global bias
++    ggml_tensor * rel_rows_swa = nullptr; // Physical KV cell lists for the SWA bias
 +    ggml_tensor * vocab_mask  = nullptr; // F32 [n_vocab]
 +    ggml_tensor * shexp_idx   = nullptr; // I32 [n_shexp, n_tokens], constant 0..n_shexp-1
 +
@@ -1304,7 +1387,6 @@ index 000000000..f6020bedd
 +
 +    const auto * mctx_hyb  = static_cast<const llama_memory_hybrid_iswa_context *>(mctx);
 +    const auto * mctx_recr = mctx_hyb->get_recr();
-+    const auto * mctx_attn = mctx_hyb->get_attn();
 +
 +    const uint32_t kv_head = mctx_recr->get_head();
 +
@@ -1333,6 +1415,9 @@ index 000000000..f6020bedd
 +        }
 +    }
 +
++    // Fill the row lists before the relative-position input reads them.
++    auto * inp_hybrid = build_inp_mem_hybrid_iswa();
++    auto * attn_input = inp_hybrid->get_attn();
 +    auto inp = std::make_unique<llm_graph_input_inkling>(hparams, mctx_hyb);
 +
 +    if (hparams.inkling_log_n_floor > 0 && has_global) {
@@ -1342,14 +1427,16 @@ index 000000000..f6020bedd
 +    }
 +
 +    if (needs_rel_idx_global) {
-+        const int64_t n_kv = mctx_attn->get_base()->get_n_kv();
++        const int64_t n_kv = attn_input->self_attn_mask.raw->ne[0];
++        inp->rel_rows = attn_input->self_attn_mask.rows;
 +        inp->rel_idx = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_tokens);
 +        ggml_set_input(inp->rel_idx);
 +        ggml_set_name(inp->rel_idx, "inkling_rel_idx");
 +    }
 +
 +    if (needs_rel_idx_local) {
-+        const int64_t n_kv_swa = mctx_attn->get_swa()->get_n_kv();
++        const int64_t n_kv_swa = attn_input->self_attn_mask_swa.raw->ne[0];
++        inp->rel_rows_swa = attn_input->self_attn_mask_swa.rows;
 +        inp->rel_idx_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv_swa, n_tokens);
 +        ggml_set_input(inp->rel_idx_swa);
 +        ggml_set_name(inp->rel_idx_swa, "inkling_rel_idx_swa");
@@ -1384,8 +1471,6 @@ index 000000000..f6020bedd
 +    request_input(shexp_idx,   "inkling.shared_expert_indices");
 +
 +    res->add_input(std::move(inp));
-+
-+    auto * inp_hybrid = build_inp_mem_hybrid_iswa();
 +
 +    // shared by the 4 stream sub-views; build_rs must run exactly once per layer (it zero-inits fresh states)
 +    ggml_tensor * conv_rs_cur = nullptr;
@@ -2086,6 +2171,81 @@ index dde1b03f0..d12706299 100644
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 30c88b490..0fb9f036a 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -1,4 +1,8 @@
+ #include "skippy.h"
++#include "ggml-alloc.h"
++#include "ggml-cpu.h"
++#include <algorithm>
++#include <cstring>
+ #include "../src/skippy/state_memory.h"
+ 
+ #include "../src/llama-batch.h"
+@@ -77,7 +81,61 @@ static bool graph_cache_capabilities_cover_complete_state() {
+     return skippy_graph_cache_capabilities(result) == 0;
+ }
+ 
++static bool relative_position_indices_follow_kv_rows() {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    if (!model) return false;
++    llama_hparams hparams{};
++    hparams.n_layer_all = 1;
++    hparams.n_embd_head_k_full = hparams.n_embd_head_v_full = 4;
++    hparams.n_embd_head_k_swa = hparams.n_embd_head_v_swa = 4;
++    hparams.n_embd_head_k_mla_impl = hparams.n_embd_head_v_mla_impl = 4;
++    hparams.n_head_arr[0] = hparams.n_head_kv_arr[0] = 1;
++    llama_kv_cache kv(*model, false, hparams, GGML_TYPE_F32, GGML_TYPE_F32,
++            true, false, true, 8, 2, 0, LLAMA_SWA_TYPE_NONE, nullptr,
++            [](int32_t il) { return il == 0; }, {}, {});
++
++    llama_pos positions[] = {5, 7};
++    llama_seq_id sequences[] = {0, 1};
++    llama_seq_id * token_sequences[] = {&sequences[0], &sequences[1]};
++    int32_t counts[] = {1, 1};
++    llama_ubatch batch{};
++    batch.n_tokens = 2;
++    batch.n_pos = 1;
++    batch.n_seq_tokens = 1;
++    batch.n_seqs = batch.n_seqs_unq = 2;
++    batch.pos = positions;
++    batch.n_seq_id = counts;
++    batch.seq_id = token_sequences;
++    batch.seq_id_unq = sequences;
++    llama_kv_cache::slot_info slot{};
++    slot.s0 = slot.s1 = 0;
++    slot.strm = {0};
++    slot.idxs = {{3, 1}};
++    kv.apply_ubatch(slot, batch);
++
++    ggml_context_ptr context(ggml_init({ggml_tensor_overhead()*2, nullptr, true}));
++    auto * rows = ggml_new_tensor_2d(context.get(), GGML_TYPE_I32, 2, 2);
++    auto * indices = ggml_new_tensor_2d(context.get(), GGML_TYPE_I32, 2, 2);
++    auto * buffer = ggml_backend_alloc_ctx_tensors_from_buft(context.get(), ggml_backend_cpu_buffer_type());
++    if (!buffer) return false;
++    const int32_t selected_rows[] = {3, -1, 1, -1};
++    ggml_backend_tensor_set(rows, selected_rows, 0, sizeof(selected_rows));
++    positions[0] = 6;
++    positions[1] = 8;
++    kv.set_input_pos_rel_flat(indices, &batch, 4, rows);
++    int32_t actual[4]{};
++    ggml_backend_tensor_get(indices, actual, 0, sizeof(actual));
++    const int32_t expected[] = {1, 4, 6, 9};
++    const bool matches = std::equal(std::begin(expected), std::end(expected), std::begin(actual));
++    ggml_backend_buffer_free(buffer);
++    return matches;
++}
++
+ int main() {
++    if (!relative_position_indices_follow_kv_rows()) {
++        fprintf(stderr, "relative positions do not follow fused KV row order and padding\n");
++        return 1;
++    }
+     if (!graph_cache_capabilities_cover_complete_state()) {
+         fprintf(stderr, "graph cache capabilities do not cover complete state\n");
+         return 1;
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
 index fd8b24efd..7bf7efd9d 100644
 --- a/tools/mtmd/CMakeLists.txt
@@ -2717,6 +2877,3 @@ index 538f90013..16842c535 100644
                  } else {
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
--- 
-2.54.0 (Apple Git-157)
-

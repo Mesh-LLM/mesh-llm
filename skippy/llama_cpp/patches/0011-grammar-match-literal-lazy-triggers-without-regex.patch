@@ -1,13 +1,13 @@
-From c94a258bad825ba2d6bf4d4ef99ff477ded8eb62 Mon Sep 17 00:00:00 2001
+From b5f2cf1efb8ca2eeab77267967328bfda8dab1ef Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
 Subject: [PATCH 11/15] grammar: match literal lazy triggers without regex
 
 ---
  src/llama-grammar.cpp                   | 10 ++++
- tests/CMakeLists.txt                    |  4 +-
+ tests/CMakeLists.txt                    |  1 +
  tests/test-grammar-trigger-patterns.cpp | 72 +++++++++++++++++++++++++
- 3 files changed, 83 insertions(+), 3 deletions(-)
+ 3 files changed, 83 insertions(+)
  create mode 100644 tests/test-grammar-trigger-patterns.cpp
 
 diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
@@ -32,16 +32,12 @@ index 4e096a368..96772743d 100644
          // get from the first matched capturing group to the end of the string
          size_t start = std::string::npos;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 65108c82a..bb1ab68d2 100644
+index f393c6edc..b8b159025 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -191,10 +191,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
-     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
-     llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
-     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
--    llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
--    llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
--    llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
+@@ -196,6 +196,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
+     llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
      llama_build_and_test(test-grammar-parser.cpp  LABEL behavior  LINK llama)
 +    llama_build_and_test(test-grammar-trigger-patterns.cpp  LABEL behavior  LINK llama)
      llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
@@ -125,6 +121,3 @@ index 000000000..6df57b5c6
 +    assert(insensitive.find("WORD") == 0);
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-
