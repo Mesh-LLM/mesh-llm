@@ -8,7 +8,9 @@ fn fixture(body: &str) -> (tempfile::TempDir, ProcessSpec, Limits) {
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let spec = ProcessSpec {
         executable,
-        arguments: Vec::new(),
+        arguments: vec![super::super::Value::Public(
+            crate::test_sleep::sleep_executable().into(),
+        )],
         cwd: dir.path().to_path_buf(),
         environment: BTreeMap::from([(
             "PATH".into(),
@@ -53,7 +55,7 @@ fn exact_lines_including_eof_fragment_are_projected_but_never_retained() {
 fn descendants_holding_output_and_late_failure_cannot_be_admitted_as_clean_success() {
     for body in [
         "printf 'typed-fact\\n'; exit 9",
-        "trap '' TERM; sleep 10 & printf 'typed-fact\\n'; exit 0",
+        "trap '' TERM; \"$1\" 10 & printf 'typed-fact\\n'; exit 0",
     ] {
         let (_dir, spec, limits) = fixture(body);
         let mut lines = 0;
