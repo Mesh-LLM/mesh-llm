@@ -893,6 +893,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         compute_operations: compute.operations,
         dflash_target_layers: server.split_dflash_target_layers.clone(),
         dflash_context_window: server.split_dflash_context_window,
+        dflash_feature_encodings: server.split_dflash_feature_encodings.clone(),
     }
 }
 
@@ -937,6 +938,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         compute_operations: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 
@@ -987,5 +989,6 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         compute_operations: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }

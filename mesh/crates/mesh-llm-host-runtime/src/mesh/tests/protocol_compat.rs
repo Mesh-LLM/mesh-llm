@@ -377,6 +377,7 @@ fn stage_load_proto_carries_a_split_dflash_plan() {
             sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".into(),
             bytes: 1_849_481_472,
         }),
+        feature_encoding: Some(skippy_runtime::DFlashFeatureEncoding::Q4),
     };
     load.dflash = Some(plan.clone());
 
@@ -393,9 +394,11 @@ fn stage_status_proto_carries_the_final_stage_draft_layers() {
     );
     status.dflash_target_layers = Some(vec![6, 20, 34]);
     status.dflash_context_window = Some(2048);
+    status.dflash_feature_encodings = vec!["q8".into(), "q4".into()];
     let decoded = stage_status_from_proto(stage_status_to_proto(status.clone())).unwrap();
     assert_eq!(decoded.dflash_target_layers, Some(vec![6, 20, 34]));
     assert_eq!(decoded.dflash_context_window, Some(2048));
+    assert_eq!(decoded.dflash_feature_encodings, vec!["q8", "q4"]);
 
     // A draft that attends its whole context reports no window.
     status.dflash_context_window = None;

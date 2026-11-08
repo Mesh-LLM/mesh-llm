@@ -129,6 +129,11 @@ message StageDFlashPlan {
   // The configured draft device, on the final stage only. A stage without
   // it places the draft with the target.
   optional string draft_device = 6;
+  // How the stages before the final one encode the feature rows they
+  // forward (bf16, q8 or q4), settled against what the final stage reports
+  // it reads. Unset sends q8 (a plan built from local configuration). A stage's
+  // SKIPPY_DFLASH_FEATURE_ENCODING overrides it.
+  optional string feature_encoding = 7;
 }
 
 message StageDFlashDraftSource {
@@ -296,6 +301,9 @@ message StageDFlashDraftStatus {
   // for prompt tokens before it. Unset when any layer attends the whole
   // context.
   optional uint32 context_window = 2;
+  // The feature-row encodings the final stage reads. A final stage that
+  // lists none is treated as having no draft.
+  repeated string feature_encodings = 3;
 }
 
 message StageStatusList {

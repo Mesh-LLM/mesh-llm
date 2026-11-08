@@ -31,9 +31,9 @@ use crate::{
 };
 
 use super::feature_wire::{
-    DFlashFeatureEncoding, GGML_TYPE_BF16, decode_bf16, decode_q8_rows, dflash_feature_identity,
-    dflash_feature_layer, dflash_feature_part, encode_bf16, encode_q8_rows, f16_to_f32,
-    q8_feature_identity,
+    DFlashFeatureEncoding, GGML_TYPE_BF16, block_feature_identity, decode_bf16, decode_q4_rows,
+    decode_q8_rows, dflash_feature_identity, dflash_feature_layer, dflash_feature_part,
+    encode_bf16, encode_q4_rows, encode_q8_rows, f16_to_f32,
 };
 use super::lock_recovering;
 
@@ -257,12 +257,13 @@ impl DFlashFeatureRows {
                     GGML_TYPE_BF16,
                     usize::try_from(part.dimensions[0]).context("feature width")?,
                 ),
-                DFlashFeatureEncoding::Q8 => {
-                    let n_embd = width.context("Q8 feature part names no width")?;
+                DFlashFeatureEncoding::Q8 | DFlashFeatureEncoding::Q4 => {
+                    let n_embd = width
+                        .with_context(|| format!("{encoding:?} feature part names no width"))?;
                     let words = usize::try_from(part.dimensions[0]).context("feature words")?;
                     ensure!(
                         words * 4 == encoding.row_bytes(n_embd),
-                        "Q8 feature part for layer {layer} has {words} words a row, \
+                        "{encoding:?} feature part for layer {layer} has {words} words a row, \
                          not the {} bytes of {n_embd} values",
                         encoding.row_bytes(n_embd)
                     );
@@ -288,6 +289,7 @@ impl DFlashFeatureRows {
             let values = match encoding {
                 DFlashFeatureEncoding::Bf16 => decode_bf16(payload),
                 DFlashFeatureEncoding::Q8 => decode_q8_rows(payload, n_embd),
+                DFlashFeatureEncoding::Q4 => decode_q4_rows(payload, n_embd),
             };
             rows.insert(layer, values)?;
         }
@@ -348,10 +350,14 @@ impl DFlashFeatureRows {
                         self.n_embd,
                     )
                 }
-                DFlashFeatureEncoding::Q8 => {
-                    encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                DFlashFeatureEncoding::Q8 | DFlashFeatureEncoding::Q4 => {
+                    if encoding == DFlashFeatureEncoding::Q8 {
+                        encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                    } else {
+                        encode_q4_rows(values, self.n_embd, &mut frame.payload);
+                    }
                     (
-                        q8_feature_identity(*layer, self.n_embd)?,
+                        block_feature_identity(encoding, *layer, self.n_embd)?,
                         crate::GGML_TYPE_I32,
                         4,
                         row_bytes / 4,
@@ -394,6 +400,8 @@ pub(crate) struct DFlashCapture {
     input_layer: Option<u32>,
     n_embd: usize,
     n_batch: usize,
+    /// How this stage encodes the rows it forwards.
+    encoding: DFlashFeatureEncoding,
 }
 
 // Only touched behind the owning Mutex, and Skippy serializes target-context
@@ -455,21 +463,26 @@ pub(crate) struct DFlashSplitSession {
     /// The next message's rows lie before the draft's attention window: no
     /// stage forwards their features and the draft does not ingest them.
     pub(crate) unattended: bool,
+    /// How this stage encodes the rows it forwards: the plan's encoding,
+    /// unless `SKIPPY_DFLASH_FEATURE_ENCODING` names another, which wins.
+    encoding: DFlashFeatureEncoding,
 }
 
 impl DFlashSplitSession {
     pub(crate) fn capturing(capture: &SharedDFlashCapture) -> Self {
-        let (input_layer, captures_layers) = {
+        let (input_layer, captures_layers, encoding) = {
             let capture = lock_recovering(capture, |_| {});
             (
                 capture.input_layer.map(|layer| (layer, capture.n_embd)),
                 !capture.layers.is_empty(),
+                capture.encoding,
             )
         };
         Self {
             capture: Some(Arc::downgrade(capture)),
             input_layer,
             captures_layers,
+            encoding,
             ..Self::default()
         }
     }
@@ -667,7 +680,7 @@ impl StageSession {
             }
         }
         if let Some(rows) = rows {
-            rows.append_to_frame(frame)?;
+            rows.append_to_frame_as(frame, split.encoding)?;
         }
         input_error.map_or(Ok(()), Err)
     }
@@ -697,13 +710,15 @@ impl StageModel {
 
     /// Captures the inputs of the DFlash target layers this stage owns so its
     /// sessions can forward them to the final stage's draft, plus its input
-    /// activation when this stage starts on a target layer. Returns the
+    /// activation when this stage starts on a target layer, encoded as
+    /// `encoding` (see [`DFlashFeatureEncoding::for_plan`]). Returns the
     /// forwarded layers. Attach before creating serving sessions.
     pub fn attach_dflash_capture(
         &mut self,
         target_layers: &[u32],
         layer_start: u32,
         layer_end: u32,
+        encoding: DFlashFeatureEncoding,
     ) -> Result<Vec<u32>> {
         if self.dflash_draft().is_some() || self.dflash_capture().is_some() {
             bail!("a DFlash draft or capture is already attached");
@@ -745,6 +760,7 @@ impl StageModel {
             input_layer,
             n_embd,
             n_batch,
+            encoding,
         };
         if !layers.is_empty() {
             super::refresh_target_program(&probe)?;
@@ -752,8 +768,8 @@ impl StageModel {
         drop(probe);
         self.install_dflash_capture(Arc::new(Mutex::new(capture)))?;
         crate::write_native_log_note(format!(
-            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={:?}",
-            DFlashFeatureEncoding::configured()
+            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={}",
+            encoding.as_str()
         ));
         Ok(layers.into_iter().chain(input_layer).collect())
     }
@@ -1112,7 +1128,8 @@ mod tests {
 
         // A width that disagrees with the packed rows is refused.
         let mut wrong = frame.clone();
-        wrong.desc.parts[1].identity = q8_feature_identity(6, 64).unwrap();
+        wrong.desc.parts[1].identity =
+            block_feature_identity(DFlashFeatureEncoding::Q8, 6, 64).unwrap();
         assert!(DFlashFeatureRows::from_frame(&wrong).is_err());
     }
 
