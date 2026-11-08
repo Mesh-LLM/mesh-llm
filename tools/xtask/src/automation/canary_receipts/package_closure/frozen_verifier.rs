@@ -89,8 +89,33 @@ pub(super) fn clean_source(root: &Path) -> DynResult<()> {
             "--",
         ],
     )?;
-    if !process::text(root, &["ls-files", "--others", "--exclude-standard"])?.is_empty() {
-        return Err("verification source has untracked files outside ignored build outputs".into());
+    let untracked = process::git(
+        root,
+        &[
+            "ls-files".into(),
+            "--others".into(),
+            "--exclude-standard".into(),
+            "-z".into(),
+        ],
+        None,
+    )?;
+    if !untracked.is_empty() {
+        let paths = untracked
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .take(8)
+            .map(|path| {
+                format!(
+                    "{:?}",
+                    String::from_utf8_lossy(&path[..path.len().min(160)])
+                )
+            })
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "verification source has untracked files outside ignored build outputs: {}",
+            paths.join(", ")
+        )
+        .into());
     }
     Ok(())
 }
