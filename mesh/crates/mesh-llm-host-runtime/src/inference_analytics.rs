@@ -241,6 +241,24 @@ fn is_local_network(ip: IpAddr) -> bool {
     }
 }
 
+/// A peer's link class and the round trip that belongs to it.
+///
+/// A peer that fell back to a relay can still hold its last direct RTT.
+/// Reporting that under `relay` would make relays look as fast as the direct
+/// path they replaced, so a relay link reports only the relay path's own RTT.
+fn link_and_rtt(
+    path: Option<SelectedPathObservation>,
+    direct_rtt_ms: Option<u32>,
+) -> (LinkClass, Option<u32>) {
+    let link = LinkClass::of(path.as_ref());
+    let path_rtt = path.and_then(|path| path.rtt_ms);
+    let rtt = match link {
+        LinkClass::Relay => path_rtt,
+        LinkClass::Lan | LinkClass::Wan | LinkClass::Unknown => direct_rtt_ms.or(path_rtt),
+    };
+    (link, rtt)
+}
+
 fn outcome_str(outcome: AttemptOutcome) -> &'static str {
     match outcome {
         AttemptOutcome::Success => "success",
@@ -286,11 +304,12 @@ pub(crate) fn report_route(
             .await
             .into_iter()
             .find(|peer| peer.id == peer_id);
-        let path = peer.as_ref().and_then(|peer| peer.selected_path);
-        let mut properties = properties.with("link", LinkClass::of(path.as_ref()).as_str());
-        if let Some(rtt) = peer.as_ref().and_then(|peer| peer.current_direct_rtt_ms()) {
-            properties = properties.with("rtt_ms", rtt);
-        } else if let Some(rtt) = path.and_then(|path| path.rtt_ms) {
+        let (link, rtt) = link_and_rtt(
+            peer.as_ref().and_then(|peer| peer.selected_path),
+            peer.as_ref().and_then(|peer| peer.current_direct_rtt_ms()),
+        );
+        let mut properties = properties.with("link", link.as_str());
+        if let Some(rtt) = rtt {
             properties = properties.with("rtt_ms", rtt);
         }
         mesh_llm_analytics::capture(Event::InferenceRoute, properties);
@@ -335,12 +354,7 @@ pub(crate) fn spawn_mesh_links_reporter(node: crate::mesh::Node) {
                 .peers()
                 .await
                 .iter()
-                .map(|peer| {
-                    let rtt = peer
-                        .current_direct_rtt_ms()
-                        .or_else(|| peer.selected_path.and_then(|path| path.rtt_ms));
-                    (LinkClass::of(peer.selected_path.as_ref()), rtt)
-                })
+                .map(|peer| link_and_rtt(peer.selected_path, peer.current_direct_rtt_ms()))
                 .collect::<Vec<_>>();
             mesh_llm_analytics::capture(Event::MeshLinks, mesh_links_properties(&links));
             tokio::time::sleep(MESH_LINKS_INTERVAL).await;

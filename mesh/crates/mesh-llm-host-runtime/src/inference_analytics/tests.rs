@@ -122,6 +122,23 @@ fn links_classify_by_path_and_address() {
 }
 
 #[test]
+fn a_relay_link_reports_its_own_round_trip_not_a_stale_direct_one() {
+    let mut relay = path("relay", "203.0.113.9:4000");
+    relay.rtt_ms = Some(140);
+    assert_eq!(
+        link_and_rtt(Some(relay), Some(9)),
+        (LinkClass::Relay, Some(140))
+    );
+    relay.rtt_ms = None;
+    assert_eq!(link_and_rtt(Some(relay), Some(9)), (LinkClass::Relay, None));
+    // A direct link prefers the best direct measurement.
+    assert_eq!(
+        link_and_rtt(Some(path("direct", "192.168.1.20:4000")), Some(2)),
+        (LinkClass::Lan, Some(2))
+    );
+}
+
+#[test]
 fn mesh_links_summarize_each_class() {
     let properties = mesh_links_properties(&[
         (LinkClass::Lan, Some(1)),

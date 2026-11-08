@@ -319,7 +319,7 @@ impl StageOpenAiBackend {
             }
         };
 
-        let output = collector.finish(prompt_token_ids.len(), cache_stats)?;
+        let mut output = collector.finish(prompt_token_ids.len(), cache_stats)?;
         let mut summary_attrs = self.openai_attrs(&ids);
         summary_attrs.insert(
             "llama_stage.prompt_token_count".to_string(),
@@ -367,7 +367,7 @@ impl StageOpenAiBackend {
         // rate must not count toward the speculative window.
         self.record_speculation_outcome(&output, speculating && sampling.top_logprobs.is_none());
         if crate::generation_stats::observer_installed() {
-            crate::generation_stats::notify(&self.generation_stats(
+            output.generation_stats = Some(self.generation_stats(
                 &output,
                 &gated_speculative.effective_strategy,
                 speculating && sampling.top_logprobs.is_none(),

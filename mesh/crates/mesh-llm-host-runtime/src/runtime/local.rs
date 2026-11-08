@@ -503,8 +503,10 @@ pub(super) enum ModelLoadSource {
     LayerPackage,
     /// A whisper.cpp model file, by path or repository reference.
     WhisperFile,
-    /// A layer package served as stage 0 of a split.
+    /// A Hugging Face layer package served as stage 0 of a split.
     SplitLayerPackage,
+    /// Stage 0 of a split whose model came from anywhere but Hugging Face.
+    SplitLocalSource,
 }
 
 impl ModelLoadSource {
@@ -514,6 +516,7 @@ impl ModelLoadSource {
             Self::LayerPackage => "layer_package",
             Self::WhisperFile => "whisper_file",
             Self::SplitLayerPackage => "split_layer_package",
+            Self::SplitLocalSource => "split_local_source",
         }
     }
 
@@ -531,7 +534,7 @@ impl ModelLoadSource {
             Self::DirectGguf => false,
             Self::LayerPackage | Self::SplitLayerPackage => true,
             // The name may come from a local path, so it is never reported.
-            Self::WhisperFile => false,
+            Self::WhisperFile | Self::SplitLocalSource => false,
         }
     }
 }
@@ -558,8 +561,20 @@ pub(super) fn report_model_loaded_analytics(
 }
 
 /// Report `model_loaded` for stage 0 of a split.
-pub(super) fn report_split_model_loaded_analytics(model: &str) {
-    report_model_loaded_analytics(model, ModelLoadSource::SplitLayerPackage, None);
+///
+/// The name is reportable only when the package is a Hugging Face reference.
+/// A split can also run from a local `--gguf`, whose name may be a file stem
+/// or an alias matching one.
+pub(super) fn report_split_model_loaded_analytics(model: &str, package_ref: &str) {
+    report_model_loaded_analytics(model, split_model_load_source(package_ref), None);
+}
+
+fn split_model_load_source(package_ref: &str) -> ModelLoadSource {
+    if package_ref.starts_with("hf://") {
+        ModelLoadSource::SplitLayerPackage
+    } else {
+        ModelLoadSource::SplitLocalSource
+    }
 }
 
 /// Which System One (OpenJEV) backend a loaded model is, if any.
@@ -1621,7 +1636,7 @@ mod tests {
     use super::{
         LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
         model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
-        system_one_backend, unix_nanos_to_unix_ms,
+        split_model_load_source, system_one_backend, unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
     use crate::mesh;
@@ -1663,6 +1678,25 @@ mod tests {
         );
         assert_eq!(system_one_backend(Some(&meta("qwen3"))), None);
         assert_eq!(system_one_backend(None), None);
+    }
+
+    #[test]
+    fn a_split_from_a_local_file_never_reports_its_name() {
+        // `--gguf ./acme-merger-finetune.gguf --model acme-merger-finetune`
+        // splits under the alias, which is the file stem again.
+        let source = split_model_load_source;
+        assert_eq!(
+            model_loaded_label(
+                "acme-merger-finetune",
+                source("/home/you/acme-merger-finetune.gguf")
+            )
+            .as_str(),
+            "redacted"
+        );
+        assert_eq!(
+            model_loaded_label("Qwen3-8B-Q4_K_M", source("hf://unsloth/Qwen3-8B-GGUF")).as_str(),
+            "Qwen3-8B-Q4_K_M"
+        );
     }
 
     #[test]

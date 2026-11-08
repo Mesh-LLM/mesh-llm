@@ -306,6 +306,10 @@ pub(super) async fn run_runtime_cli(
         });
     }
 
+    // Before any topology branches off, so `--local-model-only` reports
+    // `inference_request` too.
+    crate::inference_analytics::install();
+
     // These topologies are intentionally selected before plugin startup,
     // release lookup, config-driven mesh discovery, and `mesh::Node::start`.
     // Load config only to configure their optional audit sink; failures stay
@@ -1152,7 +1156,6 @@ pub(super) async fn build_run_auto_node_setup(
     );
     node.start_heartbeat();
     node.start_rtt_refresh();
-    crate::inference_analytics::install();
     crate::inference_analytics::spawn_mesh_links_reporter(node.clone());
     // iroh owns NAT traversal and relay-to-direct migration; modern nodes do
     // not start the legacy application-level reverse-dial sender.
