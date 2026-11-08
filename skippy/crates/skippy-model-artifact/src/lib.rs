@@ -8,18 +8,15 @@ pub mod selection;
 use std::path::Path;
 
 /// Parses `https://huggingface.co/<owner>/<repo>/resolve/<rev>/<file>` (https or http).
-/// Rejects any empty part and a repo without an owner.
+/// Accepts `<repo>` or `<owner>/<repo>`; rejects empty parts, extra repo components, and drops `?query`/`#fragment`.
 pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
     let tail = url
         .strip_prefix("https://huggingface.co/")
         .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
     let (repo, rest) = tail.split_once("/resolve/")?;
-    let (owner, name) = repo.split_once('/')?;
+    let rest = rest.split(['?', '#']).next()?;
     let (revision, file) = rest.split_once('/')?;
-    if [owner, name, revision, file]
-        .iter()
-        .any(|part| part.is_empty())
-    {
+    if repo.split('/').count() > 2 || repo.split('/').chain([revision, file]).any(str::is_empty) {
         return None;
     }
     Some((repo, Some(revision), file))
@@ -678,12 +675,32 @@ mod hf_resolve_url_tests {
     }
 
     #[test]
+    fn accepts_top_level_repository() {
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co/gpt2/resolve/main/m.gguf"),
+            Some(("gpt2", Some("main"), "m.gguf"))
+        );
+    }
+
+    #[test]
+    fn strips_query_and_fragment() {
+        for suffix in ["?download=true", "#frag"] {
+            let url = format!("https://huggingface.co/org/repo/resolve/main/m.gguf{suffix}");
+            assert_eq!(
+                parse_hf_resolve_url_parts(&url),
+                Some(("org/repo", Some("main"), "m.gguf")),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_malformed_urls() {
         for url in [
             "https://huggingface.co/org/repo/resolve/main/",
             "https://huggingface.co/org/repo/resolve/main",
             "https://huggingface.co/org/repo/resolve//m.gguf",
-            "https://huggingface.co/gpt2/resolve/main/m.gguf",
+            "https://huggingface.co/org/repo/extra/resolve/main/m.gguf",
             "https://huggingface.co//repo/resolve/main/m.gguf",
             "https://huggingface.co/org//resolve/main/m.gguf",
             "https://example.com/org/repo/resolve/main/m.gguf",

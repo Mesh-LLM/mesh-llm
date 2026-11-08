@@ -95,12 +95,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_url_rejects_repository_without_owner() {
+    fn resolve_url_supports_top_level_hugging_face_repository() {
         assert_eq!(
             parse_hf_resolve_url_parts(
                 "https://huggingface.co/gpt2/resolve/main/model.safetensors"
             ),
-            None
+            Some((
+                "gpt2".to_string(),
+                Some("main".to_string()),
+                "model.safetensors".to_string(),
+            ))
         );
     }
 }
