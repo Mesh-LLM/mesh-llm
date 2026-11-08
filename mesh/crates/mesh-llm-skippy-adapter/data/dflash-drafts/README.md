@@ -26,7 +26,7 @@ runtime needs.
     "revision": "<40-character commit>",
     "files": [{ "path": "tokenizer.json", "sha256": "<sha256>" }]
   },
-  "convert": { "llama_cpp_upstream": "<skippy/llama_cpp/upstream.txt>", "outtype": "q8_0" },
+  "convert": { "converter": "dflash-laguna", "outtype": "q8_0" },
   "output": {
     "repo": "meshllm/Laguna-XS-2.1-DFlash-Q8_0-GGUF",
     "file": "Laguna-XS-2.1-DFlash-Q8_0.gguf",
@@ -37,13 +37,15 @@ runtime needs.
 ```
 
 - `source` and `target_model` list every file the converter reads, pinned by
-  revision and SHA-256; nothing else is downloaded. `target_model` is the
-  directory passed as `--target-model-dir` (DFlash drafts take the target's
-  tokenizer and config) and may be omitted.
-- `convert` names the llama.cpp pin the output was produced at and the
-  `convert_hf_to_gguf.py --outtype`: `q8_0`, `bf16`, `f16` or `f32`. CI
-  refuses to convert an entry whose pin differs from
-  `skippy/llama_cpp/upstream.txt`; reconvert it and update `output`.
+  revision and SHA-256. The converter hashes each before reading it.
+  `target_model` holds the target's `config.json`, `tokenizer.json` and
+  `tokenizer_config.json`: DFlash drafts share the target's vocabulary.
+- `convert` names the conversion `cargo xtool models dflash-draft-convert`
+  performs. `dflash-laguna` writes Poolside's Laguna drafters
+  (`DFlashLagunaForCausalLM`) the way the patched llama.cpp converter does,
+  matrices as Q8_0. It refuses config keys and tokenizers it does not handle,
+  so a new drafter needs converter support (checked against llama.cpp's
+  output) before it gets an entry.
 - `output` is the file CI uploads. It is uploaded only if the conversion
   hashes to `sha256` and is `bytes` long, and only if the file does not exist
   yet. A published file is never overwritten or deleted; one that hashes
@@ -55,22 +57,20 @@ pairing index.
 ## Reproducing an output
 
 The converter names the model after the source directory, so keep the
-directory named after the source repo. With the pinned llama.cpp prepared and
-the locked converter environment from `ci/dflash-drafts/convert`:
+directory named after the source repo:
 
 ```sh
-scripts/prepare-llama.sh pinned
-uv sync --locked --project ci/dflash-drafts/convert
 hf download poolside/Laguna-XS-2.1-DFlash config.json model.safetensors \
   --revision <revision> --local-dir work/source/Laguna-XS-2.1-DFlash
 hf download poolside/Laguna-XS-2.1 config.json tokenizer.json tokenizer_config.json \
   --revision <revision> --local-dir work/target/Laguna-XS-2.1
-uv run --locked --project ci/dflash-drafts/convert python .deps/llama.cpp/convert_hf_to_gguf.py \
-  work/source/Laguna-XS-2.1-DFlash --target-model-dir work/target/Laguna-XS-2.1 \
-  --outtype q8_0 --outfile Laguna-XS-2.1-DFlash-Q8_0.gguf
-sha256sum Laguna-XS-2.1-DFlash-Q8_0.gguf
+cargo xtool models dflash-draft-convert \
+  --manifest mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/manifest.json \
+  --draft Laguna-XS-2.1-DFlash-Q8_0 --source work/source/Laguna-XS-2.1-DFlash \
+  --target-model work/target/Laguna-XS-2.1 --output Laguna-XS-2.1-DFlash-Q8_0.gguf
 ```
 
-Check the downloaded files against the manifest before converting. The
-conversion is deterministic: two runs from the same sources produce the same
-bytes.
+The command prints the SHA-256 and size it produced and fails if they differ
+from the manifest, so it also gives a new entry its `output`. The conversion
+is deterministic, and for Laguna-XS 2.1 it reproduces llama.cpp's
+`convert_hf_to_gguf.py` output byte for byte.

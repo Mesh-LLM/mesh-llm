@@ -2,8 +2,9 @@ name: Publish DFlash draft conversions
 
 # Converts the DFlash drafts listed in the checked-in manifest to GGUF and
 # publishes them to Hugging Face when the manifest changes on main. Each entry
-# pins its sources by revision and SHA-256, names the llama.cpp pin it was
-# converted at, and states the SHA-256 the conversion must produce. A draft is
+# pins its sources by revision and SHA-256, names the conversion
+# (`cargo xtool models dflash-draft-convert`), and states the SHA-256 it must
+# produce. A draft is
 # uploaded only when the output hashes to that value and its target file does
 # not exist yet; a published file is never overwritten or deleted, and one that
 # hashes differently fails the run.
@@ -33,16 +34,16 @@ env:
   CARGO_PROFILE_RELEASE_DEBUG: "0"
   CARGO_PROFILE_BENCH_DEBUG: "0"
   DRAFTS_MANIFEST: mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/manifest.json
-  LLAMA_PIN_FILE: skippy/llama_cpp/upstream.txt
 
 jobs:
   publish:
     name: Publish DFlash draft conversions
     if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' }}
     # The HF token stays on a GitHub-hosted runner and reaches only the upload
-    # step; the container supplies git, jq and the pinned hf CLI.
+    # step; the container supplies Rust for the converter, git, jq and the
+    # pinned hf CLI.
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     defaults:
@@ -118,16 +119,9 @@ jobs:
           done
           echo "pending=$pending" >> "$GITHUB_OUTPUT"
           echo "count=$(jq 'length' <<<"$pending")" >> "$GITHUB_OUTPUT"
-      - name: Prepare pinned llama.cpp
+      - name: Prepare repository automation
         if: ${{ steps.plan.outputs.count != '0' }}
-        run: |
-          set -euo pipefail
-          scripts/prepare-llama.sh pinned
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        if: ${{ steps.plan.outputs.count != '0' }}
-        with:
-          version: "0.12.19"
-          enable-cache: false
+        uses: ./.github/actions/prepare-automation
       - name: Convert drafts
         id: convert
         if: ${{ steps.plan.outputs.count != '0' }}
@@ -135,20 +129,13 @@ jobs:
           PENDING: ${{ steps.plan.outputs.pending }}
         run: |
           set -euo pipefail
-          TRUSTED_ROOT="$GITHUB_WORKSPACE"
-          DRAFT_CONVERT_PROJECT="$TRUSTED_ROOT/ci/dflash-drafts/convert"
-          export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/draft-convert-venv"
-          export UV_CACHE_DIR="$RUNNER_TEMP/uv-cache"
-          uv sync --locked --no-python-downloads --python python3 --project "$DRAFT_CONVERT_PROJECT"
-          llama="$TRUSTED_ROOT/.deps/llama.cpp"
-          pin="$(tr -d '[:space:]' < "$LLAMA_PIN_FILE")"
           staging="$RUNNER_TEMP/dflash-drafts"
           mkdir -p "$staging"
 
-          # Downloads the files a source lists at its revision into dir, and
-          # refuses any whose bytes do not hash to the manifest.
+          # Downloads the files a source lists at its revision into dir. The
+          # converter hashes each against the manifest before reading it.
           fetch() {
-            local source="$1" dir="$2" repo revision path sha256
+            local source="$1" dir="$2" repo revision path
             repo="$(jq -r '.repo' <<<"$source")"
             revision="$(jq -r '.revision' <<<"$source")"
             [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ && "$revision" =~ ^[0-9a-f]{40}$ ]] || {
@@ -156,56 +143,34 @@ jobs:
               return 1
             }
             mkdir -p "$dir"
-            while IFS=$'\t' read -r path sha256; do
-              [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$sha256" =~ ^[0-9a-f]{64}$ ]] || {
+            while IFS= read -r path; do
+              [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
                 echo "::error::invalid source file $repo/$path" >&2
                 return 1
               }
               curl --silent --show-error --fail --location --proto '=https' --retry 3 \
                 --output "$dir/$path" "https://huggingface.co/$repo/resolve/$revision/$path"
-              echo "$sha256  $dir/$path" | sha256sum --check --strict --quiet || {
-                echo "::error::$repo@$revision/$path does not hash to $sha256" >&2
-                return 1
-              }
-            done < <(jq -r '.files[] | [.path, .sha256] | @tsv' <<<"$source")
+            done < <(jq -r '.files[].path' <<<"$source")
           }
 
           for i in $(jq -r '.[]' <<<"$PENDING"); do
             entry="$(jq -c ".drafts[$i]" "$DRAFTS_MANIFEST")"
             name="$(jq -r '.name' <<<"$entry")"
             file="$(jq -r '.output.file' <<<"$entry")"
-            sha256="$(jq -r '.output.sha256' <<<"$entry")"
-            bytes="$(jq -r '.output.bytes' <<<"$entry")"
-            outtype="$(jq -r '.convert.outtype' <<<"$entry")"
-            if [[ "$(jq -r '.convert.llama_cpp_upstream' <<<"$entry")" != "$pin" ]]; then
-              echo "::error::$name was converted at another llama.cpp pin than $pin; reconvert it and update its output" >&2
-              exit 1
-            fi
-            case "$outtype" in
-              q8_0|bf16|f16|f32) ;;
-              *) echo "::error::$name: unsupported outtype $outtype" >&2; exit 1 ;;
-            esac
-
-            # The converter names the model after the source directory, so the
-            # layout is fixed: <work>/source/<repo name>, <work>/target/<repo name>.
+            # The converter names the model after the source directory, so
+            # the layout is fixed: <work>/source/<repo name>.
             work="$RUNNER_TEMP/convert-$i"
             source_dir="$work/source/$(jq -r '.source.repo | split("/")[1]' <<<"$entry")"
             fetch "$(jq -c '.source' <<<"$entry")" "$source_dir"
-            args=("$source_dir" --outtype "$outtype" --outfile "$work/$file")
+            args=(--manifest "$DRAFTS_MANIFEST" --draft "$name" --source "$source_dir" --output "$work/$file")
             if jq -e '.target_model' <<<"$entry" >/dev/null; then
               target_dir="$work/target/$(jq -r '.target_model.repo | split("/")[1]' <<<"$entry")"
               fetch "$(jq -c '.target_model' <<<"$entry")" "$target_dir"
-              args+=(--target-model-dir "$target_dir")
+              args+=(--target-model "$target_dir")
             fi
-            uv run --locked --no-sync --no-python-downloads --project "$DRAFT_CONVERT_PROJECT" python "$llama/convert_hf_to_gguf.py" "${args[@]}"
-
-            produced_sha256="$(sha256sum "$work/$file" | cut -d' ' -f1)"
-            produced_bytes="$(stat -c %s "$work/$file")"
-            echo "$name: $file is $produced_sha256 ($produced_bytes bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
-            if [[ "$produced_sha256" != "$sha256" || "$produced_bytes" != "$bytes" ]]; then
-              echo "::error::$name converted to $produced_sha256 ($produced_bytes bytes), the manifest expects $sha256 ($bytes bytes)" >&2
-              exit 1
-            fi
+            # Fails, reporting what it produced, unless the output matches the
+            # manifest's sha256 and bytes.
+            "$MESH_LLM_AUTOMATION_BIN" models dflash-draft-convert "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
             mkdir -p "$staging/$i"
             mv "$work/$file" "$staging/$i/$file"
             rm -rf "$work"

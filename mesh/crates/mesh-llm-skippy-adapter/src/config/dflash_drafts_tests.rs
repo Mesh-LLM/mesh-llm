@@ -1,8 +1,9 @@
 //! The DFlash draft conversion manifest, `data/dflash-drafts/manifest.json`.
 //!
-//! CI converts each listed draft at the pinned llama.cpp, checks the output
-//! against the SHA-256 the entry states, and uploads it to the entry's
-//! `meshllm/` repo (`.github/workflows/dflash-drafts-publish.yml`). A pairing
+//! CI converts each listed draft with `cargo xtool models
+//! dflash-draft-convert`, checks the output against the SHA-256 the entry
+//! states, and uploads it to the entry's `meshllm/` repo
+//! (`.github/workflows/dflash-drafts-publish.yml`). A pairing
 //! may only name a `meshllm/` draft that this manifest produces, so every draft
 //! we host can be rebuilt from pinned sources.
 
@@ -12,7 +13,8 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::dflash_catalog::bootstrap_pairings;
-use super::{DFlashDraft, DFlashPairing, load_dflash_pairing_index};
+use super::dflash_index::load_dflash_pairing_index;
+use super::{DFlashDraft, DFlashPairing};
 
 const MANIFEST_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -23,8 +25,10 @@ const INDEX_PATH: &str = concat!(
     "/data/dflash-pairings/index.json"
 );
 
-/// What `convert_hf_to_gguf.py --outtype` writes without a separate quantize step.
-const OUTTYPES: [&str; 4] = ["q8_0", "bf16", "f16", "f32"];
+/// The conversions `cargo xtool models dflash-draft-convert` performs, and
+/// the output types it writes.
+const CONVERTERS: [&str; 1] = ["dflash-laguna"];
+const OUTTYPES: [&str; 1] = ["q8_0"];
 
 /// A published draft: what a pairing pins and the manifest promises.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -144,10 +148,13 @@ fn manifest_outputs(manifest: &Value) -> Result<Vec<Output>, String> {
         let convert = object(
             entry.get("convert").unwrap_or(&Value::Null),
             &what,
-            &["llama_cpp_upstream", "outtype"],
+            &["converter", "outtype"],
         )?;
-        if !is_hex(string(convert, &what, "llama_cpp_upstream")?, 40) {
-            return Err(format!("{what} llama_cpp_upstream is not a commit SHA"));
+        let converter = string(convert, &what, "converter")?;
+        if !CONVERTERS.contains(&converter) {
+            return Err(format!(
+                "{what} converter `{converter}` is not one of {CONVERTERS:?}"
+            ));
         }
         let outtype = string(convert, &what, "outtype")?;
         if !OUTTYPES.contains(&outtype) {
@@ -242,7 +249,7 @@ fn laguna_entry() -> Value {
             ]
         },
         "convert": {
-            "llama_cpp_upstream": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+            "converter": "dflash-laguna",
             "outtype": "q8_0"
         },
         "output": {
@@ -344,8 +351,8 @@ fn a_draft_published_outside_meshllm_or_without_its_hash_is_refused() {
 fn a_draft_conversion_must_be_one_the_workflow_runs() {
     let error = error_with(|entry| entry["convert"]["outtype"] = json!("q4_k_m"));
     assert!(error.contains("outtype"), "{error}");
-    let error = error_with(|entry| entry["convert"]["llama_cpp_upstream"] = json!("b1234"));
-    assert!(error.contains("llama_cpp_upstream"), "{error}");
+    let error = error_with(|entry| entry["convert"]["converter"] = json!("convert_hf_to_gguf"));
+    assert!(error.contains("converter"), "{error}");
     let error = error_with(|entry| entry["convert"]["extra_args"] = json!(["--vocab-only"]));
     assert!(error.contains("unknown field `extra_args`"), "{error}");
 }
