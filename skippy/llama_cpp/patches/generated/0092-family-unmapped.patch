@@ -71,27 +71,6 @@ index 890dcaa7b30c963d1ed6c5d1f62104b8d6072fa6..3205d2c6cac03dcf00c1a5b07be996f1
      }
  
      cur = inpL;
-diff --git a/src/models/beam.cpp b/src/models/beam.cpp
-index 8654e0c95a4feef28fd02fcd137944011803da9f..0dc0177a70357e1b112bdab1902ba66cf8ecaafc 100644
---- a/src/models/beam.cpp
-+++ b/src/models/beam.cpp
-@@ -136,6 +136,8 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
-     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         const bool is_swa = hparams.is_swa(il);
-@@ -234,6 +236,7 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
-         cb(cur, "l_out", il);
- 
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     cur = inpL;
 diff --git a/src/models/bert.cpp b/src/models/bert.cpp
 index b98faffc90fd38b2fb4df3b7f226a4dda3205cdb..741aeb0577b82ded54505fcb52a317386b8cb680 100644
 --- a/src/models/bert.cpp
@@ -155,27 +134,6 @@ index 3ac5782a8e8b392886cc22d0af1e46dab1af8274..68a845ee3b643bae7905512f766e878e
      }
  
      cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
-diff --git a/src/models/clover-moe.cpp b/src/models/clover-moe.cpp
-index 9caaa56309a245b46983bb26f9421deef3f0abeb..09baa2726389952ac08127adca234f92954284ad 100644
---- a/src/models/clover-moe.cpp
-+++ b/src/models/clover-moe.cpp
-@@ -135,6 +135,8 @@ llama_model_clover_moe::graph::graph(const llm_graph_params & params) :
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         res->t_layer_inp[il] = inpL;
- 
-         ggml_tensor * inpSA = inpL;
-@@ -173,6 +175,7 @@ llama_model_clover_moe::graph::graph(const llm_graph_params & params) :
-         cb(cur, "l_out", il);
- 
-         inpL = cur;
-+        end_block(inpL, il);
-     }
-     cur = inpL;
- 
 diff --git a/src/models/codeshell.cpp b/src/models/codeshell.cpp
 index e316602f5a21e71bace02682f3e93925a26d525f..9d13a8561d76a2e86795cd571a2164ec59fde79e 100644
 --- a/src/models/codeshell.cpp
@@ -478,27 +436,6 @@ index 780f34f04571fea8bebf676fbe0eac6cfd730f1e..e2dc66638aeca115b2f369a36396fd07
      }
      cur = inpL;
  
-diff --git a/src/models/flint.cpp b/src/models/flint.cpp
-index 520334ce656f2a1c2b235ddf8cd3329ac04cea64..1658a1d2aa3b7107f7cc8445f8c03ed10ffcbb37 100644
---- a/src/models/flint.cpp
-+++ b/src/models/flint.cpp
-@@ -104,6 +104,8 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         res->t_layer_inp[il] = inpL;
-         ggml_tensor * inpSA = inpL;
- 
-@@ -184,6 +186,7 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
- 
-         // input for next layer
-         inpL = cur;
-+        end_block(inpL, il);
-     }
-     cur = inpL;
- 
 diff --git a/src/models/gemma-embedding.cpp b/src/models/gemma-embedding.cpp
 index aa43910be0c0de9e2f5da078ac3f5c39cc4f7fb5..2de935723b7ae75d1e424bdb68cf8cf07c061703 100644
 --- a/src/models/gemma-embedding.cpp
@@ -688,69 +625,6 @@ index 419474c564371c760fabaca949f0963ace692ec5..9d8a7f7396207c9451c8e06c0fec52d4
      }
  
      cur = inpL;
-diff --git a/src/models/kolibri1.cpp b/src/models/kolibri1.cpp
-index c4d8eca1bed4377d60312af67df3886ebf8f33d8..6eb21c12145ebd8615913b912c6ab5432cbb9769 100644
---- a/src/models/kolibri1.cpp
-+++ b/src/models/kolibri1.cpp
-@@ -81,6 +81,8 @@ llama_model_kolibri1::graph::graph(const llm_graph_params & params)
-     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         ggml_tensor * residual = inpL;
-@@ -158,6 +160,7 @@ llama_model_kolibri1::graph::graph(const llm_graph_params & params)
- 
-         inpL = build_cvec(cur, il);
-         cb(inpL, "l_out", il);
-+        end_block(inpL, il);
-     }
- 
-     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
-diff --git a/src/models/lfm3.cpp b/src/models/lfm3.cpp
-index 0746394ce31cb7b0977680d68281c41303955950..ec5c2a030f88b7f92fac834c20b96ca6addc8e3a 100644
---- a/src/models/lfm3.cpp
-+++ b/src/models/lfm3.cpp
-@@ -149,6 +149,8 @@ llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(cur, il);
-+
-         res->t_layer_inp[il] = cur;
- 
-         auto * prev_cur = cur;
-@@ -195,6 +197,7 @@ llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
- 
-         cur = build_cvec(cur, il);
-         cb(cur, "l_out", il);
-+        end_block(cur, il);
-     }
- 
-     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
-diff --git a/src/models/limite.cpp b/src/models/limite.cpp
-index 2bd45561a12476d32f32083cb908fe6c261b102c..8468d1a1f2ab0d8bc065ad1facc70f2d80ad9642 100644
---- a/src/models/limite.cpp
-+++ b/src/models/limite.cpp
-@@ -112,6 +112,8 @@ llama_model_limite::graph::graph(const llm_graph_params & params) : llm_graph_co
-     std::vector<ggml_tensor *> hist(n_layer, nullptr);
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         hist[il] = inpL;
-@@ -237,6 +239,7 @@ llama_model_limite::graph::graph(const llm_graph_params & params) : llm_graph_co
-         cb(cur, "l_out", il);
- 
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     cur = build_norm(inpL, nullptr, nullptr, LLM_NORM_RMS, -1);
 diff --git a/src/models/llada-moe.cpp b/src/models/llada-moe.cpp
 index 0086d52afd8a92a4b8dc3c5307fb4b96ca91d8cc..1b78b4ea330dc787781781744942df4ccc5f1f03 100644
 --- a/src/models/llada-moe.cpp
@@ -893,27 +767,6 @@ index 17c9c5ab6b91fd898eea89e32dd25cecb8eafb15..4ed2caea19424d9acc8ff82f939b81fc
 @@ -216,6 +218,7 @@ llama_model_modern_bert::graph::graph(const llm_graph_params & params) : llm_gra
  
          // input for next layer
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     cur = inpL;
-diff --git a/src/models/muse-spark.cpp b/src/models/muse-spark.cpp
-index ea6ab84abd94c772de64ba4c9715e76618878e10..b76112517d9b1505794e46e1e11c62925b505df5 100644
---- a/src/models/muse-spark.cpp
-+++ b/src/models/muse-spark.cpp
-@@ -95,6 +95,8 @@ llama_model_muse_spark::graph::graph(const llm_graph_params & params)
-     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         res->t_layer_inp[il] = inpL;
- 
-         ggml_tensor * inpSA = inpL;
-@@ -199,6 +201,7 @@ llama_model_muse_spark::graph::graph(const llm_graph_params & params)
-         cb(cur, "l_out", il);
- 
          inpL = cur;
 +        end_block(inpL, il);
      }
@@ -1234,27 +1087,6 @@ index 51bb0bad6227bbfc37619bb06e2b43cee915e25b..ec4b6063ea2a131411b0628cf1c04a28
      }
      cur = inpL;
  
-diff --git a/src/models/ricursive.cpp b/src/models/ricursive.cpp
-index e14caa8b3c1ae561a2625bfd592ce1859d1441ff..149de00e00afdfa8b5ab01993af4b34ba5375a97 100644
---- a/src/models/ricursive.cpp
-+++ b/src/models/ricursive.cpp
-@@ -130,6 +130,8 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
-     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         ggml_tensor * inpSA = inpL;
-@@ -215,6 +217,7 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
-         cb(cur, "l_out", il);
- 
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
 diff --git a/src/models/rnd1.cpp b/src/models/rnd1.cpp
 index 8ea8d23649a0824348551d235de59a1c0a5e4947..dd52092f860585e9fcc6cab90bed3593c1fba04e 100644
 --- a/src/models/rnd1.cpp
@@ -1290,27 +1122,6 @@ index c7940dc806b4ce0fa74303dac62553cba88bc622..03744e09f8e0d853b29ff177485980a7
  
          // norm
 @@ -122,6 +124,7 @@ llama_model_seed_oss::graph::graph(const llm_graph_params & params) : llm_graph_
- 
-         // input for next layer
-         inpL = cur;
-+        end_block(inpL, il);
-     }
-     cur = inpL;
- 
-diff --git a/src/models/sensenova-u1.cpp b/src/models/sensenova-u1.cpp
-index 7c8025703f18f8fdfa971244803e06f9fac9d7de..8904aed0ba35b2d71b9f9c9e017e7fff3aa74956 100644
---- a/src/models/sensenova-u1.cpp
-+++ b/src/models/sensenova-u1.cpp
-@@ -125,6 +125,8 @@ llama_model_sensenova_u1::graph::graph(const llm_graph_params & params) : llm_gr
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         res->t_layer_inp[il] = inpL;
- 
-         ggml_tensor * inpSA = inpL;
-@@ -176,6 +178,7 @@ llama_model_sensenova_u1::graph::graph(const llm_graph_params & params) : llm_gr
  
          // input for next layer
          inpL = cur;
@@ -1419,27 +1230,6 @@ index 5bf18f0665e3987514746467b1158c1a9d1f2498..a643066c7f97ce9cf4b40d5506b820e1
      }
  
      cur = inpL;
-diff --git a/src/models/xing4-0.cpp b/src/models/xing4-0.cpp
-index c95acd6b83c28127e8628b2f3c2b3a89109456c8..fce2459b1082f78759d505c2caa126eca0ab7451 100644
---- a/src/models/xing4-0.cpp
-+++ b/src/models/xing4-0.cpp
-@@ -628,6 +628,8 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
-     cb(inpL, "hc_init", -1);
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         ggml_tensor * residual = inpL;
-@@ -796,6 +798,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
-         inpL = build_hc_post(cur, residual, post, comb, il);
-         inpL = build_cvec(inpL, il);
-         cb(inpL, "l_out", il);
-+        end_block(inpL, il);
-     }
-     cur = inpL;
- 
 diff --git a/src/models/xverse.cpp b/src/models/xverse.cpp
 index e0710bd9cecd32525d667d528579e9426efe0028..08d0bc8c7aa9904285f821227253b7f6466c1403 100644
 --- a/src/models/xverse.cpp
