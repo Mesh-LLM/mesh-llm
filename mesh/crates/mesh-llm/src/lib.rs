@@ -606,6 +606,13 @@ fn speculative_overrides_from_cli(
         .speculative
         .speculative_ngram_fallback
         .map(|fallback| fallback.as_str().to_string());
+    // `--no-draft` turns the automatic defaults off as `spec_default = false`
+    // does: no sibling draft, catalog DFlash pairing or native MTP unless a
+    // strategy or draft is configured.
+    overrides.spec_default = cli
+        .speculative
+        .no_draft
+        .then_some(mesh_llm_host_runtime::sdk::config::BoolOrAuto::Bool(false));
     (overrides != Default::default()).then_some(overrides)
 }
 
@@ -888,6 +895,24 @@ mod cli_entrypoint_tests {
         assert_eq!(config.ngram_min, Some(2));
         assert_eq!(config.ngram_max, Some(6));
         assert_eq!(config.ngram_max_proposal_tokens, Some(5));
+    }
+
+    #[test]
+    fn cli_no_draft_turns_the_automatic_speculative_defaults_off() {
+        let parse = |args: &[&str]| {
+            let normalized = mesh_llm_cli::normalize_runtime_surface_args(
+                ["mesh-llm", "serve"].iter().chain(args).copied(),
+            );
+            mesh_llm_cli::Cli::try_parse_from(normalized.normalized).expect("CLI parses")
+        };
+
+        let config = super::speculative_overrides_from_cli(&parse(&["--no-draft"]))
+            .expect("--no-draft produces an override");
+        assert_eq!(
+            config.spec_default,
+            Some(mesh_llm_config::BoolOrAuto::Bool(false))
+        );
+        assert!(super::speculative_overrides_from_cli(&parse(&[])).is_none());
     }
 
     #[test]
