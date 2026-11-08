@@ -220,6 +220,10 @@ fn multimodal_stage_config(
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: None,
+        // The 128px smoke image collapses to 16 vision tokens on Qwen-VL,
+        // which can stop before generating an answer. Exercise image generation
+        // with enough visual detail while keeping this bounded smoke small.
+        image_min_tokens: Some(256),
         native_mtp_enabled: true,
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         bind_addr: bind_addr.to_string(),
