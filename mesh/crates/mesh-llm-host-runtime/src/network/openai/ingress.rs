@@ -266,7 +266,8 @@ async fn auto_route_candidate_pool<'a>(
         available_models,
         &request.client_path,
         descriptors,
-    );
+    )
+    .await;
     if available.is_empty()
         && let Some(workload) = required_request_workload(&request.client_path)
     {

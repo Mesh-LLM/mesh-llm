@@ -1288,7 +1288,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let body_json = request.body_json.as_ref().unwrap_or(&empty_body);
     let media = workload_routing::request_media(&request.client_path, request.body_json.as_ref());
     let with_caps =
-        workload_routing::routing_candidates(node, served, &request.client_path, descriptors);
+        workload_routing::routing_candidates(node, served, &request.client_path, descriptors).await;
     if with_caps.is_empty()
         && (workload_routing::request_workload_class(&request.client_path).is_some()
             || workload_routing::is_system_one_path(&request.client_path))

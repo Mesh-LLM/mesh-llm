@@ -474,6 +474,41 @@ impl Node {
         result
     }
 
+    /// How many routable hosts serve each of `models` right now (paused peers
+    /// excluded). Automatic routing weights a model's share by this count so a
+    /// model on twenty hosts is drawn twenty times as often as the same-speed
+    /// model on one host, instead of each *name* getting an equal draw.
+    pub async fn replica_counts_for_models(
+        &self,
+        models: &[String],
+    ) -> std::collections::BTreeMap<String, usize> {
+        use crate::proto::node::InferenceAdmissionState;
+        let peers = self.routable_peers().await;
+        let state = self.state.lock().await;
+        let serving: Vec<&PeerInfo> = peers
+            .iter()
+            .filter(|p| is_routing_eligible(p, &state))
+            .filter(|p| {
+                !matches!(
+                    p.inference_admission_state,
+                    Some(
+                        InferenceAdmissionState::RemotePaused | InferenceAdmissionState::AllPaused
+                    )
+                )
+            })
+            .collect();
+        models
+            .iter()
+            .map(|model| {
+                let count = serving
+                    .iter()
+                    .filter(|p| routes_http_model(p, model))
+                    .count();
+                (model.clone(), count)
+            })
+            .collect()
+    }
+
     /// All host IDs serving a model, with a healthy hash-preferred host first.
     /// Paused peers are excluded; deprioritized peers remain spillover capacity.
     pub async fn hosts_for_model(&self, model: &str) -> Vec<EndpointId> {

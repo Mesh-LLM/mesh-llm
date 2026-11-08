@@ -52,6 +52,10 @@ pub struct RoutingCandidate<'a> {
     /// How many throughput samples back `tps_hint`. Used to decide
     /// whether we trust the hint or treat the model as "cold".
     pub throughput_samples: u64,
+    /// Routable hosts serving this model right now (at least 1). The model's
+    /// draw weight is per-host throughput times this count, so capacity, not
+    /// the number of distinct names, decides the share each model receives.
+    pub replicas: usize,
 }
 
 impl<'a> RoutingCandidate<'a> {
@@ -65,6 +69,7 @@ impl<'a> RoutingCandidate<'a> {
             parameter_count_b: None,
             tps_hint: None,
             throughput_samples: 0,
+            replicas: 1,
         }
     }
 }
@@ -157,14 +162,15 @@ pub fn pick_model_classified<'a>(
 /// Compute the routing weight for a single candidate. See the module-level
 /// `TPS_*` constants for the rationale on each clamp.
 fn candidate_weight(candidate: &RoutingCandidate<'_>) -> f64 {
-    if candidate.throughput_samples >= TPS_MIN_SAMPLES {
+    let per_host = if candidate.throughput_samples >= TPS_MIN_SAMPLES {
         candidate
             .tps_hint
             .unwrap_or(TPS_NEUTRAL_WEIGHT)
             .clamp(TPS_WEIGHT_MIN, TPS_WEIGHT_MAX)
     } else {
         TPS_NEUTRAL_WEIGHT
-    }
+    };
+    per_host * candidate.replicas.max(1) as f64
 }
 
 /// Pick one candidate from a non-empty slice using tok/s-weighted draw,
@@ -788,7 +794,29 @@ mod tests {
             parameter_count_b: None,
             tps_hint: Some(tps),
             throughput_samples: samples,
+            replicas: 1,
         }
+    }
+
+    #[test]
+    fn replica_count_multiplies_a_models_share() {
+        // Same per-host speed and tier: the model served by four hosts should
+        // be drawn about four times as often as the one on a single host.
+        let caps = crate::models::ModelCapabilities::default();
+        let mut four = scored("replicated-70b", caps, 20.0, 10);
+        four.replicas = 4;
+        let one = scored("lone-70b", caps, 20.0, 10);
+        let counts = count_picks(&[four, one], 4000);
+        let replicated = counts.get("replicated-70b") as f64;
+        let lone = counts.get("lone-70b") as f64;
+        // Weighted share 4/5 on 85% of draws plus 1/2 on the 15% uniform
+        // exploration draws = 0.755 of all picks (was 0.5 when names, not
+        // capacity, set the share).
+        let share = replicated / (replicated + lone);
+        assert!(
+            (0.70..0.81).contains(&share),
+            "expected ~75% of picks for the replicated model, got {replicated}:{lone}"
+        );
     }
 
     fn count_picks(available: &[RoutingCandidate<'_>], iterations: usize) -> HashMapCounts {

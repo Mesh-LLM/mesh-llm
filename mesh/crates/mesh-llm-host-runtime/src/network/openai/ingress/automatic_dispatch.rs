@@ -76,7 +76,8 @@ async fn pick_remaining_model(
     request.ensure_body_json();
     let media = workload_routing::request_media(&request.client_path, request.body_json.as_ref());
     let candidates =
-        workload_routing::routing_candidates(ctx.node, &names, &request.client_path, &descriptors);
+        workload_routing::routing_candidates(ctx.node, &names, &request.client_path, &descriptors)
+            .await;
     let candidates = router::filter_media_compatible_candidates(&candidates, &media)?;
     // Do not resurrect an all-cooling tier while spilling. Initial selection
     // retains its existing availability policy; re-picks require a ready host.

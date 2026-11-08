@@ -302,13 +302,14 @@ pub(super) fn is_binary_task_path(path: &str) -> bool {
 
 /// Pick metadata from a descriptor that supports this request, not whichever
 /// peer happened to gossip the model name first.
-pub(super) fn routing_candidates<'a>(
+pub(super) async fn routing_candidates<'a>(
     node: &mesh::Node,
     models: &'a [String],
     path: &str,
     descriptors: &[ServedModelDescriptor],
 ) -> Vec<crate::network::router::RoutingCandidate<'a>> {
     let metrics = node.routing_metrics();
+    let replicas = node.replica_counts_for_models(models).await;
     models
         .iter()
         .filter(|model| model_satisfies_request(model, path, descriptors))
@@ -330,6 +331,7 @@ pub(super) fn routing_candidates<'a>(
                     .and_then(|metadata| metadata.parameter_count_b),
                 tps_hint,
                 throughput_samples,
+                replicas: replicas.get(model.as_str()).copied().unwrap_or(1).max(1),
             }
         })
         .collect()
