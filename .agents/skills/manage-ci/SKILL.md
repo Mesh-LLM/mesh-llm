@@ -774,8 +774,12 @@ Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
 
-The trusted-main canary releases both native build runners before scheduling
-one job per certified family. The combined handoff binds one source, plan and
+The trusted-main canary runs macOS and Linux native producers concurrently for
+the first unchanged selected-source certification pass. Both independently
+build the frozen commit, and combination requires matching source, plan and
+candidate receipts. Changed-pin repair and independent verification keep the
+Mac-to-Linux candidate dependency. Both native build runners are released before
+scheduling one job per certified family. The combined handoff binds one source, plan and
 manifest to separate macOS and Linux executable sets; each worker chooses its
 set after memory-only placement and never rebuilds.
 The immutable model cache remains offline and read-only. One workflow-level

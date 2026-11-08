@@ -393,10 +393,13 @@ gh workflow run llama-upstream-canary.yml --ref main \
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
 a branch moving later cannot change the selected source for that run.
 
-`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
-build → managed package combination → memory-tier family matrix → managed
-aggregate. The first producer freezes the candidate; the second rebuilds that
-exact candidate for Linux. Both producers perform prepare, manifest-policy, full native and Rust
+`llama-canary-family-pass.yml` runs macOS and Linux native builds concurrently
+for the first unchanged selected-source certification pass. Both independently
+prove the frozen selected commit; combination requires matching candidate,
+source, plan and manifest identities before the memory-tier family matrix.
+Changed-pin repair and independent verification keep the Mac → Linux
+dependency: Mac freezes the candidate, then Linux rebuilds that exact candidate.
+Both producers perform prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It reads
 Git manifest, path-list and diff payloads through bounded raw capture, separately
 from redacted diagnostics, so ordinary model names containing `token` retain

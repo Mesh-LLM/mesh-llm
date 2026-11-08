@@ -288,9 +288,12 @@ pipeline. Packages bind both the controller and selected base; changed candidate
 must be direct children of that base with an admitted bundle. Certify modes still
 reject upstream overrides and preserve the selected commit unchanged.
 
-`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
-build → managed package combination → memory-tier family matrix → managed
-aggregate. The protected controller prepares automation and invokes `canary-receipts build`
+`llama-canary-family-pass.yml` runs macOS and Linux native builds concurrently
+for the first unchanged selected-source certification pass. Changed-pin repair
+and independent verification still build Mac first, then pass its exact candidate
+package to Linux. Both paths join at managed package combination, followed by
+the memory-tier family matrix and managed aggregate. The protected controller
+prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
 Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
 manifests, enumerating source paths or hashing source diffs. Diagnostics remain
