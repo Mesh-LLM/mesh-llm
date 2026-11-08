@@ -582,17 +582,29 @@ impl crate::mesh::Node {
                 let (entry, rate) = match target {
                     election::InferenceTarget::Local(_) => (local_evidence.clone(), local_rate),
                     election::InferenceTarget::Remote(peer_id) => {
-                        let advertisement = state
-                            .peers
-                            .get(peer_id)
-                            .and_then(|peer| peer.cache_affinity.as_ref());
+                        let peer = state.peers.get(peer_id);
+                        let advertisement = peer.and_then(|peer| peer.cache_affinity.as_ref());
+                        // The peer's dedicated per-model rate first; a node
+                        // that predates it still carries one on its cache
+                        // entries while they last.
+                        let rate = peer
+                            .and_then(|peer| {
+                                peer.advertised_model_throughput
+                                    .iter()
+                                    .find(|hint| hint.model_name == model)
+                            })
+                            .and_then(|hint| hint.prefill)
+                            .and_then(|prefill| prefill.fresh_micros_per_token(now_unix_ms))
+                            .or_else(|| {
+                                advertisement.and_then(|advertisement| {
+                                    advertisement.model_prefill_micros_per_token(model, now_unix_ms)
+                                })
+                            });
                         (
                             advertisement.and_then(|advertisement| {
                                 advertisement.probe(model, prefix_hash, now_unix_ms)
                             }),
-                            advertisement.and_then(|advertisement| {
-                                advertisement.model_prefill_micros_per_token(model, now_unix_ms)
-                            }),
+                            rate,
                         )
                     }
                     election::InferenceTarget::None => return None,

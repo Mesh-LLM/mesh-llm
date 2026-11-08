@@ -569,6 +569,84 @@ async fn a_slow_cache_hit_loses_to_a_faster_cold_peer() -> Result<()> {
     Ok(())
 }
 
+/// A peer holding no cache entry is costed cold from the prefill rate on its
+/// throughput hint, so a fast idle peer vetoes a slow hit; once that rate is
+/// stale it is uncosted again and cannot.
+#[tokio::test]
+async fn a_cold_peer_with_only_its_advertised_rate_can_veto_a_slow_hit() -> Result<()> {
+    use crate::network::metrics::{ModelThroughputHint, PrefillMeasurement};
+    use mesh_llm_routing::cache_inventory::{
+        CACHE_AFFINITY_SALT_BYTES, CacheAffinityAdvertisement, CacheAffinityEntry, CacheTier,
+        prefix_digest,
+    };
+    use mesh_llm_routing::request_cost::RequestCostInput;
+
+    let model = "acme/code-model:Q4_K_M";
+    let warm_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let cold_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let salt = [6; CACHE_AFFINITY_SALT_BYTES];
+    let now = crate::mesh::current_time_unix_ms();
+    let fifteen_minutes = 15 * 60 * 1000;
+
+    for (rate_age_ms, expect_hit) in [(1_000, false), (fifteen_minutes + 1_000, true)] {
+        let node = test_node_with_remote_models(&[(model, warm_peer), (model, cold_peer)]).await;
+        let affinity = AffinityRouter::new();
+        let mut request = unparsed_chat_request(model);
+        let mut prepared = prepare_mesh_targets(
+            &mut request,
+            Some(model),
+            &[warm_peer, cold_peer],
+            &affinity,
+        );
+        let prefix_hash = prepared.prefix_hash.expect("derived prefix");
+        let mut warm = test_peer_serving_model(warm_peer, model);
+        warm.cache_affinity = Some(CacheAffinityAdvertisement {
+            salt,
+            epoch: 1,
+            generated_at_unix_ms: now,
+            ttl_ms: 120_000,
+            entries: vec![CacheAffinityEntry {
+                model: model.to_string(),
+                prefix_digest: prefix_digest(&salt, model, prefix_hash),
+                matched_tokens: 1_024,
+                suffix_prefill_tokens: 0,
+                tier: CacheTier::L1,
+                restore_micros: 0,
+                queue_delay_micros: 0,
+                prefill_micros_per_token: 2_000,
+            }],
+        });
+        node.insert_test_peer(warm).await;
+        let mut cold = test_peer_serving_model(cold_peer, model);
+        cold.cache_affinity = None;
+        cold.advertised_model_throughput = vec![ModelThroughputHint {
+            model_name: model.to_string(),
+            avg_tokens_per_second_milli: 40_000,
+            throughput_samples: 8,
+            measurement: None,
+            prefill: Some(PrefillMeasurement {
+                micros_per_token: 250,
+                observed_at_unix_ms: now - rate_age_ms,
+            }),
+        }];
+        node.insert_test_peer(cold).await;
+
+        order_mesh_target_hosts(
+            &node,
+            Some(model),
+            None,
+            &mut prepared,
+            &affinity,
+            RequestCostInput::heuristic(4_096, 1_024),
+        )
+        .await;
+
+        let expected = expect_hit.then_some(election::InferenceTarget::Remote(warm_peer));
+        assert_eq!(prepared.cache_target, expected, "rate age {rate_age_ms} ms");
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn cached_auto_model_stays_sticky_when_no_ready_remote_model_exists() -> Result<()> {
     let cached_model = "cached-cooling-model-31B";

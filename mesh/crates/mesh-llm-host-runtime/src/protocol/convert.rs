@@ -720,6 +720,8 @@ fn local_throughput_hint_to_proto(
             Kind::EndToEndAttempt => WireKind::EndToEndAttempt as i32,
             Kind::Unknown => WireKind::Unspecified as i32,
         }),
+        prefill_micros_per_token: hint.prefill.map(|prefill| prefill.micros_per_token),
+        prefill_observed_at_unix_ms: hint.prefill.map(|prefill| prefill.observed_at_unix_ms),
     }
 }
 
@@ -747,6 +749,17 @@ fn proto_throughput_hint_to_local(
         avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
         throughput_samples: hint.throughput_samples,
         measurement,
+        // Only a dated, measured rate is kept; an older sender sends neither.
+        prefill: hint
+            .prefill_micros_per_token
+            .zip(hint.prefill_observed_at_unix_ms)
+            .filter(|(micros_per_token, _)| *micros_per_token > 0)
+            .map(|(micros_per_token, observed_at_unix_ms)| {
+                crate::network::metrics::PrefillMeasurement {
+                    micros_per_token,
+                    observed_at_unix_ms,
+                }
+            }),
     }
 }
 
@@ -1578,6 +1591,38 @@ mod tests {
                 .expect("time and window make a measurement");
             assert_eq!(measurement.kind, expected, "wire kind {kind:?}");
         }
+    }
+
+    /// The prefill rate travels as two optional fields; it exists only when
+    /// both are present and the rate is measured.
+    #[test]
+    fn prefill_rate_needs_its_rate_and_time_from_the_wire() {
+        use crate::network::metrics::{ModelThroughputHint, PrefillMeasurement};
+        let prefill = PrefillMeasurement {
+            micros_per_token: 250,
+            observed_at_unix_ms: 1_800_000_000_000,
+        };
+        let local = ModelThroughputHint {
+            model_name: "qwen".to_string(),
+            avg_tokens_per_second_milli: 42_000,
+            throughput_samples: 7,
+            measurement: None,
+            prefill: Some(prefill),
+        };
+        let wire = local_throughput_hint_to_proto(&local);
+        assert_eq!(wire.prefill_micros_per_token, Some(250));
+        assert_eq!(proto_throughput_hint_to_local(&wire).prefill, Some(prefill));
+
+        let rate_only = crate::proto::node::AdvertisedModelThroughput {
+            prefill_observed_at_unix_ms: None,
+            ..wire.clone()
+        };
+        assert_eq!(proto_throughput_hint_to_local(&rate_only).prefill, None);
+        let unmeasured = crate::proto::node::AdvertisedModelThroughput {
+            prefill_micros_per_token: Some(0),
+            ..wire
+        };
+        assert_eq!(proto_throughput_hint_to_local(&unmeasured).prefill, None);
     }
 
     #[test]

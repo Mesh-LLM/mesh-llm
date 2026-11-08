@@ -853,6 +853,7 @@ pub(crate) mod tests {
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
                 measurement: None,
+                prefill: None,
             }],
             cache_affinity: None,
             display_rtt: None,

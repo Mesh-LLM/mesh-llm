@@ -125,6 +125,8 @@ pub struct CacheInventory {
     max_entries: usize,
     ttl: Duration,
     model_prefill_micros_per_token: HashMap<String, u64>,
+    /// When each model's rate last took a sample.
+    model_prefill_observed_at: HashMap<String, Instant>,
 }
 
 impl CacheInventory {
@@ -183,6 +185,15 @@ impl CacheInventory {
                     / 4;
             })
             .or_insert(prefill_micros_per_token);
+        self.model_prefill_observed_at
+            .insert(model.to_string(), Instant::now());
+    }
+
+    /// This node's calibrated rate for `model` and when it last took a
+    /// sample, for gossip; `None` before the first measurement.
+    pub fn model_prefill_measurement(&self, model: &str) -> Option<(u64, Instant)> {
+        let rate = self.model_prefill_micros_per_token(model)?;
+        Some((rate, *self.model_prefill_observed_at.get(model)?))
     }
 
     pub fn record_l1_hit(
@@ -364,6 +375,7 @@ impl Default for CacheInventory {
             max_entries: CACHE_AFFINITY_MAX_ENTRIES,
             ttl: CACHE_AFFINITY_TTL,
             model_prefill_micros_per_token: HashMap::new(),
+            model_prefill_observed_at: HashMap::new(),
         }
     }
 }
@@ -544,6 +556,12 @@ mod tests {
         assert_eq!(inventory.model_prefill_micros_per_token("model"), None);
         inventory.observe_prefill_cost("model", 800);
         assert_eq!(inventory.model_prefill_micros_per_token("model"), Some(800));
+        let (rate, observed_at) = inventory
+            .model_prefill_measurement("model")
+            .expect("a measured rate is dated for gossip");
+        assert_eq!(rate, 800);
+        assert!(observed_at.elapsed() < Duration::from_secs(60));
+        assert_eq!(inventory.model_prefill_measurement("other"), None);
         assert_eq!(inventory.model_prefill_micros_per_token("other"), None);
     }
 
