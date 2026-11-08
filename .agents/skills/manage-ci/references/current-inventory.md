@@ -195,7 +195,7 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted upstream selection step receives
+without falling back to `master`. The managed upstream selection step receives
 the workflow's read-only GitHub token through `GH_TOKEN`.
 Runner placement uses managed memory labels without a runner API query. Workers
 receive no GitHub token.
@@ -238,7 +238,7 @@ cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
-Only two green passes permit the hosted publisher to create a PR to `main`
+Only two green passes permit the managed lab publisher to create a PR to `main`
 with that exact commit. Both modes keep its existing pin and never invoke Goose.
 The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
@@ -289,7 +289,7 @@ must be direct children of that base with an admitted bundle. Certify modes stil
 reject upstream overrides and preserve the selected commit unchanged.
 
 `llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
-build → hosted package combination → memory-tier family matrix → hosted
+build → managed package combination → memory-tier family matrix → managed
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
 Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
@@ -371,7 +371,7 @@ Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
 Reruns retain attempt-labelled family/build history. These diagnostics never
-substitute for either complete certification pass. The hosted aggregate emits
+substitute for either complete certification pass. The managed aggregate emits
 a digest-bound classification artifact for candidate repair or a single
 targeted infrastructure recheck. That recheck runs only the runner/workflow-
 failed or missing families against the same producer package, without Goose or
@@ -500,7 +500,7 @@ prepare/build failures under the existing 11.5-hour coding-admission and
 failure starts a new bounded session on the next attempt after restoring the
 exact prior candidate as uncommitted changes on the frozen base. Every edit
 invalidates all prior family results. Candidates are local, uncertified commits
-until both full family passes are green. The separate GitHub-hosted publisher
+until both full family passes are green. The separate managed lab publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level

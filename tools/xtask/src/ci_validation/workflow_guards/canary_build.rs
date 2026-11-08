@@ -136,7 +136,12 @@ fn classified_recheck(document: &Node) -> DynResult<()> {
     let (execute, command) = h::step(steps, "id", "reconcile")?;
     let checkout = h::checkout(steps, "${{ inputs.source }}", None)?;
     h::before(checkout, execute)?;
-    super::canary_execution::preparation(steps, "${{ inputs.source }}", execute)?;
+    super::canary_execution::preparation(
+        steps,
+        "${{ inputs.source }}",
+        execute,
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     super::canary_execution::classified_context(command)?;
     reconciliation_downloads(steps, execute)?;
     h::binding(
