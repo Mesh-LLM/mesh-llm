@@ -210,8 +210,41 @@ fn linux_x86_64_cmake_false_native_value_pins_the_portable_isa_baseline() {
             .output()
             .unwrap(),
     );
-    assert!(fixture.log().contains("-DGGML_SSE42=ON"));
-    assert!(fixture.log().contains("-DGGML_AVX2=OFF"));
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(
+            fixture.log().contains(argument),
+            "missing portable ISA argument {argument}"
+        );
+    }
+}
+#[test]
+fn linux_x86_64_cmake_false_native_values_are_normalized_before_matching() {
+    for value in ["foo-NOTFOUND", "fAlSe", "  Off  "] {
+        let fixture = Fixture::new(true);
+        success(
+            fixture
+                .command("Linux")
+                .env("LLAMA_STAGE_GGML_NATIVE", value)
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            fixture.log().contains("-DGGML_SSE42=ON"),
+            "portable baseline missing for {value:?}"
+        );
+    }
 }
 #[test]
 fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
@@ -237,7 +270,10 @@ fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
         "-DGGML_FMA=OFF",
         "-DGGML_F16C=OFF",
     ] {
-        assert!(!fixture.log().contains(argument), "unexpected portable ISA argument {argument}");
+        assert!(
+            !fixture.log().contains(argument),
+            "unexpected portable ISA argument {argument}"
+        );
     }
 }
 #[test]
@@ -263,7 +299,10 @@ fn linux_non_x86_64_build_does_not_receive_x86_isa_flags() {
         "-DGGML_FMA=OFF",
         "-DGGML_F16C=OFF",
     ] {
-        assert!(!fixture.log().contains(argument), "unexpected x86 ISA argument {argument}");
+        assert!(
+            !fixture.log().contains(argument),
+            "unexpected x86 ISA argument {argument}"
+        );
     }
 }
 #[test]
