@@ -348,9 +348,17 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         reservation.transfer_to(&target);
         state.attempts += 1;
         let attempt_started = Instant::now();
-        let retry_policy = ResponseRetryPolicy::next_target_available(
+        let mut retry_policy = ResponseRetryPolicy::next_target_available(
             idx + 1 < total_targets || automatic_retry.is_some(),
         );
+        // An answer the last host produced is terminal even for an automatic
+        // directive: the model spill covers uncommitted exhaustion (busy,
+        // unavailable, 402, context overflow), not a delivered response the
+        // quality probe dislikes. A `finish_reason: length` reply is the
+        // client's own `max_tokens` at work and recurs on every model, so
+        // rejecting it here turned a served answer into "all eligible
+        // automatic models exhausted" (CI smoke, max_tokens 4, 2026-11-08).
+        retry_policy.response_quality = idx + 1 < total_targets;
         if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
             &node,
             &mut tcp_stream,

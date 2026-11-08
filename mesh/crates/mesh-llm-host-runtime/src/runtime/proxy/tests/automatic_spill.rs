@@ -74,3 +74,38 @@ async fn automatic_ingress_without_plugin_selects_concrete_model() {
         assert!(proxy.await.unwrap_err().is_cancelled());
     }
 }
+
+// A served answer the quality probe dislikes is still the answer when no other
+// host of that model remains: the spill is for uncommitted exhaustion, not for a
+// reply truncated by the client's own `max_tokens` (CI smoke, 2026-11-08).
+#[tokio::test]
+async fn automatic_ingress_delivers_length_truncated_reply_from_sole_model() {
+    for directive in ["mesh", "auto"] {
+        let (port, captured, upstream) = spawn_capturing_upstream(
+            r#"{"id":"chatcmpl-short","object":"chat.completion","model":"sole-worker","choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"Hello, how are"}}]}"#,
+        ).await;
+        let (address, proxy) =
+            spawn_api_proxy_test_harness(local_targets(&[("sole-worker", port)])).await;
+        let body = json!({
+            "model": directive,
+            "messages": [{"role":"user", "content":"Say hi."}],
+            "max_tokens": 4
+        }).to_string();
+        let wire = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let response = tokio::time::timeout(
+            Duration::from_secs(30),
+            send_request_and_read_response(address, vec![wire.into_bytes()]),
+        ).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{directive}: {response}");
+        assert!(response.contains("chatcmpl-short"), "{directive}: {response}");
+        assert!(!response.contains("exhausted"), "{directive}: {response}");
+        let raw = String::from_utf8(captured.await.unwrap()).unwrap();
+        assert!(raw.contains(r#""model":"sole-worker""#), "{raw}");
+        upstream.await.unwrap();
+        proxy.abort();
+        assert!(proxy.await.unwrap_err().is_cancelled());
+    }
+}
