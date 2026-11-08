@@ -392,8 +392,15 @@ fn stage_status_proto_carries_the_final_stage_draft_layers() {
         crate::inference::skippy::StageRuntimeState::Ready,
     );
     status.dflash_target_layers = Some(vec![6, 20, 34]);
+    status.dflash_context_window = Some(2048);
     let decoded = stage_status_from_proto(stage_status_to_proto(status.clone())).unwrap();
     assert_eq!(decoded.dflash_target_layers, Some(vec![6, 20, 34]));
+    assert_eq!(decoded.dflash_context_window, Some(2048));
+
+    // A draft that attends its whole context reports no window.
+    status.dflash_context_window = None;
+    let decoded = stage_status_from_proto(stage_status_to_proto(status.clone())).unwrap();
+    assert_eq!(decoded.dflash_context_window, None);
 
     // A stage that drafts nothing, or predates the report, reports none.
     status.dflash_target_layers = None;

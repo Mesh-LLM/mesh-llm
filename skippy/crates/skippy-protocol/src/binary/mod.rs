@@ -358,6 +358,17 @@ mod tests {
     }
 
     #[test]
+    fn split_dflash_unattended_rows_flag_round_trips() {
+        let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
+        assert!(!state.split_dflash_unattended_rows());
+        state.set_split_dflash_unattended_rows(true);
+        assert!(state.split_dflash_unattended_rows());
+        assert!(!state.split_dflash());
+        state.set_split_dflash_unattended_rows(false);
+        assert!(!state.split_dflash_unattended_rows());
+    }
+
+    #[test]
     fn prefill_compute_calibration_ignores_short_tail_overhead() {
         let mut stats = StageReplyStats::default();
         stats.observe_prefill_compute(1, 48_000, 128);

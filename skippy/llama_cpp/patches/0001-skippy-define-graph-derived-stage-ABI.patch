@@ -16,11 +16,11 @@ Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
  include/skippy/sampling.h             |  76 +++++++
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 256 +++++++++++++++++++++++
  include/skippy/state.h                | 236 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2110 insertions(+)
+ 16 files changed, 2114 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -1556,10 +1556,10 @@ index 000000000..0b5994482
 +#endif // SKIPPY_SPECULATIVE_DECODING_H
 diff --git a/include/skippy/stage_plan.h b/include/skippy/stage_plan.h
 new file mode 100644
-index 000000000..962674190
+index 000000000..7ffe65277
 --- /dev/null
 +++ b/include/skippy/stage_plan.h
-@@ -0,0 +1,252 @@
+@@ -0,0 +1,256 @@
 +#ifndef SKIPPY_STAGE_PLAN_H
 +#define SKIPPY_STAGE_PLAN_H
 +
@@ -1650,6 +1650,10 @@ index 000000000..962674190
 +    SKIPPY_STAGE_PLAN_STATE_KV_VALUE = 1,
 +    SKIPPY_STAGE_PLAN_STATE_RECURRENT_CONV = 2,
 +    SKIPPY_STAGE_PLAN_STATE_RECURRENT_SSM = 3,
++    /** State a graph derives and keeps across steps outside a KV or recurrent
++     * cache (DeepSeek-V4's compressor and indexer state, say); a stage that
++     * holds it snapshots its full state. */
++    SKIPPY_STAGE_PLAN_STATE_DERIVED_PERSISTENT = 4,
 +};
 +
 +/** @brief Access performed against persistent state. */

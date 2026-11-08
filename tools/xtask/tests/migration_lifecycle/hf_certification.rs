@@ -61,7 +61,7 @@ fn command(root: &Path, cancel: &Cancellation) -> process::RawProcessReport {
             .collect(),
     };
     let limits = Limits {
-        execution: Duration::from_secs(22),
+        execution: Duration::from_secs(75),
         graceful_shutdown: Duration::from_secs(4),
         forced_shutdown: Duration::from_secs(2),
         retained_bytes_per_stream: 1048576,
@@ -104,6 +104,68 @@ fn write(root: &Path, value: &Json) {
 }
 fn receipt(root: &Path) -> Json {
     serde_json::from_slice(&std::fs::read(root.join("evidence/report.json")).unwrap()).unwrap()
+}
+
+fn release_handler_barrier<'scope, T>(
+    root: &Path,
+    token: &Cancellation,
+    worker: std::thread::ScopedJoinHandle<'scope, T>,
+    deadline: Instant,
+) -> std::thread::ScopedJoinHandle<'scope, T> {
+    let pending = root.join("evidence/handler.pending");
+    let marker = root.join("evidence/invoked.json");
+    while !pending.exists() && Instant::now() < deadline && !worker.is_finished() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let failure = if !pending.exists() {
+        Some("signal-handler barrier was not observed".to_owned())
+    } else if marker.exists() {
+        Some("readiness marker preceded signal handler".to_owned())
+    } else {
+        std::fs::write(root.join("evidence/handler.release"), b"release")
+            .err()
+            .map(|error| format!("could not release signal-handler barrier: {error}"))
+    };
+    if let Some(failure) = failure {
+        token.cancel();
+        let _ = worker.join();
+        panic!("{failure}");
+    }
+    worker
+}
+
+#[test]
+fn handler_barrier_failure_cancels_and_joins_worker() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for failure in ["missing", "premature", "release"] {
+        let root = tempfile::tempdir().unwrap();
+        let evidence = root.path().join("evidence");
+        std::fs::create_dir(&evidence).unwrap();
+        if failure != "missing" {
+            std::fs::write(evidence.join("handler.pending"), b"pending").unwrap();
+        }
+        if failure == "premature" {
+            std::fs::write(evidence.join("invoked.json"), b"early").unwrap();
+        }
+        if failure == "release" {
+            std::fs::create_dir(evidence.join("handler.release")).unwrap();
+        }
+        let token = Cancellation::default();
+        let exited = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                while !token.is_cancelled() {
+                    std::thread::yield_now();
+                }
+                exited.store(true, Ordering::SeqCst);
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                release_handler_barrier(root.path(), &token, worker, Instant::now());
+            }));
+            assert!(result.is_err(), "{failure} must fail");
+            assert!(token.is_cancelled() && exited.load(Ordering::SeqCst));
+        });
+    }
 }
 #[test]
 fn hf_certification_cli_executes_exact_projector_and_ordered_mtp_modes() {
@@ -212,13 +274,19 @@ fn hf_certification_cli_cancel_and_deadline_stop_owned_inflight_product_and_publ
         let mut input = fixture(root.path(), "held", true);
         if !explicit {
             input["timeout_secs"] = json!(5);
+        } else {
+            input["timeout_secs"] = json!(60);
+            std::fs::write(root.path().join("handler-barrier"), b"hold").unwrap();
         }
         write(root.path(), &input);
         let token = Cancellation::default();
         let (result, seen) = std::thread::scope(|scope| {
-            let worker = scope.spawn(|| command(root.path(), &token));
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut worker = scope.spawn(|| command(root.path(), &token));
+            let deadline = Instant::now() + Duration::from_secs(30);
             let marker = root.path().join("evidence/invoked.json");
+            if explicit {
+                worker = release_handler_barrier(root.path(), &token, worker, deadline);
+            }
             while !marker.exists() && Instant::now() < deadline && !worker.is_finished() {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -238,7 +306,8 @@ fn hf_certification_cli_cancel_and_deadline_stop_owned_inflight_product_and_publ
             assert_eq!(result.process.status.unwrap().code(), Some(1));
         }
         assert_eq!(receipt(root.path())["status"], "FAILED");
-        assert!(root.path().join("evidence/stopped").exists());
+        let pid = std::fs::read_to_string(root.path().join("evidence/owned.pid")).unwrap();
+        crate::support::assert_absent(pid.trim().parse().unwrap());
         root.close().unwrap();
     }
 }

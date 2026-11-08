@@ -609,6 +609,7 @@ mod tests {
             draft_model_path: "/models/draft-dflash.gguf".into(),
             max_draft_tokens: None,
             target_layers: Vec::new(),
+            context_window: None,
         });
         assert!(speculation_plan_is_active(&plan));
     }

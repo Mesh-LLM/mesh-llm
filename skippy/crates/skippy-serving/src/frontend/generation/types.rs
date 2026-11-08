@@ -185,6 +185,10 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     /// The final stage's DFlash draft when this split speculates with one;
     /// stage 0 then sizes each block from measured cost and acceptance.
     pub(in crate::frontend) split_dflash_draft: Option<&'a std::path::Path>,
+    /// How many positions back that draft attends, when every one of its
+    /// attention layers slides over a window; stage 0 sends no feature rows
+    /// for prompt tokens before it.
+    pub(in crate::frontend) split_dflash_context_window: Option<u32>,
     /// The final stage's draft-context counters, from its latest replies.
     pub(in crate::frontend) split_dflash_health: SplitDFlashHealth,
     pub(in crate::frontend) prompt_token_ids: &'a [i32],

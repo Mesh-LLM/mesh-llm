@@ -47,6 +47,12 @@ pub struct DFlashProposalConfig {
     /// reads them from `draft_model_path`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_layers: Vec<u32>,
+    /// On stage 0 of a split: how many positions back the final stage's
+    /// draft attends, as that stage reported when it attached the draft.
+    /// Stage 0 then sends no feature rows for prompt tokens the draft can
+    /// never attend. `None` sends them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
 }
 
 impl DFlashProposalConfig {
@@ -104,6 +110,7 @@ mod tests {
                 draft_model_path: PathBuf::from("/models/draft-dflash.gguf"),
                 max_draft_tokens: Some(8),
                 target_layers: Vec::new(),
+                context_window: None,
             }),
             ..SpeculativeDecodeConfig::default()
         }
