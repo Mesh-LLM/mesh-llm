@@ -25,6 +25,7 @@ pub const STREAM_PEER_DOWN: u8 = 0x06;
 pub const STREAM_PEER_LEAVING: u8 = 0x07;
 pub const STREAM_PLUGIN_CHANNEL: u8 = 0x08;
 pub const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
+pub const STREAM_PLUGIN_MESH_STREAM: u8 = 0x0a;
 /// Reserved legacy mesh-plane config subscription stream ID.
 ///
 /// Config and inventory control now live exclusively on `mesh-llm-control/2`;
@@ -1062,6 +1063,23 @@ mod tests {
         assert_eq!(ALPN_CONTROL_V2, b"mesh-llm-control/2");
         assert_eq!(ALPN_V1, b"mesh-llm/1");
         assert_eq!(ALPN_V0, b"mesh-llm/0");
+        let ids = [
+            STREAM_GOSSIP,
+            STREAM_TUNNEL,
+            STREAM_TUNNEL_MAP,
+            STREAM_TUNNEL_HTTP,
+            STREAM_ROUTE_REQUEST,
+            STREAM_PEER_DOWN,
+            STREAM_PEER_LEAVING,
+            STREAM_PLUGIN_CHANNEL,
+            STREAM_PLUGIN_BULK_TRANSFER,
+            STREAM_PLUGIN_MESH_STREAM,
+        ];
+        assert_eq!(
+            ids,
+            [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a]
+        );
+        assert_eq!(STREAM_NATIVE_CHAT, 0x0f);
         assert_eq!(STREAM_CONFIG_SUBSCRIBE, 0x0b);
         assert_eq!(STREAM_CONFIG_PUSH, 0x0c);
         assert_eq!(STREAM_SUBPROTOCOL, 0x0d);
