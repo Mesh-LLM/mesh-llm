@@ -25,14 +25,66 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     build_handoffs(build, "macOS")?;
     let linux = h::job(document, "build_linux")?;
     h::needs(linux, &["build"])?;
+    h::condition(
+        linux,
+        "${{ needs.build.result == 'success' && !(inputs.mode == 'pinned-build' && inputs.mesh_source != '' && inputs.pass_id == 'repair-1' && inputs.previous_package == '') }}",
+    )?;
     h::binding(
         h::member(linux, "env")?,
         "NATIVE_BUILD_MODE",
         "native-build",
     )?;
+    h::binding(h::member(linux, "env")?, "CTEST_PARALLEL_LEVEL", "4")?;
     build_handoffs(linux, "Linux")?;
+    let pinned_linux = h::job(document, "build_linux_pinned")?;
+    if h::member(pinned_linux, "needs").is_ok() {
+        return Err("frozen Linux producer must not wait for macOS".into());
+    }
+    h::condition(
+        pinned_linux,
+        "${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && inputs.mode == 'pinned-build' && inputs.mesh_source != '' && inputs.pass_id == 'repair-1' && inputs.previous_package == '' }}",
+    )?;
+    let pinned_env = h::member(pinned_linux, "env")?;
+    for key in [
+        "NATIVE_PREVIOUS_PACKAGE",
+        "NATIVE_PREVIOUS_IDENTITY",
+        "NATIVE_PREVIOUS_HEAD",
+        "NATIVE_PREVIOUS_FEEDBACK",
+    ] {
+        h::binding(pinned_env, key, "")?;
+    }
+    h::binding(pinned_env, "NATIVE_BUILD_MODE", "pinned-build")?;
+    h::binding(pinned_env, "CTEST_PARALLEL_LEVEL", "4")?;
+    build_handoffs(pinned_linux, "Linux")?;
     let combine = h::job(document, "combine")?;
-    h::needs(combine, &["build", "build_linux"])?;
+    h::needs(combine, &["build", "build_linux", "build_linux_pinned"])?;
+    h::condition(
+        combine,
+        "${{ !cancelled() && needs.build.result == 'success' && (needs.build_linux.result == 'success' || needs.build_linux_pinned.result == 'success') }}",
+    )?;
+    let linux_package =
+        "${{ needs.build_linux_pinned.outputs.package || needs.build_linux.outputs.package }}";
+    let linux_identity =
+        "${{ needs.build_linux_pinned.outputs.identity || needs.build_linux.outputs.identity }}";
+    let combine_steps = h::steps(combine)?;
+    let (_, linux_download) = combine_steps
+        .iter()
+        .enumerate()
+        .find(|(_, step)| {
+            field(step, "uses").is_some_and(|uses| uses.starts_with("actions/download-artifact@"))
+                && h::member(step, "with")
+                    .ok()
+                    .and_then(|inputs| field(inputs, "path"))
+                    == Some("${{ runner.temp }}/canary-linux")
+        })
+        .ok_or("missing Linux producer download")?;
+    h::binding(h::member(linux_download, "with")?, "name", linux_package)?;
+    let (_, combine_command) = h::step(combine_steps, "id", "combine")?;
+    h::binding(
+        h::member(combine_command, "env")?,
+        "LINUX_IDENTITY",
+        linux_identity,
+    )?;
     worker(h::job(document, "family")?)?;
     let aggregate = h::job(document, "aggregate")?;
     super::canary_execution::aggregate(aggregate)?;
@@ -415,6 +467,35 @@ mod tests {
             h::replace(&mut node, &path, Node::Scalar(value.into()));
             assert!(validate(node).is_err(), "{path:?}");
         }
+    }
+    #[test]
+    fn frozen_linux_must_be_independent_and_combined_with_the_selected_producer() {
+        for (path, value) in [
+            (vec!["jobs", "build_linux_pinned", "if"], "true"),
+            (
+                vec!["jobs", "build_linux_pinned", "env", "NATIVE_BUILD_MODE"],
+                "native-build",
+            ),
+            (
+                vec!["jobs", "build_linux", "if"],
+                "${{ needs.build.result == 'success' }}",
+            ),
+            (
+                vec!["jobs", "combine", "if"],
+                "${{ needs.build.result == 'success' }}",
+            ),
+        ] {
+            let mut node = document();
+            h::replace(&mut node, &path, Node::Scalar(value.into()));
+            assert!(validate(node).is_err(), "{path:?}");
+        }
+        let mut node = document();
+        let Node::Map(entries) = h::mutable(h::mutable(&mut node, "jobs"), "build_linux_pinned")
+        else {
+            unreachable!()
+        };
+        entries.push(("needs".into(), Node::Scalar("build".into())));
+        assert!(validate(node).is_err());
     }
     #[test]
     fn restore_requires_bootstrap_and_actual_command_not_comment() {

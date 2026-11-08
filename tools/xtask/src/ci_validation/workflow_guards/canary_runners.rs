@@ -76,6 +76,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     }
     h::binding(h::job(pass, "build")?, "runs-on", PASS_MAC_RUNNER)?;
     h::binding(h::job(pass, "build_linux")?, "runs-on", PASS_LINUX_RUNNER)?;
+    h::binding(
+        h::job(pass, "build_linux_pinned")?,
+        "runs-on",
+        PASS_LINUX_RUNNER,
+    )?;
     for name in ["family", "retry_family"] {
         h::binding(h::job(pass, name)?, "runs-on", PASS_TIERED_RUNNER)?;
     }

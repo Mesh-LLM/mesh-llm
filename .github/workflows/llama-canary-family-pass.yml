@@ -59,9 +59,9 @@ on:
       branch:
         value: ${{ jobs.combine.outputs.branch }}
       failure_class:
-        value: ${{ jobs.reconcile.outputs.failure_class || jobs.aggregate.outputs.failure_class || jobs.combine.outputs.failure_class || jobs.build_linux.outputs.failure_class || jobs.build.outputs.failure_class }}
+        value: ${{ jobs.reconcile.outputs.failure_class || jobs.aggregate.outputs.failure_class || jobs.combine.outputs.failure_class || jobs.build_linux_pinned.outputs.failure_class || jobs.build_linux.outputs.failure_class || jobs.build.outputs.failure_class }}
       failure_stage:
-        value: ${{ jobs.reconcile.outputs.failure_stage || jobs.aggregate.outputs.failure_stage || jobs.combine.outputs.failure_stage || jobs.build_linux.outputs.failure_stage || jobs.build.outputs.failure_stage }}
+        value: ${{ jobs.reconcile.outputs.failure_stage || jobs.aggregate.outputs.failure_stage || jobs.combine.outputs.failure_stage || jobs.build_linux_pinned.outputs.failure_stage || jobs.build_linux.outputs.failure_stage || jobs.build.outputs.failure_stage }}
       repairable:
         value: ${{ jobs.reconcile.outputs.repairable || jobs.aggregate.outputs.repairable }}
       feedback:
@@ -293,7 +293,7 @@ jobs:
 
   build_linux:
     needs: build
-    if: ${{ needs.build.result == 'success' }}
+    if: ${{ needs.build.result == 'success' && !(inputs.mode == 'pinned-build' && inputs.mesh_source != '' && inputs.pass_id == 'repair-1' && inputs.previous_package == '') }}
     runs-on: ${{ fromJSON(inputs.runner_labels_linux) }}
     timeout-minutes: 1430
     outputs:
@@ -316,8 +316,34 @@ jobs:
       NATIVE_PREVIOUS_FEEDBACK: ''
     steps: *native_build_steps
 
+  build_linux_pinned:
+    # The selected source is immutable: Linux can prove it independently while Mac builds.
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && inputs.mode == 'pinned-build' && inputs.mesh_source != '' && inputs.pass_id == 'repair-1' && inputs.previous_package == '' }}
+    runs-on: ${{ fromJSON(inputs.runner_labels_linux) }}
+    timeout-minutes: 1430
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      identity: ${{ steps.build.outputs.identity_sha256 }}
+      head: ${{ steps.build.outputs.candidate }}
+      branch: ${{ steps.build.outputs.branch }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}-Linux
+      failure_class: ${{ steps.build.outputs.failure_class }}
+      failure_stage: ${{ steps.build.outputs.failure_stage }}
+    env:
+      MESH_LLM_REQUIRE_SCCACHE: '1'
+      CTEST_PARALLEL_LEVEL: '4'
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      NATIVE_BUILD_MODE: pinned-build
+      NATIVE_PREVIOUS_PACKAGE: ''
+      NATIVE_PREVIOUS_IDENTITY: ''
+      NATIVE_PREVIOUS_HEAD: ''
+      NATIVE_PREVIOUS_FEEDBACK: ''
+    steps: *native_build_steps
+
   combine:
-    needs: [build, build_linux]
+    needs: [build, build_linux, build_linux_pinned]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.build_linux.result == 'success' || needs.build_linux_pinned.result == 'success') }}
     runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
     outputs:
       matrix: ${{ steps.combine.outputs.matrix }}
@@ -343,13 +369,13 @@ jobs:
           path: ${{ runner.temp }}/canary-macos
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build_linux.outputs.package }}
+          name: ${{ needs.build_linux_pinned.outputs.package || needs.build_linux.outputs.package }}
           path: ${{ runner.temp }}/canary-linux
       - name: Bind both native producers to one candidate
         id: combine
         env:
           MAC_IDENTITY: ${{ needs.build.outputs.identity }}
-          LINUX_IDENTITY: ${{ needs.build_linux.outputs.identity }}
+          LINUX_IDENTITY: ${{ needs.build_linux_pinned.outputs.identity || needs.build_linux.outputs.identity }}
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/canary-combine.json"
