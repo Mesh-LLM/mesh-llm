@@ -69,6 +69,11 @@ pub(super) fn is_static_summary_token(token: &str) -> bool {
             | "rotate-owner"
             | "trust"
             | "add"
+            | "policy"
+            | "off"
+            | "prefer-owned"
+            | "require-owned"
+            | "allowlist"
     )
 }
 

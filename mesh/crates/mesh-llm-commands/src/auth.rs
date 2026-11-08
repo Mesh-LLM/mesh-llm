@@ -4,7 +4,7 @@ use std::result::Result as StdResult;
 
 use anyhow::{Context, Result, bail};
 use iroh::{EndpointId, SecretKey};
-use mesh_llm_cli::{AuthCommand, TrustCommand};
+use mesh_llm_cli::AuthCommand;
 use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_identity::{
     KEYCHAIN_SERVICE, OwnerKeychainLoadError, OwnerKeypair, SignedNodeOwnership, TrustPolicy,
@@ -15,6 +15,8 @@ use mesh_llm_identity::{
     save_node_ownership, save_trust_store, sign_node_ownership, verify_node_ownership,
 };
 use zeroize::Zeroizing;
+
+mod trust;
 
 fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()
@@ -148,7 +150,7 @@ pub fn run_auth_command(command: &AuthCommand) -> Result<()> {
             no_passphrase,
             force,
         } => run_rotate_owner(owner_key.clone(), *no_passphrase, *force),
-        AuthCommand::Trust { command } => run_trust_command(command),
+        AuthCommand::Trust { command } => trust::run_trust_command(command),
     }
 }
 
@@ -495,6 +497,7 @@ pub(crate) fn run_status(
         "Revoked node IDs:{}",
         trust_store.revoked_node_ids.len()
     )?;
+    trust::write_enforcement_notes(&mut err, &trust_store, &trust_store_path)?;
 
     writeln!(err)?;
 
@@ -908,102 +911,6 @@ pub(crate) fn run_rotate_owner(
     writeln!(err, "New owner ID:    {}", new_keypair.owner_id())?;
     if let Some(backup_path) = backup_path {
         writeln!(err, "Backup:          {}", backup_path.display())?;
-    }
-
-    Ok(())
-}
-
-pub(crate) fn run_trust_command(command: &TrustCommand) -> Result<()> {
-    match command {
-        TrustCommand::Add {
-            owner_id,
-            label,
-            trust_store,
-        } => {
-            let trust_store_path = resolve_trust_store_path(trust_store.clone())?;
-            let mut store = load_effective_trust_store(&trust_store_path)?;
-            store.add_trusted_owner(owner_id.clone(), label.clone());
-            save_trust_store(&trust_store_path, &store)?;
-            let mut err = mesh_llm_events::console_err();
-            writeln!(
-                err,
-                "Trusted owner {owner_id} in {}",
-                trust_store_path.display()
-            )?;
-        }
-        TrustCommand::Remove {
-            owner_id,
-            trust_store,
-        } => {
-            let trust_store_path = resolve_trust_store_path(trust_store.clone())?;
-            let mut store = load_effective_trust_store(&trust_store_path)?;
-            let mut err = mesh_llm_events::console_err();
-            if store.remove_trusted_owner(owner_id) {
-                save_trust_store(&trust_store_path, &store)?;
-                writeln!(
-                    err,
-                    "Removed trusted owner {owner_id} from {}",
-                    trust_store_path.display()
-                )?;
-            } else {
-                writeln!(err, "Trusted owner {owner_id} was not present.")?;
-            }
-        }
-        TrustCommand::List { trust_store } => {
-            let trust_store_path = resolve_trust_store_path(trust_store.clone())?;
-            let store = load_effective_trust_store(&trust_store_path)?;
-            let mut err = mesh_llm_events::console_err();
-            writeln!(err, "Trust store:     {}", trust_store_path.display())?;
-            writeln!(err, "Policy:          {:?}", store.policy)?;
-            writeln!(err)?;
-            writeln!(err, "Trusted owners:")?;
-            if store.trusted_owners.is_empty() {
-                writeln!(err, "- none")?;
-            } else {
-                for owner in &store.trusted_owners {
-                    match owner.label.as_deref() {
-                        Some(label) => writeln!(err, "- {} ({label})", owner.owner_id)?,
-                        None => writeln!(err, "- {}", owner.owner_id)?,
-                    }
-                }
-            }
-            writeln!(err)?;
-            writeln!(err, "Revoked owners:")?;
-            if store.revoked_owners.is_empty() {
-                writeln!(err, "- none")?;
-            } else {
-                for owner in &store.revoked_owners {
-                    match owner.reason.as_deref() {
-                        Some(reason) => writeln!(err, "- {} ({reason})", owner.owner_id)?,
-                        None => writeln!(err, "- {}", owner.owner_id)?,
-                    }
-                }
-            }
-            writeln!(err)?;
-            writeln!(err, "Revoked node certs:")?;
-            if store.revoked_node_certs.is_empty() {
-                writeln!(err, "- none")?;
-            } else {
-                for cert in &store.revoked_node_certs {
-                    match cert.reason.as_deref() {
-                        Some(reason) => writeln!(err, "- {} ({reason})", cert.cert_id)?,
-                        None => writeln!(err, "- {}", cert.cert_id)?,
-                    }
-                }
-            }
-            writeln!(err)?;
-            writeln!(err, "Revoked node IDs:")?;
-            if store.revoked_node_ids.is_empty() {
-                writeln!(err, "- none")?;
-            } else {
-                for node in &store.revoked_node_ids {
-                    match node.reason.as_deref() {
-                        Some(reason) => writeln!(err, "- {} ({reason})", node.node_endpoint_id)?,
-                        None => writeln!(err, "- {}", node.node_endpoint_id)?,
-                    }
-                }
-            }
-        }
     }
 
     Ok(())

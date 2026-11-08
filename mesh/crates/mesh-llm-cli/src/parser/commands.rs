@@ -30,6 +30,17 @@ pub enum TrustPolicy {
     Allowlist,
 }
 
+impl TrustPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::PreferOwned => "prefer-owned",
+            Self::RequireOwned => "require-owned",
+            Self::Allowlist => "allowlist",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum MeshDiscoveryMode {
     #[default]
@@ -190,6 +201,15 @@ pub enum TrustCommand {
     },
     /// Show the current trust store contents.
     List {
+        /// Path to the trust store file.
+        #[arg(long)]
+        trust_store: Option<PathBuf>,
+    },
+    /// Set the trust policy that `serve` uses when `--trust-policy` is not passed.
+    Policy {
+        /// Trust policy to store.
+        #[arg(value_enum)]
+        policy: TrustPolicy,
         /// Path to the trust store file.
         #[arg(long)]
         trust_store: Option<PathBuf>,
@@ -1328,6 +1348,32 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn auth_trust_policy_parses_each_policy_by_its_name() {
+        for policy in TrustPolicy::value_variants() {
+            let cli = Cli::parse_from(["mesh-llm", "auth", "trust", "policy", policy.as_str()]);
+            match cli.command.expect("auth command expected") {
+                Command::Auth {
+                    command:
+                        AuthCommand::Trust {
+                            command:
+                                TrustCommand::Policy {
+                                    policy: parsed,
+                                    trust_store,
+                                },
+                        },
+                } => {
+                    assert_eq!(parsed, *policy);
+                    assert_eq!(trust_store, None);
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        }
+
+        assert!(Cli::try_parse_from(["mesh-llm", "auth", "trust", "policy"]).is_err());
+        assert!(Cli::try_parse_from(["mesh-llm", "auth", "trust", "policy", "strict"]).is_err());
     }
 
     #[test]

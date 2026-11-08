@@ -291,7 +291,8 @@ Switches:
 - `--owner-key <OWNER_KEY>`: keystore used to attest this runtime node.
 - `--owner-required`: fail startup if owner attestation cannot be loaded.
 - `--node-label <NODE_LABEL>`: attach a human label to this runtime node certificate.
-- `--trust-policy <TRUST_POLICY>`: override peer ownership trust policy.
+- `--trust-policy <TRUST_POLICY>`: override the trust policy stored in the
+  trust store (set with `auth trust policy`; `off` when unset).
 - `--trust-owner <TRUST_OWNER>`: add trusted owner IDs on top of the local trust store.
 
 ### Locked split topology
@@ -1002,6 +1003,12 @@ Subcommands:
 - `auth trust remove <OWNER_ID> [--trust-store <PATH>]`: remove an owner from
   the local trust allowlist.
 - `auth trust list [--trust-store <PATH>]`: show the current trust store.
+- `auth trust policy <off|prefer-owned|require-owned|allowlist> [--trust-store <PATH>]`:
+  set the trust policy stored in the trust store. `serve` uses it when
+  `--trust-policy` is not passed, from its next start. Trusted owners are only
+  enforced under `allowlist`, and revocations under `require-owned` or
+  `allowlist`; `auth status`, `auth trust add` and `auth trust list` say when
+  the stored policy leaves them unenforced.
 
 `auth init` switches:
 
