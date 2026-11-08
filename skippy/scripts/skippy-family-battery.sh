@@ -753,11 +753,14 @@ planned_certification_count() {
 # that pins an mmproj artifact, after its core certification lanes.
 run_mmproj_smoke() {
   local family="$1" target="$2" mmproj="$3" model_id="$4" startup_timeout="$5" activation_width="$6" split_layer="$7"
-  local smoke_run_id smoke_run_dir exit_code log_path smoke_timeout reasoning_effort
+  local smoke_run_id smoke_run_dir exit_code log_path smoke_timeout reasoning_effort max_tokens
   smoke_timeout="$(cert_timeout_for_startup "$startup_timeout")"
   reasoning_effort=none
+  max_tokens=256
   if [[ "$family" == muse-spark ]]; then
     reasoning_effort=low
+    # Muse cannot disable reasoning; leave room for a visible final image answer.
+    max_tokens=1024
   fi
   smoke_run_id="$(printf '%03d-%s-mmproj' "$TOTAL" "$(slugify "$family")")"
   smoke_run_dir="$CERT_DIR/$smoke_run_id"
@@ -766,7 +769,7 @@ run_mmproj_smoke() {
   echo "==> family-certify mmproj smoke: family=$family model=$(basename "$target") mmproj=$(basename "$mmproj")"
   MM_SMOKE_TOTAL=$((MM_SMOKE_TOTAL + 1))
   if (( DRY_RUN == 1 )); then
-    echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$split_layer' SKIPPY_MM_REASONING_EFFORT='$reasoning_effort' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-serving --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
+    echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$split_layer' SKIPPY_MM_MAX_TOKENS='$max_tokens' SKIPPY_MM_REASONING_EFFORT='$reasoning_effort' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-serving --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
     return 0
   fi
   local -a smoke_command
@@ -783,7 +786,7 @@ run_mmproj_smoke() {
       SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
       SKIPPY_MM_ACTIVATION_WIDTH="$activation_width" \
       SKIPPY_MM_CTX_SIZE=2048 \
-      SKIPPY_MM_MAX_TOKENS=256 \
+      SKIPPY_MM_MAX_TOKENS="$max_tokens" \
       SKIPPY_MM_N_GPU_LAYERS=999 \
       SKIPPY_MM_SPLIT_LAYER="$split_layer" \
       SKIPPY_MM_REASONING_EFFORT="$reasoning_effort" \
