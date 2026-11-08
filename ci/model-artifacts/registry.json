@@ -5442,14 +5442,14 @@
         "gguf"
       ],
       "artifact": {
-        "repo": "Diffuspace/Clover-35B-A3B-Preview-GGUF",
-        "revision": "32e22a02b885e173177b7ce7661ad13448b4f89e",
+        "repo": "maternion/Clover-35B-A3B-Preview-GGUF",
+        "revision": "e30bdb38a657bd4909b97d4e32453f37bf490414",
         "selector": "Q4_K_M",
         "files": [
           {
-            "path": "Clover-35B-A3B-Preview-Q4_K_M.gguf",
-            "size_bytes": 22998009248,
-            "sha256": "4d439bb832487fbb91d0a739a5746cf3089bde4137c17050576b24e6dba3539c"
+            "path": "Diffuspace-Clover-35B-A3B-Preview-Q4_K_M.gguf",
+            "size_bytes": 21166750624,
+            "sha256": "efedbfb7a188322cd669cef0f2f1e494120fae8352dda01134c2a255955e4b2f"
           }
         ]
       },
@@ -5465,9 +5465,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 22987011840
+          "estimated_model_bytes": 21155768832
         },
-        "notes": "Pinned clover-moe GGUF; new upstream decoder with generated stage boundaries; first full certification pending",
+        "notes": "Pinned mainline-compatible Clover repack with converted GDN decay; single-step parity, three-stage chain, and state handoff passed on James-lab Spark",
         "class": "causal_generation"
       }
     },

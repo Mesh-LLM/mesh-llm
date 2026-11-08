@@ -1050,10 +1050,10 @@
       "class": "causal_generation",
       "architecture": "clover_moe",
       "profile": "full",
-      "artifact": {"repo": "Diffuspace/Clover-35B-A3B-Preview-GGUF", "revision": "32e22a02b885e173177b7ce7661ad13448b4f89e", "files": ["Clover-35B-A3B-Preview-Q4_K_M.gguf"], "file_integrity": {"Clover-35B-A3B-Preview-Q4_K_M.gguf": {"size_bytes": 22998009248, "blob_id": "4d439bb832487fbb91d0a739a5746cf3089bde4137c17050576b24e6dba3539c"}}, "selector": "Q4_K_M"},
+      "artifact": {"repo": "maternion/Clover-35B-A3B-Preview-GGUF", "revision": "e30bdb38a657bd4909b97d4e32453f37bf490414", "files": ["Diffuspace-Clover-35B-A3B-Preview-Q4_K_M.gguf"], "file_integrity": {"Diffuspace-Clover-35B-A3B-Preview-Q4_K_M.gguf": {"size_bytes": 21166750624, "blob_id": "efedbfb7a188322cd669cef0f2f1e494120fae8352dda01134c2a255955e4b2f"}}, "selector": "Q4_K_M"},
       "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 2048, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 22987011840},
-      "notes": "Pinned clover-moe GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 21155768832},
+      "notes": "Pinned mainline-compatible Clover repack with converted GDN decay; single-step parity, three-stage chain, and state handoff passed on James-lab Spark"
     },
     {
       "family": "flint",
