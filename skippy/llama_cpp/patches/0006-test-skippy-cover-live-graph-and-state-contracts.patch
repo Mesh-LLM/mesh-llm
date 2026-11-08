@@ -1157,10 +1157,10 @@ index 000000000..cd2e4af3f
 +}
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
 new file mode 100644
-index 000000000..f452b4303
+index 000000000..25977b408
 --- /dev/null
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,131 @@
 +# Registry dimensions are checked by scripts/tests/test_synthetic_graph_registry.py.
 +function(skippy_contract_case family arch layers width mtp mode)
 +    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-${family}")
@@ -1278,6 +1278,7 @@ index 000000000..f452b4303
 +skippy_contract_case(kolibri1 kolibri1 50 2560 0 causal)
 +skippy_contract_case(beam beam 52 5120 0 causal)
 +skippy_contract_case(muse-spark muse-spark 62 8192 0 causal)
++skippy_contract_case(metis16 metis16 24 8192 0 causal)
 +
 +# GLM-5.3 is too large for the ordinary one-host family battery. Keep its
 +# production topology in a separate synthetic-architecture lane so this case
