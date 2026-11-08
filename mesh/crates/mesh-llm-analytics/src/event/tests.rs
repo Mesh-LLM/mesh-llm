@@ -76,6 +76,9 @@ fn event_names_are_unique_and_snake_case() {
         Event::ModelLoaded,
         Event::ModelDownload,
         Event::HardwareProfile,
+        Event::InferenceRequest,
+        Event::InferenceRoute,
+        Event::MeshLinks,
     ];
     let mut names: Vec<_> = events.iter().map(|event| event.name()).collect();
     names.sort_unstable();
@@ -96,14 +99,26 @@ fn buckets_cover_their_ranges() {
     assert_eq!(bucket_count(4), "3-4");
     assert_eq!(bucket_count(1_000), "33+");
 
-    const GB: u64 = 1024 * 1024 * 1024;
-    assert_eq!(bucket_gigabytes(0), "0-8");
-    assert_eq!(bucket_gigabytes(36 * GB), "32-64");
-    assert_eq!(bucket_gigabytes(512 * GB), "256+");
-
     assert_eq!(bucket_duration_secs(30), "under_1m");
     assert_eq!(bucket_duration_secs(3_600), "1h-6h");
     assert_eq!(bucket_duration_secs(90_000), "over_24h");
+}
+
+#[test]
+fn gigabytes_round_to_the_nearest_whole_gib() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    assert_eq!(gigabytes(0), 0);
+    // A 16 GiB machine whose budget reads a little under or over 16 GiB is
+    // one number, not two neighbouring ranges.
+    assert_eq!(gigabytes(16 * GIB - GIB / 10), 16);
+    assert_eq!(gigabytes(16 * GIB + GIB / 10), 16);
+    assert_eq!(gigabytes(512 * GIB), 512);
+}
+
+#[test]
+fn floats_serialize_as_numbers() {
+    let rendered = serde_json::to_string(&Value::from(12.5_f64)).unwrap();
+    assert_eq!(rendered, "12.5");
 }
 
 #[test]

@@ -19,6 +19,22 @@ impl Node {
             }
             crate::inference::election::InferenceTarget::None => return,
         };
+        let remote_peer = match target {
+            crate::inference::election::InferenceTarget::Remote(peer_id) => Some(*peer_id),
+            _ => None,
+        };
+        crate::inference_analytics::report_route(
+            self,
+            remote_peer,
+            crate::inference_analytics::RouteAttempt {
+                model,
+                target: &attempt_target,
+                queue_wait,
+                attempt_time,
+                outcome,
+                completion_tokens,
+            },
+        );
         self.routing_metrics.record_attempt(
             model,
             attempt_target.clone(),
@@ -49,6 +65,18 @@ impl Node {
     ) {
         let model_ref = model.map(canonical_demand_model_ref);
         let attempt_target = crate::network::metrics::AttemptTarget::Endpoint(endpoint.to_string());
+        crate::inference_analytics::report_route(
+            self,
+            None,
+            crate::inference_analytics::RouteAttempt {
+                model: model_ref.as_deref(),
+                target: &attempt_target,
+                queue_wait,
+                attempt_time,
+                outcome,
+                completion_tokens,
+            },
+        );
         self.routing_metrics.record_attempt(
             model_ref.as_deref(),
             attempt_target.clone(),

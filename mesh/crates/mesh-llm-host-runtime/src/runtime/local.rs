@@ -503,6 +503,8 @@ pub(super) enum ModelLoadSource {
     LayerPackage,
     /// A whisper.cpp model file, by path or repository reference.
     WhisperFile,
+    /// A layer package served as stage 0 of a split.
+    SplitLayerPackage,
 }
 
 impl ModelLoadSource {
@@ -511,6 +513,7 @@ impl ModelLoadSource {
             Self::DirectGguf => "direct_gguf",
             Self::LayerPackage => "layer_package",
             Self::WhisperFile => "whisper_file",
+            Self::SplitLayerPackage => "split_layer_package",
         }
     }
 
@@ -526,7 +529,7 @@ impl ModelLoadSource {
     fn may_report_name(self) -> bool {
         match self {
             Self::DirectGguf => false,
-            Self::LayerPackage => true,
+            Self::LayerPackage | Self::SplitLayerPackage => true,
             // The name may come from a local path, so it is never reported.
             Self::WhisperFile => false,
         }
@@ -554,6 +557,11 @@ pub(super) fn report_model_loaded_analytics(
     mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
 }
 
+/// Report `model_loaded` for stage 0 of a split.
+pub(super) fn report_split_model_loaded_analytics(model: &str) {
+    report_model_loaded_analytics(model, ModelLoadSource::SplitLayerPackage, None);
+}
+
 /// Which System One (OpenJEV) backend a loaded model is, if any.
 ///
 /// Read from the GGUF architecture, never from the model name, so it stays a
@@ -572,6 +580,8 @@ fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Optio
 /// reporter: the capture itself is a fire-and-forget into a global queue.
 fn model_loaded_label(model: &str, source: ModelLoadSource) -> mesh_llm_analytics::Label {
     if source.may_report_name() {
+        // Lets `inference_request` and `inference_route` name it too.
+        crate::inference_analytics::allow_model_name(model);
         mesh_llm_analytics::Label::sanitize_or_redact(model)
     } else {
         mesh_llm_analytics::Label::redacted()

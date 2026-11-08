@@ -1152,6 +1152,8 @@ pub(super) async fn build_run_auto_node_setup(
     );
     node.start_heartbeat();
     node.start_rtt_refresh();
+    crate::inference_analytics::install();
+    crate::inference_analytics::spawn_mesh_links_reporter(node.clone());
     // iroh owns NAT traversal and relay-to-direct migration; modern nodes do
     // not start the legacy application-level reverse-dial sender.
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);

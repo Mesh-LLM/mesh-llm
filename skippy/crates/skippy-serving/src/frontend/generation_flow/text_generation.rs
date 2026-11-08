@@ -358,7 +358,7 @@ impl StageOpenAiBackend {
             "llama_stage.eog_check_ms".to_string(),
             json!(output.eog_check_ms),
         );
-        self.emit_openai_summary(
+        let total_ms = self.emit_openai_summary(
             "stage.openai_generation_summary",
             generation_timer,
             summary_attrs,
@@ -366,6 +366,64 @@ impl StageOpenAiBackend {
         // A logprobs request ran with speculation stood down above: its decode
         // rate must not count toward the speculative window.
         self.record_speculation_outcome(&output, speculating && sampling.top_logprobs.is_none());
+        if crate::generation_stats::observer_installed() {
+            crate::generation_stats::notify(&self.generation_stats(
+                &output,
+                &gated_speculative.effective_strategy,
+                speculating && sampling.top_logprobs.is_none(),
+                total_ms,
+            ));
+        }
         Ok(output)
+    }
+}
+
+impl StageOpenAiBackend {
+    /// The observer's view of one finished generation: counts and timings only.
+    fn generation_stats(
+        &self,
+        output: &GeneratedText,
+        speculative_strategy: &str,
+        speculation_allowed: bool,
+        total_ms: f64,
+    ) -> crate::generation_stats::GenerationStats {
+        let (split, downstream_lanes) = match &self.mode {
+            InferenceBackendMode::LocalRuntime => (false, None),
+            InferenceBackendMode::EmbeddedStageZero { lane_pool, .. } => {
+                (true, lane_pool.as_ref().map(|pool| pool.capacity))
+            }
+        };
+        let draft = output.speculative_stats.as_ref();
+        let mtp = output.native_mtp_stats;
+        let wire = output.activation_wire;
+        crate::generation_stats::GenerationStats {
+            model_id: self.model_id.clone(),
+            split,
+            downstream_lanes,
+            concurrency_limit: self.generation_limit.current_limit(),
+            context_size: self.ctx_size,
+            prompt_tokens: output.prompt_tokens,
+            completion_tokens: output.completion_tokens,
+            cached_prompt_tokens: output.cached_prompt_tokens,
+            prefill_tokens: output.suffix_prefill_tokens,
+            cache_hit_kind: output.cache_hit_kind.unwrap_or("none"),
+            queue_wait_ms: output.queue_wait_ms,
+            restore_ms: output.restore_ms,
+            prefill_ms: output.prompt_ms,
+            decode_ms: output.predicted_ms,
+            total_ms,
+            finish_reason: output.finish_reason.as_str(),
+            speculative_strategy: speculative_strategy.to_owned(),
+            speculation_allowed,
+            draft_windows: draft.map_or(0, |stats| stats.windows as u64),
+            draft_proposed_tokens: draft.map_or(0, |stats| stats.draft_tokens as u64),
+            draft_accepted_tokens: draft.map_or(0, |stats| stats.accepted_tokens as u64),
+            mtp_verifications: mtp.verification_count,
+            mtp_proposed_tokens: mtp.drafted_tokens,
+            mtp_accepted_tokens: mtp.accepted_tokens,
+            activation_codec: wire.map(|wire| wire.codec),
+            activation_prefill_bytes: wire.map_or(0, |wire| wire.prefill_bytes as u64),
+            activation_decode_bytes: wire.map_or(0, |wire| wire.decode_bytes as u64),
+        }
     }
 }

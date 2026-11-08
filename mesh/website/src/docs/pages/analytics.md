@@ -63,6 +63,9 @@ And one of these events:
 | `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`), `source` (`direct_gguf`, `layer_package`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
+| `inference_request` | see below | How fast real requests are served: prefill, decode, context length, prompt cache, speculative decoding, and lanes |
+| `inference_route` | see below | Where requests go (this node, a peer, an endpoint), whether they succeed, and the link to the peer |
+| `mesh_links` | see below | How this node's peers are connected and how far away they are |
 
 `hardware_profile` is sent once per `serve` process and carries:
 
@@ -70,14 +73,52 @@ And one of these events:
 |---|---|---|
 | `gpu_model` | `apple-m1-pro`, `nvidia-geforce-rtx-4090`, `none`, `unreported` | The device name, lowercased and hyphenated, and only when a naming probe actually produced it. `none` means no GPU was found. `unreported` means one exists but nothing named it — including when the survey holds a placeholder such as `GPU 0`, which is never published as though it were a real device |
 | `gpu_count` | `1`, `3-4`, `33+` | Bucketed |
-| `vram_total` | `8-16`, `32-64` | Bucketed gigabytes across all GPUs |
-| `system_ram` | `16-32`, `64-128` | Bucketed gigabytes of system RAM, when the platform reports it |
+| `vram_gb` | `24`, `36` | GPU memory available to mesh-llm, in whole GiB |
+| `system_ram_gb` | `16`, `64` | System RAM in whole GiB, when the platform reports it |
 | `unified_memory` | `true` | Whether this is a unified-memory SoC |
 | `backend_metal`, `backend_cuda`, `backend_rocm`, `backend_vulkan` | `true` / `false` | Which backends this machine can run |
 
-Counts and sizes are bucketed rather than exact (`3-4`, `9-16`, `33+`),
-because an exact VRAM figure or GPU count at the tail can identify a single
-deployment.
+GPU counts are bucketed (`3-4`, `9-16`, `33+`). Memory is rounded to the
+nearest whole GiB: ranges with shared edges (`8-16`, `16-32`) were ambiguous,
+and because the VRAM figure is a budget that moves slightly between runs, the
+same machine could land in one range on one start and the next range on the
+following one. Earlier versions reported `vram_total` and `system_ram` as
+ranges.
+
+`inference_request` is sent for a generation this node served. At most 30
+are sent per minute per process; when some were skipped, the next one
+carries a `weight` saying how many requests it stands for. It carries:
+
+| Property | Example | Notes |
+|---|---|---|
+| `model` | `Qwen3-8B-Q4_K_M`, `redacted` | Named only for models loaded from a catalog or repository reference, as for `model_loaded` |
+| `weight` | `1`, `12` | Requests this event represents |
+| `serving` | `local`, `split` | Whole model on this node, or stage 0 of a split |
+| `downstream_lanes`, `concurrency_limit` | `4`, `2` | Persistent lanes to the next split stage, and generations admitted at once |
+| `context_size`, `prompt_tokens`, `completion_tokens`, `context_tokens`, `context_fill` | `32768`, `3000`, `200`, `3200`, `0.0977` | Token counts only, never tokens |
+| `cached_prompt_tokens`, `prefill_tokens`, `cache_hit_kind` | `2000`, `1000`, `prefix` | How much of the prompt the KV cache saved |
+| `queue_wait_ms`, `restore_ms`, `prefill_ms`, `decode_ms`, `ttft_ms`, `total_ms` | `512.4` | Timings |
+| `prefill_tps`, `decode_tps` | `2000`, `50` | Tokens per second |
+| `finish_reason` | `stop`, `length` | Why generation ended |
+| `spec_strategy`, `spec_allowed` | `dflash`, `ngram-suffix`, `disabled` | The speculative decoding strategy, and whether the speculation gate let this request use it |
+| `spec_proposed_tokens`, `spec_accepted_tokens`, `spec_acceptance`, `spec_windows`, `spec_accepted_per_window` | `300`, `150`, `0.5`, `50`, `3` | Draft tokens proposed and accepted, overall and split into draft-model/N-gram (`spec_draft_*`) and native MTP/split DFlash (`spec_mtp_*`) |
+| `activation_codec`, `activation_prefill_bytes`, `activation_decode_bytes` | `f16` | Split only: bytes sent to the next stage |
+
+`inference_route` is sent for each routing attempt this node fronted, under
+the same per-minute limit and `weight` rule. It carries `model` (as above),
+`target` (`local`, `remote`, `endpoint`), `outcome` (`success`, `timeout`,
+`unavailable`, `context_overflow`, `rejected`), `queue_wait_ms`, `attempt_ms`,
+`completion_tokens`, `end_to_end_tps`, and for a remote target `link` and
+`rtt_ms`.
+
+`mesh_links` is sent five minutes after a node starts and hourly after that.
+It carries `peers`, and for each link class (`lan`, `wan`, `relay`,
+`unknown`) the number of peers (`lan_peers`, …) and their median and maximum
+round-trip time (`lan_rtt_ms_median`, `lan_rtt_ms_max`, …).
+
+A link is `lan` when it is direct to a private, link-local, or loopback
+address, `wan` when it is direct to a public address, and `relay` when it
+goes through a relay. The address decides the class and is never reported.
 
 Processes mesh-llm starts for its own purposes report nothing at all: the
 plugin services `serve` spawns, and the bundle-verification run the updater
@@ -98,8 +139,9 @@ commands and node starts.
   `redacted`.
 - **Your IP address or location.** Every event sets `$geoip_disable` and a
   null `$ip`, and the project discards client IP data at ingestion.
-- **Anything about your mesh peers.** No peer IDs, addresses, mesh names,
-  invite tokens, or topology.
+- **Anything that identifies your mesh peers.** No peer IDs, addresses, mesh
+  names, or invite tokens. Only how many peers there are, how each link is
+  carried, and how long a round trip takes.
 - **Hostnames, usernames, MAC addresses, or hardware serials.** The install
   identifier is random and derived from nothing. The hardware survey can
   report a hostname and per-GPU serials, PCI addresses, and vendor UUIDs;
