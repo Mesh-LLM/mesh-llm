@@ -166,7 +166,12 @@ run_candidate_gates() {
   run_full_build || return $?
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_early_native_certification || return 1
-    controller_parity_inventory
+    if [[ ( "$HARNESS_MODE" == verify-build || "$HARNESS_MODE" == native-build ) &&
+        -n "${CANARY_INPUT_BUNDLE:-}" ]]; then
+      verification_source_inspection verification-parity-inventory "$CERTIFY_LOG"
+    else
+      controller_parity_inventory
+    fi
   else
     run_certification
   fi
