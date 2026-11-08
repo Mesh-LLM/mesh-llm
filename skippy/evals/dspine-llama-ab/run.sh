@@ -108,19 +108,20 @@ for arm in $ARMS; do
       run_arm dspine -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-v2-b16.gguf" \
         --spec-type draft-dflash --spec-draft-n-max 15 -fa on -c "$CTX";;
     dspine16)
-      # paper configuration: 16 drafted tokens per step
+      # clamp smoke test: the runtime clamps n_max to block_size - 1 = 15,
+      # so this arm must produce identical acceptance to dspine
       run_arm dspine16 -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-v2-b16.gguf" \
         --spec-type draft-dflash --spec-draft-n-max 16 -fa on -c "$CTX";;
     dspine-q8)
-      # quantized draft: Q8_0 weights, paper block width
+      # quantized draft: Q8_0 weights, paper block width (1 anchor + 15 drafts)
       run_arm dspine-q8 -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-v2-q8_0.gguf" \
-        --spec-type draft-dflash --spec-draft-n-max 16 -fa on -c "$CTX";;
+        --spec-type draft-dflash --spec-draft-n-max 15 -fa on -c "$CTX";;
     dspine-p05|dspine-p10)
       # walk early-exit sweep: truncate the chain when transition confidence
       # drops below p_min
       pmin="0.${arm##dspine-p}"
       run_arm "$arm" -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-v2-b16.gguf" \
-        --spec-type draft-dflash --spec-draft-n-max 16 --spec-draft-p-min "$pmin" -fa on -c "$CTX";;
+        --spec-type draft-dflash --spec-draft-n-max 15 --spec-draft-p-min "$pmin" -fa on -c "$CTX";;
     *) echo "unknown arm: $arm" >&2; exit 1;;
   esac
 done
