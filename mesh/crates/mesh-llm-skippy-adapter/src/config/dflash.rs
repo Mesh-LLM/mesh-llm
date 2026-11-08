@@ -63,10 +63,11 @@ pub(super) fn select_dflash_draft<'a>(
     Ok(Some(path))
 }
 
-/// Whether this build's native runtime can host a DFlash draft context.
-/// Windows runtimes export no draft-context API (`skippy-ffi`'s
-/// `llama_draft_api()` is `None` there), so a known target on Windows keeps
-/// native MTP or plain decoding instead of a default draft it cannot attach.
+/// Whether a known target may get a DFlash draft by default on this build.
+/// Windows runtimes resolve the draft-context API, but a default draft stays
+/// off there until the recurrent state of every lane is in the memory plan
+/// (#2318): a known target on Windows keeps native MTP or plain decoding, and
+/// an explicitly configured draft still attaches.
 pub(super) const DFLASH_DRAFT_CONTEXT_AVAILABLE: bool = !cfg!(windows);
 
 /// What else the resolver decided that keeps a known DFlash pairing from
@@ -188,6 +189,8 @@ pub(super) fn dflash_decode_config(
         draft_model_path: path.to_path_buf(),
         max_draft_tokens: (draft_max_tokens > 0).then_some(draft_max_tokens as usize),
         target_layers: Vec::new(),
+        context_window: None,
+        feature_encoding: None,
     });
     base
 }

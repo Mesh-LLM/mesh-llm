@@ -108,6 +108,37 @@ pub(super) fn family(roots: &Roots, canary: &Canary, outcome: (&str, bool)) -> P
     Plan::files(targets)
 }
 
+pub(super) fn canary_controller(roots: &Roots, uploaded: bool) -> Plan {
+    let mut targets = vec![Target::new(
+        &roots.workspace,
+        roots.workspace.join("target/debug"),
+    )];
+    for name in [
+        "canary-macos",
+        "canary-linux",
+        "canary-combine.json",
+        "aggregate-input",
+        "aggregate-evidence",
+        "reconcile-input",
+        "previous-feedback",
+        "retry-evidence",
+        "certified-canary",
+        "canary-publication.json",
+    ] {
+        targets.push(Target::new(&roots.temporary, roots.temporary.join(name)));
+    }
+    if uploaded {
+        for name in [
+            "canary-combined",
+            "canary-family-feedback",
+            "reconciled-family-feedback",
+        ] {
+            targets.push(Target::new(&roots.temporary, roots.temporary.join(name)));
+        }
+    }
+    Plan::files(targets)
+}
+
 pub(super) fn replay(roots: &Roots, uploaded: bool) -> Plan {
     let root = roots.temporary.join("agentic-replay-worktrees");
     let mut targets = vec![

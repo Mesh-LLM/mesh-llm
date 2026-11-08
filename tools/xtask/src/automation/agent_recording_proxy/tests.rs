@@ -115,6 +115,9 @@ fn client(address: &str, method: &str, path: &str, body: &[u8]) -> std::io::Resu
 }
 
 fn raw_request(socket: &mut TcpStream) -> Vec<u8> {
+    // Accepted sockets can inherit the listener's nonblocking mode (macOS).
+    // Use a blocking socket so the bounded read waits for the upstream bytes.
+    socket.set_nonblocking(false).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();

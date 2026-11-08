@@ -643,6 +643,39 @@ fn an_exact_evidence_age_span_is_advertised_undated() {
     );
 }
 
+/// Under a millisecond of evidence left is advertised undated too, never as a
+/// 1 ms window that would outlast the oldest sample.
+#[test]
+fn a_sub_millisecond_remainder_is_advertised_undated() {
+    let metrics = RoutingMetrics::new();
+    let target = AttemptTarget::Local("127.0.0.1:9337".into());
+    let hosted = vec!["qwen".to_string()];
+    let start = Instant::now();
+    let second = Duration::from_secs(1);
+    record_at(
+        &metrics,
+        start,
+        &target,
+        second,
+        AttemptOutcome::Success,
+        Some(100),
+    );
+    let latest =
+        start + throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE - Duration::from_micros(500);
+    record_at(
+        &metrics,
+        latest,
+        &target,
+        second,
+        AttemptOutcome::Success,
+        Some(40),
+    );
+
+    let advertised = metrics.advertisable_model_throughput_at(&hosted, latest, TEST_NOW_UNIX_MS);
+    assert_eq!(advertised[0].throughput_samples, 2);
+    assert_eq!(advertised[0].measurement, None);
+}
+
 /// What this node keeps as evidence and what it accepts from a peer are
 /// the same 15 minutes.
 #[test]

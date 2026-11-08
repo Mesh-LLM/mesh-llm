@@ -830,6 +830,8 @@ pub enum skippy_stage_plan_state_kind {
     KvValue = 1,
     RecurrentConv = 2,
     RecurrentSsm = 3,
+    #[doc = " State a graph derives and keeps across steps outside a KV or recurrent\n cache (DeepSeek-V4's compressor and indexer state, say); a stage that\n holds it snapshots its full state."]
+    DerivedPersistent = 4,
 }
 #[repr(u32)]
 #[doc = " @brief Access performed against persistent state."]

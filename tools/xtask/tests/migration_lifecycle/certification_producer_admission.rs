@@ -266,12 +266,13 @@ run_early_native_certification
                 "custody\ncustody\n"
             );
             assert_eq!(
-                fs::read_to_string(root.join("consumed-environment")).unwrap(),
+                fs::read_to_string(root.join("early-battery-cwd/consumed-environment")).unwrap(),
                 "fixture-ready\nowned path\nfinite-certification-early\n"
             );
+            assert!(!root.join("consumed-environment").exists());
         } else {
             assert!(
-                !root.join("consumed-environment").exists(),
+                !root.join("early-battery-cwd/consumed-environment").exists(),
                 "mode={mode}: {report:?}"
             );
             if mode == "changed-before" {

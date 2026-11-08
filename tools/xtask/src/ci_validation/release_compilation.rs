@@ -65,17 +65,21 @@ fn package_bypass(job: &Node, step: &Node) -> bool {
     })
 }
 
-fn cargo_step(job: &Node, step: &Node) -> bool {
-    let run = field(step, "run").unwrap_or("");
-    let executable = run
+fn executable_run(step: &Node) -> String {
+    field(step, "run")
+        .unwrap_or("")
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
+fn cargo_step(job: &Node, step: &Node) -> bool {
+    let executable = executable_run(step);
     [
         "cargo ",
         "scripts/release-version.sh",
         "scripts/publish-crates.sh",
+        "scripts/release-notes-generate.sh",
     ]
     .iter()
     .any(|marker| executable.contains(marker))
@@ -127,6 +131,27 @@ fn check_setup(document: &Node, job: &Node, callers: &[(usize, &Node)]) -> DynRe
     }
     if !initialized {
         return Err("Cargo before any required sccache initialization".into());
+    }
+    Ok(())
+}
+
+fn check_notes_toolchain(job: &Node) -> DynResult<()> {
+    let job_steps = steps(job);
+    for (helper, caller) in job_steps.iter().enumerate() {
+        if !executable_run(caller).contains("scripts/release-notes-generate.sh") {
+            continue;
+        }
+        let covered = job_steps[..helper].iter().any(|step| {
+            field(step, "uses").is_some_and(|uses| uses.starts_with("dtolnay/rust-toolchain@"))
+                && !suppressed(step)
+                && covers(step, caller)
+        });
+        if !covered {
+            return Err(
+                "release notes helper has no earlier pinned Rust toolchain that covers its condition without suppressing failure"
+                    .into(),
+            );
+        }
     }
     Ok(())
 }
@@ -225,7 +250,7 @@ pub(super) fn check(root: &Path, source: &str) -> DynResult<()> {
             if callers.is_empty() {
                 Ok(())
             } else {
-                check_setup(&document, job, &callers)
+                check_setup(&document, job, &callers).and_then(|()| check_notes_toolchain(job))
             }
         };
         result.map_err(|error| format!("release workflow `{name}`: {error}"))?;

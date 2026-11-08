@@ -192,7 +192,9 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         .stderr(Stdio::from(log))
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(90);
+    // Slowest scenario waits sequentially: dial 30s + port release 5s + restart
+    // startup 30s + stop 5s (+ teardown). Individual waits stay bounded above.
+    let deadline = Instant::now() + Duration::from_secs(150);
     let result = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break Some(status);
@@ -356,9 +358,16 @@ async fn cancelled_startup_scenario() {
     let mut config = isolated_config();
     let (peer, token) = unresponsive_peer().await;
     config.network.join_tokens = vec![token];
-    let mut startup = tokio::spawn(start_embedded_node(config.clone()));
+    // Startup must outlast the 30s dial wait below (the default startup timeout
+    // equals it), so only the abort can release the runtime, never a
+    // startup-timeout cleanup. The restart keeps the default timeout.
+    let mut startup_config = config.clone();
+    startup_config.startup_timeout = Duration::from_secs(60);
+    let mut startup = tokio::spawn(start_embedded_node(startup_config));
     let mut packet = [0; 2048];
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // Cold startup can compete with the full workspace suite on busy builders.
+    // Wait for its dial before measuring the cancellation barriers below.
+    tokio::time::timeout(Duration::from_secs(30), async {
         tokio::select! {
             result = &mut startup => match result {
                 Ok(Err(error)) => panic!("startup failed before dialing the fixture: {error:#}"),

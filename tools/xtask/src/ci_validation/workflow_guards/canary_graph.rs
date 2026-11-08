@@ -119,7 +119,7 @@ fn result(job: &Node) -> DynResult<()> {
         ],
     )?;
     h::before(resolution, controller)?;
-    selector_preparation(job, steps, controller, decision)
+    selector_preparation(job, steps, controller, decision, false)
 }
 
 fn preflight(job: &Node) -> DynResult<()> {
@@ -288,7 +288,9 @@ fn independent_pass(
     };
     h::condition(
         verify,
-        &format!("${{{{ !cancelled() && {changed}needs.{repair_name}.outputs.green == 'true' }}}}"),
+        &format!(
+            "${{{{ !cancelled() && {changed}needs.{repair_name}.outputs.green == 'true' && needs.{repair_name}.outputs.retry_recovered != 'true' }}}}"
+        ),
     )?;
     pass(verify, &format!("verify-{number}"))?;
     let inputs = h::member(verify, "with")?;
@@ -324,7 +326,7 @@ fn select_attempt(attempt: &Node, repair_name: &str, verify_name: &str) -> DynRe
     if repair_name == "repair_1" {
         selected_publication_flag(command)?;
     }
-    selector_preparation(attempt, steps, checkout, select)?;
+    selector_preparation(attempt, steps, checkout, select, true)?;
     let env = h::member(command, "env")?;
     h::binding(env, "CHANGED", "${{ needs.resolve.outputs.changed }}")?;
     h::binding(
@@ -373,8 +375,25 @@ fn selector_preparation(
     steps: &[Node],
     checkout: usize,
     decision: usize,
+    resolved_runner: bool,
 ) -> DynResult<()> {
-    h::binding(job, "runs-on", "ubuntu-24.04")?;
+    let literal = job.get("runs-on").map(Node::list)
+        == Some(vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus",
+        ]);
+    let selected = h::binding(
+        job,
+        "runs-on",
+        "${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}",
+    )
+    .is_ok();
+    if !(if resolved_runner { selected } else { literal }) {
+        return Err("canary final selector must run even if source resolution fails".into());
+    }
     let preparations = steps
         .iter()
         .enumerate()
@@ -392,7 +411,11 @@ fn selector_preparation(
         return Err("selector preparation must run unconditionally and fail closed".into());
     }
     let inputs = h::member(step, "with")?;
-    h::binding(inputs, "runner-profile", "hosted-bare")?;
+    h::binding(
+        inputs,
+        "runner-profile",
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     h::binding(inputs, "allow_depot_remote_cache", "false")?;
     h::binding(inputs, "allow_native_github_cache", "false")?;
     h::before(checkout, *prepare)?;
@@ -429,6 +452,24 @@ mod tests {
     #[test]
     fn current_admission_graph_is_bound() {
         validate(document()).unwrap();
+    }
+
+    #[test]
+    fn all_verification_passes_must_skip_recovered_retries() -> DynResult<()> {
+        for number in 1..=3 {
+            let mut node = document();
+            let verify = format!("verify_{number}");
+            let condition = h::member(h::job(&node, &verify).unwrap(), "if")?
+                .text()
+                .unwrap()
+                .replace(
+                    &format!(" && needs.repair_{number}.outputs.retry_recovered != 'true'"),
+                    "",
+                );
+            h::replace(&mut node, &["jobs", &verify, "if"], Node::Scalar(condition));
+            assert!(validate(node).is_err(), "{verify}");
+        }
+        Ok(())
     }
 
     #[test]

@@ -92,12 +92,14 @@ fn parsed_producer_bound_artifacts_select_prior_siblings_and_never_foreign_ident
         field(build.get("outputs").unwrap(), "package"),
         field(upload_package.get("with").unwrap(), "name").replace("${{ runner.os }}", "macOS")
     );
-    let linux = jobs.get("build_linux").unwrap();
-    let (_, linux_upload) = named(steps(linux), "id", "upload_package");
-    assert_eq!(
-        field(linux.get("outputs").unwrap(), "package"),
-        field(linux_upload.get("with").unwrap(), "name").replace("${{ runner.os }}", "Linux")
-    );
+    for name in ["build_linux", "build_linux_pinned"] {
+        let linux = jobs.get(name).unwrap();
+        let (_, linux_upload) = named(steps(linux), "id", "upload_package");
+        assert_eq!(
+            field(linux.get("outputs").unwrap(), "package"),
+            field(linux_upload.get("with").unwrap(), "name").replace("${{ runner.os }}", "Linux")
+        );
+    }
     let family = jobs.get("family").unwrap();
     let aggregate = jobs.get("aggregate").unwrap();
     let (_, upload) = named(steps(family), "name", "Upload family evidence");

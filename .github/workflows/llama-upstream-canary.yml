@@ -36,7 +36,7 @@ concurrency:
 jobs:
   resolve:
     if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
     outputs:
       mesh_source: ${{ steps.resolve.outputs.mesh_source }}
       source: ${{ steps.resolve.outputs.source }}
@@ -62,7 +62,7 @@ jobs:
       - name: Prepare protected controller for trusted source resolution
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - name: Select managed memory pools and native producers
@@ -135,6 +135,12 @@ jobs:
             echo "mode=$mode"
             echo "certify=$certify"
           } >> "$GITHUB_OUTPUT"
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
 
   preflight:
     needs: [resolve]
@@ -225,7 +231,7 @@ jobs:
 
   verify_1:
     needs: [resolve, repair_1]
-    if: ${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' }}
+    if: ${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' && needs.repair_1.outputs.retry_recovered != 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
@@ -244,7 +250,7 @@ jobs:
   attempt_1:
     needs: [resolve, repair_1, verify_1]
     if: ${{ !cancelled() && needs.resolve.outputs.certify == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}
     outputs: &attempt_outputs
       state: ${{ steps.select.outputs.state }}
       green: ${{ steps.select.outputs.green }}
@@ -272,7 +278,7 @@ jobs:
       - name: Prepare frozen controller automation for attempt 1 selection
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 1
@@ -287,6 +293,12 @@ jobs:
           options=()
           if [[ "$PUBLISH_SELECTED" == true ]]; then options+=(--publish-selected); fi
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON" "${options[@]}"
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
 
   repair_2:
     needs: [resolve, attempt_1]
@@ -308,7 +320,7 @@ jobs:
 
   verify_2:
     needs: [resolve, repair_2]
-    if: ${{ !cancelled() && needs.repair_2.outputs.green == 'true' }}
+    if: ${{ !cancelled() && needs.repair_2.outputs.green == 'true' && needs.repair_2.outputs.retry_recovered != 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
@@ -326,7 +338,7 @@ jobs:
   attempt_2:
     needs: [resolve, attempt_1, repair_2, verify_2]
     if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_1.outputs.state == 'repairable' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}
     outputs: *attempt_outputs
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -341,7 +353,7 @@ jobs:
       - name: Prepare frozen controller automation for attempt 2 selection
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 2
@@ -353,6 +365,12 @@ jobs:
         run: |
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
 
   repair_3:
     needs: [resolve, attempt_2]
@@ -374,7 +392,7 @@ jobs:
 
   verify_3:
     needs: [resolve, repair_3]
-    if: ${{ !cancelled() && needs.repair_3.outputs.green == 'true' }}
+    if: ${{ !cancelled() && needs.repair_3.outputs.green == 'true' && needs.repair_3.outputs.retry_recovered != 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
@@ -392,7 +410,7 @@ jobs:
   attempt_3:
     needs: [resolve, attempt_2, repair_3, verify_3]
     if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_2.outputs.state == 'repairable' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}
     outputs: *attempt_outputs
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -407,7 +425,7 @@ jobs:
       - name: Prepare frozen controller automation for attempt 3 selection
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 3
@@ -419,11 +437,17 @@ jobs:
         run: |
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
 
   result:
     needs: [resolve, preflight, repair_1, verify_1, attempt_1, attempt_2, attempt_3]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
     outputs:
       package: ${{ steps.result.outputs.package }}
       identity: ${{ steps.result.outputs.identity }}
@@ -452,7 +476,7 @@ jobs:
       - name: Prepare frozen controller automation for final selection
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - name: Require complete certification and independent verification
@@ -471,12 +495,18 @@ jobs:
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-final \
             --certify "$CERTIFY" --changed "$CHANGED" --mesh-source "$MESH_SOURCE" \
             --preflight "$PREFLIGHT" --attempts-json "$ATTEMPTS_JSON" "${options[@]}"
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
 
   publish-certified-canary:
     needs: [resolve, result]
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    runs-on: [self-hosted, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
+    timeout-minutes: 30
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -491,7 +521,9 @@ jobs:
       - name: Prepare frozen controller automation for publication verification
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.result.outputs.package }}
@@ -527,13 +559,18 @@ jobs:
           CANARY_PR_BODY: ${{ runner.temp }}/certified-canary/pr-body.md
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
         run: scripts/llama-canary-publish.sh
-
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false
   alert-consecutive-failures:
     name: Alert after consecutive scheduled failures
     if: ${{ !cancelled() && github.event_name == 'schedule' }}
     needs: [resolve, result, publish-certified-canary]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    runs-on: [self-hosted, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
@@ -544,6 +581,16 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prepare protected controller for managed-runner cleanup
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Reconcile consecutive-failure alert
         continue-on-error: true
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
@@ -630,3 +677,9 @@ jobs:
                 labels: ['component: ci'],
               });
             }
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded false

@@ -31,6 +31,20 @@ pub(super) fn prefill_chunk_end(
     end
 }
 
+/// Where the prompt rows a split's DFlash draft can attend begin: the draft
+/// slides every attention layer over `context_window` positions, and its
+/// first block drafts after the last of `prefill_tokens` prompt rows, so no
+/// block attends a row before `prefill_tokens - context_window`. Prefill
+/// chunks before it carry no feature rows. `None` when every row may be
+/// attended.
+pub(super) fn split_dflash_unattended_until(
+    prefill_tokens: usize,
+    context_window: Option<u32>,
+) -> Option<usize> {
+    let window = usize::try_from(context_window?).ok()?;
+    Some(prefill_tokens.saturating_sub(window)).filter(|until| *until > 0)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PrefillChunkSchedule {
     pub(super) sizes: Vec<usize>,
@@ -389,7 +403,20 @@ pub(super) fn drain_embedded_prefill_replies(
 
 #[cfg(test)]
 mod tests {
-    use super::prefill_chunk_end;
+    use super::{prefill_chunk_end, split_dflash_unattended_until};
+
+    #[test]
+    fn a_sliding_draft_leaves_rows_before_its_window_unattended() {
+        assert_eq!(
+            split_dflash_unattended_until(33_000, Some(2048)),
+            Some(30_952)
+        );
+        // A prompt inside the window, or a draft with full attention, sends
+        // every row.
+        assert_eq!(split_dflash_unattended_until(2048, Some(2048)), None);
+        assert_eq!(split_dflash_unattended_until(100, Some(1024)), None);
+        assert_eq!(split_dflash_unattended_until(33_000, None), None);
+    }
 
     #[test]
     fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {

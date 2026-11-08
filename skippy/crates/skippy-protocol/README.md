@@ -47,11 +47,21 @@ Generation 12 added unsampled `PrefillReadout` requests and bounded
 probabilities; full vocabulary logits stay in its native runtime. The scores
 return along the ordered stage chain, independently of sampled-token replies.
 
-Current generation 13 carries split DFlash and the FP8 activation codecs:
-stage loads may carry a DFlash plan, activation frames may carry the draft's
-target-layer feature rows as optional parts and may use the FP8 codecs, and
-every reply's fixed statistics end with the split DFlash counters. All
-participants must advertise `stage-generation-13`; older peers fail closed.
+Generation 13 added split DFlash and the FP8 activation codecs: stage loads
+may carry a DFlash plan, activation frames may carry the draft's target-layer
+feature rows as optional parts and may use the FP8 codecs, and every reply's
+fixed statistics end with the split DFlash counters.
+
+Generation 14 windowed split DFlash feature rows: a final stage's DFlash
+status reports how far back its draft attends, and prefill messages carry
+`SPLIT_DFLASH_UNATTENDED_ROWS` for prompt rows before that window, for which
+no stage forwards feature rows.
+
+Current generation 15 negotiates the feature-row encoding: a final stage's
+DFlash status lists the encodings it reads (`bf16`, `q8`, `q4`), and the
+DFlash plan sent to every earlier stage names the one they send. A final
+stage that lists none attaches no split DFlash. All participants must
+advertise `stage-generation-15`; older peers fail closed.
 
 Admission requires mesh-subprotocol control, list-valued status responses,
 strict local-content identity, canonical stage-admission descriptors, and stale
