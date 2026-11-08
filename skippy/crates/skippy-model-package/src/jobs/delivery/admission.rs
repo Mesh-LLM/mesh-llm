@@ -17,9 +17,12 @@ fn hex_pin(value: &str, length: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
+/// A path in the Linux job container, so absolute means a leading `/`
+/// whatever the submitting host is: `Path::is_absolute` would also want a
+/// drive on Windows and refuse every `/models/...` mount.
 pub(super) fn absolute(value: &str) -> bool {
     let path = Path::new(value);
-    path.is_absolute()
+    value.starts_with('/')
         && path
             .components()
             .all(|c| !matches!(c, Component::ParentDir | Component::CurDir))
