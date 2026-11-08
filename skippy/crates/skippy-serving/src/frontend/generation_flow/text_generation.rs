@@ -302,6 +302,17 @@ impl StageOpenAiBackend {
                             .then(|| gated_speculative.dflash.as_ref())
                             .flatten()
                             .and_then(|dflash| dflash.context_window),
+                        split_dflash_downstream_bytes_per_token: split_dflash
+                            .is_some()
+                            .then(|| gated_speculative.dflash.as_ref())
+                            .flatten()
+                            .map_or(0, |dflash| {
+                                crate::split_dflash::downstream_feature_bytes_per_token(
+                                    dflash,
+                                    config.layer_end,
+                                    usize::try_from(activation_width).unwrap_or(0),
+                                )
+                            }),
                         split_dflash_health: Default::default(),
                         prompt_token_ids: &prompt_token_ids,
                         recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids

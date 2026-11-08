@@ -246,6 +246,17 @@ impl DFlashFeatureRows {
 
     /// Reads every DFlash feature part of `frame`, in either encoding.
     pub fn from_frame(frame: &ActivationFrame) -> Result<Option<Self>> {
+        Self::from_frame_with_width(frame, None)
+    }
+
+    /// Reads every DFlash feature part of `frame` whose rows are
+    /// `expected_width` wide, refusing any other width before decoding it, so
+    /// a malformed part cannot make this stage allocate for rows it would
+    /// never use.
+    pub fn from_frame_with_width(
+        frame: &ActivationFrame,
+        expected_width: Option<usize>,
+    ) -> Result<Option<Self>> {
         let mut rows: Option<Self> = None;
         for part in frame.desc.parts()? {
             let Some((layer, encoding, width)) = dflash_feature_part(&part.identity) else {
@@ -274,6 +285,12 @@ impl DFlashFeatureRows {
                 part.ggml_type == expected_type && part.rank == 2 && part.token_axis == 1,
                 "DFlash feature part for layer {layer} has an unexpected layout"
             );
+            if let Some(expected) = expected_width {
+                ensure!(
+                    n_embd == expected,
+                    "DFlash feature part for layer {layer} is {n_embd} wide, not the {expected} the draft reads"
+                );
+            }
             let start = usize::try_from(part.payload_offset).context("feature offset")?;
             let bytes = usize::try_from(part.payload_bytes).context("feature bytes")?;
             let payload = frame
@@ -596,7 +613,11 @@ impl StageSession {
         }
         if let Some(link) = self.dflash.as_ref() {
             let input_layer = link.input_layer;
-            let (rows, error) = match input.map(DFlashFeatureRows::from_frame).transpose() {
+            let feature_width = link.feature_width;
+            let (rows, error) = match input
+                .map(|frame| DFlashFeatureRows::from_frame_with_width(frame, feature_width))
+                .transpose()
+            {
                 Ok(rows) => (rows.flatten(), None),
                 Err(error) => (None, Some(error.context("read DFlash feature parts"))),
             };
@@ -978,6 +999,25 @@ mod tests {
         session.dflash_mark_unattended(true);
         session.dflash_reset_health();
         assert!(!session.dflash_unattended());
+    }
+
+    #[test]
+    fn feature_rows_of_another_width_are_refused_before_decoding() {
+        let mut rows = DFlashFeatureRows::new(2, 1);
+        rows.insert(3, vec![1.0, 2.0]).unwrap();
+        let mut frame = frame(1);
+        rows.append_to_frame_as(&mut frame, DFlashFeatureEncoding::Q4)
+            .unwrap();
+        let error = DFlashFeatureRows::from_frame_with_width(&frame, Some(4)).unwrap_err();
+        assert!(
+            error.to_string().contains("is 2 wide, not the 4"),
+            "{error:#}"
+        );
+        assert!(
+            DFlashFeatureRows::from_frame_with_width(&frame, Some(2))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
