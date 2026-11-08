@@ -186,8 +186,17 @@ both evidence sets, and fails after both have had a chance to run.
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
-**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. Default
+**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch.
+Successful same-candidate infrastructure reconciliation emits
+`retry_recovered=true`. In that case `verify_1`, `verify_2`, and `verify_3`
+skip their native builds and complete family matrices; selection retains the
+certified package and can continue to publication. This retry exception also
+applies to explicit selected-source publication. Other candidates retain the
+independent-pass requirements described below, and changed producer identities
+cannot reuse prior receipts.
+
+The controller freezes one main source SHA and the upstream target before any
+hardware work. Default
 selection uses `repository llama-upstream-release` to compare publication times
 across pages of `ggml-org/llama.cpp` release metadata, including prereleases and
 excluding drafts, then peel the selected tag to an exact commit. Every page is
@@ -238,7 +247,8 @@ cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
-Only two green passes permit the managed lab publisher to create a PR to `main`
+Two green passes, or the successful same-candidate retry exception above,
+permit the managed lab publisher to create a PR to `main`
 with that exact commit. Both modes keep its existing pin and never invoke Goose.
 The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
@@ -484,7 +494,7 @@ worker failures remain recoverable by later bounded repair passes;
 runner/workflow failures receive one targeted same-candidate recheck. A clean
 recheck plus the retained initial successes completes that immutable full pass;
 a repeated infrastructure failure or invalid aggregate evidence stops. Only
-complete independent success permits publication.
+complete independent success or successful same-candidate recovery permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 

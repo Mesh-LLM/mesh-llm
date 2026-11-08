@@ -231,7 +231,7 @@ jobs:
 
   verify_1:
     needs: [resolve, repair_1]
-    if: ${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' }}
+    if: ${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' && needs.repair_1.outputs.retry_recovered != 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
@@ -320,7 +320,7 @@ jobs:
 
   verify_2:
     needs: [resolve, repair_2]
-    if: ${{ !cancelled() && needs.repair_2.outputs.green == 'true' }}
+    if: ${{ !cancelled() && needs.repair_2.outputs.green == 'true' && needs.repair_2.outputs.retry_recovered != 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
@@ -392,7 +392,7 @@ jobs:
 
   verify_3:
     needs: [resolve, repair_3]
-    if: ${{ !cancelled() && needs.repair_3.outputs.green == 'true' }}
+    if: ${{ !cancelled() && needs.repair_3.outputs.green == 'true' && needs.repair_3.outputs.retry_recovered != 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
