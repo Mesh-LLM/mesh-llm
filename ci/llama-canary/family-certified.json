@@ -1010,10 +1010,10 @@
       "class": "causal_generation",
       "architecture": "limite",
       "profile": "full",
-      "artifact": {"repo": "yamura4/limite-1b-violetto-GGUF", "revision": "1099469126d1cd6153315413b8537775446217e4", "files": ["gguf/limite-1b-violetto-Q4_K_M.gguf"], "file_integrity": {"gguf/limite-1b-violetto-Q4_K_M.gguf": {"size_bytes": 734191616, "blob_id": "6d779ff80256d46760015647e4a8cda3b401531f325123398baee97ce76afa52"}}, "selector": "Q4_K_M"},
+      "artifact": {"repo": "roshan-soni/limite-1b-violetto-GGUF", "revision": "a8a759e8f227b9ce1b3686c6d015eda920554110", "files": ["limite-1b-violetto.Q4_K_M.gguf"], "file_integrity": {"limite-1b-violetto.Q4_K_M.gguf": {"size_bytes": 669623296, "blob_id": "32562c7301a522f7efac2b023d2acd37c26d6a352a0845ea4dac9bf7d8dd6895"}}, "selector": "Q4_K_M"},
       "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 1280, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 728230840},
-      "notes": "Pinned limite GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 669623296},
+      "notes": "Pinned modern-format Limite GGUF; real-model three-lane certification pending"
     },
     {
       "family": "lfm3",

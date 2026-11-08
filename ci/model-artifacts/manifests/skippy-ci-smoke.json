@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "skippy-ci-smoke",
-  "registry_sha256": "542d558b07ee2f154cbe5975f0e0f7ca42e2c1a6da037e441cda4cf2c31c4962",
+  "registry_sha256": "9091f524d510eee1e24bd2d0ed2057f1bfb6ae3f12a9946d0b3467847c2ed83b",
   "artifacts": [
     {
       "id": "family-qwen3-dense",
