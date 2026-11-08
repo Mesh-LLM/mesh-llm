@@ -875,19 +875,16 @@ pub fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameError> {
 /// length prefix, so a peer that claims a large frame and then stalls holds
 /// only as much memory as it actually sent.
 pub async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
-    const READ_CHUNK_BYTES: usize = 64 * 1024;
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_CONTROL_FRAME_BYTES {
         anyhow::bail!("control frame too large: {} bytes", len);
     }
-    let mut buf = Vec::with_capacity(len.min(READ_CHUNK_BYTES));
-    let mut chunk = vec![0u8; len.min(READ_CHUNK_BYTES)];
+    let mut buf = Vec::new();
     while buf.len() < len {
-        let wanted = (len - buf.len()).min(chunk.len());
-        match recv.read(&mut chunk[..wanted]).await? {
-            Some(read) => buf.extend_from_slice(&chunk[..read]),
+        match recv.read_chunk(len - buf.len()).await? {
+            Some(chunk) => buf.extend_from_slice(&chunk),
             None => anyhow::bail!("control frame ended after {} of {} bytes", buf.len(), len),
         }
     }
@@ -1003,6 +1000,38 @@ mod tests {
         OwnerControlWatchConfigResponse, PeerAnnouncement, SignedNodeOwnership,
     };
     use prost::Message;
+
+    #[tokio::test]
+    async fn read_len_prefixed_returns_full_max_size_body() {
+        const ALPN: &[u8] = b"mesh-llm/test-frame";
+        let bind = |alpn: Option<&[u8]>| {
+            let mut b = Endpoint::builder(iroh::endpoint::presets::Minimal)
+                .relay_mode(iroh::endpoint::RelayMode::Disabled)
+                .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+                .unwrap();
+            if let Some(alpn) = alpn {
+                b = b.alpns(vec![alpn.to_vec()]);
+            }
+            b.bind()
+        };
+        let server = bind(Some(ALPN)).await.unwrap();
+        let client = bind(None).await.unwrap();
+        let body: Vec<u8> = (0..MAX_CONTROL_FRAME_BYTES).map(|i| i as u8).collect();
+        let sent = body.clone();
+        let addr = server.addr();
+        let writer = tokio::spawn(async move {
+            let conn = client.connect(addr, ALPN).await.unwrap();
+            let (mut send, _recv) = conn.open_bi().await.unwrap();
+            write_len_prefixed(&mut send, &sent).await.unwrap();
+            send.finish().unwrap();
+            let _ = conn.closed().await;
+        });
+        let conn = server.accept().await.unwrap().await.unwrap();
+        let (_send, mut recv) = conn.accept_bi().await.unwrap();
+        assert_eq!(read_len_prefixed(&mut recv).await.unwrap(), body);
+        conn.close(0u32.into(), b"done");
+        writer.await.unwrap();
+    }
 
     fn control_plane_test_config() -> NodeConfigSnapshot {
         NodeConfigSnapshot {
