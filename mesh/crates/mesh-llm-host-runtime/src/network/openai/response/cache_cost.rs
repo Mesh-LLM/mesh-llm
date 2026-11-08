@@ -5,6 +5,12 @@ pub(in crate::network::openai) struct CacheCostObservation {
     pub(in crate::network::openai) prefill_micros_per_token: Option<u64>,
 }
 
+/// Fewest prefilled tokens a sample needs before it calibrates the rate. A
+/// short suffix is dominated by per-request overhead and by attention over the
+/// restored prefix: on a CPU node, a 48-token suffix after a 946-token hit
+/// measured 29 ms/token where a 1,256-token cold prompt measured 13 ms/token.
+const MIN_PREFILL_RATE_SAMPLE_TOKENS: u64 = 256;
+
 fn timing_micros(timings: &serde_json::Value, name: &str) -> Option<u64> {
     let millis = timings.get(name)?.as_f64()?;
     if !millis.is_finite() || millis < 0.0 || millis > u64::MAX as f64 / 1_000.0 {
@@ -28,7 +34,7 @@ pub(in crate::network::openai) fn parse_cache_cost_from_json_body(
         .get("suffix_prefill_n")
         .and_then(serde_json::Value::as_u64);
     let prefill_micros_per_token = match (prompt_micros, suffix_prefill_tokens) {
-        (Some(prompt), Some(tokens)) if tokens > 0 => Some(
+        (Some(prompt), Some(tokens)) if tokens >= MIN_PREFILL_RATE_SAMPLE_TOKENS => Some(
             prompt
                 .saturating_sub(restore_micros)
                 .div_ceil(tokens)
@@ -58,13 +64,26 @@ mod tests {
             }
         });
 
+        // Too short a suffix to calibrate the rate; the other costs stand.
         assert_eq!(
             parse_cache_cost_from_json_body(response.to_string().as_bytes()),
             Some(CacheCostObservation {
                 queue_delay_micros: 1_250,
                 restore_micros: 2_500,
-                prefill_micros_per_token: Some(2_000),
+                prefill_micros_per_token: None,
             })
+        );
+        let response = serde_json::json!({
+            "timings": {
+                "prompt_ms": 514.5,
+                "cache_restore_ms": 2.5,
+                "suffix_prefill_n": MIN_PREFILL_RATE_SAMPLE_TOKENS
+            }
+        });
+        assert_eq!(
+            parse_cache_cost_from_json_body(response.to_string().as_bytes())
+                .and_then(|cost| cost.prefill_micros_per_token),
+            Some(2_000)
         );
         assert_eq!(parse_cache_cost_from_json_body(br#"{}"#), None);
     }

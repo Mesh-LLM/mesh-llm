@@ -7,6 +7,11 @@ use iroh::EndpointId;
 use mesh_llm_routing::affinity as shared_affinity;
 use mesh_llm_routing::request_cost;
 
+/// Fewest prompt tokens a reply needs before it teaches the bytes-per-token
+/// ratio, and how many models the ratio is kept for.
+const MIN_PROMPT_SIZE_SAMPLE_TOKENS: u64 = 64;
+const PROMPT_SIZE_MAX_MODELS: usize = 1_024;
+
 /// Smallest credited prefix that lets a cache hit override normal routing.
 const MIN_SAVED_TOKENS: u32 = mesh_llm_routing::cache_aware::DEFAULT_MIN_SAVED_TOKENS;
 use serde::Serialize;
@@ -77,6 +82,9 @@ struct AffinityState {
     cache_leases: HashMap<CacheLeaseKey, CacheLeaseEntry>,
     cache_lease_lru: VecDeque<CacheLeaseKey>,
     cache_lease_epoch: u64,
+    /// Prompt bytes per token learned per model from completed replies, in
+    /// thousandths.
+    prompt_bytes_per_token_milli: HashMap<String, u32>,
 }
 
 #[derive(Clone)]
@@ -116,6 +124,46 @@ impl AffinityRouter {
             target_health: TargetHealth::default(),
             reservations: RoutingReservations::default(),
         }
+    }
+
+    /// Learn how many prompt bytes `model` spends per token from a reply's
+    /// `usage.prompt_tokens`, so the next request is sized from its body at a
+    /// measured ratio rather than a fixed guess. Small prompts are skipped:
+    /// the chat template's own tokens would dominate them.
+    pub(crate) fn observe_prompt_size(&self, model: &str, prompt_bytes: usize, prompt_tokens: u64) {
+        if prompt_tokens < MIN_PROMPT_SIZE_SAMPLE_TOKENS || prompt_bytes == 0 {
+            return;
+        }
+        let ratio = u64::try_from(prompt_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(1_000)
+            / prompt_tokens;
+        let ratio = u32::try_from(ratio).unwrap_or(u32::MAX).clamp(
+            request_cost::MIN_BYTES_PER_TOKEN_MILLI,
+            request_cost::MAX_BYTES_PER_TOKEN_MILLI,
+        );
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let known = state.prompt_bytes_per_token_milli.contains_key(model);
+        if !known && state.prompt_bytes_per_token_milli.len() >= PROMPT_SIZE_MAX_MODELS {
+            return;
+        }
+        state
+            .prompt_bytes_per_token_milli
+            .entry(model.to_string())
+            .and_modify(|previous| *previous = (previous.saturating_mul(3) + ratio) / 4)
+            .or_insert(ratio);
+    }
+
+    pub(crate) fn prompt_bytes_per_token_milli(&self, model: &str) -> Option<u32> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .prompt_bytes_per_token_milli
+            .get(model)
+            .copied()
     }
 
     pub fn stats_snapshot(&self) -> AffinityStatsSnapshot {
@@ -440,9 +488,23 @@ pub(crate) fn cache_prefix_hash(parsed_body: Option<&Value>) -> Option<u64> {
 }
 
 /// Size of this request and of the prefix it provably shares, with the same
-/// scaffold rule as `routing_keys`, so the credited prefix is what was hashed.
-pub(crate) fn request_cost_input(parsed_body: Option<&Value>) -> request_cost::RequestCostInput {
-    request_cost::request_cost_input_from_body(parsed_body, true)
+/// scaffold rule as `routing_keys`, so the credited prefix is what was hashed,
+/// at the model's learned bytes per token when one is known.
+pub(crate) fn request_cost_input(
+    parsed_body: Option<&Value>,
+    affinity: &AffinityRouter,
+    model: &str,
+) -> request_cost::RequestCostInput {
+    request_cost::request_cost_input_from_body_calibrated(
+        parsed_body,
+        true,
+        affinity.prompt_bytes_per_token_milli(model),
+    )
+}
+
+/// Prompt bytes of a request body, as `request_cost_input` measures them.
+pub(crate) fn prompt_bytes(parsed_body: Option<&Value>) -> Option<usize> {
+    parsed_body.map(shared_affinity::prompt_bytes_from_body)
 }
 
 impl crate::mesh::Node {
@@ -941,6 +1003,25 @@ mod tests {
         assert_eq!(prepared.ordered.len(), 1);
         assert_eq!(prepared.prefix_hash, cache_prefix_hash(Some(&req)));
         assert_eq!(prepared.cache_target, None);
+    }
+
+    #[test]
+    fn the_prompt_ratio_is_learned_from_large_enough_replies() {
+        let affinity = AffinityRouter::new();
+        assert_eq!(affinity.prompt_bytes_per_token_milli("qwen"), None);
+        // The chat template dominates a tiny prompt, so it teaches nothing.
+        affinity.observe_prompt_size("qwen", 400, MIN_PROMPT_SIZE_SAMPLE_TOKENS - 1);
+        assert_eq!(affinity.prompt_bytes_per_token_milli("qwen"), None);
+        affinity.observe_prompt_size("qwen", 6_300, 1_000);
+        assert_eq!(affinity.prompt_bytes_per_token_milli("qwen"), Some(6_300));
+        affinity.observe_prompt_size("qwen", 4_000, 1_000);
+        assert_eq!(affinity.prompt_bytes_per_token_milli("qwen"), Some(5_725));
+        // Absurd ratios are clamped before they enter the average.
+        affinity.observe_prompt_size("other", 10, 1_000);
+        assert_eq!(
+            affinity.prompt_bytes_per_token_milli("other"),
+            Some(request_cost::MIN_BYTES_PER_TOKEN_MILLI)
+        );
     }
 
     #[tokio::test]

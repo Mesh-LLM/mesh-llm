@@ -317,6 +317,9 @@ struct MeshAttemptState {
     attempts: usize,
     last_retryable: bool,
     refreshed: bool,
+    /// Prompt bytes of the request body, to learn the model's bytes per token
+    /// from the reply's `usage.prompt_tokens`.
+    prompt_bytes: Option<usize>,
 }
 
 enum MeshAttemptDisposition {
@@ -603,6 +606,8 @@ async fn build_mesh_request_plan(
     );
     let request_cost = crate::network::affinity::request_cost_input(
         super::workload_routing::affinity_body(request),
+        affinity,
+        effective_model.as_deref().unwrap_or_default(),
     );
     let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
         node,
@@ -786,6 +791,9 @@ async fn route_mesh_request_attempts(
         attempts: 0,
         last_retryable: false,
         refreshed: false,
+        prompt_bytes: crate::network::affinity::prompt_bytes(
+            super::workload_routing::affinity_body(request),
+        ),
     };
     for (idx, target_host) in target_hosts.iter().enumerate() {
         transfer_mesh_reservation(reservation.as_mut(), *target_host);
@@ -1010,6 +1018,14 @@ fn handle_mesh_attempt_result(
                     usage.completion_tokens,
                     outcome,
                 );
+                if (200..300).contains(&status_code)
+                    && let Some(((model, bytes), tokens)) = context
+                        .effective_model
+                        .zip(context.state.prompt_bytes)
+                        .zip(usage.prompt_tokens)
+                {
+                    context.affinity.observe_prompt_size(model, bytes, tokens);
+                }
             }
             handle_delivered_mesh_attempt(context, status_code);
             MeshAttemptDisposition::Return(RouteAttemptResult::Delivered {

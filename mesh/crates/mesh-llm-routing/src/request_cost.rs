@@ -25,6 +25,22 @@ pub fn request_cost_input_from_body(
     body: Option<&Value>,
     prefix_fallback_to_first_user: bool,
 ) -> RequestCostInput {
+    request_cost_input_from_body_calibrated(body, prefix_fallback_to_first_user, None)
+}
+
+/// Bounds on a learned bytes-per-token ratio, in thousandths.
+pub const MIN_BYTES_PER_TOKEN_MILLI: u32 = 1_000;
+pub const MAX_BYTES_PER_TOKEN_MILLI: u32 = 32_000;
+
+/// Like [`request_cost_input_from_body`], with the model's bytes per token
+/// learned from its own replies when known (`usage.prompt_tokens` against the
+/// prompt bytes). The prompt is sized at that ratio; the shared prefix at 1.25
+/// times it, so a credit still errs toward too small.
+pub fn request_cost_input_from_body_calibrated(
+    body: Option<&Value>,
+    prefix_fallback_to_first_user: bool,
+    bytes_per_token_milli: Option<u32>,
+) -> RequestCostInput {
     let Some(body) = body else {
         return RequestCostInput {
             prompt_tokens: None,
@@ -34,6 +50,27 @@ pub fn request_cost_input_from_body(
     let prompt_bytes = prompt_bytes_from_body(body);
     let shared_bytes = scaffold_prefix_from_body(body, prefix_fallback_to_first_user)
         .map_or(0, |scaffold| scaffold.bytes);
+    if let Some(ratio) = bytes_per_token_milli
+        .map(|ratio| ratio.clamp(MIN_BYTES_PER_TOKEN_MILLI, MAX_BYTES_PER_TOKEN_MILLI))
+    {
+        let ratio = u64::from(ratio);
+        let tokens = |bytes: usize, ratio: u64| {
+            u64::try_from(bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(1_000)
+                / ratio
+        };
+        return RequestCostInput {
+            prompt_tokens: Some(TokenEstimate {
+                tokens: u32::try_from(tokens(prompt_bytes, ratio)).unwrap_or(u32::MAX),
+                source: TokenSource::Calibrated,
+            }),
+            reusable_prefix_tokens: Some(
+                u32::try_from(tokens(shared_bytes, ratio.saturating_mul(5) / 4))
+                    .unwrap_or(u32::MAX),
+            ),
+        };
+    }
     RequestCostInput {
         prompt_tokens: Some(TokenEstimate {
             tokens: u32::try_from(prompt_bytes.div_ceil(PROMPT_BYTES_PER_TOKEN))
@@ -54,6 +91,9 @@ pub enum TokenSource {
     Measured,
     /// Derived from request size with a conservative ratio.
     Heuristic,
+    /// Derived from request size with the ratio learned from this model's
+    /// replies.
+    Calibrated,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,5 +652,34 @@ mod tests {
             ..request(4_096, 0)
         };
         assert!(!can_earn_cache_credit(unsized_prefix, 256));
+    }
+
+    #[test]
+    fn a_learned_ratio_sizes_the_prompt_and_still_credits_low() {
+        let body = chat_body(8_000, 2_000);
+        let prompt_bytes = prompt_bytes_from_body(&body);
+        let shared_bytes = scaffold_prefix_from_body(&body, true)
+            .expect("system scaffold")
+            .bytes;
+        let sized = request_cost_input_from_body_calibrated(Some(&body), true, Some(6_300));
+        let prompt = sized.prompt_tokens.expect("sized");
+        assert_eq!(prompt.source, TokenSource::Calibrated);
+        assert_eq!(prompt.tokens as usize, prompt_bytes * 1_000 / 6_300);
+        // The shared prefix at 1.25 times the ratio: below its own estimate.
+        assert_eq!(
+            sized.reusable_prefix_tokens,
+            Some((shared_bytes * 1_000 / 7_875) as u32)
+        );
+        assert!(sized.reusable_prefix_tokens.unwrap() < (shared_bytes * 1_000 / 6_300) as u32);
+        // Out-of-range ratios are clamped, and no ratio keeps the fixed guess.
+        let tiny = request_cost_input_from_body_calibrated(Some(&body), true, Some(10));
+        assert_eq!(
+            tiny.prompt_tokens.map(|p| p.tokens as usize),
+            Some(prompt_bytes * 1_000 / MIN_BYTES_PER_TOKEN_MILLI as usize)
+        );
+        assert_eq!(
+            request_cost_input_from_body_calibrated(Some(&body), true, None),
+            request_cost_input_from_body(Some(&body), true)
+        );
     }
 }

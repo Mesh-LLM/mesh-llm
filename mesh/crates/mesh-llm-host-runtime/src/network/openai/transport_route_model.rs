@@ -109,6 +109,9 @@ struct RouteModelState {
     attempts: usize,
     timeout_attempts: usize,
     refreshed: bool,
+    /// Prompt bytes of the request body, to learn the model's bytes per token
+    /// from the reply's `usage.prompt_tokens`.
+    prompt_bytes: Option<usize>,
 }
 
 enum RouteModelDisposition {
@@ -133,7 +136,7 @@ async fn cache_target_for_request(
     candidates: &[election::InferenceTarget],
 ) -> Option<election::InferenceTarget> {
     let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body)?;
-    let request = crate::network::affinity::request_cost_input(affinity_body);
+    let request = crate::network::affinity::request_cost_input(affinity_body, affinity, model);
     node.cache_target_with_lease(affinity, model, prefix_hash, candidates, request)
         .await
 }
@@ -282,6 +285,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         timeout_attempts: 0,
         refreshed: false,
+        prompt_bytes: crate::network::affinity::prompt_bytes(affinity_body),
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
     // resolves the capsule client nonce once, before target selection), so every
@@ -547,6 +551,16 @@ fn handle_delivered_route_model_attempt(
     output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
 ) -> RouteModelDisposition {
     update_local_cache_evidence(&context, status_code, usage.as_ref(), cache_cost);
+    if (200..300).contains(&status_code)
+        && let Some((bytes, tokens)) = context
+            .state
+            .prompt_bytes
+            .zip(usage.as_ref().and_then(|usage| usage.prompt_tokens))
+    {
+        context
+            .affinity
+            .observe_prompt_size(context.model, bytes, tokens);
+    }
     context.node.record_routed_request(
         Some(context.model),
         context.state.attempts,
@@ -893,6 +907,7 @@ mod tests {
             attempts: 1,
             timeout_attempts: 0,
             refreshed: false,
+            prompt_bytes: None,
         };
         (node, affinity, target, selection, state)
     }
