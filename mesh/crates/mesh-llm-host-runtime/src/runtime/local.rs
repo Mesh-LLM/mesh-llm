@@ -552,7 +552,14 @@ pub(super) fn report_model_loaded_analytics(
     metadata: Option<&models::gguf::GgufCompactMeta>,
 ) {
     let mut properties = mesh_llm_analytics::Properties::new()
-        .with("model", model_loaded_label(model, source))
+        .with(
+            "model",
+            model_loaded_label(
+                model,
+                source,
+                models::find_loaded_remote_catalog_model_exact(model).is_some(),
+            ),
+        )
         .with("source", source.as_str());
     if let Some(backend) = system_one_backend(metadata) {
         properties = properties.with("system_one_backend", backend);
@@ -591,10 +598,20 @@ fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Optio
 
 /// The `model` value `report_model_loaded_analytics` puts on the wire.
 ///
+/// A name goes out only when its source may report one *and* it is an exact
+/// catalog entry. The serving name of a package load can be a configured
+/// alias (`server.alias`, `--model`), which is operator configuration, not a
+/// catalog name, and may name an unreleased finetune.
+///
 /// Separate from the capture so the privacy decision is testable without a
-/// reporter: the capture itself is a fire-and-forget into a global queue.
-fn model_loaded_label(model: &str, source: ModelLoadSource) -> mesh_llm_analytics::Label {
-    if source.may_report_name() {
+/// reporter or a loaded catalog: the capture itself is a fire-and-forget into
+/// a global queue.
+fn model_loaded_label(
+    model: &str,
+    source: ModelLoadSource,
+    catalog_name: bool,
+) -> mesh_llm_analytics::Label {
+    if source.may_report_name() && catalog_name {
         // Lets `inference_request` and `inference_route` name it too.
         crate::inference_analytics::allow_model_name(model);
         mesh_llm_analytics::Label::sanitize_or_redact(model)
@@ -1660,7 +1677,7 @@ mod tests {
             "and the grammar accepts it, which is exactly the hole"
         );
         assert_eq!(
-            model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
+            model_loaded_label(&name, ModelLoadSource::DirectGguf, true).as_str(),
             "redacted"
         );
     }
@@ -1688,15 +1705,37 @@ mod tests {
         assert_eq!(
             model_loaded_label(
                 "acme-merger-finetune",
-                source("/home/you/acme-merger-finetune.gguf")
+                source("/home/you/acme-merger-finetune.gguf"),
+                true,
             )
             .as_str(),
             "redacted"
         );
         assert_eq!(
-            model_loaded_label("Qwen3-8B-Q4_K_M", source("hf://unsloth/Qwen3-8B-GGUF")).as_str(),
+            model_loaded_label(
+                "Qwen3-8B-Q4_K_M",
+                source("hf://unsloth/Qwen3-8B-GGUF"),
+                true
+            )
+            .as_str(),
             "Qwen3-8B-Q4_K_M"
         );
+    }
+
+    #[test]
+    fn a_configured_alias_is_never_reported() {
+        // `server.alias = "acme-codename"` on a Hugging Face package: the
+        // serving name is operator configuration, so it redacts on both the
+        // split and whole-model package paths.
+        for source in [
+            ModelLoadSource::LayerPackage,
+            split_model_load_source("hf://unsloth/Qwen3-8B-GGUF"),
+        ] {
+            assert_eq!(
+                model_loaded_label("acme-codename", source, false).as_str(),
+                "redacted"
+            );
+        }
     }
 
     #[test]
@@ -1704,12 +1743,12 @@ mod tests {
         // Redacting the direct-file case must not cost us the answer to
         // "which models actually get run" for catalog models.
         assert_eq!(
-            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage).as_str(),
+            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage, true).as_str(),
             "qwen3-8b"
         );
         // A catalog ref that fails the grammar still redacts, as before.
         assert_eq!(
-            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage).as_str(),
+            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage, true).as_str(),
             "redacted"
         );
     }

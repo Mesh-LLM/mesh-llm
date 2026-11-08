@@ -60,7 +60,7 @@ And one of these events:
 | `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …) | Which commands are used, and which fail |
 | `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested`, `auto_update`, `post_update_restart` — all booleans | How nodes are started. `auto_update` is whether the node manages its own upgrades; `post_update_restart` marks the second half of a self-update, since updating restarts the process and would otherwise count as a second node start |
 | `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded` | Whether nodes stay up |
-| `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`), `source` (`direct_gguf`, `layer_package`, `whisper_file`, `split_layer_package` for stage 0 of a split from a Hugging Face package, `split_local_source` for stage 0 of a split from anything else, which is always `redacted`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
+| `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`, and for a model served under a configured alias such as `server.alias`), `source` (`direct_gguf`, `layer_package`, `whisper_file`, `split_layer_package` for stage 0 of a split from a Hugging Face package, `split_local_source` for stage 0 of a split from anything else, which is always `redacted`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
 | `inference_request` | see below | How fast real requests are served: prefill, decode, context length, prompt cache, speculative decoding, and lanes |
@@ -91,7 +91,7 @@ carries a `weight` saying how many requests it stands for. It carries:
 
 | Property | Example | Notes |
 |---|---|---|
-| `model` | `Qwen3-8B-Q4_K_M`, `redacted` | Named only for models loaded from a catalog or repository reference, as for `model_loaded` |
+| `model` | `Qwen3-8B-Q4_K_M`, `redacted` | Named only when `model_loaded` named it: an exact catalog name for a model loaded from a catalog or repository reference. Local files and configured aliases are `redacted` |
 | `weight` | `1`, `12` | Requests this event represents |
 | `serving` | `local`, `split` | Whole model on this node, or stage 0 of a split |
 | `downstream_lanes`, `concurrency_limit` | `4`, `2` | Persistent lanes to the next split stage, and generations admitted at once |
@@ -114,7 +114,7 @@ the same per-minute limit and `weight` rule. It carries `model` (as above),
 `mesh_links` is sent five minutes after a node starts and hourly after that.
 It carries `peers`, and for each link class (`lan`, `wan`, `relay`,
 `unknown`) the number of peers (`lan_peers`, …) and their median and maximum
-round-trip time (`lan_rtt_ms_median`, `lan_rtt_ms_max`, …).
+round-trip time (`lan_rtt_ms_median`, `lan_rtt_ms_max`, …). A peer with no observed path counts under `unknown` and carries no round-trip time.
 
 A link is `lan` when it is direct to a private, link-local, or loopback
 address, `wan` when it is direct to a public address, and `relay` when it

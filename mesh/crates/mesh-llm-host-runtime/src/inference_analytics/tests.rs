@@ -131,6 +131,8 @@ fn a_relay_link_reports_its_own_round_trip_not_a_stale_direct_one() {
     );
     relay.rtt_ms = None;
     assert_eq!(link_and_rtt(Some(relay), Some(9)), (LinkClass::Relay, None));
+    // No selected path: a gossip RTT belongs to no link.
+    assert_eq!(link_and_rtt(None, Some(9)), (LinkClass::Unknown, None));
     // A direct link prefers the best direct measurement.
     assert_eq!(
         link_and_rtt(Some(path("direct", "192.168.1.20:4000")), Some(2)),

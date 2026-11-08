@@ -14,9 +14,10 @@
 //! after others were dropped carries `weight`, the number of requests it
 //! stands for, so totals stay right when summed by weight.
 //!
-//! Model names are reported only for models this node loaded from a catalog
-//! or repository reference, the same rule `model_loaded` follows. Anything
-//! else, including a name a client typed into a request, is `redacted`.
+//! Model names are reported only when `model_loaded` reported them: an exact
+//! catalog name for a model this node loaded from a catalog or repository
+//! reference. Anything else, including a local file, a configured alias, or a
+//! name a client typed into a request, is `redacted`.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -52,8 +53,8 @@ pub(crate) fn install() {
     ));
 }
 
-/// Allow `name` to be reported. Call only for a model loaded from a catalog
-/// or repository reference, never one named after a local file.
+/// Allow `name` to be reported. Call only for an exact catalog name loaded
+/// from a catalog or repository reference, never a local file or an alias.
 pub(crate) fn allow_model_name(name: &str) {
     if let Ok(mut models) = REPORTABLE_MODELS.lock() {
         models
@@ -246,6 +247,8 @@ fn is_local_network(ip: IpAddr) -> bool {
 /// A peer that fell back to a relay can still hold its last direct RTT.
 /// Reporting that under `relay` would make relays look as fast as the direct
 /// path they replaced, so a relay link reports only the relay path's own RTT.
+/// With no selected path the only figure is a gossip-derived one that belongs
+/// to no link, so none is reported.
 fn link_and_rtt(
     path: Option<SelectedPathObservation>,
     direct_rtt_ms: Option<u32>,
@@ -254,7 +257,8 @@ fn link_and_rtt(
     let path_rtt = path.and_then(|path| path.rtt_ms);
     let rtt = match link {
         LinkClass::Relay => path_rtt,
-        LinkClass::Lan | LinkClass::Wan | LinkClass::Unknown => direct_rtt_ms.or(path_rtt),
+        LinkClass::Lan | LinkClass::Wan => direct_rtt_ms.or(path_rtt),
+        LinkClass::Unknown => None,
     };
     (link, rtt)
 }
