@@ -55,8 +55,8 @@ fn dimensions_when_dense_or_recurrent_metadata_is_valid() {
 }
 
 #[test]
-fn activation_width_when_qwen4_or_dflash_is_hyper_connected() {
-    for architecture in ["qwen4exp", "dflash"] {
+fn activation_width_when_metadata_declares_hyper_connections() {
+    for architecture in ["qwen4exp", "dflash", "xing4_0"] {
         let fields: Vec<_> = [
             ("block_count", 33),
             ("embedding_length", 2048),

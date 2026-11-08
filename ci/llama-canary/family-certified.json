@@ -1004,6 +1004,107 @@
       "execution": {"trunk_layers": 42, "mtp_layers": 0, "activation_width": 3136, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 2829187200},
       "notes": "nemotron_h hybrid (Mamba2 + attention) Nano 4B; head_count_kv is per-layer and zero on non-attention layers; estimated_model_bytes is the exact pinned GGUF tensor byte sum"
+    },
+    {
+      "family": "limite",
+      "class": "causal_generation",
+      "architecture": "limite",
+      "profile": "full",
+      "artifact": {"repo": "yamura4/limite-1b-violetto-GGUF", "revision": "1099469126d1cd6153315413b8537775446217e4", "files": ["gguf/limite-1b-violetto-Q4_K_M.gguf"], "file_integrity": {"gguf/limite-1b-violetto-Q4_K_M.gguf": {"size_bytes": 734191616, "blob_id": "6d779ff80256d46760015647e4a8cda3b401531f325123398baee97ce76afa52"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 1280, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 728230840},
+      "notes": "Pinned limite GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "lfm3",
+      "class": "causal_generation",
+      "architecture": "lfm3",
+      "profile": "full",
+      "artifact": {"repo": "LiquidAI/LFM3-1.7B-GGUF", "revision": "cd0c74c575b5c416f3011b5b4c298077f26ca8c2", "files": ["LFM3-1.7B-Q4_K_M.gguf"], "file_integrity": {"LFM3-1.7B-Q4_K_M.gguf": {"size_bytes": 1099627808, "blob_id": "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2048, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 1091380480},
+      "notes": "Pinned lfm3 GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "sensenova-u1",
+      "class": "causal_generation",
+      "architecture": "sensenova_u1",
+      "profile": "full",
+      "artifact": {"repo": "mradermacher/SenseNova-U1-8B-MoT-SFT-GGUF", "revision": "d6f6cb9a6dddad8857a8c7738094dc69ee69ebaa", "files": ["SenseNova-U1-8B-MoT-SFT.Q4_K_M.gguf"], "file_integrity": {"SenseNova-U1-8B-MoT-SFT.Q4_K_M.gguf": {"size_bytes": 5721327552, "blob_id": "2eb5ee5ae6fb6cce781158d92cea0783d105aff00747e53c4890603699813602"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 42, "mtp_layers": 0, "activation_width": 4096, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 5715367936},
+      "notes": "Pinned sensenova-u1 GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "xing4-0",
+      "class": "causal_generation",
+      "architecture": "xing4_0",
+      "profile": "full",
+      "artifact": {"repo": "XingChen-AGI/Xing4.0-29B-A4B-GGUF", "revision": "6b64a569bf77297678291fba3d076cf4f43225cd", "files": ["xing4_0-29b-IQ4_NL.gguf"], "file_integrity": {"xing4_0-29b-IQ4_NL.gguf": {"size_bytes": 20104012544, "blob_id": "9c9c81cf83b6ce974d3440088318de83b727c0064124ca6c3c919289adadb4dd"}}, "selector": "IQ4_NL"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 1, "activation_width": 14336, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 20100828352},
+      "notes": "Pinned xing4-0 GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "clover-moe",
+      "class": "causal_generation",
+      "architecture": "clover_moe",
+      "profile": "full",
+      "artifact": {"repo": "Diffuspace/Clover-35B-A3B-Preview-GGUF", "revision": "32e22a02b885e173177b7ce7661ad13448b4f89e", "files": ["Clover-35B-A3B-Preview-Q4_K_M.gguf"], "file_integrity": {"Clover-35B-A3B-Preview-Q4_K_M.gguf": {"size_bytes": 22998009248, "blob_id": "4d439bb832487fbb91d0a739a5746cf3089bde4137c17050576b24e6dba3539c"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 2048, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 22987011840},
+      "notes": "Pinned clover-moe GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "flint",
+      "class": "causal_generation",
+      "architecture": "flint",
+      "profile": "full",
+      "artifact": {"repo": "ggml-org/Flint-GGUF", "revision": "468307a1b38259e9e4c9d4fe53d4e3b76386572c", "files": ["Flint-Q4_K_M.gguf"], "file_integrity": {"Flint-Q4_K_M.gguf": {"size_bytes": 23387911136, "blob_id": "c3c4d93f9db92627a2fc47ea8fe8c64a094cabd3549db544bcdd2c00e9a9a347"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 49, "mtp_layers": 0, "activation_width": 2048, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 23382441088},
+      "notes": "Pinned flint GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "ricursive",
+      "class": "causal_generation",
+      "architecture": "ricursive",
+      "profile": "full",
+      "artifact": {"repo": "AtomicChat/Ripple-65B-Preview-GGUF", "revision": "df550a7178a87bbfb6ee2bdbd37603c553d536ee", "files": ["Ripple-65B-Preview-Q4_K_M.gguf"], "file_integrity": {"Ripple-65B-Preview-Q4_K_M.gguf": {"size_bytes": 38798820576, "blob_id": "51de49f0833201d82e624c1273a0316dca6c281616371770213f0c6d277b8652"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 80, "mtp_layers": 0, "activation_width": 5120, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 38795202880},
+      "notes": "Pinned ricursive GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "kolibri1",
+      "class": "causal_generation",
+      "architecture": "kolibri1",
+      "profile": "full",
+      "artifact": {"repo": "Hob-forge/Kolibri-1-GGUF", "revision": "40eaa5cf6cfca3afaf8b8832bac962652edb0bde", "files": ["Kolibri-1-Q4_K_M.gguf"], "file_integrity": {"Kolibri-1-Q4_K_M.gguf": {"size_bytes": 47454113472, "blob_id": "c2ac1301424441ef210b6de50ce25e8ccf69f86494df53d6ba52ed558456062e"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 50, "mtp_layers": 0, "activation_width": 2560, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 47449226240},
+      "notes": "Pinned kolibri1 GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "beam",
+      "class": "causal_generation",
+      "architecture": "beam",
+      "profile": "full",
+      "artifact": {"repo": "unsloth/Beam-1.0-501B-A23B-GGUF", "revision": "4cc80272381734e2b16b34c1af3362c7268a0ebc", "files": ["UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00001-of-00004.gguf", "UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00002-of-00004.gguf", "UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00003-of-00004.gguf", "UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00004-of-00004.gguf"], "file_integrity": {"UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00001-of-00004.gguf": {"size_bytes": 5954020, "blob_id": "6b8f157c8dd1cf9fe06156ee9b3973a7e5a6a9348c45768db48e558cc58c3a18"}, "UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00002-of-00004.gguf": {"size_bytes": 49583532032, "blob_id": "36aa3d6b3dca694a0e72f908c780a67bbb8a8bd70874aec6152d0699c5df487b"}, "UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00003-of-00004.gguf": {"size_bytes": 49439126816, "blob_id": "a60bd8a4d89bb2386d0a4a0825e4b18178b086aa2d193ba990af27bd0e466cf2"}, "UD-IQ1_S/Beam-1.0-501B-A23B-UD-IQ1_S-00004-of-00004.gguf": {"size_bytes": 4031348512, "blob_id": "191549f22a30cb5e3e7f213b4a8b4ce4c05a3d1f610c1ad83bd0c82cc0b89351"}}, "selector": "UD-IQ1_S"},
+      "execution": {"trunk_layers": 52, "mtp_layers": 0, "activation_width": 5120, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 103053952768, "minimum_runner_memory_gib": 256},
+      "notes": "Pinned beam GGUF; new upstream decoder with generated stage boundaries; first full certification pending"
+    },
+    {
+      "family": "muse-spark",
+      "class": "causal_generation",
+      "architecture": "muse-spark",
+      "profile": "full",
+      "artifact": {"repo": "unsloth/Muse-Spark-Open-816B-A42B-GGUF", "revision": "c00670568b6ce5e56a247f67091247984df2a01e", "files": ["UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00001-of-00005.gguf", "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00002-of-00005.gguf", "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00003-of-00005.gguf", "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00004-of-00005.gguf", "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00005-of-00005.gguf"], "file_integrity": {"UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00001-of-00005.gguf": {"size_bytes": 13079896, "blob_id": "c7e327f6d210ef2bfa3e312bc831468e61a5d4f8d1d9714a6f6d6d8f6b7d5b70"}, "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00002-of-00005.gguf": {"size_bytes": 49907804224, "blob_id": "d250bc8c546c40c9f2ea30306a1f4cb60c127e9383f3cc69dd1cc055f8e30872"}, "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00003-of-00005.gguf": {"size_bytes": 49627378848, "blob_id": "de1f9d84c00f01548493c951069b2b754c3a4f8a08e01f6795afcfd2808dbd82"}, "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00004-of-00005.gguf": {"size_bytes": 49414954496, "blob_id": "c1ce189800e243c57d735e13e3448d2fdd2faf7c2a9e496a9a85b28964abe18d"}, "UD-IQ1_S/Muse-Spark-Open-816B-A42B-UD-IQ1_S-00005-of-00005.gguf": {"size_bytes": 26676356928, "blob_id": "34bc63c09ec6897dd2cafc1599a4e39dae1053525649736781916e054d060c9a"}}, "selector": "UD-IQ1_S"},
+      "mmproj_artifact": {"repo": "unsloth/Muse-Spark-Open-816B-A42B-GGUF", "revision": "c00670568b6ce5e56a247f67091247984df2a01e", "files": ["mmproj-Q8_0.gguf"], "file_integrity": {"mmproj-Q8_0.gguf": {"size_bytes": 2183868768, "blob_id": "c3a0613bb2be1dde38faec3d1d1bf2c118013626ab9623936de500a656232ed3"}}, "selector": "Q8_0"},
+      "execution": {"trunk_layers": 62, "mtp_layers": 0, "activation_width": 8192, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 175626404864, "minimum_runner_memory_gib": 256, "startup_timeout_secs": 900},
+      "notes": "Muse Spark MoE; pinned Q8 projector exercises local and split image smoke; first full certification pending"
     }
   ]
 }
