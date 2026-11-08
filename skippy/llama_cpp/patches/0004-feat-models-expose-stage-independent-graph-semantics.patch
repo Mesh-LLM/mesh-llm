@@ -1,48 +1,78 @@
-From d1c4aba2283569e88d02626eeba39d0b204d8028 Mon Sep 17 00:00:00 2001
+From 7864e891b5b481a11babb965c4b2756a1e367341 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 04/15] feat(models): expose stage-independent graph semantics
 
 ---
- src/llama-graph.cpp           | 782 ++++++++++++++++++++++++++++++----
- src/llama-graph.h             | 213 ++++++++-
- src/llama-kv-cache.cpp        |  18 -
- src/llama-kv-cache.h          |   5 +
- src/models/bailingmoe3.cpp    |  20 +-
- src/models/bitnet.cpp         |   4 +-
- src/models/chameleon.cpp      |  25 +-
- src/models/deepseek32.cpp     |  16 +-
- src/models/deepseek4.cpp      |  38 +-
- src/models/delta-net-base.cpp |  21 +-
- src/models/gemma4.cpp         |   5 +-
- src/models/glm-dsa.cpp        |  70 ++-
- src/models/glm4-moe.cpp       |   9 +-
- src/models/glm4.cpp           |   9 +-
- src/models/granite-swa.cpp    |  36 +-
- src/models/granite-switch.cpp |  53 ++-
- src/models/kimi-k3.cpp        |  14 +-
- src/models/kimi-k31.cpp       |  14 +-
- src/models/kimi-linear.cpp    |  28 +-
- src/models/lfm-base.cpp       |   4 +-
- src/models/mamba-base.cpp     |  57 ++-
- src/models/mimo2.cpp          |  15 +-
- src/models/minicpm3.cpp       |   4 +-
- src/models/minimax-01.cpp     |  13 +-
- src/models/minimax-m3.cpp     |  47 +-
- src/models/models.h           |   6 +-
- src/models/nemotron-h-moe.cpp |  41 +-
- src/models/nemotron-h.cpp     |  11 +-
- src/models/qwen2moe.cpp       |   5 +-
- src/models/qwen35.cpp         |   3 +-
- src/models/qwen35moe.cpp      |   3 +-
- src/models/qwen3next.cpp      |   5 +-
- src/models/qwen3vl.cpp        |   3 +-
- src/models/qwen4exp.cpp       |  16 +-
- src/models/rwkv6-base.cpp     |   9 +-
- src/models/rwkv6.cpp          |   2 +-
- src/models/rwkv7-base.cpp     |   9 +-
- 37 files changed, 1316 insertions(+), 317 deletions(-)
+ src/llama-context.cpp            |  10 +
+ src/llama-graph.cpp              | 782 +++++++++++++++++++++++++++----
+ src/llama-graph.h                | 215 ++++++++-
+ src/llama-kv-cache.cpp           |  18 -
+ src/llama-kv-cache.h             |   5 +
+ src/models/bailingmoe3.cpp       |  20 +-
+ src/models/bitnet.cpp            |   4 +-
+ src/models/chameleon.cpp         |  25 +-
+ src/models/deepseek32.cpp        |  16 +-
+ src/models/deepseek4.cpp         |  38 +-
+ src/models/delta-net-base.cpp    |  21 +-
+ src/models/gemma4.cpp            |   5 +-
+ src/models/glm-dsa.cpp           |  70 ++-
+ src/models/glm4-moe.cpp          |   9 +-
+ src/models/glm4.cpp              |   9 +-
+ src/models/granite-swa.cpp       |  36 +-
+ src/models/granite-switch.cpp    |  53 ++-
+ src/models/kimi-k3.cpp           |  14 +-
+ src/models/kimi-k31.cpp          |  14 +-
+ src/models/kimi-linear.cpp       |  28 +-
+ src/models/lfm-base.cpp          |   4 +-
+ src/models/mamba-base.cpp        |  57 ++-
+ src/models/mimo2.cpp             |  15 +-
+ src/models/minicpm3.cpp          |   4 +-
+ src/models/minimax-01.cpp        |  13 +-
+ src/models/minimax-m3.cpp        |  47 +-
+ src/models/models.h              |   6 +-
+ src/models/nemotron-h-moe.cpp    |  41 +-
+ src/models/nemotron-h.cpp        |  11 +-
+ src/models/qwen2moe.cpp          |   5 +-
+ src/models/qwen35.cpp            |   3 +-
+ src/models/qwen35moe.cpp         |   3 +-
+ src/models/qwen3next.cpp         |   5 +-
+ src/models/qwen3vl.cpp           |   3 +-
+ src/models/qwen4exp.cpp          |  16 +-
+ src/models/rwkv6-base.cpp        |   9 +-
+ src/models/rwkv6.cpp             |   2 +-
+ src/models/rwkv7-base.cpp        |   9 +-
+ src/skippy/stage_realization.cpp |  15 +-
+ 39 files changed, 1335 insertions(+), 325 deletions(-)
 
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 2658379ba..5794e7905 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3274,6 +3274,15 @@ llm_graph_params llama_context::graph_params(
+             const llama_memory_context_i * mctx,
+                           llm_graph_type   gtype,
+             const skippy_graph_build_inputs & graph_build_inputs) const {
++    std::vector<int32_t> import_token_axes;
++    // The prompt graph establishes the token axis before decode reservation,
++    // where checkpoint and token dimensions can have the same small size.
++    if (input_activation_frontier_observed && input_activation_frontier_stable &&
++            graph_build_inputs.activation_import_bindings == this->graph_build_inputs.activation_import_bindings) {
++        for (const auto & part : input_activation_frontier) {
++            import_token_axes.push_back(part.token_axis);
++        }
++    }
+     std::vector<int32_t> export_token_axes;
+     // Reservation observes the frontier with multiple tokens. Reuse those
+     // axes during decode, where singleton checkpoint/token dimensions can be
+@@ -3303,6 +3312,7 @@ llm_graph_params llama_context::graph_params(
+         /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
+         /*.samplers    =*/ sampling.samplers,
+         /*.build_inputs=*/ graph_build_inputs,
++        /*.activation_import_token_axes=*/ std::move(import_token_axes),
+         /*.activation_export_token_axes=*/ std::move(export_token_axes),
+         /*.computation_generation=*/ computation_generation,
+         /*.n_outputs   =*/ n_outputs,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
 index d1ee7c090..25bad9935 100644
 --- a/src/llama-graph.cpp
@@ -1468,7 +1498,7 @@ index d1ee7c090..25bad9935 100644
      return (llm_graph_input_mem_hybrid_iswa *) res->add_input(std::move(inp));
  }
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index ed7bb54c8..a3411fb94 100644
+index ed7bb54c8..1dddab22d 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -5,11 +5,17 @@
@@ -1612,22 +1642,24 @@ index ed7bb54c8..a3411fb94 100644
  class llm_graph_input_attn_cross : public llm_graph_input_i {
  public:
      llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
-@@ -821,6 +906,10 @@ struct llm_graph_params {
+@@ -821,6 +906,11 @@ struct llm_graph_params {
  
      std::map<llama_seq_id, llama_sampler *> samplers;
  
 +    skippy_graph_build_inputs build_inputs;
++    std::vector<int32_t> activation_import_token_axes;
 +    std::vector<int32_t> activation_export_token_axes;
 +    uint64_t computation_generation = 0;
 +
      static bool samplers_equal(
            const std::map<llama_seq_id, llama_sampler *> & lhs,
            const std::map<llama_seq_id, llama_sampler *> & rhs) {
-@@ -883,6 +972,11 @@ struct llm_graph_params {
+@@ -883,6 +973,12 @@ struct llm_graph_params {
              return false;
          }
  
 +        if (!build_inputs.topology_equal(other.build_inputs) ||
++                activation_import_token_axes != other.activation_import_token_axes ||
 +                activation_export_token_axes != other.activation_export_token_axes) {
 +            return false;
 +        }
@@ -1635,7 +1667,7 @@ index ed7bb54c8..a3411fb94 100644
          if (!samplers_equal(samplers, other.samplers)) {
              return false;
          }
-@@ -913,6 +1007,7 @@ struct llm_graph_params {
+@@ -913,6 +1009,7 @@ struct llm_graph_params {
              cparams.causal_attn             == other.cparams.causal_attn             &&
              layer_inp_dev == other.layer_inp_dev &&
              layer_inp_src == other.layer_inp_src &&
@@ -1643,7 +1675,7 @@ index ed7bb54c8..a3411fb94 100644
              model == other.model &&
              gtype == other.gtype &&
              cvec  == other.cvec  &&
-@@ -927,6 +1022,23 @@ struct llm_graph_fused_node {
+@@ -927,6 +1024,23 @@ struct llm_graph_fused_node {
      int il;
  };
  
@@ -1667,7 +1699,7 @@ index ed7bb54c8..a3411fb94 100644
  class llm_graph_result {
  public:
      llm_graph_result(int64_t max_nodes);
-@@ -938,6 +1050,26 @@ public:
+@@ -938,6 +1052,26 @@ public:
      ggml_tensor * get_embd()        const { return t_embd; }
      ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
      ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
@@ -1694,7 +1726,7 @@ index ed7bb54c8..a3411fb94 100644
  
      ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
  
-@@ -948,6 +1080,8 @@ public:
+@@ -948,6 +1082,8 @@ public:
  
      void reset();
  
@@ -1703,7 +1735,7 @@ index ed7bb54c8..a3411fb94 100644
      void set_inputs(const llama_ubatch * ubatch);
      void set_outputs(const llm_graph_params & params);
  
-@@ -968,6 +1102,18 @@ public:
+@@ -968,6 +1104,18 @@ public:
  
      const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
  
@@ -1722,7 +1754,7 @@ index ed7bb54c8..a3411fb94 100644
      void set_params(const llm_graph_params & params);
  
      // important graph nodes
-@@ -977,6 +1123,8 @@ public:
+@@ -977,6 +1125,8 @@ public:
      ggml_tensor * t_embd        = nullptr;
      ggml_tensor * t_embd_pooled = nullptr;
      ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
@@ -1731,7 +1763,7 @@ index ed7bb54c8..a3411fb94 100644
  
      std::vector<ggml_tensor *> t_layer_inp;
  
-@@ -987,6 +1135,13 @@ public:
+@@ -987,6 +1137,13 @@ public:
  
      std::vector<llm_graph_input_ptr> inputs;
      std::vector<llm_graph_fused_node> fused_nodes;
@@ -1745,7 +1777,7 @@ index ed7bb54c8..a3411fb94 100644
  
      std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hdmd_inputs;
  
-@@ -1087,6 +1242,8 @@ struct llm_graph_context {
+@@ -1087,6 +1244,8 @@ struct llm_graph_context {
  
      const llm_graph_cb & cb_func;
  
@@ -1754,7 +1786,7 @@ index ed7bb54c8..a3411fb94 100644
      llm_graph_result * res;
  
      ggml_context * ctx0 = nullptr;
-@@ -1107,6 +1264,30 @@ struct llm_graph_context {
+@@ -1107,6 +1266,30 @@ struct llm_graph_context {
          return inp_out_ids != nullptr && cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
      }
  
@@ -1785,7 +1817,7 @@ index ed7bb54c8..a3411fb94 100644
      //
      // common
      //
-@@ -1124,7 +1305,8 @@ struct llm_graph_context {
+@@ -1124,7 +1307,8 @@ struct llm_graph_context {
      ggml_tensor * build_lora_mm(
                ggml_tensor * w,
                ggml_tensor * cur,
@@ -1795,7 +1827,7 @@ index ed7bb54c8..a3411fb94 100644
  
      // do mat_mul_id, while optionally apply lora and per-expert scale
      // if slots is set, the experts are read from the MoE cache at these slots (see build_moe_cache_slots)
-@@ -1253,7 +1435,8 @@ struct llm_graph_context {
+@@ -1253,7 +1437,8 @@ struct llm_graph_context {
      //
  
      // tok_scale: applied to token rows only
@@ -1805,7 +1837,7 @@ index ed7bb54c8..a3411fb94 100644
      ggml_tensor * build_inp_pos() const;
  
      // applies the RoPE of layer il, cur is returned as is if the layer has none
-@@ -1443,6 +1626,19 @@ struct llm_graph_context {
+@@ -1443,6 +1628,19 @@ struct llm_graph_context {
                  int32_t   rs_zero,
              const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
  
@@ -1825,7 +1857,7 @@ index ed7bb54c8..a3411fb94 100644
      llm_graph_input_rs * build_rs_inp() const;
  
      ggml_tensor * build_rs(
-@@ -1459,7 +1655,16 @@ struct llm_graph_context {
+@@ -1459,7 +1657,16 @@ struct llm_graph_context {
              ggml_tensor * s,
              ggml_tensor * conv_x,
                  int64_t   n_cols,
@@ -3434,6 +3466,32 @@ index 3300822d2..c764b0d53 100644
  
      if (layer.time_mix_ln && layer.time_mix_ln_b) {
          // group norm with head_count groups
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index 1ae940166..74bc61e56 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -265,14 +265,13 @@ void skippy_realize_stage_graph(
+     explicit_import_token_axes.reserve(selection.activation_imports.size());
+     for (size_t index = 0; index < selection.activation_imports.size(); ++index) {
+         const ggml_tensor * source = selection.activation_imports[index];
+-        if (index < params.build_inputs.activation_frontier.size()) {
+-            const int32_t admitted_axis = params.build_inputs.activation_frontier[index].token_axis;
+-            import_token_axes.push_back(skippy_activation_token_axis(source, params.ubatch.n_tokens, admitted_axis));
+-            explicit_import_token_axes.push_back(admitted_axis >= 0);
+-        } else {
+-            import_token_axes.push_back(infer_token_axis(source, params.ubatch.n_tokens));
+-            explicit_import_token_axes.push_back(false);
+-        }
++        const int32_t admitted_axis = index < params.build_inputs.activation_frontier.size()
++                ? params.build_inputs.activation_frontier[index].token_axis : -1;
++        const int32_t prepared_axis = index < params.activation_import_token_axes.size()
++                ? params.activation_import_token_axes[index] : -1;
++        const int32_t axis = admitted_axis >= 0 ? admitted_axis : prepared_axis;
++        import_token_axes.push_back(skippy_activation_token_axis(source, params.ubatch.n_tokens, axis));
++        explicit_import_token_axes.push_back(axis >= 0);
+     }
+ 
+     std::unordered_map<const ggml_tensor *, ggml_tensor *> replacements;
 -- 
 2.56.0
 

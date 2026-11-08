@@ -1,4 +1,4 @@
-From 3bbc6ae1d5e79646e935f4004245d47812c48f13 Mon Sep 17 00:00:00 2001
+From 1156376822542dfc282f72743eda484f7b810d32 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
