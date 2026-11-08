@@ -1,6 +1,6 @@
 //! A plugin admission NO at `backend_selected` skips to the next candidate.
 use super::*;
-use crate::plugin::selected_attempt_test_support::attempt_policy_manager;
+use crate::plugin::selected_attempt_test_support::{DENY_HEADER, attempt_policy_manager};
 use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -10,6 +10,16 @@ const MODEL: &str = "qwen";
 /// attempts `<= deny_through` (or fails). Returns the client's raw response,
 /// how many backends were contacted, and the plugin's `(target, attempt)` log.
 async fn route(deny_through: u64, fail: bool) -> (String, usize, Vec<(String, u64)>) {
+    route_observed(deny_through, fail, false).await.0
+}
+
+/// `route`, optionally inside a real `ExchangeSession`; also returns the
+/// terminal events the plugin received.
+async fn route_observed(
+    deny_through: u64,
+    fail: bool,
+    observed: bool,
+) -> ((String, usize, Vec<(String, u64)>), Vec<serde_json::Value>) {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -56,7 +66,27 @@ async fn route(deny_through: u64, fail: bool) -> (String, usize, Vec<(String, u6
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
         .await
         .unwrap();
-    let (manager, seen) = attempt_policy_manager(deny_through, fail).await;
+    let (manager, seen, terminals) = attempt_policy_manager(deny_through, fail).await;
+    let mut session = None;
+    let mut observation_id = None;
+    if observed {
+        let (started, admission) = crate::plugin::ExchangeSession::begin(
+            &manager,
+            crate::plugin::request_event(
+                "skip-e2e".into(),
+                "chat_completions",
+                "POST",
+                "/v1/chat/completions",
+                b"{}",
+                Default::default(),
+                false,
+            ),
+        )
+        .await;
+        assert!(admission.error_status().is_none());
+        observation_id = Some(started.observation_id().to_owned());
+        session = Some(started);
+    }
     node.set_plugin_manager(manager).await;
     let affinity = AffinityRouter::new();
     let mut targets = election::ModelTargets::default();
@@ -73,7 +103,7 @@ async fn route(deny_through: u64, fail: bool) -> (String, usize, Vec<(String, u6
         body.len()
     )
     .into_bytes();
-    let request = BufferedHttpRequest {
+    let mut request = BufferedHttpRequest {
         raw,
         method: "POST".to_owned(),
         path: "/v1/chat/completions".to_owned(),
@@ -91,6 +121,7 @@ async fn route(deny_through: u64, fail: bool) -> (String, usize, Vec<(String, u6
         correlation_id: None,
         exchange_observation_id: None,
     };
+    request.exchange_observation_id = observation_id;
     route_model_request(
         node,
         downstream_stream.into(),
@@ -117,7 +148,21 @@ async fn route(deny_through: u64, fail: bool) -> (String, usize, Vec<(String, u6
         task.abort();
     }
     let seen = seen.lock().unwrap().clone();
-    (response, contacted, seen)
+    if let Some(mut session) = session {
+        session
+            .observer()
+            .finish(skippy_inference_api::wire_bytes::commit_wire_bytes(b""));
+        session.finish("completed").await;
+    }
+    let finished = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while observed && terminals.lock().unwrap().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        terminals.lock().unwrap().clone()
+    })
+    .await
+    .expect("the plugin must receive the terminal event");
+    ((response, contacted, seen), finished)
 }
 
 #[tokio::test]
@@ -156,4 +201,22 @@ async fn a_failed_admission_hook_does_not_skip_to_the_next_peer() {
     assert!(response.starts_with("HTTP/1.1 503"), "got: {response}");
     assert_eq!(contacted, 0);
     assert_eq!(seen.len(), 1, "fail closed on the first candidate");
+}
+
+#[tokio::test]
+async fn a_skipped_peers_deny_is_recorded_but_does_not_mark_the_admitted_exchange() {
+    let ((response, contacted, seen), terminals) = route_observed(1, false, true).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "got: {response}");
+    assert!(
+        !response.to_ascii_lowercase().contains(DENY_HEADER),
+        "the skipped peer's deny headers must not reach the client"
+    );
+    assert_eq!(contacted, 1);
+    assert_eq!(seen.len(), 2);
+    let terminal = &terminals[0];
+    assert_eq!(terminal["admission_denied"], false);
+    let history = terminal["attempt_history"].as_array().unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0]["admission_denied"], true);
+    assert!(history[1].get("admission_denied").is_none());
 }

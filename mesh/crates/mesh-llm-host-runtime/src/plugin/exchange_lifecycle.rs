@@ -250,12 +250,14 @@ impl PluginManager {
         result.merge(self.exchange_phase(event.clone()).await);
         let mut state = state.lock().unwrap();
         let skipped = more_candidates && result.is_candidate_deny();
+        // A hook that failed to observe the skipped attempt still leaves the
+        // exchange's evidence incomplete, so these flags accumulate regardless.
+        state.incomplete |= result.incomplete;
+        state.evidence_unavailable |= result.evidence_unavailable;
+        state.internal_hook_failure |= result.internal_hook_failure;
         if !skipped {
-            state.incomplete |= result.incomplete;
             state.required_failure |= result.required_failure;
             state.denied |= result.denied;
-            state.evidence_unavailable |= result.evidence_unavailable;
-            state.internal_hook_failure |= result.internal_hook_failure;
             let headers_complete =
                 exchange_metadata::merge_headers(&mut state.headers, result.headers.clone());
             let annotations_complete = exchange_metadata::merge_annotations(

@@ -352,7 +352,7 @@ async fn request_allow_then_selected_rejection_retains_admission_but_reports_typ
 /// when a later candidate was admitted (skip-to-next-peer on a NO).
 #[tokio::test]
 async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
-    let (manager, seen) =
+    let (manager, seen, _) =
         crate::plugin::selected_attempt_test_support::attempt_policy_manager(1, false).await;
     let (session, admission) = ExchangeSession::begin(
         &manager,
@@ -400,6 +400,10 @@ async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
         .unwrap();
     let state = state.lock().unwrap();
     assert!(!state.denied, "the admitted attempt decides the exchange");
+    assert!(
+        state.headers.is_empty(),
+        "a skipped deny's headers stay out"
+    );
     assert_eq!(state.attempt_history.len(), 2);
     assert_eq!(state.attempt_history[0]["admission_denied"], true);
     assert!(state.attempt_history[1].get("admission_denied").is_none());
