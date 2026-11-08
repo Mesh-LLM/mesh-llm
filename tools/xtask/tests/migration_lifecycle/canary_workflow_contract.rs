@@ -428,7 +428,7 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         field(publish, "if"),
         "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}"
     );
-    assert_eq!(field(publish, "runs-on"), "ubuntu-24.04");
+    assert_eq!(field(publish, "runs-on"), "macos-15");
     let (_, action) = named(publish, "id", "publish");
     assert_eq!(field(action, "run"), "scripts/llama-canary-publish.sh");
     assert_eq!(
@@ -829,7 +829,7 @@ fn actual_scheduled_alert_reconciles_first_failure_repeated_failure_and_recovery
         needs(alert),
         BTreeSet::from(["resolve", "result", "publish-certified-canary"])
     );
-    assert_eq!(field(alert, "runs-on"), "ubuntu-24.04");
+    assert_eq!(field(alert, "runs-on"), "macos-15");
     assert_eq!(field(alert, "timeout-minutes"), "5");
     let permissions = alert.get("permissions").unwrap();
     assert_eq!(field(permissions, "actions"), "read");

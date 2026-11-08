@@ -12,6 +12,12 @@ const PREFLIGHT_RUNNER: &str = "${{ fromJSON(needs.resolve.outputs.runner_labels
 const PASS_MAC_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_macos) }}";
 const PASS_LINUX_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_linux) }}";
 const PASS_TIERED_RUNNER: &str = "${{ fromJSON(matrix.memory_tier == 'accelerator-memory-256plus' && inputs.runner_labels_256 || inputs.runner_labels_128) }}";
+const CONTROL_RUNNER: &str = "${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}";
+const PASS_CONTROL_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_128) }}";
+const BOOTSTRAP_RUNNER: &str =
+    "self-hosted,ARM64,jy-managed,family-certify,accelerator-memory-128plus";
+const CONTROL_PROFILE: &str =
+    "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}";
 
 pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let caller = workflows.get(CALLER).ok_or("missing canary workflow")?;
@@ -20,6 +26,51 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         .ok_or("missing canary family pass workflow")?;
 
     h::binding(h::job(caller, "preflight")?, "runs-on", PREFLIGHT_RUNNER)?;
+    for name in ["resolve", "result"] {
+        let job = h::job(caller, name)?;
+        if job.get("runs-on").map(Node::list) != Some(BOOTSTRAP_RUNNER.split(',').collect()) {
+            return Err(format!("{name} must use the closed managed runner pool").into());
+        }
+    }
+    for name in ["attempt_1", "attempt_2", "attempt_3"] {
+        h::binding(h::job(caller, name)?, "runs-on", CONTROL_RUNNER)?;
+    }
+    for name in ["combine", "aggregate", "reconcile"] {
+        h::binding(h::job(pass, name)?, "runs-on", PASS_CONTROL_RUNNER)?;
+    }
+    for (document, names) in [
+        (
+            caller,
+            &["resolve", "attempt_1", "attempt_2", "attempt_3", "result"][..],
+        ),
+        (pass, &["combine", "aggregate", "reconcile"][..]),
+    ] {
+        for name in names {
+            let (_, prepare) = h::step(
+                h::steps(h::job(document, name)?)?,
+                "uses",
+                "./.github/actions/prepare-automation",
+            )?;
+            h::binding(
+                h::member(prepare, "with")?,
+                "runner-profile",
+                CONTROL_PROFILE,
+            )?;
+        }
+    }
+    for name in ["publish-certified-canary", "alert-consecutive-failures"] {
+        h::binding(h::job(caller, name)?, "runs-on", "macos-15")?;
+    }
+    let (_, publisher_prepare) = h::step(
+        h::steps(h::job(caller, "publish-certified-canary")?)?,
+        "uses",
+        "./.github/actions/prepare-automation",
+    )?;
+    h::binding(
+        h::member(publisher_prepare, "with")?,
+        "runner-profile",
+        "image",
+    )?;
     h::binding(h::job(pass, "build")?, "runs-on", PASS_MAC_RUNNER)?;
     h::binding(h::job(pass, "build_linux")?, "runs-on", PASS_LINUX_RUNNER)?;
     for name in ["family", "retry_family"] {
@@ -195,6 +246,25 @@ mod tests {
             let script = scalar_mut(member_mut(select, "run"));
             *script = script.replace(label, replacement);
             assert!(check(&changed).is_err(), "select script: {label}");
+        }
+    }
+
+    #[test]
+    fn controller_jobs_reject_hosted_runner_fallbacks() {
+        for (workflow, job_name) in [
+            (CALLER, "resolve"),
+            (CALLER, "result"),
+            (CALLER, "publish-certified-canary"),
+            (CALLER, "alert-consecutive-failures"),
+            (PASS, "combine"),
+            (PASS, "aggregate"),
+            (PASS, "reconcile"),
+        ] {
+            let mut changed = workflows();
+            let document = changed.get_mut(workflow).unwrap();
+            let job = member_mut(member_mut(document, "jobs"), job_name);
+            *member_mut(job, "runs-on") = Node::Scalar("ubuntu-24.04".into());
+            assert!(check(&changed).is_err(), "{workflow}/{job_name}");
         }
     }
 

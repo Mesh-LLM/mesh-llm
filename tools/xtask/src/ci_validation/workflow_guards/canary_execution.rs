@@ -81,7 +81,12 @@ fn worker_transactions(steps: &[Node], receipt_name: &str) -> DynResult<()> {
 pub(super) fn aggregate(job: &Node) -> DynResult<()> {
     let steps = h::steps(job)?;
     let (execute, command) = h::step(steps, "id", "aggregate")?;
-    preparation(steps, "${{ inputs.source }}", execute)?;
+    preparation(
+        steps,
+        "${{ inputs.source }}",
+        execute,
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     classified_context(command)?;
     h::command(
         command,
@@ -225,7 +230,12 @@ pub(super) fn publication(job: &Node) -> DynResult<()> {
         "name",
         "Verify final handoff and write evidence summary",
     )?;
-    preparation(steps, "${{ needs.resolve.outputs.source }}", verify)?;
+    preparation(
+        steps,
+        "${{ needs.resolve.outputs.source }}",
+        verify,
+        "image",
+    )?;
     download(
         steps,
         "name",
@@ -262,7 +272,12 @@ pub(super) fn publication(job: &Node) -> DynResult<()> {
     h::before(verify, publish)
 }
 
-pub(super) fn preparation(steps: &[Node], revision: &str, execute: usize) -> DynResult<()> {
+pub(super) fn preparation(
+    steps: &[Node],
+    revision: &str,
+    execute: usize,
+    profile: &str,
+) -> DynResult<()> {
     let checkout = h::checkout(steps, revision, None)?;
     let (prepare, step) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
     if steps
@@ -275,7 +290,7 @@ pub(super) fn preparation(steps: &[Node], revision: &str, execute: usize) -> Dyn
     {
         return Err("canary controller preparation must run exactly once and fail closed".into());
     }
-    h::binding(h::member(step, "with")?, "runner-profile", "hosted-bare")?;
+    h::binding(h::member(step, "with")?, "runner-profile", profile)?;
     h::before(checkout, prepare)?;
     h::before(prepare, execute)?;
     for (index, _) in steps.iter().enumerate().filter(|(_, step)| {
