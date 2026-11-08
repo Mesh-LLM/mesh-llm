@@ -262,19 +262,28 @@ pub enum CacheRouteDecision {
         cost: ServiceCost,
         best_cold_micros: Option<u64>,
     },
-    /// A cold candidate is at least as cheap; keep the normal order.
-    ColdWins,
+    /// Serving the request cold on `target` is estimated cheaper than the
+    /// best hit: route there. Candidate order breaks ties between cold
+    /// candidates.
+    ColdWins {
+        target: InferenceTarget,
+        micros: u64,
+    },
+    /// The best hit is cheaper, but by less than the margin: too close to
+    /// act on, so the normal order stands.
+    Marginal,
     /// Cache evidence exists but no hit could be costed.
     Incomparable(MissingComponent),
     /// No candidate advertised a cache hit worth considering.
     NoEvidence,
 }
 
-/// Pick a cache target only when it is cheaper for this request than serving
-/// it cold anywhere, including on the cached candidate itself. A hit must also
-/// credit at least `min_saved_tokens`, and beat the best cold estimate by the
-/// prefill time of those tokens at its own rate, so a marginal estimate never
-/// overrides the established order. Candidate order breaks ties.
+/// Compare the best cache hit for this request with serving it cold on every
+/// costed candidate, the hit's own included. A hit must credit at least
+/// `min_saved_tokens` and beat the best cold estimate by the prefill time of
+/// those tokens at its own rate; a cold candidate estimated cheaper than the
+/// hit is chosen instead; anything in between is too close to act on and
+/// keeps the established order. Candidate order breaks ties.
 pub fn decide_cache_route(
     request: RequestCostInput,
     candidates: &[CandidateCostInput],
@@ -282,9 +291,18 @@ pub fn decide_cache_route(
 ) -> CacheRouteDecision {
     let best_cold = candidates
         .iter()
-        .filter_map(|candidate| cold_cost(request, candidate).ok())
-        .map(|cost| cost.micros)
-        .min();
+        .filter_map(|candidate| {
+            cold_cost(request, candidate)
+                .ok()
+                .map(|cost| (candidate, cost.micros))
+        })
+        .fold(
+            None,
+            |best: Option<(&CandidateCostInput, u64)>, (candidate, micros)| match best {
+                Some((_, best_micros)) if best_micros <= micros => best,
+                _ => Some((candidate, micros)),
+            },
+        );
 
     let mut best_warm: Option<(&CandidateCostInput, ServiceCost)> = None;
     let mut first_missing = None;
@@ -314,11 +332,17 @@ pub fn decide_cache_route(
         u64::from(min_saved_tokens).saturating_mul(rate)
     });
     match best_cold {
-        Some(cold) if cost.micros.saturating_add(margin) > cold => CacheRouteDecision::ColdWins,
+        Some((cold, micros)) if micros < cost.micros => CacheRouteDecision::ColdWins {
+            target: cold.target.clone(),
+            micros,
+        },
+        Some((_, micros)) if cost.micros.saturating_add(margin) > micros => {
+            CacheRouteDecision::Marginal
+        }
         _ => CacheRouteDecision::CacheHitWins {
             target: winner.target.clone(),
             cost,
-            best_cold_micros: best_cold,
+            best_cold_micros: best_cold.map(|(_, micros)| micros),
         },
     }
 }
@@ -365,6 +389,13 @@ mod tests {
         }
     }
 
+    fn cold_winner(decision: &CacheRouteDecision) -> Option<InferenceTarget> {
+        match decision {
+            CacheRouteDecision::ColdWins { target, .. } => Some(target.clone()),
+            _ => None,
+        }
+    }
+
     fn winner(decision: &CacheRouteDecision) -> Option<InferenceTarget> {
         match decision {
             CacheRouteDecision::CacheHitWins { target, .. } => Some(target.clone()),
@@ -380,7 +411,7 @@ mod tests {
             &[warm(1, 6_000_000, 250, 3_000, 0), cold(2, 0, 250)],
             MIN_SAVED,
         );
-        assert_eq!(decision, CacheRouteDecision::ColdWins);
+        assert_eq!(cold_winner(&decision), Some(remote(2)));
     }
 
     #[test]
@@ -392,7 +423,7 @@ mod tests {
         let short = decide_cache_route(request(2_200, 2_000), &candidates, MIN_SAVED);
         assert_eq!(winner(&short), Some(remote(1)));
         let long = decide_cache_route(request(20_000, 2_000), &candidates, MIN_SAVED);
-        assert_eq!(long, CacheRouteDecision::ColdWins);
+        assert_eq!(cold_winner(&long), Some(remote(2)));
     }
 
     #[test]
@@ -431,7 +462,7 @@ mod tests {
             &[warm(1, 0, 1_000, 300, 0), cold(2, 0, 790)],
             MIN_SAVED,
         );
-        assert_eq!(decision, CacheRouteDecision::ColdWins);
+        assert_eq!(decision, CacheRouteDecision::Marginal);
     }
 
     #[test]
@@ -441,7 +472,8 @@ mod tests {
             &[warm(1, 0, 1_000, 1_000, 1_500_000)],
             MIN_SAVED,
         );
-        assert_eq!(decision, CacheRouteDecision::ColdWins);
+        // Serving the request cold on the same node beats restoring it.
+        assert_eq!(cold_winner(&decision), Some(remote(1)));
     }
 
     #[test]
@@ -524,7 +556,7 @@ mod tests {
             ],
             MIN_SAVED,
         );
-        assert_eq!(decision, CacheRouteDecision::ColdWins);
+        assert_eq!(cold_winner(&decision), Some(remote(2)));
     }
 
     fn chat_body(system: usize, user: usize) -> Value {

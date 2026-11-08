@@ -579,9 +579,11 @@ impl crate::mesh::Node {
             .invalidate(model, prefix_hash)
     }
 
-    /// Choose a cache target for this request, honouring a short lease only
-    /// for a request that could earn cache credit at all. Shared by the model
-    /// route and the remote-host ordering, so both apply the same estimate.
+    /// Choose a target for this request from cache evidence, shared by the
+    /// model route and the remote-host ordering so both apply the same
+    /// estimate. The estimate comes first: a short lease, the memory of a
+    /// recent decision, only stands in when nothing can be costed yet (a hit
+    /// not advertised so far), so it never overrides a costed comparison.
     pub(crate) async fn cache_target_with_lease(
         &self,
         affinity: &AffinityRouter,
@@ -593,24 +595,30 @@ impl crate::mesh::Node {
         if !request_cost::can_earn_cache_credit(request, MIN_SAVED_TOKENS) {
             return None;
         }
-        if let Some(target) = affinity.lookup_cache_lease(model, prefix_hash, candidates) {
-            return Some(target);
-        }
         let lease_epoch = affinity.cache_lease_epoch();
-        let selected = self
-            .select_cache_target(model, prefix_hash, candidates, request)
-            .await;
-        if let Some(target) = selected.as_ref() {
-            affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
+        match self
+            .cache_route_decision(model, prefix_hash, candidates, request)
+            .await
+        {
+            request_cost::CacheRouteDecision::CacheHitWins { target, .. }
+            | request_cost::CacheRouteDecision::ColdWins { target, .. } => {
+                affinity.remember_cache_lease_if_epoch(model, prefix_hash, &target, lease_epoch);
+                Some(target)
+            }
+            request_cost::CacheRouteDecision::Marginal => None,
+            request_cost::CacheRouteDecision::Incomparable(_)
+            | request_cost::CacheRouteDecision::NoEvidence => {
+                affinity.lookup_cache_lease(model, prefix_hash, candidates)
+            }
         }
-        selected
     }
 
     /// Probe bounded local and peer advertisements for the exact request
-    /// prefix, and route to a hit only when, for this request, it is cheaper
-    /// than serving it cold on any candidate, the hit's own included
-    /// (`request_cost::decide_cache_route`). Missing, expired, unmeasured or
-    /// incomparable evidence preserves normal candidate order.
+    /// prefix and compare the best hit with serving the request cold on every
+    /// costed candidate (`request_cost::decide_cache_route`): the target is the
+    /// hit when it wins clearly, the cheapest cold candidate when that is
+    /// estimated cheaper. A marginal difference, or missing, expired,
+    /// unmeasured or incomparable evidence, preserves normal candidate order.
     pub(crate) async fn select_cache_target(
         &self,
         model: &str,
@@ -621,6 +629,23 @@ impl crate::mesh::Node {
         if !request_cost::can_earn_cache_credit(request, MIN_SAVED_TOKENS) {
             return None;
         }
+        match self
+            .cache_route_decision(model, prefix_hash, candidates, request)
+            .await
+        {
+            request_cost::CacheRouteDecision::CacheHitWins { target, .. }
+            | request_cost::CacheRouteDecision::ColdWins { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+
+    async fn cache_route_decision(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        candidates: &[election::InferenceTarget],
+        request: request_cost::RequestCostInput,
+    ) -> request_cost::CacheRouteDecision {
         let (local_evidence, local_rate) = {
             let mut inventory = self
                 .cache_affinity_inventory
@@ -681,10 +706,7 @@ impl crate::mesh::Node {
         drop(state);
         let decision = request_cost::decide_cache_route(request, &inputs, MIN_SAVED_TOKENS);
         tracing::debug!(model, ?decision, "cache route decision");
-        match decision {
-            request_cost::CacheRouteDecision::CacheHitWins { target, .. } => Some(target),
-            _ => None,
-        }
+        decision
     }
 }
 

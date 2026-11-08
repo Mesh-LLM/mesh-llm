@@ -493,8 +493,8 @@ async fn prefix_kill_switch_prevents_cache_evidence_reordering() -> Result<()> {
 /// The issue's fixture: 4,096 prompt tokens, 1,024 provably shared. A hit on a
 /// peer prefilling at 2 ms/token costs 6.144 s (plus the 256-token margin),
 /// while a peer that holds nothing for this prefix but prefills at 0.25
-/// ms/token serves it cold in 1.024 s. The hit only wins once the cold peer is
-/// slower than the warm one's estimate.
+/// ms/token serves it cold in 1.024 s, so the cold peer is chosen. The hit
+/// only wins once the cold peer is slower than the warm one's estimate.
 #[tokio::test]
 async fn a_slow_cache_hit_loses_to_a_faster_cold_peer() -> Result<()> {
     use mesh_llm_routing::cache_inventory::{
@@ -544,6 +544,12 @@ async fn a_slow_cache_hit_loses_to_a_faster_cold_peer() -> Result<()> {
         let mut cold = test_peer_serving_model(cold_peer, model);
         cold.cache_affinity = Some(advertisement(prefix_hash ^ 1, 1_024, cold_rate));
         node.insert_test_peer(cold).await;
+        // A lease from an earlier decision does not override a costed one.
+        affinity.remember_cache_lease(
+            model,
+            prefix_hash,
+            &election::InferenceTarget::Remote(warm_peer),
+        );
 
         let (ordered, _) = order_mesh_target_hosts(
             &node,
@@ -555,23 +561,21 @@ async fn a_slow_cache_hit_loses_to_a_faster_cold_peer() -> Result<()> {
         )
         .await;
 
-        if expect_hit {
-            assert_eq!(
-                prepared.cache_target,
-                Some(election::InferenceTarget::Remote(warm_peer))
-            );
-            assert_eq!(ordered.first(), Some(&warm_peer));
-        } else {
-            assert_eq!(prepared.cache_target, None, "cold rate {cold_rate}");
-            assert!(!prepared.affinity_applied);
-        }
+        // The cheaper option leads: the hit, or the faster peer served cold.
+        let expected = if expect_hit { warm_peer } else { cold_peer };
+        assert_eq!(
+            prepared.cache_target,
+            Some(election::InferenceTarget::Remote(expected)),
+            "cold rate {cold_rate}"
+        );
+        assert_eq!(ordered.first(), Some(&expected));
     }
     Ok(())
 }
 
 /// A peer holding no cache entry is costed cold from the prefill rate on its
-/// throughput hint, so a fast idle peer vetoes a slow hit; once that rate is
-/// stale it is uncosted again and cannot.
+/// throughput hint, so a fast idle peer is chosen over a slow hit; once that
+/// rate is stale it is uncosted again and the hit wins.
 #[tokio::test]
 async fn a_cold_peer_with_only_its_advertised_rate_can_veto_a_slow_hit() -> Result<()> {
     use crate::network::metrics::{ModelThroughputHint, PrefillMeasurement};
@@ -641,8 +645,14 @@ async fn a_cold_peer_with_only_its_advertised_rate_can_veto_a_slow_hit() -> Resu
         )
         .await;
 
-        let expected = expect_hit.then_some(election::InferenceTarget::Remote(warm_peer));
-        assert_eq!(prepared.cache_target, expected, "rate age {rate_age_ms} ms");
+        // A fresh rate makes the idle peer the cheaper target; a stale one
+        // leaves it uncosted, and the hit wins against its own cold cost.
+        let expected = if expect_hit { warm_peer } else { cold_peer };
+        assert_eq!(
+            prepared.cache_target,
+            Some(election::InferenceTarget::Remote(expected)),
+            "rate age {rate_age_ms} ms"
+        );
     }
     Ok(())
 }
