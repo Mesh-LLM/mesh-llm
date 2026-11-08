@@ -115,12 +115,15 @@ async fn mesh_candidates_cover_local_and_remote_placements() {
 }
 
 #[tokio::test]
-/// The live automatic path: ingress resolves `mesh` to the concrete model and
-/// writes that name back into the request before host selection runs, so the
-/// name no longer says the request was automatic. Host selection must still
-/// draw over this node and its peers — from the automatic-route flag — or
-/// every automatic request takes the named-model local-first path (lab,
-/// 2026-11-08: 0 of 100 automatic requests left the origin node).
+/// The live automatic path: ingress resolves the directive (`mesh`, the
+/// deprecated `auto`, or an absent model) to the concrete model and writes
+/// that name back into the request before host selection runs, so the name no
+/// longer says the request was automatic. Host selection must still draw over
+/// this node and its peers — from the automatic-route flag — or every
+/// automatic request takes the named-model local-first path (lab, 2026-11-08:
+/// 0 of 100 automatic requests left the origin node). The flag does not
+/// outrank `local_execution_only`: a request this node must execute itself
+/// keeps the peer out of the draw.
 async fn automatic_request_keeps_mesh_candidates_after_model_rewrite() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
@@ -136,24 +139,47 @@ async fn automatic_request_keeps_mesh_candidates_after_model_rewrite() {
         .targets
         .insert(MODEL.into(), vec![election::InferenceTarget::Local(9337)]);
     let path = "/v1/chat/completions";
-    let mut automatic = request(path, "mesh");
-    crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut automatic, Some(MODEL));
-    assert_eq!(automatic.model_name.as_deref(), Some(MODEL));
-    assert!(automatic.automatic_route);
-    assert_eq!(
-        super::super::route_model::execution_candidates(&node, MODEL, &automatic, &targets, false)
+    let local = vec![election::InferenceTarget::Local(9337)];
+    let mesh_wide = vec![
+        election::InferenceTarget::Local(9337),
+        election::InferenceTarget::Remote(remote),
+    ];
+    for directive in [Some("mesh"), Some("auto"), None] {
+        let mut automatic = request_with_model(path, directive);
+        crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut automatic, Some(MODEL));
+        assert_eq!(
+            automatic.model_name.as_deref(),
+            Some(MODEL),
+            "{directive:?}: directive rewritten to the resolved model"
+        );
+        assert!(
+            automatic.automatic_route,
+            "{directive:?}: flagged automatic"
+        );
+        assert_eq!(
+            super::super::route_model::execution_candidates(
+                &node, MODEL, &automatic, &targets, false
+            )
             .await,
-        vec![
-            election::InferenceTarget::Local(9337),
-            election::InferenceTarget::Remote(remote)
-        ]
-    );
-    let named = request(path, MODEL);
+            mesh_wide,
+            "{directive:?}: automatic request draws over local and peer"
+        );
+        assert_eq!(
+            super::super::route_model::execution_candidates(
+                &node, MODEL, &automatic, &targets, true
+            )
+            .await,
+            local,
+            "{directive:?}: local-only execution keeps the peer out"
+        );
+    }
+    let mut named = request(path, MODEL);
+    crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut named, Some(MODEL));
     assert!(!named.automatic_route);
     assert_eq!(
         super::super::route_model::execution_candidates(&node, MODEL, &named, &targets, false)
             .await,
-        vec![election::InferenceTarget::Local(9337)]
+        local
     );
 }
 
@@ -305,12 +331,20 @@ async fn peer(
 
 /// Construct a parsed endpoint request without invoking a native model.
 fn request(path: &str, model: &str) -> BufferedHttpRequest {
-    let body = serde_json::json!({
-        "model": model,
+    request_with_model(path, Some(model))
+}
+
+/// Like [`request`]; `None` leaves the `model` field out of the body, the
+/// way a client that relies on automatic routing may send it.
+fn request_with_model(path: &str, model: Option<&str>) -> BufferedHttpRequest {
+    let mut body = serde_json::json!({
         "input": "workload routing regression",
         "user": "workload-session",
         "prompt_cache_key": "workload-cache",
     });
+    if let Some(model) = model {
+        body["model"] = model.into();
+    }
     let bytes = serde_json::to_vec(&body).expect("serialize body");
     BufferedHttpRequest {
         raw: format!("POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", bytes.len(), body).into_bytes(),
@@ -324,7 +358,7 @@ fn request(path: &str, model: &str) -> BufferedHttpRequest {
         body_bytes: Some(bytes),
         completion_tokens: None,
         stream: None,
-        model_name: Some(model.into()),
+        model_name: model.map(Into::into),
         request_object_request_ids: vec![],
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
