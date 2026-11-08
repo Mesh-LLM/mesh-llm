@@ -5291,7 +5291,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 669623296
+          "estimated_model_bytes": 663659568
         },
         "notes": "Pinned modern-format Limite GGUF; real-model three-lane certification pending",
         "class": "causal_generation"

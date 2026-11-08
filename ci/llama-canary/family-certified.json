@@ -1012,7 +1012,7 @@
       "profile": "full",
       "artifact": {"repo": "roshan-soni/limite-1b-violetto-GGUF", "revision": "a8a759e8f227b9ce1b3686c6d015eda920554110", "files": ["limite-1b-violetto.Q4_K_M.gguf"], "file_integrity": {"limite-1b-violetto.Q4_K_M.gguf": {"size_bytes": 669623296, "blob_id": "32562c7301a522f7efac2b023d2acd37c26d6a352a0845ea4dac9bf7d8dd6895"}}, "selector": "Q4_K_M"},
       "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 1280, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 669623296},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 663659568},
       "notes": "Pinned modern-format Limite GGUF; real-model three-lane certification pending"
     },
     {
