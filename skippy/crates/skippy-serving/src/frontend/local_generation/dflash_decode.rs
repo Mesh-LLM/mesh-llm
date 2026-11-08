@@ -39,7 +39,12 @@ const FIRST_BACKOFF_TOKENS: usize = 4;
 const MAX_BACKOFF_TOKENS: usize = 64;
 
 /// Serial tokens decoded before an adaptive request that chose serial decoding
-/// probes with a short block again, so a change in the text can be noticed.
+/// probes with a block again, so a change in the text can be noticed.
+/// Probes alternate between a short block and the longest allowed one: short
+/// probes are cheap where rows are expensive, and long ones measure the
+/// acceptance of later positions, which short probes never reach. Without
+/// them a request that starts serial from pessimistic shared estimates can
+/// stay serial for hundreds of tokens even where long blocks pay.
 const ADAPTIVE_PROBE_INTERVAL: usize = 16;
 const ADAPTIVE_PROBE_DRAFTS: usize = 2;
 
@@ -58,6 +63,7 @@ pub(in crate::frontend) struct AdaptiveBlocks {
     acceptance: Acceptance,
     windows: u64,
     serial_since_probe: usize,
+    probes: u64,
     /// Set when this token was left to a serial step, so the next call can
     /// time it.
     serial_started: Option<Instant>,
@@ -74,6 +80,7 @@ impl AdaptiveBlocks {
             acceptance: shared.acceptance.capped(),
             windows: 0,
             serial_since_probe: 0,
+            probes: 0,
             serial_started: None,
             paused: false,
         }
@@ -131,7 +138,12 @@ impl AdaptiveBlocks {
             return 0;
         }
         self.serial_since_probe = 0;
-        ADAPTIVE_PROBE_DRAFTS.min(limit)
+        self.probes += 1;
+        if self.probes.is_multiple_of(2) {
+            limit
+        } else {
+            ADAPTIVE_PROBE_DRAFTS.min(limit)
+        }
     }
 
     pub(in crate::frontend) fn record(
@@ -458,6 +470,22 @@ mod tests {
         assert!(chosen[..serial - 1].iter().all(|&step| step == (0, true)));
         assert_eq!(chosen[serial - 1], (0, false));
         assert_eq!(chosen[serial], (ADAPTIVE_PROBE_DRAFTS, false));
+    }
+
+    #[test]
+    fn serial_probes_alternate_short_and_full_blocks() {
+        let mut blocks = AdaptiveBlocks::new(PathBuf::from("/test/serial-probe-lengths.gguf"));
+        for rows in [3, 5, 3, 5] {
+            blocks.record(rows, 90_000.0, 0.0, rows - 1, 0);
+        }
+        blocks.cost.observe_serial(10_000.0);
+        blocks.cost.observe_serial(10_000.0);
+
+        let probes: Vec<usize> = (0..4 * ADAPTIVE_PROBE_INTERVAL)
+            .map(|_| blocks.next_drafts(7))
+            .filter(|&drafts| drafts > 0)
+            .collect();
+        assert_eq!(probes, [ADAPTIVE_PROBE_DRAFTS, 7, ADAPTIVE_PROBE_DRAFTS, 7]);
     }
 
     #[test]
