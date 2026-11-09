@@ -1,7 +1,7 @@
-From 1225179bf77ba58aa8b4cf11edabe588dee7fc9f Mon Sep 17 00:00:00 2001
+From fd0584c4b6fd9081584bf913a85349bc0df5b64b Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
-Subject: [PATCH 15/15] skippy: roll back staged verify windows in place
+Subject: [PATCH] skippy: roll back staged verify windows in place
 
 A recurrent verify window of up to n_rs_seq rows rolls back through the
 rollback snapshots instead of a host checkpoint and replay, but staged
@@ -61,11 +61,11 @@ rewind must be refused as unsupported.
  src/skippy/session.cpp                        |  13 +-
  src/skippy/state.cpp                          |  65 ++-
  src/skippy/tests/sampling_history.cpp         |  49 +++
- src/skippy/tests/verify_rollback.cpp          | 390 ++++++++++++++++++
+ src/skippy/tests/verify_rollback.cpp          | 392 ++++++++++++++++++
  src/skippy/verify_window.cpp                  | 213 ++++++++++
  src/skippy/verify_window.h                    |  38 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
- 16 files changed, 935 insertions(+), 79 deletions(-)
+ 16 files changed, 937 insertions(+), 79 deletions(-)
  create mode 100644 src/skippy/tests/verify_rollback.cpp
  create mode 100644 src/skippy/verify_window.cpp
  create mode 100644 src/skippy/verify_window.h
@@ -783,16 +783,18 @@ index 4100856f3..f092b75b0 100644
          }
 diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
 new file mode 100644
-index 000000000..13857a5a8
+index 000000000..f479a8e4e
 --- /dev/null
 +++ b/src/skippy/tests/verify_rollback.cpp
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,392 @@
 +// Speculative verify windows with forced rejections must commit exactly the
 +// tokens a session decodes one at a time, whether each window rolls back in
 +// place through the recurrent rollback snapshots or through a host checkpoint,
 +// and when windows are pipelined: the next window decodes before the previous
 +// one is resolved, and a rejection then lands in the earlier window.
 +#include "skippy.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "../runtime_types.h"
 +
 +#include <cstdio>
@@ -1466,3 +1468,6 @@ index d09acccb4..8d68604c3 100644
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 30, 4, &retired)) return 10;
      return 0;
  }
+-- 
+2.56.0
+
