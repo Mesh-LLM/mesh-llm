@@ -14,8 +14,10 @@ type Seen = Arc<Mutex<Vec<Option<String>>>>;
 fn sink(seen: &Seen) -> SessionEndKvExportSink {
     let seen = Arc::clone(seen);
     Box::new(move |session| {
+        // A failed assertion poisons `seen` while the runtime still owes
+        // this export; dropping the runtime must not then abort the run.
         seen.lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(session.map(|(_, session_id)| session_id.to_string()));
     })
 }
@@ -222,4 +224,84 @@ fn a_panicking_sink_for_a_parked_duplicate_of_a_live_session_keeps_its_lane() {
     let mut free = runtime.free_lane_indices.clone();
     free.sort_unstable();
     assert_eq!(free, vec![0, 1]);
+}
+
+/// Puts `session_id` on a lane with no native state, as a live session.
+fn activate(runtime: &mut RuntimeState, session_id: &str) -> usize {
+    let index = runtime.next_lane_index;
+    runtime.next_lane_index += 1;
+    runtime.sessions.insert(
+        session_id.to_string(),
+        RuntimeLaneSession {
+            index,
+            session: skippy_runtime::StageSession::detached_dflash_for_test(),
+            resident_prefix: None,
+        },
+    );
+    runtime.track_session_tokens_for_test(session_id, 10);
+    index
+}
+
+/// A parked session's cells stay claimed in the shared pool until its
+/// exports run. An operation on another, already active session must run
+/// them and release the lane first, or that session's decode can find the
+/// pool full (`decode: failed to find a memory slot`).
+#[test]
+fn an_operation_on_an_active_session_completes_parked_sessions_first() {
+    let seen = Seen::default();
+    let mut runtime = RuntimeState::new_modelless_for_test(2);
+    activate(&mut runtime, "active");
+    park_with_export(&mut runtime, "parked", sink(&seen));
+    let parked_index = runtime.parked_session_ends[0].lane.index;
+
+    runtime.ensure_session_active("active").unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![Some("parked".to_string())]);
+    assert!(runtime.parked_session_ends.is_empty());
+    assert!(!runtime.sessions.contains_key("parked"));
+    assert!(runtime.free_lane_indices.contains(&parked_index));
+    assert!(runtime.sessions.contains_key("active"));
+}
+
+#[test]
+fn an_active_session_lookup_completes_parked_sessions_first() {
+    let seen = Seen::default();
+    let mut runtime = RuntimeState::new_modelless_for_test(2);
+    activate(&mut runtime, "active");
+    park_with_export(&mut runtime, "parked", sink(&seen));
+
+    let _ = runtime.active_session("active").unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![Some("parked".to_string())]);
+    assert!(runtime.parked_session_ends.is_empty());
+}
+
+/// A sink reaches the runtime through the same session lookup; that must
+/// not start completing the other parked sessions inside it.
+#[test]
+fn a_sink_using_the_runtime_does_not_complete_other_parked_sessions() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = RuntimeState::new_modelless_for_test(2);
+    let first = Arc::clone(&order);
+    park_with_export(
+        &mut runtime,
+        "first",
+        Box::new(move |_| first.lock().unwrap().push("first")),
+    );
+    let second = Arc::clone(&order);
+    park_with_export(
+        &mut runtime,
+        "second",
+        Box::new(move |session| {
+            let (runtime, session_id) = session.expect("rows resident");
+            runtime.ensure_session_active(session_id).unwrap();
+            second.lock().unwrap().push("second");
+        }),
+    );
+
+    runtime.complete_parked_session_ends();
+
+    assert_eq!(*order.lock().unwrap(), vec!["second", "first"]);
+    assert!(runtime.parked_session_ends.is_empty());
+    assert!(!runtime.completing_parked_session_ends);
 }

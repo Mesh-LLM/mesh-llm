@@ -14,8 +14,10 @@
 //! which parks the session with its rows intact instead of dropping it, and
 //! then schedules [`RuntimeState::complete_parked_session_ends`] as a detached
 //! runtime operation, so the copy runs after the response has gone out. Any
-//! lane acquisition completes parked sessions first, so a parked lane is never
-//! counted twice. Every other way a session ends or changes (an error drop, a
+//! operation on a session, including lane acquisition, completes parked
+//! sessions first: a parked lane is never counted twice, and a parked
+//! session's KV cells are released before any other session prefills or
+//! decodes into the shared pool, as they were when sessions were dropped. Every other way a session ends or changes (an error drop, a
 //! restore, an import, a trim below the boundary, a new session under the
 //! same id, panic recovery) abandons the export instead.
 
@@ -90,19 +92,34 @@ impl RuntimeState {
             lane,
             token_count,
         });
-        Ok(RuntimeSessionDropStats {
+        Ok(self.parked_session_stats())
+    }
+
+    fn parked_session_stats(&self) -> RuntimeSessionDropStats {
+        RuntimeSessionDropStats {
             reset_session: false,
             reset_ms: 0.0,
             preserved_resident_prefix: false,
             lane_discarded: false,
             lane_discard_reason: None,
             stats_after: self.session_stats(),
-        })
+        }
     }
 
     /// Run the exports every parked session owes, then drop it.
+    ///
+    /// Every runtime operation on a session calls this first (see
+    /// `RuntimeState::session`), so no prefill, decode or verify runs while a
+    /// parked session still claims its KV cells in the shared pool. Its
+    /// sinks reach the runtime through the same path, so a call made while
+    /// parked sessions are being completed returns at once.
     pub fn complete_parked_session_ends(&mut self) {
+        if self.parked_session_ends.is_empty() || self.completing_parked_session_ends {
+            return;
+        }
+        self.completing_parked_session_ends = true;
         self.finish_parked_session_ends(true);
+        self.completing_parked_session_ends = false;
     }
 
     /// Drop every parked session; `complete` runs their exports first.

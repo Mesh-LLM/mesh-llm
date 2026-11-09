@@ -32,6 +32,8 @@ impl PanicRecovery for RuntimeState {
     /// start on clean lanes.
     fn reset_after_panic(&mut self) {
         // A panic leaves every lane suspect, so no owed export may read one.
+        // A sink that panicked left the completion flag set.
+        self.completing_parked_session_ends = false;
         self.abandon_all_session_end_kv_exports();
         let mut session_ids: Vec<String> = self.sessions.keys().cloned().collect();
         session_ids.extend(self.session_token_counts.keys().cloned());

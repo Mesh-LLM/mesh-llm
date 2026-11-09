@@ -85,6 +85,9 @@ pub struct RuntimeState {
     session_end_kv_exports: BTreeMap<String, Vec<session_end_exports::SessionEndKvExport>>,
     /// Normally ended sessions kept until their exports run.
     parked_session_ends: Vec<session_end_exports::ParkedSessionEnd>,
+    /// Set while parked sessions' exports run, so their own runtime calls do
+    /// not start completing the rest.
+    completing_parked_session_ends: bool,
     #[cfg(test)]
     modelless_for_test: bool,
     /// Lets modelless tests exercise a split DFlash final stage.
@@ -281,6 +284,7 @@ impl RuntimeState {
             dflash_deferred_drafts: BTreeMap::new(),
             session_end_kv_exports: BTreeMap::new(),
             parked_session_ends: Vec::new(),
+            completing_parked_session_ends: false,
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -441,6 +445,7 @@ fn runtime_from_loaded_model(
         dflash_deferred_drafts: BTreeMap::new(),
         session_end_kv_exports: BTreeMap::new(),
         parked_session_ends: Vec::new(),
+        completing_parked_session_ends: false,
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
