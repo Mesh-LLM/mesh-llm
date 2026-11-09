@@ -6,18 +6,29 @@ Subject: [PATCH] test(skippy): cover head-input publication and stage capture
 DeepSeek-V4 publishes the head input as the mean of its hyper-connection
 streams, so the final stage of a split must keep it: its stage capture
 covers target layers 41, 42 and 43 on every stage of an even 2- and
-4-way cut, and llama_layer_inp_published reports it.
+4-way cut, and llama_layer_inp_published reports it. Its verify-rollback
+case runs in native-rollback mode.
 ---
- src/CMakeLists.txt                          |  13 +++
+ src/CMakeLists.txt                          |  16 +++
  src/skippy/tests/graph_build_inputs.cpp     | 112 +++++++++++++++++---
  src/skippy/tests/graph_contract_cases.cmake |  23 ++++
- 3 files changed, 131 insertions(+), 17 deletions(-)
+ 3 files changed, 134 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c2238097e..59140b920 100644
+index c2238097e..d8e31aa55 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -793,6 +793,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -515,6 +515,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     # lfm2's fixture slides its attention window, so it checkpoints every window.
+     add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
+     add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
++    # DeepSeek-V4 rewinds its derived compressor state through its own seq_rm,
++    # within the snapshots of the last decode.
++    add_skippy_verify_rollback_test(deepseek4 deepseek4-moe.gguf native-rollback)
+     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
+     target_include_directories(skippy-sampling-history PRIVATE .)
+     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+@@ -793,6 +796,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_recurrent_rollback PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
  
