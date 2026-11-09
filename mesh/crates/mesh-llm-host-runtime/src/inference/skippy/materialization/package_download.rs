@@ -686,15 +686,16 @@ mod tests {
         .into_iter()
         .map(EnvRestore::capture)
         .collect();
-        // SAFETY: the enclosing tests are `#[serial]`, so these process
-        // environment mutations cannot race another test.
-        unsafe {
-            std::env::set_var("HF_HOME", temp.join("hf"));
-            std::env::set_var("XDG_CACHE_HOME", temp.join("mesh-cache"));
-            std::env::set_var("HF_ENDPOINT", endpoint);
-            std::env::remove_var("HF_HUB_CACHE");
-            std::env::remove_var("HUGGINGFACE_HUB_CACHE");
-            std::env::remove_var("HF_HUB_OFFLINE");
+        // Every caller is `#[serial]`; `restore_env` is this file's audited
+        // mutation site, so the setup goes through it.
+        restore_env("HF_HOME", Some(temp.join("hf").into_os_string()));
+        restore_env(
+            "XDG_CACHE_HOME",
+            Some(temp.join("mesh-cache").into_os_string()),
+        );
+        restore_env("HF_ENDPOINT", Some(OsString::from(endpoint)));
+        for key in ["HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HUB_OFFLINE"] {
+            restore_env(key, None);
         }
         guards
     }
