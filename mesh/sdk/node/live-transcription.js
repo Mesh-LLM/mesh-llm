@@ -24,6 +24,7 @@ class LiveTranscription {
   [Symbol.asyncIterator]() { return this.events() }
 }
 
+/** Opens a session through the native handle, mapping camelCase options to the native wire keys. */
 async function startLiveTranscription(handle, options = {}) {
   const { sampleRate, turnDetection, stepMs, ...rest } = options
   const wire = { ...rest, sample_rate: sampleRate, step_ms: stepMs }

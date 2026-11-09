@@ -6,10 +6,15 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { setTimeout: delay } = require('node:timers/promises')
+const net = require('node:net')
+const dgram = require('node:dgram')
 
+/** sha256-hex digests the given bytes. */
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex')
+/** Writes value as pretty JSON into root/name. */
 const write = (root, name, value) => fs.writeFileSync(path.join(root, name), JSON.stringify(value, null, 2))
 
+/** Resolves the promise or rejects after milliseconds with the operation name. */
 async function bounded(promise, milliseconds, operation) {
   let timer
   try {
@@ -19,6 +24,7 @@ async function bounded(promise, milliseconds, operation) {
   } finally { clearTimeout(timer) }
 }
 
+/** Records the loaded native identity and mapped runtime into evidence. */
 function loadedIdentity(evidence, phase) {
   const expected = fs.realpathSync(process.env.MESHLLM_NODE_NATIVE_PATH)
   assert.equal(digest(fs.readFileSync(expected)), process.env.MESH_SDK_NATIVE_SHA256)
@@ -45,6 +51,7 @@ function loadedIdentity(evidence, phase) {
     symbolAddressIdentity: 'not exposed by this JavaScript API' })
 }
 
+/** Asserts the event stream transcribes the pinned JFK clip exactly once. */
 function assertSpeech(events) {
   const deltas = events.filter(event => event.type === 'delta').map(event => event.text).join('')
   const completed = events.filter(event => event.type === 'completed')
@@ -60,6 +67,7 @@ function assertSpeech(events) {
   }
 }
 
+/** Streams the pinned clip through one live session and asserts its transcript. */
 async function speechSession(node, model, pcm, evidence) {
   const options = { model, sampleRate: 16000, language: 'en', turnDetection: null, stepMs: 400, tentative: true }
   const session = await bounded(node.startLiveTranscription(options), 35000, 'start speech')
@@ -96,6 +104,7 @@ async function speechSession(node, model, pcm, evidence) {
   }
 }
 
+/** Starts an empty session, closes it over a blocked read, and proves the read ends at EOF. */
 async function closeBlockedRead(node, model) {
   const session = await bounded(node.startLiveTranscription({ model }), 35000, 'start blocked session')
   let settled = false
@@ -108,6 +117,28 @@ async function closeBlockedRead(node, model) {
     assert.equal(await bounded(pending, 2000, 'unblocked read'), null)
     assert.equal(await bounded(session.nextEvent(), 2000, 'repeat ended read'), null)
   } finally { await bounded(session.close(), 3000, 'repeat blocked close') }
+}
+
+/** Resolves once the given port can be (re)bound on 127.0.0.1. */
+function bindPort(port, family) {
+  return new Promise((resolve, reject) => {
+    if (family === 'udp4') {
+      const socket = dgram.createSocket('udp4')
+      socket.once('error', reject)
+      socket.bind(port, '127.0.0.1', () => { socket.close(); resolve() })
+      return
+    }
+    const server = net.createServer()
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', () => server.close(() => resolve()))
+  })
+}
+
+/** Rebinds and releases each port the stopped node owned, proving the listeners were released. */
+async function assertPortsRebound(ports) {
+  await bounded(bindPort(ports.API, 'tcp4'), 5000, 'rebind API port')
+  await bounded(bindPort(ports.CONSOLE, 'tcp4'), 5000, 'rebind console port')
+  await bounded(bindPort(ports.BIND, 'udp4'), 5000, 'rebind bind UDP port')
 }
 
 test('actual native speech, discovery, option validation and cancellation', {
@@ -197,6 +228,10 @@ test('actual native speech, discovery, option validation and cancellation', {
     const stopped = !(await bounded(node.status(), 3000, 'stopped node status')).running
     write(evidence, 'cleanup.json', { pid: process.pid, stopped, ports })
     assert.equal(stopped, true)
+    // status().running does not prove the listeners were released; each
+    // owned port must be rebindable before the test can trust cleanup.
+    await assertPortsRebound(ports)
+    write(evidence, 'ports-rebound.json', { pid: process.pid, ports })
     const runtime = process.env.MESH_LLM_RUNTIME_ROOT
     if (fs.existsSync(runtime)) for (const file of fs.readdirSync(runtime, { recursive: true })) {
       if (path.basename(file) === 'skippy-native.log') {
