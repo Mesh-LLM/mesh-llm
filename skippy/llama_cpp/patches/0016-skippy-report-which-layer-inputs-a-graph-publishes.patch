@@ -1,20 +1,31 @@
-From 3bedcf67e7b64ba56c059a06ec7419d5dd1fc6c1 Mon Sep 17 00:00:00 2001
+From 1a469ba388e6631d22e7eae3fdec94cfa3f7a3fa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:18:19 +1100
 Subject: [PATCH] skippy: report published layer inputs including head input
 
 ---
- src/llama-context.cpp | 42 +++++++++++++++++++++++++++++++++++++++++-
- src/llama-context.h   |  4 ++++
+ src/llama-context.cpp | 46 ++++++++++++++++++++++++++++++++++++++++++-
+ src/llama-context.h   |  7 +++++++
  src/llama-ext.h       |  5 +++++
- 3 files changed, 50 insertions(+), 1 deletion(-)
+ 3 files changed, 57 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b5bb1cac5..6830b3637 100644
+index 3257d7f2c..cb68e7e53 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1524,7 +1524,7 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+@@ -25,6 +25,7 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <limits>
++#include <mutex>
+ #include <stdexcept>
+ #include <string>
+ #include <unordered_map>
+@@ -1516,9 +1517,10 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+ }
+ 
  void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
++    std::lock_guard<std::mutex> lock(layer_inp_state_mutex);
      LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
  
 -    GGML_ASSERT(lid < model.hparams.n_layer());
@@ -22,11 +33,20 @@ index b5bb1cac5..6830b3637 100644
  
      if (cparams.embeddings_layer_inp[lid] == enable) return;
      ++computation_generation;
-@@ -3060,6 +3060,42 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
+@@ -2151,6 +2153,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+ int llama_context::decode(
+         const llama_batch_ext & batch_inp,
+         const skippy_graph_build_inputs & graph_build_inputs) {
++    std::lock_guard<std::mutex> lock(layer_inp_state_mutex);
+     if (!memory) {
+         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
+         return encode(batch_inp, graph_build_inputs);
+@@ -3054,6 +3057,43 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
      return true;
  }
  
 +bool llama_context::layer_inp_published(uint32_t lid) {
++    std::lock_guard<std::mutex> lock(layer_inp_state_mutex);
 +    if (lid >= cparams.embeddings_layer_inp.size()) {
 +        return false;
 +    }
@@ -65,7 +85,7 @@ index b5bb1cac5..6830b3637 100644
  ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_tokens,
                                             uint32_t                          n_seqs,
                                             uint32_t                          n_outputs,
-@@ -4946,6 +4982,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
+@@ -4940,6 +4980,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
      ctx->set_embeddings_layer_inp(lid, value);
  }
  
@@ -77,10 +97,18 @@ index b5bb1cac5..6830b3637 100644
      ctx->set_nextn_layer_offset(offset);
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 791072aeb..68b3f056c 100644
+index 791072aeb..f8884668f 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -154,6 +154,10 @@ struct llama_context {
+@@ -14,6 +14,7 @@
+ 
+ #include <array>
+ #include <map>
++#include <mutex>
+ #include <string>
+ #include <vector>
+ 
+@@ -154,6 +155,10 @@ struct llama_context {
      void set_embeddings (bool value);
      void set_embeddings_nextn(bool value, bool masked);
      void set_embeddings_layer_inp(uint32_t lid, bool enable);
@@ -91,6 +119,15 @@ index 791072aeb..68b3f056c 100644
      void set_embeddings_layer_inp_dev(bool value);
  
      // whether decode accepts entries whose embd is a row of ctx_other's layer input device buffer
+@@ -374,6 +379,8 @@ private:
+     const llama_model & model;
+ 
+     llama_cparams cparams;
++    // A publication probe temporarily changes graph inputs on the shared context.
++    std::mutex layer_inp_state_mutex;
+ 
+     const skippy_graph_build_inputs graph_build_inputs;
+     uint64_t computation_generation = 0;
 diff --git a/src/llama-ext.h b/src/llama-ext.h
 index 9449e1da7..2ebc4a2a6 100644
 --- a/src/llama-ext.h

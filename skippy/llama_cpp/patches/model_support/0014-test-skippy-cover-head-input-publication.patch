@@ -1,13 +1,13 @@
-From 4a5ff84a35d79dd95340611c6c38587bd066290e Mon Sep 17 00:00:00 2001
+From 0fb08138b1b7604222e39ead955fb27b22ddb85b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:20:42 +1100
 Subject: [PATCH] test(skippy): cover head-input publication and stage capture
 
 ---
- src/CMakeLists.txt                          | 13 +++
- src/skippy/tests/graph_build_inputs.cpp     | 88 +++++++++++++++++----
- src/skippy/tests/graph_contract_cases.cmake | 10 +++
- 3 files changed, 94 insertions(+), 17 deletions(-)
+ src/CMakeLists.txt                          |  13 +++
+ src/skippy/tests/graph_build_inputs.cpp     | 112 +++++++++++++++++---
+ src/skippy/tests/graph_contract_cases.cmake |  10 ++
+ 3 files changed, 118 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index c2238097e..59140b920 100644
@@ -34,18 +34,20 @@ index c2238097e..59140b920 100644
          NAME skippy_generate_mamba2_fixture
          COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index 511e647f4..bf3385c61 100644
+index 511e647f4..7418c05c5 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
-@@ -11,6 +11,7 @@
+@@ -11,7 +11,9 @@
  #include "skippy/stage_slice_plan.h"
  #include "skippy/stage_realization.h"
  
 +#include <algorithm>
  #include <atomic>
++#include <charconv>
  #include <cmath>
  #include <cstdint>
-@@ -21,6 +22,7 @@
+ #include <cstdio>
+@@ -21,6 +23,7 @@
  #include <memory>
  #include <set>
  #include <stdexcept>
@@ -53,7 +55,7 @@ index 511e647f4..bf3385c61 100644
  #include <thread>
  #include <utility>
  #include <vector>
-@@ -903,8 +905,8 @@ static int check_execution_profile_residency() {
+@@ -903,8 +906,8 @@ static int check_execution_profile_residency() {
  
  // Speculative drafters capture the residual entering each trunk layer. Every
  // layer must publish a finite input row per token, and distinct layers must
@@ -64,7 +66,7 @@ index 511e647f4..bf3385c61 100644
      llama_model_params model_params = llama_model_default_params();
      model_params.n_gpu_layers = 0;
      model_params.load_mtp = true; // the fixture carries a NextN block beside the trunk
-@@ -917,14 +919,15 @@ static int check_layer_inputs(const char * model_path) {
+@@ -917,14 +920,15 @@ static int check_layer_inputs(const char * model_path) {
      }
      const int32_t n_layer = llama_model_n_layer(model);
      const int32_t n_embd = llama_model_n_embd(model);
@@ -82,7 +84,7 @@ index 511e647f4..bf3385c61 100644
          const float * data = llama_get_embeddings_layer_inp(ctx, il);
          if (data == nullptr) {
              std::fprintf(stderr, "layer %d input was not captured\n", il);
-@@ -956,24 +959,67 @@ static int check_layer_inputs(const char * model_path) {
+@@ -956,24 +960,90 @@ static int check_layer_inputs(const char * model_path) {
      return rc;
  }
  
@@ -109,6 +111,22 @@ index 511e647f4..bf3385c61 100644
 +            std::fprintf(stderr, "head input published = %d, expected %d (n_seq_max %u)\n",
 +                    published, expected, n_seq_max);
 +            rc = 143;
++        }
++        if (rc == 0) {
++            std::atomic<bool> start{false};
++            int decode_status = -1;
++            std::thread decoder([&] {
++                while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
++                llama_token token = 1;
++                decode_status = llama_decode(ctx, llama_batch_get_one(&token, 1));
++            });
++            start.store(true, std::memory_order_release);
++            const bool during_decode = llama_layer_inp_published(ctx, n_layer);
++            decoder.join();
++            if (decode_status != 0 || during_decode != expected) {
++                std::fprintf(stderr, "head input probe overlapped a failed decode (n_seq_max %u)\n", n_seq_max);
++                rc = 144;
++            }
 +        }
 +        llama_free(ctx);
 +        if (rc != 0) break;
@@ -138,7 +156,14 @@ index 511e647f4..bf3385c61 100644
 +        const std::string list = targets_csv;
 +        for (size_t pos = 0;;) {
 +            const size_t comma = list.find(',', pos);
-+            targets.push_back(std::stoi(list.substr(pos, comma - pos)));
++            const std::string token = list.substr(pos, comma - pos);
++            int32_t layer = 0;
++            const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), layer);
++            if (error != std::errc{} || end != token.data() + token.size()) {
++                llama_model_free(model);
++                return 130;
++            }
++            targets.push_back(layer);
 +            if (comma == std::string::npos) break;
 +            pos = comma + 1;
 +        }
@@ -158,7 +183,7 @@ index 511e647f4..bf3385c61 100644
      int rc = 0;
      for (const auto & cuts : splits) {
          for (size_t stage = 0; rc == 0 && stage + 1 < cuts.size(); ++stage) {
-@@ -992,7 +1038,8 @@ static int check_stage_layer_inputs(const char * model_path) {
+@@ -992,7 +1062,8 @@ static int check_stage_layer_inputs(const char * model_path) {
              }
              std::vector<int32_t> captured;
              for (int32_t layer : targets) {
@@ -168,7 +193,7 @@ index 511e647f4..bf3385c61 100644
                      captured.push_back(layer);
                      context->set_embeddings_layer_inp(layer, true);
                  }
-@@ -1033,15 +1080,22 @@ int main(int argc, char ** argv) {
+@@ -1033,15 +1104,22 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
@@ -196,10 +221,10 @@ index 511e647f4..bf3385c61 100644
          return rc;
      }
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
-index f78fc55a1..c5e725a9b 100644
+index 0d1bbf6e7..ffa8aa02c 100644
 --- a/src/skippy/tests/graph_contract_cases.cmake
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -146,3 +146,13 @@ add_test(NAME skippy_glm5_next_stage_layer_inputs COMMAND skippy-graph-build-inp
+@@ -135,3 +135,13 @@ add_test(NAME skippy_glm5_next_stage_layer_inputs COMMAND skippy-graph-build-inp
      "${glm5_next_contract_dir}/graph-contract.gguf")
  set_tests_properties(skippy_glm5_next_stage_layer_inputs PROPERTIES
      FIXTURES_REQUIRED contract-glm5-next-synthetic TIMEOUT 900)
