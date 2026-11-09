@@ -39,7 +39,7 @@ fn direct_cases() -> Vec<RunnerCase> {
         (
             vec![
                 ("INPUT_DEPOT_PR_ENABLED", "true"),
-                ("FIXTURE_DATE", "2027-05-09"),
+                ("FIXTURE_DATE", "2026-09-14"),
             ],
             false,
             true,
@@ -47,7 +47,7 @@ fn direct_cases() -> Vec<RunnerCase> {
         (
             vec![
                 ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
-                ("FIXTURE_DATE", "2027-05-09"),
+                ("FIXTURE_DATE", "2026-10-02"),
             ],
             true,
             false,
@@ -111,7 +111,7 @@ fn other_event_cases() -> Vec<RunnerCase> {
                 ("INPUT_EVENT_NAME", "push"),
                 ("INPUT_REF", "refs/heads/main"),
                 ("INPUT_DEPOT_MAIN_ENABLED", "true"),
-                ("FIXTURE_DATE", "2027-05-09"),
+                ("FIXTURE_DATE", "2026-10-02"),
             ],
             true,
             false,
@@ -329,7 +329,7 @@ fn exact_sentinel_ref_does_not_authorize_other_prs_forks_dispatch_or_forced_host
         let mut fields = vec![
             ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
             ("INPUT_DEPOT_PR_ENABLED", "false"),
-            ("FIXTURE_DATE", "2027-05-09"),
+            ("FIXTURE_DATE", "2026-10-02"),
         ];
         fields.extend(extra);
         let output = fixture.selector(&fields);

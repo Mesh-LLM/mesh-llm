@@ -38,7 +38,7 @@ impl Default for Case {
             manual: "false",
             pr: "false",
             force_hosted: "false",
-            date: "2026-11-09",
+            date: "2026-09-03",
             canary_reference: "",
             target: "x86_64-unknown-linux-gnu",
             size: "8",
@@ -358,7 +358,7 @@ fn actual_native_sdk_macos_resolver_preserves_main_hosted_and_direct_pr_provider
 #[test]
 fn actual_sdk_resolvers_preserve_expiry_and_distinguish_exact_canary_cache_authority() {
     for name in workflows() {
-        for date in ["2027-05-09", "2027-05-10"] {
+        for date in ["2026-09-14", "2026-10-04"] {
             assert_selection(
                 name,
                 Case {

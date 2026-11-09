@@ -67,7 +67,7 @@ fn shared_selector_preserves_legacy_approval_independence_and_dispatch_branch_co
         );
     }
     // The global bounded exception has expired, so stale approval data cannot
-    // grant a provider selection on or after the deadline.
+    // grant a provider selection after the deadline.
     selected(
         &[
             ("INPUT_DEPOT_PR_ENABLED", "true"),
@@ -76,17 +76,9 @@ fn shared_selector_preserves_legacy_approval_independence_and_dispatch_branch_co
                 "INPUT_PR_APPROVED_SHA",
                 "0123456789abcdef0123456789abcdef01234567",
             ),
-            ("FIXTURE_DATE", "2027-05-09"),
+            ("FIXTURE_DATE", "2026-09-14"),
         ],
         false,
-        true,
-    );
-    selected(
-        &[
-            ("INPUT_DEPOT_PR_ENABLED", "true"),
-            ("FIXTURE_DATE", "2027-05-08"),
-        ],
-        true,
         true,
     );
     for (main, manual, origin, provider) in [
@@ -114,7 +106,7 @@ fn shared_selector_preserves_legacy_approval_independence_and_dispatch_branch_co
             ("INPUT_REF", "refs/heads/main"),
             ("INPUT_DEPOT_MAIN_ENABLED", "true"),
             ("INPUT_DEPOT_PR_ENABLED", "true"),
-            ("FIXTURE_DATE", "2027-05-09"),
+            ("FIXTURE_DATE", "2026-09-14"),
         ],
         true,
         false,
@@ -177,7 +169,7 @@ fn shared_selector_exact_canary_cannot_bypass_repository_event_or_hosted_control
     selected(
         &[
             ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
-            ("FIXTURE_DATE", "2027-05-09"),
+            ("FIXTURE_DATE", "2026-10-02"),
         ],
         true,
         false,

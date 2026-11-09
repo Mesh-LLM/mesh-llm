@@ -979,7 +979,7 @@ GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 workflow accepts a raw provider label. Trusted main Linux requires
 `DEPOT_RUNNERS_ENABLED=true`. Eligible same-repository PR jobs may use the
 time-bounded exception when `DEPOT_PR_RUNNERS_ENABLED=true`; it expires on
-2027-05-09 UTC. Forks remain hosted. The intended permanent gate
+2026-09-14 UTC. Forks remain hosted. The intended permanent gate
 may cover eligible build/test rows across Linux, Depot macOS 15 and Windows
 2022 when equivalent images/architectures exist; planning/required summaries,
 credential-bearing smokes, `gpu-nvidia` hardware and uncertified Intel macOS

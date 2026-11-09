@@ -2,13 +2,10 @@
 
 Status: **accepted, bounded exception**
 
-- Original decision date: 2026-08-14
-- Extension decision date: 2026-11-09
-- Start: when this reviewed policy update reaches the protected default branch
-- Automatic expiry: 2027-05-09 00:00 UTC
-- Owner: MeshLLM maintainers
+- Decision date: 2026-08-14
+- Automatic expiry: 2026-09-14 00:00 UTC
 - Scope: eligible same-repository `pull_request` merge refs only
-- Objective: reduce PR CI queue time while Depot and GitHub finish stronger
+- Objective: reduce CI iteration time while Depot and GitHub finish stronger
   cache-authority controls
 
 ## Decision
@@ -21,24 +18,6 @@ claim that Depot currently provides branch or pull-request cache isolation.
 The exception does not apply to forks, `pull_request_target`, releases,
 publishing, deployment, credential-bearing smoke jobs, CI-policy changes, or
 jobs outside the existing eligible runner-selection set.
-
-## 2026-11-09 extension
-
-Maintainers extend this bounded exception for six months to relieve the current
-GitHub-hosted macOS PR queue. The protected selector already maps eligible
-same-repository macOS jobs to `depot-macos-15`; no workflow edit or per-PR
-configuration is needed. The repository variable `DEPOT_PR_RUNNERS_ENABLED`
-was verified as `true` on 2026-11-09, so the extension takes effect when this
-reviewed source change reaches the protected default branch.
-
-The gate applies to every eligible executor row across the existing PR lanes,
-including eligible Linux and Windows jobs, rather than macOS alone. Prior
-provider-comparison evidence recorded the macOS and Windows capacity rollback
-threshold. Capacity remains an unresolved risk: if Depot queueing or execution
-crosses that threshold again, immediately set
-`DEPOT_PR_RUNNERS_ENABLED=false` and rerun the same PR revision on GitHub-hosted
-runners. This extension adds no cache-isolation evidence and does not change
-the accepted repository-wide cache risk described below.
 
 ## Findings
 
@@ -143,7 +122,7 @@ With both selectors disabled, the same workflow graph selects GitHub-hosted
 runners. No source, matrix, artifact, command, or required-summary change is
 needed.
 
-The selector fails hosted at the start of 2027-05-09 UTC. Extending the window
+The selector fails hosted at the start of 2026-09-14 UTC. Extending the window
 requires a reviewed source change to the expiry and this decision record; a
 repository variable cannot extend it.
 

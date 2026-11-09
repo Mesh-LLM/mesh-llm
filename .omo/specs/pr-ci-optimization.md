@@ -316,7 +316,7 @@ never provide raw labels or independent remote-cache permission.
 Permanent Depot PR execution is not enabled. The selector has a bounded
 `DEPOT_PR_CANARY_REF` hook for one exact same-repository merge ref. The separate
 temporary exception requires `DEPOT_PR_RUNNERS_ENABLED` and the checked-in
-2027-05-09 UTC deadline. The Quality slice
+2026-09-14 UTC deadline. The Quality slice
 also has a separate `DEPOT_PR_SENTINEL_REF` selector and
 `DEPOT_PR_SENTINEL_ID` validation for one no-checkout authority diagnostic;
 the ordinary Quality jobs still use `DEPOT_PR_CANARY_REF`, and a global PR gate
@@ -392,7 +392,7 @@ the enclosing PR run was later cancelled during cleanup. Trusted-main verify
 restored and exactly validated that poison, then failed its intended expected-
 miss gate. This is unsafe repository-scoped cross-trust authority, not a
 successful isolation result. The temporary exception knowingly accepts it only
-when `DEPOT_PR_RUNNERS_ENABLED=true` and the 2027-05-09 UTC deadline is still
+when `DEPOT_PR_RUNNERS_ENABLED=true` and the 2026-09-14 UTC deadline is still
 active. A provider-isolation redesign and a new successful sentinel are
 required before that exception can become permanent. The exact-SHA five-lane
 candidate, provider-separated comparison, and identical-SHA hosted rollback

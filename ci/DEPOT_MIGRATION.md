@@ -2,7 +2,7 @@
 
 Status: trusted-main support exists. A time-bounded, explicitly accepted
 cache-risk exception permits eligible same-repository PR jobs
-through 2027-05-09 UTC; forks remain hosted. Automatic Depot Cache and Registry Actions connectivity are
+through 2026-09-14 UTC; forks remain hosted. Automatic Depot Cache and Registry Actions connectivity are
 admin-verified off. Those switches remove Depot's direct `DEPOT_CACHE_TOKEN`,
 build-tool cache preconfiguration and Registry Actions authentication from
 fresh runners; they do not provide a documented per-connection/job/ref ACL or
@@ -35,7 +35,7 @@ Depot is a placement provider, not a different CI graph.
   to select Depot. Every eligible role retains a GitHub-hosted fallback.
 - `DEPOT_PR_RUNNERS_ENABLED == 'true'` activates the bounded exception for
   eligible same-repository PR jobs. The checked-in selector expires this path
-  on 2027-05-09 UTC; a missing, false, or expired value fails hosted.
+  on 2026-09-14 UTC; a missing, false, or expired value fails hosted.
 - `DEPOT_PR_CANARY_REF` is an optional, exact
   `refs/pull/<number>/merge` selector for one protected same-repository canary
   ref. It does not enable the global PR gate, does not grant remote cache
@@ -337,7 +337,7 @@ protected workflows must:
 
 Permanent activation still requires every acceptance canary. The temporary
 exception requires `DEPOT_PR_RUNNERS_ENABLED=true` and expires in checked-in
-policy on 2027-05-09 UTC. Roll back immediately by deleting
+policy on 2026-09-14 UTC. Roll back immediately by deleting
 `DEPOT_PR_CANARY_REF` and deleting or setting
 `DEPOT_PR_RUNNERS_ENABLED=false`, then rerun the identical PR plan on hosted
 placement; this changes provider placement only and must leave commands,
