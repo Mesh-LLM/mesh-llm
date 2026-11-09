@@ -251,6 +251,36 @@ ngram_max_proposal_tokens = 6
 }
 
 #[test]
+fn cli_spec_default_override_wins_over_the_config_file() {
+    let mut config: plugin::MeshConfig = toml::from_str(
+        r#"
+[defaults.speculative]
+spec_default = true
+
+[[models]]
+model = "test/model"
+
+[models.speculative]
+spec_default = true
+"#,
+    )
+    .expect("config parses");
+    let mut overrides = plugin::SpeculativeConfig::default();
+    overrides.spec_default = Some(crate::sdk::config::BoolOrAuto::Bool(false));
+
+    apply_runtime_cli_speculative_overrides(&mut config, Some(&overrides));
+
+    let off = Some(crate::sdk::config::BoolOrAuto::Bool(false));
+    let defaults = config
+        .defaults
+        .as_ref()
+        .and_then(|d| d.speculative.as_ref());
+    assert_eq!(defaults.and_then(|s| s.spec_default.clone()), off);
+    let model = config.models[0].speculative.as_ref();
+    assert_eq!(model.and_then(|s| s.spec_default.clone()), off);
+}
+
+#[test]
 fn cli_checkpoint_overrides_are_canonical_and_take_precedence() {
     let temp = tempfile::tempdir().expect("tempdir");
     let imatrix = temp.path().join("test.imatrix");
