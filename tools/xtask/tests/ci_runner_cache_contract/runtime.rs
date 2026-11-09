@@ -39,7 +39,7 @@ fn direct_cases() -> Vec<RunnerCase> {
         (
             vec![
                 ("INPUT_DEPOT_PR_ENABLED", "true"),
-                ("FIXTURE_DATE", "2026-09-14"),
+                ("FIXTURE_DATE", "2027-09-14"),
             ],
             false,
             true,
