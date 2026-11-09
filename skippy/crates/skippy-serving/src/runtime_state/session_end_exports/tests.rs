@@ -89,6 +89,25 @@ fn a_trim_abandons_only_the_exports_whose_rows_it_removes() {
 }
 
 #[test]
+fn the_longest_export_runs_first() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = RuntimeState::new_modelless_for_test(1);
+    runtime.track_session_tokens_for_test("request", 130);
+    for boundary in [100, 120, 110] {
+        let order = Arc::clone(&order);
+        runtime.export_kv_at_session_end(
+            "request",
+            boundary,
+            Box::new(move |_| order.lock().unwrap().push(boundary)),
+        );
+    }
+
+    runtime.complete_session_end_kv_exports("request");
+
+    assert_eq!(*order.lock().unwrap(), vec![120, 110, 100]);
+}
+
+#[test]
 fn a_restore_abandons_the_export() {
     let seen = Seen::default();
     let mut runtime = runtime_owing_export(130, 100, &seen);

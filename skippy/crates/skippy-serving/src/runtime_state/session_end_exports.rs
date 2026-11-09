@@ -134,10 +134,16 @@ impl RuntimeState {
     }
 
     /// Run every export `session_id` owes while its rows are resident.
+    ///
+    /// The longest runs first. The exports run back to back, so the recorder
+    /// is usually still storing the first when the next asks for admission,
+    /// and a best-effort one is then declined. The longest prefix is the one
+    /// the session's next turn can restore the most of.
     fn complete_session_end_kv_exports(&mut self, session_id: &str) {
-        let Some(exports) = self.session_end_kv_exports.remove(session_id) else {
+        let Some(mut exports) = self.session_end_kv_exports.remove(session_id) else {
             return;
         };
+        exports.sort_by_key(|export| std::cmp::Reverse(export.token_count));
         for export in exports {
             if self.has_session_range(session_id, 0, export.token_count) {
                 (export.sink)(Some((self, session_id)));
