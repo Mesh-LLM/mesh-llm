@@ -23,6 +23,8 @@ env:
 
 jobs:
   ownership-state-machines:
+    # MESH_NIGHTLY_KV_COVERAGE_ENABLED gates the daily schedule again once it
+    # is restored; workflow_dispatch ignores it.
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_KV_COVERAGE_ENABLED != '0' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
