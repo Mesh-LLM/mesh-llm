@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -26,7 +27,6 @@ use mesh_llm_sdk::native_runtime::{self, NativeRuntimeManifest, RuntimeSelection
 use mesh_llm_sdk::{MeshNode, MeshNodeBuilder};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 const PCM_SHA256: &str = "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9";
@@ -679,6 +679,22 @@ fn assert_transcript(inputs: &Inputs, events: &[LiveTranscriptionEvent]) -> Resu
         .collect::<String>();
     ensure!(deltas == text, "Delta/completed mismatch");
     ensure!(events.iter().any(|event| matches!(event, LiveTranscriptionEvent::Tentative { text, .. } if !text.trim().is_empty())), "Missing tentative text");
+    // The clip was sent at the 400 ms cadence `options` requested: about
+    // 27 passes read 11 s of audio, versus about 12 at the 1000 ms default.
+    // Each pass that changes the unconfirmed tail reports a tentative event,
+    // so a healthy 400 ms run cannot stay at the default's reading count.
+    let tentative = events
+        .iter()
+        .filter(|event| matches!(event, LiveTranscriptionEvent::Tentative { .. }))
+        .count();
+    ensure!(
+        tentative >= 15,
+        "Expected the 400 ms cadence to out-read the 1000 ms default; saw {tentative} tentative readings"
+    );
+    inputs.write(
+        "cadence.json",
+        &json!({"step_ms": 400, "tentative_events": tentative}),
+    )?;
     ensure!(
         !events
             .iter()
@@ -732,6 +748,18 @@ fn assert_transcript(inputs: &Inputs, events: &[LiveTranscriptionEvent]) -> Resu
     Ok(())
 }
 
+/// A no-op waker for observing one poll of a read that must report
+/// `Poll::Pending` without registering a real wake-up.
+fn noop_raw_waker() -> std::task::RawWaker {
+    const VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
+        |data| std::task::RawWaker::new(data, &VTABLE),
+        |_| {},
+        |_| {},
+        |_| {},
+    );
+    std::task::RawWaker::new(std::ptr::null(), &VTABLE)
+}
+
 async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> Result<()> {
     let live = bounded(
         35,
@@ -740,36 +768,29 @@ async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> R
     )
     .await??;
     let session = Arc::new(LiveTranscriptionSession::new(live));
-    let inbound = Arc::clone(&session);
-    let (entered, started) = oneshot::channel();
-    let mut reader = tokio::spawn(async move {
-        let _ = entered.send(());
-        inbound.next_event().await
-    });
-    let outcome = async {
-        bounded(2, "reader entered", started).await??;
-        // No audio was sent, so the reader has nothing to return until close.
-        // EOF from the close below, not any earlier event, is the proof.
-        ensure!(!reader.is_finished(), "Empty reader must be pending before cancellation");
-        // Rust cancels this session by close, not by aborting a recv future.
-        bounded(3, "cancel pending read", session.close()).await?;
-        let event = bounded(3, "cancelled reader EOF", &mut reader).await??;
-        ensure!(event.is_none(), "Close must unblock the pending reader at EOF");
-        inputs.write("cancellation.json", &json!({"collector_started": true, "pending_at_close": true,
-            "cancellation_api": "LiveTranscriptionSession::close", "pending_reader_returned_eof": true}))?;
-        Ok::<(), anyhow::Error>(())
-    }.await;
-    let closed = bounded(5, "repeat cancellation close", session.close()).await;
-    if !reader.is_finished()
-        && bounded(3, "fallback reader join", &mut reader)
-            .await
-            .is_err()
-    {
-        reader.abort();
-        let _ = reader.await;
-    }
-    outcome?;
-    closed?;
+    // No audio was sent, so the first read blocks in the session's event
+    // channel. One poll observes that pending state on the read itself; a
+    // spawned-task marker would only prove the task started.
+    let mut read = Box::pin(session.next_event());
+    let waker = unsafe { std::task::Waker::from_raw(noop_raw_waker()) };
+    let mut context = std::task::Context::from_waker(&waker);
+    ensure!(
+        matches!(read.as_mut().poll(&mut context), Poll::Pending),
+        "The native read must be pending before cancellation, not return an early event"
+    );
+    // Rust cancels this session by close, not by aborting a recv future.
+    bounded(3, "cancel pending read", session.close()).await?;
+    let event = bounded(3, "cancelled reader EOF", &mut read).await?;
+    ensure!(
+        event.is_none(),
+        "Close must unblock the pending read at EOF"
+    );
+    inputs.write(
+        "cancellation.json",
+        &json!({"pending_observed": "Poll::Pending on the next_event read",
+        "cancellation_api": "LiveTranscriptionSession::close",
+        "pending_reader_returned_eof": true}),
+    )?;
     bounded(3, "second cancellation close", session.close()).await?;
     ensure!(
         bounded(2, "repeat cancelled read", session.next_event())
