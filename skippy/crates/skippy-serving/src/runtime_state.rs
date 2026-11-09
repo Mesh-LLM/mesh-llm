@@ -90,6 +90,9 @@ pub struct RuntimeState {
     /// Lets modelless tests exercise a split DFlash final stage.
     #[cfg(test)]
     pub(crate) dflash_drafts_for_test: bool,
+    /// Lets modelless tests stand in for a stage with a sliding-window cache.
+    #[cfg(test)]
+    pub(crate) sliding_window_kv_for_test: bool,
 }
 
 /// What a split DFlash final stage needs to draft the block after a verify
@@ -283,6 +286,7 @@ impl RuntimeState {
             compute_meter: Arc::default(),
             modelless_for_test: true,
             dflash_drafts_for_test: false,
+            sliding_window_kv_for_test: false,
         }
     }
 
@@ -444,6 +448,8 @@ fn runtime_from_loaded_model(
         modelless_for_test: false,
         #[cfg(test)]
         dflash_drafts_for_test: false,
+        #[cfg(test)]
+        sliding_window_kv_for_test: false,
     })))
 }
 

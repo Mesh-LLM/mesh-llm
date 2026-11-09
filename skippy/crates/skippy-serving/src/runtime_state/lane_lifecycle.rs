@@ -404,6 +404,20 @@ impl RuntimeState {
             .kv_page_size(layer_start, layer_end, token_start, token_count)
     }
 
+    /// The layout [`Self::export_kv_page`] would describe, without copying.
+    pub fn kv_page_layout(
+        &mut self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<RuntimeKvPageDesc> {
+        self.validate_export_range(session_id, token_start, token_count)?;
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        self.session(session_id)?
+            .kv_page_layout(layer_start, layer_end, token_start, token_count)
+    }
+
     pub fn probe_kv_page(
         &mut self,
         session_id: &str,

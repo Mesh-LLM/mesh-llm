@@ -6,7 +6,9 @@
 //! the boundary do not change while the session lives (decode appends, and
 //! speculative rollback never reaches below the prompt), so copying them,
 //! which takes seconds at long context, waits until the session ends instead
-//! of holding the runtime while the request decodes.
+//! of holding the runtime while the request decodes. A sliding-window cache
+//! breaks that premise, so a stage with one captures immediately; see
+//! [`RuntimeState::kv_rows_stay_resident`].
 //!
 //! A request that ends normally calls [`RuntimeState::end_session_timed`],
 //! which parks the session with its rows intact instead of dropping it, and
@@ -39,6 +41,23 @@ pub(crate) struct ParkedSessionEnd {
 }
 
 impl RuntimeState {
+    /// Whether rows `[0, token_count)` of `session_id` stay resident until
+    /// the session ends, which deferring their export relies on.
+    ///
+    /// Full-attention and recurrent memories only append while a session
+    /// decodes. A sliding-window cache may reuse the cells that fall out of
+    /// the window, whatever its size (`swa_full` only sizes it), so a session
+    /// with one does not qualify, and neither does one whose page layout
+    /// cannot be read.
+    pub(crate) fn kv_rows_stay_resident(&mut self, session_id: &str, token_count: u64) -> bool {
+        #[cfg(test)]
+        if self.modelless_for_test {
+            return !self.sliding_window_kv_for_test;
+        }
+        self.kv_page_layout(session_id, 0, token_count)
+            .is_ok_and(|layout| !layout.has_sliding_window_component())
+    }
+
     /// Run `sink` when the session ends, while its KV rows
     /// `[0, token_count)` are still resident.
     pub(crate) fn export_kv_at_session_end(

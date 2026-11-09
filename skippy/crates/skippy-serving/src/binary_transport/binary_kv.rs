@@ -5,7 +5,9 @@ use std::{
 };
 
 use crate::{
-    kv_integration::{ExactStateKvExport, KvStageIntegration, PrefillKvIdentity},
+    kv_integration::{
+        ExactStateKvExport, KvStageIntegration, PrefillKvIdentity, SessionEndCapture,
+    },
     runtime_state::RuntimeState,
     telemetry::{Telemetry, lifecycle_attrs},
 };
@@ -844,51 +846,29 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
         let token_count_usize = usize::try_from(identity.identity.token_count)
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
-        if exact_state_record_allowed
-            && token_count_usize == token_ids.len()
-            && kv_export == ExactStateKvExport::AtSessionEnd
-        {
-            match kv.record_exact_state_at_session_end(
-                runtime,
-                session_id,
-                &identity,
-                crate::kv_integration::CaptureAdmission::BestEffort,
-                None,
-                true,
-            ) {
-                Ok(true) => {
-                    result.recorded_pages = result.recorded_pages.saturating_add(1);
-                    result.recorded_tokens = result
-                        .recorded_tokens
-                        .saturating_add(identity.identity.token_count);
-                    attrs.insert(
-                        "skippy.exact_cache.recorded_page_id".to_string(),
-                        json!(identity.page_id),
-                    );
-                    attrs.insert(
-                        "skippy.exact_cache.deferred_to_session_end".to_string(),
-                        json!(true),
-                    );
-                    if !kv.records_resident_prefixes() {
-                        continue;
-                    }
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    attrs.insert(
-                        "skippy.exact_cache.record_error_class".to_string(),
-                        json!(crate::kv_integration::telemetry_error_class(&error)),
-                    );
-                }
-            }
-        } else if exact_state_record_allowed && token_count_usize == token_ids.len() {
-            match kv.record_exact_state(
-                runtime,
-                session_id,
-                &identity,
-                crate::kv_integration::CaptureAdmission::BestEffort,
-            ) {
-                Ok(Some(record)) => {
+        if exact_state_record_allowed && token_count_usize == token_ids.len() {
+            let captured = match kv_export {
+                ExactStateKvExport::AtSessionEnd => kv.record_exact_state_at_session_end(
+                    runtime,
+                    session_id,
+                    &identity,
+                    crate::kv_integration::CaptureAdmission::BestEffort,
+                    None,
+                    true,
+                ),
+                ExactStateKvExport::Now => kv
+                    .record_exact_state(
+                        runtime,
+                        session_id,
+                        &identity,
+                        crate::kv_integration::CaptureAdmission::BestEffort,
+                    )
+                    .map(|record| {
+                        record.map_or(SessionEndCapture::Skipped, SessionEndCapture::Recorded)
+                    }),
+            };
+            match captured {
+                Ok(SessionEndCapture::Recorded(record)) => {
                     result.recorded_pages = result.recorded_pages.saturating_add(1);
                     result.recorded_tokens = result
                         .recorded_tokens
@@ -923,7 +903,22 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
                         continue;
                     }
                 }
-                Ok(None) => {}
+                // Not counted as recorded: the record is queued only if the
+                // session ends normally and session-end admission takes it.
+                Ok(SessionEndCapture::Deferred) => {
+                    attrs.insert(
+                        "skippy.exact_cache.deferred_page_id".to_string(),
+                        json!(identity.page_id),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.deferred_to_session_end".to_string(),
+                        json!(true),
+                    );
+                    if !kv.records_resident_prefixes() {
+                        continue;
+                    }
+                }
+                Ok(SessionEndCapture::Skipped) => {}
                 Err(error) => {
                     attrs.insert(
                         "skippy.exact_cache.record_error_class".to_string(),

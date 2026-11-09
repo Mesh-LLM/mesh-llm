@@ -1,4 +1,5 @@
 use super::*;
+use crate::kv_integration::SessionEndCapture;
 
 /// Owns one unit of the test-only outstanding-capture counter for a single
 /// detached capture task. Construction increments the counter, so the unit is
@@ -257,8 +258,16 @@ impl StageOpenAiBackend {
             );
             let mut attrs = self.openai_attrs(ids);
             let decision = match &pending {
-                Ok(true) => "deferred_to_session_end",
-                Ok(false) => "record_none",
+                Ok(SessionEndCapture::Deferred) => "deferred_to_session_end",
+                Ok(SessionEndCapture::Recorded(record)) => {
+                    attrs.insert(
+                        "skippy.exact_cache.recorded_page_id".to_string(),
+                        json!(record.page_id),
+                    );
+                    attrs.insert("skippy.exact_cache.queued".to_string(), json!(true));
+                    "recorded"
+                }
+                Ok(SessionEndCapture::Skipped) => "record_none",
                 Err(error) => {
                     attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
                     "error"
@@ -274,7 +283,10 @@ impl StageOpenAiBackend {
             );
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
-            return matches!(pending, Ok(true));
+            return matches!(
+                pending,
+                Ok(SessionEndCapture::Deferred | SessionEndCapture::Recorded(_))
+            );
         }
         match kv.record_exact_state_with_cost_and_durability(
             runtime,

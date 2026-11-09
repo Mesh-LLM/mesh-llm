@@ -2073,6 +2073,22 @@ mod reserved_admission_harness {
     /// record_exact_state releases its real credit when the radix lock is
     /// busy: the capture is skipped without waiting and the inflight page is
     /// released.
+    /// A sliding-window cache can reuse rows below the boundary before the
+    /// session ends, so its stage copies them with the recurrent state.
+    #[test]
+    fn a_sliding_window_stage_does_not_defer_its_kv_copy() {
+        let (kv, _) = harness();
+        assert_eq!(
+            kv.exact_state_payload(),
+            Some(StagePrefixCachePayload::KvRecurrent)
+        );
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        assert!(kv.defers_kv_copy(&mut runtime, SESSION, 3));
+
+        runtime.sliding_window_kv_for_test = true;
+        assert!(!kv.defers_kv_copy(&mut runtime, SESSION, 3));
+    }
+
     #[test]
     fn record_exact_state_releases_credit_when_radix_is_busy() {
         let (kv, config) = harness();

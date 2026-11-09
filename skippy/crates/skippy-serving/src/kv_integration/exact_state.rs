@@ -72,6 +72,18 @@ pub(crate) enum ExactStateKvExport {
     AtSessionEnd,
 }
 
+/// What [`KvStageIntegration::record_exact_state_at_session_end`] did.
+#[derive(Debug)]
+pub(crate) enum SessionEndCapture {
+    /// Nothing will be recorded.
+    Skipped,
+    /// Captured whole now and queued for the recorder.
+    Recorded(ExactStateRecord),
+    /// The recurrent state is captured; the KV rows are copied and the record
+    /// queued when the session ends, if it ends normally.
+    Deferred,
+}
+
 /// Total in-flight exact-state payloads per stage — exporting, queued in the
 /// recorder channel, or held by the recorder worker. Sized as channel
 /// capacity (1) plus one worker-held record.
@@ -615,15 +627,15 @@ impl KvStageIntegration {
     /// Copying the KV rows takes seconds at long context and holds the runtime,
     /// so on the split decode path it stalled every token behind it. The rows
     /// below the boundary do not change while the session lives, so the
-    /// recorded payload is the same bytes either way.
+    /// recorded payload is the same bytes either way. A stage whose rows can
+    /// change (a sliding-window cache, see
+    /// [`RuntimeState::kv_rows_stay_resident`]) captures now instead.
     ///
     /// The recurrent copy held until then is reserved against host memory
     /// now, and the capture is skipped if it does not fit. Admission, the
     /// recorder slot and the snapshot reservation are taken when the session
     /// ends. The record is lost if the session is restored, imported into,
     /// trimmed below the boundary or recovered from a panic before it ends.
-    ///
-    /// Returns whether a capture is pending.
     pub(crate) fn record_exact_state_at_session_end(
         self: &Arc<Self>,
         runtime: &mut RuntimeState,
@@ -632,8 +644,9 @@ impl KvStageIntegration {
         admission: CaptureAdmission,
         l3_cost: Option<skippy_cache::policy::CostSample>,
         write_through_l3: bool,
-    ) -> Result<bool> {
-        if self.exact_state_payload() != Some(StagePrefixCachePayload::KvRecurrent) {
+    ) -> Result<SessionEndCapture> {
+        let token_count = identity.identity.token_count;
+        if !self.defers_kv_copy(runtime, session_id, token_count) {
             return self
                 .record_exact_state_with_cost_and_durability(
                     runtime,
@@ -643,16 +656,17 @@ impl KvStageIntegration {
                     l3_cost,
                     write_through_l3,
                 )
-                .map(|record| record.is_some());
+                .map(|record| {
+                    record.map_or(SessionEndCapture::Skipped, SessionEndCapture::Recorded)
+                });
         }
-        let token_count = identity.identity.token_count;
         if !self.should_record() || token_count < self.checkpoint_policy.min_tokens {
-            return Ok(false);
+            return Ok(SessionEndCapture::Skipped);
         }
         let Some(retained_reservation) =
             self.reserve_retained_recurrent_host_memory(runtime, session_id, token_count)
         else {
-            return Ok(false);
+            return Ok(SessionEndCapture::Skipped);
         };
         let recurrent = match runtime.export_recurrent_state(session_id) {
             Ok(recurrent) => recurrent,
@@ -702,7 +716,20 @@ impl KvStageIntegration {
                 );
             }),
         );
-        Ok(true)
+        Ok(SessionEndCapture::Deferred)
+    }
+
+    /// Whether a capture of `session_id` at `token_count` may copy its KV
+    /// rows when the session ends: only a KV-plus-recurrent payload splits
+    /// its copy, and only rows that stay resident until then can wait.
+    pub(super) fn defers_kv_copy(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        token_count: u64,
+    ) -> bool {
+        self.exact_state_payload() == Some(StagePrefixCachePayload::KvRecurrent)
+            && runtime.kv_rows_stay_resident(session_id, token_count)
     }
 
     /// Gate a capture and take its admission credit. `None` when nothing
