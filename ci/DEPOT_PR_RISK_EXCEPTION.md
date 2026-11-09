@@ -3,7 +3,7 @@
 Status: **accepted, bounded exception**
 
 - Decision date: 2026-08-14
-- Automatic expiry: 2026-09-14 00:00 UTC
+- Automatic expiry: 2027-09-14 00:00 UTC (extended from 2026-09-14)
 - Scope: eligible same-repository `pull_request` merge refs only
 - Objective: reduce CI iteration time while Depot and GitHub finish stronger
   cache-authority controls
@@ -122,7 +122,7 @@ With both selectors disabled, the same workflow graph selects GitHub-hosted
 runners. No source, matrix, artifact, command, or required-summary change is
 needed.
 
-The selector fails hosted at the start of 2026-09-14 UTC. Extending the window
+The selector fails hosted at the start of 2027-09-14 UTC. Extending the window
 requires a reviewed source change to the expiry and this decision record; a
 repository variable cannot extend it.
 
