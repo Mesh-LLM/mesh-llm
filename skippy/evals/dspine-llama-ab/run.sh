@@ -104,7 +104,7 @@ run_arm() {
     sleep 5
   done
   [ "$up" = 1 ] || { echo "server for arm $arm did not come up; see $ART/server-$arm.log" >&2; return 1; }
-  python3 "$HERE/measure.py" "$PORT" "$arm" "$HERE/prompts.jsonl" "$LIMIT" | tee "$ART/arm-$arm.log"
+  bash "$HERE/measure.sh" "$PORT" "$arm" "$HERE/prompts.jsonl" "$LIMIT" | tee "$ART/arm-$arm.log"
   stop_server
   gpu_state "$arm-after"
 }
