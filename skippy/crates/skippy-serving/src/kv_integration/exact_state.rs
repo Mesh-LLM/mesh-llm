@@ -565,6 +565,7 @@ impl KvStageIntegration {
             admission,
             l3_cost.as_ref(),
             write_through_l3,
+            None,
         )?
         else {
             return Ok(None);
@@ -684,6 +685,7 @@ impl KvStageIntegration {
                 let Some((runtime, session_id)) = session else {
                     return;
                 };
+                // The snapshot reservation takes over the recurrent copy's.
                 let Ok(Some((_, admission_credit))) = kv.begin_exact_state_capture(
                     runtime,
                     session_id,
@@ -691,11 +693,10 @@ impl KvStageIntegration {
                     admission,
                     l3_cost.as_ref(),
                     write_through_l3,
+                    retained_reservation,
                 ) else {
                     return;
                 };
-                // The snapshot reservation now covers the recurrent copy.
-                drop(retained_reservation);
                 let exported = match runtime.export_kv_page(session_id, 0, token_count) {
                     Ok(page) => Ok((page.payload, Some(page.desc))),
                     Err(error) if is_native_kv_unavailable(&error) => Ok((Vec::new(), None)),
@@ -734,6 +735,10 @@ impl KvStageIntegration {
 
     /// Gate a capture and take its admission credit. `None` when nothing
     /// should be recorded; the page is then not marked in flight.
+    ///
+    /// `retained` is this capture's reservation for a recurrent copy it
+    /// already holds; the snapshot reservation takes it over.
+    #[allow(clippy::too_many_arguments)]
     fn begin_exact_state_capture(
         &self,
         runtime: &mut RuntimeState,
@@ -742,6 +747,7 @@ impl KvStageIntegration {
         admission: CaptureAdmission,
         l3_cost: Option<&skippy_cache::policy::CostSample>,
         write_through_l3: bool,
+        retained: Option<snapshot_headroom::SnapshotReservation>,
     ) -> Result<Option<(StagePrefixCachePayload, ExactStateAdmissionCredit)>> {
         let Some(exact_state_payload) = self.exact_state_payload() else {
             return Ok(None);
@@ -824,6 +830,7 @@ impl KvStageIntegration {
             session_id,
             exact_state_payload,
             token_count,
+            retained,
         ) else {
             self.finish_record(&identity.page_id);
             return Ok(None);
