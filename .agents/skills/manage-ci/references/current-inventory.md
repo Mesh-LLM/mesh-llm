@@ -1057,11 +1057,8 @@ Release host producers use `upload-automation` to publish one immutable xtask
 per OS/architecture and source SHA. Every release composer has its host producer
 in `needs` and uses `restore-automation` to verify checksums/source identity and
 export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap.
-Composition is not fully offline: on macOS and Linux, `package-release.sh`
-fetches each default plugin archive the host pins (`repository bundled-plugins`)
-from that plugin's GitHub release over HTTPS, checks it against the pinned
-SHA-256, places it under `plugins/`, and runs `repository bundled-plugins-check`
-with the composed host. The shared
+Composition is fully offline: `package-release.sh` places no plugins in any
+bundle. The shared
 artifact actions remain reusable; L2 bare-hosted callers use hosted-bare preparation.
 Windows release composers no longer use `prepare-automation`; the release workflow has
 no setup-python steps. Runtime-package verification embeds the GLIBC policy
