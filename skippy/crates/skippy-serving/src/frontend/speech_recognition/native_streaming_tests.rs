@@ -286,21 +286,34 @@ fn phrase_occurrences(text: &str, phrase: &str) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires pinned Tiny/JFK PCM fixtures, a packaged Metal runtime, and SKIPPY_ASR_TRACE_PATH; takes 44 seconds"]
+#[ignore = "requires pinned Tiny/JFK PCM fixtures, a packaged Metal runtime, and a SKIPPY_ASR_TRACE_PATH base directory; takes 44 seconds"]
 async fn cold_metal_live_session_preserves_four_paced_utterances() {
-    run_paced_session(None).await;
+    run_paced_session(
+        "cold_metal_live_session_preserves_four_paced_utterances",
+        None,
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires pinned Tiny/JFK PCM fixtures and packaged Metal; holds callback 28 for an exact two-second audio backlog"]
 async fn cold_metal_live_session_preserves_utterances_after_one_backlog() {
-    run_paced_session(Some(Arc::new(ExactBacklog::default()))).await;
+    run_paced_session(
+        "cold_metal_live_session_preserves_utterances_after_one_backlog",
+        Some(Arc::new(ExactBacklog::default())),
+    )
+    .await;
 }
 
-async fn run_paced_session(backlog: Option<Arc<ExactBacklog>>) {
-    let path = std::env::var_os("SKIPPY_ASR_TRACE_PATH").expect("set SKIPPY_ASR_TRACE_PATH");
+async fn run_paced_session(name: &str, backlog: Option<Arc<ExactBacklog>>) {
+    // SKIPPY_ASR_TRACE_PATH is a base directory: each test writes its own
+    // file under it, so parallel ignored runs cannot truncate one
+    // another's records.
+    let base = std::env::var_os("SKIPPY_ASR_TRACE_PATH").expect("set SKIPPY_ASR_TRACE_PATH");
+    let base = std::path::PathBuf::from(base);
+    std::fs::create_dir_all(&base).unwrap();
     let trace = Arc::new(LiveTrace {
-        file: Mutex::new(File::create(path).unwrap()),
+        file: Mutex::new(File::create(base.join(format!("{name}.jsonl"))).unwrap()),
         started: Instant::now(),
         pass: AtomicUsize::new(0),
         sent_samples: AtomicUsize::new(0),
