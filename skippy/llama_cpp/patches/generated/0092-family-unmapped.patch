@@ -290,10 +290,10 @@ index c6a6d6a97521fa8cfee3c8073e7ccfd9ff594108..a88cb1dd2e3636258be19c27b6102b50
      cur = inpL;
  
 diff --git a/src/models/deepseek41.cpp b/src/models/deepseek41.cpp
-index ea24f6a7a3b67f770c05fec50652095861d0a898..5bc1edf3f531c91f4a653ce77015c0a09ee19cc6 100644
+index f46502cab041db093911fcfad3a600ce820287b1..fbec8fd3ebed9bd16df536e326c7bc79b281ddee 100644
 --- a/src/models/deepseek41.cpp
 +++ b/src/models/deepseek41.cpp
-@@ -831,6 +831,8 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+@@ -834,6 +834,8 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
      ggml_tensor * pre_prev = nullptr;
  
      for (int il = 0; il < n_layer; ++il) {
@@ -302,7 +302,7 @@ index ea24f6a7a3b67f770c05fec50652095861d0a898..5bc1edf3f531c91f4a653ce77015c0a0
          const auto & layer = model.layers[il];
  
          const int e = model.engram_index(il);
-@@ -913,6 +915,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+@@ -916,6 +918,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
          inpL = build_hc_post(cur, residual, ffn_mix.post, ffn_mix.comb, il);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_out", il);

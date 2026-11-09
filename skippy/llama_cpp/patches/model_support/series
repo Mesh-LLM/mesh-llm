@@ -15,3 +15,4 @@
 0015-tests-model-kolibri-biased-logit-router-fixture.patch
 0016-models-admit-legacy-clover-shared-expert-metadata.patch
 0017-test-skippy-cover-head-input-publication.patch
+0018-models-register-deepseek41-request-inputs.patch
