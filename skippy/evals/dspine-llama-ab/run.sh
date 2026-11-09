@@ -6,13 +6,17 @@
 # same target, same prompts, greedy, 256 tokens, concurrency 1. Draft arms use
 # the full 15-token block (block_size 16 minus the anchor row).
 #
-#   off     no draft
-#   dflash  z-lab/Qwen3-8B-DFlash-b16 converted to GGUF (plain DFlash, block 16)
-#   dspine  tencent/Qwen3-8B-DSpine-b16 converted to GGUF (DSpine, block 16,
-#           Ajay9o9 layout detected via dflash.selector_top_k on the DFlash2 path)
+#   off        no draft
+#   dflash     z-lab/Qwen3-8B-DFlash-b16 converted to GGUF (plain DFlash, block 16)
+#   dspine     tencent/Qwen3-8B-DSpine-b16 converted to GGUF (DSpine, block 16,
+#              Ajay9o9 layout detected via dflash.selector_top_k on the DFlash2 path)
+#   dspine16   clamp smoke test: requests n_max 16, runtime clamps to 15
+#   dspine-q8  dspine with a Q8_0 draft
+#   dspine-p05 / dspine-p10  walk early-exit sweep (--spec-draft-p-min)
 #
 # Both drafts were converted from the pinned upstream revisions with the
-# repo's converter (conversion/qwen.py), BF16, --target-model-dir Qwen/Qwen3-8B.
+# prepared tree's convert_hf_to_gguf.py (converter in conversion/qwen.py),
+# BF16, --target-model-dir Qwen/Qwen3-8B.
 #
 # Env:
 #   ARMS     space-separated arms            (default: "off dflash dspine")
@@ -30,6 +34,15 @@ mkdir -p "$W/models" "$ART"
 ARMS="${ARMS:-off dflash dspine}"
 LIMIT="${LIMIT:-0}"
 CTX=8192
+
+# Validate the full arm list before any weight download, so a typo fails fast
+# instead of fetching gigabytes first.
+for arm in $ARMS; do
+  case "$arm" in
+    off|dflash|dspine|dspine16|dspine-q8|dspine-p05|dspine-p10) ;;
+    *) echo "unknown arm: $arm (supported: off dflash dspine dspine16 dspine-q8 dspine-p05 dspine-p10)" >&2; exit 1;;
+  esac
+done
 
 # --- weights -----------------------------------------------------------------
 
@@ -60,8 +73,10 @@ fetch() { # fetch <url> <sha256> <dest>
 echo "=== fetch + verify weights"
 fetch "$TARGET_URL" "$TARGET_SHA" "$W/models/qwen3-8b-bf16.gguf"
 case " $ARMS " in *" dflash "*) fetch "$DFLASH_URL" "$DFLASH_SHA" "$W/models/qwen3-8b-dflash-b16.gguf";; esac
-case " $ARMS " in *dspine*) fetch "$DSPINE_URL" "$DSPINE_SHA" "$W/models/qwen3-8b-dspine-v2-b16.gguf";; esac
-case " $ARMS " in *dspine-q8*) fetch "$DSPINE_Q8_URL" "$DSPINE_Q8_SHA" "$W/models/qwen3-8b-dspine-v2-q8_0.gguf";; esac
+# The BF16 DSpine draft is used by dspine, dspine16 and the p_min sweeps;
+# dspine-q8 uses only its own Q8_0 draft.
+case " $ARMS " in *" dspine "*|*" dspine16 "*|*" dspine-p05 "*|*" dspine-p10 "*) fetch "$DSPINE_URL" "$DSPINE_SHA" "$W/models/qwen3-8b-dspine-v2-b16.gguf";; esac
+case " $ARMS " in *" dspine-q8 "*) fetch "$DSPINE_Q8_URL" "$DSPINE_Q8_SHA" "$W/models/qwen3-8b-dspine-v2-q8_0.gguf";; esac
 
 gpu_state() { nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,noheader 2>/dev/null | sed "s/^/gpu: $1 /" || true; }
 

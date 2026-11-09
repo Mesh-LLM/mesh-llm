@@ -1,7 +1,7 @@
 # DSpine vs DFlash on llama.cpp
 
 A/B benchmark for the DSpine port in the llama.cpp patch queue
-(`skippy/llama_cpp/patches/model_support/0007-models-add-dspine-block-parallel-drafter-support.patch`),
+(`skippy/llama_cpp/patches/model_support/0015-models-add-dspine-block-parallel-drafter-support.patch`),
 run through the jianyang lab fleet (`jy submit`) on a DGX Spark.
 
 Three arms share one target (`Qwen/Qwen3-8B`, BF16 GGUF from unsloth), one prompt
@@ -12,8 +12,10 @@ set (77 report-split prompts from `skippy/evals/spec-prompts`), greedy decoding,
 - `dflash` — `z-lab/Qwen3-8B-DFlash-b16` (plain DFlash, block 16), converted to GGUF
 - `dspine` — `tencent/Qwen3-8B-DSpine-b16` (DSpine, block 16), converted to GGUF
 
-Both draft GGUFs are converted with this repo's `conversion/qwen.py`
-(`--target-model-dir Qwen/Qwen3-8B`, BF16) and are hosted at
+Both draft GGUFs are converted with the patched llama.cpp tree's
+`convert_hf_to_gguf.py` (the DSpine converter lives in `conversion/qwen.py`
+there; prepare it with `scripts/prepare-llama.sh pinned`) using
+`--target-model-dir Qwen/Qwen3-8B`, BF16, and are hosted at
 `jamesdumay/qwen3-8b-spec-drafts-gguf` with SHA-256 verification in `run.sh`.
 
 ## Running
