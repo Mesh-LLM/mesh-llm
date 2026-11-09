@@ -1,7 +1,7 @@
 # DSpine vs DFlash on llama.cpp
 
 A/B benchmark for the DSpine port in the llama.cpp patch queue
-(`skippy/llama_cpp/patches/model_support/0015-models-add-dspine-block-parallel-drafter-support.patch`),
+(`skippy/llama_cpp/patches/model_support/0016-models-add-dspine-block-parallel-drafter-support.patch`),
 run through the jianyang lab fleet (`jy submit`) on a DGX Spark.
 
 Three arms share one target (`Qwen/Qwen3-8B`, BF16 GGUF from unsloth), one prompt
