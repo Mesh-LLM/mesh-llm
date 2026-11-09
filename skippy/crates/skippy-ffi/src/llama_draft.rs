@@ -89,6 +89,7 @@ pub fn ggml_type_from_cache_code(code: i32) -> Option<GgmlType> {
         value if value == raw::Nvfp4 as i32 => raw::Nvfp4,
         value if value == raw::Q1_0 as i32 => raw::Q1_0,
         value if value == raw::Q2_0 as i32 => raw::Q2_0,
+        value if value == raw::F8E4M3 as i32 => raw::F8E4M3,
         _ => return None,
     };
     Some(value)

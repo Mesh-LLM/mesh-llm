@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/bloom.cpp b/src/models/bloom.cpp
-index 54ef3a03759f349bc2577440d56d1be5394cd8a7..dbc802afb808865ef655f6b0513e0d1080ed62fa 100644
+index 076927e0d513d9510d1f117f9b5c83d896a5b69e..48e3f3a10bf8f06fcae645e043a618bd5c91be50 100644
 --- a/src/models/bloom.cpp
 +++ b/src/models/bloom.cpp
-@@ -83,6 +83,8 @@ llama_model_bloom::graph::graph(const llama_model & model, const llm_graph_param
+@@ -83,6 +83,8 @@ llama_model_bloom::graph::graph(const llm_graph_params & params) : llm_graph_con
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 54ef3a03759f349bc2577440d56d1be5394cd8a7..dbc802afb808865ef655f6b0513e0d10
          cur = build_norm(inpL,
                  model.layers[il].attn_norm,
                  model.layers[il].attn_norm_b,
-@@ -132,6 +134,7 @@ llama_model_bloom::graph::graph(const llama_model & model, const llm_graph_param
+@@ -132,6 +134,7 @@ llama_model_bloom::graph::graph(const llm_graph_params & params) : llm_graph_con
  
          // input for next layer
          inpL = cur;

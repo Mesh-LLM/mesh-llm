@@ -1,34 +1,52 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Daniel Winter <danielwinterw@gmail.com>
-Date: Sat, 7 Nov 2026 14:20:44 +1100
-Subject: [PATCH] skippy: report which layer inputs a graph publishes
+From 1a469ba388e6631d22e7eae3fdec94cfa3f7a3fa Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 09:18:19 +1100
+Subject: [PATCH] skippy: report published layer inputs including head input
 
-Speculative drafts capture the residual entering chosen target layers,
-including layer n_layer (the last layer's output) for some drafts. Only
-graphs that record a layer's input can serve that capture; asking any
-other graph for it aborts the next decode.
-
-llama_layer_inp_published() builds the architecture graph for one token
-per sequence, the shape of the token-generation graph reserved at init,
-with the layer captured and reports whether it names the tensor. It
-stops before the output pass and scheduling, so it leaves reserved
-graphs and the scheduler alone, and lets a host refuse a draft before
-it attaches.
 ---
- src/llama-context.cpp | 40 +++++++++++++++++++++++++++++++++++
- src/llama-context.h   |  4 ++++
+ src/llama-context.cpp | 46 ++++++++++++++++++++++++++++++++++++++++++-
+ src/llama-context.h   |  7 +++++++
  src/llama-ext.h       |  5 +++++
- 3 files changed, 49 insertions(+)
+ 3 files changed, 57 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 483b5d16b..de8bc31f9 100644
+index 3257d7f2c..cb68e7e53 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2811,6 +2811,42 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
+@@ -25,6 +25,7 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <limits>
++#include <mutex>
+ #include <stdexcept>
+ #include <string>
+ #include <unordered_map>
+@@ -1516,9 +1517,10 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+ }
+ 
+ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
++    std::lock_guard<std::mutex> lock(layer_inp_state_mutex);
+     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
+ 
+-    GGML_ASSERT(lid < model.hparams.n_layer());
++    GGML_ASSERT(lid <= model.hparams.n_layer());
+ 
+     if (cparams.embeddings_layer_inp[lid] == enable) return;
+     ++computation_generation;
+@@ -2151,6 +2153,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+ int llama_context::decode(
+         const llama_batch_ext & batch_inp,
+         const skippy_graph_build_inputs & graph_build_inputs) {
++    std::lock_guard<std::mutex> lock(layer_inp_state_mutex);
+     if (!memory) {
+         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
+         return encode(batch_inp, graph_build_inputs);
+@@ -3054,6 +3057,43 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
      return true;
  }
  
 +bool llama_context::layer_inp_published(uint32_t lid) {
++    std::lock_guard<std::mutex> lock(layer_inp_state_mutex);
 +    if (lid >= cparams.embeddings_layer_inp.size()) {
 +        return false;
 +    }
@@ -67,7 +85,7 @@ index 483b5d16b..de8bc31f9 100644
  ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_tokens,
                                             uint32_t                          n_seqs,
                                             uint32_t                          n_outputs,
-@@ -4628,6 +4664,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
+@@ -4940,6 +4980,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
      ctx->set_embeddings_layer_inp(lid, value);
  }
  
@@ -79,10 +97,18 @@ index 483b5d16b..de8bc31f9 100644
      ctx->set_nextn_layer_offset(offset);
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index a9b05f5dd..a2c701f79 100644
+index 791072aeb..f8884668f 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -152,6 +152,10 @@ struct llama_context {
+@@ -14,6 +14,7 @@
+ 
+ #include <array>
+ #include <map>
++#include <mutex>
+ #include <string>
+ #include <vector>
+ 
+@@ -154,6 +155,10 @@ struct llama_context {
      void set_embeddings (bool value);
      void set_embeddings_nextn(bool value, bool masked);
      void set_embeddings_layer_inp(uint32_t lid, bool enable);
@@ -90,14 +116,23 @@ index a9b05f5dd..a2c701f79 100644
 +    // whether the model's graph publishes layer lid's input when it is captured;
 +    // lid == n_layer is the last layer's output, the output head's input
 +    bool layer_inp_published(uint32_t lid);
-     void set_nextn_layer_offset(int32_t offset);
-     void set_causal_attn(bool value);
-     void set_warmup(bool value);
+     void set_embeddings_layer_inp_dev(bool value);
+ 
+     // whether decode accepts entries whose embd is a row of ctx_other's layer input device buffer
+@@ -374,6 +379,8 @@ private:
+     const llama_model & model;
+ 
+     llama_cparams cparams;
++    // A publication probe temporarily changes graph inputs on the shared context.
++    std::mutex layer_inp_state_mutex;
+ 
+     const skippy_graph_build_inputs graph_build_inputs;
+     uint64_t computation_generation = 0;
 diff --git a/src/llama-ext.h b/src/llama-ext.h
-index 1e24ccaa5..9cb6bf853 100644
+index 9449e1da7..2ebc4a2a6 100644
 --- a/src/llama-ext.h
 +++ b/src/llama-ext.h
-@@ -138,6 +138,11 @@ LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int
+@@ -166,6 +166,11 @@ LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int
  // Set whether the context outputs the input embeddings of a specific layer
  LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
  
@@ -110,5 +145,5 @@ index 1e24ccaa5..9cb6bf853 100644
  // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
  LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

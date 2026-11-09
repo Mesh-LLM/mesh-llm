@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/falcon-h1.cpp b/src/models/falcon-h1.cpp
-index a7f9e55765f21f2aeb3450b27a1b39853c51ab1f..d2d91b5f588cabd6901361923eab2de1d3ccdef1 100644
+index 22c677b475f128fa8466087c35766c7d86dec6a4..fccb94ed18dd216a98786af280fbafc2b5609eff 100644
 --- a/src/models/falcon-h1.cpp
 +++ b/src/models/falcon-h1.cpp
-@@ -130,6 +130,8 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
+@@ -138,6 +138,8 @@ llama_model_falcon_h1::graph::graph(const llm_graph_params & params) :
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index a7f9e55765f21f2aeb3450b27a1b39853c51ab1f..d2d91b5f588cabd6901361923eab2de1
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-@@ -191,6 +193,7 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
+@@ -196,6 +198,7 @@ llama_model_falcon_h1::graph::graph(const llm_graph_params & params) :
  
          // input for next layer
          inpL = cur;

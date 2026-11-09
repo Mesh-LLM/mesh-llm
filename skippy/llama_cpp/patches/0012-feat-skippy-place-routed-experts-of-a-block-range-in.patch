@@ -1,8 +1,8 @@
-From 3f2412d2aee75610f4f74cc9b55f4817bab8b6eb Mon Sep 17 00:00:00 2001
+From 85bf84039958989b16f16fa0fcb407037579cc00 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 16 Oct 2026 19:21:00 +0300
-Subject: [PATCH] feat(skippy): place routed experts of a block range in host
- memory
+Subject: [PATCH 12/15] feat(skippy): place routed experts of a block range in
+ host memory
 
 Add host_expert_layer_start/end to skippy_runtime_config. When the range
 is non-empty, every model load installs one tensor buffer-type override
@@ -24,15 +24,15 @@ object because llama.cpp borrows both until the load call returns.
  7 files changed, 109 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 3f6aab137..b9b5259af 100644
+index b9b5259af..df831c43e 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 67
-+#define SKIPPY_ABI_VERSION_PATCH 68
+-#define SKIPPY_ABI_VERSION_PATCH 68
++#define SKIPPY_ABI_VERSION_PATCH 69
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -252,5 +252,5 @@ index 471968158..772d380e2 100644
      return passed ? 0 : 1;
  }
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

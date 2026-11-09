@@ -17,6 +17,7 @@ use skippy_runtime::{
     WorkloadInfo, parse_cache_type,
 };
 
+mod expert_placement;
 mod frame_operations;
 pub(crate) use frame_operations::slice_activation_frame;
 mod lane_lifecycle;
@@ -591,9 +592,7 @@ pub(crate) fn runtime_config_from_stage_config(
             SplitMode::Row => RuntimeSplitMode::Row,
             SplitMode::Tensor => RuntimeSplitMode::Tensor,
         },
-        host_expert_layers: config
-            .host_expert_layers
-            .and_then(|layers| skippy_runtime::HostExpertLayers::new(layers.start, layers.end)),
+        host_expert_layers: expert_placement::from_stage_config(config.host_expert_layers)?,
         selected_backend_device: config
             .selected_device
             .as_ref()

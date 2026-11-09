@@ -1,40 +1,22 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From f9c1f4d5a6b910791c62db5654904900cd86d20b Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
-Date: Sat, 10 Oct 2026 16:37:38 +0100
+Date: Fri, 6 Nov 2026 10:37:00 -0800
 Subject: [PATCH] models: add Qwen3-MoE native MTP
 
-Load an appended NextN block for qwen3moe and build its draft graph, so a
-Qwen3-MoE checkpoint with a trained multi-token-prediction head drafts
-through the existing native MTP sidecar path, unsplit and on the final
-stage of a split.
-
-The head is one dense Qwen3 decoder layer (attention shaped like the
-trunk's, SwiGLU FFN sized by its own tensors) fed by
-eh_proj([enorm(e_{t+1}); hnorm(h_t)]), where h_t is the trunk's post-norm
-hidden state. Logits come from the shared LM head after shared_head_norm;
-deeper drafts chain on the layer output before that norm, which is what
-the MTP graph exposes as its NextN hidden state.
-
-The trunk keeps every row's post-norm hidden state when NextN outputs are
-unmasked. The converter appends a head stored beside the checkpoint as
-mtp.safetensors + mtp_config.json, swapping proj's input halves into the
-GGUF eh_proj concat order, and --mtp exports it as a draft sidecar. A
-synthetic fixture certifies the integrated stage program and its drafts.
 ---
  conversion/qwen.py         |  98 ++++++++++++++++
  gguf-py/gguf/constants.py  |  10 ++
- include/skippy/common.h    |   2 +-
  src/CMakeLists.txt         |   8 ++
  src/models/models.h        |   5 +
  src/models/qwen3moe.cpp    | 227 ++++++++++++++++++++++++++++++++++---
  tests/test-llama-archs.cpp |   2 +-
- 7 files changed, 332 insertions(+), 20 deletions(-)
+ 6 files changed, 331 insertions(+), 19 deletions(-)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
-index 43d2fb466..b935e6630 100644
+index 7c9744f51..e678bd042 100644
 --- a/conversion/qwen.py
 +++ b/conversion/qwen.py
-@@ -258,12 +258,110 @@ class Qwen3Model(Qwen2Model):
+@@ -277,12 +277,110 @@ class Qwen3Model(Qwen2Model):
  @ModelBase.register("Qwen3MoeForCausalLM")
  @ModelBase.example("Qwen/Qwen3-30B-A3B")
  class Qwen3MoeModel(Qwen2MoeModel):
@@ -146,10 +128,10 @@ index 43d2fb466..b935e6630 100644
      def set_vocab(self):
          # deal with intern-s1
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index a39d046fe..5a7beb09b 100644
+index 61c51c8fd..bf964a0dc 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -2770,6 +2770,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -3256,6 +3256,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_GATE_EXP,
          MODEL_TENSOR.FFN_DOWN_EXP,
          MODEL_TENSOR.FFN_UP_EXP,
@@ -164,26 +146,13 @@ index a39d046fe..5a7beb09b 100644
 +        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
 +        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
      ],
-     MODEL_ARCH.QWEN3NEXT: [
-         MODEL_TENSOR.TOKEN_EMBD,
-diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 2fc90a14e..5180a2531 100644
---- a/include/skippy/common.h
-+++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
  
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 72
-+#define SKIPPY_ABI_VERSION_PATCH 73
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+     MODEL_ARCH.FLINT: [
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index fa6857599..6cf6effb4 100644
+index db01bc2f5..eab1c3a46 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -199,6 +199,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -256,6 +256,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
          "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)
@@ -199,16 +168,11 @@ index fa6857599..6cf6effb4 100644
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/models/models.h b/src/models/models.h
-index 1eaa9b576..5d89bebd1 100644
+index 00538e6b0..f714f51d3 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -644,10 +644,15 @@ struct llama_model_qwen3moe : public llama_model_base {
-     llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
-     void load_arch_hparams(llama_model_loader & ml) override;
-     void load_arch_tensors(llama_model_loader & ml) override;
- 
-     struct graph : public llm_graph_context {
-         graph(const llama_model & model, const llm_graph_params & params);
+@@ -655,6 +655,11 @@ struct llama_model_qwen3moe : public llama_model_base {
+         graph(const llm_graph_params & params);
      };
  
 +    // Appended NextN block: one Qwen3 decoder layer with a dense SwiGLU FFN.
@@ -218,8 +182,9 @@ index 1eaa9b576..5d89bebd1 100644
 +
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
+ 
 diff --git a/src/models/qwen3moe.cpp b/src/models/qwen3moe.cpp
-index 2198fcfb5..37ddca4f2 100644
+index ce7144a22..c4cc708cd 100644
 --- a/src/models/qwen3moe.cpp
 +++ b/src/models/qwen3moe.cpp
 @@ -11,9 +11,15 @@ void llama_model_qwen3moe::load_arch_hparams(llama_model_loader & ml) {
@@ -329,10 +294,10 @@ index 2198fcfb5..37ddca4f2 100644
 +    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
 +        return std::make_unique<graph_mtp>(*this, params);
 +    }
-     return std::make_unique<graph>(*this, params);
+     return std::make_unique<graph>(params);
  }
  
-@@ -120,7 +164,9 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -112,7 +156,9 @@ llama_model_qwen3moe::graph::graph(const llm_graph_params & params) : llm_graph_
                      model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
@@ -343,7 +308,7 @@ index 2198fcfb5..37ddca4f2 100644
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -166,6 +212,14 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -158,6 +204,14 @@ llama_model_qwen3moe::graph::graph(const llm_graph_params & params) : llm_graph_
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
  
@@ -358,7 +323,7 @@ index 2198fcfb5..37ddca4f2 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
  
-@@ -175,3 +229,140 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -167,3 +221,140 @@ llama_model_qwen3moe::graph::graph(const llm_graph_params & params) : llm_graph_
      cb(cur, "result_output", -1);
      res->t_logits = cur;
  }
@@ -500,15 +465,18 @@ index 2198fcfb5..37ddca4f2 100644
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 69313f903..4f7ea31ac 100644
+index d7d1a9024..89b5135a4 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1265,7 +1265,7 @@ int main(int argc, char ** argv) {
+@@ -2138,7 +2138,7 @@ int main(int argc, char ** argv) {
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
                      arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
 -                            arch == LLM_ARCH_GLM_DSA,
 +                            arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_QWEN3MOE,
+                     0,
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
-             llama_model_saver metadata(arch, gguf.get());
+-- 
+2.54.0 (Apple Git-157)
+

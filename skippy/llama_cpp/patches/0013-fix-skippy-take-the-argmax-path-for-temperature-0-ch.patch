@@ -1,8 +1,8 @@
-From 76aa25ebe340b870943599b4360cec976e140bc9 Mon Sep 17 00:00:00 2001
+From 4954bc1b8f899e77b205e5f9a38749f61bd14cf2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 29 Oct 2026 19:55:52 -0400
-Subject: [PATCH] fix(skippy): take the argmax path for temperature-0 chains
- that can only pick the top logit
+Subject: [PATCH 13/15] fix(skippy): take the argmax path for temperature-0
+ chains that can only pick the top logit
 
 ---
  src/CMakeLists.txt                    |   3 +-
@@ -17,7 +17,7 @@ Subject: [PATCH] fix(skippy): take the argmax path for temperature-0 chains
  create mode 100644 src/skippy/sampling_argmax.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 48f8964a9..93b538b0e 100644
+index c7a99d16c..cd2b536f6 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -50,6 +50,7 @@ add_library(llama
@@ -28,7 +28,7 @@ index 48f8964a9..93b538b0e 100644
              skippy/execution-batch.cpp
              skippy/execution-single.cpp
              skippy/model_load_config.cpp
-@@ -416,7 +417,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -417,7 +418,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
      target_link_libraries(skippy-sampling-history PRIVATE llama)
      function(add_skippy_sampling_history_tests family fixture state)
@@ -106,14 +106,14 @@ index 3c9fc758b..2d266fbb7 100644
      skippy_mark_context_synchronized(session->stage_model);
      const auto * candidates = common_sampler_get_candidates(session->sampler, false);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index f44e874d9..7d34b34bf 100644
+index f44e874d9..46e907aa0 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -1,6 +1,7 @@
  #pragma once
  
  #include "skippy.h"
-+#include "skippy/sampling_argmax.h"
++#include "sampling_argmax.h"
  
  #include "../llama-context.h"
  #include "../llama-model.h"
