@@ -320,7 +320,7 @@ transitive propagation requires an explicitly reviewed schema and bound.
 
 ## Optional MoA plugin
 
-Mixture-of-Agents is being extracted to `Mesh-LLM/moa-plugin`, not installed
-by default. Generic in-process plugins remain supported for contract tests.
-A healthy plugin registration can override the core `mesh` directive only
-for eligible non-streaming text chat requests.
+The Mixture-of-Agents plugin ships inside the `mesh-llm` binary and is off by
+default; the `[[plugin]] name = "mesh-moa"` entry above turns it on. A healthy
+plugin registration can override the core `mesh` directive only for eligible
+non-streaming text chat requests.
