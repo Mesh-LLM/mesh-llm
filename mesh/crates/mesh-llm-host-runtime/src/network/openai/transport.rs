@@ -796,15 +796,17 @@ async fn route_mesh_request_attempts(
         transfer_mesh_reservation(reservation.as_mut(), *target_host);
         state.attempts += 1;
         let attempt_started = Instant::now();
+        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets)
+            .with_caller_completion_cap(request.completion_tokens);
         let attempt_result = route_remote_attempt_with_retry(
             node,
             &mut tcp_stream,
             *target_host,
             &request.raw,
-            ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
+            retry_policy,
             RouteAttemptLoggingContext {
                 request_id: request.request_id,
-                retry_policy: ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
+                retry_policy,
                 response_adapter: request.response_adapter,
                 route_observer,
                 // This is the separate "mesh" auto-plan fan-out across many
