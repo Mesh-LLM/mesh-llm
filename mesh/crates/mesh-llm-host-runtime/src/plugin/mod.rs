@@ -14,6 +14,8 @@ mod identity_registry;
 mod identity_transport;
 pub(crate) mod inference_routing;
 mod model_assets;
+#[cfg(test)]
+pub(crate) mod selected_attempt_test_support;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;

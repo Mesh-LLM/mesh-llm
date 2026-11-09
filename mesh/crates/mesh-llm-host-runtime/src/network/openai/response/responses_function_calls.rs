@@ -658,7 +658,10 @@ mod tests {
             .as_bytes(),
         )
         .await;
-        assert!(matches!(result, Ok(RouteAttemptResult::Delivered { .. })));
+        assert!(matches!(
+            result,
+            Ok(RouteAttemptResult::CommittedStreamFailure { .. })
+        ));
         let events = sse_json_events(&body);
 
         assert_eq!(events_of(&events, "response.output_item.added").len(), 1);
