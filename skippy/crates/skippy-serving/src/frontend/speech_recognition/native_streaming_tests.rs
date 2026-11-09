@@ -364,6 +364,7 @@ async fn run_paced_session(name: &str, backlog: Option<Arc<ExactBacklog>>) {
         "can do for you",
         "what you can do",
         "do for your country",
+        "for your country",
     ]
     .map(|phrase| (phrase, phrase_occurrences(&transcript, phrase)));
     trace.record(

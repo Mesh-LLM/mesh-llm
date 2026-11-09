@@ -103,6 +103,7 @@ fn stream_four_repetitions(step_ms: u32) {
         "can do for you",
         "what you can do",
         "do for your country",
+        "for your country",
     ] {
         assert_eq!(phrase_occurrences(&offline, phrase), 4);
         assert_eq!(
