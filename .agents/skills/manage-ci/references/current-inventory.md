@@ -150,7 +150,6 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
 | `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; grants `packages: read` to pull its pinned GHCR runner image; workflow-commit controller validates locked historical metadata and the source's literal roster through Rust, then publishes from the immutable release source |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
-| `dflash-pairings-publish.yml` (`Publish DFlash pairing index`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**`, dispatch on `main` | Publishes the checked-in DFlash pairing index to Hugging Face `meshllm/dflash-pairings` with `HF_TOKEN`: uploads `index/<sha256>.json` only when absent (never overwritten or deleted; an existing copy must hash to its name), refreshes the human-facing root `index.json` and `README.md`, then re-downloads and hashes the published file. Releases pin the index by `DFLASH_PAIRING_INDEX_SHA256`. GitHub-hosted with the pinned `public cpu` image for the `hf` CLI; one non-cancelling concurrency group per commit, so no pending publication is replaced; only the run whose pairings still match `main` refreshes the root copies |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
@@ -757,7 +756,6 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `ci-ui-artifact-slice.yml` | `ui_stamp` | `public cpu`, release-tag callers only; protected automation checkout consumes the immutable raw distribution |
 | `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `mesh/website` | `public ui`, `public browser`, existing `public web`, respectively |
 | `website-pages.yml` | `build` | `public web` |
-| `dflash-pairings-publish.yml` | `publish` | `public cpu`, sha256:f499b79b... -- unconditional, no bare-metal row |
 | `nightly-stability-run.yml` | `stability` | `public cpu`, the image `prepare-automation` verifies (also bakes the node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |

@@ -11,6 +11,7 @@ use std::time::Instant;
 use crate::frontend::util::openai_backend_error;
 
 mod dflash;
+mod recurrent_rollback;
 mod standalone;
 mod suffix;
 

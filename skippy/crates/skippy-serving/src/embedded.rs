@@ -20,7 +20,11 @@ use crate::{
         RuntimeLaunchOverrides, RuntimeSessionStats, RuntimeState, load_runtime_with_overrides,
         load_runtime_with_overrides_and_open_events,
     },
-    telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
+    telemetry::{
+        Telemetry, TelemetryLevel, TelemetryStats,
+        active_span::{ActiveSpan, SpanLevel},
+        lifecycle_attrs, now_unix_nanos,
+    },
     tokenizer::{TokenizerCapability, TokenizerCapabilityError, tokenizer_http_router},
 };
 
@@ -200,6 +204,12 @@ impl SkippyRuntimeHandle {
             options.config.clone(),
             options.telemetry_level,
         );
+        let load = ActiveSpan::start(
+            Some(&telemetry),
+            "stage.embedded_runtime_load",
+            SpanLevel::Summary,
+        );
+        let entered = load.enter();
         telemetry.emit(
             "stage.embedded_runtime_load_start",
             lifecycle_attrs(&options.config),
@@ -219,6 +229,10 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
+        telemetry.record_resources("runtime_ready");
+        crate::telemetry::log_events::mark_serving();
+        drop(entered);
+        load.end();
         Ok(Self::ready(
             options.config,
             options.topology,
@@ -241,6 +255,12 @@ impl SkippyRuntimeHandle {
             options.config.clone(),
             options.telemetry_level,
         );
+        let load = ActiveSpan::start(
+            Some(&telemetry),
+            "stage.embedded_runtime_load",
+            SpanLevel::Summary,
+        );
+        let entered = load.enter();
         telemetry.emit(
             "stage.embedded_runtime_load_start",
             lifecycle_attrs(&options.config),
@@ -261,6 +281,10 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
+        telemetry.record_resources("runtime_ready");
+        crate::telemetry::log_events::mark_serving();
+        drop(entered);
+        load.end();
         Ok(Self::ready(
             options.config,
             options.topology,
@@ -346,6 +370,7 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_stopped",
             lifecycle_attrs(&self.config),
         );
+        self.telemetry.finish_process();
     }
 }
 

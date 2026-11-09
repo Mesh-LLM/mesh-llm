@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ptr;
 
 use anyhow::{Result, ensure};
@@ -218,7 +219,7 @@ impl StageSession {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_state(
+            native_call!(skippy_export_state(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -226,7 +227,7 @@ impl StageSession {
                 0,
                 &mut bytes,
                 &mut error,
-            )
+            ))
         };
         if status != Status::BufferTooSmall && status != Status::Ok {
             ensure_ok(status, error)?;
@@ -238,7 +239,7 @@ impl StageSession {
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_state(
+            native_call!(skippy_export_state(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -246,7 +247,7 @@ impl StageSession {
                 payload.len(),
                 &mut written,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         payload.truncate(written);
@@ -256,14 +257,14 @@ impl StageSession {
     pub fn import_state(&mut self, layer_start: i32, layer_end: i32, input: &[u8]) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_import_state(
+            native_call!(skippy_import_state(
                 self.raw,
                 layer_start,
                 layer_end,
                 input.as_ptr().cast(),
                 input.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         // Imported target state has no matching draft features.
@@ -286,7 +287,7 @@ impl StageSession {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_full_state(
+            native_call!(skippy_export_full_state(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -294,7 +295,7 @@ impl StageSession {
                 0,
                 &mut bytes,
                 &mut error,
-            )
+            ))
         };
         if status != Status::BufferTooSmall && status != Status::Ok {
             ensure_ok(status, error)?;
@@ -306,7 +307,7 @@ impl StageSession {
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_full_state(
+            native_call!(skippy_export_full_state(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -314,7 +315,7 @@ impl StageSession {
                 payload.len(),
                 &mut written,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         payload.truncate(written);
@@ -329,14 +330,14 @@ impl StageSession {
     ) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_import_full_state(
+            native_call!(skippy_import_full_state(
                 self.raw,
                 layer_start,
                 layer_end,
                 input.as_ptr().cast(),
                 input.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         // Imported target state has no matching draft features.
@@ -369,7 +370,7 @@ impl StageSession {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_kv_page(
+            native_call!(skippy_export_kv_page(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -380,7 +381,7 @@ impl StageSession {
                 0,
                 &mut bytes,
                 &mut error,
-            )
+            ))
         };
         if status != Status::BufferTooSmall && status != Status::Ok {
             ensure_ok(status, error)?;
@@ -392,7 +393,7 @@ impl StageSession {
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_kv_page(
+            native_call!(skippy_export_kv_page(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -403,7 +404,7 @@ impl StageSession {
                 payload.len(),
                 &mut written,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         payload.truncate(written);
@@ -425,7 +426,7 @@ impl StageSession {
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_kv_page(
+            native_call!(skippy_export_kv_page(
                 self.raw,
                 layer_start,
                 layer_end,
@@ -436,7 +437,7 @@ impl StageSession {
                 output.len(),
                 &mut written,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         if written != output.len() {
@@ -456,13 +457,13 @@ impl StageSession {
         let raw = desc.as_raw();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_import_kv_page(
+            native_call!(skippy_import_kv_page(
                 self.raw,
                 &raw,
                 payload.as_ptr().cast(),
                 payload.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = self
@@ -488,13 +489,13 @@ impl StageSession {
         let raw = desc.as_raw();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_import_cachegen_kv_page_v1(
+            native_call!(skippy_import_cachegen_kv_page_v1(
                 self.raw,
                 &raw,
                 records.as_ptr(),
                 records.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = self
@@ -509,13 +510,13 @@ impl StageSession {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_recurrent_state(
+            native_call!(skippy_export_recurrent_state(
                 self.raw,
                 ptr::null_mut(),
                 0,
                 &mut bytes,
                 &mut error,
-            )
+            ))
         };
         if status != Status::BufferTooSmall && status != Status::Ok {
             ensure_ok(status, error)?;
@@ -527,13 +528,13 @@ impl StageSession {
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_recurrent_state(
+            native_call!(skippy_export_recurrent_state(
                 self.raw,
                 payload.as_mut_ptr().cast(),
                 payload.len(),
                 &mut written,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         payload.truncate(written);
@@ -543,12 +544,12 @@ impl StageSession {
     pub fn import_recurrent_state(&mut self, input: &[u8]) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_import_recurrent_state(
+            native_call!(skippy_import_recurrent_state(
                 self.raw,
                 input.as_ptr().cast(),
                 input.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         // Imported target state has no matching draft features.

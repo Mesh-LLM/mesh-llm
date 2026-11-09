@@ -32,7 +32,6 @@ skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.
 anyhow = "1"
 dirs = "6.0.0"
 serde_json = "1"
-sha2.workspace = true
 toml = "1.1"
 
 [dev-dependencies]

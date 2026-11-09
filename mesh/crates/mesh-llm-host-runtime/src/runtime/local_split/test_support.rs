@@ -548,6 +548,9 @@ stop = ["END"]
         Some(projector_path.to_string_lossy().as_ref())
     );
     assert!(!settings.runtime_options.config.native_mtp_enabled);
+    // The attached external draft remains active even with the legacy
+    // strategy label "disabled"; size its actual seven-input serial window.
+    assert_eq!(settings.runtime_options.recurrent_rollback_tokens, 7);
     assert!(!settings.embedded_openai.native_mtp_enabled);
     assert_eq!(settings.embedded_openai.generation_concurrency, 4);
     assert_eq!(settings.embedded_openai.default_max_tokens, 321);
@@ -791,6 +794,7 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     assert!(unreadable.split_dflash.is_none());
     assert!(unreadable.embedded_openai.native_mtp_enabled);
     assert!(settings.runtime_options.config.native_mtp_enabled);
+    assert!(settings.runtime_options.recurrent_rollback_tokens > 0);
     assert!(settings.embedded_openai.native_mtp_enabled);
     assert!(settings.embedded_openai.speculative.dflash.is_none());
     assert_eq!(

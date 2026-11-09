@@ -19,6 +19,7 @@ const SKIPPY_KV_UNIFIED_ENV: &str = "AGENTX_SKIPPY_KV_UNIFIED";
 const SKIPPY_MICROBATCH_TOKENS_ENV: &str = "AGENTX_SKIPPY_MICROBATCH_TOKENS";
 const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
 const BASELINE_MICROBATCH_TOKENS: usize = 512;
+const TELEMETRY_FILE: &str = "skippy-telemetry.otlp.jsonl";
 const BATCH_TOKENS: usize = 2_048;
 
 fn llama_comparison_context(concurrency: u32) -> DynResult<u32> {
@@ -334,6 +335,13 @@ fn server(
                     .into_os_string(),
             ),
         ]);
+        if input
+            .tools
+            .as_ref()
+            .is_some_and(|tools| tools.diagnostic_telemetry)
+        {
+            enable_diagnostic_telemetry(&mut spec, &input.output);
+        }
         if input.tools.is_none()
             && (input.profile == Profile::Contention
                 || std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1"))
@@ -375,6 +383,18 @@ fn server(
         process::Value::Public("1800".into()),
     );
     Ok(spec)
+}
+
+/// Debug telemetry as OTLP JSON beside the cell's other retained evidence.
+fn enable_diagnostic_telemetry(spec: &mut process::ProcessSpec, cell: &std::path::Path) {
+    spec.arguments.extend([
+        process::Value::Public("--telemetry-level".into()),
+        process::Value::Public("debug".into()),
+    ]);
+    spec.environment.insert(
+        "SKIPPY_TELEMETRY_OTLP_FILE".into(),
+        process::Value::Public(cell.join(TELEMETRY_FILE).into_os_string()),
+    );
 }
 
 fn enable_exact_state_diagnostics(spec: &mut process::ProcessSpec) {
@@ -782,6 +802,20 @@ mod tests {
             spec.environment
                 .get(std::ffi::OsStr::new("SKIPPY_EXACT_STATE_DIAGNOSTICS")),
             Some(process::Value::Public(value)) if value == "1"
+        ));
+    }
+
+    #[test]
+    fn diagnostic_telemetry_writes_debug_otlp_into_the_cell() {
+        let mut spec = command::spec(&std::env::temp_dir(), "sh", &[]).unwrap();
+        enable_diagnostic_telemetry(&mut spec, std::path::Path::new("/runs/skippy-c4"));
+        assert!(spec.arguments.windows(2).any(|pair| matches!(pair,
+            [process::Value::Public(flag), process::Value::Public(level)]
+                if flag == "--telemetry-level" && level == "debug")));
+        assert!(matches!(
+            spec.environment.get(std::ffi::OsStr::new("SKIPPY_TELEMETRY_OTLP_FILE")),
+            Some(process::Value::Public(path))
+                if path == "/runs/skippy-c4/skippy-telemetry.otlp.jsonl"
         ));
     }
 

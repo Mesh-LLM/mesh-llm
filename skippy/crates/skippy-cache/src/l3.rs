@@ -35,7 +35,9 @@ use serde::{Deserialize, Serialize};
 use crate::fsinfo;
 
 mod packed;
+mod pressure;
 use packed::{PACK_DIR, PACK_INDEX_DIR, PackedReadRequest, PackedSegmentStore};
+pub use pressure::StorePressure;
 
 const SEGMENT_DIR: &str = "segments";
 const MANIFEST_DIR: &str = "manifests";

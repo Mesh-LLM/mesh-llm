@@ -15,5 +15,6 @@
   "threads": 20,
   "diagnostic_generation_lanes": null,
   "diagnostic_cpu": false,
+  "diagnostic_telemetry": false,
   "cell_seconds": 10200
 }
