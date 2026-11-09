@@ -615,11 +615,13 @@ impl KvStageIntegration {
     /// Copying the KV rows takes seconds at long context and holds the runtime,
     /// so on the split decode path it stalled every token behind it. The rows
     /// below the boundary do not change while the session lives, so the
-    /// recorded payload is the same bytes either way. Admission, the recorder
-    /// slot and the host-memory reservation are taken when the session ends,
-    /// so a waiting capture holds none of them. The record is lost if the
-    /// session is restored, imported into, trimmed below the boundary or
-    /// recovered from a panic before it ends.
+    /// recorded payload is the same bytes either way.
+    ///
+    /// The recurrent copy held until then is reserved against host memory
+    /// now, and the capture is skipped if it does not fit. Admission, the
+    /// recorder slot and the snapshot reservation are taken when the session
+    /// ends. The record is lost if the session is restored, imported into,
+    /// trimmed below the boundary or recovered from a panic before it ends.
     ///
     /// Returns whether a capture is pending.
     pub(crate) fn record_exact_state_at_session_end(
@@ -647,6 +649,11 @@ impl KvStageIntegration {
         if !self.should_record() || token_count < self.checkpoint_policy.min_tokens {
             return Ok(false);
         }
+        let Some(retained_reservation) =
+            self.reserve_retained_recurrent_host_memory(runtime, session_id, token_count)
+        else {
+            return Ok(false);
+        };
         let recurrent = match runtime.export_recurrent_state(session_id) {
             Ok(recurrent) => recurrent,
             Err(error) if self.dense_without_recurrent && is_recurrent_unavailable(&error) => {
@@ -673,6 +680,8 @@ impl KvStageIntegration {
                 ) else {
                     return;
                 };
+                // The snapshot reservation now covers the recurrent copy.
+                drop(retained_reservation);
                 let exported = match runtime.export_kv_page(session_id, 0, token_count) {
                     Ok(page) => Ok((page.payload, Some(page.desc))),
                     Err(error) if is_native_kv_unavailable(&error) => Ok((Vec::new(), None)),
