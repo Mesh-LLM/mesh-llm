@@ -57,7 +57,9 @@ fn a_future_only_later_segment_cannot_leave_an_empty_context_window() {
 
 #[test]
 fn a_permanently_single_segment_still_obeys_the_hard_window_bound() {
-    let mut script = Script::new(vec![vec![(900, " A B")]]);
+    // The settling pass and the final pass hear the retained window, which
+    // holds no new words.
+    let mut script = Script::new(vec![vec![(900, " A B")], vec![(900, " A B")], vec![]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     let mut stream = SpeechStream::new(SpeechStreamConfig {
         trim_after_ms: 1_500,
@@ -72,8 +74,10 @@ fn a_permanently_single_segment_still_obeys_the_hard_window_bound() {
             assert_eq!(stream.confirmed_in_buffer, 2);
         }
     }
-    assert!(stream.buffer.is_empty());
-    assert_eq!(stream.buffer_start, 4_000 * MS as u64);
+    // The hard bound still settles the window, confirms `A B`, and leaves
+    // the turn open with the newest window retained for the next pass.
+    assert_eq!(stream.buffer.len(), 3_500 * MS);
+    assert_eq!(stream.buffer_start, 500 * MS as u64);
     assert_eq!(stream.confirmed_in_buffer, 0);
     assert_eq!(stream.confirmed_prefix.observed_len(), 0);
     events.extend(stream.commit(&mut transcribe).unwrap());

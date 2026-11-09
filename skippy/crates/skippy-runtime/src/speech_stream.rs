@@ -41,6 +41,9 @@ const PROMPT_TAIL_CHARS: usize = 200;
 /// Whisper may miss or mishear the first word in two passes alike, and a word
 /// confirmed wrongly stays wrong; a pass a second becomes the default's two.
 const MIN_CONFIRM_MS: u64 = 2_000;
+/// The transcriber's hard window: a single pass must never hear more
+/// than 30 seconds of audio.
+const WHISPER_WINDOW_MS: u64 = 30_000;
 
 /// Server-side turn detection, in the shape of OpenAI's `server_vad`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -397,7 +400,15 @@ impl SpeechStream {
             }
             return Ok(());
         }
-        let segments = self.transcribe_buffer(transcribe)?;
+        // The step cadence may let the buffer outgrow the transcriber's
+        // window. Drop the oldest audio first: it was already heard by a
+        // pass within `step_ms`, so nothing unheard is lost.
+        if self.buffer.len() as u64 > WHISPER_WINDOW_MS * SAMPLES_PER_MS {
+            let excess = self.buffer.len() as u64 - WHISPER_WINDOW_MS * SAMPLES_PER_MS;
+            self.buffer_start += excess;
+            self.buffer.drain(0..excess as usize);
+        }
+        let segments = self.transcribe_window(&self.buffer, transcribe)?;
         let words = segments.iter().flatten().cloned().collect::<Vec<_>>();
         let canonical = &self.confirmed[self.confirmed.len() - self.confirmed_in_buffer..];
         let aligned = self
@@ -446,15 +457,21 @@ impl SpeechStream {
         self.confirm(newly_confirmed.to_vec(), events);
 
         let buffer_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
-        if buffer_ms > u64::from(self.config.max_buffer_ms) {
-            // No confirmed boundary arrived in time: confirm what is heard
-            // and start a fresh window.
+        // A bound configured above the window must still settle the
+        // buffer inside it.
+        if buffer_ms > u64::from(self.config.max_buffer_ms).min(WHISPER_WINDOW_MS) {
+            // No confirmed boundary arrived in time: confirm what is heard,
+            // then start the next window from the newest audio, which no
+            // pass has confirmed yet.
             let pending = std::mem::take(&mut self.pending);
             self.confirm(pending, events);
             self.held.clear();
-            self.buffer_start += self.buffer.len() as u64;
-            self.buffer.clear();
-            self.buffer_has_speech = false;
+            let retain_ms = u64::from(self.config.max_buffer_ms)
+                .min(WHISPER_WINDOW_MS.saturating_sub(u64::from(self.config.step_ms)));
+            let retain = (retain_ms * SAMPLES_PER_MS).min(self.buffer.len() as u64);
+            let drop = self.buffer.len() as u64 - retain;
+            self.buffer_start += drop;
+            self.buffer.drain(0..drop as usize);
             self.confirmed_in_buffer = 0;
             self.confirmed_prefix.clear();
             self.speech_started_at = None;
@@ -522,8 +539,14 @@ impl SpeechStream {
         events: &mut Vec<SpeechStreamEvent>,
     ) -> Result<()> {
         if self.buffer_has_speech {
+            // The final pass hears the newest window only: the audio
+            // older than the transcriber's window is already confirmed.
+            let tail = self
+                .buffer
+                .len()
+                .saturating_sub((WHISPER_WINDOW_MS * SAMPLES_PER_MS) as usize);
             let words = self
-                .transcribe_buffer(transcribe)?
+                .transcribe_window(&self.buffer[tail..], transcribe)?
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
@@ -589,13 +612,17 @@ impl SpeechStream {
         });
     }
 
-    fn transcribe_buffer(&self, transcribe: &mut Transcribe<'_>) -> Result<Vec<SegmentWords>> {
+    fn transcribe_window(
+        &self,
+        samples: &[f32],
+        transcribe: &mut Transcribe<'_>,
+    ) -> Result<Vec<SegmentWords>> {
         let options = TranscriptionOptions {
             language: self.config.language.clone(),
             prompt: self.prompt(),
             ..Default::default()
         };
-        let transcription = transcribe(&self.buffer, &options)?;
+        let transcription = transcribe(samples, &options)?;
         Ok(transcription
             .segments
             .into_iter()

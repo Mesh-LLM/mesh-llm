@@ -410,9 +410,11 @@ fn an_overlong_buffer_confirms_what_it_has_and_starts_over() {
     let mut stream = SpeechStream::new(config);
     let events = stream.push(&loud(3_000), &mut transcribe).unwrap();
     assert_eq!(deltas(&events), ["Never settles"]);
-    // The audio is gone but the turn stays open until its words are
-    // reported in a `Completed`.
-    assert!(stream.buffer.is_empty());
+    // The confirmed audio is gone and the turn stays open until its words
+    // are reported in a `Completed`; the newest window that no pass has
+    // confirmed is retained for the next pass.
+    assert_eq!(stream.buffer.len(), 2_000 * MS);
+    assert_eq!(stream.buffer_start, 1_000 * MS as u64);
     assert!(stream.has_pending_audio());
 }
 
@@ -758,7 +760,13 @@ fn a_commit_after_an_overlong_reset_still_completes_the_turn() {
         max_buffer_ms: 2_000,
         ..manual()
     };
-    let mut script = Script::new(vec![vec![(2_400, " Never settles")]]);
+    // The settling pass and the final pass hear the retained window, which
+    // holds no new words.
+    let mut script = Script::new(vec![
+        vec![(2_400, " Never settles")],
+        vec![(2_400, " Never settles")],
+        vec![],
+    ]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     let mut stream = SpeechStream::new(config);
     stream.push(&loud(3_000), &mut transcribe).unwrap();
