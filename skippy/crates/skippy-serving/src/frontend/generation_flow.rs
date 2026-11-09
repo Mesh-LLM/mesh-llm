@@ -34,9 +34,9 @@ use crate::kv_integration::proactive_eviction_attrs;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::anyhow;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -190,7 +190,7 @@ impl StageOpenAiBackend {
         max_tokens: GenerationTokenLimit,
         stop: Option<&skippy_inference_api::StopSequence>,
         mut sampling: SamplingConfig,
-        hook_request: Option<ChatCompletionRequest>,
+        hook_request: Option<GenerationRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         ids: InferenceGenerationIds,
@@ -1185,12 +1185,17 @@ impl StageOpenAiBackend {
             "openai-embedded-session-stop",
             move |runtime| {
                 runtime
-                    .drop_session_timed(&scheduler_session_key)
+                    .end_session_timed(&scheduler_session_key)
                     .map_err(|error| {
                         skippy_inference_api::InferenceError::backend(error.to_string())
                     })
             },
         ) {
+            // Prefix-cache exports the session owes run after the response.
+            let _ = self.iteration_scheduler.execute_runtime_detached(
+                "openai-embedded-session-end-exports",
+                crate::runtime_state::RuntimeState::complete_parked_session_ends,
+            );
             let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
             let drop_stats = outcome.value;
             let mut attrs = self.openai_attrs(&request.ids);

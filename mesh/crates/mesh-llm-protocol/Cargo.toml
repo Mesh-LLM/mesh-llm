@@ -15,3 +15,6 @@ iroh = { version = "1.4.1", default-features = false, features = ["metrics", "fa
 prost = "0.14"
 serde_json.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

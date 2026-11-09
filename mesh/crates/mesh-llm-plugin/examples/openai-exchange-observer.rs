@@ -79,6 +79,12 @@ async fn main() -> anyhow::Result<()> {
         .on_open_stream(move |request, _context| {
             let receiver = receiver.clone();
             Box::pin(async move {
+                let disconnect = std::env::var("MESH_LLM_EXEMPLAR_FAULT").as_deref()
+                    == Ok("disconnect_on_response_stream")
+                    && request
+                        .metadata_json
+                        .as_deref()
+                        .is_some_and(|json| json.contains("openai_exchange_response"));
                 if let Ok(path) = std::env::var("MESH_LLM_EXEMPLAR_STREAM_LOG") {
                     use tokio::io::AsyncWriteExt;
                     let mut options = tokio::fs::OpenOptions::new();
@@ -96,14 +102,17 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(|error| {
                         mesh_llm_plugin::PluginError::invalid_request(error.to_string())
                     })?;
+                    // Finish the filesystem write before fault injection can exit.
+                    // A configured disconnect still exits after a flush failure.
+                    if let Err(error) = file.flush().await
+                        && !disconnect
+                    {
+                        return Err(mesh_llm_plugin::PluginError::invalid_request(
+                            error.to_string(),
+                        ));
+                    }
                 }
-                if std::env::var("MESH_LLM_EXEMPLAR_FAULT").as_deref()
-                    == Ok("disconnect_on_response_stream")
-                    && request
-                        .metadata_json
-                        .as_deref()
-                        .is_some_and(|json| json.contains("openai_exchange_response"))
-                {
+                if disconnect {
                     std::process::exit(23);
                 }
                 receiver.open(request).await
@@ -165,6 +174,11 @@ async fn main() -> anyhow::Result<()> {
                     file.write_all(&line).await.map_err(|e| {
                         mesh_llm_plugin::PluginError::invalid_request(e.to_string())
                     })?;
+                    // The event acknowledgement must follow the completed log write.
+                    // A flush failure is reported without discarding the decision.
+                    if let Err(error) = file.flush().await {
+                        eprintln!("event log flush failed: {error}");
+                    }
                 }
                 Ok(OpenAiExchangeDecision {
                     decision: if denied {

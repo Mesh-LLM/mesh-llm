@@ -16,13 +16,10 @@ fn function(source: &str, name: &str) -> String {
     format!("{marker}{body}\n}}\n")
 }
 fn run(root: &Path, mode: &str) -> process::ProcessReport {
-    let source = fs::read_to_string(
-        super::support::repository().join("scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
-    let admission = source.split_once("if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build)$ ]]; then\n").unwrap().1.split_once("\nfi\n").unwrap().0;
+    let source = crate::canary_full_gates::fixture::source();
+    let admission = source.split_once("if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then\n").unwrap().1.split_once("\nfi\n").unwrap().0;
     let admission = format!(
-        "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build)$ ]]; then\n{admission}\nfi\n"
+        "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then\n{admission}\nfi\n"
     );
     let selection = source
         .split_once("# Legacy workload automation selection begins.\n")
@@ -77,13 +74,14 @@ if run_for 'admitted mode proof' 3 /bin/bash -c 'printf exercised > invoked; pri
     report
 }
 #[test]
-fn all_five_admitted_modes_use_actual_typed_timeout_and_preserve_child_status() {
+fn all_six_admitted_modes_use_actual_typed_timeout_and_preserve_child_status() {
     for mode in [
         "repair",
         "verify",
         "repair-build",
         "verify-build",
         "pinned-build",
+        "native-build",
     ] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();

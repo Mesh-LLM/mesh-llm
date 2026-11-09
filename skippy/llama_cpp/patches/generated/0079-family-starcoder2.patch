@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/starcoder2.cpp b/src/models/starcoder2.cpp
-index dcf6ed371408b804732c9838c61e29ea133b3ec7..8d5e015d24e26ce67f5e1d9517f879bd91e81ddb 100644
+index 2b670d5629dbf61088c068de14143e72f0cc1cae..752f2aaa6451508a58fc4e220358b0f59de4e93d 100644
 --- a/src/models/starcoder2.cpp
 +++ b/src/models/starcoder2.cpp
-@@ -75,6 +75,8 @@ llama_model_starcoder2::graph::graph(const llama_model & model, const llm_graph_
+@@ -75,6 +75,8 @@ llama_model_starcoder2::graph::graph(const llm_graph_params & params) : llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index dcf6ed371408b804732c9838c61e29ea133b3ec7..8d5e015d24e26ce67f5e1d9517f879bd
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -138,6 +140,7 @@ llama_model_starcoder2::graph::graph(const llama_model & model, const llm_graph_
+@@ -129,6 +131,7 @@ llama_model_starcoder2::graph::graph(const llm_graph_params & params) : llm_grap
  
          // input for next layer
          inpL = cur;

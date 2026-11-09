@@ -132,6 +132,11 @@ fn select_attempt(changed: bool, repair: &Job, verification: &Job) -> DynResult<
     if !changed {
         return Ok(AttemptDecision::Green(candidate));
     }
+    // Reconciliation already admits the complete family roster for this exact
+    // producer package; a successful retry does not require a second pass.
+    if repair.outputs.retry_recovered == "true" && verification.result == JobResult::Skipped {
+        return Ok(AttemptDecision::Green(candidate));
+    }
     if verification.outputs.green == "true" {
         let verified = decision::Candidate::from_outputs(&verification.outputs)?;
         return Ok(if candidate.head == verified.head {
@@ -184,11 +189,14 @@ fn select_final(
         return Err("green attempt has contradictory selection outputs".into());
     }
     let candidate = decision::Candidate::from_outputs(&selected.outputs)?;
+    if changed && !mesh_source.is_empty() && candidate.head == mesh_source {
+        return Err("selected upgrade did not produce a changed candidate".into());
+    }
     if publish_selected && attempts.selected_verification()? != candidate {
         return Err("selected publication does not match the independent verifier".into());
     }
-    if !mesh_source.is_empty() {
-        if changed || candidate.head != mesh_source {
+    if !mesh_source.is_empty() && !changed {
+        if candidate.head != mesh_source {
             return Err("selected MeshLLM revision certification failed".into());
         }
         return Ok(if publish_selected {

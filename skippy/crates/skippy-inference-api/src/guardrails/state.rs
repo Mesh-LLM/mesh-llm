@@ -1,4 +1,4 @@
-use crate::chat::ChatCompletionRequest;
+use crate::generation::GenerationRequest;
 
 use super::{
     errors::GuardrailErrorKind,
@@ -20,7 +20,7 @@ pub struct GuardrailRequestState {
 
 impl GuardrailRequestState {
     pub fn from_request(
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         mode: GuardrailMode,
         streaming_mode: StreamingGuardrailMode,
         request_contract: GuardrailRequestContract,
@@ -56,6 +56,6 @@ pub(crate) enum GuardrailRequestOutcome {
         kind: GuardrailErrorKind,
     },
     Guarded {
-        backend_request: Box<ChatCompletionRequest>,
+        backend_request: Box<GenerationRequest>,
     },
 }

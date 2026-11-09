@@ -26,10 +26,10 @@ use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
 use serde_json::Value;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::FinishReason;
 use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
@@ -162,7 +162,7 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,
     pub(in crate::frontend) speculative: &'a SpeculativeDecodeConfig,
     pub(in crate::frontend) native_mtp_enabled: bool,
-    pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
+    pub(in crate::frontend) hook_request: Option<GenerationRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
@@ -185,6 +185,13 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     /// The final stage's DFlash draft when this split speculates with one;
     /// stage 0 then sizes each block from measured cost and acceptance.
     pub(in crate::frontend) split_dflash_draft: Option<&'a std::path::Path>,
+    /// How many positions back that draft attends, when every one of its
+    /// attention layers slides over a window; stage 0 sends no feature rows
+    /// for prompt tokens before it.
+    pub(in crate::frontend) split_dflash_context_window: Option<u32>,
+    /// The most bytes of feature rows later stages add to each prompt token,
+    /// which stage 0 leaves room for when it sizes prefill frames.
+    pub(in crate::frontend) split_dflash_downstream_bytes_per_token: usize,
     /// The final stage's draft-context counters, from its latest replies.
     pub(in crate::frontend) split_dflash_health: SplitDFlashHealth,
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
@@ -192,7 +199,7 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) max_tokens: u32,
     pub(in crate::frontend) sampling: &'a SamplingConfig,
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,
-    pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
+    pub(in crate::frontend) hook_request: Option<GenerationRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
@@ -419,6 +426,10 @@ pub(in crate::frontend) struct GeneratedText {
     /// One entry per completion token, when the request asked for logprobs.
     pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
     pub(in crate::frontend) activation_wire: Option<ActivationWireStats>,
+    /// Filled in once the generation finishes, and handed to the stats
+    /// observer after admission has been timed. `None` when no observer is
+    /// installed.
+    pub(in crate::frontend) generation_stats: Option<crate::generation_stats::GenerationStats>,
 }
 
 /// Encoded activation bytes stage 0 wrote to the next stage for one response:

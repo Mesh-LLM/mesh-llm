@@ -182,6 +182,7 @@ fn resolve_speculative(
             global_config,
             package_generation,
             has_draft_model: false,
+            package_default_allowed: true,
         })?;
         let decode = dflash_decode_config(base, &strategy, &dflash_draft, draft_max_tokens);
         decode.validate()?;
@@ -252,6 +253,7 @@ fn resolve_speculative(
         global_config,
         package_generation,
         has_draft_model: mode == "draft" && draft_model_path.is_some(),
+        package_default_allowed: auto_defaults_enabled,
     })?;
     decode.requested_strategy.clone_from(&strategy);
     // A standalone N-gram plan (no native MTP, no draft model) runs in the
@@ -353,12 +355,21 @@ struct DecodeResolutionInput<'a> {
     global_config: Option<&'a SpeculativeConfig>,
     package_generation: Option<&'a PackageGenerationInfo>,
     has_draft_model: bool,
+    /// Whether `auto` may take the package's default plan. Off with
+    /// `spec_default = false` (or `--no-draft`) and no explicit strategy, so
+    /// a package default such as `ngram-cache` stays off like every other
+    /// automatic default; an explicitly named strategy is unaffected.
+    package_default_allowed: bool,
 }
 
 #[allow(clippy::too_many_lines)]
 fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<SpeculativeDecodeConfig> {
-    let mut config = package_decode_config(input.requested_strategy, input.package_generation)?
-        .unwrap_or_else(SpeculativeDecodeConfig::default);
+    let package_plan = if input.requested_strategy == "auto" && !input.package_default_allowed {
+        None
+    } else {
+        package_decode_config(input.requested_strategy, input.package_generation)?
+    };
+    let mut config = package_plan.unwrap_or_else(SpeculativeDecodeConfig::default);
     config.requested_strategy = input.requested_strategy.to_string();
     config.draft_acceptance_threshold = pick_owned(
         input

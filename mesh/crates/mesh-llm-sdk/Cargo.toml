@@ -54,4 +54,5 @@ rustls-native-certs = { version = "0.8", optional = true }
 futures-util = { version = "0.3", optional = true, default-features = false, features = ["sink"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+sha2 = { workspace = true }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }

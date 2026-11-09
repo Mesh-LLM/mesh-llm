@@ -7,6 +7,9 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures_util::Stream;
+use skippy_inference_api::generation::{
+    GenerationEventStream, GenerationRequest, GenerationResponse,
+};
 use skippy_inference_api::*;
 
 use super::admission::{Admission, MemberId};
@@ -102,8 +105,8 @@ impl InferenceBackend for MembershipBackend {
     /// Create a cancellable context and use the membership-scoped chat path.
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.chat_completion_with_context(request, InferenceRequestContext::new())
             .await
     }
@@ -111,9 +114,9 @@ impl InferenceBackend for MembershipBackend {
     /// Execute chat under this membership's admission budget and isolation scope.
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         self.execute(context, |context| {
             self.inner.chat_completion_with_context(request, context)
         })
@@ -124,9 +127,9 @@ impl InferenceBackend for MembershipBackend {
     /// Any worker-held context continues to own capacity after consumer disconnect.
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         let context = self.admitted(context).await?;
         let cancel = CancelOnDrop(context.clone());
         let inner = self.inner.chat_completion_stream(request, context).await?;

@@ -521,8 +521,21 @@ fn graph_state_requires_consistent_profiles_and_rejects_derived_state() {
         ]),
         "recurrent"
     );
-    // The native header no longer admits a derived-persistent state kind;
-    // an effect-free graph reads as full-state through the default path.
+    // State a graph derives outside its caches (DeepSeek-V4's compressor),
+    // which the native planner reports as kind 4, needs full snapshots,
+    // whatever else the profile touches.
+    let derived = super::native::state_effect_kind(4).unwrap();
+    assert_eq!(derived, StagePlanStateKind::DerivedPersistent);
+    decode.state_effects.push(effect(derived));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "full-state"
+    );
+    assert!(super::native::state_effect_kind(5).is_err());
+    // An effect-free graph reads as full-state through the default path.
     let empty = realized_profile("empty");
     assert_eq!(
         super::kv_graph_state([empty.state_effects.as_slice()]),

@@ -197,14 +197,16 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
     let control_rx = options.control_rx.take();
     let embedded_readiness_tx = options.embedded_readiness_tx.take();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(
-        options,
-        Some(surface),
-        None,
-        control_rx,
-        embedded_readiness_tx,
+    crate::sdk::embedded_shutdown::stopped_during_startup_is_ok(
+        run_runtime_cli(
+            options,
+            Some(surface),
+            None,
+            control_rx,
+            embedded_readiness_tx,
+        )
+        .await,
     )
-    .await
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -303,6 +305,10 @@ pub(super) async fn run_runtime_cli(
             context: None,
         });
     }
+
+    // Before any topology branches off, so `--local-model-only` reports
+    // `inference_request` too.
+    crate::inference_analytics::install();
 
     // These topologies are intentionally selected before plugin startup,
     // release lookup, config-driven mesh discovery, and `mesh::Node::start`.
@@ -1150,6 +1156,7 @@ pub(super) async fn build_run_auto_node_setup(
     );
     node.start_heartbeat();
     node.start_rtt_refresh();
+    crate::inference_analytics::spawn_mesh_links_reporter(node.clone());
     // iroh owns NAT traversal and relay-to-direct migration; modern nodes do
     // not start the legacy application-level reverse-dial sender.
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);

@@ -1,9 +1,5 @@
-//! Canary self-hosted placement is platform independent. The caller's resolve
-//! job picks the certification platform once per pass — macOS Metal hosts or
-//! Linux CUDA hosts — emits managed runner label sets, and every self-hosted
-//! job consumes them. The jobs never name a platform, pin a node, or fall back
-//! to a raw runner pool, and the 256-tier labels always target macOS because
-//! no other managed runner carries accelerator-memory-256plus.
+//! Family jobs request memory only. Native producers request their OS and
+//! memory; workers choose the matching payload after the scheduler places them.
 
 use super::{Node, field, handoffs as h};
 use crate::command::DynResult;
@@ -13,8 +9,15 @@ const CALLER: &str = "llama-upstream-canary.yml";
 const PASS: &str = "llama-canary-family-pass.yml";
 
 const PREFLIGHT_RUNNER: &str = "${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}";
-const PASS_128_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_128) }}";
+const PASS_MAC_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_macos) }}";
+const PASS_LINUX_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_linux) }}";
 const PASS_TIERED_RUNNER: &str = "${{ fromJSON(matrix.memory_tier == 'accelerator-memory-256plus' && inputs.runner_labels_256 || inputs.runner_labels_128) }}";
+const CONTROL_RUNNER: &str = "${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}";
+const PASS_CONTROL_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_128) }}";
+const BOOTSTRAP_RUNNER: &str =
+    "self-hosted,ARM64,jy-managed,family-certify,accelerator-memory-128plus";
+const CONTROL_PROFILE: &str =
+    "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}";
 
 pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let caller = workflows.get(CALLER).ok_or("missing canary workflow")?;
@@ -23,7 +26,61 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         .ok_or("missing canary family pass workflow")?;
 
     h::binding(h::job(caller, "preflight")?, "runs-on", PREFLIGHT_RUNNER)?;
-    h::binding(h::job(pass, "build")?, "runs-on", PASS_128_RUNNER)?;
+    for name in ["resolve", "result"] {
+        let job = h::job(caller, name)?;
+        if job.get("runs-on").map(Node::list) != Some(BOOTSTRAP_RUNNER.split(',').collect()) {
+            return Err(format!("{name} must use the closed managed runner pool").into());
+        }
+    }
+    for name in ["attempt_1", "attempt_2", "attempt_3"] {
+        h::binding(h::job(caller, name)?, "runs-on", CONTROL_RUNNER)?;
+    }
+    for name in ["combine", "aggregate", "reconcile"] {
+        h::binding(h::job(pass, name)?, "runs-on", PASS_CONTROL_RUNNER)?;
+    }
+    for (document, names) in [
+        (
+            caller,
+            &["resolve", "attempt_1", "attempt_2", "attempt_3", "result"][..],
+        ),
+        (pass, &["combine", "aggregate", "reconcile"][..]),
+    ] {
+        for name in names {
+            let (_, prepare) = h::step(
+                h::steps(h::job(document, name)?)?,
+                "uses",
+                "./.github/actions/prepare-automation",
+            )?;
+            h::binding(
+                h::member(prepare, "with")?,
+                "runner-profile",
+                CONTROL_PROFILE,
+            )?;
+        }
+    }
+    for name in ["publish-certified-canary", "alert-consecutive-failures"] {
+        let job = h::job(caller, name)?;
+        if job.get("runs-on").map(Node::list) != Some(BOOTSTRAP_RUNNER.split(',').collect()) {
+            return Err(format!("{name} must use the closed managed runner pool").into());
+        }
+        let (_, prepare) = h::step(
+            h::steps(job)?,
+            "uses",
+            "./.github/actions/prepare-automation",
+        )?;
+        h::binding(
+            h::member(prepare, "with")?,
+            "runner-profile",
+            CONTROL_PROFILE,
+        )?;
+    }
+    h::binding(h::job(pass, "build")?, "runs-on", PASS_MAC_RUNNER)?;
+    h::binding(h::job(pass, "build_linux")?, "runs-on", PASS_LINUX_RUNNER)?;
+    h::binding(
+        h::job(pass, "build_linux_pinned")?,
+        "runs-on",
+        PASS_LINUX_RUNNER,
+    )?;
     for name in ["family", "retry_family"] {
         h::binding(h::job(pass, name)?, "runs-on", PASS_TIERED_RUNNER)?;
     }
@@ -33,10 +90,10 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let resolve = h::job(caller, "resolve")?;
     let outputs = h::member(resolve, "outputs")?;
     for name in [
-        "platform",
-        "runner_profile",
         "runner_labels_128",
         "runner_labels_256",
+        "runner_labels_macos",
+        "runner_labels_linux",
     ] {
         h::binding(
             outputs,
@@ -61,23 +118,25 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
             .into());
         }
     }
-    let Some(labels_256) = script
-        .lines()
-        .find(|line| line.contains("runner_labels_256="))
-    else {
-        return Err("canary platform selection must emit runner_labels_256".into());
-    };
-    if !labels_256.contains("macOS") || labels_256.contains("$os_label") {
-        return Err("canary 256-tier runner labels must stay on macOS".into());
+    for name in ["runner_labels_128", "runner_labels_256"] {
+        let line = script
+            .lines()
+            .find(|line| line.contains(&format!("{name}=")))
+            .ok_or("missing memory label output")?;
+        if line.contains("macOS") || line.contains("Linux") {
+            return Err("family runner labels must select memory without an OS".into());
+        }
     }
-    let Some(labels_128) = script
+    let labels_mac = script
         .lines()
-        .find(|line| line.contains("runner_labels_128="))
-    else {
-        return Err("canary platform selection must emit runner_labels_128".into());
-    };
-    if !labels_128.contains("$os_label") {
-        return Err("canary 128-tier runner labels must follow the selected platform".into());
+        .find(|line| line.contains("runner_labels_macos="))
+        .ok_or("missing macOS producer labels")?;
+    let labels_linux = script
+        .lines()
+        .find(|line| line.contains("runner_labels_linux="))
+        .ok_or("missing Linux producer labels")?;
+    if !labels_mac.contains("macOS") || !labels_linux.contains("Linux") {
+        return Err("native producer labels must select their own OS".into());
     }
 
     // The family pass receives placement from its caller; it cannot invent or
@@ -87,7 +146,12 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         .and_then(|on| on.get("workflow_call"))
         .and_then(|call| call.get("inputs"))
         .ok_or("canary family pass must declare workflow_call inputs")?;
-    for name in ["runner_labels_128", "runner_labels_256", "runner_profile"] {
+    for name in [
+        "runner_labels_128",
+        "runner_labels_256",
+        "runner_labels_macos",
+        "runner_labels_linux",
+    ] {
         let input = inputs
             .get(name)
             .ok_or_else(|| format!("canary family pass must require input {name:?}"))?;
@@ -112,8 +176,13 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
             )?;
             h::binding(
                 with,
-                "runner_profile",
-                "${{ needs.resolve.outputs.runner_profile }}",
+                "runner_labels_macos",
+                "${{ needs.resolve.outputs.runner_labels_macos }}",
+            )?;
+            h::binding(
+                with,
+                "runner_labels_linux",
+                "${{ needs.resolve.outputs.runner_labels_linux }}",
             )?;
         }
     }
@@ -124,6 +193,8 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
 mod tests {
     use super::*;
     use crate::ci_validation::lane_results::workflow_yaml;
+
+    const PASS_128_RUNNER: &str = "${{ fromJSON(inputs.runner_labels_128) }}";
 
     const UPSTREAM: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -142,7 +213,7 @@ mod tests {
             ),
             (
                 "llama-canary-family-pass.yml".into(),
-                workflow_yaml::parse(FAMILY).unwrap(),
+                workflow_yaml::parse_resolved_aliases(FAMILY).unwrap(),
             ),
         ])
     }
@@ -187,6 +258,25 @@ mod tests {
     }
 
     #[test]
+    fn controller_jobs_reject_hosted_runner_fallbacks() {
+        for (workflow, job_name) in [
+            (CALLER, "resolve"),
+            (CALLER, "result"),
+            (CALLER, "publish-certified-canary"),
+            (CALLER, "alert-consecutive-failures"),
+            (PASS, "combine"),
+            (PASS, "aggregate"),
+            (PASS, "reconcile"),
+        ] {
+            let mut changed = workflows();
+            let document = changed.get_mut(workflow).unwrap();
+            let job = member_mut(member_mut(document, "jobs"), job_name);
+            *member_mut(job, "runs-on") = Node::Scalar("ubuntu-24.04".into());
+            assert!(check(&changed).is_err(), "{workflow}/{job_name}");
+        }
+    }
+
+    #[test]
     fn tiered_jobs_must_dispatch_on_the_matrix_tier() {
         let mut changed = workflows();
         let document = changed.get_mut("llama-canary-family-pass.yml").unwrap();
@@ -196,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_256_placement_cannot_follow_the_selected_platform() {
+    fn memory_256_placement_cannot_select_an_os() {
         let mut changed = workflows();
         let document = changed.get_mut("llama-upstream-canary.yml").unwrap();
         let resolve = member_mut(member_mut(document, "jobs"), "resolve");
@@ -213,7 +303,7 @@ mod tests {
             .lines()
             .map(|line| {
                 if line.contains("runner_labels_256=") {
-                    line.replace("macOS", "Linux")
+                    line.replace("\"ARM64\"", "\"Linux\", \"ARM64\"")
                 } else {
                     line.to_string()
                 }

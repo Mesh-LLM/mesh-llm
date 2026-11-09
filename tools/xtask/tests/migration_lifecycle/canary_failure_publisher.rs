@@ -136,8 +136,7 @@ impl Fixture {
 }
 #[test]
 fn retained_canary_main_failures_stop_before_snapshot_or_publication() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let tail = &source[source
         .rfind("if [[ \"$HARNESS_MODE\" == repair* ]]; then")
         .unwrap()..];
@@ -156,7 +155,7 @@ verify_repair_pin() {{ mark verify-pin; }}
 repair_candidate_until_green() {{ mark repair; return 37; }}
 snapshot_candidate_tree() {{ mark snapshot; }}
 write_candidate_bundle() {{ mark bundle; }}
-load_candidate_bundle() {{ mark load; }}
+load_candidate_bundle() {{ mark load; CANDIDATE_BASE_HEAD=fixture; CERTIFIED_SHA=fixture; }}
 materialize_verification_tree() {{ mark materialize; }}
 cleanup_verification_worktree() {{ mark cleanup; }}
 run_candidate_gates() {{ mark gates; return 41; }}
@@ -165,6 +164,7 @@ check_split_certification_roster() {{ mark roster; }}
 export_family_inputs() {{ mark export; }}
 finalize_certified_tree() {{ mark finalize; }}
 VERIFICATION_TIMEOUT_SECONDS=60
+BASE_HEAD=fixture
 {tail}
 "#
         );
@@ -203,10 +203,74 @@ VERIFICATION_TIMEOUT_SECONDS=60
     }
 }
 #[test]
+fn selected_upgrade_imports_real_candidate_into_controller_before_independent_worktree() {
+    let source = crate::canary_full_gates::fixture::source();
+    let start = source
+        .find("if [[ -n \"${CANARY_MESH_SOURCE:-}\" ]]")
+        .unwrap();
+    let end = source[start..].find("\nUPSTREAM_SHA=").unwrap() + start;
+    let fixture = Fixture::new();
+    let script = format!(
+        "#!/bin/bash\nset -euo pipefail\n{}\n{}\n{}",
+        declaration(&source, "load_candidate_bundle"),
+        declaration(&source, "materialize_verification_tree"),
+        r#"
+ROOT=$PWD
+git init --quiet -b main
+git config user.name Fixture
+git config user.email fixture@example.invalid
+mkdir -p skippy/llama_cpp
+printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > skippy/llama_cpp/upstream.txt
+git add skippy/llama_cpp/upstream.txt
+git commit --quiet -m controller
+controller=$(git rev-parse HEAD)
+TRUSTED_ROOT="$ROOT/controller"
+git clone --quiet --no-hardlinks "$ROOT" "$TRUSTED_ROOT"
+git -C "$TRUSTED_ROOT" config user.name protected-canary-bot
+git -C "$TRUSTED_ROOT" config user.email protected-canary@example.invalid
+printf '%s\n' selected-base > selected.txt
+git add selected.txt
+git commit --quiet -m selected-base
+base=$(git rev-parse HEAD)
+printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb > skippy/llama_cpp/upstream.txt
+git add skippy/llama_cpp/upstream.txt
+git commit --quiet -m candidate
+CANARY_CANDIDATE_SHA=$(git rev-parse HEAD)
+CANARY_CANDIDATE_BRANCH=llama-canary/repair-fixture-1-bbbbbbbbbb
+git branch "$CANARY_CANDIDATE_BRANCH" "$CANARY_CANDIDATE_SHA"
+CANARY_INPUT_BUNDLE="$ROOT/upgrade.bundle"
+git bundle create "$CANARY_INPUT_BUNDLE" "$CANARY_CANDIDATE_BRANCH" "^$base"
+git checkout --quiet --detach "$base"
+CANARY_SOURCE_ROOT=$ROOT
+CANARY_MESH_SOURCE=$base
+HARNESS_MODE=verify-build
+__SELECTED_SOURCE_PREPARATION__
+[[ "$(git config --local user.name)" == protected-canary-bot ]]
+[[ "$(git config --local user.email)" == protected-canary@example.invalid ]]
+if git -C "$TRUSTED_ROOT" cat-file -e "$CANARY_CANDIDATE_SHA" 2>/dev/null; then exit 91; fi
+load_candidate_bundle
+[[ "$CANDIDATE_BASE_HEAD" == "$base" ]]
+[[ "$(git -C "$TRUSTED_ROOT" rev-parse HEAD)" == "$controller" ]]
+VERIFY_ROOT="$ROOT/verification"
+RUN_KEY=fixture-1
+LLAMA_STAGE_BUILD_DIR="$ROOT/native-build"
+cleanup_verification_worktree() { :; }
+verify_repair_pin() { [[ "$(cat "$PIN_FILE")" == bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]]; }
+materialize_verification_tree
+[[ "$(git rev-parse HEAD)" == "$CANARY_CANDIDATE_SHA" ]]
+[[ "$(git -C "$TRUSTED_ROOT" rev-parse HEAD)" == "$controller" ]]
+"#
+    )
+    .replace("__SELECTED_SOURCE_PREPARATION__", &source[start..end]);
+    let result = fixture.run(&script, &[]);
+    assert!(result.0, "{result:?}");
+    fixture.close();
+}
+
+#[test]
 fn retained_candidate_import_uses_original_branch_and_restores_commit_tree() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
-    for mode in ["valid", "wrong-head", "bad-branch", "bad-sha"] {
+    let source = crate::canary_full_gates::fixture::source();
+    for mode in ["valid", "selected", "wrong-head", "bad-branch", "bad-sha"] {
         let fixture = Fixture::new();
         executable(
             &fixture.tools.join("git"),
@@ -218,14 +282,20 @@ case "$1 ${2:-}" in
 'bundle verify') ;;
 'bundle list-heads') [[ "$4" == "refs/heads/$FIXTURE_BRANCH" ]]; printf '%s refs/heads/%s\n' "$ADVERTISED" "$FIXTURE_BRANCH";;
 'fetch '*) [[ "$3" == "refs/heads/$FIXTURE_BRANCH" ]];;
+'-C '*) [[ "$2" == "$PWD/controller" && "$3" == fetch && "$4" == --no-tags && "$5" == "$PWD" && "$6" == "$FIXTURE_HEAD" ]];;
 'rev-parse '*) if [[ "$2" == "$FIXTURE_HEAD^" ]]; then printf '%s\n' "$FIXTURE_BASE"; elif [[ "$2" == "$FIXTURE_HEAD^{tree}" ]]; then printf '%s\n' "$FIXTURE_TREE"; else exit 96; fi;;
 *) exit 95;;
 esac
 "#,
         );
         let script = format!(
-            "#!/bin/bash\nset -euo pipefail\n{}\nBRANCH=llama-canary/repair-a-different-run-9-dddddddddd\nCANARY_INPUT_BUNDLE=bundle\nload_candidate_bundle\nprintf '%s %s %s\\n' \"$CERTIFIED_SHA\" \"$CANDIDATE_BASE_HEAD\" \"$VERIFICATION_TREE\"\n",
-            declaration(&source, "load_candidate_bundle")
+            "#!/bin/bash\nset -euo pipefail\n{}\nROOT=$PWD\nTRUSTED_ROOT=\"$ROOT{}\"\nBRANCH=llama-canary/repair-a-different-run-9-dddddddddd\nCANARY_INPUT_BUNDLE=bundle\nload_candidate_bundle\nprintf '%s %s %s\\n' \"$CERTIFIED_SHA\" \"$CANDIDATE_BASE_HEAD\" \"$VERIFICATION_TREE\"\n",
+            declaration(&source, "load_candidate_bundle"),
+            if mode == "selected" {
+                "/controller"
+            } else {
+                ""
+            }
         );
         let branch = if mode == "bad-branch" {
             "untrusted/branch"
@@ -246,8 +316,12 @@ esac
                 ("ADVERTISED", advertised),
             ],
         );
-        assert_eq!(output.0, mode == "valid", "{mode}: {output:?}");
-        if mode == "valid" {
+        assert_eq!(
+            output.0,
+            matches!(mode, "valid" | "selected"),
+            "{mode}: {output:?}"
+        );
+        if matches!(mode, "valid" | "selected") {
             assert_eq!(output.1, format!("{HEAD} {BASE} {TREE}\n"));
         } else {
             assert!(!fixture.trace().contains("fetch"));
@@ -303,8 +377,7 @@ printf '%s %s %s\n' "$BRANCH" "$CERTIFIED_SHA" "$VERIFICATION_TREE"
 }
 #[test]
 fn retained_finalizer_refuses_dirty_or_changed_tree_before_bundle_outputs() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     snapshot_identity(&source);
     for mode in [
         "valid",

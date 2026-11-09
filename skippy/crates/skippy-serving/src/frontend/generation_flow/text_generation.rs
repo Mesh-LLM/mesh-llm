@@ -5,7 +5,7 @@ use crate::frontend::generation::{
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use serde_json::json;
-use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
+use skippy_inference_api::{InferenceError, InferenceResult, generation::GenerationRequest};
 use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 pub(super) fn resident_capacity_target_tokens(prompt_token_count: usize) -> u64 {
@@ -50,7 +50,7 @@ impl StageOpenAiBackend {
         token_budget_stats: (usize, usize),
         stop: Option<&skippy_inference_api::StopSequence>,
         mut sampling: SamplingConfig,
-        hook_request: Option<ChatCompletionRequest>,
+        hook_request: Option<GenerationRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         ids: InferenceGenerationIds,
@@ -297,6 +297,22 @@ impl StageOpenAiBackend {
                             .then(|| gated_speculative.dflash.as_ref())
                             .flatten()
                             .map(|dflash| dflash.draft_model_path.as_path()),
+                        split_dflash_context_window: split_dflash
+                            .is_some()
+                            .then(|| gated_speculative.dflash.as_ref())
+                            .flatten()
+                            .and_then(|dflash| dflash.context_window),
+                        split_dflash_downstream_bytes_per_token: split_dflash
+                            .is_some()
+                            .then(|| gated_speculative.dflash.as_ref())
+                            .flatten()
+                            .map_or(0, |dflash| {
+                                crate::split_dflash::downstream_feature_bytes_per_token(
+                                    dflash,
+                                    config.layer_end,
+                                    usize::try_from(activation_width).unwrap_or(0),
+                                )
+                            }),
                         split_dflash_health: Default::default(),
                         prompt_token_ids: &prompt_token_ids,
                         recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids
@@ -314,7 +330,7 @@ impl StageOpenAiBackend {
             }
         };
 
-        let output = collector.finish(prompt_token_ids.len(), cache_stats)?;
+        let mut output = collector.finish(prompt_token_ids.len(), cache_stats)?;
         let mut summary_attrs = self.openai_attrs(&ids);
         summary_attrs.insert(
             "llama_stage.prompt_token_count".to_string(),
@@ -353,7 +369,7 @@ impl StageOpenAiBackend {
             "llama_stage.eog_check_ms".to_string(),
             json!(output.eog_check_ms),
         );
-        self.emit_openai_summary(
+        let total_ms = self.emit_openai_summary(
             "stage.openai_generation_summary",
             generation_timer,
             summary_attrs,
@@ -361,6 +377,64 @@ impl StageOpenAiBackend {
         // A logprobs request ran with speculation stood down above: its decode
         // rate must not count toward the speculative window.
         self.record_speculation_outcome(&output, speculating && sampling.top_logprobs.is_none());
+        if crate::generation_stats::observer_installed() {
+            output.generation_stats = Some(self.generation_stats(
+                &output,
+                &gated_speculative.effective_strategy,
+                speculating && sampling.top_logprobs.is_none(),
+                total_ms,
+            ));
+        }
         Ok(output)
+    }
+}
+
+impl StageOpenAiBackend {
+    /// The observer's view of one finished generation: counts and timings only.
+    fn generation_stats(
+        &self,
+        output: &GeneratedText,
+        speculative_strategy: &str,
+        speculation_allowed: bool,
+        total_ms: f64,
+    ) -> crate::generation_stats::GenerationStats {
+        let (split, downstream_lanes) = match &self.mode {
+            InferenceBackendMode::LocalRuntime => (false, None),
+            InferenceBackendMode::EmbeddedStageZero { lane_pool, .. } => {
+                (true, lane_pool.as_ref().map(|pool| pool.capacity))
+            }
+        };
+        let draft = output.speculative_stats.as_ref();
+        let mtp = output.native_mtp_stats;
+        let wire = output.activation_wire;
+        crate::generation_stats::GenerationStats {
+            model_id: self.model_id.clone(),
+            split,
+            downstream_lanes,
+            concurrency_limit: self.generation_limit.current_limit(),
+            context_size: self.ctx_size,
+            prompt_tokens: output.prompt_tokens,
+            completion_tokens: output.completion_tokens,
+            cached_prompt_tokens: output.cached_prompt_tokens,
+            prefill_tokens: output.suffix_prefill_tokens,
+            cache_hit_kind: output.cache_hit_kind.unwrap_or("none"),
+            queue_wait_ms: output.queue_wait_ms,
+            restore_ms: output.restore_ms,
+            prefill_ms: output.prompt_ms,
+            decode_ms: output.predicted_ms,
+            total_ms,
+            finish_reason: output.finish_reason.as_str(),
+            speculative_strategy: speculative_strategy.to_owned(),
+            speculation_allowed,
+            draft_windows: draft.map_or(0, |stats| stats.windows as u64),
+            draft_proposed_tokens: draft.map_or(0, |stats| stats.draft_tokens as u64),
+            draft_accepted_tokens: draft.map_or(0, |stats| stats.accepted_tokens as u64),
+            mtp_verifications: mtp.verification_count,
+            mtp_proposed_tokens: mtp.drafted_tokens,
+            mtp_accepted_tokens: mtp.accepted_tokens,
+            activation_codec: wire.map(|wire| wire.codec),
+            activation_prefill_bytes: wire.map_or(0, |wire| wire.prefill_bytes as u64),
+            activation_decode_bytes: wire.map_or(0, |wire| wire.decode_bytes as u64),
+        }
     }
 }

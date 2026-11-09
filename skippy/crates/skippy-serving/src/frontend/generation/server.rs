@@ -284,6 +284,16 @@ fn embedded_openai_backend_with_state_kind(
         bail!("a DFlash draft cannot be combined with native MTP or a separate draft model");
     }
     apply_native_mtp_draft_cap(&mut args.speculative, state_kind);
+    // Stage 0 of a split sizes its prefill frames by the target layers the
+    // draft reads; when the plan leaves them to the draft's header, read them
+    // once here.
+    if args.config.downstream.is_some()
+        && let Some(dflash) = args.speculative.dflash.as_mut()
+        && dflash.target_layers.is_empty()
+    {
+        dflash.target_layers = crate::split_dflash::draft_target_layers(&dflash.draft_model_path)
+            .context(crate::DFlashDraftAttachFailed)?;
+    }
     attach_native_mtp_draft_model(
         args.native_mtp_draft_model_path.as_deref(),
         &args.runtime,

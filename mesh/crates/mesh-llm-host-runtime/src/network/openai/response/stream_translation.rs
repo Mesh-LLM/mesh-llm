@@ -1,5 +1,8 @@
 use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
-use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
+use super::common::{
+    CommittedStreamFailureCause, ResponseRetryPolicy, RouteAttemptResult,
+    parse_token_usage_from_json_body,
+};
 use super::probe::{
     ResponseProbe, append_capsule_nonce_headers, append_mesh_request_id_header,
     append_mesh_served_by_header, response_is_event_stream, try_parse_response_headers,
@@ -429,11 +432,9 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
         let _ = tcp_stream.shutdown().await;
         route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::Delivered {
+        return Ok(RouteAttemptResult::CommittedStreamFailure {
             status_code: 200,
-            usage: None,
-            cache_cost: None,
-            output_digests: Default::default(),
+            cause: CommittedStreamFailureCause::BackendError,
         });
     }
     if !progress.done_seen {
@@ -1135,7 +1136,10 @@ mod tests {
 
         assert_eq!(
             route_result,
-            RouteAttemptResult::CommittedStreamFailure { status_code: 200 }
+            RouteAttemptResult::CommittedStreamFailure {
+                status_code: 200,
+                cause: CommittedStreamFailureCause::Truncated,
+            }
         );
         assert!(!body.contains("data: [DONE]"));
     }
@@ -1220,12 +1224,17 @@ data: {\"error\":{\"message\":\"deadline\",\"type\":\"server_error\",\"param\":n
 data: [DONE]\n\n",
         )
         .await;
-        let Ok(RouteAttemptResult::Delivered { output_digests, .. }) = result else {
-            panic!("expected Delivered, got {result:?}");
-        };
+        // A failed stream is reported as a committed failure, which carries
+        // no digest at all.
         assert!(
-            !output_digests.has_any(),
-            "a failed stream never carries a digest"
+            matches!(
+                result,
+                Ok(RouteAttemptResult::CommittedStreamFailure {
+                    status_code: 200,
+                    cause: CommittedStreamFailureCause::BackendError,
+                })
+            ),
+            "expected a committed backend failure, got {result:?}"
         );
     }
 
@@ -1326,14 +1335,12 @@ data: [DONE]\n\n",
         assert!(body.contains("exceeded its deadline"));
         assert!(body.contains("data: [DONE]"));
 
-        // ...but the attempt no longer reports usage-backed success.
+        // ...but the attempt is a failed inference, not a success.
         assert_eq!(
             route_result,
-            RouteAttemptResult::Delivered {
+            RouteAttemptResult::CommittedStreamFailure {
                 status_code: 200,
-                usage: None,
-                cache_cost: None,
-                output_digests: Default::default(),
+                cause: CommittedStreamFailureCause::BackendError,
             }
         );
     }
@@ -1383,16 +1390,13 @@ data: [DONE]\n\n",
 
         // The error frame still reaches the client...
         assert!(body.contains("exceeded its deadline"));
-        // ...and the embedded error is terminal: the attempt is delivered
-        // (client saw the failure) rather than misreported as an
-        // incomplete-stream truncation error.
+        // ...and the embedded error is terminal: a backend failure, not
+        // misreported as an incomplete-stream truncation.
         assert_eq!(
             route_result,
-            RouteAttemptResult::Delivered {
+            RouteAttemptResult::CommittedStreamFailure {
                 status_code: 200,
-                usage: None,
-                cache_cost: None,
-                output_digests: Default::default(),
+                cause: CommittedStreamFailureCause::BackendError,
             }
         );
     }
@@ -1444,11 +1448,9 @@ data: [DONE]\n\n",
         assert!(body.contains("exceeded its deadline"));
         assert_eq!(
             route_result,
-            RouteAttemptResult::Delivered {
+            RouteAttemptResult::CommittedStreamFailure {
                 status_code: 200,
-                usage: None,
-                cache_cost: None,
-                output_digests: Default::default(),
+                cause: CommittedStreamFailureCause::BackendError,
             }
         );
     }

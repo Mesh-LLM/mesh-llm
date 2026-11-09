@@ -81,7 +81,12 @@ fn worker_transactions(steps: &[Node], receipt_name: &str) -> DynResult<()> {
 pub(super) fn aggregate(job: &Node) -> DynResult<()> {
     let steps = h::steps(job)?;
     let (execute, command) = h::step(steps, "id", "aggregate")?;
-    preparation(steps, "${{ inputs.source }}", execute)?;
+    preparation(
+        steps,
+        "${{ inputs.source }}",
+        execute,
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     classified_context(command)?;
     h::command(
         command,
@@ -105,14 +110,14 @@ pub(super) fn aggregate(job: &Node) -> DynResult<()> {
     download(
         steps,
         "name",
-        "${{ needs.build.outputs.package }}",
+        "${{ needs.combine.outputs.package }}",
         "${{ runner.temp }}/aggregate-input",
         execute,
     )?;
     download(
         steps,
         "pattern",
-        "llama-family-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*",
+        "llama-family-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-*-${{ inputs.pass_id }}-*",
         "${{ runner.temp }}/aggregate-evidence",
         execute,
     )
@@ -148,7 +153,7 @@ pub(super) fn retry_worker(job: &Node) -> DynResult<()> {
     download(
         steps,
         "name",
-        "${{ needs.build.outputs.package }}",
+        "${{ needs.combine.outputs.package }}",
         "${{ env.PACKAGE }}",
         restore,
     )?;
@@ -171,7 +176,7 @@ pub(super) fn retry_worker(job: &Node) -> DynResult<()> {
     h::binding(
         inputs,
         "name",
-        "llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}",
+        "llama-family-retry-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}",
     )?;
     h::binding(
         inputs,
@@ -225,7 +230,12 @@ pub(super) fn publication(job: &Node) -> DynResult<()> {
         "name",
         "Verify final handoff and write evidence summary",
     )?;
-    preparation(steps, "${{ needs.resolve.outputs.source }}", verify)?;
+    preparation(
+        steps,
+        "${{ needs.resolve.outputs.source }}",
+        verify,
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     download(
         steps,
         "name",
@@ -262,7 +272,12 @@ pub(super) fn publication(job: &Node) -> DynResult<()> {
     h::before(verify, publish)
 }
 
-pub(super) fn preparation(steps: &[Node], revision: &str, execute: usize) -> DynResult<()> {
+pub(super) fn preparation(
+    steps: &[Node],
+    revision: &str,
+    execute: usize,
+    profile: &str,
+) -> DynResult<()> {
     let checkout = h::checkout(steps, revision, None)?;
     let (prepare, step) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
     if steps
@@ -275,7 +290,7 @@ pub(super) fn preparation(steps: &[Node], revision: &str, execute: usize) -> Dyn
     {
         return Err("canary controller preparation must run exactly once and fail closed".into());
     }
-    h::binding(h::member(step, "with")?, "runner-profile", "hosted-bare")?;
+    h::binding(h::member(step, "with")?, "runner-profile", profile)?;
     h::before(checkout, prepare)?;
     h::before(prepare, execute)?;
     for (index, _) in steps.iter().enumerate().filter(|(_, step)| {
@@ -330,7 +345,7 @@ pub(super) fn download(
 mod tests {
     use super::*;
     fn family() -> Node {
-        super::super::workflow_yaml::parse(include_str!(
+        super::super::workflow_yaml::parse_resolved_aliases(include_str!(
             "../../../../../.github/workflows/llama-canary-family-pass.yml"
         ))
         .unwrap()

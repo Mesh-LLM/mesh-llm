@@ -13,13 +13,13 @@ enum PendingEmission {
     End,
 }
 pub struct TerminalGuardedChatStream {
-    inner: ChatCompletionStream,
+    inner: GenerationEventStream,
     guard: Option<TerminalGuard>,
     terminal: Option<TerminalFuture>,
     pending: Option<PendingEmission>,
 }
 impl TerminalGuardedChatStream {
-    pub fn pinned(inner: ChatCompletionStream, guard: TerminalGuard) -> ChatCompletionStream {
+    pub fn pinned(inner: GenerationEventStream, guard: TerminalGuard) -> GenerationEventStream {
         Box::pin(Self {
             inner,
             guard: Some(guard),
@@ -38,7 +38,7 @@ impl Drop for TerminalGuardedChatStream {
     }
 }
 impl futures_core::Stream for TerminalGuardedChatStream {
-    type Item = InferenceResult<ChatCompletionChunk>;
+    type Item = InferenceResult<GenerationEvent>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(terminal) = self.terminal.as_mut() {
             if terminal.as_mut().poll(cx).is_pending() {
@@ -93,7 +93,7 @@ mod tests {
     impl InferenceHookPolicy for BlockingTerminal {
         async fn on_chat_completion_terminal(
             &self,
-            _request: &ChatCompletionRequest,
+            _request: &GenerationRequest,
             _id: &str,
             outcome: &ChatCompletionOutcome<'_>,
         ) {
@@ -121,7 +121,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
                 expected_error: error,
             });
-            let inner: ChatCompletionStream = if error {
+            let inner: GenerationEventStream = if error {
                 Box::pin(futures_util::stream::once(async {
                     Err(InferenceError::backend("failure"))
                 }))
@@ -129,7 +129,7 @@ mod tests {
                 Box::pin(futures_util::stream::empty())
             };
             let guard =
-                TerminalGuard::new(hooks.clone(), ChatCompletionRequest::default(), "id".into());
+                TerminalGuard::new(hooks.clone(), GenerationRequest::default(), "id".into());
             let mut stream = TerminalGuardedChatStream::pinned(inner, guard);
             let pending = tokio::spawn(async move { stream.next().await });
             hooks.started.notified().await;
@@ -153,7 +153,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
                 expected_error: error,
             });
-            let inner: ChatCompletionStream = if error {
+            let inner: GenerationEventStream = if error {
                 Box::pin(futures_util::stream::once(async {
                     Err(InferenceError::backend("failure"))
                 }))
@@ -161,7 +161,7 @@ mod tests {
                 Box::pin(futures_util::stream::empty())
             };
             let guard =
-                TerminalGuard::new(hooks.clone(), ChatCompletionRequest::default(), "id".into());
+                TerminalGuard::new(hooks.clone(), GenerationRequest::default(), "id".into());
             let mut stream = TerminalGuardedChatStream::pinned(inner, guard);
             assert!(futures_util::poll!(stream.next()).is_pending());
             hooks.started.notified().await;

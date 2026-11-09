@@ -92,7 +92,7 @@ curl -s http://localhost:9337/v1/chat/completions -H "Content-Type: application/
 
 System One models answer typed questions through
 [the Decisions API](/docs/pages/decisions-api/) at `POST /v1/decisions` or the
-[native System One API](/docs/pages/system-one-api/) at `POST /systemone`.
+[native System One API](/docs/pages/system-one-api/) at `POST /v1/systemone`.
 Chat completion methods do not call either route.
 
 ## Streaming

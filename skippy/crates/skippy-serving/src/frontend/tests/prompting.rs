@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 #[test]
 fn chat_runtime_feature_guard_allows_tool_calls() {
@@ -20,18 +21,21 @@ fn chat_runtime_feature_guard_allows_tool_calls() {
             "parallel_tool_calls": true
         }),
     ] {
-        let request: ChatCompletionRequest = serde_json::from_value(payload).unwrap();
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(payload)
+            .unwrap()
+            .into();
         ensure_chat_runtime_features_supported(&request).unwrap();
     }
 }
 
 #[test]
 fn plain_chat_does_not_require_chat_output_parser() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(!chat_output_parser_required(
         &request,
@@ -41,11 +45,12 @@ fn plain_chat_does_not_require_chat_output_parser() {
 
 #[test]
 fn hidden_reasoning_format_requires_chat_output_parser_for_plain_chat() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let template_options = ChatTemplateOptions {
         reasoning_format: Some(ChatReasoningFormat::Hidden),
         ..ChatTemplateOptions::default()
@@ -56,11 +61,12 @@ fn hidden_reasoning_format_requires_chat_output_parser_for_plain_chat() {
 
 #[test]
 fn reasoning_format_none_leaves_plain_chat_unparsed() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let template_options = ChatTemplateOptions {
         reasoning_format: Some(ChatReasoningFormat::None),
         ..ChatTemplateOptions::default()
@@ -128,7 +134,7 @@ fn assigns_unique_ids_when_llama_message_tool_calls_repeat_an_id() {
 fn parses_llama_message_reasoning_content() {
     let parsed = parsed_chat_message_from_json(
         r#"{"role":"assistant","reasoning_content":"Checked facts first.","content":"Final answer."}"#,
-        &ChatCompletionRequest {
+        &GenerationRequest {
             tools: None,
             ..tool_request()
         },
@@ -177,6 +183,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -184,7 +191,8 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         tool_calls: None,
     };
 
-    let response = chat_response_from_generated_text("qwen".to_string(), &output, Some(parsed));
+    let response =
+        generation_response_from_generated_text("qwen".to_string(), &output, Some(parsed));
 
     let message = &response.choices[0].message;
     assert_eq!(message.content.as_deref(), Some("Final answer."));
@@ -234,6 +242,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -275,6 +284,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -332,6 +342,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -369,6 +380,7 @@ fn split_prefix_cache_hit_is_reported_in_timings() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -433,8 +445,8 @@ fn auto_reasoning_visibility_keeps_reasoning_content() {
 }
 
 #[test]
-fn generation_event_to_chat_chunk_emits_reasoning_delta() {
-    let chunk = generation_event_to_chat_chunk(
+fn generation_event_to_inference_event_emits_reasoning_delta() {
+    let chunk = generation_event_to_inference_event(
         Ok(GenerationStreamEvent::ReasoningDelta(
             "Checking the premise.".to_string(),
         )),
@@ -470,7 +482,7 @@ fn llama_message_tool_parser_rejects_unknown_tool() {
 
 #[test]
 fn tool_choice_limits_allowed_tool_name() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "look this up"}],
         "tools": [
@@ -479,7 +491,8 @@ fn tool_choice_limits_allowed_tool_name() {
         ],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(parsed_tool_calls_from_message_json(
         r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_123","type":"function","function":{"name":"search","arguments":"{}"}}]}"#,
@@ -728,16 +741,17 @@ fn tool_call_stream_delta_adds_indexes() {
 
 #[test]
 fn chat_message_generation_value_preserves_tool_history() {
-    let message: skippy_inference_api::ChatMessage = serde_json::from_value(json!({
-        "role": "assistant",
-        "content": null,
-        "tool_calls": [{
-            "id": "call_123",
-            "type": "function",
-            "function": {"name": "lookup", "arguments": "{\"city\":\"Sydney\"}"}
-        }]
-    }))
-    .unwrap();
+    let message: skippy_inference_api::generation::GenerationMessage =
+        serde_json::from_value(json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{\"city\":\"Sydney\"}"}
+            }]
+        }))
+        .unwrap();
     let mut media = Vec::new();
 
     let value = chat_message_generation_value(&message, "<__media__>", &mut media).unwrap();
@@ -749,15 +763,16 @@ fn chat_message_generation_value_preserves_tool_history() {
 
 #[test]
 fn chat_message_generation_value_preserves_omitted_content() {
-    let message: skippy_inference_api::ChatMessage = serde_json::from_value(json!({
-        "role": "assistant",
-        "tool_calls": [{
-            "id": "call_123",
-            "type": "function",
-            "function": {"name": "lookup", "arguments": "{}"}
-        }]
-    }))
-    .unwrap();
+    let message: skippy_inference_api::generation::GenerationMessage =
+        serde_json::from_value(json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"}
+            }]
+        }))
+        .unwrap();
     let mut media = Vec::new();
 
     let value = chat_message_generation_value(&message, "<__media__>", &mut media).unwrap();
@@ -806,6 +821,7 @@ fn generated_text_with_logprobs() -> GeneratedText {
             },
         ]),
         activation_wire: None,
+        generation_stats: None,
     }
 }
 
@@ -865,7 +881,7 @@ fn timings_report_activation_wire_bytes_per_token() {
 fn chat_response_reports_token_logprobs_in_openai_shape() {
     let output = generated_text_with_logprobs();
 
-    let response = chat_response_from_generated_text("qwen".to_string(), &output, None);
+    let response = generation_response_from_generated_text("qwen".to_string(), &output, None);
 
     assert_eq!(
         response.choices[0].logprobs,
@@ -888,7 +904,7 @@ fn chat_response_reports_token_logprobs_in_openai_shape() {
 
     let mut plain = output;
     plain.token_logprobs = None;
-    let response = chat_response_from_generated_text("qwen".to_string(), &plain, None);
+    let response = generation_response_from_generated_text("qwen".to_string(), &plain, None);
     assert_eq!(response.choices[0].logprobs, None);
 }
 
@@ -911,4 +927,51 @@ fn completion_response_reports_token_logprobs_in_legacy_shape() {
     plain.token_logprobs = None;
     let response = completion_response_from_generated_text("qwen".to_string(), &plain);
     assert_eq!(response.choices[0].logprobs, None);
+}
+
+#[tokio::test]
+async fn streaming_skip_chat_parsing_preserves_tool_shaped_text() -> Result<()> {
+    let Some(model_path) = env::var_os("SKIPPY_CHAT_PARSER_TEST_MODEL") else {
+        eprintln!(
+            "set SKIPPY_CHAT_PARSER_TEST_MODEL to a native fixture to exercise streaming parsing"
+        );
+        return Ok(());
+    };
+    let backend = local_openai_backend(
+        StageConfig {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            model_id: "parser-fixture".into(),
+            layer_start: 0,
+            layer_end: 2,
+            lane_count: 1,
+            ctx_size: 128,
+            n_gpu_layers: 0,
+            native_mtp_enabled: false,
+            ..prefix_cache_test_config()
+        },
+        "parser-fixture",
+    )?;
+    let request = tool_request();
+    let metadata = json!({"skip_chat_parsing": true, "grammar_triggers": []}).to_string();
+    let text = "TOOL_CALL lookup {\"city\":\"Sydney\"}";
+    let direct = backend
+        .parse_chat_output(text, &request, Some(&metadata), false)?
+        .expect("raw content");
+    assert_eq!(direct.content.as_deref(), Some(text));
+    assert!(direct.tool_calls.is_none());
+    let mut parser = ChatOutputStreamParser::new(backend, request, metadata, true)?;
+    let mut events = parser.push_delta("TOOL_CALL lookup ")?;
+    events.extend(parser.push_delta("{\"city\":\"Sydney\"}")?);
+    let (final_events, reason) = parser.finish(text, FinishReason::Stop)?;
+    events.extend(final_events);
+    let mut content = String::new();
+    for event in events {
+        match event {
+            GenerationStreamEvent::Delta(delta) => content.push_str(&delta),
+            _ => panic!("skip_chat_parsing emitted a structured event"),
+        }
+    }
+    assert_eq!(content, text);
+    assert_eq!(reason, FinishReason::Stop);
+    Ok(())
 }

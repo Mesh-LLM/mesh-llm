@@ -28,10 +28,10 @@ use crate::kv_integration::{KvStageIntegration, PrefillKvIdentity, StagePrefixCa
 use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
 use axum::http::StatusCode;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceErrorKind;
 use skippy_inference_api::InferenceResult;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_metrics::attr as attr_key;
 use skippy_runtime::NativeMtpDraft as RuntimeNativeMtpDraft;
 use skippy_runtime::SamplingConfig;
@@ -45,6 +45,7 @@ use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sampl
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
 mod exact_state_recording;
+use crate::kv_integration::ExactStateKvExport;
 // Test-only: lets iteration_scheduler tests exercise the real outstanding-
 // capture accounting through the real channel/command types.
 #[cfg(test)]
@@ -261,7 +262,7 @@ pub(super) struct DecodeState {
     pub(super) runtime_lock_acquires: usize,
     pub(super) runtime_sessions_before: Option<RuntimeSessionStats>,
     pub(super) runtime_sessions_after: Option<RuntimeSessionStats>,
-    pub(super) hook_request: Option<ChatCompletionRequest>,
+    pub(super) hook_request: Option<GenerationRequest>,
     pub(super) hook_runtime: Option<tokio::runtime::Handle>,
     pub(super) generation_hooks_active: bool,
     pub(super) linear_proposal_max_tokens: usize,
@@ -946,6 +947,7 @@ impl StageOpenAiBackend {
                     request.prompt_token_ids[..boundary].to_vec(),
                     "shared_prefill_checkpoint",
                     true,
+                    ExactStateKvExport::Now,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -990,6 +992,7 @@ impl StageOpenAiBackend {
                     self.kv.as_ref().is_some_and(|kv| {
                         kv.full_exact_state_writes_through_l3(request.prompt_token_ids.len())
                     }),
+                    ExactStateKvExport::Now,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -1300,6 +1303,7 @@ impl StageOpenAiBackend {
                     checkpoint_tokens,
                     "chat_prefix_checkpoint",
                     true,
+                    ExactStateKvExport::Now,
                 );
                 prefill_cache_chunks(
                     runtime,

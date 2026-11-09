@@ -1,0 +1,3119 @@
+[
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": "answer",
+            "reasoning_content": "reason",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "plain",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "<frontend-time>",
+            "id": "<chatcmpl-frontend-id>",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "an",
+                  "reasoning_content": "reason"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "swer"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        "data: [DONE]"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "stream",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "<frontend-time>",
+            "id": "<chatcmpl-frontend-id>",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "an",
+                  "reasoning_content": "reason"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "swer"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk",
+            "usage": {
+              "completion_tokens": 7,
+              "prompt_tokens": 21,
+              "total_tokens": 28
+            }
+          }
+        }
+      ],
+      [
+        "data: [DONE]"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "stream-usage",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "tool_calls",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": null,
+            "reasoning_content": "reason",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"x\":1}",
+                  "name": "alpha"
+                },
+                "id": "call_alpha",
+                "type": "function"
+              },
+              {
+                "function": {
+                  "arguments": "{}",
+                  "name": "beta"
+                },
+                "id": "call_beta",
+                "type": "function"
+              }
+            ]
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "tools",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "<frontend-time>",
+            "id": "<chatcmpl-frontend-id>",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": "reason",
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "{\"x\":",
+                        "name": "alpha"
+                      },
+                      "id": "call_alpha",
+                      "index": 0,
+                      "type": "function"
+                    },
+                    {
+                      "function": {
+                        "arguments": "{",
+                        "name": "beta"
+                      },
+                      "id": "call_beta",
+                      "index": 1,
+                      "type": "function"
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "1}"
+                      },
+                      "index": 0
+                    },
+                    {
+                      "function": {
+                        "arguments": "}"
+                      },
+                      "index": 1
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "tool_calls",
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        "data: [DONE]"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "stream-tools",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "scripted rejection",
+        "param": "seed",
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "reject",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "scripted rejection",
+        "param": "seed",
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "stream-reject",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "<frontend-time>",
+            "id": "<chatcmpl-frontend-id>",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "an",
+                  "reasoning_content": "reason"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "error": {
+              "code": "internal_server_error",
+              "message": "scripted stream failure",
+              "param": null,
+              "type": "server_error"
+            }
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "swer"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": 42,
+            "id": "scripted-generation",
+            "model": "fixture-model",
+            "object": "chat.completion.chunk"
+          }
+        }
+      ],
+      [
+        "data: [DONE]"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "stream-error",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": 0.30000001192092896,
+          "logit_bias": {
+            "7": -1
+          },
+          "logprobs": true,
+          "max_completion_tokens": 7,
+          "max_tokens": 9,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": 1,
+          "parallel_tool_calls": null,
+          "presence_penalty": 0.10000000149011612,
+          "prompt_cache_key": "cache-a",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": null,
+          "reasoning_effort": "high",
+          "response_format": null,
+          "seed": 6,
+          "stop": [
+            "END"
+          ],
+          "stream": false,
+          "stream_options": null,
+          "temperature": 0.20000000298023224,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": 2,
+          "top_p": 0.8999999761581421,
+          "user": "person"
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": "answer",
+            "reasoning_content": "reason",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "controls",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "future_option": {
+            "a": 1
+          },
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "future_field": null,
+              "role": "future-role"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": "answer",
+            "reasoning_content": "reason",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "ignored-fields",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": null,
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{}",
+                    "name": "alpha"
+                  },
+                  "id": "call_alpha",
+                  "type": "function"
+                }
+              ]
+            },
+            {
+              "content": "result",
+              "role": "tool",
+              "tool_call_id": "call_alpha"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": "answer",
+            "reasoning_content": "reason",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "null-content",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "before",
+                  "type": "text"
+                },
+                {
+                  "image_url": {
+                    "url": "data:image/png;base64,AA=="
+                  },
+                  "text": null,
+                  "type": "image_url"
+                },
+                {
+                  "text": "after",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": "answer",
+            "reasoning_content": "reason",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "ordered-parts",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": false,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": {
+            "function": {
+              "name": "alpha"
+            },
+            "type": "function"
+          },
+          "tools": [
+            {
+              "function": {
+                "future": 1,
+                "name": "alpha",
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "future": 2,
+              "type": "function"
+            }
+          ],
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": {
+            "content": []
+          },
+          "message": {
+            "content": "answer",
+            "reasoning_content": "reason",
+            "role": "assistant"
+          }
+        }
+      ],
+      "created": 42,
+      "id": "scripted-generation",
+      "model": "fixture-model",
+      "object": "chat.completion",
+      "timings": {
+        "decode_ms": 12.5
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 21,
+        "total_tokens": 28
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "tools-input",
+    "status": 200
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "messages is required",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "empty-messages",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "messages produced an empty prompt",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "empty-prompt",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "tools[0].function must be an object",
+        "param": "tools",
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "invalid-tools",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "response_format must be an object with a type field",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "invalid-format",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "max_tokens must be greater than zero",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "zero-limit",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "unsupported_model_feature",
+        "message": "n > 1 is parsed but multiple choices are not yet implemented",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "many-choices",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "code": "invalid_value",
+        "message": "top_logprobs requires logprobs=true",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "logprobs-without-flag",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "content": [
+        {
+          "text": "answer",
+          "type": "text"
+        }
+      ],
+      "id": "msg_scripted-generation",
+      "model": "fixture-model",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 7
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-plain",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        "event: message_start",
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "msg_11111111-2222-4333-8444-555555555555",
+              "model": "fixture-model",
+              "role": "assistant",
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_start",
+        {
+          "data": {
+            "content_block": {
+              "text": "",
+              "type": "text"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "text": "an",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "text": "swer",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: content_block_stop",
+        {
+          "data": {
+            "index": 0,
+            "type": "content_block_stop"
+          }
+        }
+      ],
+      [
+        "event: message_delta",
+        {
+          "data": {
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 21,
+              "output_tokens": 7
+            }
+          }
+        }
+      ],
+      [
+        "event: message_stop",
+        {
+          "data": {
+            "type": "message_stop"
+          }
+        }
+      ],
+      [
+        ": stream complete"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-stream",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "content": [
+        {
+          "id": "call_alpha",
+          "input": {
+            "x": 1
+          },
+          "name": "alpha",
+          "type": "tool_use"
+        },
+        {
+          "id": "call_beta",
+          "input": {},
+          "name": "beta",
+          "type": "tool_use"
+        }
+      ],
+      "id": "msg_scripted-generation",
+      "model": "fixture-model",
+      "role": "assistant",
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 7
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-tools",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        "event: message_start",
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "msg_11111111-2222-4333-8444-555555555555",
+              "model": "fixture-model",
+              "role": "assistant",
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_start",
+        {
+          "data": {
+            "content_block": {
+              "id": "call_alpha",
+              "input": {},
+              "name": "alpha",
+              "type": "tool_use"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "partial_json": "{\"x\":",
+              "type": "input_json_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: content_block_start",
+        {
+          "data": {
+            "content_block": {
+              "id": "call_beta",
+              "input": {},
+              "name": "beta",
+              "type": "tool_use"
+            },
+            "index": 1,
+            "type": "content_block_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "partial_json": "{",
+              "type": "input_json_delta"
+            },
+            "index": 1,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "partial_json": "1}",
+              "type": "input_json_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "partial_json": "}",
+              "type": "input_json_delta"
+            },
+            "index": 1,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: content_block_stop",
+        {
+          "data": {
+            "index": 0,
+            "type": "content_block_stop"
+          }
+        }
+      ],
+      [
+        "event: content_block_stop",
+        {
+          "data": {
+            "index": 1,
+            "type": "content_block_stop"
+          }
+        }
+      ],
+      [
+        "event: message_delta",
+        {
+          "data": {
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 21,
+              "output_tokens": 7
+            }
+          }
+        }
+      ],
+      [
+        "event: message_stop",
+        {
+          "data": {
+            "type": "message_stop"
+          }
+        }
+      ],
+      [
+        ": stream complete"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-stream-tools",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "error": {
+        "message": "scripted rejection",
+        "type": "invalid_request_error"
+      },
+      "type": "error"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-reject",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        "event: message_start",
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "msg_11111111-2222-4333-8444-555555555555",
+              "model": "fixture-model",
+              "role": "assistant",
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_start",
+        {
+          "data": {
+            "content_block": {
+              "text": "",
+              "type": "text"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          }
+        }
+      ],
+      [
+        "event: content_block_delta",
+        {
+          "data": {
+            "delta": {
+              "text": "an",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          }
+        }
+      ],
+      [
+        "event: error",
+        {
+          "data": {
+            "error": {
+              "message": "scripted stream failure",
+              "type": "api_error"
+            },
+            "type": "error"
+          }
+        }
+      ],
+      [
+        ": stream complete"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-stream-error",
+    "status": 200
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "message": "request.future_option is not supported",
+        "type": "invalid_request_error"
+      },
+      "type": "error"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-unknown-field",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "system",
+              "role": "system"
+            },
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "effort": null,
+            "enabled": true,
+            "exclude": null,
+            "max_tokens": null
+          },
+          "reasoning_effort": "high",
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "content": [
+        {
+          "text": "answer",
+          "type": "text"
+        }
+      ],
+      "id": "msg_scripted-generation",
+      "model": "fixture-model",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 7
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-compatible-defaults",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "first\ninline",
+              "role": "system"
+            },
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "content": [
+        {
+          "text": "answer",
+          "type": "text"
+        }
+      ],
+      "id": "msg_scripted-generation",
+      "model": "fixture-model",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 7
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-inline-system",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 16,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"x\":1}",
+                    "name": "alpha"
+                  },
+                  "id": "call_alpha",
+                  "type": "function"
+                }
+              ]
+            },
+            {
+              "content": "result",
+              "role": "tool",
+              "tool_call_id": "call_alpha"
+            },
+            {
+              "content": "before\nafter",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "content": [
+        {
+          "text": "answer",
+          "type": "text"
+        }
+      ],
+      "id": "msg_scripted-generation",
+      "model": "fixture-model",
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "type": "message",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 7
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-tool-result-order",
+    "status": 200
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "message": "messages[0]: role must be `user` or `assistant`, got `developer`",
+        "type": "invalid_request_error"
+      },
+      "type": "error"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-bad-role",
+    "status": 400
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "message": "messages: at least one message is required",
+        "type": "invalid_request_error"
+      },
+      "type": "error"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-empty",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "background": false,
+      "completed_at": 42,
+      "conversation": null,
+      "created_at": 42,
+      "error": null,
+      "finish_reason": "stop",
+      "id": "scripted-generation",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "fixture-model",
+      "object": "response",
+      "output": [
+        {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": {
+                "content": []
+              },
+              "text": "answer",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_42",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        }
+      ],
+      "output_text": "answer",
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": null,
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": null,
+      "status": "completed",
+      "temperature": null,
+      "text": {
+        "format": {
+          "type": "text"
+        }
+      },
+      "tool_choice": "auto",
+      "tools": [],
+      "top_logprobs": null,
+      "top_p": null,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 21,
+        "input_tokens_details": {
+          "cached_tokens": null
+        },
+        "output_tokens": 7,
+        "total_tokens": 28
+      },
+      "user": null
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "responses",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": true,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": true,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": [
+      [
+        "event: response.created",
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "completed_at": null,
+              "conversation": null,
+              "created_at": "<frontend-time>",
+              "error": null,
+              "id": "<resp-frontend-id>",
+              "incomplete_details": null,
+              "instructions": null,
+              "max_output_tokens": null,
+              "max_tool_calls": null,
+              "metadata": {},
+              "model": "fixture-model",
+              "object": "response",
+              "output": [],
+              "output_text": "",
+              "parallel_tool_calls": true,
+              "previous_response_id": null,
+              "prompt": null,
+              "prompt_cache_key": null,
+              "prompt_cache_retention": null,
+              "reasoning": {
+                "effort": null,
+                "summary": null
+              },
+              "safety_identifier": null,
+              "service_tier": null,
+              "status": "in_progress",
+              "temperature": null,
+              "text": {
+                "format": {
+                  "type": "text"
+                }
+              },
+              "tool_choice": "auto",
+              "tools": [],
+              "top_logprobs": null,
+              "top_p": null,
+              "truncation": "disabled",
+              "usage": null,
+              "user": null
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          }
+        }
+      ],
+      [
+        "event: response.output_item.added",
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "<msg-frontend-id>",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 2,
+            "type": "response.output_item.added"
+          }
+        }
+      ],
+      [
+        "event: response.content_part.added",
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "<msg-frontend-id>",
+            "output_index": 0,
+            "part": {
+              "annotations": [],
+              "text": "",
+              "type": "output_text"
+            },
+            "sequence_number": 3,
+            "type": "response.content_part.added"
+          }
+        }
+      ],
+      [
+        "event: response.output_text.delta",
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "an",
+            "item_id": "<msg-frontend-id>",
+            "output_index": 0,
+            "sequence_number": 4,
+            "type": "response.output_text.delta"
+          }
+        }
+      ],
+      [
+        "event: response.output_text.delta",
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "swer",
+            "item_id": "<msg-frontend-id>",
+            "output_index": 0,
+            "sequence_number": 5,
+            "type": "response.output_text.delta"
+          }
+        }
+      ],
+      [
+        "event: response.output_text.done",
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "<msg-frontend-id>",
+            "output_index": 0,
+            "sequence_number": 6,
+            "text": "answer",
+            "type": "response.output_text.done"
+          }
+        }
+      ],
+      [
+        "event: response.content_part.done",
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "<msg-frontend-id>",
+            "output_index": 0,
+            "part": {
+              "annotations": [],
+              "text": "answer",
+              "type": "output_text"
+            },
+            "sequence_number": 7,
+            "type": "response.content_part.done"
+          }
+        }
+      ],
+      [
+        "event: response.output_item.done",
+        {
+          "data": {
+            "item": {
+              "content": [
+                {
+                  "annotations": [],
+                  "text": "answer",
+                  "type": "output_text"
+                }
+              ],
+              "id": "<msg-frontend-id>",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 8,
+            "type": "response.output_item.done"
+          }
+        }
+      ],
+      [
+        "event: response.completed",
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "completed_at": "<frontend-time>",
+              "conversation": null,
+              "created_at": "<frontend-time>",
+              "error": null,
+              "id": "<resp-frontend-id>",
+              "incomplete_details": null,
+              "instructions": null,
+              "max_output_tokens": null,
+              "max_tool_calls": null,
+              "metadata": {},
+              "model": "fixture-model",
+              "object": "response",
+              "output": [
+                {
+                  "content": [
+                    {
+                      "annotations": [],
+                      "text": "answer",
+                      "type": "output_text"
+                    }
+                  ],
+                  "id": "<msg-frontend-id>",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                }
+              ],
+              "output_text": "answer",
+              "parallel_tool_calls": true,
+              "previous_response_id": null,
+              "prompt": null,
+              "prompt_cache_key": null,
+              "prompt_cache_retention": null,
+              "reasoning": {
+                "effort": null,
+                "summary": null
+              },
+              "safety_identifier": null,
+              "service_tier": null,
+              "status": "completed",
+              "temperature": null,
+              "text": {
+                "format": {
+                  "type": "text"
+                }
+              },
+              "tool_choice": "auto",
+              "tools": [],
+              "top_logprobs": null,
+              "top_p": null,
+              "truncation": "disabled",
+              "usage": null,
+              "user": null
+            },
+            "sequence_number": 9,
+            "type": "response.completed"
+          }
+        }
+      ],
+      [
+        "data: [DONE]"
+      ]
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "responses-stream",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": {
+          "cancelled": false,
+          "observe_usage": false,
+          "request_id": "11111111-2222-4333-8444-555555555555",
+          "trusted_session": true
+        },
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": null,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": [
+            {
+              "function": {
+                "name": "alpha",
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ],
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "background": false,
+      "completed_at": 42,
+      "conversation": null,
+      "created_at": 42,
+      "error": null,
+      "finish_reason": "tool_calls",
+      "id": "scripted-generation",
+      "incomplete_details": null,
+      "instructions": null,
+      "max_output_tokens": null,
+      "max_tool_calls": null,
+      "metadata": {},
+      "model": "fixture-model",
+      "object": "response",
+      "output": [
+        {
+          "arguments": "{\"x\":1}",
+          "call_id": "call_alpha",
+          "id": "fc_42_0",
+          "name": "alpha",
+          "status": "completed",
+          "type": "function_call"
+        },
+        {
+          "arguments": "{}",
+          "call_id": "call_beta",
+          "id": "fc_42_1",
+          "name": "beta",
+          "status": "completed",
+          "type": "function_call"
+        }
+      ],
+      "output_text": "",
+      "parallel_tool_calls": true,
+      "previous_response_id": null,
+      "prompt": null,
+      "prompt_cache_key": null,
+      "prompt_cache_retention": null,
+      "reasoning": {
+        "effort": null,
+        "summary": null
+      },
+      "safety_identifier": null,
+      "service_tier": null,
+      "status": "completed",
+      "temperature": null,
+      "text": {
+        "format": {
+          "type": "text"
+        }
+      },
+      "tool_choice": "auto",
+      "tools": [],
+      "top_logprobs": null,
+      "top_p": null,
+      "truncation": "disabled",
+      "usage": {
+        "input_tokens": 21,
+        "input_tokens_details": {
+          "cached_tokens": null
+        },
+        "output_tokens": 7,
+        "total_tokens": 28
+      },
+      "user": null
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "responses-tools",
+    "status": 200
+  },
+  {
+    "backend": [
+      {
+        "context": null,
+        "request": {
+          "frequency_penalty": null,
+          "logit_bias": null,
+          "logprobs": null,
+          "max_completion_tokens": 1,
+          "max_tokens": null,
+          "mesh_internal_agent_session_id": "fixture-session",
+          "mesh_internal_agent_session_source": "x-agent-session",
+          "messages": [
+            {
+              "content": "hello",
+              "role": "user"
+            }
+          ],
+          "model": "fixture-model",
+          "n": null,
+          "parallel_tool_calls": null,
+          "presence_penalty": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": null,
+          "reasoning_effort": null,
+          "response_format": null,
+          "seed": null,
+          "stop": null,
+          "stream": false,
+          "stream_options": null,
+          "temperature": null,
+          "tool_choice": null,
+          "tools": null,
+          "top_logprobs": null,
+          "top_p": null,
+          "user": null
+        }
+      }
+    ],
+    "body": {
+      "input_tokens": 21
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-count",
+    "status": 200
+  },
+  {
+    "backend": [],
+    "body": {
+      "error": {
+        "message": "invalid JSON request body: Failed to deserialize the JSON body into the target type: missing field `max_tokens` at line 1 column 72",
+        "type": "invalid_request_error"
+      },
+      "type": "error"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "messages-missing-limit",
+    "status": 400
+  },
+  {
+    "backend": [
+      {
+        "system_one": {
+          "images": null,
+          "model": "fixture-model",
+          "questions": {
+            "q": {
+              "criteria": null,
+              "instructions": null,
+              "type": "noul"
+            }
+          },
+          "samples": null,
+          "sequential": null,
+          "state": {
+            "a": 2,
+            "z": 1
+          },
+          "steps": null,
+          "think": null
+        }
+      }
+    ],
+    "body": {
+      "error": {
+        "code": "unsupported_model_feature",
+        "message": "scripted SystemOne backend",
+        "param": null,
+        "type": "invalid_request_error"
+      }
+    },
+    "headers": {
+      "content-type": "application/json",
+      "x-capsule-client-nonce": "11111111-2222-4333-8444-555555555555",
+      "x-request-id": "11111111-2222-4333-8444-555555555555"
+    },
+    "name": "system-one",
+    "status": 400
+  }
+]

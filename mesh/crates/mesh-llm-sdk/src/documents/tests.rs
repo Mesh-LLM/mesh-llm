@@ -11,6 +11,7 @@ async fn multipart_upload_preserves_binary_and_provider_error_response() {
         let (mut stream, _) = listener.accept().await.unwrap();
         let (headers, body) = read_upload(&mut stream).await;
         assert!(headers.starts_with("POST /mesh/v1/documents/ocr HTTP/1.1\r\n"));
+        assert_accept(&headers, "text/markdown");
         assert!(
             headers
                 .to_ascii_lowercase()
@@ -30,11 +31,11 @@ async fn multipart_upload_preserves_binary_and_provider_error_response() {
         );
         for field in [
             "name=\"model\"\r\n\r\norg/ocr@revision#profile\r\n",
-            "name=\"response_format\"\r\n\r\nmarkdown\r\n",
             "name=\"max_pages\"\r\n\r\n3\r\n",
         ] {
             assert!(part_headers.contains(field), "missing field: {field}");
         }
+        assert!(!part_headers.contains("name=\"response_format\""));
         let body = "# Provider rejected page 2\n";
         stream
             .write_all(
@@ -68,6 +69,66 @@ async fn multipart_upload_preserves_binary_and_provider_error_response() {
     assert!(error.to_string().contains("422"));
     assert!(error.to_string().contains("Provider rejected page 2"));
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn output_formats_use_accept_without_a_legacy_multipart_field() {
+    for (format, accept, response_body) in [
+        (None, "application/json", r#"{"pages":[{"text":"café"}]}"#),
+        (
+            Some("json"),
+            "application/json",
+            r#"{"pages":[{"text":"café"}]}"#,
+        ),
+        (Some("text"), "text/plain", "café\n"),
+        (Some("markdown"), "text/markdown", "# café\n"),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (headers, body) = read_upload(&mut stream).await;
+            assert!(headers.starts_with("POST /mesh/v1/documents/ocr HTTP/1.1\r\n"));
+            assert_accept(&headers, accept);
+            let multipart = String::from_utf8_lossy(&body);
+            assert!(!multipart.contains("name=\"response_format\""));
+            assert!(!multipart.contains("name=\"max_pages\""));
+            assert!(multipart.contains("name=\"model\"\r\n\r\nocr\r\n"));
+            assert!(multipart.contains("name=\"file\"; filename=\"document\""));
+            assert!(multipart.contains("Content-Type: application/octet-stream\r\n"));
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {accept}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                        response_body.len(),
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let mut options = DocumentOcrOptions::new("ocr");
+        options.response_format = format.map(str::to_owned);
+        let response = OpenAiClient::new(format!("http://{address}/v1"))
+            .document_ocr(vec![0, 255, 13, 10], options)
+            .await
+            .unwrap();
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.content_type.as_deref(), Some(accept));
+        assert_eq!(response.body, response_body);
+        server.await.unwrap();
+    }
+}
+
+fn assert_accept(headers: &str, expected: &str) {
+    let values = headers
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("accept").then(|| value.trim())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(values, [expected]);
 }
 
 #[test]

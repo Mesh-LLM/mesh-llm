@@ -2,6 +2,6 @@
 #[path = "certify_verify.rs"]
 mod certify_verify;
 #[path = "fixture.rs"]
-mod fixture;
+pub(super) mod fixture;
 #[path = "prepare_build.rs"]
 mod prepare_build;

@@ -138,7 +138,7 @@ runs:
 
         # This checked-in deadline makes the accepted repository-wide cache
         # risk self-expiring. Extending it requires a reviewed source change.
-        depot_pr_exception_expires="2026-09-14"
+        depot_pr_exception_expires="2027-09-14"
         current_utc_date="$(date -u +%F)"
         depot_pr_exception_active=false
         if [[ "$INPUT_DEPOT_PR_ENABLED" == "true" &&

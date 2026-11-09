@@ -57,7 +57,13 @@ fn check_file(path: &Path) -> DynResult<()> {
         .file_name()
         .and_then(|v| v.to_str())
         .ok_or("invalid YAML filename")?;
-    let (document, references) = workflow_yaml::parse_with_actions(&fs::read_to_string(path)?)?;
+    let source = fs::read_to_string(path)?;
+    let (_, references) = workflow_yaml::parse_with_actions(&source)?;
+    let document = if name == "llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source)?
+    } else {
+        workflow_yaml::parse(&source)?
+    };
     execution_structure(&document)?;
     for reference in references {
         validate(name, &reference)

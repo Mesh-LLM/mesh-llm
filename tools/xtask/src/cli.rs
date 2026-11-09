@@ -33,6 +33,8 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS | probe RESPONSE LABEL | opencode-session JSONL | opencode-result JSONL}}"
     );
     println!("  cargo xtool automation family-model-identity MODEL_ID MODEL_PATH");
+    println!("  cargo xtool automation canary-receipts local-upgrade --help");
+    println!("  cargo xtool automation canary-receipts repair-check --help");
     println!("  cargo xtool automation family-model-identity --snapshot-revision PATH");
     println!(
         "  cargo xtool automation family-battery-policy ROOT MANIFEST PLAN SHARD_INDEX_OR_EMPTY"
@@ -58,6 +60,9 @@ pub(crate) fn print_usage() {
     );
     println!("  cargo xtool automation split-probe <verb> ...");
     println!("  cargo xtool models projector-download --url HTTPS_URL --output FILE");
+    println!(
+        "  cargo xtool models dflash-draft-convert --manifest FILE --draft NAME --source DIR [--target-model DIR] --output FILE"
+    );
     println!(
         "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,

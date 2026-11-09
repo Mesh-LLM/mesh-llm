@@ -64,7 +64,7 @@ fn expand(text: &str, attempt: &str, identity: &str) -> String {
     for (key, value) in [
         ("github.run_id", "123"),
         ("github.run_attempt", attempt),
-        ("needs.build.outputs.identity", identity),
+        ("needs.combine.outputs.identity", identity),
         ("inputs.pass_id", "repair-1"),
         ("matrix.shard_index", "0"),
     ] {
@@ -74,7 +74,7 @@ fn expand(text: &str, attempt: &str, identity: &str) -> String {
     expanded
 }
 fn workflow() -> Node {
-    workflow_yaml::parse(
+    workflow_yaml::parse_resolved_aliases(
         &fs::read_to_string(
             super::support::repository().join(".github/workflows/llama-canary-family-pass.yml"),
         )
@@ -90,8 +90,16 @@ fn parsed_producer_bound_artifacts_select_prior_siblings_and_never_foreign_ident
     let (_, upload_package) = named(steps(build), "id", "upload_package");
     assert_eq!(
         field(build.get("outputs").unwrap(), "package"),
-        field(upload_package.get("with").unwrap(), "name")
+        field(upload_package.get("with").unwrap(), "name").replace("${{ runner.os }}", "macOS")
     );
+    for name in ["build_linux", "build_linux_pinned"] {
+        let linux = jobs.get(name).unwrap();
+        let (_, linux_upload) = named(steps(linux), "id", "upload_package");
+        assert_eq!(
+            field(linux.get("outputs").unwrap(), "package"),
+            field(linux_upload.get("with").unwrap(), "name").replace("${{ runner.os }}", "Linux")
+        );
+    }
     let family = jobs.get("family").unwrap();
     let aggregate = jobs.get("aggregate").unwrap();
     let (_, upload) = named(steps(family), "name", "Upload family evidence");

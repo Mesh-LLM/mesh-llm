@@ -9,6 +9,9 @@ use skippy_ffi::{
 
 use crate::checkpoint::CheckpointQuantization;
 
+mod host_expert_layers;
+pub use host_expert_layers::HostExpertLayers;
+
 pub const GGML_TYPE_F32: u32 = 0;
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
@@ -157,27 +160,6 @@ pub struct RuntimeConfig {
     pub recurrent_rollback_tokens: u32,
 }
 
-/// Half-open absolute block range `[start, end)` whose routed-expert tensors
-/// (`ffn_{up,down,gate}_exps`) load into host memory. Placement only changes
-/// where the weights live and which kernels run them; routing and precision
-/// are unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HostExpertLayers {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl HostExpertLayers {
-    /// Build a range, returning `None` when it is empty.
-    pub fn new(start: u32, end: u32) -> Option<Self> {
-        (start < end).then_some(Self { start, end })
-    }
-
-    pub fn layer_count(self) -> u32 {
-        self.end.saturating_sub(self.start)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GlmDsaPolicy {
     #[default]
@@ -228,6 +210,12 @@ impl RuntimeConfig {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.layer_start >= self.layer_end {
             return Err("layer_start must be less than layer_end");
+        }
+        if self
+            .host_expert_layers
+            .is_some_and(|layers| HostExpertLayers::new(layers.start, layers.end).is_none())
+        {
+            return Err("host_expert_layers must contain between 1 and 4096 blocks");
         }
         if self
             .selected_backend_device
@@ -796,37 +784,6 @@ mod tests {
         assert_eq!(disabled.op_offload, skippy_ffi::TRISTATE_FALSE);
         assert_ne!(enabled.op_offload, disabled.op_offload);
         Ok(())
-    }
-
-    #[test]
-    fn runtime_config_raw_defaults_host_expert_layers_to_empty_range() -> anyhow::Result<()> {
-        let raw = RuntimeConfig::default().as_raw()?.raw;
-        assert_eq!(raw.host_expert_layer_start, 0);
-        assert_eq!(raw.host_expert_layer_end, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_config_raw_carries_host_expert_layer_range() -> anyhow::Result<()> {
-        let raw = RuntimeConfig {
-            host_expert_layers: HostExpertLayers::new(25, 48),
-            ..RuntimeConfig::default()
-        }
-        .as_raw()?
-        .raw;
-        assert_eq!(raw.host_expert_layer_start, 25);
-        assert_eq!(raw.host_expert_layer_end, 48);
-        Ok(())
-    }
-
-    #[test]
-    fn host_expert_layers_rejects_empty_ranges() {
-        assert_eq!(HostExpertLayers::new(4, 4), None);
-        assert_eq!(HostExpertLayers::new(5, 4), None);
-        assert_eq!(
-            HostExpertLayers::new(0, 3).map(|layers| layers.layer_count()),
-            Some(3)
-        );
     }
 
     #[test]

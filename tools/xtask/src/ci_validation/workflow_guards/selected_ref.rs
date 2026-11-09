@@ -6,6 +6,20 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let workflow = workflows
         .get("llama-upstream-canary.yml")
         .ok_or("upstream canary missing")?;
+    let action = workflow
+        .get("on")
+        .and_then(|on| on.get("workflow_dispatch"))
+        .and_then(|dispatch| dispatch.get("inputs"))
+        .and_then(|inputs| inputs.get("mesh_action"))
+        .ok_or("selected source action missing")?;
+    h::binding(action, "type", "choice")?;
+    if action.get("options").map(Node::list)
+        != Some(vec!["certify", "certify-and-publish", "upgrade"])
+    {
+        return Err(
+            "selected source must expose the bounded certification and upgrade actions".into(),
+        );
+    }
     let job = h::job(workflow, "resolve")?;
     h::condition(
         job,
@@ -14,7 +28,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let steps = h::steps(job)?;
     let checkout = h::checkout(steps, "${{ github.sha }}", None)?;
     let (bootstrap, prepare) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
-    h::binding(h::member(prepare, "with")?, "runner-profile", "hosted-bare")?;
+    h::binding(
+        h::member(prepare, "with")?,
+        "runner-profile",
+        "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
+    )?;
     let (resolve, step) = h::step(steps, "id", "resolve")?;
     let (upstream, selection) = h::step(steps, "id", "upstream")?;
     if !(checkout < bootstrap && bootstrap < upstream && upstream < resolve) {

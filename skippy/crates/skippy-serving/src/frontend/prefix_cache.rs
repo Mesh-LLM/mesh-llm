@@ -21,6 +21,7 @@ use crate::frontend::wire_messages::embedded_decode_message;
 use crate::frontend::wire_messages::embedded_prefix_cache_message;
 use crate::frontend::wire_messages::embedded_restore_prefill_decode_message;
 use crate::frontend::wire_messages::openai_stage_mask;
+use crate::kv_integration::ExactStateKvExport;
 use crate::kv_integration::KvStageIntegration;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
@@ -523,6 +524,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &InferenceGenerationIds,
         token_ids: &[i32],
+        kv_export: ExactStateKvExport,
     ) -> InferenceResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
@@ -567,6 +569,7 @@ impl StageOpenAiBackend {
                 token_ids.to_vec(),
                 "embedded_full_prefill_state",
                 kv.full_exact_state_writes_through_l3(token_ids.len()),
+                kv_export,
             );
         let mut recorded_any = exact_record_queued;
         for record in records.into_iter().flatten() {
@@ -640,6 +643,7 @@ impl StageOpenAiBackend {
                     &scheduler_checkpoint_tokens,
                     "embedded_shared_checkpoint",
                     write_through_l3,
+                    ExactStateKvExport::Now,
                 ))
             },
         )
@@ -662,8 +666,13 @@ impl StageOpenAiBackend {
         }
         let base = self.local_kv_message_base(session_id, ids);
         let identity = kv.prefill_identity(&self.config, &base, 0, token_ids);
-        let recorded_state =
-            self.record_embedded_stage0_full_prefill(session_id, ids, token_ids)?;
+        let recorded_state = self.record_embedded_stage0_full_prefill(
+            session_id,
+            ids,
+            token_ids,
+            // Recorded right after the first token, on the decode path.
+            ExactStateKvExport::AtSessionEnd,
+        )?;
         // The state is still useful for ordinary prefix restoration, but a
         // token sampled with an RNG-dependent request is never reusable.
         let recorded_token = record_replay_safe_first_token(
@@ -722,6 +731,8 @@ impl StageOpenAiBackend {
             record.session_id,
             record.ids,
             record.checkpoint_token_ids,
+            // Recorded between decode steps.
+            ExactStateKvExport::AtSessionEnd,
         )?;
         let recorded_replay = kv.record_cached_replay_tokens(
             &replay_cache_key,

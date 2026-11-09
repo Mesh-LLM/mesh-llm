@@ -286,7 +286,7 @@ fn caller_function(source: &str, name: &str) -> String {
     format!("{marker}{}{end}", body.split_once(end).unwrap().0)
 }
 fn copied_verification_helpers() -> String {
-    let source = include_str!("../../../../scripts/llama-canary-agent-repair.sh");
+    let source = crate::canary_full_gates::fixture::source();
     let frozen = source
         .find("# Legacy workload automation selection begins.")
         .unwrap();
@@ -302,7 +302,7 @@ fn copied_verification_helpers() -> String {
         "repair_family_plan_step",
         "run_for",
     ]
-    .map(|name| caller_function(source, name))
+    .map(|name| caller_function(&source, name))
     .join("\n")
 }
 impl Fixture {

@@ -5145,6 +5145,7 @@ dependencies = [
  "prost",
  "serde_json",
  "sha2 0.11.0",
+ "tokio",
 ]
 
 [[package]]
@@ -5194,6 +5195,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-runtime-install",
  "tokio",
  "tokio-tungstenite 0.29.0",
@@ -5219,6 +5221,7 @@ dependencies = [
  "mesh-llm-config",
  "mesh-llm-events",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-api",
  "skippy-config",
  "skippy-hf-hub",
@@ -11753,6 +11756,7 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "glob",
+ "goblin",
  "hex",
  "http-body-util",
  "hyper",
@@ -11765,6 +11769,7 @@ dependencies = [
  "process-supervision",
  "rcgen",
  "regex",
+ "rustix",
  "rustls",
  "semver",
  "serde",

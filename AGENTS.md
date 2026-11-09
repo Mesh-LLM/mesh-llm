@@ -115,12 +115,23 @@ Product crate documentation.
 Run Cargo commands serially. Do not run multiple Cargo commands in parallel: this workspace frequently hits package-cache and artifact-directory lock conflicts.
 
 - For a touched workspace crate, run focused `cargo check -p <crate>` and `cargo test -p <crate> --lib` during iteration.
-- Before a PR, run the full `cargo test -p <crate>` for every crate CI will test: usually the crates you changed plus their workspace dependents. Root build files and llama pin/patch changes escalate to the whole workspace (the command below prints that). Changes with no crate path (workflows, CI config, just recipes) leave the command's list empty — CI may test everything or nothing depending on the file — so use `just test-all` there.
+- Before a PR, run the full `cargo test -p <crate>` for every crate CI will test: usually the crates you changed plus their workspace dependents. Root build files and llama pin/patch changes escalate to the whole workspace (the command below prints that). Changes with no crate path (workflows, CI config, just recipes) leave the command's list empty — validate them per the minimum-validation table below instead, and run `just test-all` when the change alters which tests or build options CI invokes or changes the `test-all` recipe itself.
 - `cargo xtool repository affected-crates <paths from your diff against the PR base>` prints CI's list in its `affected` field (a bare invocation prints an empty list), and `just test-all` is the broad fallback, though it runs skippy-runtime and skippy-serving lib-only there.
 - `--lib` skips the integration-test binaries and the doc tests, and CI runs both for the crates it executes (`ci-rust-tests-slice.yml`), so a `--lib`-only run can be green while CI is red.
+- `cargo clippy --all-targets` type-checks test code but never executes it, so a green Clippy run
+  is not a test run either. Before pushing, run the full tests for every crate CI will test,
+  including workspace dependents (`just ci-automation-contracts` for `xtask`; on non-Windows hosts
+  that recipe skips the Windows-only tests CI runs, so run affected platform-specific tests on
+  Windows when available), and treat a failure caught locally as cheap, a failure caught by pushed
+  CI as expensive.
 - Exceptions: `xtask` runs its suites through `just ci-automation-contracts`; `skippy-ffi` is skipped by that slice and no CI job runs its own tests, so run `cargo test -p skippy-ffi --lib` yourself if you touched it; and CI additionally runs one feature-gated `claude-code-integration` real-client test for `mesh-llm-host-runtime` inline.
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
+- When CI fails on a PR, first confirm the failing run belongs to the current head commit and
+  actually failed (not `cancelled` or superseded by a newer push) before diagnosing; a rerun keeps
+  the original commit SHA, so also check whether the job passed in a later attempt of the same run.
+  Then read the failing job's log directly rather than polling the check rollup, which lags and
+  keeps stale results from superseded runs.
 
 For new repository automation, follow the Rust ownership rule in
 `.agents/skills/manage-ci/SKILL.md` and spec section 7.5: do not write new
@@ -160,7 +171,7 @@ Choose validation from the changed surface, not merely from the directory that c
 - External Python SDK or research interface change — use the owning external component's declared interpreter, source pin and locked dependencies. The SDK component command is `"$SDK_PYTHON" -I -B "$MESH_PYTHON_SDK_SOURCE/sdk/tests/test_client.py"`; its mock FFI coverage is separate from the four genuine SDK clients and their preserved required compatibility or embedding-workload cadence. Set `MESH_PYTHON_SDK_SOURCE` to the admitted external checkout before local source contract gates. Binding generation belongs to that external SDK, with explicit Mesh source and existing UniFFI 0.32.0 generator inputs; native bridge staging requires an already built target library and has no consumer compiler fallback. Reader constructor fixtures use native `just agentic-trajectory-reader-contracts`. Generic repository policy and CI planning use `just ci-validate`, including `ci-automation-contracts` and the native `ci-legacy-contracts`; do not restore the retired generic Python unittest gate.
 - UI-only change — follow `mesh/AGENTS.md` and run `just build`.
 - CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
-- Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface.
+- Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface, plus tests that consume the changed surface when such tests exist.
 - Mixed change — run the union of the checks required for each changed surface.
 
 Do not rerun otherwise unchanged validation solely because a commit is about to be pushed. Rerun affected checks when the validated diff or commit has changed.

@@ -61,7 +61,7 @@ impl Options {
             }
         }
         let base = required("--base-url")?.trim_end_matches('/');
-        let endpoint = format!("{base}/systemone");
+        let endpoint = format!("{base}/v1/systemone");
         transport::validate_endpoint(&endpoint)?;
         let mode = required("--mode")?.to_owned();
         if !matches!(mode.as_str(), "contract" | "full-read") {

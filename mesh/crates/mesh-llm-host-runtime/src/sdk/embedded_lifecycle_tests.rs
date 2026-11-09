@@ -31,6 +31,15 @@ fn stop_during_join_releases_runtime_and_restarts() {
 
 #[test]
 #[serial_test::serial]
+fn stop_releases_quic_before_caller_blocking_pool_runs() {
+    isolated(
+        "stop_releases_quic_before_caller_blocking_pool_runs",
+        busy_caller_pool_scenario,
+    );
+}
+
+#[test]
+#[serial_test::serial]
 fn cancelling_startup_releases_runtime_and_restarts() {
     isolated(
         "cancelling_startup_releases_runtime_and_restarts",
@@ -118,6 +127,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
     if std::env::var_os(CHILD).is_some() {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .max_blocking_threads(1)
             .enable_all()
             .build()
             .unwrap()
@@ -182,7 +192,9 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         .stderr(Stdio::from(log))
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(90);
+    // Slowest scenario waits sequentially: dial 30s + port release 5s + restart
+    // startup 30s + stop 5s (+ teardown). Individual waits stay bounded above.
+    let deadline = Instant::now() + Duration::from_secs(150);
     let result = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break Some(status);
@@ -309,13 +321,53 @@ async fn join_scenario() {
     restart_and_stop(config).await;
 }
 
+/// Require the QUIC port to be reusable before the caller's blocking worker runs.
+async fn busy_caller_pool_scenario() {
+    let config = isolated_config();
+    let handle = start_embedded_node(config.clone()).await.unwrap();
+    let stop = handle.stop();
+    tokio::pin!(stop);
+    // Poll once to enqueue the runtime-thread join on the caller's sole
+    // blocking worker, then queue a blocker behind it. Any socket close
+    // deferred to the caller after that join must wait for our release.
+    assert!(futures_util::poll!(&mut stop).is_pending());
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let (started, running) = tokio::sync::oneshot::channel();
+    let blocker = tokio::task::spawn_blocking(move || {
+        let _ = started.send(());
+        let _ = wait.recv();
+    });
+    tokio::time::timeout(Duration::from_secs(10), stop)
+        .await
+        .expect("stop joins its worker without waiting for the caller's pool")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("caller blocking worker reaches the fixture gate")
+        .unwrap();
+    let rebound =
+        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, config.network.bind_port.unwrap()));
+    // Release even on failure, so the fixture cannot hang runtime teardown.
+    drop(release);
+    blocker.await.unwrap();
+    drop(rebound.expect("stop released QUIC before caller-side deferred cleanup"));
+    restart_and_stop(config).await;
+}
+
 async fn cancelled_startup_scenario() {
     let mut config = isolated_config();
     let (peer, token) = unresponsive_peer().await;
     config.network.join_tokens = vec![token];
-    let mut startup = tokio::spawn(start_embedded_node(config.clone()));
+    // Startup must outlast the 30s dial wait below (the default startup timeout
+    // equals it), so only the abort can release the runtime, never a
+    // startup-timeout cleanup. The restart keeps the default timeout.
+    let mut startup_config = config.clone();
+    startup_config.startup_timeout = Duration::from_secs(60);
+    let mut startup = tokio::spawn(start_embedded_node(startup_config));
     let mut packet = [0; 2048];
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // Cold startup can compete with the full workspace suite on busy builders.
+    // Wait for its dial before measuring the cancellation barriers below.
+    tokio::time::timeout(Duration::from_secs(30), async {
         tokio::select! {
             result = &mut startup => match result {
                 Ok(Err(error)) => panic!("startup failed before dialing the fixture: {error:#}"),

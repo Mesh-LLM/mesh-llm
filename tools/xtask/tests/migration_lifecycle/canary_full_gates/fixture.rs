@@ -17,10 +17,14 @@ pub(super) fn repository() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-pub(super) fn source() -> String {
-    fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap()
+pub(crate) fn source() -> String {
+    format!(
+        "{}\n{}",
+        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap(),
+        fs::read_to_string(repository().join("scripts/lib/llama-canary-build-gates.sh")).unwrap()
+    )
 }
-pub(super) fn declaration(source: &str, name: &str) -> String {
+pub(crate) fn declaration(source: &str, name: &str) -> String {
     let marker = format!("\n{name}() {{\n");
     assert_eq!(source.matches(&marker).count(), 1);
     let body = source
@@ -47,7 +51,7 @@ impl Fixture {
         for directory in [
             "tools",
             "tmp",
-            "scripts",
+            "scripts/lib",
             "skippy/llama_cpp",
             ".deps/llama.cpp",
             "native/src",
@@ -60,6 +64,15 @@ impl Fixture {
         )
         .unwrap();
         fs::write(root.join("native/src/libllama.a"), b"inert archive bytes").unwrap();
+        fs::copy(
+            repository().join("scripts/lib/llama-canary-native-build.sh"),
+            root.join("scripts/lib/llama-canary-native-build.sh"),
+        )
+        .unwrap();
+        executable(
+            &root.join("tools/uname"),
+            "#!/bin/bash\nprintf '%s\\n' \"${INERT_OS:-Darwin}\"\n",
+        );
         let path = std::env::var_os("PATH").expect("prepared jq prerequisite");
         let jq = std::env::split_paths(&path)
             .map(|directory| directory.join("jq"))
@@ -102,6 +115,14 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
         );
     }
     pub(super) fn build_tools(&self) {
+        self.tool("tools/shared-check", "repair-check", "");
+        let actual = env!("CARGO_BIN_EXE_xtask").replace('\'', "'\\''");
+        executable(
+            &self.root.join("tools/controller"),
+            &format!(
+                "#!/bin/bash\nif [[ \"${{1:-}} ${{2:-}} ${{3:-}}\" == 'automation canary-receipts repair-check' ]]; then exec \"$INERT_ROOT/tools/shared-check\" \"$@\"; fi\nexec '{actual}' \"$@\"\n"
+            ),
+        );
         for (path, label) in [
             (
                 "scripts/check-skippy-generated-family-patch.sh",
@@ -117,11 +138,15 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
             "tools/uv",
             "uv",
             r#"printf '%s\0' "$UV_PROJECT_ENVIRONMENT" > "$INERT_ROOT/uv-environment-$count"
-if [[ ${12} == scripts/build-llama.sh ]]; then
+shift 8
+if [[ $1 == arch ]]; then shift 2; fi
+[[ $1 == bash ]] || exit 93
+shift
+if [[ $1 == scripts/build-llama.sh ]]; then
   printf '%s' "$LLAMA_STAGE_UPSTREAM_TESTS" > "$INERT_ROOT/upstream-tests"
 else
-  [[ ${12} == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
-  /bin/bash "${@:12}"
+  [[ $1 == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
+  /bin/bash "$@"
 fi"#,
         );
         self.tool("tools/lipo", "archive", "printf '%s\\n' \"$INERT_ARCHIVE\"");
@@ -144,7 +169,7 @@ fi"#,
             .split_once("# Legacy workload automation selection ends.")
             .unwrap()
             .0;
-        let admission_marker = "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build)$ ]]; then\n";
+        let admission_marker = "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then\n";
         let admission_body = source
             .split_once(admission_marker)
             .unwrap()
@@ -168,6 +193,7 @@ JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
 UPSTREAM_SHA={sha}
 LLAMA_STAGE_BUILD_DIR="$ROOT/native"
+LLAMA_STAGE_BACKEND=metal
 STATE_DIR="$ROOT"
 SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
 PREPARE_LOG="$ROOT/prepare.log"

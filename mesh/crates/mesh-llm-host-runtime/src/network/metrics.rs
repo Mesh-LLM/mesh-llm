@@ -551,13 +551,16 @@ impl RoutingMetrics {
                 .and_then(|(newest, oldest)| {
                     let remaining = throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE
                         .saturating_sub(newest.saturating_duration_since(oldest));
-                    if remaining.is_zero() {
+                    // Less than a whole millisecond left counts as nothing
+                    // left: rounding it up to 1 ms would outlive the sample.
+                    let window_ms = duration_millis(remaining);
+                    if window_ms == 0 {
                         return None;
                     }
                     Some(ThroughputMeasurement {
                         observed_at_unix_ms: now_unix_ms
                             .saturating_sub(duration_millis(now.saturating_duration_since(newest))),
-                        window_ms: duration_millis(remaining).max(1),
+                        window_ms,
                         kind: ThroughputMeasurementKind::EndToEndAttempt,
                     })
                 });

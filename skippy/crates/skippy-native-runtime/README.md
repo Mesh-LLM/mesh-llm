@@ -176,6 +176,11 @@ architecture is detected, the ROCm runtime is not selected;
 `MESH_LLM_ROCM_GPU_ARCHES` (comma-separated, for example `gfx1100`) supplies
 them by hand.
 
+CUDA runtimes list GPU architectures too. When none is detected (the compute
+capability comes from `nvidia-smi`), a CUDA runtime that lists any is not
+selected; `MESH_LLM_CUDA_GPU_ARCHES` (comma-separated, for example `87`)
+supplies them by hand.
+
 ### CUDA toolkit vs driver
 
 `toolkit_majors` and `driver_max_major` are deliberately separate:
