@@ -7,19 +7,27 @@ pub mod selection;
 
 use std::path::Path;
 
+/// Scheme and host spellings that name the Hugging Face resolve endpoint. The host also
+/// accepts its trailing-dot FQDN form (`huggingface.co.`), which DNS and URL parsers
+/// normalize to the same host.
 const HF_RESOLVE_PREFIXES: &[&str] = &[
     "https://huggingface.co/",
     "https://huggingface.co:443/",
+    "https://huggingface.co./",
+    "https://huggingface.co.:443/",
     "http://huggingface.co/",
     "http://huggingface.co:80/",
+    "http://huggingface.co./",
+    "http://huggingface.co.:80/",
 ];
 
 /// Parses `https://huggingface.co/<owner>/<repo>/resolve/<rev>/<file>` (https or http).
-/// The scheme and hostname are matched case-insensitively while the returned repository,
-/// revision, and file preserve the URL's original case. Accepts the explicit default ports
-/// (`:443` for https, `:80` for http), `<repo>` or `<owner>/<repo>`; rejects empty parts, a file
+/// The scheme and hostname are matched case-insensitively (including the trailing-dot host
+/// form) while the returned repository, revision, and file preserve the URL's original case.
+/// Accepts the explicit default ports (`:443` for https, `:80` for http), `<repo>` or
+/// `<owner>/<repo>`; drops `?query`/`#fragment` before parsing, and rejects empty parts, a file
 /// ending in `/` or a percent-encoded slash (`%2F`, case-insensitive), a file path whose `.`/`..`
-/// segments collapse to a directory, and extra repo components; drops `?query`/`#fragment`.
+/// segments collapse to a directory, and extra repo components.
 pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
     let lower = url.to_ascii_lowercase();
     let prefix_len = HF_RESOLVE_PREFIXES
@@ -27,8 +35,10 @@ pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str
         .find(|prefix| lower.starts_with(*prefix))
         .map(|prefix| prefix.len())?;
     let tail = &url[prefix_len..];
+    // A query or fragment terminates the path, so anything after it can never
+    // contain the `/resolve/` marker or be part of the repository or artifact.
+    let tail = &tail[..tail.find(['?', '#']).unwrap_or(tail.len())];
     let (repo, rest) = tail.split_once("/resolve/")?;
-    let rest = rest.split(['?', '#']).next()?;
     let (revision, file) = rest.split_once('/')?;
     if file.ends_with('/')
         || ends_with_encoded_slash(file)
@@ -42,10 +52,15 @@ pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str
 }
 
 /// A trailing percent-encoded slash (`%2F`, case-insensitive hex) names a directory
-/// even though the final byte is not a literal `/`.
+/// even though the final byte is not a literal `/`. The suffix is read as bytes so a
+/// multibyte UTF-8 final character can never split a character boundary.
 fn ends_with_encoded_slash(path: &str) -> bool {
-    let tail = &path[path.len().saturating_sub(3)..];
-    tail.len() == 3 && tail.starts_with('%') && tail[1..].eq_ignore_ascii_case("2f")
+    let bytes = path.as_bytes();
+    if bytes.len() < 3 {
+        return false;
+    }
+    let tail = &bytes[bytes.len() - 3..];
+    tail[0] == b'%' && tail[1..].eq_ignore_ascii_case(b"2f")
 }
 
 /// Returns `true` when the path's `.` and `..` segments collapse (RFC 3986, section 5.2.4)
@@ -749,6 +764,7 @@ mod hf_resolve_url_tests {
         );
     }
 
+    /// A resolve path ending in a literal slash names a directory, not a file.
     #[test]
     fn rejects_file_ending_in_slash() {
         for url in [
@@ -759,6 +775,9 @@ mod hf_resolve_url_tests {
         }
     }
 
+    /// A trailing percent-encoded slash names a directory even though the
+    /// final byte is not a literal `/`; an encoded slash inside the path
+    /// still names a file.
     #[test]
     fn rejects_file_ending_in_encoded_slash() {
         for url in [
@@ -775,6 +794,8 @@ mod hf_resolve_url_tests {
         );
     }
 
+    /// File paths whose `.`/`..` segments collapse to nothing name a
+    /// directory rather than an artifact file.
     #[test]
     fn rejects_paths_that_normalize_to_directories() {
         for url in [
@@ -803,6 +824,45 @@ mod hf_resolve_url_tests {
             parse_hf_resolve_url_parts("http://HUGGINGFACE.CO:80/org/repo/resolve/main/dir/m.gguf"),
             expected
         );
+    }
+
+    #[test]
+    fn accepts_trailing_dot_hostname() {
+        let expected = Some(("org/repo", Some("main"), "dir/m.gguf"));
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co./org/repo/resolve/main/dir/m.gguf"),
+            expected
+        );
+        assert_eq!(
+            parse_hf_resolve_url_parts(
+                "http://huggingface.co.:80/org/repo/resolve/main/dir/m.gguf"
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn parses_unicode_file_components_without_panic() {
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co/org/repo/resolve/main/aéé"),
+            Some(("org/repo", Some("main"), "aéé"))
+        );
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co/org/repo/resolve/main/模"),
+            Some(("org/repo", Some("main"), "模"))
+        );
+    }
+
+    /// Query or fragment text before `/resolve/` would pollute the repository
+    /// id, so such URLs must be rejected rather than parsed.
+    #[test]
+    fn rejects_query_text_before_resolve() {
+        for url in [
+            "https://huggingface.co/org/repo?x/resolve/main/m.gguf",
+            "https://huggingface.co/org#frag/repo/resolve/main/m.gguf",
+        ] {
+            assert_eq!(parse_hf_resolve_url_parts(url), None, "{url}");
+        }
     }
 
     #[test]
