@@ -8,9 +8,21 @@ use super::*;
 #[derive(Default)]
 struct RecordingOutputSink {
     events: StdMutex<Vec<OutputEvent>>,
+    /// When set, only events emitted from this thread are recorded. The
+    /// output sink is process-global, so a test that is not `serial` can emit
+    /// into it while a `serial` test is counting (#2915).
+    only_thread: Option<std::thread::ThreadId>,
 }
 
 impl RecordingOutputSink {
+    /// Record only what the calling thread emits.
+    fn for_current_thread() -> Self {
+        Self {
+            only_thread: Some(std::thread::current().id()),
+            ..Self::default()
+        }
+    }
+
     fn take_events(&self) -> Vec<OutputEvent> {
         std::mem::take(&mut *self.events.lock().expect("recording sink mutex poisoned"))
     }
@@ -18,6 +30,12 @@ impl RecordingOutputSink {
 
 impl OutputSink for RecordingOutputSink {
     fn emit_event(&self, event: OutputEvent) -> io::Result<()> {
+        if self
+            .only_thread
+            .is_some_and(|thread| thread != std::thread::current().id())
+        {
+            return Ok(());
+        }
         self.events
             .lock()
             .expect("recording sink mutex poisoned")
@@ -113,7 +131,9 @@ fn native_model_open_handled_failure_translates_to_warning_without_readiness_eve
 #[test]
 #[serial_test::serial]
 fn native_model_open_reporter_emits_visibility_only_events() {
-    let sink = Arc::new(RecordingOutputSink::default());
+    // The reporter runs synchronously on this thread, so its events are
+    // exactly the ones this thread emits.
+    let sink = Arc::new(RecordingOutputSink::for_current_thread());
     let _reset_guard = OutputSinkResetGuard;
     set_output_sink(sink.clone());
 
@@ -167,6 +187,16 @@ fn native_model_open_reporter_emits_visibility_only_events() {
                 .then_some(0),
         });
     }
+    // What a concurrent non-serial test does to the global sink: it must not
+    // be counted as one of this reporter's events.
+    std::thread::spawn(|| {
+        let _ = mesh_llm_events::emit_event(OutputEvent::Info {
+            message: "event from another test".to_string(),
+            context: None,
+        });
+    })
+    .join()
+    .unwrap();
 
     let events = sink.take_events();
     let model_events = events
