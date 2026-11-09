@@ -70,6 +70,35 @@ pub(super) fn select_dflash_draft<'a>(
 /// an explicitly configured draft still attaches.
 pub(super) const DFLASH_DRAFT_CONTEXT_AVAILABLE: bool = !cfg!(windows);
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Set while a test has default drafts on, whatever the build's default.
+    static DEFAULT_DRAFTS_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`DFLASH_DRAFT_CONTEXT_AVAILABLE`], unless a test turned default drafts on.
+pub(super) fn draft_context_available() -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    if DEFAULT_DRAFTS_ON.with(std::cell::Cell::get) {
+        return true;
+    }
+    DFLASH_DRAFT_CONTEXT_AVAILABLE
+}
+
+/// Turns default DFlash drafts on for this thread until the guard drops, so the
+/// default selection is tested on builds where it is off (Windows).
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_default_dflash_drafts() -> impl Drop {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            DEFAULT_DRAFTS_ON.with(|on| on.set(false));
+        }
+    }
+    DEFAULT_DRAFTS_ON.with(|on| on.set(true));
+    Reset
+}
+
 /// What else the resolver decided that keeps a known DFlash pairing from
 /// being the default.
 pub(super) struct DFlashDefaultSelection<'a> {
