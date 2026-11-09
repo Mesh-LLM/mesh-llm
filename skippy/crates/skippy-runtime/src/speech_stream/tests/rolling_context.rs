@@ -83,3 +83,49 @@ fn a_permanently_single_segment_still_obeys_the_hard_window_bound() {
     events.extend(stream.commit(&mut transcribe).unwrap());
     assert_eq!(deltas(&events).concat(), "A B");
 }
+
+#[test]
+fn a_slow_step_keeps_every_decoder_input_inside_the_whisper_window() {
+    // 36 s of audio at a 4 s step crosses the transcriber's 30 s window:
+    // the settling passes must drain to the cap. The single segment
+    // answers from its audio until the drain passes, after which the
+    // window holds no new words.
+    let mut script = Script::new(vec![
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 4_000,
+        ..manual()
+    });
+    let mut events = Vec::new();
+    for _ in 0..36 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    // Every pass (and the commit) must hear at most the transcriber's 30 s
+    // window, and a settling pass must actually reach the cap rather than
+    // trim early.
+    for (samples, _) in &script.seen {
+        assert!(
+            *samples <= WHISPER_WINDOW_MS as usize * MS,
+            "decoder input {samples} exceeds the whisper window"
+        );
+    }
+    assert!(
+        script
+            .seen
+            .iter()
+            .any(|(samples, _)| *samples == WHISPER_WINDOW_MS as usize * MS),
+        "a pass must be capped exactly at the whisper window: {:?}",
+        script.seen
+    );
+    assert_eq!(deltas(&events).concat(), "A B");
+}
