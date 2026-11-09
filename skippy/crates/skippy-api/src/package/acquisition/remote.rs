@@ -226,6 +226,26 @@ impl PackageAcquisition {
         Ok(downloaded)
     }
 
+    /// Resolve an `hf://` package for metadata inspection from the hub,
+    /// without the local cache lookup that `resolve_hf_package_to_local`
+    /// tries first. A complete cached snapshot can be an older package schema
+    /// than the commit the hub now serves for a branch such as `main`; this
+    /// asks the hub which commit the revision names and fetches only what
+    /// inspection reads (the manifest and its metadata artifact). Integrity
+    /// checks are the same as for any download, and nothing is deleted.
+    pub fn resolve_hf_package_upstream_to_local(&self, package_ref: &str) -> Result<String> {
+        let StagePackageRef::HuggingFacePackage { repo, revision } =
+            StagePackageRef::parse(package_ref)?
+        else {
+            anyhow::bail!("not a Hugging Face package reference: {package_ref}");
+        };
+        let revision = revision.unwrap_or_else(|| "main".to_string());
+        let acquisition = self.clone();
+        skippy_model_hf::blocking::run_hf_sync(move || {
+            acquisition.download_hf_package_to_local_sync(&repo, &revision, 0, 0, false, false)
+        })
+    }
+
     fn download_hf_package_to_local_sync(
         &self,
         repo: &str,
