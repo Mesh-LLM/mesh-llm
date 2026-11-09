@@ -72,14 +72,15 @@ pub(super) const DFLASH_DRAFT_CONTEXT_AVAILABLE: bool = !cfg!(windows);
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
-    /// Set while a test has default drafts on, whatever the build's default.
-    static DEFAULT_DRAFTS_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many guards on this thread have default drafts on, whatever the
+    /// build's default; a count, so an inner guard can't end an outer one.
+    static DEFAULT_DRAFT_GUARDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// [`DFLASH_DRAFT_CONTEXT_AVAILABLE`], unless a test turned default drafts on.
 pub(super) fn draft_context_available() -> bool {
     #[cfg(any(test, feature = "test-support"))]
-    if DEFAULT_DRAFTS_ON.with(std::cell::Cell::get) {
+    if DEFAULT_DRAFT_GUARDS.with(std::cell::Cell::get) > 0 {
         return true;
     }
     DFLASH_DRAFT_CONTEXT_AVAILABLE
@@ -89,14 +90,36 @@ pub(super) fn draft_context_available() -> bool {
 /// default selection is tested on builds where it is off (Windows).
 #[cfg(any(test, feature = "test-support"))]
 pub fn with_default_dflash_drafts() -> impl Drop {
-    struct Reset;
+    /// Not `Send`: it must drop on the thread whose count it raised.
+    struct Reset(std::marker::PhantomData<*const ()>);
     impl Drop for Reset {
         fn drop(&mut self) {
-            DEFAULT_DRAFTS_ON.with(|on| on.set(false));
+            DEFAULT_DRAFT_GUARDS.with(|guards| guards.set(guards.get() - 1));
         }
     }
-    DEFAULT_DRAFTS_ON.with(|on| on.set(true));
-    Reset
+    DEFAULT_DRAFT_GUARDS.with(|guards| guards.set(guards.get() + 1));
+    Reset(std::marker::PhantomData)
+}
+
+#[cfg(test)]
+mod default_draft_override_tests {
+    use super::{DEFAULT_DRAFT_GUARDS, with_default_dflash_drafts};
+
+    fn active_guards() -> u32 {
+        DEFAULT_DRAFT_GUARDS.with(std::cell::Cell::get)
+    }
+
+    // Counted directly: through draft_context_available() the build's default
+    // (on outside Windows) would hide an override that ended too early.
+    #[test]
+    fn default_drafts_stay_on_until_the_last_guard_drops() {
+        let outer = with_default_dflash_drafts();
+        let inner = with_default_dflash_drafts();
+        drop(inner);
+        assert_eq!(active_guards(), 1, "an inner guard ended the outer one");
+        drop(outer);
+        assert_eq!(active_guards(), 0);
+    }
 }
 
 /// What else the resolver decided that keeps a known DFlash pairing from
