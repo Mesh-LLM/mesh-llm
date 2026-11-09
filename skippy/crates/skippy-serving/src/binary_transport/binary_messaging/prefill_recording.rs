@@ -107,7 +107,14 @@ fn record_full_prefill_with_activations(
     let mut record = if kv.is_none_or(|kv| exact_prefill_record_allowed(kv, message, tokens.len()))
     {
         maybe_record_binary_full_prefill(
-            config, runtime, kv, telemetry, session_id, message, tokens,
+            config,
+            runtime,
+            kv,
+            telemetry,
+            session_id,
+            message,
+            tokens,
+            crate::kv_integration::ExactStateKvExport::Now,
         )
     } else {
         BinaryKvRecordResult::default()

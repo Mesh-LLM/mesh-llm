@@ -111,6 +111,9 @@ impl StageSession {
     /// deltas between builds -- an inference that cannot separate "reuse is
     /// firing and the residual cost is elsewhere" from "reuse is not firing".
     pub fn graph_reuse_stats(&self) -> Option<GraphReuseStats> {
+        if self.raw.is_null() {
+            return None;
+        }
         let ctx: *mut skippy_ffi::Opaque =
             unsafe { skippy_ffi::skippy_session_llama_context(self.raw) }.cast();
         if ctx.is_null() {
@@ -150,6 +153,11 @@ impl StageSession {
     }
 
     pub fn reset(&mut self) -> Result<()> {
+        // Only a detached test session has no native state; there is nothing
+        // to reset, and its owner discards the lane instead.
+        if self.raw.is_null() {
+            return Err(anyhow!("session has no native state to reset"));
+        }
         let mut error = ptr::null_mut();
         let status = unsafe { skippy_ffi::skippy_session_reset(self.raw, &mut error) };
         ensure_ok(status, error)?;

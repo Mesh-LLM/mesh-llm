@@ -806,6 +806,7 @@ impl RuntimeState {
     }
 
     pub fn trim_session(&mut self, session_id: &str, token_count: u64) -> Result<()> {
+        self.abandon_session_end_kv_exports_above(session_id, token_count);
         let session = self.session(session_id)?;
         session.trim_session(token_count)?;
         self.session_token_counts
@@ -835,6 +836,9 @@ impl RuntimeState {
     }
 
     pub(super) fn session(&mut self, session_id: &str) -> Result<&mut StageSession> {
+        // A parked session's cells go back to the pool before this one can
+        // grow into it.
+        self.complete_parked_session_ends();
         if !self.sessions.contains_key(session_id) {
             self.ensure_not_reset_by_panic(session_id)?;
             let mut lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
@@ -845,6 +849,7 @@ impl RuntimeState {
             })?;
             // A reused lane starts this session's DFlash counters over.
             lane_session.session.dflash_reset_health();
+            self.abandon_session_end_kv_exports(session_id);
             self.sessions.insert(session_id.to_string(), lane_session);
             // Every active session must have a tracked position from the
             // moment it activates (both a fresh and a reused idle lane start
@@ -889,6 +894,7 @@ impl RuntimeState {
     }
 
     pub(super) fn active_session(&mut self, session_id: &str) -> Result<&mut StageSession> {
+        self.complete_parked_session_ends();
         self.sessions
             .get_mut(session_id)
             .map(|lane_session| &mut lane_session.session)

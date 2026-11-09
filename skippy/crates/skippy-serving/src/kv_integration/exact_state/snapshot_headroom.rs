@@ -40,22 +40,58 @@ impl Drop for SnapshotReservation {
 fn reserve_snapshot(
     counter: &'static Mutex<u64>,
     snapshot_bytes: u64,
+    held: Option<SnapshotReservation>,
     host: impl FnOnce() -> Option<HostMemory>,
 ) -> Result<SnapshotReservation, SnapshotAdmission> {
+    reserve_copies(
+        counter,
+        snapshot_bytes,
+        SNAPSHOT_TRANSIENT_COPIES,
+        held,
+        host,
+    )
+}
+
+/// Reserves `copies` host copies of `bytes`, if they fit the headroom left
+/// after every other active reservation.
+///
+/// `held` is a reservation the same capture already holds for part of those
+/// bytes. It is checked against and replaced under one lock, so its bytes
+/// are not counted twice and no other capture can take them in between.
+/// If the new reservation does not fit, `held` is released.
+fn reserve_copies(
+    counter: &'static Mutex<u64>,
+    bytes: u64,
+    copies: u64,
+    held: Option<SnapshotReservation>,
+    host: impl FnOnce() -> Option<HostMemory>,
+) -> Result<SnapshotReservation, SnapshotAdmission> {
+    let mut held = held.filter(|held| std::ptr::eq(held.counter, counter));
+    let held_bytes = held.as_ref().map_or(0, |held| held.bytes);
     let mut reserved = counter
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let others = reserved.saturating_sub(held_bytes);
     let host = host().map(|mut host| {
-        host.available_bytes = host.available_bytes.saturating_sub(*reserved);
+        host.available_bytes = host.available_bytes.saturating_sub(others);
         host
     });
-    match admit_snapshot(snapshot_bytes, host) {
+    match admit_copies(bytes, copies, host) {
         SnapshotAdmission::Admit => {
-            let bytes = snapshot_bytes.saturating_mul(SNAPSHOT_TRANSIENT_COPIES);
-            *reserved = reserved.saturating_add(bytes);
+            let bytes = bytes.saturating_mul(copies);
+            *reserved = others.saturating_add(bytes);
+            if let Some(held) = held.as_mut() {
+                // Taken over above; dropping it must not release it again.
+                held.bytes = 0;
+            }
+            drop(reserved);
             Ok(SnapshotReservation { bytes, counter })
         }
-        skip => Err(skip),
+        skip => {
+            // Release the guard before `held` drops and takes the lock.
+            drop(reserved);
+            Err(skip)
+        }
     }
 }
 
@@ -76,18 +112,30 @@ pub(crate) enum SnapshotAdmission {
 
 /// Available host memory a snapshot of `snapshot_bytes` needs before it may
 /// be exported: `snapshot * SNAPSHOT_TRANSIENT_COPIES + total / HOST_RESERVE_DIVISOR`.
-pub(crate) fn required_headroom_bytes(snapshot_bytes: u64, total_bytes: u64) -> u64 {
-    snapshot_bytes
-        .saturating_mul(SNAPSHOT_TRANSIENT_COPIES)
+#[cfg(test)]
+fn required_headroom_bytes(snapshot_bytes: u64, total_bytes: u64) -> u64 {
+    required_headroom_bytes_for_copies(snapshot_bytes, SNAPSHOT_TRANSIENT_COPIES, total_bytes)
+}
+
+fn required_headroom_bytes_for_copies(bytes: u64, copies: u64, total_bytes: u64) -> u64 {
+    bytes
+        .saturating_mul(copies)
         .saturating_add(total_bytes / HOST_RESERVE_DIVISOR)
 }
 
-/// Unknown host memory keeps recording, as before.
-pub(crate) fn admit_snapshot(snapshot_bytes: u64, host: Option<HostMemory>) -> SnapshotAdmission {
+#[cfg(test)]
+fn admit_snapshot(snapshot_bytes: u64, host: Option<HostMemory>) -> SnapshotAdmission {
+    admit_copies(snapshot_bytes, SNAPSHOT_TRANSIENT_COPIES, host)
+}
+
+/// Whether `copies` host copies of `bytes` fit, keeping
+/// `total / HOST_RESERVE_DIVISOR` free. Unknown host memory keeps recording,
+/// as before.
+fn admit_copies(bytes: u64, copies: u64, host: Option<HostMemory>) -> SnapshotAdmission {
     let Some(host) = host else {
         return SnapshotAdmission::Admit;
     };
-    let required_bytes = required_headroom_bytes(snapshot_bytes, host.total_bytes);
+    let required_bytes = required_headroom_bytes_for_copies(bytes, copies, host.total_bytes);
     if host.available_bytes >= required_bytes {
         SnapshotAdmission::Admit
     } else {
@@ -126,6 +174,7 @@ impl KvStageIntegration {
         session_id: &str,
         payload: StagePrefixCachePayload,
         token_count: u64,
+        held: Option<SnapshotReservation>,
     ) -> Option<Option<SnapshotReservation>> {
         let snapshot_bytes = match self.snapshot_size(runtime, session_id, payload, token_count) {
             Ok(snapshot_bytes) => snapshot_bytes,
@@ -142,18 +191,59 @@ impl KvStageIntegration {
                         ),
                     );
                 }
-                return Some(None);
+                // Unsized, so not checked; a copy already held stays counted.
+                return Some(held);
             }
         };
-        let (required_bytes, available_bytes) =
-            match reserve_snapshot(&RESERVED_BYTES, snapshot_bytes, current_host_memory) {
-                Ok(reservation) => return Some(Some(reservation)),
-                Err(SnapshotAdmission::Skip {
-                    required_bytes,
-                    available_bytes,
-                }) => (required_bytes, available_bytes),
-                Err(SnapshotAdmission::Admit) => unreachable!(),
-            };
+        match reserve_snapshot(&RESERVED_BYTES, snapshot_bytes, held, current_host_memory) {
+            Ok(reservation) => Some(Some(reservation)),
+            Err(skip) => {
+                self.skip_for_headroom(skip, snapshot_bytes, token_count);
+                None
+            }
+        }
+    }
+
+    /// Reserves the recurrent state a deferred capture copies at its boundary
+    /// and holds until the session ends. Until then no snapshot reservation
+    /// covers it, so without this the copies held across concurrent sessions
+    /// would sit outside the headroom check. Same contract as
+    /// [`Self::reserve_snapshot_host_memory`].
+    pub(super) fn reserve_retained_recurrent_host_memory(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        token_count: u64,
+    ) -> Option<Option<SnapshotReservation>> {
+        let recurrent_bytes = match runtime.recurrent_state_size(session_id) {
+            Ok(bytes) => bytes,
+            // No recurrent memory, nothing retained; any other probe error
+            // the export reports itself.
+            Err(_) => return Some(None),
+        };
+        match reserve_copies(
+            &RESERVED_BYTES,
+            recurrent_bytes,
+            1,
+            None,
+            current_host_memory,
+        ) {
+            Ok(reservation) => Some(Some(reservation)),
+            Err(skip) => {
+                self.skip_for_headroom(skip, recurrent_bytes, token_count);
+                None
+            }
+        }
+    }
+
+    fn skip_for_headroom(&self, skip: SnapshotAdmission, snapshot_bytes: u64, token_count: u64) {
+        let SnapshotAdmission::Skip {
+            required_bytes,
+            available_bytes,
+        } = skip
+        else {
+            return;
+        };
         self.exact_state_records_dropped
             .fetch_add(1, Ordering::Relaxed);
         self.notify_kv_lifecycle(KvLifecycleEvent::ExactStateRecordFailed);
@@ -168,7 +258,6 @@ impl KvStageIntegration {
                 ),
             );
         }
-        None
     }
 
     /// Mirrors the export: a missing native KV page or a dense model's absent
@@ -231,10 +320,72 @@ mod tests {
     #[test]
     fn active_reservation_blocks_another_export_until_dropped() {
         static COUNTER: Mutex<u64> = Mutex::new(0);
-        let first = reserve_snapshot(&COUNTER, 10 * GIB, || host(64, 24)).unwrap();
-        assert!(reserve_snapshot(&COUNTER, 10 * GIB, || host(64, 24)).is_err());
+        let first = reserve_snapshot(&COUNTER, 10 * GIB, None, || host(64, 24)).unwrap();
+        assert!(reserve_snapshot(&COUNTER, 10 * GIB, None, || host(64, 24)).is_err());
         drop(first);
-        assert!(reserve_snapshot(&COUNTER, 10 * GIB, || host(64, 24)).is_ok());
+        assert!(reserve_snapshot(&COUNTER, 10 * GIB, None, || host(64, 24)).is_ok());
+    }
+
+    #[test]
+    fn a_retained_recurrent_copy_holds_its_bytes_against_later_snapshots() {
+        static COUNTER: Mutex<u64> = Mutex::new(0);
+        // 64 GiB host with 24 GiB free: a 10 GiB snapshot fits exactly.
+        let retained = reserve_copies(&COUNTER, GIB, 1, None, || host(64, 24)).unwrap();
+        assert_eq!(*COUNTER.lock().unwrap(), GIB, "one copy is reserved");
+        assert!(
+            reserve_snapshot(&COUNTER, 10 * GIB, None, || host(64, 24)).is_err(),
+            "the retained copy leaves too little for the snapshot"
+        );
+        drop(retained);
+        assert_eq!(*COUNTER.lock().unwrap(), 0);
+        assert!(reserve_snapshot(&COUNTER, 10 * GIB, None, || host(64, 24)).is_ok());
+    }
+
+    #[test]
+    fn a_snapshot_takes_over_its_own_retained_copy_without_counting_it_twice() {
+        static COUNTER: Mutex<u64> = Mutex::new(0);
+        // 64 GiB host with 24 GiB free: a 10 GiB snapshot fits exactly, so it
+        // fits only if its own retained 1 GiB is not counted against it.
+        let retained = reserve_copies(&COUNTER, GIB, 1, None, || host(64, 24)).unwrap();
+        let snapshot = reserve_snapshot(&COUNTER, 10 * GIB, Some(retained), || host(64, 24))
+            .expect("the capture's own retained copy does not count against it");
+        assert_eq!(
+            *COUNTER.lock().unwrap(),
+            20 * GIB,
+            "only the snapshot is counted"
+        );
+        drop(snapshot);
+        assert_eq!(*COUNTER.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_takeover_still_counts_other_captures_reservations() {
+        static COUNTER: Mutex<u64> = Mutex::new(0);
+        let other = reserve_copies(&COUNTER, GIB, 1, None, || host(64, 24)).unwrap();
+        let retained = reserve_copies(&COUNTER, GIB, 1, None, || host(64, 24)).unwrap();
+        assert!(
+            reserve_snapshot(&COUNTER, 10 * GIB, Some(retained), || host(64, 24)).is_err(),
+            "another capture's copy leaves too little"
+        );
+        assert_eq!(
+            *COUNTER.lock().unwrap(),
+            GIB,
+            "a declined takeover releases the retained copy and keeps the other"
+        );
+        drop(other);
+        assert_eq!(*COUNTER.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn retained_copies_stop_being_admitted_once_headroom_runs_out() {
+        static COUNTER: Mutex<u64> = Mutex::new(0);
+        // 64 GiB host with 8 GiB free keeps 4 GiB back: four 1 GiB copies fit.
+        let held: Vec<_> = (0..4)
+            .map(|_| reserve_copies(&COUNTER, GIB, 1, None, || host(64, 8)).unwrap())
+            .collect();
+        assert!(reserve_copies(&COUNTER, GIB, 1, None, || host(64, 8)).is_err());
+        drop(held);
+        assert!(reserve_copies(&COUNTER, GIB, 1, None, || host(64, 8)).is_ok());
     }
 
     #[test]

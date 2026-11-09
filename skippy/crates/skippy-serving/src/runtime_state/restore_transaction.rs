@@ -87,6 +87,7 @@ impl RuntimeState {
         session_id: &str,
         restore: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
+        self.abandon_session_end_kv_exports(session_id);
         let result = restore(self);
         let Err(restore_error) = result else {
             return result;
@@ -100,6 +101,7 @@ impl RuntimeState {
     /// release, so dropping the lane is safer than allowing a dirty session to
     /// be reused by a cache-off fallback.
     fn force_discard_session(&mut self, session_id: &str) {
+        self.abandon_session_end_kv_exports(session_id);
         if let Some(lane_session) = self.sessions.remove(session_id) {
             let lane_index = lane_session.index;
             drop(lane_session);
