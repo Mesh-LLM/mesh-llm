@@ -74,7 +74,7 @@ impl SplitTopologyGeneration {
 
     /// Run this generation with `choice` on every hop. The codec rides each
     /// stage's load request and the topology hash, so all stages of one
-    /// generation use the coordinator's choice. Every stage-generation-13
+    /// generation use the coordinator's choice. Every stage-generation-16
     /// peer decodes every codec, so no choice needs a capability check.
     pub(super) fn with_activation_codec(mut self, choice: SplitActivationCodec) -> Self {
         self.activation_codec = choice.codec;

@@ -270,7 +270,7 @@ fn canonical_config_hash_changes_when_structured_refs_change_encoding() {
     );
 }
 #[test]
-pub(crate) fn mesh_requirements_survive_owner_control_config_round_trip() {
+fn mesh_requirements_survive_owner_control_config_round_trip() {
     // Regression: NodeConfigSnapshot used to drop [mesh_requirements] on the
     // owner-control get/apply path, silently stripping admission requirements
     // from an immutable mesh. The proto NodeConfigSnapshot now carries an

@@ -8,6 +8,112 @@ fn accepts_hosted_setup_before_cargo() {
 }
 
 #[test]
+fn release_notes_helper_requires_prior_cache_setup() {
+    let toolchain = "      - uses: dtolnay/rust-toolchain@pin\n";
+    let source = VALID
+        .replace("metadata:", "release_notes:")
+        .replace(
+            "cargo fmt --all --check",
+            "scripts/release-notes-generate.sh",
+        )
+        .replace("    steps:\n", &format!("    steps:\n{toolchain}"));
+    check(Path::new("."), &source).unwrap();
+
+    for invalid in [
+        source.replace(toolchain, ""),
+        source.replace(toolchain, "").replace(
+            "      - run: scripts/release-notes-generate.sh\n",
+            &format!("      - run: scripts/release-notes-generate.sh\n{toolchain}"),
+        ),
+        source.replace("      - uses: mozilla-actions/sccache-action@pin\n", ""),
+        source.replace(
+            "      - uses: ./.github/actions/configure-sccache-gha\n",
+            "",
+        ),
+        source
+            .replace("      - run: scripts/release-notes-generate.sh\n", "")
+            .replace(
+                "    steps:\n",
+                "    steps:\n      - run: scripts/release-notes-generate.sh\n",
+            ),
+        source.replace(
+            toolchain,
+            "      - uses: dtolnay/rust-toolchain@pin\n        if: github.event_name == 'push'\n",
+        ),
+        source.replace(
+            toolchain,
+            "      - uses: dtolnay/rust-toolchain@pin\n        continue-on-error: true\n",
+        ),
+        source
+            .replace(
+                toolchain,
+                "      - uses: dtolnay/rust-toolchain@pin\n        if: github.event_name == 'push'\n",
+            )
+            .replace(
+                "      - run: scripts/release-notes-generate.sh\n",
+                "      - run: scripts/release-notes-generate.sh\n        if: github.event_name == 'push'\n      - run: scripts/release-notes-generate.sh\n",
+            ),
+    ] {
+        assert!(
+            check(Path::new("."), &invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("release_notes"),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn release_notes_helper_accepts_any_earlier_covering_toolchain() {
+    let source = VALID
+        .replace("metadata:", "release_notes:")
+        .replace(
+            "cargo fmt --all --check",
+            "scripts/release-notes-generate.sh",
+        )
+        .replace(
+            "    steps:\n",
+            "    steps:\n      - uses: dtolnay/rust-toolchain@pin\n        if: github.event_name == 'push'\n      - uses: dtolnay/rust-toolchain@pin\n",
+        );
+    check(Path::new("."), &source).unwrap();
+}
+
+#[test]
+fn release_notes_helper_mention_in_a_comment_is_not_an_invocation() {
+    let toolchain = "      - uses: dtolnay/rust-toolchain@pin\n";
+    let source = VALID
+        .replace("metadata:", "release_notes:")
+        .replace(
+            "cargo fmt --all --check",
+            "scripts/release-notes-generate.sh",
+        )
+        .replace(
+            "    steps:\n",
+            &format!(
+                "    steps:\n      - run: |\n          # later: scripts/release-notes-generate.sh\n          true\n{toolchain}"
+            ),
+        );
+    check(Path::new("."), &source).unwrap();
+}
+
+#[test]
+fn real_release_notes_job_keeps_remote_caches_disabled() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = std::fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap();
+    let document = workflow_yaml::parse(&source).unwrap();
+    let job = document.get("jobs").unwrap().get("release_notes").unwrap();
+    let configure = steps(job)
+        .iter()
+        .find(|step| field(step, "uses") == Some("./.github/actions/configure-sccache-gha"))
+        .expect("release_notes configures sccache");
+    let inputs = configure.get("with").expect("configure-sccache-gha inputs");
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        assert_eq!(field(inputs, key), Some("false"), "{key}");
+    }
+}
+
+#[test]
 fn rejects_absent_late_swapped_conditional_or_suppressed_setup() {
     for source in [
         VALID.replace("      - uses: mozilla-actions/sccache-action@pin\n", ""),

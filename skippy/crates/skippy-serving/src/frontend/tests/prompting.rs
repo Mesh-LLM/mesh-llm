@@ -183,6 +183,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -241,6 +242,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -282,6 +284,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -339,6 +342,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -376,6 +380,7 @@ fn split_prefix_cache_hit_is_reported_in_timings() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -816,6 +821,7 @@ fn generated_text_with_logprobs() -> GeneratedText {
             },
         ]),
         activation_wire: None,
+        generation_stats: None,
     }
 }
 

@@ -14,9 +14,7 @@ pub fn mesh_capacity_bytes(hw: &HardwareSurvey) -> u64 {
         return hw.vram_bytes;
     }
 
-    let gpu_capacity = hw
-        .gpus
-        .iter()
+    let gpu_capacity = crate::hardware::memory_bearing_gpus(&hw.gpus)
         .map(|gpu| crate::vram::allocatable_bytes(gpu.vram_bytes, gpu.reserved_bytes))
         .sum();
     if gpu_capacity > 0 {
@@ -195,8 +193,9 @@ pub fn advertised_memory(
 /// per-device facts first, the legacy per-GPU lists otherwise.
 fn enumerated_device_memory(hw: &HardwareSurvey) -> (u64, u64) {
     if !hw.gpus.is_empty() {
-        let vram = hw.gpus.iter().map(|gpu| gpu.vram_bytes).sum();
-        let reserved = hw.gpus.iter().filter_map(|gpu| gpu.reserved_bytes).sum();
+        let gpus = || crate::hardware::memory_bearing_gpus(&hw.gpus);
+        let vram = gpus().map(|gpu| gpu.vram_bytes).sum();
+        let reserved = gpus().filter_map(|gpu| gpu.reserved_bytes).sum();
         return (vram, reserved);
     }
     let vram = hw.gpu_vram.iter().sum();

@@ -701,6 +701,8 @@ fn draft_model_path_overrides_a_configured_dflash_draft() {
             draft_model_path: "draft-dflash.gguf".into(),
             max_draft_tokens: Some(6),
             target_layers: Vec::new(),
+            context_window: None,
+            feature_encoding: None,
         }),
         ..Default::default()
     };
@@ -757,6 +759,8 @@ fn dflash_strategy_keeps_a_configured_dflash_draft() {
             draft_model_path: "draft-dflash.gguf".into(),
             max_draft_tokens: Some(6),
             target_layers: Vec::new(),
+            context_window: None,
+            feature_encoding: None,
         }),
         ..Default::default()
     };
@@ -771,6 +775,8 @@ fn dflash_strategy_keeps_a_configured_dflash_draft() {
                 draft_model_path: "draft-dflash.gguf".into(),
                 max_draft_tokens: Some(6),
                 target_layers: Vec::new(),
+                context_window: None,
+                feature_encoding: None,
             },
             "{discovered:?}"
         );
@@ -800,6 +806,8 @@ fn cli_strategy_overrides_a_configured_dflash_plan() {
             draft_model_path: "draft-dflash.gguf".into(),
             max_draft_tokens: None,
             target_layers: Vec::new(),
+            context_window: None,
+            feature_encoding: None,
         }),
         ..Default::default()
     };

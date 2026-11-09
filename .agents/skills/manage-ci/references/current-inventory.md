@@ -186,8 +186,17 @@ both evidence sets, and fails after both have had a chance to run.
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
-**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. Default
+**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch.
+Successful same-candidate infrastructure reconciliation emits
+`retry_recovered=true`. In that case `verify_1`, `verify_2`, and `verify_3`
+skip their native builds and complete family matrices; selection retains the
+certified package and can continue to publication. This retry exception also
+applies to explicit selected-source publication. Other candidates retain the
+independent-pass requirements described below, and changed producer identities
+cannot reuse prior receipts.
+
+The controller freezes one main source SHA and the upstream target before any
+hardware work. Default
 selection uses `repository llama-upstream-release` to compare publication times
 across pages of `ggml-org/llama.cpp` release metadata, including prereleases and
 excluding drafts, then peel the selected tag to an exact commit. Every page is
@@ -195,7 +204,7 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted upstream selection step receives
+without falling back to `master`. The managed upstream selection step receives
 the workflow's read-only GitHub token through `GH_TOKEN`.
 Runner placement uses managed memory labels without a runner API query. Workers
 receive no GitHub token.
@@ -238,7 +247,8 @@ cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
-Only two green passes permit the hosted publisher to create a PR to `main`
+Two green passes, or the successful same-candidate retry exception above,
+permit the managed lab publisher to create a PR to `main`
 with that exact commit. Both modes keep its existing pin and never invoke Goose.
 The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
@@ -288,9 +298,12 @@ pipeline. Packages bind both the controller and selected base; changed candidate
 must be direct children of that base with an admitted bundle. Certify modes still
 reject upstream overrides and preserve the selected commit unchanged.
 
-`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
-build → hosted package combination → memory-tier family matrix → hosted
-aggregate. The protected controller prepares automation and invokes `canary-receipts build`
+`llama-canary-family-pass.yml` runs macOS and Linux native builds concurrently
+for the first unchanged selected-source certification pass. Changed-pin repair
+and independent verification still build Mac first, then pass its exact candidate
+package to Linux. Both paths join at managed package combination, followed by
+the memory-tier family matrix and managed aggregate. The protected controller
+prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
 Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
 manifests, enumerating source paths or hashing source diffs. Diagnostics remain
@@ -305,7 +318,7 @@ job results, then export verified classified feedback. Retry rows overlay only
 controller placement fields over admitted source rows. Each attempt selector
 and the final selector prepare the frozen controller with both cache authorities
 disabled before invoking native selection.
-Its bounded process owner retains redacted logs and owns Goose and its progress projection.
+Its bounded process owner retains redacted logs and owns the Goose process.
 The retained repair wrapper performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
@@ -321,8 +334,10 @@ independently of its 60-second Git command budget. `--timeout` overrides both.
 Both generation and idempotence remain required; deadline diagnostics retain
 readable child output and process cleanup status.
 
-The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
-in the repair session and trusted build; the per-case timeout remains 900 seconds.
+The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
+runs in the repair session and trusted build. The Linux build job uses 4 to
+limit concurrent CUDA test memory pressure. The per-case timeout remains 900
+seconds.
 The build job prepares the locked canary Python SDK before its early Metal
 battery, so Nomic embedding uses the same interpreter as family workers.
 Non-chat certification starts the candidate through `skippy serve --model-path`
@@ -348,6 +363,8 @@ completion and waits for live members to stop before handing the workspace back.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
+Bundle-backed native builds inspect parity against the admitted exact candidate;
+the controller parity inventory checks only the frozen selected source.
 
 The family matrix is submitted in ascending estimated model bytes, with family
 name breaking ties. Balanced shard membership remains unchanged. This puts
@@ -369,7 +386,7 @@ Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
 Reruns retain attempt-labelled family/build history. These diagnostics never
-substitute for either complete certification pass. The hosted aggregate emits
+substitute for either complete certification pass. The managed aggregate emits
 a digest-bound classification artifact for candidate repair or a single
 targeted infrastructure recheck. That recheck runs only the runner/workflow-
 failed or missing families against the same producer package, without Goose or
@@ -477,28 +494,20 @@ worker failures remain recoverable by later bounded repair passes;
 runner/workflow failures receive one targeted same-candidate recheck. A clean
 recheck plus the retained initial successes completes that immutable full pass;
 a repeated infrastructure failure or invalid aggregate evidence stops. Only
-complete independent success permits publication.
+complete independent success or successful same-candidate recovery permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 
-Llama repair now invokes Goose with `stream-json` and projects it through
-`automation canary-progress` before the bounded outer wrapper capture. The
-console keeps concise assistant narration, tool start/return/error and one-minute
-activity reports. Expandable GitHub log groups retain commands and returned tool
-results without cluttering the default view. The formatter samples the run-owned
-`agent-commands/*/output.log` files, exposing recent output even while a shell
-tool is blocked behind `tail`.
-It reports elapsed/idle time and the wrapper's separate completion record; active
-logs take priority over newer completed commands. The Unix projector opens logs
-through directory handles without following symlinks and cancels the supervised
-Goose/logging pipeline if projection fails while the agent is quiet.
-Full original events remain in `agent.log`; full command logs retain their
-existing 14-day build-artifact upload. The console prints local paths for live
-operator inspection; these are not remotely accessible HTTP links. Downloadable
-full logs become available after the evidence upload, not while a job is active.
-There is no new service, permission, secret, runner selection or certification gate.
+Llama repair invokes Goose in normal text mode. Its stdout and stderr stream
+once to the job console and are saved as `agent.log`; there is no progress
+projector, activity ticker or tool-output duplication. GitHub workflow commands
+are disabled around the Goose stream so model/tool text cannot alter the job.
+Complete per-command logs remain in the existing 14-day build artifact and can
+be inspected on the runner while a command is active. The artifact becomes
+downloadable after upload. Logging failure stops the supervised turn; credential
+and certification boundaries are unchanged.
 
-See [Following a Llama Upgrade repair](../../../../ci/llama-canary/PROGRESS.md) for console and detailed-log examples.
+See [Following a Llama Upgrade repair](../../../../ci/llama-canary/PROGRESS.md).
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
@@ -506,7 +515,7 @@ prepare/build failures under the existing 11.5-hour coding-admission and
 failure starts a new bounded session on the next attempt after restoring the
 exact prior candidate as uncommitted changes on the frozen base. Every edit
 invalidates all prior family results. Candidates are local, uncertified commits
-until both full family passes are green. The separate GitHub-hosted publisher
+until both full family passes are green. The separate managed lab publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level
@@ -535,7 +544,9 @@ checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
 `libllama.so`), then supplies that library directory to Cargo's package
 verification. The resume workflow uses the same release-archive contract.
 
-The `release_notes` job runs after a successful stable publish with
+The `release_notes` job initializes the Rust toolchain and sccache with both
+remote caches disabled before invoking its Cargo-backed notes helper. It runs
+after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog
 sections through `scripts/release-notes-generate.sh`, which calls `cargo xtool
 release notes-link`, `notes-classify`, and `notes-regroup`. The deterministic
@@ -730,7 +741,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `ci-ui-artifact-slice.yml` | `ui_stamp` | `public cpu`, release-tag callers only; protected automation checkout consumes the immutable raw distribution |
 | `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `mesh/website` | `public ui`, `public browser`, existing `public web`, respectively |
 | `website-pages.yml` | `build` | `public web` |
-| `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
+| `nightly-stability-run.yml` | `stability` | `public cpu`, the image `prepare-automation` verifies (also bakes the node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
 | `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit; packaging also fetches the pinned default-plugin archives from their GitHub releases (curl, HTTPS only) and checks them against the pins |
@@ -891,7 +902,7 @@ trusting this line). Bumping the mesh-llm side alone fails `ui_e2e` on
 cross-repo sequence, in order: bump `config/playwright-pin.txt` in
 `mesh-llm-runner-images`, rebuild and promote the `public web` image, re-pin
 the new digest in `ci-web-slice.yml` (and `ci-ui-artifact-slice.yml` /
-`website-pages.yml` / `nightly-stability-run.yml`, which share it), then
+`website-pages.yml`, which share it), then
 bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 
 ### `setup-macos-lld` composite

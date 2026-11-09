@@ -132,6 +132,11 @@ fn select_attempt(changed: bool, repair: &Job, verification: &Job) -> DynResult<
     if !changed {
         return Ok(AttemptDecision::Green(candidate));
     }
+    // Reconciliation already admits the complete family roster for this exact
+    // producer package; a successful retry does not require a second pass.
+    if repair.outputs.retry_recovered == "true" && verification.result == JobResult::Skipped {
+        return Ok(AttemptDecision::Green(candidate));
+    }
     if verification.outputs.green == "true" {
         let verified = decision::Candidate::from_outputs(&verification.outputs)?;
         return Ok(if candidate.head == verified.head {

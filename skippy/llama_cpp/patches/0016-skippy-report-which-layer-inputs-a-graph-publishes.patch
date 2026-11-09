@@ -1,0 +1,112 @@
+From 3bedcf67e7b64ba56c059a06ec7419d5dd1fc6c1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 09:18:19 +1100
+Subject: [PATCH] skippy: report published layer inputs including head input
+
+---
+ src/llama-context.cpp | 42 +++++++++++++++++++++++++++++++++++++++++-
+ src/llama-context.h   |  4 ++++
+ src/llama-ext.h       |  5 +++++
+ 3 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index b5bb1cac5..6830b3637 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1524,7 +1524,7 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
+ 
+-    GGML_ASSERT(lid < model.hparams.n_layer());
++    GGML_ASSERT(lid <= model.hparams.n_layer());
+ 
+     if (cparams.embeddings_layer_inp[lid] == enable) return;
+     ++computation_generation;
+@@ -3060,6 +3060,42 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
+     return true;
+ }
+ 
++bool llama_context::layer_inp_published(uint32_t lid) {
++    if (lid >= cparams.embeddings_layer_inp.size()) {
++        return false;
++    }
++    // Build the architecture graph for one token per sequence with the layer
++    // captured and see whether it names the tensor. The batch takes the
++    // shape of the token-generation graph reserved at init (one token for
++    // each of n_seq_max sequences), since a full-cache memory context lays
++    // out a stream per sequence and graphs reshape against that. This stops
++    // short of the output pass, which aborts on a capture the graph cannot
++    // satisfy, and of scheduling, so the reserved graphs and the scheduler
++    // are left as they are.
++    const uint32_t n_seqs = std::max<uint32_t>(1, cparams.n_seq_max);
++    const std::vector<bool> saved_layer_inp = cparams.embeddings_layer_inp;
++    const auto saved_n_outputs = n_outputs;
++    cparams.embeddings_layer_inp[lid] = true;
++    n_outputs = n_seqs;
++    bool published = false;
++    try {
++        const auto mctx = memory ? memory->init_full() : nullptr;
++        llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
++        llama_ubatch ubatch = balloc.ubatch_reserve(1, n_seqs);
++        ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
++        llm_graph_result res(graph_max_nodes(n_seqs));
++        res.reset();
++        const auto graph = model.build_arch_graph(
++                graph_params(&res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type)));
++        published = graph->res->get_layer_inp((int) lid) != nullptr;
++    } catch (const std::exception & err) {
++        LLAMA_LOG_WARN("%s: could not build the graph to check layer %u: %s\n", __func__, lid, err.what());
++    }
++    n_outputs = saved_n_outputs;
++    cparams.embeddings_layer_inp = saved_layer_inp;
++    return published;
++}
++
+ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_tokens,
+                                            uint32_t                          n_seqs,
+                                            uint32_t                          n_outputs,
+@@ -4946,6 +4982,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
+     ctx->set_embeddings_layer_inp(lid, value);
+ }
+ 
++bool llama_layer_inp_published(llama_context * ctx, uint32_t lid) {
++    return ctx->layer_inp_published(lid);
++}
++
+ void llama_set_nextn_layer_offset(llama_context * ctx, int32_t offset) {
+     ctx->set_nextn_layer_offset(offset);
+ }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 791072aeb..68b3f056c 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -154,6 +154,10 @@ struct llama_context {
+     void set_embeddings (bool value);
+     void set_embeddings_nextn(bool value, bool masked);
+     void set_embeddings_layer_inp(uint32_t lid, bool enable);
++
++    // whether the model's graph publishes layer lid's input when it is captured;
++    // lid == n_layer is the last layer's output, the output head's input
++    bool layer_inp_published(uint32_t lid);
+     void set_embeddings_layer_inp_dev(bool value);
+ 
+     // whether decode accepts entries whose embd is a row of ctx_other's layer input device buffer
+diff --git a/src/llama-ext.h b/src/llama-ext.h
+index 9449e1da7..2ebc4a2a6 100644
+--- a/src/llama-ext.h
++++ b/src/llama-ext.h
+@@ -166,6 +166,11 @@ LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int
+ // Set whether the context outputs the input embeddings of a specific layer
+ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
+ 
++// Whether the model's graph publishes the input of layer lid (lid == n_layer: the
++// last layer's output) when it is captured. Builds the graph once, without
++// running it; capturing a layer the graph does not publish aborts the decode.
++LLAMA_API bool llama_layer_inp_published(struct llama_context * ctx, uint32_t lid);
++
+ // mirrors:
+ // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
+ LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
+-- 
+2.56.0
+

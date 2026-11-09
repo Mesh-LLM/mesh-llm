@@ -85,7 +85,7 @@ workloads normalize unrecognized peer values to `unknown`; the original workload
 string is not preserved. Kinds are string-valued. Open-ended metadata uses
 `ModelJSONValue`. Filters combine with AND; preserve them when continuing a page.
 
-Runtime limits, capability evidence, thinking controls and payment offers apply
+Runtime limits, capability evidence, thinking controls and plugin requirements apply
 to their provider. A model's operation list means at least one provider offers
 each operation. `node.inference.listModels()` remains the LLM-only compatibility
 view. Full discovery does not make an OpenAI HTTP request.

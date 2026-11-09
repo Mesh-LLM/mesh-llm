@@ -571,6 +571,27 @@ impl RuntimeState {
         }
     }
 
+    /// Marks the next message of a session as holding only prompt rows the
+    /// final stage's DFlash draft never attends, or clears the mark: no
+    /// feature rows go with its frame and the draft does not ingest them. A
+    /// marked message may be a session's first, so this creates the session.
+    pub(crate) fn dflash_split_mark_unattended(&mut self, session_id: &str, unattended: bool) {
+        if !unattended {
+            if let Some(lane) = self.sessions.get_mut(session_id) {
+                lane.session.dflash_mark_unattended(false);
+            }
+            return;
+        }
+        match self.session(session_id) {
+            Ok(session) => session.dflash_mark_unattended(true),
+            Err(error) => tracing::warn!(
+                session_id,
+                error = format!("{error:#}"),
+                "split DFlash: no session to mark rows outside the draft window"
+            ),
+        }
+    }
+
     /// Appends the DFlash feature rows this stage captured for the message
     /// that produced `output`, for the final stage's draft.
     pub(crate) fn dflash_split_output(&mut self, session_id: &str, output: &mut ActivationFrame) {
@@ -936,7 +957,7 @@ fn split_activation_frame(
     Ok(Some(frames))
 }
 
-fn slice_activation_frame(
+pub(crate) fn slice_activation_frame(
     input: &ActivationFrame,
     token_start: usize,
     token_count: usize,

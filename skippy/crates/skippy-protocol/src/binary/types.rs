@@ -214,6 +214,11 @@ pub mod state_flags {
     /// and send it in a second reply. The verdict reply says whether a draft
     /// reply follows (reply marker bit `REPLY_DRAFT_FOLLOWS`).
     pub const SPLIT_DFLASH_EARLY_VERDICT: i32 = 1 << 15;
+    /// On a prefill message of a split DFlash target: the final stage's
+    /// draft never attends these prompt rows, which lie before its sliding
+    /// attention window. Stages forward no DFlash feature rows for them, and
+    /// the draft does not ingest them; its context starts after them.
+    pub const SPLIT_DFLASH_UNATTENDED_ROWS: i32 = 1 << 16;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -453,6 +458,18 @@ impl StageStateHeader {
             self.flags |= state_flags::SPLIT_DFLASH_EARLY_VERDICT;
         } else {
             self.flags &= !state_flags::SPLIT_DFLASH_EARLY_VERDICT;
+        }
+    }
+
+    pub fn split_dflash_unattended_rows(self) -> bool {
+        self.flags & state_flags::SPLIT_DFLASH_UNATTENDED_ROWS != 0
+    }
+
+    pub fn set_split_dflash_unattended_rows(&mut self, unattended: bool) {
+        if unattended {
+            self.flags |= state_flags::SPLIT_DFLASH_UNATTENDED_ROWS;
+        } else {
+            self.flags &= !state_flags::SPLIT_DFLASH_UNATTENDED_ROWS;
         }
     }
 

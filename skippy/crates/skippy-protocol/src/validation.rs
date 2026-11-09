@@ -10,13 +10,13 @@ pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";
 pub const STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER: &str = "persistent-lane-marker";
-pub const STAGE_PROTOCOL_GENERATION: u32 = 13;
+pub const STAGE_PROTOCOL_GENERATION: u32 = 16;
 /// Generation-scoped stage capability. A peer can advertise `stage-control`
 /// while still rejecting current-generation frames, so split planning gates on
 /// this exact token before sending current-generation control requests.
-pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13: &str = "stage-generation-13";
+pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V16: &str = "stage-generation-16";
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13;
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V16;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
 pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf-content-id-v1";
@@ -30,7 +30,11 @@ pub const STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1: &str = "decode-batch
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;
-pub const MAX_STAGE_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// Largest stage message on the wire. It bounds what a receiver commits for
+/// one frame before reading its payload (#2218). Sized so one 512-token
+/// prefill chunk of a wide boundary (four 4096-wide F32 streams: 32 MiB)
+/// still crosses as one frame, with room for DFlash feature rows.
+pub const MAX_STAGE_FRAME_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum number of unresolved verify windows covered by native checkpoints.
 pub const MAX_VERIFY_WINDOW_PIPELINE_DEPTH: usize = 64;
 /// Sanity bound on the run-ahead speculative-token budget. Every in-flight

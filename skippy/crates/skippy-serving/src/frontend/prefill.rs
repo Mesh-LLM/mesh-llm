@@ -11,9 +11,6 @@ use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use std::net::TcpStream;
 
-mod frame_budget;
-pub(super) use frame_budget::bounded_chunk_size;
-
 pub(super) fn prefill_chunk_end(
     pos_start: usize,
     chunk_size: usize,
@@ -29,6 +26,20 @@ pub(super) fn prefill_chunk_end(
         end = end.min(boundary);
     }
     end
+}
+
+/// Where the prompt rows a split's DFlash draft can attend begin: the draft
+/// slides every attention layer over `context_window` positions, and its
+/// first block drafts after the last of `prefill_tokens` prompt rows, so no
+/// block attends a row before `prefill_tokens - context_window`. Prefill
+/// chunks before it carry no feature rows. `None` when every row may be
+/// attended.
+pub(super) fn split_dflash_unattended_until(
+    prefill_tokens: usize,
+    context_window: Option<u32>,
+) -> Option<usize> {
+    let window = usize::try_from(context_window?).ok()?;
+    Some(prefill_tokens.saturating_sub(window)).filter(|until| *until > 0)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,6 +342,82 @@ impl PrefillChunkPlanner {
     }
 }
 
+/// Replies the next stage owes stage 0 for the prefill frames sent ahead of
+/// it, and how stage 0 waited for them over one prefill.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PrefillReplyCredits {
+    pub(super) pending: usize,
+    pub(super) pending_max: usize,
+    pub(super) credit_waits: usize,
+    pub(super) deferred_drained: usize,
+}
+
+/// What sending one prefill chunk's frames cost.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PrefillFramesSent {
+    pub(super) activation_bytes: usize,
+    pub(super) write_ms: f64,
+    pub(super) downstream_wait_ms: f64,
+    pub(super) credit_waits: usize,
+    pub(super) deferred_drained: usize,
+}
+
+/// Sends one prefill chunk's frames downstream in order. With a reply credit
+/// limit, a frame is written only once fewer than that many replies are
+/// outstanding; without one, every frame waits for its own acknowledgement.
+/// `write` writes one frame.
+pub(super) fn send_prefill_frames(
+    downstream: &mut TcpStream,
+    frames: &[skippy_protocol::binary::StageWireMessage],
+    credit_limit: usize,
+    credits: &mut PrefillReplyCredits,
+    chain_stats: &mut StageReplyStats,
+    mut write: impl FnMut(
+        &mut TcpStream,
+        &skippy_protocol::binary::StageWireMessage,
+    ) -> InferenceResult<()>,
+) -> InferenceResult<PrefillFramesSent> {
+    let mut sent = PrefillFramesSent::default();
+    for frame in frames {
+        sent.activation_bytes = sent.activation_bytes.saturating_add(frame.activation.len());
+        if credit_limit == 0 {
+            let write_timer = PhaseTimer::start();
+            write(&mut *downstream, frame)?;
+            sent.write_ms += write_timer.elapsed_ms();
+            let wait_timer = PhaseTimer::start();
+            let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+            sent.downstream_wait_ms += wait_timer.elapsed_ms();
+            if reply.kind != WireReplyKind::Ack {
+                return Err(InferenceError::backend(format!(
+                    "expected prefill ACK from downstream, got {:?}",
+                    reply.kind
+                )));
+            }
+            chain_stats.merge(reply.stats);
+            continue;
+        }
+        while credits.pending >= credit_limit {
+            credits.credit_waits = credits.credit_waits.saturating_add(1);
+            sent.credit_waits = sent.credit_waits.saturating_add(1);
+            let drained =
+                drain_one_embedded_prefill_reply(downstream, &mut credits.pending, chain_stats)?;
+            credits.deferred_drained = credits
+                .deferred_drained
+                .saturating_add(drained.drained_replies);
+            sent.deferred_drained = sent
+                .deferred_drained
+                .saturating_add(drained.drained_replies);
+            sent.downstream_wait_ms += drained.downstream_wait_ms;
+        }
+        let write_timer = PhaseTimer::start();
+        write(&mut *downstream, frame)?;
+        sent.write_ms += write_timer.elapsed_ms();
+        credits.pending = credits.pending.saturating_add(1);
+        credits.pending_max = credits.pending_max.max(credits.pending);
+    }
+    Ok(sent)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct EmbeddedPrefillDrain {
     pub(super) drained_replies: usize,
@@ -389,7 +476,20 @@ pub(super) fn drain_embedded_prefill_replies(
 
 #[cfg(test)]
 mod tests {
-    use super::prefill_chunk_end;
+    use super::{prefill_chunk_end, split_dflash_unattended_until};
+
+    #[test]
+    fn a_sliding_draft_leaves_rows_before_its_window_unattended() {
+        assert_eq!(
+            split_dflash_unattended_until(33_000, Some(2048)),
+            Some(30_952)
+        );
+        // A prompt inside the window, or a draft with full attention, sends
+        // every row.
+        assert_eq!(split_dflash_unattended_until(2048, Some(2048)), None);
+        assert_eq!(split_dflash_unattended_until(100, Some(1024)), None);
+        assert_eq!(split_dflash_unattended_until(33_000, None), None);
+    }
 
     #[test]
     fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {

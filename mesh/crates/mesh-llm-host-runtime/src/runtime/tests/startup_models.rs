@@ -1866,3 +1866,23 @@ parallel = 6
         "a model's own setting still wins, as it does over the file"
     );
 }
+
+#[test]
+fn mesh_requirements_cli_accepts_each_bound_independently() {
+    assert_mesh_requirements_cli_accepts_each_bound_independently();
+}
+
+#[test]
+fn mesh_requirements_cli_overrides_config_per_field_before_genesis() {
+    assert_mesh_requirements_cli_overrides_config_per_field_before_genesis();
+}
+
+#[test]
+fn mesh_requirements_config_rejects_min_greater_than_max_after_merge() {
+    assert_mesh_requirements_config_rejects_min_greater_than_max_after_merge();
+}
+
+#[test]
+fn mesh_requirements_rejects_local_policy_mutation_on_existing_mesh() {
+    assert_mesh_requirements_rejects_local_policy_mutation_on_existing_mesh();
+}

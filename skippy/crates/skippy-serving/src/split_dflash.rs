@@ -47,6 +47,11 @@ pub struct SplitDFlashStage {
     /// fetches and verifies its own copy. `None` for a configured draft, which
     /// the operator places, and from older planners.
     pub draft_source: Option<SplitDFlashDraftSource>,
+    /// How the stages before the final one encode the feature rows they
+    /// forward, settled against what the final stage reads. `None` sends Q8,
+    /// which every final stage reads. On any stage,
+    /// `SKIPPY_DFLASH_FEATURE_ENCODING` overrides it.
+    pub feature_encoding: Option<skippy_runtime::DFlashFeatureEncoding>,
 }
 
 /// A default DFlash draft pinned on Hugging Face.
@@ -80,6 +85,10 @@ impl SplitDFlashStage {
             draft_n_gpu_layers,
             draft_device: None,
             draft_source: None,
+            feature_encoding: dflash
+                .feature_encoding
+                .as_deref()
+                .and_then(skippy_runtime::DFlashFeatureEncoding::parse),
         })
     }
 
@@ -95,6 +104,43 @@ impl SplitDFlashStage {
         u32::try_from(drafted.saturating_add(1)).unwrap_or(u32::MAX)
     }
 }
+
+/// What a split's final stage reports once it has attached its DFlash draft.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SplitDFlashAttached {
+    /// The target layers the draft reads.
+    pub target_layers: Vec<u32>,
+    /// How many positions back the draft attends, when every one of its
+    /// attention layers slides over a window. A block drafted after position
+    /// `p` never reads a target row at or before `p - window`, so stage 0
+    /// leaves the feature rows of older prompt tokens off the wire. `None`
+    /// when any layer attends the whole context.
+    pub context_window: Option<u32>,
+    /// The feature-row encodings this stage reads.
+    pub feature_encodings: Vec<skippy_runtime::DFlashFeatureEncoding>,
+}
+
+/// How a split's earlier stages encode feature rows for a final stage that
+/// reads `readable`: Q4 when it reads Q4, else Q8. The draft only proposes
+/// tokens the target verifies, so the encoding can change acceptance but
+/// never output.
+pub fn settled_feature_encoding(
+    readable: &[skippy_runtime::DFlashFeatureEncoding],
+) -> Option<skippy_runtime::DFlashFeatureEncoding> {
+    use skippy_runtime::DFlashFeatureEncoding;
+    readable
+        .contains(&SPLIT_FEATURE_ENCODING)
+        .then_some(SPLIT_FEATURE_ENCODING)
+        .or_else(|| {
+            readable
+                .contains(&DFlashFeatureEncoding::Q8)
+                .then_some(DFlashFeatureEncoding::Q8)
+        })
+}
+
+/// The encoding a split sends feature rows in when its final stage reads it.
+pub const SPLIT_FEATURE_ENCODING: skippy_runtime::DFlashFeatureEncoding =
+    skippy_runtime::DFlashFeatureEncoding::Q4;
 
 /// The target layers a DFlash draft reads, from its GGUF header.
 pub fn draft_target_layers(path: &Path) -> Result<Vec<u32>> {
@@ -189,14 +235,14 @@ pub fn borrowed_resident_tensor_ids(
 /// others. A final stage without a usable draft serves without one; stage 0
 /// then receives no drafts and decodes serially.
 ///
-/// Returns the draft's target layers once a final stage has attached it, so
-/// the planner can tell stage 0 the draft is there; `None` otherwise.
+/// Returns what the final stage attached, so the planner can tell stage 0
+/// the draft is there; `None` otherwise.
 pub(crate) fn attach_split_dflash(
     runtime: &mut RuntimeState,
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
     plan: &SplitDFlashStage,
-) -> Result<Option<Vec<u32>>> {
+) -> Result<Option<SplitDFlashAttached>> {
     if config.downstream.is_none() {
         let Some(path) = plan.draft_model_path.as_deref() else {
             return Ok(None);
@@ -226,12 +272,23 @@ pub(crate) fn attach_split_dflash(
             target_layers = ?info.target_layer_ids,
             "split DFlash draft attached on the final stage"
         );
-        return Ok(Some(info.target_layer_ids.clone()));
+        let context_window = skippy_model_artifact::gguf::scan_gguf_dflash_context_window(path);
+        tracing::info!(
+            stage = config.stage_id,
+            context_window = ?context_window,
+            "split DFlash draft attention reach: earlier stages send feature rows only within it"
+        );
+        return Ok(Some(SplitDFlashAttached {
+            target_layers: info.target_layer_ids.clone(),
+            context_window,
+            feature_encodings: skippy_runtime::DFlashFeatureEncoding::READABLE.to_vec(),
+        }));
     }
     let layers = runtime.model.attach_dflash_capture(
         &plan.target_layers,
         config.layer_start,
         config.layer_end,
+        skippy_runtime::DFlashFeatureEncoding::for_plan(plan.feature_encoding),
     )?;
     tracing::info!(
         stage = config.stage_id,
@@ -271,6 +328,30 @@ fn draft_device_on_this_node(device: Option<&str>) -> Option<String> {
 /// drafts arrive where native MTP drafts do, so stage 0 drives them through
 /// the native MTP verify windows. Each window verifies the whole block.
 /// `None` when the plan has no DFlash draft.
+/// The most bytes of DFlash feature rows the stages after stage 0 append to
+/// each prompt token they forward: a row for every target layer past stage
+/// 0's own, `width` values wide, in the widest encoding a stage may send
+/// (`SKIPPY_DFLASH_FEATURE_ENCODING` can override the settled one on any
+/// stage). Layers on the final stage are counted too, though it forwards
+/// nothing, so the bound is high.
+pub(crate) fn downstream_feature_bytes_per_token(
+    dflash: &DFlashProposalConfig,
+    stage0_layer_end: u32,
+    width: usize,
+) -> usize {
+    let row_bytes = skippy_runtime::DFlashFeatureEncoding::READABLE
+        .iter()
+        .map(|encoding| encoding.row_bytes(width))
+        .max()
+        .unwrap_or(0);
+    let layers = dflash
+        .target_layers
+        .iter()
+        .filter(|&&layer| layer >= stage0_layer_end)
+        .count();
+    layers.saturating_mul(row_bytes)
+}
+
 pub(crate) fn split_stage0_plan(plan: &SpeculativeDecodeConfig) -> Option<SpeculativeDecodeConfig> {
     let dflash = plan.dflash.as_ref()?;
     let block = dflash
@@ -294,6 +375,21 @@ pub(crate) fn split_stage0_plan(plan: &SpeculativeDecodeConfig) -> Option<Specul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_runtime::DFlashFeatureEncoding;
+
+    #[test]
+    fn features_go_in_the_most_compact_encoding_the_final_stage_reads() {
+        assert_eq!(
+            settled_feature_encoding(&DFlashFeatureEncoding::READABLE),
+            Some(SPLIT_FEATURE_ENCODING)
+        );
+        // A final stage that does not read Q4 gets Q8.
+        assert_eq!(
+            settled_feature_encoding(&[DFlashFeatureEncoding::Bf16, DFlashFeatureEncoding::Q8]),
+            Some(DFlashFeatureEncoding::Q8)
+        );
+        assert_eq!(settled_feature_encoding(&[]), None);
+    }
 
     fn dflash_plan(cap: Option<usize>) -> SpeculativeDecodeConfig {
         SpeculativeDecodeConfig {
@@ -303,6 +399,8 @@ mod tests {
                 draft_model_path: PathBuf::from("/models/draft-dflash.gguf"),
                 max_draft_tokens: cap,
                 target_layers: Vec::new(),
+                context_window: None,
+                feature_encoding: None,
             }),
             ..SpeculativeDecodeConfig::default()
         }
@@ -327,6 +425,24 @@ mod tests {
         assert_eq!(uncapped.native_mtp.max_draft_tokens, 15);
         let wide = split_stage0_plan(&dflash_plan(Some(31))).unwrap();
         assert_eq!(wide.native_mtp.max_draft_tokens, 15);
+    }
+
+    #[test]
+    fn stage0_counts_feature_rows_of_the_layers_past_its_own_at_the_widest_encoding() {
+        let dflash = DFlashProposalConfig {
+            draft_model_path: PathBuf::from("draft.gguf"),
+            max_draft_tokens: None,
+            target_layers: vec![1, 10, 20, 30],
+            context_window: None,
+            feature_encoding: Some("q4".to_string()),
+        };
+        // Settled on Q4, but any stage may be told to send BF16.
+        let row = DFlashFeatureEncoding::Bf16.row_bytes(2048);
+        assert_eq!(
+            downstream_feature_bytes_per_token(&dflash, 10, 2048),
+            3 * row
+        );
+        assert_eq!(downstream_feature_bytes_per_token(&dflash, 31, 2048), 0);
     }
 
     #[test]
@@ -491,6 +607,8 @@ mod tests {
             draft_model_path: PathBuf::from("/not/on/this/node.gguf"),
             max_draft_tokens: Some(4),
             target_layers: vec![2, 17, 32],
+            context_window: None,
+            feature_encoding: None,
         };
         let plan = SplitDFlashStage::from_draft(&dflash, false, None).unwrap();
         assert_eq!(plan.target_layers, vec![2, 17, 32]);

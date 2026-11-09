@@ -61,6 +61,9 @@ fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Bool(inner) => json!(inner),
         Value::Int(inner) => json!(inner),
+        // `json!` turns a non-finite float into `null`, which PostHog stores
+        // as unset rather than as a bogus number.
+        Value::Float(inner) => json!(inner),
         Value::Text(label) => json!(label.as_str()),
         Value::Static(inner) => json!(inner),
     }
