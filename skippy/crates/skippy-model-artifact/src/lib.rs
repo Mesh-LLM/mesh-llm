@@ -7,25 +7,59 @@ pub mod selection;
 
 use std::path::Path;
 
+const HF_RESOLVE_PREFIXES: &[&str] = &[
+    "https://huggingface.co/",
+    "https://huggingface.co:443/",
+    "http://huggingface.co/",
+    "http://huggingface.co:80/",
+];
+
 /// Parses `https://huggingface.co/<owner>/<repo>/resolve/<rev>/<file>` (https or http).
-/// Accepts the explicit default ports (`:443` for https, `:80` for http), `<repo>` or `<owner>/<repo>`;
-/// rejects empty parts, a file ending in `/`, extra repo components, and drops `?query`/`#fragment`.
+/// The scheme and hostname are matched case-insensitively while the returned repository,
+/// revision, and file preserve the URL's original case. Accepts the explicit default ports
+/// (`:443` for https, `:80` for http), `<repo>` or `<owner>/<repo>`; rejects empty parts, a file
+/// ending in `/` or a percent-encoded slash (`%2F`, case-insensitive), a file path whose `.`/`..`
+/// segments collapse to a directory, and extra repo components; drops `?query`/`#fragment`.
 pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
-    let tail = url
-        .strip_prefix("https://huggingface.co/")
-        .or_else(|| url.strip_prefix("https://huggingface.co:443/"))
-        .or_else(|| url.strip_prefix("http://huggingface.co/"))
-        .or_else(|| url.strip_prefix("http://huggingface.co:80/"))?;
+    let lower = url.to_ascii_lowercase();
+    let prefix_len = HF_RESOLVE_PREFIXES
+        .iter()
+        .find(|prefix| lower.starts_with(*prefix))
+        .map(|prefix| prefix.len())?;
+    let tail = &url[prefix_len..];
     let (repo, rest) = tail.split_once("/resolve/")?;
     let rest = rest.split(['?', '#']).next()?;
     let (revision, file) = rest.split_once('/')?;
     if file.ends_with('/')
+        || ends_with_encoded_slash(file)
+        || normalizes_to_directory(file)
         || repo.split('/').count() > 2
         || repo.split('/').chain([revision, file]).any(str::is_empty)
     {
         return None;
     }
     Some((repo, Some(revision), file))
+}
+
+/// A trailing percent-encoded slash (`%2F`, case-insensitive hex) names a directory
+/// even though the final byte is not a literal `/`.
+fn ends_with_encoded_slash(path: &str) -> bool {
+    let tail = &path[path.len().saturating_sub(3)..];
+    tail.len() == 3 && tail.starts_with('%') && tail[1..].eq_ignore_ascii_case("2f")
+}
+
+/// Returns `true` when the path's `.` and `..` segments collapse (RFC 3986, section 5.2.4)
+/// to no remaining component, so the URL names a directory rather than an artifact file.
+fn normalizes_to_directory(path: &str) -> bool {
+    let mut depth = 0u32;
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => depth = depth.saturating_sub(1),
+            _ => depth += 1,
+        }
+    }
+    depth == 0
 }
 
 use anyhow::{Result, bail};
@@ -36,13 +70,18 @@ use skippy_model_ref::{
     parse_model_ref, split_gguf_shard_info,
 };
 
+/// Resolves revisions and lists artifacts for model repositories.
 #[async_trait]
 pub trait ModelRepository: Send + Sync {
+    /// Resolves `revision` (or the repository default when `None`) to a concrete revision.
     async fn resolve_revision(&self, repo: &str, revision: Option<&str>) -> Result<String>;
 
+    /// Lists the artifact files present in `repo` at `revision`.
     async fn list_files(&self, repo: &str, revision: &str) -> Result<Vec<ModelArtifactFile>>;
 }
 
+/// A model artifact resolved against a repository: its identity, format, and the
+/// complete file set needed to serve the primary artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedModelArtifact {
     pub model_id: String,
@@ -56,6 +95,8 @@ pub struct ResolvedModelArtifact {
     pub distribution_id: String,
 }
 
+/// The stable identity of a served model, including its remote source
+/// coordinates when the model came from a repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelIdentity {
     pub model_id: String,
@@ -74,6 +115,7 @@ pub struct ModelIdentity {
 }
 
 impl ModelIdentity {
+    /// Builds an identity from a bare model id with no source coordinates.
     pub fn from_model_id(model_id: impl Into<String>) -> Self {
         Self {
             model_id: model_id.into(),
@@ -101,6 +143,7 @@ impl From<&ResolvedModelArtifact> for ModelIdentity {
     }
 }
 
+/// The on-disk format of a model artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelFormat {
@@ -108,6 +151,7 @@ pub enum ModelFormat {
     Safetensors,
 }
 
+/// A single file in a model artifact: its path plus optional size and SHA-256.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelArtifactFile {
     pub path: String,
@@ -116,6 +160,7 @@ pub struct ModelArtifactFile {
 }
 
 impl ModelArtifactFile {
+    /// Builds an entry with only a path; size and digest stay unknown.
     pub fn new(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -125,6 +170,7 @@ impl ModelArtifactFile {
     }
 }
 
+/// Parses `model_ref` and resolves the matching artifact from `repository`.
 pub async fn resolve_model_artifact_ref(
     model_ref: &str,
     repository: &impl ModelRepository,
@@ -133,6 +179,8 @@ pub async fn resolve_model_artifact_ref(
     resolve_model_artifact(&parsed, repository).await
 }
 
+/// Like [`resolve_model_artifact_ref`], but selects within `available_bytes`
+/// when the repository exposes file sizes.
 pub async fn resolve_model_artifact_ref_with_budget(
     model_ref: &str,
     repository: &impl ModelRepository,
@@ -142,6 +190,7 @@ pub async fn resolve_model_artifact_ref_with_budget(
     resolve_model_artifact_with_budget(&parsed, repository, available_bytes).await
 }
 
+/// Resolves the artifact for an already-parsed `model_ref`.
 pub async fn resolve_model_artifact(
     model_ref: &ModelRef,
     repository: &impl ModelRepository,
@@ -149,6 +198,7 @@ pub async fn resolve_model_artifact(
     resolve_model_artifact_with_budget(model_ref, repository, 0).await
 }
 
+/// Resolves the artifact for `model_ref`, preferring files that fit `available_bytes`.
 pub async fn resolve_model_artifact_with_budget(
     model_ref: &ModelRef,
     repository: &impl ModelRepository,
@@ -186,6 +236,8 @@ pub async fn resolve_model_artifact_with_budget(
     })
 }
 
+/// Picks the primary artifact file for `selector` (or the repository default
+/// when `None`) from `files`.
 pub fn select_primary_artifact_file(
     selector: Option<&str>,
     files: &[ModelArtifactFile],
@@ -193,6 +245,8 @@ pub fn select_primary_artifact_file(
     select_primary_file(selector, files)
 }
 
+/// Returns the full file set that serves `primary_file`, including every
+/// shard when it is a split GGUF.
 pub fn artifact_files_for_primary(
     primary_file: &str,
     files: &[ModelArtifactFile],
@@ -703,6 +757,52 @@ mod hf_resolve_url_tests {
         ] {
             assert_eq!(parse_hf_resolve_url_parts(url), None, "{url}");
         }
+    }
+
+    #[test]
+    fn rejects_file_ending_in_encoded_slash() {
+        for url in [
+            "https://huggingface.co/org/repo/resolve/main/dir%2F",
+            "https://huggingface.co/org/repo/resolve/main/dir%2f",
+            "http://huggingface.co:80/org/repo/resolve/main/dir%2F",
+        ] {
+            assert_eq!(parse_hf_resolve_url_parts(url), None, "{url}");
+        }
+        // An encoded slash inside the path still names a file.
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co/org/repo/resolve/main/dir%2Fm.gguf"),
+            Some(("org/repo", Some("main"), "dir%2Fm.gguf"))
+        );
+    }
+
+    #[test]
+    fn rejects_paths_that_normalize_to_directories() {
+        for url in [
+            "https://huggingface.co/org/repo/resolve/main/dir/..",
+            "https://huggingface.co/org/repo/resolve/main/a/..",
+            "https://huggingface.co/org/repo/resolve/main/..",
+            "http://huggingface.co:80/org/repo/resolve/main/dir/..",
+        ] {
+            assert_eq!(parse_hf_resolve_url_parts(url), None, "{url}");
+        }
+        // `a/b/..` collapses to the artifact file `a`, so it stays accepted.
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://huggingface.co/org/repo/resolve/main/a/b/.."),
+            Some(("org/repo", Some("main"), "a/b/.."))
+        );
+    }
+
+    #[test]
+    fn accepts_mixed_case_hostname() {
+        let expected = Some(("org/repo", Some("main"), "dir/m.gguf"));
+        assert_eq!(
+            parse_hf_resolve_url_parts("https://HuggingFace.Co/org/repo/resolve/main/dir/m.gguf"),
+            expected
+        );
+        assert_eq!(
+            parse_hf_resolve_url_parts("http://HUGGINGFACE.CO:80/org/repo/resolve/main/dir/m.gguf"),
+            expected
+        );
     }
 
     #[test]
