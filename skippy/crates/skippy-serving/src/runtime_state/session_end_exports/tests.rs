@@ -183,3 +183,43 @@ fn a_panicking_sink_leaves_the_other_parked_lanes_for_panic_recovery() {
         .expect("a later admission finds a free lane");
     }
 }
+
+#[test]
+fn a_panicking_sink_for_a_parked_duplicate_of_a_live_session_keeps_its_lane() {
+    let mut runtime = RuntimeState::new_modelless_for_test(2);
+    park_with_export(
+        &mut runtime,
+        "request",
+        Box::new(|_| panic!("session-end export sink panicked")),
+    );
+    // A live session under the same id; the parked one is abandoned.
+    let index = runtime.next_lane_index;
+    runtime.next_lane_index += 1;
+    runtime.sessions.insert(
+        "request".to_string(),
+        RuntimeLaneSession {
+            index,
+            session: skippy_runtime::StageSession::detached_dflash_for_test(),
+            resident_prefix: None,
+        },
+    );
+
+    let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.complete_parked_session_ends();
+    }));
+    assert!(completed.is_err(), "precondition: the sink panicked");
+    assert_eq!(
+        runtime.free_lane_indices,
+        vec![0],
+        "the parked lane is back before its sink runs"
+    );
+    assert!(
+        runtime.sessions.contains_key("request"),
+        "the live session stays"
+    );
+
+    runtime.reset_after_panic();
+    let mut free = runtime.free_lane_indices.clone();
+    free.sort_unstable();
+    assert_eq!(free, vec![0, 1]);
+}

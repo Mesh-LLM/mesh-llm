@@ -114,11 +114,13 @@ impl RuntimeState {
             let session_id = parked.session_id;
             // Lane acquisition finishes parked sessions first, so the id is
             // free; never displace a live session if it is not.
+            // The lane goes back before any sink runs, so a panicking sink
+            // cannot strand it.
             if self.sessions.contains_key(&session_id) {
-                self.abandon_session_end_kv_exports(&session_id);
                 let index = parked.lane.index;
                 drop(parked.lane);
                 self.free_lane_indices.push(index);
+                self.abandon_session_end_kv_exports(&session_id);
                 continue;
             }
             self.sessions.insert(session_id.clone(), parked.lane);
