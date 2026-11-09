@@ -103,15 +103,37 @@ impl DraftBatch {
 /// Concatenates one batch row's input across every extracted target layer.
 ///
 /// `layers[k]` is the captured input of the k-th extracted layer for the last
-/// target decode, `n_embd` floats per batch row.
+/// target decode, `n_embd` floats per batch row. Non-finite values are
+/// clamped (see [`finite_feature`]).
 pub(crate) fn target_feature_row<'a>(
     layers: &'a [&'a [f32]],
     n_embd: usize,
     row: usize,
 ) -> impl Iterator<Item = f32> + 'a {
-    layers
-        .iter()
-        .flat_map(move |layer| layer[row * n_embd..(row + 1) * n_embd].iter().copied())
+    layers.iter().flat_map(move |layer| {
+        layer[row * n_embd..(row + 1) * n_embd]
+            .iter()
+            .copied()
+            .map(finite_feature)
+    })
+}
+
+/// The largest finite f16.
+const F16_MAX: f32 = 65504.0;
+
+/// A target feature the draft can fuse: NaN becomes 0 and infinities the
+/// largest finite f16 of their sign. Metal's matrix kernels stage f32
+/// activations as f16, so a model with massive activations (Laguna's
+/// attention-sink rows reach about 1e6 in the residual) captures inf or NaN
+/// for prompt rows, and one such row poisons the whole draft cache.
+fn finite_feature(value: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else if value.is_nan() {
+        0.0
+    } else {
+        F16_MAX.copysign(value)
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +149,17 @@ mod tests {
         assert_eq!(
             target_feature_row(&layers, 2, 1).collect::<Vec<_>>(),
             vec![3.0, 4.0, 30.0, 40.0]
+        );
+    }
+
+    #[test]
+    fn feature_rows_clamp_non_finite_values() {
+        let layer = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.5e6];
+        let layers = [&layer[..]];
+
+        assert_eq!(
+            target_feature_row(&layers, 4, 0).collect::<Vec<_>>(),
+            vec![0.0, 65504.0, -65504.0, 1.5e6]
         );
     }
 

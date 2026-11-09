@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "58a4bbd39ef52aa9f737fdd269141b50722165490cf4c5fb951e2f3ae5277c33",
+  "full_patch_sha256": "13543d5294fd709c23700e1225d12b4e2ea97c3dd4779d9ce4802893bfc116a6",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -444,7 +444,7 @@
         "laguna"
       ],
       "file": "0044-family-laguna.patch",
-      "sha256": "649e2a09dbeee56ed526e7a8d33d7ef618a6193f262252c77c879be3563f9433",
+      "sha256": "86a8343ebd0b733a8a55f6418cb75fb833822211bf9291229b9b8c51af331afb",
       "sources": [
         "src/models/laguna.cpp"
       ]

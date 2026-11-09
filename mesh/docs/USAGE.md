@@ -1134,6 +1134,7 @@ quant matches, and the draft is pinned to a Hugging Face revision and SHA-256:
 | Qwen3-Coder-Next | `AtomicChat/Qwen3-Coder-Next-DFlash-GGUF` | Metal only |
 | Nemotron-3.5-Bolt-E4B | `unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF` | all |
 | Nemotron-3.5-Lightning-30B-A3B | `magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF` (DSpark) | CUDA and others |
+| Laguna-S-2.1 | `poolside/Laguna-S-2.1-GGUF` (`laguna-s-2.1-DFlash-BF16.gguf`) | CUDA and others |
 
 Nemotron-3.5-Bolt-E4B has Gemma-4-E4B-It's shape and Nemotron-3.5-Lightning-30B-A3B
 has Nemotron-3-Nano-30B-A3B's; both are told apart by their GGUF names. Lightning's
