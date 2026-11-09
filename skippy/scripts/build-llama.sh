@@ -292,13 +292,16 @@ if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
   LLAMA_GGML_NATIVE_NORMALIZED="$(printf '%s' "$LLAMA_GGML_NATIVE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]')"
   case "$LLAMA_GGML_NATIVE_NORMALIZED" in
     OFF|NO|FALSE|N|0|IGNORE|NOTFOUND|*-NOTFOUND|'')
-      # The distributed Linux runtime must not inherit AVX2-class flags from
-      # its build host. This AVX baseline runs on Sandy Bridge CPUs such as the
-      # i7-2600K while keeping the CPU path usable without native tuning.
+      # Reproducible builds previously used ggml's generic x86 baseline.
+      # Explicit values also replace ISA settings from an existing cache.
+      LLAMA_BASELINE_AVX=ON
+      if [[ -n "${SOURCE_DATE_EPOCH+x}" ]]; then
+        LLAMA_BASELINE_AVX=OFF
+      fi
       CMAKE_ARGS+=(
         -DGGML_NATIVE=OFF
-        -DGGML_SSE42=ON
-        -DGGML_AVX=ON
+        "-DGGML_SSE42=$LLAMA_BASELINE_AVX"
+        "-DGGML_AVX=$LLAMA_BASELINE_AVX"
         -DGGML_AVX_VNNI=OFF
         -DGGML_AVX2=OFF
         -DGGML_BMI2=OFF

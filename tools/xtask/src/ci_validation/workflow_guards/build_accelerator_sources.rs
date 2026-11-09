@@ -93,8 +93,8 @@ fn build_accelerator_sources_linux_x86_64_release_isa_is_explicit_and_portable()
     assert!(linux_x86_64.contains("OFF|NO|FALSE|N|0|IGNORE|NOTFOUND"));
     for argument in [
         "-DGGML_NATIVE=OFF",
-        "-DGGML_SSE42=ON",
-        "-DGGML_AVX=ON",
+        "-DGGML_SSE42=$LLAMA_BASELINE_AVX",
+        "-DGGML_AVX=$LLAMA_BASELINE_AVX",
         "-DGGML_AVX_VNNI=OFF",
         "-DGGML_AVX2=OFF",
         "-DGGML_BMI2=OFF",

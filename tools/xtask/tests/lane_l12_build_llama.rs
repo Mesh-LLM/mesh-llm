@@ -76,6 +76,7 @@ impl Fixture {
             )
             .env("FIXTURE_OS", os)
             .env("FIXTURE_ARCH", "x86_64")
+            .env_remove("SOURCE_DATE_EPOCH")
             .env("LLAMA_WORKDIR", &self.work)
             .env("LLAMA_STAGE_BUILD_DIR", &self.build)
             .env("LLAMA_STAGE_BACKEND", "cpu")
@@ -198,6 +199,28 @@ fn linux_x86_64_default_pins_a_sandy_bridge_compatible_isa_in_configure_and_stam
             fixture.stamp().contains(&format!("cmake-arg={argument}")),
             "missing build-stamp argument {argument}"
         );
+    }
+}
+#[test]
+fn reproducible_linux_x86_64_configure_disables_avx_and_sse42() {
+    for epoch in ["", "1700000000"] {
+        let fixture = Fixture::new(true);
+        success(
+            fixture
+                .command("Linux")
+                .env("SOURCE_DATE_EPOCH", epoch)
+                .output()
+                .unwrap(),
+        );
+        for argument in [
+            "-DGGML_NATIVE=OFF",
+            "-DGGML_SSE42=OFF",
+            "-DGGML_AVX=OFF",
+            "-DGGML_AVX2=OFF",
+        ] {
+            assert!(fixture.log().contains(argument), "missing {argument}");
+            assert!(fixture.stamp().contains(&format!("cmake-arg={argument}")));
+        }
     }
 }
 #[test]
