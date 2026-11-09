@@ -142,6 +142,11 @@ async function assertPortsRebound(ports) {
   await bounded(bindPort(ports.BIND, 'udp4'), 5000, 'rebind bind UDP port')
 }
 
+/** Whether a relative path stays under its root; `..` counts only as a whole component. */
+function within(relative) {
+  return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+}
+
 test('actual native speech, discovery, option validation and cancellation', {
   skip: process.env.MESH_SDK_LIVE_SPEECH !== '1', timeout: 150000
 }, async () => {
@@ -155,19 +160,20 @@ test('actual native speech, discovery, option validation and cancellation', {
     const value = process.env[name]
     assert.ok(value && path.isAbsolute(value), `${name} must be explicit and absolute`)
     const relative = path.relative(state, value)
-    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), `${name} must be isolated`)
+    assert.ok(relative && within(relative), `${name} must be isolated`)
     if (fs.existsSync(value)) {
       assert.ok(fs.statSync(value).isDirectory(), `${name} must start absent or empty`)
       assert.deepEqual(fs.readdirSync(value), [], `${name} must start empty`)
       const actual = path.relative(actualState, fs.realpathSync(value))
-      assert.ok(actual && !actual.startsWith('..') && !path.isAbsolute(actual), `${name} must resolve inside its isolated root`)
+      assert.ok(actual && within(actual), `${name} must resolve inside its isolated root`)
     } else {
       // An absent leaf still resolves through its ancestors, and a
       // symlinked ancestor can point outside the root.
       let ancestor = value
       while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor)
+      // The state root itself is a valid nearest ancestor for a new file.
       const actual = path.relative(actualState, fs.realpathSync(ancestor))
-      assert.ok(actual && !actual.startsWith('..') && !path.isAbsolute(actual), `${name} must resolve inside its isolated root`)
+      assert.ok(within(actual), `${name} must resolve inside its isolated root`)
     }
   }
   const inputs = process.env.MESH_SPEECH_INPUTS

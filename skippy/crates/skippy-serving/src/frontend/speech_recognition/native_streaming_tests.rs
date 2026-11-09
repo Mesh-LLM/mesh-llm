@@ -323,12 +323,20 @@ async fn cold_metal_live_session_preserves_utterances_after_one_backlog() {
 async fn run_paced_session(name: &str, backlog: Option<Arc<ExactBacklog>>) {
     // SKIPPY_ASR_TRACE_PATH is a base directory: each test writes its own
     // file under it, so parallel ignored runs cannot truncate one
-    // another's records.
+    // another's records. An existing record is refused, never truncated.
     let base = std::env::var_os("SKIPPY_ASR_TRACE_PATH").expect("set SKIPPY_ASR_TRACE_PATH");
     let base = std::path::PathBuf::from(base);
     std::fs::create_dir_all(&base).unwrap();
     let trace = Arc::new(LiveTrace {
-        file: Mutex::new(File::create(base.join(format!("{name}.jsonl"))).unwrap()),
+        file: Mutex::new(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(base.join(format!("{name}.jsonl")))
+                .expect(
+                    "SKIPPY_ASR_TRACE_PATH already holds this test's trace; use a fresh directory",
+                ),
+        ),
         started: Instant::now(),
         pass: AtomicUsize::new(0),
         sent_samples: AtomicUsize::new(0),

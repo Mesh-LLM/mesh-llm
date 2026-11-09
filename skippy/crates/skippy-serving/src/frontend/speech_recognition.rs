@@ -293,9 +293,10 @@ impl LiveSession {
                     // never holds every delta until the whole batch
                     // settles. Each push runs at most one pass, in the
                     // same order a single push would.
-                    // One step of audio, in the stream's 16 kHz samples.
+                    // One step of the stream's current cadence, in its 16 kHz
+                    // samples; a mid-session `Configure` changes the step.
                     let step_samples = ((SPEECH_SAMPLE_RATE / 1000) as u64
-                        * u64::from(stream_config(&config).step_ms).max(1))
+                        * u64::from(stream.config().step_ms).max(1))
                         as usize;
                     pcm.chunks(step_samples)
                         .try_for_each(|chunk| {

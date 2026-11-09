@@ -264,14 +264,17 @@ impl SpeechStream {
         for frame in frames.chunks(FRAME_SAMPLES) {
             self.received += frame.len() as u64;
             self.push_frame(frame, transcribe, &mut events)?;
-            if self.in_turn
-                && self.received - self.last_pass_at
-                    >= u64::from(self.config.step_ms) * SAMPLES_PER_MS
-            {
+            if self.in_turn && self.received - self.last_pass_at >= self.step_samples() {
                 self.run_pass(transcribe, &mut events)?;
             }
         }
         Ok(events)
+    }
+
+    /// New audio between passes. A step beyond the transcriber's window would
+    /// let audio leave the window before any pass heard it.
+    fn step_samples(&self) -> u64 {
+        u64::from(self.config.step_ms).min(WHISPER_WINDOW_MS) * SAMPLES_PER_MS
     }
 
     /// Ends the current turn now, confirming everything the final pass hears.
@@ -407,7 +410,8 @@ impl SpeechStream {
         // The step cadence may let the buffer outgrow the transcriber's
         // window. Drop the oldest audio first: it was already heard by a
         // pass within `step_ms`, so nothing unheard is lost.
-        if self.buffer.len() as u64 > WHISPER_WINDOW_MS * SAMPLES_PER_MS {
+        let window_capped = self.buffer.len() as u64 > WHISPER_WINDOW_MS * SAMPLES_PER_MS;
+        if window_capped {
             let excess = self.buffer.len() as u64 - WHISPER_WINDOW_MS * SAMPLES_PER_MS;
             self.buffer_start += excess;
             self.buffer.drain(0..excess as usize);
@@ -462,11 +466,14 @@ impl SpeechStream {
 
         let buffer_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
         // A bound configured above the window must still settle the
-        // buffer inside it.
-        if buffer_ms > u64::from(self.config.max_buffer_ms).min(WHISPER_WINDOW_MS) {
+        // buffer inside it: the cap above already discarded audio, so the
+        // words it heard are confirmed here rather than left to accumulate.
+        if window_capped || buffer_ms > u64::from(self.config.max_buffer_ms).min(WHISPER_WINDOW_MS)
+        {
             // No confirmed boundary arrived in time: confirm what is heard,
-            // then start the next window from the newest audio, which no
-            // pass has confirmed yet.
+            // then start the next window from the newest audio. Confirmed
+            // words whose audio is retained keep their ownership, so a later
+            // pass cannot confirm them a second time.
             let pending = std::mem::take(&mut self.pending);
             self.confirm(pending, events);
             self.held.clear();
@@ -476,14 +483,36 @@ impl SpeechStream {
             let drop = self.buffer.len() as u64 - retain;
             self.buffer_start += drop;
             self.buffer.drain(0..drop as usize);
-            self.confirmed_in_buffer = 0;
-            self.confirmed_prefix.clear();
+            self.release_dropped_ownership(&segments, drop / SAMPLES_PER_MS, aligned.is_some());
             self.speech_started_at = None;
         } else if buffer_ms > u64::from(self.config.trim_after_ms) && aligned.is_some() {
             self.trim_confirmed(&segments, boundary + agreed);
         }
         self.report_tentative(events);
         Ok(())
+    }
+
+    /// Releases ownership of confirmed words whose audio an overflow dropped.
+    /// A segment that reaches into the retained audio keeps its words owned.
+    /// Without a supported alignment no word can be placed in the audio, so
+    /// every owner is released.
+    fn release_dropped_ownership(
+        &mut self,
+        segments: &[SegmentWords],
+        drop_ms: u64,
+        aligned: bool,
+    ) {
+        if !aligned {
+            self.confirmed_in_buffer = 0;
+            self.confirmed_prefix.clear();
+            return;
+        }
+        let dropped_words = segments
+            .iter()
+            .take_while(|segment| segment.end_ms <= drop_ms as i64)
+            .map(|segment| segment.words.len())
+            .sum();
+        self.confirmed_in_buffer -= self.confirmed_prefix.trim(dropped_words);
     }
 
     /// Reports the unconfirmed words a pass has heard, when enabled.

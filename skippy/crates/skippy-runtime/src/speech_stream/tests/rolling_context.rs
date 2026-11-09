@@ -78,13 +78,56 @@ fn a_permanently_single_segment_still_obeys_the_hard_window_bound() {
         }
     }
     // The hard bound still settles the window, confirms `A B`, and leaves
-    // the turn open with the newest window retained for the next pass.
+    // the turn open with the newest window retained for the next pass. The
+    // segment ends after the cut, so its audio stays and its words stay owned.
     assert_eq!(stream.buffer.len(), 3_500 * MS);
     assert_eq!(stream.buffer_start, 500 * MS as u64);
-    assert_eq!(stream.confirmed_in_buffer, 0);
+    assert_eq!(stream.confirmed_in_buffer, 2);
+    // The last pass heard nothing, so the owners are omitted, not observed.
     assert_eq!(stream.confirmed_prefix.observed_len(), 0);
     events.extend(stream.commit(&mut transcribe).unwrap());
     assert_eq!(deltas(&events).concat(), "A B");
+}
+
+/// Words whose audio survives an overflow are not confirmed a second time.
+#[test]
+fn an_overflow_does_not_reconfirm_words_in_the_retained_audio() {
+    // The overflow at 4 s keeps the audio from 0.5 s, so the next window
+    // hears `A B` again, now ending at 0.4 s. Its words are still owned.
+    let mut script = Script::new(vec![
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(900, " A B")],
+        vec![(400, " A B")],
+        vec![],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        trim_after_ms: 1_500,
+        max_buffer_ms: 3_500,
+        ..manual()
+    });
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "A B");
+}
+
+/// A step beyond the window still runs a pass before audio leaves it.
+#[test]
+fn a_step_beyond_the_window_is_clamped_to_it() {
+    let mut script = Script::new(vec![vec![(900, " A B")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 60_000,
+        ..manual()
+    });
+    stream.push(&loud(31_000), &mut transcribe).unwrap();
+    assert_eq!(script.seen.len(), 1);
+    assert_eq!(script.seen[0].0, WHISPER_WINDOW_MS as usize * MS);
 }
 
 /// A slow step keeps every decoder input inside the whisper window.
