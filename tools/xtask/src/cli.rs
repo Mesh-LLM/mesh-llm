@@ -61,6 +61,9 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation split-probe <verb> ...");
     println!("  cargo xtool models projector-download --url HTTPS_URL --output FILE");
     println!(
+        "  cargo xtool models dflash-draft-convert --manifest FILE --draft NAME --source DIR [--target-model DIR] --output FILE"
+    );
+    println!(
         "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,
         crate::automation::stability::USAGE,
