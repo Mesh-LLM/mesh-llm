@@ -1,4 +1,4 @@
-From 06e6f65bf2e4c548f2f401a3879ee2fe015c4487 Mon Sep 17 00:00:00 2001
+From a071d1256173acfeff6fcd4181f123a4af4f9ea7 Mon Sep 17 00:00:00 2001
 From: AjHomelab <31621065+Ajay9o9@users.noreply.github.com>
 Date: Mon, 9 Nov 2026 07:03:22 +1100
 Subject: [PATCH] dflash : add DSpine draft model support
@@ -20,7 +20,7 @@ Review hardening on top of the import:
 - the docs section records the local-download conversion flow and the
   --spec-draft-n-ubatch >= block size requirement.
 ---
- conversion/qwen.py             |  77 ++++++++++++
+ conversion/qwen.py             |  80 +++++++++++++
  docs/speculative.md            |  40 +++++++
  gguf-py/gguf/constants.py      |  18 +++
  gguf-py/gguf/tensor_mapping.py |  24 ++++
@@ -29,13 +29,23 @@ Review hardening on top of the import:
  src/llama-model.h              |  10 ++
  src/llama-quant.cpp            |   5 +
  src/models/dflash.cpp          | 209 +++++++++++++++++++++++++++++++++
- 9 files changed, 401 insertions(+)
+ 9 files changed, 404 insertions(+)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
-index e678bd042..cea6de808 100644
+index e678bd042..6682de472 100644
 --- a/conversion/qwen.py
 +++ b/conversion/qwen.py
-@@ -1018,6 +1018,45 @@ class DFlashModel(Qwen3Model):
+@@ -1009,6 +1009,9 @@ class DFlashModel(Qwen3Model):
+         causal = self.hparams.get("is_causal")
+         if causal is None:
+             causal = dflash_config.get("causal")
++        if causal is None:
++            # DSpine drafts train causal draft attention under draft_block_causal
++            causal = dflash_config.get("draft_block_causal")
+         if causal is not None:
+             self.gguf_writer.add_causal_attention(bool(causal))
+ 
+@@ -1018,6 +1021,45 @@ class DFlashModel(Qwen3Model):
              head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
              self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
  
@@ -81,7 +91,7 @@ index e678bd042..cea6de808 100644
      def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
          yield from super().generate_extra_tensors()
  
-@@ -1115,6 +1154,44 @@ class DFlashModel(Qwen3Model):
+@@ -1115,6 +1157,44 @@ class DFlashModel(Qwen3Model):
          ):
              name += ".weight"
  
@@ -178,10 +188,10 @@ index d8f3bcb39..28a03957d 100644
  
  An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index bf964a0dc..c83de3421 100644
+index b563b6236..8cb07fcaa 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -1440,6 +1440,12 @@ class MODEL_TENSOR(IntEnum):
+@@ -1442,6 +1442,12 @@ class MODEL_TENSOR(IntEnum):
      DFLASH_SELECTOR_PREV   = auto()
      DFLASH_SELECTOR_NEXT   = auto()
      DFLASH_SELECTOR_HIDDEN = auto()
@@ -194,7 +204,7 @@ index bf964a0dc..c83de3421 100644
      LILICORR_TOKEN_PROJ           = auto()
      LILICORR_PASS_HIDDEN_PROJ     = auto()
      LILICORR_SLOT_EMBD            = auto()
-@@ -2399,6 +2405,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -2402,6 +2408,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.DFLASH_SELECTOR_PREV:      "selector_predecessor",
      MODEL_TENSOR.DFLASH_SELECTOR_NEXT:      "selector_successor",
      MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN:    "selector_hidden",
@@ -207,7 +217,7 @@ index bf964a0dc..c83de3421 100644
      MODEL_TENSOR.LILICORR_TOKEN_PROJ:                   "lilicorr.token_proj",
      MODEL_TENSOR.LILICORR_PASS_HIDDEN_PROJ:             "lilicorr.pass_hidden_proj",
      MODEL_TENSOR.LILICORR_SLOT_EMBD:                    "lilicorr.slot_embedding",
-@@ -6244,6 +6256,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -6249,6 +6261,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.DFLASH_SELECTOR_PREV,
          MODEL_TENSOR.DFLASH_SELECTOR_NEXT,
          MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN,
@@ -256,10 +266,10 @@ index 8888dc76e..5dd8c85be 100644
              "model.lilicorr.layers.{bid}.attn.in_proj",
          ),
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 83ea80ed6..e4432a3ca 100644
+index 984d38a42..7bf497b1b 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -924,6 +924,12 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+@@ -926,6 +926,12 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
      { LLM_TENSOR_DFLASH_SELECTOR_PREV,                   "selector_predecessor" },
      { LLM_TENSOR_DFLASH_SELECTOR_NEXT,                   "selector_successor" },
      { LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,                 "selector_hidden" },
@@ -272,7 +282,7 @@ index 83ea80ed6..e4432a3ca 100644
      { LLM_TENSOR_LILICORR_TOKEN_PROJ,                    "lilicorr.token_proj" },
      { LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,              "lilicorr.pass_hidden_proj" },
      { LLM_TENSOR_LILICORR_SLOT_EMBD,                     "lilicorr.slot_embedding" },
-@@ -1337,6 +1343,12 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+@@ -1340,6 +1346,12 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
      {LLM_TENSOR_DFLASH_SELECTOR_PREV,       {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
      {LLM_TENSOR_DFLASH_SELECTOR_NEXT,       {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
      {LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
@@ -286,10 +296,10 @@ index 83ea80ed6..e4432a3ca 100644
      {LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
      {LLM_TENSOR_LILICORR_SLOT_EMBD,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_ADD}},
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index f35716bfe..7129241c6 100644
+index f39f71ec3..037bbd02e 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -928,6 +928,12 @@ enum llm_tensor {
+@@ -930,6 +930,12 @@ enum llm_tensor {
      LLM_TENSOR_DFLASH_SELECTOR_PREV,
      LLM_TENSOR_DFLASH_SELECTOR_NEXT,
      LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
@@ -347,10 +357,10 @@ index 2c90b2331..313f43f04 100644
      if (arch == LLM_ARCH_KIMI_K31) {
          quantize &= name.find("indexer.attn_q_b") == std::string::npos;
 diff --git a/src/models/dflash.cpp b/src/models/dflash.cpp
-index 13020bb32..3f39755d1 100644
+index 52d146ae5..0913a99c3 100644
 --- a/src/models/dflash.cpp
 +++ b/src/models/dflash.cpp
-@@ -399,6 +399,31 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+@@ -435,6 +435,31 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
              layer.dflash_ffn_conv_proj  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_PROJ,  "weight", i), { n_embd, projected }, 0);
          }
      }
@@ -381,8 +391,8 @@ index 13020bb32..3f39755d1 100644
 +    }
  }
  
- template <>
-@@ -753,6 +778,182 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
+ // Laguna drafters RMS-norm each captured target feature before fc: view the
+@@ -810,6 +835,182 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
      ggml_build_forward_expand(g.gf, packed);
  }
  
@@ -565,7 +575,7 @@ index 13020bb32..3f39755d1 100644
  static void build_lilicorr_scores(llm_graph_context & g, const llama_model & model,
          ggml_tensor * tok_embd, ggml_tensor * anchors) {
      ggml_context * ctx0 = g.ctx0;
-@@ -1062,6 +1263,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+@@ -1130,6 +1331,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
      }
      cb(inpL, "inp_noise_embd", -1);
  
@@ -574,7 +584,7 @@ index 13020bb32..3f39755d1 100644
      for (int il = 0; il < n_layer; ++il) {
          const auto & layer = model.layers[il];
  
-@@ -1151,6 +1354,10 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+@@ -1243,6 +1446,10 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
          if (layer.out_scale) {
              cur = ggml_mul(ctx0, cur, layer.out_scale);
          }
@@ -585,7 +595,7 @@ index 13020bb32..3f39755d1 100644
          cb(cur, "l_out", il);
  
          inpL = cur;
-@@ -1212,6 +1419,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+@@ -1304,6 +1511,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
  
      if (model.dflash_selector_hidden) {
          build_dflash2_selector(*this, model, inp_tokens);
