@@ -55,4 +55,4 @@ futures-util = { version = "0.3", optional = true, default-features = false, fea
 
 [dev-dependencies]
 sha2 = { workspace = true }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }

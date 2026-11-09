@@ -56,6 +56,7 @@ struct Inputs {
 }
 
 impl Inputs {
+    /// Reads and validates the admitted inputs from the environment.
     fn read() -> Result<Self> {
         ensure!(
             required("MESH_SDK_LIVE_SPEECH")? == "1",
@@ -141,6 +142,7 @@ impl Inputs {
         })
     }
 
+    /// Builds the embedded node config from the admitted inputs.
     fn config(&self) -> Result<EmbeddedMeshNodeConfig> {
         Ok(serde_json::from_value(json!({
             "mode": "serve",
@@ -154,11 +156,13 @@ impl Inputs {
         }))?)
     }
 
+    /// Writes one evidence record under the fresh evidence directory.
     fn write(&self, name: &str, value: &Value) -> Result<()> {
         fs::write(self.evidence.join(name), serde_json::to_vec_pretty(value)?)?;
         Ok(())
     }
 
+    /// Confirms the fixture ports are free before the node binds them.
     fn ports_free(&self) -> Result<()> {
         for port in &self.ports[..2] {
             let socket = tokio::net::TcpSocket::new_v4()?;
@@ -176,12 +180,14 @@ impl Inputs {
     }
 }
 
+/// Reads a non-blank required environment variable.
 fn required(key: &str) -> Result<String> {
     let value = std::env::var(key).with_context(|| format!("Missing {key}"))?;
     ensure!(!value.is_empty(), "Missing {key}");
     Ok(value)
 }
 
+/// Reads a required environment variable as an absolute path.
 fn absolute_path(key: &str) -> Result<PathBuf> {
     let path = PathBuf::from(required(key)?);
     ensure!(
@@ -194,10 +200,12 @@ fn absolute_path(key: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Reads a required environment variable as an existing absolute path.
 fn existing_path(key: &str) -> Result<PathBuf> {
     Ok(absolute_path(key)?.canonicalize()?)
 }
 
+/// Requires a path to be fresh: absent or an empty directory.
 fn require_fresh(path: &Path) -> Result<()> {
     if path.exists() {
         ensure!(
@@ -208,6 +216,7 @@ fn require_fresh(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validates the isolated state variables against the state root.
 fn validate_isolation() -> Result<()> {
     let state = existing_path("MESH_SDK_STATE_ROOT")?;
     ensure!(state.parent().is_some(), "State root must be isolated");
@@ -235,12 +244,14 @@ fn validate_isolation() -> Result<()> {
     Ok(())
 }
 
+/// Reads a required environment variable as a fixture port.
 fn port(key: &str) -> Result<u16> {
     let port = required(key)?.parse()?;
     ensure!(port >= 1024, "{key} must be an unprivileged port");
     Ok(port)
 }
 
+/// Returns the SHA-256 of a file as lowercase hexadecimal.
 fn hash_file(path: &Path) -> Result<String> {
     let mut hash = Sha256::new();
     let mut file = File::open(path)?;
@@ -255,6 +266,7 @@ fn hash_file(path: &Path) -> Result<String> {
     digest_hex(&hash.finalize())
 }
 
+/// Renders a byte slice as lowercase hexadecimal.
 fn digest_hex(bytes: &[u8]) -> Result<String> {
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -263,6 +275,7 @@ fn digest_hex(bytes: &[u8]) -> Result<String> {
     Ok(encoded)
 }
 
+/// Awaits a future under a deadline, naming the timeout failure.
 async fn bounded<T>(seconds: u64, label: &str, future: impl Future<Output = T>) -> Result<T> {
     tokio::time::timeout(Duration::from_secs(seconds), future)
         .await
@@ -302,6 +315,7 @@ pub(super) async fn run() -> Result<()> {
     ports
 }
 
+/// Installs the admitted runtime into the isolated state root.
 async fn prepare_runtime(inputs: &Inputs) -> Result<()> {
     let root = inputs.manifest_path.parent().context("runtime root")?;
     let release = inputs
@@ -338,6 +352,7 @@ async fn prepare_runtime(inputs: &Inputs) -> Result<()> {
     }))
 }
 
+/// Runs the full SDK exercise against the started node.
 async fn exercise(node: &MeshNode, inputs: &Inputs) -> Result<()> {
     let status = bounded(5, "node status", node.status()).await??;
     ensure!(
@@ -380,6 +395,7 @@ async fn exercise(node: &MeshNode, inputs: &Inputs) -> Result<()> {
     cancel_blocked_read(node, inputs, &model).await
 }
 
+/// Builds the live transcription options for the fixture model.
 fn options(model: &str, step: u32) -> LiveTranscriptionOptions {
     LiveTranscriptionOptions {
         model: Some(model.to_owned()),
@@ -392,6 +408,7 @@ fn options(model: &str, step: u32) -> LiveTranscriptionOptions {
     }
 }
 
+/// Reports whether the model is ready to serve the speech workload.
 fn ready(model: &MeshModel) -> bool {
     model.kind == MeshModelKind::Model
         && model.workload_class == Some(ModelWorkloadClass::SpeechRecognition)
@@ -410,6 +427,7 @@ fn ready(model: &MeshModel) -> bool {
         })
 }
 
+/// Waits for the speech model to appear on the node.
 async fn discover(node: &MeshNode, inputs: &Inputs) -> Result<String> {
     // Subscribe to runtime status changes before the first list, so a model
     // becoming ready between a list and the wait still wakes the next list.
@@ -458,6 +476,7 @@ async fn discover(node: &MeshNode, inputs: &Inputs) -> Result<String> {
     }
 }
 
+/// Records the mapped runtime files for the provenance evidence.
 fn record_mapped_runtime(inputs: &Inputs) -> Result<()> {
     let map = process_map()?;
     let root = inputs.manifest_path.parent().context("runtime root")?;
@@ -501,11 +520,13 @@ fn record_mapped_runtime(inputs: &Inputs) -> Result<()> {
     )
 }
 
+/// Reads the process memory map under its platform name.
 #[cfg(target_os = "linux")]
 fn process_map() -> Result<String> {
     Ok(fs::read_to_string("/proc/self/maps")?)
 }
 
+/// Reads the process memory map under its platform name.
 #[cfg(target_os = "macos")]
 fn process_map() -> Result<String> {
     use std::ffi::{CStr, OsStr, c_char};
@@ -541,11 +562,13 @@ fn process_map() -> Result<String> {
     Ok(paths.join("\n"))
 }
 
+/// Reads the process memory map under its platform name.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn process_map() -> Result<String> {
     bail!("This native fixture requires macOS or Linux mapped-image inspection")
 }
 
+/// Appends one session event projection to the trace file.
 fn record_event(
     file: &mut File,
     start: Instant,
@@ -563,6 +586,7 @@ fn record_event(
 
 type SpeechReader = Option<JoinHandle<Result<Vec<LiveTranscriptionEvent>>>>;
 
+/// Reads the session events until end of stream.
 async fn join_reader(reader: &mut SpeechReader) -> Result<Vec<LiveTranscriptionEvent>> {
     let Some(mut task) = reader.take() else {
         return Ok(Vec::new());
@@ -576,6 +600,7 @@ async fn join_reader(reader: &mut SpeechReader) -> Result<Vec<LiveTranscriptionE
     }
 }
 
+/// Streams the fixture PCM and checks the counted transcript phrases.
 async fn transcribe(node: &MeshNode, inputs: &Inputs, model: &str) -> Result<()> {
     let live = bounded(
         35,
@@ -613,6 +638,7 @@ async fn transcribe(node: &MeshNode, inputs: &Inputs, model: &str) -> Result<()>
     repeated_close
 }
 
+/// Streams a clip through the SDK and collects its events.
 async fn stream_clip(
     session: &LiveTranscriptionSession,
     reader: &mut SpeechReader,
@@ -656,6 +682,7 @@ async fn stream_clip(
     Ok(())
 }
 
+/// Asserts the four counted phrase repetitions in the completed transcript.
 fn assert_transcript(inputs: &Inputs, events: &[LiveTranscriptionEvent]) -> Result<()> {
     let completed = events
         .iter()
@@ -760,6 +787,7 @@ fn noop_raw_waker() -> std::task::RawWaker {
     std::task::RawWaker::new(std::ptr::null(), &VTABLE)
 }
 
+/// Cancels a pending read and confirms close wakes the reader.
 async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> Result<()> {
     let live = bounded(
         35,
@@ -768,27 +796,43 @@ async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> R
     )
     .await??;
     let session = Arc::new(LiveTranscriptionSession::new(live));
-    // No audio was sent, so the first read blocks in the session's event
-    // channel. One poll observes that pending state on the read itself; a
-    // spawned-task marker would only prove the task started.
-    let mut read = Box::pin(session.next_event());
-    let waker = unsafe { std::task::Waker::from_raw(noop_raw_waker()) };
-    let mut context = std::task::Context::from_waker(&waker);
+    let (polled_tx, polled_rx) = tokio::sync::oneshot::channel();
+    // No audio was sent, so the read blocks in the session's event channel.
+    // It lives in a waiting task: one poll there observes the pending state
+    // before the close, and the `read.await` below it re-registers with the
+    // task's own waker, so `close()` - not a repoll from this test - wakes
+    // the read at EOF.
+    let reader = {
+        let session = Arc::clone(&session);
+        tokio::spawn(async move {
+            let mut read = Box::pin(session.next_event());
+            let pending = {
+                let waker = unsafe { std::task::Waker::from_raw(noop_raw_waker()) };
+                let mut context = std::task::Context::from_waker(&waker);
+                matches!(read.as_mut().poll(&mut context), Poll::Pending)
+            };
+            let _ = polled_tx.send(pending);
+            read.await
+        })
+    };
+    let pending = bounded(2, "reader polled pending", polled_rx).await??;
+    // Rust cancels this session by close, not by aborting a recv future. It
+    // runs before the assertions so a failing run still wakes the task.
+    bounded(3, "cancel pending read", session.close()).await?;
+    let event = bounded(5, "cancelled reader EOF", reader).await??;
     ensure!(
-        matches!(read.as_mut().poll(&mut context), Poll::Pending),
+        pending,
         "The native read must be pending before cancellation, not return an early event"
     );
-    // Rust cancels this session by close, not by aborting a recv future.
-    bounded(3, "cancel pending read", session.close()).await?;
-    let event = bounded(3, "cancelled reader EOF", &mut read).await?;
     ensure!(
         event.is_none(),
         "Close must unblock the pending read at EOF"
     );
     inputs.write(
         "cancellation.json",
-        &json!({"pending_observed": "Poll::Pending on the next_event read",
+        &json!({"pending_observed": "Poll::Pending reported by the waiting reader task",
         "cancellation_api": "LiveTranscriptionSession::close",
+        "close_woke_reader": true,
         "pending_reader_returned_eof": true}),
     )?;
     bounded(3, "second cancellation close", session.close()).await?;
