@@ -20,7 +20,7 @@ pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
 /// `index/<sha256>.json` in [`DFLASH_PAIRING_INDEX_REPO`] when it changes on
 /// `main`, so editing the pairings means updating this constant too.
 pub const DFLASH_PAIRING_INDEX_SHA256: &str =
-    "7e5bfaf4d03c952e7f0e7a4fe0613ad66f205fbba278a6ae5eda10b3d4b7f76f";
+    "d3c66d8d895b504538a0c5f3e75caef1b95324543aaeb98a628feff9464d1e11";
 
 /// A pairing index named by the SHA-256 of its bytes.
 ///
