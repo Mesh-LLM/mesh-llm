@@ -956,8 +956,8 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
-            (Some(*status_code), Some("upstream_stream_incomplete"))
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
+            (Some(*status_code), Some(cause.reason()))
         }
         RouteAttemptResult::ClientDisconnected => (None, Some("client_disconnected")),
     }
@@ -1032,6 +1032,12 @@ fn handle_mesh_attempt_result(
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
         RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
         RouteAttemptResult::CommittedStreamFailure { .. } => {
+            // Terminal once committed, and a failed request, not a success.
+            context.node.record_routed_request(
+                context.effective_model,
+                context.state.attempts,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
             MeshAttemptDisposition::Return(attempt_result)
         }
         RouteAttemptResult::ClientDisconnected => {
@@ -1087,9 +1093,9 @@ fn terminal_outcome_for_mesh_route_result(
                 status_code,
             }
         }
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
             crate::logging::TerminalOutcome::FailedWithStatus {
-                error: "upstream_stream_incomplete".into(),
+                error: cause.reason().into(),
                 status_code,
             }
         }
@@ -1713,10 +1719,15 @@ pub async fn route_to_target(
             .await;
             response_outcome(503, result)
         }
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
+            node.record_routed_request(
+                model,
+                1,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
             RouteDispatchOutcome::FailedWithStatus {
                 status_code,
-                reason: "upstream_stream_incomplete",
+                reason: cause.reason(),
             }
         }
         RouteAttemptResult::ClientDisconnected => {
@@ -1825,10 +1836,15 @@ pub async fn route_http_endpoint_request(
             );
             RouteDispatchOutcome::Failed("endpoint_transport_failed")
         }
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
+            node.record_routed_request(
+                model,
+                1,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
             RouteDispatchOutcome::FailedWithStatus {
                 status_code,
-                reason: "upstream_stream_incomplete",
+                reason: cause.reason(),
             }
         }
         RouteAttemptResult::ClientDisconnected => {
