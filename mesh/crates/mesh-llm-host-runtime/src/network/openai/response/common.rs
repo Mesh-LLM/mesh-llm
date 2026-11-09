@@ -142,10 +142,33 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     /// the same request through, so the fan-out tries the next one.
     RetryableGateUnsatisfied,
     RetryableResponseQuality(ResponseQualityFailure),
+    /// The response head (and possibly output) already reached the client, so
+    /// the attempt is terminal: nothing is replayed on another target. It is
+    /// still a failed inference, never a success.
     CommittedStreamFailure {
         status_code: u16,
+        cause: CommittedStreamFailureCause,
     },
     ClientDisconnected,
+}
+
+/// Why a committed stream failed. Bounded on purpose: it labels routing
+/// feedback and terminal events, never the backend's own message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::network::openai) enum CommittedStreamFailureCause {
+    /// The upstream stream ended or broke before its terminal frame.
+    Truncated,
+    /// The upstream sent an explicit error frame inside a 200 stream.
+    BackendError,
+}
+
+impl CommittedStreamFailureCause {
+    pub(in crate::network::openai) fn reason(self) -> &'static str {
+        match self {
+            Self::Truncated => "upstream_stream_incomplete",
+            Self::BackendError => "upstream_stream_error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +216,14 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
         RouteAttemptResult::RetryableGateUnsatisfied => "retryable_gate_unsatisfied",
         RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
-        RouteAttemptResult::CommittedStreamFailure { .. } => "committed_stream_failure",
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: CommittedStreamFailureCause::Truncated,
+            ..
+        } => "committed_stream_failure",
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: CommittedStreamFailureCause::BackendError,
+            ..
+        } => "committed_stream_backend_error",
         RouteAttemptResult::ClientDisconnected => "client_disconnected",
     }
 }

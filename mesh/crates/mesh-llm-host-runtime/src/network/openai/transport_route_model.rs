@@ -522,10 +522,13 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableUnavailable => {
             handle_retryable_route_model_unavailable(node, target, state)
         }
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
+            // Committed, so terminal here; but the inference failed, so the
+            // request counts as failed, not as the success its 200 head says.
+            record_route_model_unavailable(node, model, state.attempts);
             RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
                 status_code,
-                reason: "upstream_stream_incomplete",
+                reason: cause.reason(),
             })
         }
         RouteAttemptResult::ClientDisconnected => {

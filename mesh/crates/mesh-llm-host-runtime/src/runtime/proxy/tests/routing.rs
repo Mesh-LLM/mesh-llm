@@ -559,3 +559,196 @@ async fn test_api_proxy_passes_through_native_base64_audio() {
     proxy_handle.abort();
     let _ = upstream_handle.await;
 }
+
+/// Proxy over `targets` that also hands back the node and the affinity
+/// router, so a test can read routed-request metrics and target health.
+async fn spawn_api_proxy_test_harness_with_node(
+    targets: election::ModelTargets,
+) -> (
+    SocketAddr,
+    tokio::task::JoinHandle<()>,
+    mesh::Node,
+    affinity::AffinityRouter,
+) {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    advertise_test_targets(&node, &targets).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (_target_tx, target_rx) = watch::channel(targets);
+    let affinity = affinity::AffinityRouter::default();
+    let handle = tokio::spawn(api_proxy(
+        node.clone(),
+        addr.port(),
+        target_rx,
+        Some(listener.into()),
+        false,
+        affinity.clone(),
+    ));
+    (addr, handle, node, affinity)
+}
+
+const STREAM_DELTA: &str = r#"data: {"id":"chatcmpl_err","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}
+
+"#;
+const STREAM_ERROR: &str = r#"data: {"error":{"message":"backend timed out","type":"server_error","code":"timeout"}}
+
+"#;
+const STREAM_STOP: &str = r#"data: {"id":"chatcmpl_err","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}
+
+"#;
+const STREAM_DONE: &str = "data: [DONE]\n\n";
+
+fn streaming_request(path: &str) -> Vec<u8> {
+    let body = match path {
+        "/v1/responses" => json!({"model": "test", "stream": true, "input": "stream please"}),
+        "/v1/messages" => json!({
+            "model": "test",
+            "stream": true,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "stream please"}],
+        }),
+        _ => json!({
+            "model": "test",
+            "stream": true,
+            "messages": [{"role": "user", "content": "stream please"}],
+        }),
+    }
+    .to_string();
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .into_bytes()
+}
+
+struct StreamOutcome {
+    response: String,
+    second_target_contacted: bool,
+    requests: u64,
+    successful_requests: u64,
+    penalized_targets: usize,
+}
+
+/// Stream `frames` from the first of two targets through `path` and report
+/// what the client saw and what routing recorded.
+async fn route_stream_through_two_targets(path: &str, frames: &[&str]) -> StreamOutcome {
+    let chunks = frames
+        .iter()
+        .map(|frame| (Duration::ZERO, frame.as_bytes().to_vec()))
+        .collect();
+    let (first_port, _first_rx, first_handle) =
+        spawn_streaming_upstream("text/event-stream", chunks).await;
+    let (second_port, second_rx, second_handle) = spawn_capturing_upstream(
+        r#"{"id":"chatcmpl-second","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"second host"},"finish_reason":"stop"}]}"#,
+    )
+    .await;
+    let (proxy_addr, proxy_handle, node, affinity) = spawn_api_proxy_test_harness_with_node(
+        single_model_targets("test", &[first_port, second_port]),
+    )
+    .await;
+
+    let response = send_request_and_read_response(proxy_addr, vec![streaming_request(path)]).await;
+
+    // The route records its outcome after the client stream closes.
+    let mut snapshot = None;
+    for _ in 0..100 {
+        snapshot = node.routing_metrics().model_snapshots().remove("test");
+        if snapshot.as_ref().is_some_and(|s| s.request_count > 0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let snapshot = snapshot.expect("the routed request was never recorded");
+    let second_target_contacted = tokio::time::timeout(Duration::from_millis(300), second_rx)
+        .await
+        .is_ok_and(|raw| raw.is_ok());
+
+    proxy_handle.abort();
+    let _ = first_handle.await;
+    second_handle.abort();
+    let _ = second_handle.await;
+
+    StreamOutcome {
+        response,
+        second_target_contacted,
+        requests: snapshot.request_count,
+        successful_requests: snapshot.successful_requests,
+        penalized_targets: affinity.stats_snapshot().target_reputation.penalized_targets,
+    }
+}
+
+#[tokio::test]
+async fn test_api_proxy_counts_a_streamed_backend_error_as_failed_inference() {
+    let cases: [(&str, &str, &[&str]); 5] = [
+        ("chat, error first", "/v1/chat/completions", &[STREAM_ERROR]),
+        (
+            "chat, error after output",
+            "/v1/chat/completions",
+            &[STREAM_DELTA, STREAM_ERROR],
+        ),
+        (
+            "chat, error then [DONE]",
+            "/v1/chat/completions",
+            &[STREAM_DELTA, STREAM_ERROR, STREAM_DONE],
+        ),
+        (
+            "responses, error after output",
+            "/v1/responses",
+            &[STREAM_DELTA, STREAM_ERROR],
+        ),
+        (
+            "anthropic, error after output",
+            "/v1/messages",
+            &[STREAM_DELTA, STREAM_ERROR],
+        ),
+    ];
+    for (name, path, frames) in cases {
+        let outcome = route_stream_through_two_targets(path, frames).await;
+        assert!(
+            outcome.response.starts_with("HTTP/1.1 200 OK"),
+            "{name}: {}",
+            outcome.response
+        );
+        assert!(
+            outcome.response.contains("backend timed out"),
+            "{name}: the client must still get the backend's error: {}",
+            outcome.response
+        );
+        assert!(
+            !outcome.second_target_contacted,
+            "{name}: a committed stream was replayed on the second target"
+        );
+        assert_eq!(outcome.requests, 1, "{name}");
+        assert_eq!(
+            outcome.successful_requests, 0,
+            "{name}: a streamed backend error was counted as a successful request"
+        );
+        assert_eq!(
+            outcome.penalized_targets, 1,
+            "{name}: the failing target was credited instead of penalized"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_api_proxy_counts_healthy_streams_as_success_and_truncated_ones_as_failed() {
+    let healthy = route_stream_through_two_targets(
+        "/v1/chat/completions",
+        &[STREAM_DELTA, STREAM_STOP, STREAM_DONE],
+    )
+    .await;
+    assert!(healthy.response.contains("partial"));
+    assert!(!healthy.second_target_contacted);
+    assert_eq!((healthy.requests, healthy.successful_requests), (1, 1));
+    assert_eq!(healthy.penalized_targets, 0);
+
+    // No error frame and no [DONE]: a transport truncation. Terminal once
+    // committed, and now counted as a failed request too.
+    let truncated = route_stream_through_two_targets("/v1/chat/completions", &[STREAM_DELTA]).await;
+    assert!(!truncated.second_target_contacted);
+    assert_eq!((truncated.requests, truncated.successful_requests), (1, 0));
+    assert_eq!(truncated.penalized_targets, 1);
+}
