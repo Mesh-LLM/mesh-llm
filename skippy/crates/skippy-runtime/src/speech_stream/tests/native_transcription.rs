@@ -1,5 +1,6 @@
 use super::*;
 
+/// Counts non-overlapping word-window occurrences of a phrase.
 fn phrase_occurrences(text: &str, phrase: &str) -> usize {
     let words = text
         .split(|character: char| !character.is_alphanumeric())
@@ -16,18 +17,21 @@ fn phrase_occurrences(text: &str, phrase: &str) -> usize {
         .count()
 }
 
+/// Four real repetitions stream without replaying trimmed speech.
 #[test]
 #[ignore = "requires SKIPPY_ASR_TEST_MODEL and SKIPPY_ASR_TEST_AUDIO (11-second JFK fixture)"]
 fn streams_four_real_repetitions_without_replaying_trimmed_speech() {
     stream_four_repetitions(400);
 }
 
+/// Four real repetitions stream at the default cadence.
 #[test]
 #[ignore = "requires SKIPPY_ASR_TEST_MODEL and SKIPPY_ASR_TEST_AUDIO (11-second JFK fixture)"]
 fn streams_four_real_repetitions_at_default_cadence() {
     stream_four_repetitions(SpeechStreamConfig::default().step_ms);
 }
 
+/// Streams four repetitions and checks their deltas and final transcript.
 fn stream_four_repetitions(step_ms: u32) {
     crate::test_support::require_native_runtime();
     let model = std::env::var_os("SKIPPY_ASR_TEST_MODEL").expect("set SKIPPY_ASR_TEST_MODEL");
@@ -97,7 +101,8 @@ fn stream_four_repetitions(step_ms: u32) {
     };
     eprintln!("offline transcript: {offline}");
     eprintln!("live transcript: {transcript}");
-    assert_eq!(deltas(&events).concat(), *transcript);
+    let joined = deltas(&events).concat();
+    assert_eq!(joined, *transcript);
     for phrase in [
         "fellow americans",
         "can do for you",
@@ -111,5 +116,12 @@ fn stream_four_repetitions(step_ms: u32) {
             4,
             "rolling clause count for {phrase:?}; offline: {offline}; live: {transcript}"
         );
+    }
+    // The utterance opening must survive all four repetitions in the deltas
+    // and the completed transcript alike. The decoder may render it as
+    // "asked not", but an omitted opening cannot pass.
+    for text in [&joined, transcript] {
+        let opening = phrase_occurrences(text, "ask not") + phrase_occurrences(text, "asked not");
+        assert_eq!(opening, 4, "all four openings must survive; text: {text}");
     }
 }

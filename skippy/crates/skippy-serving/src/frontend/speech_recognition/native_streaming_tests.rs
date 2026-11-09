@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+/// Renders a byte slice as lowercase hexadecimal.
 fn digest_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -23,6 +24,7 @@ struct LiveTrace {
 }
 
 impl LiveTrace {
+    /// Appends one timestamped observation to the trace file.
     fn record(&self, kind: &str, detail: Value) {
         let mut file = self.file.lock().unwrap();
         let record = json!({
@@ -54,6 +56,7 @@ struct ExactBacklog {
 }
 
 impl ExactBacklog {
+    /// Holds callback 28 until the exact backlog frames have arrived.
     fn hold_callback(&self, pass: usize, trace: &LiveTrace) {
         if pass != 28 {
             return;
@@ -82,6 +85,7 @@ impl ExactBacklog {
         );
     }
 
+    /// Waits for the expected frame to leave the paced producer.
     async fn frame_sent(&self, frame: usize) {
         *self.sent_frames.lock().unwrap() = frame;
         self.frames_arrived.notify_one();
@@ -94,10 +98,12 @@ impl ExactBacklog {
 }
 
 impl SpeechTranscriber for RecordingTranscriber {
+    /// Rejects decoded input; the live session already carries PCM.
     fn decode(&self, audio: &[u8]) -> anyhow::Result<Vec<f32>> {
         skippy_runtime::decode_audio(audio)
     }
 
+    /// Records the native pass and answers the scripted transcript.
     fn transcribe(
         &self,
         samples: &[f32],
@@ -169,6 +175,7 @@ impl SpeechTranscriber for RecordingTranscriber {
     }
 }
 
+/// Builds the fixture PCM the transcript phrases are asserted against.
 fn pinned_pcm() -> Vec<i16> {
     let path = std::env::var_os("SKIPPY_ASR_TEST_PCM").expect("set SKIPPY_ASR_TEST_PCM");
     let bytes = std::fs::read(path).unwrap();
@@ -189,6 +196,7 @@ fn pinned_pcm() -> Vec<i16> {
         .collect()
 }
 
+/// Wraps the native recognition model with tracing and an optional backlog.
 fn native_model(trace: Arc<LiveTrace>, backlog: Option<Arc<ExactBacklog>>) -> RecordingTranscriber {
     skippy_runtime::test_support::require_native_runtime();
     let path = std::env::var_os("SKIPPY_ASR_TEST_MODEL").expect("set SKIPPY_ASR_TEST_MODEL");
@@ -206,6 +214,7 @@ fn native_model(trace: Arc<LiveTrace>, backlog: Option<Arc<ExactBacklog>>) -> Re
     }
 }
 
+/// Paces the fixture PCM through the live session in fixed frames.
 async fn send_paced_audio(
     input: mpsc::Sender<RealtimeInput>,
     pcm: Vec<i16>,
@@ -233,6 +242,7 @@ async fn send_paced_audio(
     trace.record("commit_sent", json!({}));
 }
 
+/// Projects the realtime output fields the test records.
 fn output_detail(output: &RealtimeOutput) -> Value {
     match output {
         RealtimeOutput::Delta { turn, text } => {
@@ -249,6 +259,7 @@ fn output_detail(output: &RealtimeOutput) -> Value {
     }
 }
 
+/// Reads the session events until completion and collects the transcript.
 async fn collect_transcript(
     output: &mut mpsc::Receiver<RealtimeOutput>,
     trace: &LiveTrace,
@@ -269,6 +280,7 @@ async fn collect_transcript(
     }
 }
 
+/// Counts non-overlapping word-window occurrences of a phrase.
 fn phrase_occurrences(text: &str, phrase: &str) -> usize {
     let words = text
         .split(|character: char| !character.is_alphanumeric())
@@ -285,6 +297,7 @@ fn phrase_occurrences(text: &str, phrase: &str) -> usize {
         .count()
 }
 
+/// A cold Metal live session preserves four paced utterances.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires pinned Tiny/JFK PCM fixtures, a packaged Metal runtime, and a SKIPPY_ASR_TRACE_PATH base directory; takes 44 seconds"]
 async fn cold_metal_live_session_preserves_four_paced_utterances() {
@@ -295,6 +308,7 @@ async fn cold_metal_live_session_preserves_four_paced_utterances() {
     .await;
 }
 
+/// A cold Metal live session preserves utterances after one backlog.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires pinned Tiny/JFK PCM fixtures and packaged Metal; holds callback 28 for an exact two-second audio backlog"]
 async fn cold_metal_live_session_preserves_utterances_after_one_backlog() {
@@ -305,6 +319,7 @@ async fn cold_metal_live_session_preserves_utterances_after_one_backlog() {
     .await;
 }
 
+/// Runs one paced live session and asserts the counted transcript phrases.
 async fn run_paced_session(name: &str, backlog: Option<Arc<ExactBacklog>>) {
     // SKIPPY_ASR_TRACE_PATH is a base directory: each test writes its own
     // file under it, so parallel ignored runs cannot truncate one
@@ -359,6 +374,19 @@ async fn run_paced_session(name: &str, backlog: Option<Arc<ExactBacklog>>) {
     drop(session);
     assert_eq!(trace.sent_samples.load(Ordering::SeqCst), 704_000);
     assert_eq!(confirmed, transcript);
+    // The utterance opening must survive in both the confirmed (deltas) and
+    // the completed transcript; the decoder may render it as "asked not",
+    // but an omitted opening cannot pass.
+    for (surface, text) in [
+        ("confirmed", confirmed.as_str()),
+        ("completed", transcript.as_str()),
+    ] {
+        let opening = phrase_occurrences(text, "ask not") + phrase_occurrences(text, "asked not");
+        assert_eq!(
+            opening, 4,
+            "opening missing from the {surface} transcript: {text}"
+        );
+    }
     let counts = [
         "fellow americans",
         "can do for you",
