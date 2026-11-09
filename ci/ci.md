@@ -1214,7 +1214,7 @@ boundary.
 
 The ordinary PR selector requires the independent global gate. Forks and
 CI-policy changes remain hosted, and the source-enforced exception expires on
-2026-09-14 UTC. GitHub's `all_external_contributors` approval policy covers
+2027-05-09 UTC. GitHub's `all_external_contributors` approval policy covers
 external contributors, not same-repository collaborator branches; the global
 gate and checked-in expiry are therefore the maintainer approval control.
 
@@ -1340,7 +1340,7 @@ an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.
 
 Permanent Depot PR execution is not yet approved. The bounded exception permits
-eligible same-repository PR jobs through 2026-09-14 UTC. A protected
+eligible same-repository PR jobs through 2027-05-09 UTC. A protected
 runner-group check, no-secret/no-direct-token execution, provider-isolation
 redesign, and a new successful non-secret sentinel remain prerequisites for
 removing that deadline. Do not change Depot settings or runner groups in a

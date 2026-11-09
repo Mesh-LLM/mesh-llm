@@ -161,7 +161,7 @@ impl Fixture {
             ("INPUT_PR_CANARY_REF", ""),
             ("INPUT_FORCE_HOSTED", "false"),
             ("INPUT_MANUAL_USE_DEPOT", "false"),
-            ("FIXTURE_DATE", "2026-09-03"),
+            ("FIXTURE_DATE", "2026-11-09"),
         ] {
             c.env(k, v);
         }
