@@ -614,7 +614,7 @@ pub(super) fn capped_target_idle_sessions(
 /// If `create()` fails after popping from the free list, the index is
 /// pushed back so a retry can reuse it. The high-water counter is only
 /// bumped on success, matching the prior behavior.
-fn create_indexed_lane_resource<T>(
+pub(super) fn create_indexed_lane_resource<T>(
     next_lane_index: &mut usize,
     free_lane_indices: &mut Vec<usize>,
     lane_count: u32,

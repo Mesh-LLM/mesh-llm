@@ -87,8 +87,11 @@ impl RuntimeState {
     }
 
     /// Drop every parked session; `complete` runs their exports first.
+    ///
+    /// Sessions are taken one at a time, so if a sink panics the ones not yet
+    /// finished stay parked, and panic recovery returns their lanes.
     pub(super) fn finish_parked_session_ends(&mut self, complete: bool) {
-        for parked in std::mem::take(&mut self.parked_session_ends) {
+        while let Some(parked) = self.parked_session_ends.pop() {
             let session_id = parked.session_id;
             // Lane acquisition finishes parked sessions first, so the id is
             // free; never displace a live session if it is not.

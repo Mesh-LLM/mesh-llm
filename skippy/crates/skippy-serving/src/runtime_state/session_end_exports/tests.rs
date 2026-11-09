@@ -110,3 +110,57 @@ fn panic_recovery_abandons_every_owed_export() {
     assert_eq!(*seen.lock().unwrap(), vec![None, None]);
     assert!(runtime.session_end_kv_exports.is_empty());
 }
+
+/// Parks `session_id` on a lane with no native state that owes an export of
+/// rows `[0, 100)`.
+fn park_with_export(runtime: &mut RuntimeState, session_id: &str, sink: SessionEndKvExportSink) {
+    let index = runtime.next_lane_index;
+    runtime.next_lane_index += 1;
+    runtime.sessions.insert(
+        session_id.to_string(),
+        RuntimeLaneSession {
+            index,
+            session: skippy_runtime::StageSession::detached_dflash_for_test(),
+            resident_prefix: None,
+        },
+    );
+    runtime.track_session_tokens_for_test(session_id, 130);
+    runtime.export_kv_at_session_end(session_id, 100, sink);
+    runtime.end_session_timed(session_id).unwrap();
+}
+
+#[test]
+fn a_panicking_sink_leaves_the_other_parked_lanes_for_panic_recovery() {
+    let seen = Seen::default();
+    let mut runtime = RuntimeState::new_modelless_for_test(2);
+    park_with_export(&mut runtime, "first", sink(&seen));
+    park_with_export(
+        &mut runtime,
+        "second",
+        Box::new(|_| panic!("session-end export sink panicked")),
+    );
+    assert_eq!(runtime.parked_session_ends.len(), 2);
+
+    let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.complete_parked_session_ends();
+    }));
+    assert!(completed.is_err(), "precondition: the sink panicked");
+    // What the runtime lock does when it recovers from the poison.
+    runtime.reset_after_panic();
+
+    assert_eq!(*seen.lock().unwrap(), vec![None]);
+    assert!(runtime.parked_session_ends.is_empty());
+    assert!(runtime.sessions.is_empty());
+    let mut free = runtime.free_lane_indices.clone();
+    free.sort_unstable();
+    assert_eq!(free, vec![0, 1], "both lane indices are reclaimed");
+    for _ in 0..2 {
+        super::super::lane_lifecycle::create_indexed_lane_resource(
+            &mut runtime.next_lane_index,
+            &mut runtime.free_lane_indices,
+            runtime.lane_count,
+            || Ok(()),
+        )
+        .expect("a later admission finds a free lane");
+    }
+}

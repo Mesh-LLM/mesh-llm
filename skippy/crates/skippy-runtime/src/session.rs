@@ -150,6 +150,11 @@ impl StageSession {
     }
 
     pub fn reset(&mut self) -> Result<()> {
+        // Only a detached test session has no native state; there is nothing
+        // to reset, and its owner discards the lane instead.
+        if self.raw.is_null() {
+            return Err(anyhow!("session has no native state to reset"));
+        }
         let mut error = ptr::null_mut();
         let status = unsafe { skippy_ffi::skippy_session_reset(self.raw, &mut error) };
         ensure_ok(status, error)?;
