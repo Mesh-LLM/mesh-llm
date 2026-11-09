@@ -47,6 +47,16 @@ fn a_known_canonical_spelling_does_not_consume_a_genuine_new_repetition() {
 }
 
 #[test]
+fn a_changed_prefix_does_not_match_a_confirmed_word_to_a_later_repetition() {
+    // The prefix is revised (`hello` -> `hi`) and the speaker repeats the
+    // confirmed word: the confirmed `ask` keeps its earlier occurrence, so
+    // the new repetition stays outside the consumed prefix for the delta.
+    let mut prefix = prefix("hello ask not");
+    assert_eq!(prefix.align(&words("hi ask not ask")), Some(3));
+    assert_eq!(prefix.align(&words("hi ask not ask ask")), Some(3));
+}
+
+#[test]
 fn substitutions_and_temporary_omissions_preserve_ownership() {
     let mut prefix = prefix("hello wrong ready ask not");
     assert_eq!(prefix.align(&words("hello right ready")), Some(3));

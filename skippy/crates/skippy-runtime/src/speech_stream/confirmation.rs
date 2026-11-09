@@ -147,13 +147,16 @@ impl ConfirmedPrefix {
     /// edit, pending-tail, and observed-length ordering. Ownerless insertions
     /// cannot justify consuming a new tail.
     fn recovered_alignment(&self, words: &[String], pending: &[String]) -> Option<Alignment> {
+        // Repeated words can pin many owners: compute the pending support
+        // once and reuse it across the candidate alignments.
+        let tail_agreement = Self::tail_agreement(words, pending);
         self.anchors
             .iter()
             .enumerate()
             .filter(|(_, anchor)| {
                 anchor.canonical.is_some() && words.iter().any(|word| anchor.matches(word))
             })
-            .filter_map(|(required, _)| self.alignment(words, pending, Some(required)))
+            .filter_map(|(required, _)| self.alignment_with(words, Some(required), &tail_agreement))
             .min_by_key(|alignment| {
                 let tail_support = words[alignment.end..]
                     .iter()
@@ -188,17 +191,11 @@ impl ConfirmedPrefix {
     /// ownerless insertion inside the consumed prefix. Keep that owner in the
     /// alignment and recompute from the unchanged anchors. Pins only grow for
     /// this call, so there are at most one more passes than there are anchors.
-    fn alignment(
-        &self,
-        words: &[String],
-        pending: &[String],
-        required: Option<usize>,
-    ) -> Option<Alignment> {
-        let mut pinned = vec![false; self.anchors.len()];
-        // Prior unconfirmed text is independent evidence for a candidate tail.
-        // It only resolves ties in edits and supported matches; empty pending
-        // leaves the original length-based endpoint ordering unchanged.
-        let tail_agreement = (0..=words.len())
+    /// Prior unconfirmed text is independent evidence for a candidate tail.
+    /// It only resolves ties in edits and supported matches; empty pending
+    /// leaves the original length-based endpoint ordering unchanged.
+    fn tail_agreement(words: &[String], pending: &[String]) -> Vec<usize> {
+        (0..=words.len())
             .map(|end| {
                 pending
                     .iter()
@@ -206,11 +203,29 @@ impl ConfirmedPrefix {
                     .take_while(|(a, b)| same_word(a, b))
                     .count()
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn alignment(
+        &self,
+        words: &[String],
+        pending: &[String],
+        required: Option<usize>,
+    ) -> Option<Alignment> {
+        self.alignment_with(words, required, &Self::tail_agreement(words, pending))
+    }
+
+    fn alignment_with(
+        &self,
+        words: &[String],
+        required: Option<usize>,
+        tail_agreement: &[usize],
+    ) -> Option<Alignment> {
+        let mut pinned = vec![false; self.anchors.len()];
         loop {
             let cells = self.alignment_cells(words, &pinned, required);
             let (end, score) =
-                self.best_alignment(&cells, words, &tail_agreement, required.is_some())?;
+                self.best_alignment(&cells, words, tail_agreement, required.is_some())?;
             if score.matched == 0 && !words.is_empty() {
                 return None;
             }
