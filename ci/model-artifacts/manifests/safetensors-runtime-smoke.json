@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "safetensors-runtime-smoke",
-  "registry_sha256": "da9adaee49db9be97b207b107e5a13943a46e321b62faf6ee4192028f10dee62",
+  "registry_sha256": "961607ab41b23c604bcf05f7a7bf4dce73d5df7e44afb45e29093ca59a96113c",
   "artifacts": [
     {
       "id": "smollm2-safetensors",
