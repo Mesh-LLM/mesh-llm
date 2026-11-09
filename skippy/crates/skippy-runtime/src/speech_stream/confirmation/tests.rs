@@ -2,16 +2,19 @@ use super::*;
 
 mod occurrences;
 
+/// Splits text into the word units the stream confirms.
 fn words(text: &str) -> Vec<String> {
     text.split_whitespace().map(str::to_string).collect()
 }
 
+/// Builds a confirmed prefix from a space-separated word list.
 fn prefix(text: &str) -> ConfirmedPrefix {
     let mut prefix = ConfirmedPrefix::default();
     prefix.append(&words(text));
     prefix
 }
 
+/// Counts the anchors that own a canonical word.
 fn ownership(prefix: &ConfirmedPrefix) -> usize {
     prefix
         .anchors
@@ -20,6 +23,7 @@ fn ownership(prefix: &ConfirmedPrefix) -> usize {
         .count()
 }
 
+/// Canonical and observed spellings can return after an omission.
 #[test]
 fn canonical_and_observed_spellings_can_return_after_an_omission() {
     for restored in ["asked", "ask"] {
@@ -38,6 +42,7 @@ fn canonical_and_observed_spellings_can_return_after_an_omission() {
     }
 }
 
+/// A known canonical spelling does not consume a genuine new repetition.
 #[test]
 fn a_known_canonical_spelling_does_not_consume_a_genuine_new_repetition() {
     let mut prefix = prefix("Hello asked");
@@ -46,6 +51,7 @@ fn a_known_canonical_spelling_does_not_consume_a_genuine_new_repetition() {
     assert_eq!(ownership(&prefix), 2);
 }
 
+/// A changed prefix does not match a confirmed word to a later repetition.
 #[test]
 fn a_changed_prefix_does_not_match_a_confirmed_word_to_a_later_repetition() {
     // The prefix is revised (`hello` -> `hi`) and the speaker repeats the
@@ -56,6 +62,7 @@ fn a_changed_prefix_does_not_match_a_confirmed_word_to_a_later_repetition() {
     assert_eq!(prefix.align(&words("hi ask not ask ask")), Some(3));
 }
 
+/// Substitutions and temporary omissions preserve ownership.
 #[test]
 fn substitutions_and_temporary_omissions_preserve_ownership() {
     let mut prefix = prefix("hello wrong ready ask not");
@@ -71,6 +78,7 @@ fn substitutions_and_temporary_omissions_preserve_ownership() {
     assert!(prefix.anchors.is_empty());
 }
 
+/// An omitted word cannot consume a genuine new tail as a substitution.
 #[test]
 fn an_omitted_word_cannot_consume_a_genuine_new_tail_as_a_substitution() {
     let mut prefix = prefix("A B C D");
@@ -81,6 +89,7 @@ fn an_omitted_word_cannot_consume_a_genuine_new_tail_as_a_substitution() {
     assert_eq!(ownership(&prefix), 5);
 }
 
+/// Missing suffix ownership survives an early segment cut.
 #[test]
 fn missing_suffix_ownership_survives_an_early_segment_cut() {
     let mut prefix = prefix("A B C D");
@@ -91,6 +100,7 @@ fn missing_suffix_ownership_survives_an_early_segment_cut() {
     assert_eq!(prefix.trim(2), 2);
 }
 
+/// Missing prefix ownership is removed with a later segment cut.
 #[test]
 fn missing_prefix_ownership_is_removed_with_a_later_segment_cut() {
     let mut prefix = prefix("A B C D");
@@ -99,6 +109,7 @@ fn missing_prefix_ownership_is_removed_with_a_later_segment_cut() {
     assert!(prefix.anchors.is_empty());
 }
 
+/// An insertion inside consumed words owns no output word.
 #[test]
 fn an_insertion_inside_consumed_words_owns_no_output_word() {
     let mut prefix = prefix("A C D");
@@ -109,6 +120,7 @@ fn an_insertion_inside_consumed_words_owns_no_output_word() {
     assert_eq!(prefix.align(&words("C D E")), Some(2));
 }
 
+/// A genuine repetition after restored words remains available.
 #[test]
 fn genuine_repetition_after_restored_words_remains_available() {
     let mut prefix = prefix("Go now Go now");
@@ -119,6 +131,7 @@ fn genuine_repetition_after_restored_words_remains_available() {
     assert_eq!(prefix.align(&words("Go now Go now Go now Go now")), Some(6));
 }
 
+/// An omitted start does not make aligned confirmed words pending.
 #[test]
 fn an_omitted_start_does_not_make_aligned_confirmed_words_pending() {
     let mut prefix = prefix("Hello world ask not");
@@ -134,6 +147,7 @@ fn an_omitted_start_does_not_make_aligned_confirmed_words_pending() {
     assert_eq!(prefix.observed_len(), 2);
 }
 
+/// An observed substitution is not weaker than matching pending words.
 #[test]
 fn an_observed_substitution_is_not_weaker_than_matching_pending_words() {
     let mut prefix = prefix("Hello Alice");
@@ -150,6 +164,7 @@ fn an_observed_substitution_is_not_weaker_than_matching_pending_words() {
     assert_eq!(prefix.observed_len(), 2);
 }
 
+/// Pending evidence keeps omitted ownership for a restored prefix.
 #[test]
 fn pending_evidence_keeps_omitted_ownership_for_a_restored_prefix() {
     let mut prefix = prefix("for you");
@@ -168,6 +183,7 @@ fn pending_evidence_keeps_omitted_ownership_for_a_restored_prefix() {
     assert_eq!(ownership(&prefix), 5);
 }
 
+/// Unsupported hypotheses leave ownership unchanged.
 #[test]
 fn unsupported_hypotheses_leave_ownership_unchanged() {
     let mut prefix = prefix("A B");
@@ -176,6 +192,7 @@ fn unsupported_hypotheses_leave_ownership_unchanged() {
     assert_eq!(prefix.align(&words("A B E")), Some(2));
 }
 
+/// Discarded insertions do not accumulate history.
 #[test]
 fn discarded_insertions_do_not_accumulate_history() {
     let mut prefix = prefix("A D");
@@ -189,6 +206,7 @@ fn discarded_insertions_do_not_accumulate_history() {
     assert!(prefix.anchors.is_empty());
 }
 
+/// Unsupported boundaries use the capped observed length without mutation.
 #[test]
 fn unsupported_boundaries_use_the_capped_observed_length_without_mutation() {
     let mut prefix = prefix("A B");
@@ -200,6 +218,7 @@ fn unsupported_boundaries_use_the_capped_observed_length_without_mutation() {
     assert_eq!(prefix.align(&words("A B next")), Some(2));
 }
 
+/// Restored owned spellings align only the prefix and preserve the tail.
 #[test]
 fn restored_owned_spellings_align_only_the_prefix_and_preserve_the_tail() {
     for spelling in ["Alice", "Bob"] {
@@ -214,6 +233,7 @@ fn restored_owned_spellings_align_only_the_prefix_and_preserve_the_tail() {
     }
 }
 
+/// Recovering an omitted owner updates the observed prefix.
 #[test]
 fn recovering_an_omitted_owner_updates_the_observed_prefix() {
     let mut prefix = prefix("A B");
@@ -226,6 +246,7 @@ fn recovering_an_omitted_owner_updates_the_observed_prefix() {
     assert_eq!(prefix.align(&words("A B next")), Some(2));
 }
 
+/// Recovery retains supported paths that the unconstrained cells discard.
 #[test]
 fn recovery_retains_supported_paths_that_the_unconstrained_cells_discard() {
     let mut prefix = prefix("A B C");
@@ -236,6 +257,7 @@ fn recovery_retains_supported_paths_that_the_unconstrained_cells_discard() {
     assert_eq!(ownership(&prefix), 3);
 }
 
+/// Recovery consumes all restored owners before exposing the tail.
 #[test]
 fn recovery_consumes_all_restored_owners_before_exposing_the_tail() {
     for (text, end) in [("X Y B filler C today", 5), ("X Y C B Z C today", 6)] {
@@ -249,6 +271,7 @@ fn recovery_consumes_all_restored_owners_before_exposing_the_tail() {
     }
 }
 
+/// Unsupported boundaries count observed insertions without treating them as owners.
 #[test]
 fn unsupported_boundaries_count_observed_insertions_without_treating_them_as_owners() {
     let mut prefix = prefix("A C");
@@ -262,6 +285,7 @@ fn unsupported_boundaries_count_observed_insertions_without_treating_them_as_own
     assert_eq!(prefix.align(&words("A B C next")), Some(3));
 }
 
+/// Repeated pending speech can shorten but not extend an unsupported prefix.
 #[test]
 fn repeated_pending_speech_can_shorten_but_not_extend_an_unsupported_prefix() {
     for (text, pending, expected) in [

@@ -262,6 +262,7 @@ struct LiveSession {
 }
 
 impl LiveSession {
+    /// Runs the live session loop, feeding batched audio in step-sized pushes.
     fn run(
         self,
         config: RealtimeTranscriptionConfig,
@@ -437,6 +438,7 @@ fn stream_config(config: &RealtimeTranscriptionConfig) -> SpeechStreamConfig {
     }
 }
 
+/// Fails a request that is not speech-only.
 fn speech_only() -> InferenceError {
     InferenceError::unsupported(
         "this speech-recognition model only serves /v1/audio/transcriptions and /v1/audio/translations",
@@ -577,6 +579,7 @@ mod tests {
         }
     }
 
+    /// Builds a request the live session answers slowly in tests.
     fn slow_request() -> AudioTranscriptionRequest {
         AudioTranscriptionRequest {
             model: "whisper-test".into(),

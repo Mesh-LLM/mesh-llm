@@ -1,5 +1,6 @@
 use super::*;
 
+/// A revised prior phrase and leading comma do not replay the last word.
 #[test]
 fn a_revised_prior_phrase_and_leading_comma_do_not_replay_the_last_word() {
     // Captured base.en/400 ms passes91–95. The preceding output omitted the
@@ -46,6 +47,7 @@ fn a_revised_prior_phrase_and_leading_comma_do_not_replay_the_last_word() {
     assert_eq!(deltas(&events).concat(), " asked not!");
 }
 
+/// A wholly substituted prefix keeps agreed new speech streaming.
 #[test]
 fn a_wholly_substituted_prefix_keeps_agreed_new_speech_streaming() {
     let mut script = Script::new(vec![
@@ -78,6 +80,7 @@ fn a_wholly_substituted_prefix_keeps_agreed_new_speech_streaming() {
     assert_eq!(stream.current_turn(), 1);
 }
 
+/// A final wholly substituted prefix keeps new speech at commit.
 #[test]
 fn a_final_wholly_substituted_prefix_keeps_new_speech_at_commit() {
     let mut script = Script::new(vec![
@@ -105,6 +108,7 @@ fn a_final_wholly_substituted_prefix_keeps_new_speech_at_commit() {
     assert_eq!(stream.current_turn(), 1);
 }
 
+/// A restored owned word keeps new speech streaming.
 #[test]
 fn a_restored_owned_word_keeps_new_speech_streaming() {
     let mut script = Script::new(vec![
@@ -136,6 +140,7 @@ fn a_restored_owned_word_keeps_new_speech_streaming() {
     assert_eq!(deltas(&events).concat(), "A B fresh words today");
 }
 
+/// A restored owned word keeps new speech at commit.
 #[test]
 fn a_restored_owned_word_keeps_new_speech_at_commit() {
     let mut script = Script::new(vec![
@@ -164,6 +169,7 @@ fn a_restored_owned_word_keeps_new_speech_at_commit() {
     assert_eq!(deltas(&events).concat(), "A B final words");
 }
 
+/// Multiple restored owners leave only genuinely new trailing speech.
 #[test]
 fn multiple_restored_owners_leave_only_genuinely_new_trailing_speech() {
     for (hypothesis, transcript) in [
@@ -200,6 +206,7 @@ fn multiple_restored_owners_leave_only_genuinely_new_trailing_speech() {
     }
 }
 
+/// Recovered prefixes do not make uncertain audio trimmable.
 #[test]
 fn recovered_prefixes_do_not_make_uncertain_audio_trimmable() {
     let mut script = Script::new(vec![
@@ -222,6 +229,7 @@ fn recovered_prefixes_do_not_make_uncertain_audio_trimmable() {
     assert_eq!(deltas(&done), [" fresh words"]);
 }
 
+/// A repeated pending word survives a shorter unsupported prefix at commit.
 #[test]
 fn a_repeated_pending_word_survives_a_shorter_unsupported_prefix_at_commit() {
     let mut script = Script::new(vec![
@@ -250,6 +258,7 @@ fn a_repeated_pending_word_survives_a_shorter_unsupported_prefix_at_commit() {
     assert_eq!(deltas(&events).concat(), "A C fresh");
 }
 
+/// Shortened pending boundaries track later unsupported prefixes.
 #[test]
 fn shortened_pending_boundaries_track_later_unsupported_prefixes() {
     for (passes, transcript, final_delta) in [
@@ -301,6 +310,7 @@ fn shortened_pending_boundaries_track_later_unsupported_prefixes() {
     }
 }
 
+/// An unsupported prefix does not replay a restored omitted owner.
 #[test]
 fn an_unsupported_prefix_does_not_replay_a_restored_omitted_owner() {
     // Y revises the retained prefix before the already emitted B returns.
@@ -343,6 +353,7 @@ fn an_unsupported_prefix_does_not_replay_a_restored_omitted_owner() {
     assert_eq!(deltas(&events).concat(), "A B");
 }
 
+/// Wholly rewritten prefixes without new speech do not append words.
 #[test]
 fn wholly_rewritten_prefixes_without_new_speech_do_not_append_words() {
     for rewrite in ["Gamma Delta", "Gamma"] {

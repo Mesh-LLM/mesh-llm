@@ -37,6 +37,7 @@ import uniffi.mesh_ffi.currentMeshVersion
 
 /** Genuine native fixture. Its foreground test process also needs an owned outer deadline. */
 class NativeLiveTranscriptionTest {
+    /** Runs discovery, validation, and cancellation against the admitted native fixture. */
     @Test
     fun nativeSpeechDiscoveryValidationAndCancellation() {
         assumeTrue("Set MESH_SDK_LIVE_SPEECH=1 for native speech", System.getenv("MESH_SDK_LIVE_SPEECH") == "1")
@@ -93,8 +94,10 @@ private class SpeechInputs {
     private fun required(key: String): String = env[key]?.takeIf { it.isNotBlank() } ?: error("Missing $key")
     private fun path(key: String): File = File(required(key)).also { check(it.isAbsolute) { "$key must be absolute" } }.canonicalFile
 
+    /** Appends one evidence record to the fresh evidence directory. */
     fun write(name: String, value: JsonObject) = evidence.resolve(name).writeText(value.toString() + "\n")
 
+    /** Builds the isolated node configuration for the fixture ports. */
     fun config(): JsonObject = buildJsonObject {
         put("mode", "serve")
         put("http", buildJsonObject { put("api_port", ports[0]); put("console_port", ports[1]); put("console_ui", false) })
@@ -109,6 +112,7 @@ private class SpeechInputs {
     }
 
     companion object {
+        /** Returns the SHA-256 of the bytes as lowercase hexadecimal. */
         fun digest(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     }
 }
@@ -117,6 +121,7 @@ private class SpeechEvents(private val file: File) {
     private val started = System.nanoTime()
     private val events = mutableListOf<LiveTranscriptionEvent>()
 
+    /** Records an event in memory and appends its projection to the trace. */
     @Synchronized
     fun record(event: LiveTranscriptionEvent, source: String) {
         events.add(event)
@@ -135,6 +140,7 @@ private class SpeechEvents(private val file: File) {
         }.toString() + "\n")
     }
 
+    /** Returns the events recorded so far in arrival order. */
     @Synchronized
     fun snapshot(): List<LiveTranscriptionEvent> = events.toList()
 }
@@ -157,6 +163,7 @@ private class NativeSpeechFixture(private val inputs: SpeechInputs) {
         }
     }
 
+    /** Exercises the fixture sessions and asserts the recorded evidence. */
     suspend fun run() {
         assertPortsFree()
         inputs.write("identity.json", buildJsonObject {

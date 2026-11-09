@@ -15,6 +15,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LiveTranscriptionTest {
+    /** Explicit push-to-talk options survive the native round trip. */
     @Test
     fun optionsPreserveExplicitPushToTalk() {
         val options = Json.parseToJsonElement(LiveTranscriptionOptions(sampleRate = 48000u, turnDetection = null).json()).jsonObject
@@ -25,6 +26,7 @@ class LiveTranscriptionTest {
         assertEquals(JsonPrimitive(false), defaults["tentative"])
     }
 
+    /** Incremental options serialize under their native keys. */
     @Test
     fun incrementalOptionsUseNativeKeys() {
         val options = Json.parseToJsonElement(LiveTranscriptionOptions(stepMs = 400u, tentative = true).json()).jsonObject
@@ -33,6 +35,7 @@ class LiveTranscriptionTest {
         assertNull(options["stepMs"])
     }
 
+    /** Tentative replacements and clear remain distinct from final text. */
     @Test
     fun tentativeReplacementsAndClearRemainDistinctFromFinalText() = runTest {
         for (text in listOf("hel", "hello", "")) {
@@ -79,6 +82,7 @@ class LiveTranscriptionTest {
         live.sendAudio(emptyList())
     }
 
+    /** Cancelling a pending read closes on IO without blocking the collection. */
     @Test
     fun cancellingEventsDuringPendingReadClosesOnIoWithoutBlockingCollection() = runBlocking {
         val readPending = CompletableDeferred<Unit>()

@@ -8,6 +8,7 @@ use super::*;
 // JFK upstream revision: 231638a0717b7822784297e5980965ffcec05810.
 // Four-copy PCM SHA256: 8cda406b2cf6e25a495646c906762a4033129b4acdf09f4da40d3502f71c2008.
 // The first four and the earlier "your" anchor were omitted; "you" was inserted.
+/// Rebuilds the confirmed prefix captured from the admitted reproduction.
 fn captured_prefix() -> ConfirmedPrefix {
     let entries = [
         ("and", Some("and"), false),
@@ -57,6 +58,7 @@ const CANONICAL: &str = "and so my fellow Americans! ask not! what your country 
 const PASS94: &str = ", ask what you can do for your country. ask not! what you country can do for you. ask what you country can do for your country. ask not!";
 const PASS95: &str = ", ask what you can do for your country. ask not! what you country can do for you. ask what you country can do for your country. and so my fellow Americans... asked not!";
 
+/// A restored opening keeps its confirmed occurrence after reordered clauses.
 #[test]
 fn a_restored_opening_keeps_its_confirmed_occurrence_after_reordered_clauses() {
     let mut prefix = captured_prefix();
@@ -101,6 +103,7 @@ fn a_restored_opening_keeps_its_confirmed_occurrence_after_reordered_clauses() {
     assert_eq!(ownership(&prefix), 28);
 }
 
+/// Canonical aliases do not steal a genuine later repetition after revision.
 #[test]
 fn canonical_aliases_do_not_steal_a_genuine_later_repetition_after_revision() {
     for tail in ["can run", "today can run"] {
@@ -112,6 +115,7 @@ fn canonical_aliases_do_not_steal_a_genuine_later_repetition_after_revision() {
     }
 }
 
+/// Repeating the omitted opening does not reassign its occurrence.
 #[test]
 fn repeating_the_omitted_opening_does_not_reassign_its_occurrence() {
     let mut prefix = captured_prefix();
@@ -147,6 +151,7 @@ fn repeating_the_omitted_opening_does_not_reassign_its_occurrence() {
 // Model the owning stream's agreement and append transitions, including the
 // state mutation between repeated hypotheses. No trimming occurs in this
 // captured window: its only segment ends beyond the available audio.
+/// Applies one hypothesis through the owning stream's agreement and append.
 fn apply_agreement(
     prefix: &mut ConfirmedPrefix,
     canonical: &mut Vec<String>,
@@ -170,6 +175,7 @@ fn apply_agreement(
     emitted
 }
 
+/// An omitted alias recovers without charging a new occurrence.
 #[test]
 fn an_omitted_alias_recovers_without_charging_a_new_occurrence() {
     for restored in ["asked", "ask"] {
@@ -182,6 +188,7 @@ fn an_omitted_alias_recovers_without_charging_a_new_occurrence() {
     }
 }
 
+/// Omission does not create debt that consumes a later repetition.
 #[test]
 fn omission_does_not_create_debt_that_consumes_a_later_repetition() {
     let mut prefix = prefix("Hello Alice");
@@ -192,6 +199,7 @@ fn omission_does_not_create_debt_that_consumes_a_later_repetition() {
     assert_eq!(&hypothesis[end..], words("today Alice"));
 }
 
+/// Stable revisions do not stall a genuine later occurrence.
 #[test]
 fn stable_revisions_do_not_stall_a_genuine_later_occurrence() {
     let mut prefix = prefix("Hello Alice");
@@ -202,6 +210,7 @@ fn stable_revisions_do_not_stall_a_genuine_later_occurrence() {
     }
 }
 
+/// Successive revisions do not accumulate alignment debt.
 #[test]
 fn successive_revisions_do_not_accumulate_alignment_debt() {
     let mut prefix = prefix("Hello Alice");
@@ -216,6 +225,7 @@ fn successive_revisions_do_not_accumulate_alignment_debt() {
     assert_eq!(&hypothesis[end..], words("today Alice"));
 }
 
+/// A stable reorder keeps new speech available without replaying owned words.
 #[test]
 fn a_stable_reorder_keeps_new_speech_available_without_replaying_owned_words() {
     let mut prefix = prefix("A B C D");
@@ -232,6 +242,7 @@ fn a_stable_reorder_keeps_new_speech_available_without_replaying_owned_words() {
     assert_eq!(ownership(&prefix), 5);
 }
 
+/// An inserted duplicate does not pin an owner that was not omitted.
 #[test]
 fn an_inserted_duplicate_does_not_pin_an_owner_that_was_not_omitted() {
     let mut prefix = prefix("A C");
@@ -241,6 +252,7 @@ fn an_inserted_duplicate_does_not_pin_an_owner_that_was_not_omitted() {
     assert_eq!(ownership(&prefix), 2);
 }
 
+/// An already omitted owner is not pinned by a later insertion.
 #[test]
 fn an_already_omitted_owner_is_not_pinned_by_a_later_insertion() {
     let mut prefix = prefix("A B C D");
@@ -251,6 +263,7 @@ fn an_already_omitted_owner_is_not_pinned_by_a_later_insertion() {
     assert_eq!(ownership(&prefix), 4);
 }
 
+/// Omission and duplicate context keep the new tail available.
 #[test]
 fn omission_and_duplicate_context_keep_the_new_tail_available() {
     let mut prefix = prefix("X A X B");
@@ -261,6 +274,7 @@ fn omission_and_duplicate_context_keep_the_new_tail_available() {
     assert_eq!(prefix.align(&words("X A X B tail")), Some(4));
 }
 
+/// Collision matching uses the same case and punctuation rules.
 #[test]
 fn collision_matching_uses_the_same_case_and_punctuation_rules() {
     let mut prefix = prefix("A Bee C D");
@@ -272,6 +286,7 @@ fn collision_matching_uses_the_same_case_and_punctuation_rules() {
     assert_eq!(prefix.anchors.len(), 4);
 }
 
+/// Different punctuation-only words do not create a collision.
 #[test]
 fn different_punctuation_only_words_do_not_create_a_collision() {
     let mut prefix = prefix("A ! C D");
@@ -292,6 +307,7 @@ fn different_punctuation_only_words_do_not_create_a_collision() {
     );
 }
 
+/// Impossible pins have no reachable alignment.
 #[test]
 fn impossible_pins_have_no_reachable_alignment() {
     let prefix = prefix("A B");
@@ -306,6 +322,7 @@ fn impossible_pins_have_no_reachable_alignment() {
     assert_eq!(prefix.observed_len(), 2);
 }
 
+/// Many independent reorders preserve the complete new tail.
 #[test]
 fn many_independent_reorders_preserve_the_complete_new_tail() {
     let mut canonical = Vec::new();
@@ -322,6 +339,7 @@ fn many_independent_reorders_preserve_the_complete_new_tail() {
     assert_eq!(ownership(&prefix), canonical.len());
 }
 
+/// Without a collision, an inserted word does not absorb a new tail.
 #[test]
 fn without_a_collision_an_inserted_word_does_not_absorb_a_new_tail() {
     let mut prefix = prefix("A B C");
@@ -331,6 +349,7 @@ fn without_a_collision_an_inserted_word_does_not_absorb_a_new_tail() {
     assert_eq!(ownership(&prefix), 3);
 }
 
+/// Pending evidence keeps a new tail after insertion without a collision.
 #[test]
 fn pending_evidence_keeps_a_new_tail_after_insertion_without_a_collision() {
     let canonical = words("A B C");
@@ -343,6 +362,7 @@ fn pending_evidence_keeps_a_new_tail_after_insertion_without_a_collision() {
     assert_eq!(ownership(&prefix), 3);
 }
 
+/// An earlier reorder does not absorb an unrelated new tail without pending.
 #[test]
 fn an_earlier_reorder_does_not_absorb_an_unrelated_new_tail_without_pending() {
     let mut prefix = prefix("A B C D P Q R");
@@ -352,6 +372,7 @@ fn an_earlier_reorder_does_not_absorb_an_unrelated_new_tail_without_pending() {
     assert_eq!(ownership(&prefix), 7);
 }
 
+/// An earlier reorder does not absorb an unrelated pending tail.
 #[test]
 fn an_earlier_reorder_does_not_absorb_an_unrelated_pending_tail() {
     let canonical = words("A B C D P Q R");
@@ -364,6 +385,7 @@ fn an_earlier_reorder_does_not_absorb_an_unrelated_pending_tail() {
     assert_eq!(ownership(&prefix), 7);
 }
 
+/// Unrelated pending keeps the existing new tail boundary.
 #[test]
 fn unrelated_pending_keeps_the_existing_new_tail_boundary() {
     for (canonical_text, hypothesis_text) in
@@ -379,6 +401,7 @@ fn unrelated_pending_keeps_the_existing_new_tail_boundary() {
     }
 }
 
+/// Pending tail evidence does not skip a genuine repeated phrase.
 #[test]
 fn pending_tail_evidence_does_not_skip_a_genuine_repeated_phrase() {
     let canonical = words("Go now");
@@ -392,6 +415,7 @@ fn pending_tail_evidence_does_not_skip_a_genuine_repeated_phrase() {
     assert_eq!(ownership(&prefix), 2);
 }
 
+/// An empty confirmed prefix leaves all first speech available.
 #[test]
 fn an_empty_confirmed_prefix_leaves_all_first_speech_available() {
     let mut prefix = ConfirmedPrefix::default();

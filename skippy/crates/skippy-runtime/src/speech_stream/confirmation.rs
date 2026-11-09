@@ -14,6 +14,7 @@ struct Anchor {
 }
 
 impl Anchor {
+    /// Reports whether a word matches the anchor's text or canonical spelling.
     fn matches(&self, word: &str) -> bool {
         same_word(&self.text, word)
             || self
@@ -126,6 +127,7 @@ impl ConfirmedPrefix {
         self.align_pending(words, &[])
     }
 
+    /// Consumes a supported prefix against the anchors and updates ownership.
     fn align_pending(&mut self, words: &[String], pending: &[String]) -> Option<usize> {
         if self.anchors.is_empty() {
             self.observed_words = 0;
@@ -137,6 +139,7 @@ impl ConfirmedPrefix {
         Some(alignment.end)
     }
 
+    /// Returns the matched count of the best alignment, or zero if unreachable.
     fn alignment_support(&self, words: &[String], pending: &[String]) -> usize {
         self.alignment(words, pending, None)
             .map_or(0, |alignment| alignment.score.matched)
@@ -172,6 +175,7 @@ impl ConfirmedPrefix {
             })
     }
 
+    /// Reports whether an omitted owner reappears after the consumed prefix.
     fn tail_replays_omitted_owner(
         &self,
         words: &[String],
@@ -206,6 +210,7 @@ impl ConfirmedPrefix {
             .collect()
     }
 
+    /// Computes the best anchor-to-word alignment with the tail agreement.
     fn alignment(
         &self,
         words: &[String],
@@ -215,6 +220,7 @@ impl ConfirmedPrefix {
         self.alignment_with(words, required, &Self::tail_agreement(words, pending))
     }
 
+    /// Computes an alignment, pinning relocated owners until it is stable.
     fn alignment_with(
         &self,
         words: &[String],
@@ -240,6 +246,7 @@ impl ConfirmedPrefix {
         }
     }
 
+    /// Selects the reachable end cell with the best preference order.
     fn best_alignment(
         &self,
         cells: &[Option<Cell>],
@@ -263,6 +270,7 @@ impl ConfirmedPrefix {
             })
     }
 
+    /// Lists owners omitted in the alignment that reappear as insertions.
     fn relocated_owners(
         &self,
         words: &[String],
@@ -328,6 +336,7 @@ impl ConfirmedPrefix {
             .count()
     }
 
+    /// Builds the alignment cell table over the anchors and words.
     fn alignment_cells(
         &self,
         words: &[String],
@@ -381,6 +390,7 @@ impl ConfirmedPrefix {
         cells
     }
 
+    /// Rebuilds the anchors' observed state from the selected alignment.
     fn aligned_anchors(&self, words: &[String], cells: &[Option<Cell>], end: usize) -> Vec<Anchor> {
         let columns = words.len() + 1;
         let (mut row, mut column) = (self.anchors.len(), end);
@@ -444,10 +454,12 @@ struct Cell {
 }
 
 impl Cell {
+    /// Orders cells by edits, then by most matched anchors.
     fn preference(self) -> (usize, std::cmp::Reverse<usize>) {
         (self.edits, std::cmp::Reverse(self.matched))
     }
 
+    /// Advances a cell by one alignment step.
     fn advance(self, edits: usize, matched: bool, step: Step) -> Self {
         Self {
             edits: self.edits + edits,

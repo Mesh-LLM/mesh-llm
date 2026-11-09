@@ -9,6 +9,7 @@ struct ObservedPass {
 }
 
 impl std::fmt::Debug for ObservedPass {
+    /// Renders the observed window without its full sample payload.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ObservedPass")
@@ -28,6 +29,7 @@ struct AudioWords {
 impl AudioWords {
     // Each second's amplitude identifies a word, so hypotheses depend on the
     // actual audio window rather than the number of times this model is called.
+    /// Transcribes each whole second of the window as its own named word.
     fn transcribe(
         &mut self,
         samples: &[f32],
@@ -54,12 +56,14 @@ impl AudioWords {
     }
 }
 
+/// Builds audio whose per-second amplitude names the second's word.
 fn word_audio(samples: usize) -> Vec<f32> {
     (0..samples)
         .map(|index| (10 + index / (1_000 * MS)) as f32 / 100.0)
         .collect()
 }
 
+/// Pushes the audio in the given packet sizes and collects the events.
 fn push_parts(
     stream: &mut SpeechStream,
     model: &mut AudioWords,
@@ -83,6 +87,7 @@ fn push_parts(
     events
 }
 
+/// Runs a whole turn through the given packets and returns every pass.
 fn observed_turn(
     audio: &[f32],
     parts: &[usize],
@@ -96,6 +101,7 @@ fn observed_turn(
     (model.seen, events)
 }
 
+/// Whole, small, and partial frame packets observe identical windows and events.
 #[test]
 fn whole_small_and_partial_frame_packets_have_identical_windows_and_events() {
     let audio = word_audio(4_500 * MS + 17);
@@ -117,6 +123,7 @@ fn whole_small_and_partial_frame_packets_have_identical_windows_and_events() {
     }
 }
 
+/// Non-frame multiple steps keep the same next-frame cadence.
 #[test]
 fn non_frame_multiple_steps_keep_the_same_next_frame_cadence() {
     let audio = word_audio(1_000 * MS + 17);
@@ -136,6 +143,7 @@ fn non_frame_multiple_steps_keep_the_same_next_frame_cadence() {
     assert_eq!(observed_turn(&audio, &[audio.len()], config), expected);
 }
 
+/// Trimming prompts and append-only events are partition invariant.
 #[test]
 fn trimming_prompts_and_append_only_events_are_partition_invariant() {
     let audio = word_audio(8_500 * MS + 17);
@@ -165,6 +173,7 @@ fn trimming_prompts_and_append_only_events_are_partition_invariant() {
     }
 }
 
+/// VAD finalization at a due frame does not run a second pass.
 #[test]
 fn vad_finalization_at_a_due_frame_does_not_run_a_second_pass() {
     let config = SpeechStreamConfig {
@@ -199,6 +208,7 @@ fn vad_finalization_at_a_due_frame_does_not_run_a_second_pass() {
     }
 }
 
+/// Config changes, clear, and commit keep their audio boundaries.
 #[test]
 fn config_changes_clear_and_commit_keep_their_audio_boundaries() {
     let mut stream = SpeechStream::new(manual());

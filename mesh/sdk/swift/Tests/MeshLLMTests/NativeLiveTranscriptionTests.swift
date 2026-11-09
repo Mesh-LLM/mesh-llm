@@ -10,6 +10,7 @@ import MachO
 /// Opt in only with a freshly built native framework and isolated launch environment.
 /// The enclosing test process must also have an operator-owned wall-clock deadline.
 final class NativeLiveTranscriptionTests: XCTestCase {
+    /// Exercises discovery, validation, and cancellation against the admitted native fixture.
     func testNativeSpeechDiscoveryValidationAndCancellation() async throws {
         guard ProcessInfo.processInfo.environment["MESH_SDK_LIVE_SPEECH"] == "1" else {
             throw XCTSkip("Set MESH_SDK_LIVE_SPEECH=1 to exercise the genuine native speech SDK")
@@ -48,10 +49,12 @@ private struct NativeSpeechInputs: Sendable {
 
     init(testExecutable: URL?) throws {
         let env = ProcessInfo.processInfo.environment
+        /// Reads a required non-empty environment variable.
         func value(_ key: String) throws -> String {
             guard let value = env[key], !value.isEmpty else { throw NativeSpeechFailure("Missing \(key)") }
             return value
         }
+        /// Resolves a required environment variable to a normalized absolute URL.
         func path(_ key: String) throws -> URL {
             let raw = try value(key)
             try requireSpeech(raw.hasPrefix("/"), "\(key) must be absolute")
@@ -124,6 +127,7 @@ private struct NativeSpeechInputs: Sendable {
 
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
+    /// Writes one evidence record under the fresh evidence directory.
     func write(_ name: String, _ value: [String: Any]) throws {
         let bytes = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
         try bytes.write(to: evidence.appendingPathComponent(name), options: .atomic)
@@ -145,13 +149,16 @@ private struct NativeSpeechInputs: Sendable {
 /// FFI read. Cleanup closes the owned sessions and then requires every call to settle.
 private actor NativeSpeechCalls {
     var active: Set<UUID> = []
+    /// Tracks a call started on the unstructured FFI path.
     func begin(_ id: UUID) { active.insert(id) }
+    /// Untracks a settled FFI call.
     func end(_ id: UUID) { active.remove(id) }
     var isEmpty: Bool { active.isEmpty }
 }
 
 private actor NativeSpeechResult<Value: Sendable> {
     var value: Result<Value, Error>?
+    /// Stores the settled result for the deadline poller.
     func finish(_ result: Result<Value, Error>) { value = result }
 }
 
@@ -162,9 +169,12 @@ private actor NativeSpeechEvents {
     let file: URL
     let start = ContinuousClock.now
     init(file: URL) { self.file = file }
+    /// Marks the collector read as waiting for an event.
     func pending() { waiting = true }
+    /// Marks the collector as finished after end of stream.
     func end() { waiting = false; finished = true }
     var isPending: Bool { waiting && !finished && values.isEmpty }
+    /// Records an event in memory and appends its projection to the trace.
     func record(_ event: LiveTranscriptionEvent, source: String) throws {
         values.append(event)
         let projection: [String: Any] = ["type": event.type, "item_id": event.itemId.map { $0 as Any } ?? NSNull(),
@@ -183,6 +193,7 @@ private actor NativeSpeechEvents {
 
 private actor NativeSpeechSessions {
     var values: [LiveTranscription] = []
+    /// Registers an owned session for cleanup.
     func add(_ session: LiveTranscription) { values.append(session) }
 }
 
@@ -192,6 +203,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
     let sessions = NativeSpeechSessions()
     init(inputs: NativeSpeechInputs) { self.inputs = inputs }
 
+    /// Awaits an operation under an owned deadline, cancelling the task if it lags.
     func within<Value: Sendable>(_ seconds: Double, _ label: String,
                                 _ operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
         let result = NativeSpeechResult<Value>()
@@ -211,6 +223,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         throw NativeSpeechFailure("\(label) timed out; fallback cleanup is not a pass")
     }
 
+    /// Exercises the fixture sessions and asserts the recorded evidence.
     func run() async throws {
         try assertPortsFree()
         try inputs.write("identity.json", ["pid": ProcessInfo.processInfo.processIdentifier,
@@ -234,6 +247,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         if let failure { throw failure }
     }
 
+    /// Waits for the speech model to appear on the serving node.
     func discover(_ node: Node) async throws -> String {
         let deadline = ContinuousClock.now.advanced(by: .seconds(45))
         while ContinuousClock.now < deadline {
@@ -260,6 +274,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
             && model.providers.contains { $0.local && $0.available && $0.runtime?.ready == true }
     }
 
+    /// Records the loaded runtime files for the provenance evidence.
     func recordLoadedRuntime() throws {
         let images = (0..<_dyld_image_count()).compactMap { index -> URL? in
             guard let name = _dyld_get_image_name(index) else { return nil }
@@ -277,10 +292,12 @@ private final class NativeSpeechFixture: @unchecked Sendable {
             "loaded_test_executable": inputs.testExecutable.path, "test_sha256": inputs.testHash])
     }
 
+    /// Builds the live transcription options for the fixture model.
     func options(_ model: String, step: UInt32 = 400) -> LiveTranscriptionOptions {
         LiveTranscriptionOptions(model: model, language: "en", sampleRate: 16000, turnDetection: nil, stepMs: step, tentative: true)
     }
 
+    /// Starts a live transcription session on the node.
     func start(_ node: Node, model: String, step: UInt32 = 400) async throws -> LiveTranscription {
         try await within(35, "session start") { [self] in
             let session = try await node.startLiveTranscription(options(model, step: step))
@@ -289,6 +306,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         }
     }
 
+    /// Confirms invalid option bounds fail before a session is created.
     func invalidBounds(_ node: Node, model: String) async throws {
         for step: UInt32 in [199, 5001] {
             var rejection: Error?
@@ -300,6 +318,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         }
     }
 
+    /// Streams the fixture PCM and checks the counted transcript phrases.
     func transcribe(_ node: Node, model: String) async throws {
         let session = try await start(node, model: model)
         let events = NativeSpeechEvents(file: inputs.evidence.appendingPathComponent("speech.jsonl"))
@@ -340,6 +359,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         try await within(3, "close speech") { await session.close(); await session.close() }
     }
 
+    /// Asserts the four counted phrase repetitions in the completed transcript.
     func assertTranscript(_ events: [LiveTranscriptionEvent]) throws {
         let completed = events.filter { $0.type == "completed" }
         let text = completed.first?.transcript ?? ""
@@ -357,6 +377,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         }
     }
 
+    /// Cancels a pending collector read and confirms close settles it.
     func cancelCollector(_ node: Node, model: String) async throws {
         let session = try await start(node, model: model)
         let observation = NativeSpeechEvents(file: inputs.evidence.appendingPathComponent("cancellation-events.jsonl"))
@@ -397,6 +418,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         try requireSpeech(eof == nil, "Cancelled reader must stay at EOF")
     }
 
+    /// Closes every owned session and requires the FFI calls to settle.
     func cleanup(_ node: Node) async throws {
         var failure: Error?
         for session in await sessions.values {
@@ -417,6 +439,7 @@ private final class NativeSpeechFixture: @unchecked Sendable {
         if let failure { throw failure }
     }
 
+    /// Confirms the fixture ports are free before the node binds them.
     func assertPortsFree() throws {
         for (index, port) in inputs.ports.enumerated() {
             let descriptor = socket(AF_INET, index == 2 ? SOCK_DGRAM : SOCK_STREAM, 0)

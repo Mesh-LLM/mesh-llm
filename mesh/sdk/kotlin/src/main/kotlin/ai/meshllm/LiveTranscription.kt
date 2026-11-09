@@ -51,7 +51,7 @@ data class LiveTranscriptionOptions(
     }).toString()
 }
 
-/**
+ /**
  * Types: speech_started, speech_stopped, delta, tentative, committed, completed, error.
  * Tentative text replaces the turn's previous unconfirmed text; empty text clears it.
  * Completed supersedes tentative text. Delta text is confirmed and should be appended.
@@ -97,6 +97,7 @@ class LiveTranscription internal constructor(
         LiveTranscriptionEvent.decode(it.jsonObject)
     }
     suspend fun close(): Unit = withContext(Dispatchers.IO) { closeNative() }
+    /** Emits the session events until the session closes. */
     fun events(): Flow<LiveTranscriptionEvent> = callbackFlow {
         // A blocking native read cannot be cancelled until native close returns.
         // Keep its lifetime outside the collector's structured cancellation join.

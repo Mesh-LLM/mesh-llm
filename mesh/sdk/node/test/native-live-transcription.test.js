@@ -77,6 +77,7 @@ async function speechSession(node, model, pcm, evidence) {
     events.push(event)
     fs.appendFileSync(path.join(evidence, 'speech.jsonl'), JSON.stringify({ elapsedMs: performance.now() - started, event }) + '\n')
   }
+  /** Reads the session events in the background until end of stream. */
   const reader = (async () => { for (;;) {
     const event = await session.nextEvent()
     if (event == null) return

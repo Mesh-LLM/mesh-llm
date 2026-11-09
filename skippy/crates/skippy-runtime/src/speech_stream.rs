@@ -57,6 +57,7 @@ pub struct TurnDetection {
 }
 
 impl Default for TurnDetection {
+    /// Defaults to a 0.5 threshold, 300 ms prefix padding, and 500 ms silence.
     fn default() -> Self {
         Self {
             threshold: 0.5,
@@ -95,6 +96,7 @@ pub struct SpeechStreamConfig {
 }
 
 impl Default for SpeechStreamConfig {
+    /// Defaults to one-second steps with voice-activity turn detection.
     fn default() -> Self {
         Self {
             turn_detection: Some(TurnDetection::default()),
@@ -182,6 +184,7 @@ pub struct SpeechStream {
 }
 
 impl SpeechStream {
+    /// Creates a stream with the configured cadence and turn detection.
     pub fn new(config: SpeechStreamConfig) -> Self {
         Self {
             config,
@@ -384,6 +387,7 @@ impl SpeechStream {
         self.last_pass_at = self.buffer_start;
     }
 
+    /// Runs one recognition pass over the newest audio window.
     fn run_pass(
         &mut self,
         transcribe: &mut Transcribe<'_>,
@@ -482,6 +486,7 @@ impl SpeechStream {
         Ok(())
     }
 
+    /// Reports the unconfirmed words a pass has heard, when enabled.
     fn report_tentative(&mut self, events: &mut Vec<SpeechStreamEvent>) {
         if !self.config.tentative {
             return;
@@ -533,6 +538,7 @@ impl SpeechStream {
         self.confirmed_in_buffer -= self.confirmed_prefix.trim(cut_words);
     }
 
+    /// Finalizes the turn with one pass over the newest window.
     fn finish_turn(
         &mut self,
         transcribe: &mut Transcribe<'_>,
@@ -580,6 +586,7 @@ impl SpeechStream {
         Ok(())
     }
 
+    /// Clears the turn's audio, ownership, and reporting state.
     fn reset_turn(&mut self) {
         self.in_turn = false;
         self.buffer.clear();
@@ -595,6 +602,7 @@ impl SpeechStream {
         self.speech_started_at = None;
     }
 
+    /// Confirms new words and reports them as deltas.
     fn confirm(&mut self, words: Vec<String>, events: &mut Vec<SpeechStreamEvent>) {
         if words.is_empty() {
             return;
@@ -612,6 +620,7 @@ impl SpeechStream {
         });
     }
 
+    /// Transcribes a sample window and keeps its non-silent segments.
     fn transcribe_window(
         &self,
         samples: &[f32],

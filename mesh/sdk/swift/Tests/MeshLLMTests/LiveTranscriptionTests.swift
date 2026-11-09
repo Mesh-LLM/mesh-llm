@@ -3,6 +3,7 @@ import XCTest
 @testable import MeshLLM
 
 final class LiveTranscriptionTests: XCTestCase {
+    /// Explicit sample-rate and push-to-talk options survive the round trip.
     func testOptionsPreserveSampleRateAndExplicitPushToTalk() throws {
         let options = LiveTranscriptionOptions(sampleRate: 48000, turnDetection: nil)
         let value = try JSONSerialization.jsonObject(with: Data(options.json().utf8)) as! [String: Any]
@@ -14,6 +15,7 @@ final class LiveTranscriptionTests: XCTestCase {
         XCTAssertEqual(defaults["tentative"] as? Bool, false)
     }
 
+    /// Incremental options serialize under their native keys.
     func testIncrementalOptionsUseNativeKeys() throws {
         let options = LiveTranscriptionOptions(stepMs: 400, tentative: true)
         let value = try JSONSerialization.jsonObject(with: Data(options.json().utf8)) as! [String: Any]
@@ -22,6 +24,7 @@ final class LiveTranscriptionTests: XCTestCase {
         XCTAssertNil(value["stepMs"])
     }
 
+    /// Tentative replacements and clear remain distinct from final text.
     func testTentativeReplacementsAndClearRemainDistinctFromFinalText() async throws {
         for text in ["hel", "hello", ""] {
             let live = LiveTranscription(

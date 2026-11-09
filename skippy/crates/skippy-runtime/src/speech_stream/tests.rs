@@ -244,6 +244,7 @@ fn switching_tentative_back_on_reports_the_last_text_again() {
     );
 }
 
+/// Passes wait for a step of new audio.
 #[test]
 fn passes_wait_for_a_step_of_new_audio() {
     let mut script = Script::new(vec![vec![(500, " Hi")]]);
@@ -259,6 +260,7 @@ fn passes_wait_for_a_step_of_new_audio() {
     assert_eq!(script.seen[0].0, 1_000 * MS);
 }
 
+/// Voice activity opens and closes turns with prefix padding.
 #[test]
 fn voice_activity_opens_and_closes_turns_with_prefix_padding() {
     let mut script = Script::new(vec![vec![(800, " Yes.")]]);

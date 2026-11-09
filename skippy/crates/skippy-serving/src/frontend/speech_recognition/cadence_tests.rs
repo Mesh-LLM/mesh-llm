@@ -13,6 +13,7 @@ struct FirstPassGate {
 }
 
 impl FirstPassGate {
+    /// Blocks the first pass until the test releases it.
     fn wait(&self) {
         let (released, timeout) = self
             .wake
@@ -28,6 +29,7 @@ impl FirstPassGate {
         );
     }
 
+    /// Releases the first pass and wakes its waiter.
     fn release(&self) {
         *self.released.lock().unwrap() = true;
         self.wake.notify_one();
@@ -37,6 +39,7 @@ impl FirstPassGate {
 struct ReleaseOnDrop(Arc<FirstPassGate>);
 
 impl Drop for ReleaseOnDrop {
+    /// Releases the first pass if the test drops its guard first.
     fn drop(&mut self) {
         self.0.release();
     }
@@ -50,10 +53,12 @@ struct WindowModel {
 }
 
 impl SpeechTranscriber for WindowModel {
+    /// Rejects decoded input; live sessions already carry PCM.
     fn decode(&self, _audio: &[u8]) -> anyhow::Result<Vec<f32>> {
         unreachable!("live input already contains PCM")
     }
 
+    /// Records each pass, gates the first one, and answers fixed text.
     fn transcribe(
         &self,
         samples: &[f32],
@@ -89,6 +94,7 @@ impl SpeechTranscriber for WindowModel {
 
 type WindowObservation = (Vec<(Vec<f32>, TranscriptionOptions)>, Vec<RealtimeOutput>);
 
+/// Compares every observed window's samples and options in order.
 fn assert_same_windows(actual: &WindowObservation, expected: &WindowObservation) {
     assert_eq!(actual.0.len(), expected.0.len(), "native pass count");
     for (index, ((samples, options), (expected_samples, expected_options))) in
@@ -108,6 +114,7 @@ fn assert_same_windows(actual: &WindowObservation, expected: &WindowObservation)
     }
 }
 
+/// Runs a live session and returns its observed windows and outputs.
 async fn run_session(backlogged: bool) -> WindowObservation {
     let (called, mut calls) = mpsc::unbounded_channel();
     let gate = Arc::new(FirstPassGate::default());
@@ -163,6 +170,7 @@ async fn run_session(backlogged: bool) -> WindowObservation {
     (seen, events)
 }
 
+/// A queued backlog preserves every audio-clock pass.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queued_backlog_preserves_every_audio_clock_pass() {
     let control = run_session(false).await;
@@ -182,6 +190,7 @@ async fn a_queued_backlog_preserves_every_audio_clock_pass() {
     );
 }
 
+/// A mid-batch decoder error ends the session without reusing confirmation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_mid_batch_decoder_error_ends_the_session_without_reusing_confirmation() {
     let (called, mut calls) = mpsc::unbounded_channel();
