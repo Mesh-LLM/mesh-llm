@@ -89,6 +89,7 @@ pub fn ggml_type_from_cache_code(code: i32) -> Option<GgmlType> {
         value if value == raw::Nvfp4 as i32 => raw::Nvfp4,
         value if value == raw::Q1_0 as i32 => raw::Q1_0,
         value if value == raw::Q2_0 as i32 => raw::Q2_0,
+        value if value == raw::F8E4M3 as i32 => raw::F8E4M3,
         _ => return None,
     };
     Some(value)
@@ -133,6 +134,8 @@ pub struct LlamaDraftApi {
     pub get_embeddings_nextn: unsafe extern "C" fn(ctx: *mut Opaque) -> *mut f32,
     pub set_embeddings_layer_inp: unsafe extern "C" fn(ctx: *mut Opaque, lid: u32, value: bool),
     pub get_embeddings_layer_inp: unsafe extern "C" fn(ctx: *mut Opaque, lid: u32) -> *mut f32,
+    /// Whether the target graph publishes layer `lid`'s input when captured.
+    pub layer_inp_published: unsafe extern "C" fn(ctx: *mut Opaque, lid: u32) -> bool,
     pub model_target_layer_ids: unsafe extern "C" fn(model: *const Opaque) -> *const i32,
     pub model_target_layer_ids_n: unsafe extern "C" fn(model: *const Opaque) -> u32,
     pub model_dflash_selector_top_k: unsafe extern "C" fn(model: *const Opaque) -> i32,
@@ -146,15 +149,8 @@ pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
     crate::dynamic::llama_draft_api()
 }
 
-/// The `src/llama-ext.h` entry points keep C++ linkage and are only bound
-/// under the Itanium mangling, so Windows builds have no draft-context API.
-#[cfg(all(not(feature = "dynamic-runtime"), windows))]
-pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
-    None
-}
-
 /// Returns the statically linked draft-context API.
-#[cfg(all(not(feature = "dynamic-runtime"), not(windows)))]
+#[cfg(not(feature = "dynamic-runtime"))]
 pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
     use crate::static_bindings as raw;
     static API: LlamaDraftApi = LlamaDraftApi {
@@ -183,6 +179,7 @@ pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
         get_embeddings_nextn: raw::llama_get_embeddings_nextn,
         set_embeddings_layer_inp: raw::llama_set_embeddings_layer_inp,
         get_embeddings_layer_inp: raw::llama_get_embeddings_layer_inp,
+        layer_inp_published: raw::llama_layer_inp_published,
         model_target_layer_ids: raw::llama_model_target_layer_ids,
         model_target_layer_ids_n: raw::llama_model_target_layer_ids_n,
         model_dflash_selector_top_k: raw::llama_model_dflash_selector_top_k,

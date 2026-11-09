@@ -85,7 +85,7 @@ preserved. Kinds are string-valued. Unknown optional
 facts remain null; open-ended metadata uses `JsonElement`.
 
 A model's operations mean at least one provider advertises each operation.
-Runtime limits, capabilities, thinking controls and payment offers belong to
+Runtime limits, capabilities, thinking controls and plugin requirements belong to
 their provider. `node.inference.listModels()` stays the LLM-only compatibility
 view. Full discovery does not call the OpenAI model endpoint.
 

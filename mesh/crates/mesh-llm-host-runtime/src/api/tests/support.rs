@@ -94,7 +94,8 @@ fn mesh_requirements_test_policy() -> crate::MeshGenesisPolicy {
     mesh_requirements_test_policy_for_owner("owner-123")
 }
 
-pub(crate) fn assert_mesh_requirements_status_excludes_rejected_peers_from_admitted_list() {
+#[test]
+fn mesh_requirements_status_excludes_rejected_peers_from_admitted_list() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -124,7 +125,8 @@ pub(crate) fn assert_mesh_requirements_status_excludes_rejected_peers_from_admit
         });
 }
 
-pub(crate) fn assert_mesh_requirements_status_reports_policy_hash_read_only() {
+#[test]
+fn mesh_requirements_status_reports_policy_hash_read_only() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -152,7 +154,8 @@ pub(crate) fn assert_mesh_requirements_status_reports_policy_hash_read_only() {
         });
 }
 
-pub(crate) fn assert_mesh_requirements_certified_binary_required_event_text() {
+#[test]
+fn mesh_requirements_certified_binary_required_event_text() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -177,7 +180,8 @@ pub(crate) fn assert_mesh_requirements_certified_binary_required_event_text() {
         });
 }
 
-pub(crate) fn assert_mesh_requirements_rejection_events_do_not_expose_tokens() {
+#[test]
+fn mesh_requirements_rejection_events_do_not_expose_tokens() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1101,7 +1105,10 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             lease_until_unix_ms: 999_999,
             compute_busy_nanos: 0,
             compute_operations: 0,
+            compute_decode_tokens: 0,
             dflash_target_layers: None,
+            dflash_context_window: None,
+            dflash_feature_encodings: Vec::new(),
         },
     )
     .await;

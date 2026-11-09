@@ -15,6 +15,7 @@ use mesh_llm_plugin_manager::{
 use reqwest::Client;
 use std::collections::BTreeSet;
 
+use crate::runtime_native::human_bytes;
 use mesh_llm_cli::PluginCommand;
 use mesh_llm_tui::terminal_progress::{
     SpinnerHandle, clear_stderr_line, ratio_complete_u64, render_inline_gauge, start_spinner,
@@ -744,7 +745,7 @@ impl CliPluginProgress {
         let mut err = mesh_llm_events::console_err();
         let _ = writeln!(err, "⬇️  Downloading {asset}");
         if let Some(total) = total_bytes {
-            let _ = writeln!(err, "   size: {}", format_bytes(total));
+            let _ = writeln!(err, "   size: {}", human_bytes(total));
         }
     }
 
@@ -763,8 +764,8 @@ impl CliPluginProgress {
                 &format!(
                     "⬇️  {} {} / {} ({}%)",
                     asset,
-                    format_bytes(downloaded),
-                    format_bytes(total),
+                    human_bytes(downloaded),
+                    human_bytes(total),
                     percent
                 ),
             );
@@ -834,24 +835,6 @@ impl PluginProgressReporter for CliPluginProgress {
                 let _ = writeln!(err, "✅ {name} is up to date ({version})");
             }
         }
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB"];
-    let mut value = bytes as f64;
-    let mut unit = UNITS[0];
-    for candidate in &UNITS[1..] {
-        if value < 1024.0 {
-            break;
-        }
-        value /= 1024.0;
-        unit = candidate;
-    }
-    if unit == "B" {
-        format!("{bytes} {unit}")
-    } else {
-        format!("{value:.1} {unit}")
     }
 }
 

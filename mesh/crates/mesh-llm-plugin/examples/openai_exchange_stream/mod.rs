@@ -288,6 +288,8 @@ async fn log_receipt(
     )?;
     line.push(b'\n');
     file.write_all(&line).await?;
+    // The receipt is sent only after its log record is complete.
+    file.flush().await?;
     Ok(())
 }
 

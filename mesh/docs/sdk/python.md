@@ -77,7 +77,7 @@ Filters combine with AND. Keep filters unchanged when continuing a page, and
 restart if its snapshot expires. Missing metadata is unknown. Unrecognized
 workloads become `unknown`; the original peer string is not preserved.
 Each provider retains its runtime limits, capabilities
-and optional thinking/payment observations. See
+and optional thinking observations and plugin requirements. See
 [Mesh model discovery](../MODEL_DISCOVERY.md) for complete HTTP and SDK shapes.
 
 Use a Python SDK release and native bridge containing these APIs together.

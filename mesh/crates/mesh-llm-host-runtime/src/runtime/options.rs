@@ -74,7 +74,6 @@ pub struct RuntimeOptions {
     pub command_is_update: bool,
     pub command_uses_machine_output: bool,
     pub draft: Option<PathBuf>,
-    pub draft_max: u16,
     pub no_draft: bool,
     pub speculative_overrides: Option<SpeculativeConfig>,
     /// Serving intent, composed into the settings it implies before the
@@ -168,7 +167,6 @@ impl Default for RuntimeOptions {
             command_is_update: false,
             command_uses_machine_output: false,
             draft: None,
-            draft_max: 8,
             no_draft: false,
             speculative_overrides: None,
             strategy: None,

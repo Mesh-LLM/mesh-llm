@@ -699,7 +699,7 @@ mod tests {
         };
         let args = args.stage;
         assert_eq!(args.openai_prefill_chunk_policy, "fixed");
-        assert_eq!(args.openai_prefill_chunk_size, 64);
+        assert_eq!(args.openai_prefill_chunk_size, 512);
         assert_eq!(args.openai_prefill_adaptive_start, 64);
         assert_eq!(args.openai_prefill_adaptive_step, 64);
         assert_eq!(args.openai_prefill_adaptive_max, 512);
@@ -717,7 +717,7 @@ mod tests {
         };
         let args = args.public;
         assert_eq!(args.prefill_chunk_policy, "fixed");
-        assert_eq!(args.prefill_chunk_size, 64);
+        assert_eq!(args.prefill_chunk_size, 512);
         assert_eq!(args.prefill_adaptive_start, 64);
         assert_eq!(args.prefill_adaptive_step, 64);
         assert_eq!(args.prefill_adaptive_max, 512);

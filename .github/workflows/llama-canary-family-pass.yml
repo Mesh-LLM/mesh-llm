@@ -50,6 +50,8 @@ on:
     outputs:
       green:
         value: ${{ jobs.reconcile.outputs.green || jobs.aggregate.outputs.green }}
+      retry_recovered:
+        value: ${{ jobs.reconcile.outputs.retry_recovered }}
       package:
         value: ${{ jobs.combine.outputs.package }}
       identity:
@@ -59,9 +61,9 @@ on:
       branch:
         value: ${{ jobs.combine.outputs.branch }}
       failure_class:
-        value: ${{ jobs.reconcile.outputs.failure_class || jobs.aggregate.outputs.failure_class || jobs.combine.outputs.failure_class || jobs.build_linux.outputs.failure_class || jobs.build.outputs.failure_class }}
+        value: ${{ jobs.reconcile.outputs.failure_class || jobs.aggregate.outputs.failure_class || jobs.combine.outputs.failure_class || jobs.build_linux_pinned.outputs.failure_class || jobs.build_linux.outputs.failure_class || jobs.build.outputs.failure_class }}
       failure_stage:
-        value: ${{ jobs.reconcile.outputs.failure_stage || jobs.aggregate.outputs.failure_stage || jobs.combine.outputs.failure_stage || jobs.build_linux.outputs.failure_stage || jobs.build.outputs.failure_stage }}
+        value: ${{ jobs.reconcile.outputs.failure_stage || jobs.aggregate.outputs.failure_stage || jobs.combine.outputs.failure_stage || jobs.build_linux_pinned.outputs.failure_stage || jobs.build_linux.outputs.failure_stage || jobs.build.outputs.failure_stage }}
       repairable:
         value: ${{ jobs.reconcile.outputs.repairable || jobs.aggregate.outputs.repairable }}
       feedback:
@@ -290,9 +292,10 @@ jobs:
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job build \
             --evidence-uploaded "$EVIDENCE_UPLOADED" --package-uploaded "$PACKAGE_UPLOADED"
+
   build_linux:
     needs: build
-    if: ${{ needs.build.result == 'success' }}
+    if: ${{ needs.build.result == 'success' && !(inputs.mode == 'pinned-build' && inputs.mesh_source != '' && inputs.pass_id == 'repair-1' && inputs.previous_package == '') }}
     runs-on: ${{ fromJSON(inputs.runner_labels_linux) }}
     timeout-minutes: 1430
     outputs:
@@ -315,9 +318,35 @@ jobs:
       NATIVE_PREVIOUS_FEEDBACK: ''
     steps: *native_build_steps
 
+  build_linux_pinned:
+    # The selected source is immutable: Linux can prove it independently while Mac builds.
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && inputs.mode == 'pinned-build' && inputs.mesh_source != '' && inputs.pass_id == 'repair-1' && inputs.previous_package == '' }}
+    runs-on: ${{ fromJSON(inputs.runner_labels_linux) }}
+    timeout-minutes: 1430
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      identity: ${{ steps.build.outputs.identity_sha256 }}
+      head: ${{ steps.build.outputs.candidate }}
+      branch: ${{ steps.build.outputs.branch }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}-Linux
+      failure_class: ${{ steps.build.outputs.failure_class }}
+      failure_stage: ${{ steps.build.outputs.failure_stage }}
+    env:
+      MESH_LLM_REQUIRE_SCCACHE: '1'
+      CTEST_PARALLEL_LEVEL: '4'
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      NATIVE_BUILD_MODE: pinned-build
+      NATIVE_PREVIOUS_PACKAGE: ''
+      NATIVE_PREVIOUS_IDENTITY: ''
+      NATIVE_PREVIOUS_HEAD: ''
+      NATIVE_PREVIOUS_FEEDBACK: ''
+    steps: *native_build_steps
+
   combine:
-    needs: [build, build_linux]
-    runs-on: ubuntu-24.04
+    needs: [build, build_linux, build_linux_pinned]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.build_linux.result == 'success' || needs.build_linux_pinned.result == 'success') }}
+    runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
     outputs:
       matrix: ${{ steps.combine.outputs.matrix }}
       identity: ${{ steps.combine.outputs.identity_sha256 }}
@@ -333,7 +362,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -342,13 +371,13 @@ jobs:
           path: ${{ runner.temp }}/canary-macos
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build_linux.outputs.package }}
+          name: ${{ needs.build_linux_pinned.outputs.package || needs.build_linux.outputs.package }}
           path: ${{ runner.temp }}/canary-linux
       - name: Bind both native producers to one candidate
         id: combine
         env:
           MAC_IDENTITY: ${{ needs.build.outputs.identity }}
-          LINUX_IDENTITY: ${{ needs.build_linux.outputs.identity }}
+          LINUX_IDENTITY: ${{ needs.build_linux_pinned.outputs.identity || needs.build_linux.outputs.identity }}
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/canary-combine.json"
@@ -363,11 +392,20 @@ jobs:
               linux_package:$linux_package,linux_identity_sha256:$linux_identity_sha256,output:$output}' > "$input"
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts combine --input "$input"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        id: upload_package
         with:
           name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.combine.outputs.identity_sha256 }}
           path: ${{ runner.temp }}/canary-combined/
           if-no-files-found: error
           retention-days: 1
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          EVIDENCE_UPLOADED: ${{ steps.upload_package.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
@@ -494,10 +532,11 @@ jobs:
         run: |
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job family --evidence-uploaded "$EVIDENCE_UPLOADED"
+
   aggregate:
     needs: [combine, family]
     if: ${{ !cancelled() && needs.combine.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
     outputs:
       green: ${{ steps.aggregate.outputs.green }}
       state: ${{ steps.aggregate.outputs.state }}
@@ -515,7 +554,7 @@ jobs:
       - name: Prepare frozen controller automation for aggregation
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -540,6 +579,7 @@ jobs:
             --controller-revision "$CANARY_CONTROLLER_SHA" --selected-source "$CANARY_MESH_SOURCE" \
             --family-result "$FAMILY_RESULT" --feedback-output "$RUNNER_TEMP/canary-family-feedback"
       - name: Upload classified family failure evidence
+        id: upload_feedback
         if: ${{ !cancelled() && steps.aggregate.outputs.feedback_ready == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -547,6 +587,14 @@ jobs:
           path: ${{ runner.temp }}/canary-family-feedback/
           if-no-files-found: error
           retention-days: 14
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          EVIDENCE_UPLOADED: ${{ steps.upload_feedback.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   retry_family:
     name: ${{ inputs.pass_id }} infrastructure retry / ${{ matrix.families }}
@@ -674,9 +722,10 @@ jobs:
   reconcile:
     needs: [combine, aggregate, retry_family]
     if: ${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
     outputs:
       green: ${{ steps.reconcile.outputs.green }}
+      retry_recovered: ${{ steps.reconcile.outputs.retry_recovered }}
       state: ${{ steps.reconcile.outputs.state }}
       repairable: ${{ steps.reconcile.outputs.repairable }}
       failure_class: ${{ steps.reconcile.outputs.failure_class }}
@@ -690,7 +739,7 @@ jobs:
       - name: Prepare frozen controller automation for reconciliation
         uses: ./.github/actions/prepare-automation
         with:
-          runner-profile: hosted-bare
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -720,6 +769,7 @@ jobs:
             --evidence "$RUNNER_TEMP/retry-evidence" --family-result "$FAMILY_RESULT" \
             --feedback-output "$RUNNER_TEMP/reconciled-family-feedback"
       - name: Upload reconciled candidate repair evidence
+        id: upload_feedback
         if: ${{ !cancelled() && steps.reconcile.outputs.feedback_ready == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -727,3 +777,11 @@ jobs:
           path: ${{ runner.temp }}/reconciled-family-feedback/
           if-no-files-found: error
           retention-days: 14
+      - name: Clean controller outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          EVIDENCE_UPLOADED: ${{ steps.upload_feedback.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-controller --evidence-uploaded "$EVIDENCE_UPLOADED"

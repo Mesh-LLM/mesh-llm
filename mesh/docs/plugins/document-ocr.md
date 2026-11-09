@@ -1,6 +1,6 @@
 # Document OCR plugin contract
 
-An OCR provider registers an inference endpoint with protocol `document_ocr_v1` and serves `GET /v1/models` plus `POST /mesh/v1/documents/ocr` on its local HTTP address. The host probes `/v1/models` to discover available model IDs, advertises them as `DocumentOcr` workloads, and routes OCR requests only to endpoints carrying this protocol. A provider can be written in any language; the [ONNX plugin](https://github.com/Mesh-LLM/onnx) is the first implementation, using Indra in Rust with `ort`.
+An OCR provider registers an inference endpoint with protocol `document_ocr_v1` and serves `GET /v1/models` plus `POST /mesh/v1/documents/ocr` on its local HTTP address. The host probes `/v1/models` to discover available model IDs, advertises them as `DocumentOcr` workloads, and routes OCR requests only to endpoints carrying this protocol. A provider can be written in any language. The external [ONNX OCR provider](https://github.com/Mesh-LLM/onnx-plugin) runs Indra in Rust with `ort`; see its README for supported inputs and [manual model-directory configuration](managed-models.md#onnx-ocr-configuration).
 
 The task lives under `/mesh/v1/` because `/v1/` is reserved for OpenAI-shaped endpoints: an OpenAI client or SDK pointed at Mesh finds the paths it expects, and a Mesh task can never collide with a route OpenAI adds later. The path is a **two-sided contract** — the host admits the request by matching this path to a workload class, then forwards that same path to the provider — so host and provider must agree on the literal string. Changing it on one side is a runtime `404`, not a compile error.
 
@@ -23,9 +23,9 @@ Four task slots share a protocol label, a literal path, and multipart `file` plu
 | Image/text similarity | `image_text_similarity_v1` | `POST /mesh/v1/images/similarity` | `ImageTextSimilarity` |
 | Relative depth | `depth_estimation_v1` | `POST /mesh/v1/images/depth` | `DepthEstimation` |
 
-Transcription keeps the OpenAI path because that endpoint already exists and an OpenAI client should find it; the other three have no OpenAI equivalent and sit under `/mesh/v1/`. The [ONNX plugin](https://github.com/Mesh-LLM/onnx) documents each one with a configuration example, an HTTP request and its use cases.
+Transcription keeps the OpenAI path because that endpoint already exists and an OpenAI client should find it; the other three have no OpenAI equivalent and sit under `/mesh/v1/`. These are Mesh task contracts, not a list of tasks implemented by the ONNX OCR provider. Check each provider's documented protocols before configuring it.
 
-Mesh-specific tasks negotiate representations with `Accept`. Transcription also supports OpenAI's multipart `response_format` field, which takes precedence over `Accept`. The ONNX provider supports `json` and `text`; it rejects timing-dependent formats such as `srt`, `vtt` and `verbose_json` because its decoder does not supply timestamps.
+Mesh-specific tasks negotiate representations with `Accept`. Transcription also supports OpenAI's multipart `response_format` field, which takes precedence over `Accept`. A transcription provider must document its supported formats and reject formats it cannot produce; OCR support alone does not imply transcription support.
 
 ## Routing
 
@@ -35,6 +35,6 @@ The workload enum adds a protobuf value without changing existing values. Older 
 
 ## Provider registration
 
-The Rust plugin SDK can register the endpoint with `mesh_llm_plugin::inference::provider(id, local_url).protocol("document_ocr_v1")` and advertise `endpoint:inference/document_ocr_v1`. The HTTP provider must be ready before registration. Its inventory may advertise a configured model as `loadable` while its engine is unloaded; `ready` and `busy` models also remain routable. The provider loads on demand when a request arrives.
+The Rust plugin SDK can register the endpoint with `mesh_llm_plugin::inference::provider(id, local_url).protocol("document_ocr_v1")` and advertise `endpoint:inference/document_ocr_v1`. The HTTP provider must be ready before registration. A provider implementing on-demand loading may advertise a configured model as `loadable` while its engine is unloaded; `ready` and `busy` models also remain routable. A provider advertising `loadable` must load the engine when a request arrives.
 
 [Managed provider models](managed-models.md) use Mesh configuration and the host's shared asset acquisition service. The provider owns model sessions, preprocessing, inference and residency; it also supplies any PDF rendering dependency. These stay outside Skippy.

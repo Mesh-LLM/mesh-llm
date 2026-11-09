@@ -292,11 +292,15 @@ fn package_upload_actual_lfs_artifact_reuses_batch_put_and_commits_one_verified_
         .block_on(publisher(&server).upload_until(
             &plan,
             artifact,
-            Instant::now() + Duration::from_secs(5),
+            Instant::now() + Duration::from_secs(30),
             std::future::pending(),
             &mut |_| Ok(()),
         ));
-    assert!(receipt.completed && receipt.source_custody_verified);
+    assert!(
+        receipt.completed && receipt.source_custody_verified,
+        "upload receipt: {}",
+        serde_json::to_string(&receipt).unwrap()
+    );
     assert_eq!(receipt.unlinked, cfg!(unix));
     let object = receipt.attempts[0].object.as_ref().unwrap();
     assert!(

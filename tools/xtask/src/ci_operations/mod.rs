@@ -50,6 +50,7 @@ pub(crate) mod json_access;
 pub(crate) mod json_decode;
 mod performance_history;
 mod pr_authority;
+mod prepared_images;
 mod registry_pulls;
 mod runner_cleanup;
 mod runner_identity;

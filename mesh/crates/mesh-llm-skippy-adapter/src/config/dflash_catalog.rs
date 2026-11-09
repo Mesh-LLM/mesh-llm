@@ -6,14 +6,14 @@
 //! cache on first load and serves without speculation if it cannot.
 //!
 //! The default draft comes from, in order: the layer package's own `dflash`
-//! proposer, the pairing index published on Hugging Face at the revision this
-//! release pins, and, until that index is published and cached, the bootstrap
-//! table compiled in here.
+//! proposer, the pairing index this release pins by content hash, and, until
+//! that index is cached (or if it cannot be read or fails its hash), the
+//! bootstrap table compiled in here.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, RwLock};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use hf_hub::RepoTypeModel;
 use skippy_model_artifact::gguf::{
     GgufCompactMeta, scan_gguf_compact_meta, scan_gguf_dflash_target_layers,
@@ -25,44 +25,8 @@ pub use skippy_package_format::{
 };
 use skippy_runtime::package::PackageGenerationInfo;
 
-/// The Hugging Face repo that publishes the DFlash pairing index.
-pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
-/// The index file in [`DFLASH_PAIRING_INDEX_REPO`].
-pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
-/// The one index commit this release trusts.
-pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> =
-    Some("91c1cb2cc50f4087ac73a7a74b01670a18015059");
-
-/// A pairing index file pinned to one commit of a Hugging Face repo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DFlashPairingIndexPin {
-    pub repo: &'static str,
-    pub revision: &'static str,
-    pub file: &'static str,
-}
-
-impl DFlashPairingIndexPin {
-    /// The index this release trusts, once it is published.
-    pub fn shipped() -> Option<Self> {
-        DFLASH_PAIRING_INDEX_REVISION.map(|revision| Self {
-            repo: DFLASH_PAIRING_INDEX_REPO,
-            revision,
-            file: DFLASH_PAIRING_INDEX_FILE,
-        })
-    }
-
-    /// Where the Hugging Face cache keeps the index once fetched.
-    pub fn cache_path(&self) -> PathBuf {
-        huggingface_snapshot_path(self.repo, RepoTypeModel, self.revision).join(self.file)
-    }
-}
-
-/// Reads and validates a pairing index file.
-pub fn load_dflash_pairing_index(path: &Path) -> Result<DFlashPairingIndex> {
-    let json = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    DFlashPairingIndex::from_json(&json)
-        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
-}
+#[cfg(test)]
+use super::dflash_index::load_dflash_pairing_index;
 
 static INSTALLED_INDEX: RwLock<Option<Arc<Vec<DFlashPairing>>>> = RwLock::new(None);
 static BOOTSTRAP_PAIRINGS: LazyLock<Arc<Vec<DFlashPairing>>> =
@@ -136,13 +100,12 @@ pub struct DefaultDFlash {
     pub source: DFlashPairingSource,
 }
 
-/// The pairings this release ships, used only until the published index is
-/// cached.
+/// The pairings this release falls back to until the pinned index is cached,
+/// or when it cannot be read or fails its hash.
 ///
-/// TODO: delete once `meshllm/dflash-pairings` is published and
-/// [`DFLASH_PAIRING_INDEX_REVISION`] pins it; the index then carries these
-/// pairings (`skippy/evals/dflash-pairings/index.json` is generated from this
-/// table).
+/// TODO: delete once packages declare their drafts; the index
+/// (`data/dflash-pairings/index.json`) is the source of truth, and a test
+/// checks that it pairs every target here the same way.
 pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
     vec![
         // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
@@ -276,6 +239,116 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 15,
             backends: DFlashBackends::Metal,
         },
+        // Nemotron-3.5-Bolt-E4B, a Gemma-4-E4B fine-tune with Gemma-4-E4B-It's
+        // shape, so the name breaks the tie. NVIDIA's DFlash draft reads target
+        // layers 6..=36 at width 2560 with an 8-token block, in sliding-window
+        // attention. Greedy chat decodes 142.1 tok/s on a DGX Spark (58.4 off)
+        // and 62.3 on an M4 (28.5 off).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "gemma4".to_string(),
+                layer_count: 42,
+                embedding_length: 2560,
+                expert_count: 0,
+                family: Some("Nemotron-3.5-Bolt".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF".to_string(),
+                revision: "b738967d6da3441a7d1c71fcec15e49e32e16ecd".to_string(),
+                file: "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf".to_string(),
+                sha256: "9a63662ae8395b8bfc1a1b00d7a9ef354120f172704bd6ba88d3870cf22d4d03"
+                    .to_string(),
+                bytes: 398_892_256,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::All,
+        },
+        // Nemotron-3.5-Lightning-30B-A3B has Nemotron-3-Nano-30B-A3B's shape,
+        // so the name breaks the tie. NVIDIA's DSpark draft (DFlash with a
+        // Markov head) reads target layers 2..=52, layer 52 being the head's
+        // input, with an 8-token block. It replaces the default native MTP:
+        // on a DGX Spark greedy chat decodes 88.0 tok/s (76.7 MTP, 66.0 off),
+        // sampled at T=0.7 87.6 (54.8 MTP) and agentic coding 78.4 (72.8 MTP).
+        // Not on Metal, which has no NVFP4 kernels for the draft, so native
+        // MTP stays the default there.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "nemotron_h_moe".to_string(),
+                layer_count: 52,
+                embedding_length: 2688,
+                expert_count: 128,
+                family: Some("Nemotron-3.5-Lightning".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF"
+                    .to_string(),
+                revision: "ed35fc990759330e325ab9e41bcf80737ab4dafc".to_string(),
+                file: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark.gguf".to_string(),
+                sha256: "14fcc5296ca9be2fa2156275fd1811de966835e2894729907a03cf7f80634856"
+                    .to_string(),
+                bytes: 1_357_001_312,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::NotMetal,
+        },
+        // Laguna-S-2.1 (Poolside, 118B MoE with 8B active). Poolside's own BF16
+        // GGUF of the draft reads target layers 2, 11, 20, 30, 39 and 48 (the
+        // last layer's output) with a 512-token sliding window. A DGX Spark
+        // decodes chat 1.45x and agent turns 1.6x faster. Community Q8_0 GGUFs
+        // without the window metadata lose all acceptance past 16K of history.
+        // Off on Metal: Laguna's target returns NaN logits there for short
+        // prompts (f16 overflow in the MoE down projection). Laguna-XS-2.1
+        // has no default until a Q8_0 of its draft that keeps the window is
+        // published; the community GGUFs drop it or use another layout.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 48,
+                embedding_length: 3072,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "poolside/Laguna-S-2.1-GGUF".to_string(),
+                revision: "19036076775e9ba6758595f78af99cb976ef8ff0".to_string(),
+                file: "laguna-s-2.1-DFlash-BF16.gguf".to_string(),
+                sha256: "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4"
+                    .to_string(),
+                bytes: 2_233_764_224,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::NotMetal,
+        },
+        // DeepSeek-V4-Flash-0731 ships its DSpark draft in the checkpoint: three
+        // uncompressed DSV4 blocks with hyper-connections and a Markov head,
+        // reading target layers 41..=43 (43 being the output head's input),
+        // drafting a 5-token block from the anchor on. DeepSeek-V4-Flash and
+        // its Vision-Exp fine-tune have the same shape but other weights, so
+        // the name breaks the tie. The GGUFs carry no MTP head, so the draft
+        // replaces plain decoding. On one DGX Spark (UD-Q2_K_XL) greedy chat
+        // decodes 34.0 tok/s (18.2 off), sampled at T=0.7 33.3 (18.2) and
+        // agentic coding 28.1 (14.0). Split across two Sparks (UD-Q4_K_XL)
+        // greedy chat decodes 22.7 tok/s (14.5 off) on the LAN and 19.6
+        // (11.3) with 20 ms per hop. Metal is untested.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "deepseek4".to_string(),
+                layer_count: 43,
+                embedding_length: 4096,
+                expert_count: 256,
+                family: Some("DeepSeek-V4-Flash-0731".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "unsloth/DeepSeek-V4-Flash-0731-GGUF".to_string(),
+                revision: "fbbb5b93fb787c21338159b0af3318bb3f4d9768".to_string(),
+                file: "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf".to_string(),
+                sha256: "2c7ac54b0b64a99df1f139a9f1371a00198265e1d6a614b77597d20a655a4249"
+                    .to_string(),
+                bytes: 10_896_057_440,
+            },
+            max_draft_tokens: 5,
+            backends: DFlashBackends::NotMetal,
+        },
     ]
 }
 
@@ -374,13 +447,25 @@ pub(super) fn package_selects_dflash(
 
 /// Whether `name` carries `family` as a whole token, ignoring case, so
 /// "Huihui-Qwen3.6-27B" names Qwen3.6 but "Qwen3.6x" and "Qwen3.65" do not.
+/// Spaces, underscores and hyphens are one separator, so "NVIDIA Nemotron 3.5
+/// Bolt E4B" names Nemotron-3.5-Bolt.
 fn names_family(name: &str, family: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let family = family.to_ascii_lowercase();
+    let name = separators_as_hyphens(name);
+    let family = separators_as_hyphens(family);
     let continues = |c: char| c.is_ascii_alphanumeric() || c == '.';
     name.match_indices(&family).any(|(start, _)| {
         !name[..start].ends_with(continues) && !name[start + family.len()..].starts_with(continues)
     })
+}
+
+/// `text` lowercased, with spaces and underscores written as hyphens.
+fn separators_as_hyphens(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            ' ' | '_' => '-',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect()
 }
 
 /// The default cap on DFlash draft tokens per block. Adaptive block sizing
@@ -405,8 +490,9 @@ pub fn dflash_draft_cache_path(draft: &DFlashDraft) -> PathBuf {
 
 impl DefaultDFlash {
     /// Refuses a draft that cannot read this target: it must be a DFlash GGUF
-    /// as wide as the target that reads only layers the target has, and
-    /// exactly the layers a package proposer declares.
+    /// as wide as the target that reads only layers the target has (layer
+    /// `layer_count` is the last layer's output, the output head's input),
+    /// and exactly the layers a package proposer declares.
     pub fn check_draft(&self, path: &Path) -> Result<()> {
         let target = &self.pairing.target;
         let Some(meta) = scan_gguf_compact_meta(path) else {
@@ -425,7 +511,7 @@ impl DefaultDFlash {
         );
         let layers = scan_gguf_dflash_target_layers(path).unwrap_or_default();
         ensure!(!layers.is_empty(), "draft names no target layers");
-        if let Some(layer) = layers.iter().find(|&&layer| layer >= target.layer_count) {
+        if let Some(layer) = layers.iter().find(|&&layer| layer > target.layer_count) {
             bail!(
                 "draft reads target layer {layer}, but the target has {} layers",
                 target.layer_count
@@ -555,43 +641,20 @@ mod tests {
         pairing_in(&bootstrap_pairings(), meta, metal).map(|pairing| pairing.draft.repo.clone())
     }
 
-    const INDEX_PATH: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../skippy/evals/dflash-pairings/index.json"
-    );
-
-    /// The bootstrap table as the index `meshllm/dflash-pairings` publishes.
-    fn generated_index_json() -> String {
-        let index = DFlashPairingIndex {
-            schema_version: skippy_package_format::DFLASH_PAIRING_INDEX_SCHEMA_VERSION,
-            pairings: bootstrap_pairings(),
-        };
-        serde_json::to_string_pretty(&index).unwrap() + "\n"
-    }
-
-    /// `UPDATE_DFLASH_PAIRINGS_INDEX=1` rewrites the checked-in index from
-    /// the bootstrap table.
-    #[test]
-    fn the_checked_in_index_is_the_bootstrap_table() {
-        let generated = generated_index_json();
-        if std::env::var_os("UPDATE_DFLASH_PAIRINGS_INDEX").is_some() {
-            std::fs::write(INDEX_PATH, &generated).unwrap();
-        }
-        let checked_in = std::fs::read_to_string(INDEX_PATH).unwrap();
-        assert_eq!(
-            checked_in, generated,
-            "regenerate with UPDATE_DFLASH_PAIRINGS_INDEX=1 cargo test -p mesh-llm-skippy-adapter the_checked_in_index"
-        );
-        let index = load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap();
-        assert_eq!(index.pairings, bootstrap_pairings());
-    }
-
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B and Qwen3-Coder-Next.
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B,
+    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block), Laguna-S-2.1 and
+    /// DeepSeek-V4-Flash-0731, plus Laguna-XS-2.1, which has no default draft
+    /// yet.
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
+        let mut lightning = named(
+            target_meta("nemotron_h_moe", 53, 2688, 128),
+            "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+        );
+        lightning.nextn_predict_layers = 1;
         vec![
             (
                 "Qwen3.5-9B",
@@ -610,15 +673,39 @@ mod tests {
                 "Qwen3-Coder-Next",
                 named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
             ),
+            (
+                "Nemotron-3.5-Bolt-E4B",
+                named(
+                    target_meta("gemma4", 42, 2560, 0),
+                    "NVIDIA Nemotron 3.5 Bolt E4B",
+                ),
+            ),
+            ("Nemotron-3.5-Lightning-30B-A3B", lightning),
+            (
+                "Laguna-XS-2.1",
+                named(target_meta("laguna", 40, 2048, 256), "Laguna XS 2.1"),
+            ),
+            (
+                "Laguna-S-2.1",
+                named(target_meta("laguna", 48, 3072, 256), "Laguna S 2.1"),
+            ),
+            (
+                "DeepSeek-V4-Flash-0731",
+                named(
+                    target_meta("deepseek4", 43, 4096, 256),
+                    "Deepseek-V4-Flash-0731",
+                ),
+            ),
         ]
     }
 
-    /// The published index: the checked-in copy of `index.json` at
-    /// [`DFLASH_PAIRING_INDEX_REVISION`], or the file
+    /// The pinned index: the checked-in `index.json`, or the file
     /// `DFLASH_PAIRING_INDEX_FIXTURE` names (a fresh download, say).
     fn published_index() -> DFlashPairingIndex {
-        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE")
-            .map_or_else(|| PathBuf::from(INDEX_PATH), PathBuf::from);
+        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE").map_or_else(
+            || PathBuf::from(super::super::dflash_index::INDEX_PATH),
+            PathBuf::from,
+        );
         load_dflash_pairing_index(&path).unwrap()
     }
 
@@ -679,6 +766,117 @@ mod tests {
             Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
         );
         assert_eq!(repo("Qwen3-Coder-Next", false), None);
+        for metal in [true, false] {
+            assert_eq!(
+                repo("Nemotron-3.5-Bolt-E4B", metal).as_deref(),
+                Some("unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF")
+            );
+        }
+        assert_eq!(
+            repo("Nemotron-3.5-Lightning-30B-A3B", false).as_deref(),
+            Some("magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF")
+        );
+        // Native MTP stays Lightning's default on Metal.
+        assert_eq!(repo("Nemotron-3.5-Lightning-30B-A3B", true), None);
+        assert_eq!(
+            repo("DeepSeek-V4-Flash-0731", false).as_deref(),
+            Some("unsloth/DeepSeek-V4-Flash-0731-GGUF")
+        );
+        assert_eq!(repo("DeepSeek-V4-Flash-0731", true), None);
+    }
+
+    #[test]
+    fn deepseek_v4_flash_0731_is_told_from_deepseek_v4_flash_by_name() {
+        const DSPARK: &str = "unsloth/DeepSeek-V4-Flash-0731-GGUF";
+        let dsv4 = target_meta("deepseek4", 43, 4096, 256);
+        for name in [
+            "Deepseek-V4-Flash-0731",
+            "DeepSeek V4 Flash 0731",
+            "deepseek-v4-flash-0731",
+        ] {
+            assert_eq!(
+                repo(&named(dsv4.clone(), name), false).as_deref(),
+                Some(DSPARK),
+                "{name}"
+            );
+        }
+        // The original release and its vision fine-tune share the shape but
+        // not the draft's training.
+        for name in ["DeepSeek-V4-Flash", "DeepSeek-V4-Flash-Vision-Exp"] {
+            assert_eq!(repo(&named(dsv4.clone(), name), false), None, "{name}");
+        }
+        assert_eq!(repo(&dsv4, false), None);
+    }
+
+    #[test]
+    fn the_published_index_pairs_laguna_s_off_metal_and_not_laguna_xs() {
+        let index = published_index();
+        let repo = |model: &str, metal| {
+            let (_, meta) = default_targets()
+                .into_iter()
+                .find(|(name, _)| *name == model)
+                .unwrap();
+            pairing_in(&index.pairings, &meta, metal).map(|pairing| pairing.draft.repo.clone())
+        };
+        assert_eq!(
+            repo("Laguna-S-2.1", false).as_deref(),
+            Some("poolside/Laguna-S-2.1-GGUF")
+        );
+        assert_eq!(repo("Laguna-S-2.1", true), None);
+        // Laguna-XS-2.1 waits for a published draft with its sliding window.
+        assert_eq!(repo("Laguna-XS-2.1", false), None);
+        assert_eq!(repo("Laguna-XS-2.1", true), None);
+    }
+
+    #[test]
+    fn nemotron_lightning_is_told_from_nemotron_3_nano_by_name() {
+        const DSPARK: &str = "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF";
+        let with_mtp = |name: &str| {
+            let mut meta = named(target_meta("nemotron_h_moe", 53, 2688, 128), name);
+            meta.nextn_predict_layers = 1;
+            meta
+        };
+        for name in [
+            "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+            "NVIDIA Nemotron 3.5 Lightning 30B A3B",
+        ] {
+            assert_eq!(
+                repo(&with_mtp(name), false).as_deref(),
+                Some(DSPARK),
+                "{name}"
+            );
+            assert_eq!(repo(&with_mtp(name), true), None, "{name}");
+        }
+        // Nemotron-3-Nano-30B-A3B has the same executable shape.
+        let nano = named(
+            target_meta("nemotron_h_moe", 52, 2688, 128),
+            "Nemotron-3-Nano-30B-A3B",
+        );
+        assert_eq!(repo(&nano, false), None);
+        assert_eq!(repo(&nano, true), None);
+    }
+
+    #[test]
+    fn nemotron_bolt_is_told_from_gemma_4_by_name() {
+        const BOLT: &str = "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF";
+        let gemma4 = target_meta("gemma4", 42, 2560, 0);
+        // As unsloth, bartowski, LM Studio and NVIDIA name their quants.
+        for name in [
+            "NVIDIA Nemotron 3.5 Bolt E4B",
+            "NVIDIA-Nemotron-3.5-Bolt-E4B",
+            "Nemotron 3.5 Bolt E4B",
+        ] {
+            for metal in [true, false] {
+                assert_eq!(
+                    repo(&named(gemma4.clone(), name), metal).as_deref(),
+                    Some(BOLT),
+                    "{name}"
+                );
+            }
+        }
+        // Gemma-4-E4B-It has the same shape; the Bolt draft is not its default.
+        assert_eq!(repo(&named(gemma4.clone(), "Gemma-4-E4B-It"), false), None);
+        assert_eq!(repo(&gemma4, false), None);
     }
 
     #[test]
@@ -757,6 +955,19 @@ mod tests {
             ("MyQwen3.8-27B", "Qwen3.8", false),
             ("Qwen3.6-27B", "Qwen3.8", false),
             ("", "Qwen3.8", false),
+            ("NVIDIA Nemotron 3.5 Bolt E4B", "Nemotron-3.5-Bolt", true),
+            ("Nemotron 3.5 Bolt E4B", "Nemotron-3.5-Bolt", true),
+            (
+                "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+                "Nemotron-3.5-Lightning",
+                true,
+            ),
+            ("nemotron_3.5_lightning", "Nemotron-3.5-Lightning", true),
+            ("Nemotron-3-Nano-30B-A3B", "Nemotron-3.5-Lightning", false),
+            ("Gemma-4-E4B-It", "Nemotron-3.5-Bolt", false),
+            ("Deepseek-V4-Flash-0731", "DeepSeek-V4-Flash-0731", true),
+            ("DeepSeek-V4-Flash", "DeepSeek-V4-Flash-0731", false),
+            ("DeepSeek-V4-Flash-07310", "DeepSeek-V4-Flash-0731", false),
         ] {
             assert_eq!(names_family(name, family), expected, "{name}");
         }
@@ -852,12 +1063,17 @@ mod tests {
         for (draft, reason) in [
             (draft_file("qwen35", 4096, &[2, 30]), "architecture"),
             (draft_file("dflash", 2048, &[2, 30]), "hidden size"),
-            (draft_file("dflash", 4096, &[2, 38]), "target layer 38"),
+            (draft_file("dflash", 4096, &[2, 33]), "target layer 33"),
             (draft_file("dflash", 4096, &[]), "no target layers"),
         ] {
             let error = pairing.check_draft(draft.path()).unwrap_err().to_string();
             assert!(error.contains(reason), "{error}");
         }
+
+        // Layer 32 of a 32-layer target is its last layer's output, the
+        // output head's input, which Nemotron-3.5 drafts read.
+        let head_input = draft_file("dflash", 4096, &[2, 32]);
+        pairing.check_draft(head_input.path()).unwrap();
 
         // A package proposer's declared target layers must be the draft's.
         pairing.target_layers = Some(vec![2, 30]);
@@ -945,23 +1161,5 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&index).unwrap()).unwrap();
         let error = load_dflash_pairing_index(&path).unwrap_err().to_string();
         assert!(error.contains("sha256"), "{error}");
-    }
-
-    #[test]
-    fn the_index_is_pinned_to_one_revision_of_its_repo() {
-        assert_eq!(DFLASH_PAIRING_INDEX_REPO, "meshllm/dflash-pairings");
-        assert_eq!(DFLASH_PAIRING_INDEX_FILE, "index.json");
-        if let Some(revision) = DFLASH_PAIRING_INDEX_REVISION {
-            assert_eq!(revision.len(), 40);
-            assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        }
-        let pin = DFlashPairingIndexPin {
-            repo: DFLASH_PAIRING_INDEX_REPO,
-            revision: "0123456789abcdef0123456789abcdef01234567",
-            file: DFLASH_PAIRING_INDEX_FILE,
-        };
-        assert!(pin.cache_path().ends_with(
-            "models--meshllm--dflash-pairings/snapshots/0123456789abcdef0123456789abcdef01234567/index.json"
-        ));
     }
 }

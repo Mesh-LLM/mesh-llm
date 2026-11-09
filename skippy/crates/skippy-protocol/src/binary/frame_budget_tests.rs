@@ -21,19 +21,19 @@ fn sampling_uses_actual_bytes_at_the_frame_boundary() {
     message.kind = WireMessageKind::ConfigureGeneration;
     message.state = StageStateHeader::new(message.kind);
     message.sampling = Some(StageSamplingConfig::default());
-    message.chat_sampling_metadata = Some(String::new());
-    let remaining = crate::MAX_STAGE_FRAME_BYTES - message.estimated_wire_bytes();
-    message.chat_sampling_metadata = Some("x".repeat(remaining));
+    message.chat_sampling_metadata = Some("x".repeat(MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES));
     let mut bytes = Vec::new();
     write_stage_message(&mut bytes, &message).unwrap();
-    assert_eq!(bytes.len(), crate::MAX_STAGE_FRAME_BYTES);
+    assert_eq!(bytes.len(), message.estimated_wire_bytes());
 
+    // A budget of exactly the frame's size admits it.
+    let budget = bytes.len();
     let decoded = read_stage_message_for_codec_policy_with_frame_budget(
         Cursor::new(bytes),
         1,
         crate::StageActivationCodec::RawF32V1,
         crate::StageActivationCodecPolicy::Fixed,
-        crate::MAX_STAGE_FRAME_BYTES,
+        budget,
     )
     .unwrap();
 

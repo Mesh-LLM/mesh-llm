@@ -155,7 +155,7 @@ verify_repair_pin() {{ mark verify-pin; }}
 repair_candidate_until_green() {{ mark repair; return 37; }}
 snapshot_candidate_tree() {{ mark snapshot; }}
 write_candidate_bundle() {{ mark bundle; }}
-load_candidate_bundle() {{ mark load; }}
+load_candidate_bundle() {{ mark load; CANDIDATE_BASE_HEAD=fixture; CERTIFIED_SHA=fixture; }}
 materialize_verification_tree() {{ mark materialize; }}
 cleanup_verification_worktree() {{ mark cleanup; }}
 run_candidate_gates() {{ mark gates; return 41; }}
@@ -164,6 +164,7 @@ check_split_certification_roster() {{ mark roster; }}
 export_family_inputs() {{ mark export; }}
 finalize_certified_tree() {{ mark finalize; }}
 VERIFICATION_TIMEOUT_SECONDS=60
+BASE_HEAD=fixture
 {tail}
 "#
         );

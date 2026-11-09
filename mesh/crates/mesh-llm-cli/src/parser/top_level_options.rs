@@ -288,9 +288,9 @@ pub struct SpeculativeOptions {
     #[arg(long, hide = true)]
     pub draft: Option<PathBuf>,
 
-    /// Max draft tokens (default: 8).
-    #[arg(long, default_value = "8", hide = true)]
-    pub draft_max: u16,
+    /// Max draft tokens per step (default: the runtime's for the strategy).
+    #[arg(long, hide = true)]
+    pub draft_max: Option<u16>,
 
     /// Disable automatic draft model detection.
     #[arg(long, hide = true)]

@@ -307,6 +307,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         "stage_index": 1,
         "layer_start": args.split_layer,
         "layer_end": args.layer_end,
+        "lane_count": 1,
         "ctx_size": args.ctx_size,
         "n_batch": args.n_batch,
         "n_ubatch": args.n_ubatch,

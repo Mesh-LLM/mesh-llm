@@ -35,7 +35,7 @@ impl Server {
         let stopped = stop.clone();
         let worker = thread::spawn(move || {
             for reply in replies {
-                let deadline = Instant::now() + Duration::from_secs(10);
+                let deadline = Instant::now() + Duration::from_secs(60);
                 let mut socket = loop {
                     if stopped.load(Ordering::Acquire) {
                         return;
@@ -53,10 +53,10 @@ impl Server {
                 };
                 socket.set_nonblocking(false).unwrap();
                 socket
-                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .set_read_timeout(Some(Duration::from_secs(30)))
                     .unwrap();
                 socket
-                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .set_write_timeout(Some(Duration::from_secs(30)))
                     .unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0; 4096];

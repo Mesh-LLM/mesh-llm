@@ -32,7 +32,8 @@ pub use llama::{
 pub use mtmd::{
     mtmd_bitmap_free, mtmd_bitmap_get_n_bytes, mtmd_context_params_default, mtmd_decode_use_mrope,
     mtmd_default_marker, mtmd_free, mtmd_gen_audio_get_info, mtmd_helper_bitmap_init_from_buf,
-    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_reset,
+    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output,
+    mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
     mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
     mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
     mtmd_helper_init_opt_default, mtmd_helper_video_free, mtmd_input_chunks_free,
@@ -351,9 +352,10 @@ pub unsafe extern "C" fn ggml_backend_dev_by_name(name: *const c_char) -> *mut O
 }
 
 // `src/llama-ext.h` is a C++ staging header, so these keep C++ linkage and are
-// bound by their Itanium-mangled names. The mangling encodes the parameter
-// types, so an upstream signature change fails to link instead of miscalling.
-#[cfg(not(windows))]
+// bound by their decorated names: Itanium for GCC, Clang and MinGW, MSVC for
+// MSVC-ABI Windows. Both encode the parameter types, so an upstream signature
+// change fails to link instead of miscalling.
+#[cfg(not(target_env = "msvc"))]
 unsafe extern "C" {
     #[link_name = "_Z26llama_set_embeddings_nextnP13llama_contextbb"]
     pub fn llama_set_embeddings_nextn(ctx: *mut Opaque, value: bool, masked: bool);
@@ -363,10 +365,32 @@ unsafe extern "C" {
     pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
     #[link_name = "_Z30llama_get_embeddings_layer_inpP13llama_contextj"]
     pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "_Z25llama_layer_inp_publishedP13llama_contextj"]
+    pub fn llama_layer_inp_published(ctx: *mut Opaque, lid: u32) -> bool;
     #[link_name = "_Z28llama_model_target_layer_idsPK11llama_model"]
     pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
     #[link_name = "_Z30llama_model_target_layer_ids_nPK11llama_model"]
     pub fn llama_model_target_layer_ids_n(model: *const Opaque) -> u32;
     #[link_name = "_Z33llama_model_dflash_selector_top_kPK11llama_model"]
+    pub fn llama_model_dflash_selector_top_k(model: *const Opaque) -> i32;
+}
+
+#[cfg(target_env = "msvc")]
+unsafe extern "C" {
+    #[link_name = "?llama_set_embeddings_nextn@@YAXPEAUllama_context@@_N1@Z"]
+    pub fn llama_set_embeddings_nextn(ctx: *mut Opaque, value: bool, masked: bool);
+    #[link_name = "?llama_get_embeddings_nextn@@YAPEAMPEAUllama_context@@@Z"]
+    pub fn llama_get_embeddings_nextn(ctx: *mut Opaque) -> *mut f32;
+    #[link_name = "?llama_set_embeddings_layer_inp@@YAXPEAUllama_context@@I_N@Z"]
+    pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
+    #[link_name = "?llama_get_embeddings_layer_inp@@YAPEAMPEAUllama_context@@I@Z"]
+    pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "?llama_layer_inp_published@@YA_NPEAUllama_context@@I@Z"]
+    pub fn llama_layer_inp_published(ctx: *mut Opaque, lid: u32) -> bool;
+    #[link_name = "?llama_model_target_layer_ids@@YAPEBHPEBUllama_model@@@Z"]
+    pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
+    #[link_name = "?llama_model_target_layer_ids_n@@YAIPEBUllama_model@@@Z"]
+    pub fn llama_model_target_layer_ids_n(model: *const Opaque) -> u32;
+    #[link_name = "?llama_model_dflash_selector_top_k@@YAHPEBUllama_model@@@Z"]
     pub fn llama_model_dflash_selector_top_k(model: *const Opaque) -> i32;
 }

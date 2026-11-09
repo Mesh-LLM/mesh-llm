@@ -82,7 +82,7 @@ const next = ocr.next_cursor
 ```
 
 A model's `operations` describe what at least one provider advertises. Runtime
-limits, capabilities, thinking controls and payment offers stay under their
+limits, capabilities, thinking controls and plugin requirements stay under their
 provider; they are not guarantees for every replica. Missing metadata means
 unknown. `node.inference.listModels()` is the LLM-only compatibility view.
 

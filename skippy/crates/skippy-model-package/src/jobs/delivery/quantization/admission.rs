@@ -10,7 +10,7 @@ fn closed(v: &Value, keys: &[&str]) -> bool {
 }
 fn immutable_artifact(v: &Value, mounts: &[ModelMount], mounted: bool) -> Result<()> {
     admission::artifact(v, mounts, mounted)?;
-    if Path::new(admission::text(v, "path")?).starts_with("/work") {
+    if admission::within(admission::text(v, "path")?, "/work") {
         bail!("quant immutable artifact in mutable work");
     }
     Ok(())
@@ -130,7 +130,7 @@ fn template(t: &Value) -> Result<()> {
             .is_none_or(|n| !(5..=86400).contains(&n))
         || ["source_root", "work_root", "target_root"]
             .iter()
-            .any(|k| t[k].as_str().is_none_or(|s| !Path::new(s).is_absolute()))
+            .any(|k| t[k].as_str().is_none_or(|s| !s.starts_with('/')))
     {
         bail!("quant template closed grammar/bounds refused");
     }
@@ -188,24 +188,25 @@ fn operator(v: &Value, mounts: &[ModelMount]) -> Result<()> {
             bail!("quant repeated source artifact");
         }
     }
-    let source_root = Path::new(admission::text(t, "source_root")?);
+    let source_root = admission::text(t, "source_root")?;
     if !mounts.iter().any(|m| {
         t["source_repo"].as_str() == Some(m.repo.as_str())
             && t["source_revision"].as_str() == Some(m.revision.as_str())
-            && source_root.starts_with(&m.mount_path)
+            && admission::within(source_root, &m.mount_path)
     }) {
         bail!("quant source repo/revision/mount mismatch");
     }
     for (i, p) in parts.iter().enumerate() {
-        let expected = source_root
-            .join(admission::text(t, "source_prefix")?)
-            .join(format!(
-                "{}-{:05}-of-{:05}.gguf",
-                admission::text(t, "basename")?,
-                i + 1,
-                parts.len()
-            ));
-        if Path::new(admission::text(p, "path")?) != expected {
+        // `source_prefix` and `basename` are single components.
+        let expected = format!(
+            "{source_root}/{}/{}-{:05}-of-{:05}.gguf",
+            admission::text(t, "source_prefix")?,
+            admission::text(t, "basename")?,
+            i + 1,
+            parts.len()
+        );
+        let path = admission::text(p, "path")?;
+        if !(admission::within(path, &expected) && admission::within(&expected, path)) {
             bail!("quant ordered source sibling identity refused");
         }
     }
@@ -283,7 +284,7 @@ pub(super) fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) ->
     resources(&v, plan)?;
     operator(&v, mounts)?;
     immutable_artifact(&v["runner"], mounts, false)?;
-    if Path::new(admission::text(&v["runner"], "path")?).starts_with("/models") {
+    if admission::within(admission::text(&v["runner"], "path")?, "/models") {
         bail!("quant runner requires declared image custody");
     }
     let export = &v["receipt_export"];
