@@ -8,15 +8,21 @@ pub mod selection;
 use std::path::Path;
 
 /// Parses `https://huggingface.co/<owner>/<repo>/resolve/<rev>/<file>` (https or http).
-/// Accepts `<repo>` or `<owner>/<repo>`; rejects empty parts, extra repo components, and drops `?query`/`#fragment`.
+/// Accepts the explicit default ports (`:443` for https, `:80` for http), `<repo>` or `<owner>/<repo>`;
+/// rejects empty parts, a file ending in `/`, extra repo components, and drops `?query`/`#fragment`.
 pub fn parse_hf_resolve_url_parts(url: &str) -> Option<(&str, Option<&str>, &str)> {
     let tail = url
         .strip_prefix("https://huggingface.co/")
-        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
+        .or_else(|| url.strip_prefix("https://huggingface.co:443/"))
+        .or_else(|| url.strip_prefix("http://huggingface.co/"))
+        .or_else(|| url.strip_prefix("http://huggingface.co:80/"))?;
     let (repo, rest) = tail.split_once("/resolve/")?;
     let rest = rest.split(['?', '#']).next()?;
     let (revision, file) = rest.split_once('/')?;
-    if repo.split('/').count() > 2 || repo.split('/').chain([revision, file]).any(str::is_empty) {
+    if file.ends_with('/')
+        || repo.split('/').count() > 2
+        || repo.split('/').chain([revision, file]).any(str::is_empty)
+    {
         return None;
     }
     Some((repo, Some(revision), file))
@@ -672,6 +678,31 @@ mod hf_resolve_url_tests {
             parse_hf_resolve_url_parts("http://huggingface.co/org/repo/resolve/main/dir/m.gguf"),
             expected
         );
+    }
+
+    #[test]
+    fn accepts_explicit_default_ports() {
+        let expected = Some(("org/repo", Some("main"), "dir/m.gguf"));
+        assert_eq!(
+            parse_hf_resolve_url_parts(
+                "https://huggingface.co:443/org/repo/resolve/main/dir/m.gguf"
+            ),
+            expected
+        );
+        assert_eq!(
+            parse_hf_resolve_url_parts("http://huggingface.co:80/org/repo/resolve/main/dir/m.gguf"),
+            expected
+        );
+    }
+
+    #[test]
+    fn rejects_file_ending_in_slash() {
+        for url in [
+            "https://huggingface.co/org/repo/resolve/main/dir/",
+            "http://huggingface.co:80/org/repo/resolve/main/dir/",
+        ] {
+            assert_eq!(parse_hf_resolve_url_parts(url), None, "{url}");
+        }
     }
 
     #[test]
