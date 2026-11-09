@@ -42,7 +42,7 @@ package-backed layer splits.
 | Model artifact model | Full MLX models from HuggingFace; custom model cards with `trust_remote_code` toggle | Layer package repositories with `model-package.json` manifest, GGUF artifacts, validation, certification, HF Jobs publishing |
 | Image generation | Native FLUX.1-dev and FLUX.1-Kontext-dev support; streaming partial images; OpenAI-compatible `/v1/images/generations` | Flash-MoE SSD plugin support; no native image generation |
 | Agent integrations | Generic OpenAI-compatible client support | Built-in launchers for Goose, Claude Code, OpenCode, Pi; blackboard plugin; MCP server at `:3131/mcp` |
-| Mixture-of-Agents | Not available | Experimental `model: "mesh"` fan-out across every model in the mesh with code-level arbitration |
+| Mixture-of-Agents | Not available | Opt-in built-in plugin (`[[plugin]] name = "mesh-moa"`): `model: "mesh"` answered by a committee of models |
 | Instance lifecycle | Explicit create/delete instance model with placement preview, placement compute, and SSE-based await | Automatic model serving on the local node or routing to a peer that has the requested model |
 | Operational model | Local cluster coordination across nearby devices with zero-config auto-discovery | Operator-controlled distributed serving across private or published meshes; owner-control plane with explicit endpoint bootstrap |
 | Image models | `EXO_ENABLE_IMAGE_MODELS=true` enables FLUX-based image generation and editing | Not a built-in capability; plugin-extensible |
@@ -241,7 +241,7 @@ Additional management endpoints on the console port (`:3131`):
 Mesh LLM's API supports:
 - Tool calling and structured outputs (JSON mode)
 - Streaming with SSE
-- MoA (`model: "mesh"`) fan-out across all models
+- Opt-in MoA plugin for `model: "mesh"`
 - Model routing by peer availability
 
 ## Model sources and artifact management

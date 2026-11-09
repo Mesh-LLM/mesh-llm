@@ -21,59 +21,33 @@ model and is unaffected by anything on this page.
 
 ## What you get
 
-Automatic routing serves a request in one of two ways, and it chooses for you.
-
-**A committee.** Several models answer, see each other's drafts, improve them,
-and one model synthesises the result. This is Mixture-of-Agents (MoA). It is
-what `mesh` does whenever the mesh can field a committee and the request allows
-it.
-
-**A single model.** One model, selected for the request, answers directly.
-
-Both are normal outcomes. A single model is not a failure or a downgrade — for
-some requests it is the only correct answer, and for some meshes it is the best
-available one.
-
-## When you get a single model
-
-Four cases, all decided from your request or the mesh's shape:
-
-| Situation | Why |
-|---|---|
-| Your request includes an image, audio, or a file | A committee compares and merges answers as text, so it has no defined way to combine answers about an image. Your request is routed to a model whose runtime actually supports that input. |
-| You asked for `"stream": true` | Committee members must finish before their answers can be compared, so a committee cannot emit real tokens as they are produced. A single model streams for real. |
-| You sent no `model` field at all | You did not ask for automatic serving, so Mesh does not add committee latency and cost on your behalf. Send `"model": "mesh"` to opt in. |
-| You posted to `/v1/completions` | Committee members are asked a chat question each, and a completions request carries a `prompt` rather than a conversation. `/v1/chat/completions` and `/v1/responses` both convene committees. |
+By default, `mesh` picks **one model** that can handle the request (tools,
+images, context length) and answers from it, streaming or not. Traffic is
+spread across every machine serving that model in proportion to its measured
+speed, and a busy or failing machine is skipped before the first byte is sent.
+If every machine for that model fails, Mesh tries another compatible model.
 
 If you send an image and **no** online model supports image input, the request
 fails with `422` rather than quietly answering the text part of your question.
 
-## What the mesh's shape changes
+Once a streamed response has started, it cannot be retried elsewhere — if that
+machine disappears mid-answer, the response is cut short.
 
-| Your mesh | What `mesh` does |
-|---|---|
-| One model | Serves that model. `mesh` works on a single node. |
-| Several copies of one model on different machines | Committee. Repeated sampling of one model ensembles well. |
-| A mix of larger and smaller models | Committee of the stronger models, unless dropping the smaller ones would leave no committee at all — in which case the mix is kept, because a mixed committee beats one strong model alone. |
-| Only small models (under ~10B) | The strongest single model answers. Measured on this configuration, a committee of small models did not beat the best member alone, so Mesh does not spend the extra calls. |
+## Mixture-of-Agents plugin (opt-in)
 
-The last row is a deliberate, measured choice rather than a limitation of the
-idea. See `mesh/evals/moa-openrouter/RESULTS.md` in the repository for the data.
+Mesh ships a built-in Mixture-of-Agents (MoA) plugin: several models answer,
+and one synthesises the result. It is **off by default**. Enable it in
+`~/.mesh-llm/config.toml`:
 
-## Streaming and resilience are a trade
+```toml
+[[plugin]]
+name = "mesh-moa"
+```
 
-Worth knowing if you care about robustness:
-
-- A **committee** collects whole answers before replying, so if a machine drops
-  out mid-request the remaining members still produce an answer. It cannot send
-  you a first token early.
-- A **single model** streams tokens as they are generated. But once the first
-  bytes of a streamed response have been sent, there is no way to retry
-  elsewhere — if that machine disappears mid-answer, the response is cut short.
-
-Because `"stream": true` selects a single model, asking to stream is also
-asking for the less recoverable path. For long unattended work on a mesh whose
-machines come and go, leaving streaming off is the more robust choice.
+With it enabled, non-streaming text chat sent to `mesh` is answered by the
+committee (responses carry `x-moa-*` headers). Streaming, image/audio/file
+requests and named models still use a single model. See
+`mesh/evals/moa-openrouter/RESULTS.md` for when a committee helps.
 
 ## Discovering what is available
 
@@ -106,8 +80,7 @@ and keeps `mesh` focused on serving whatever you send as well as it can.
 deprecated alias and will be removed in a future release; the daemon logs a
 warning when a request uses it.
 
-Historically `auto` picked one "good" model while `mesh` convened a committee.
-That distinction leaked an implementation detail into the API — callers had to
+Historically `auto` and `mesh` behaved differently. That distinction leaked an implementation detail into the API — callers had to
 know which mechanism they wanted, when what they actually wanted was a good
 answer. There is now one name for that intent.
 
