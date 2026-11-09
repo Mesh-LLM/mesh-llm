@@ -129,11 +129,20 @@ test('actual native speech, discovery, option validation and cancellation', {
       assert.deepEqual(fs.readdirSync(value), [], `${name} must start empty`)
       const actual = path.relative(actualState, fs.realpathSync(value))
       assert.ok(actual && !actual.startsWith('..') && !path.isAbsolute(actual), `${name} must resolve inside its isolated root`)
+    } else {
+      // An absent leaf still resolves through its ancestors, and a
+      // symlinked ancestor can point outside the root.
+      let ancestor = value
+      while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor)
+      const actual = path.relative(actualState, fs.realpathSync(ancestor))
+      assert.ok(actual && !actual.startsWith('..') && !path.isAbsolute(actual), `${name} must resolve inside its isolated root`)
     }
   }
   const inputs = process.env.MESH_SPEECH_INPUTS
   const evidence = process.env.MESH_SPEECH_EVIDENCE
   fs.mkdirSync(evidence, { recursive: true })
+  // Prior evidence would be mistaken for this run's output.
+  assert.deepEqual(fs.readdirSync(evidence), [], 'MESH_SPEECH_EVIDENCE must start empty')
   const pcm = fs.readFileSync(path.join(inputs, 'jfk.s16le'))
   assert.equal(pcm.length, 352000)
   assert.equal(digest(pcm), 'a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9')
