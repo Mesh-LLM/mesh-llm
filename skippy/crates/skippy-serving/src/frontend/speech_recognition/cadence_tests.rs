@@ -215,8 +215,9 @@ async fn a_mid_batch_decoder_error_ends_the_session_without_reusing_confirmation
             .unwrap(),
         Some(1)
     );
-    // The next push contains a successful agreeing pass followed by an error.
-    // Its confirmation mutation and events cannot be resumed independently.
+    // The next step-sized pushes contain a successful agreeing pass,
+    // whose delta is delivered, followed by an error. The failed pass's
+    // mutation cannot be resumed independently.
     session
         .input
         .send(RealtimeInput::Audio(vec![8_000; 32_000]))
@@ -231,6 +232,7 @@ async fn a_mid_batch_decoder_error_ends_the_session_without_reusing_confirmation
     {
         match event {
             RealtimeOutput::Tentative { .. } if !failed => {}
+            RealtimeOutput::Delta { .. } if !failed => {}
             RealtimeOutput::Failed { message } if !failed => {
                 assert_eq!(message, "injected decoder failure");
                 failed = true;

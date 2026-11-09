@@ -15,8 +15,8 @@ use skippy_inference_api::{
     generation::GenerationRequest, generation::GenerationResponse,
 };
 use skippy_runtime::{
-    PcmResampler, SpeechRecognitionModel, SpeechStream, SpeechStreamConfig, SpeechStreamEvent,
-    Transcription, TranscriptionOptions, TurnDetection,
+    PcmResampler, SPEECH_SAMPLE_RATE, SpeechRecognitionModel, SpeechStream, SpeechStreamConfig,
+    SpeechStreamEvent, Transcription, TranscriptionOptions, TurnDetection,
 };
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task;
@@ -286,9 +286,25 @@ impl LiveSession {
                             Err(_) => break,
                         }
                     }
-                    stream.push(&pcm, &mut |samples, options| {
-                        self.transcribe(samples, options)
-                    })
+                    // Deliver each cadence pass's events before the next
+                    // pass runs: feed the batched audio in step-sized
+                    // pushes rather than one large push, so a backlog
+                    // never holds every delta until the whole batch
+                    // settles. Each push runs at most one pass, in the
+                    // same order a single push would.
+                    // One step of audio, in the stream's 16 kHz samples.
+                    let step_samples = ((SPEECH_SAMPLE_RATE / 1000) as u64
+                        * u64::from(stream_config(&config).step_ms).max(1))
+                        as usize;
+                    pcm.chunks(step_samples)
+                        .try_for_each(|chunk| {
+                            let pass_events = stream.push(chunk, &mut |samples, options| {
+                                self.transcribe(samples, options)
+                            })?;
+                            pass_events.into_iter().for_each(|event| self.report(event));
+                            Ok(())
+                        })
+                        .map(|()| Vec::new())
                 }
                 RealtimeInput::Commit => {
                     if !stream.has_pending_audio() {
