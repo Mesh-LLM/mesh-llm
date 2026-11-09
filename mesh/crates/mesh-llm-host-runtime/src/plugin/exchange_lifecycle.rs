@@ -62,6 +62,11 @@ impl PhaseResult {
             self.evidence_unavailable = true;
         }
     }
+    /// A plain plugin deny: the plugins said no to this candidate, and nothing
+    /// else (a required-hook failure) makes the whole request fail closed.
+    pub(crate) fn is_candidate_deny(&self) -> bool {
+        self.denied && !self.required_failure
+    }
     pub(crate) fn error_status(&self) -> Option<u16> {
         if self.denied {
             Some(self.deny_status.unwrap_or(403))
@@ -185,7 +190,21 @@ impl PluginManager {
     pub(crate) async fn selected_exchange_phase(
         &self,
         observation_id: &str,
+        event: Value,
+    ) -> PhaseResult {
+        self.selected_exchange_phase_for_candidate(observation_id, event, false)
+            .await
+    }
+
+    /// `selected_exchange_phase` for one candidate of several. With
+    /// `more_candidates`, a plain deny only rules this candidate out: the
+    /// attempt is recorded in `attempt_history`, but its flags, headers and
+    /// annotations stay out of the exchange, which the next candidate decides.
+    pub(crate) async fn selected_exchange_phase_for_candidate(
+        &self,
+        observation_id: &str,
         mut event: Value,
+        more_candidates: bool,
     ) -> PhaseResult {
         let state = self
             .inner
@@ -230,20 +249,25 @@ impl PluginManager {
             .await;
         result.merge(self.exchange_phase(event.clone()).await);
         let mut state = state.lock().unwrap();
+        let skipped = more_candidates && result.is_candidate_deny();
+        // A hook that failed to observe the skipped attempt still leaves the
+        // exchange's evidence incomplete, so these flags accumulate regardless.
         state.incomplete |= result.incomplete;
-        state.required_failure |= result.required_failure;
-        state.denied |= result.denied;
         state.evidence_unavailable |= result.evidence_unavailable;
         state.internal_hook_failure |= result.internal_hook_failure;
-        let headers_complete =
-            exchange_metadata::merge_headers(&mut state.headers, result.headers.clone());
-        let annotations_complete = exchange_metadata::merge_annotations(
-            &mut state.annotations,
-            result.annotations.clone(),
-        );
-        if !headers_complete || !annotations_complete {
-            state.incomplete = true;
-            state.evidence_unavailable = true;
+        if !skipped {
+            state.required_failure |= result.required_failure;
+            state.denied |= result.denied;
+            let headers_complete =
+                exchange_metadata::merge_headers(&mut state.headers, result.headers.clone());
+            let annotations_complete = exchange_metadata::merge_annotations(
+                &mut state.annotations,
+                result.annotations.clone(),
+            );
+            if !headers_complete || !annotations_complete {
+                state.incomplete = true;
+                state.evidence_unavailable = true;
+            }
         }
         if state.attempt_history.len() < 16 {
             let mut attempt = serde_json::Map::new();
@@ -258,6 +282,9 @@ impl PluginManager {
                 if let Some(value) = event.get(key) {
                     attempt.insert(key.into(), value.clone());
                 }
+            }
+            if result.denied {
+                attempt.insert("admission_denied".into(), json!(true));
             }
             state.attempt_history.push(Value::Object(attempt));
         } else {

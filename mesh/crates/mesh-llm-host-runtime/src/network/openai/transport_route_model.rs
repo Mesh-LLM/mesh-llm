@@ -1,6 +1,7 @@
 #[path = "transport_route_exhaustion.rs"]
 mod exhaustion;
 
+use super::super::exchange_admission::SelectedRouteAdmission;
 use super::*;
 use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_context};
 use crate::network::reservations::RoutingReservation;
@@ -307,22 +308,28 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         // peer's capsule_id and misattribute it to this attempt.
         clear_peer_capsule(peer_capsule_id);
         reservation.transfer_to(&target);
-        state.attempts += 1;
         let attempt_started = Instant::now();
         let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
-        if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
+        match super::super::exchange_admission::admit_selected_candidate(
             &node,
             &mut tcp_stream,
             request,
             Some(model),
             "mesh",
             super::super::exchange_admission::SelectedRouteTarget::Mesh(&target),
-            state.attempts,
+            idx + 1,
+            idx + 1 < total_targets,
         )
         .await
         {
-            return outcome;
+            SelectedRouteAdmission::Proceed => {}
+            // A plugin said no to this peer, not to the request: try the next.
+            SelectedRouteAdmission::NextCandidate => continue,
+            SelectedRouteAdmission::Rejected(outcome) => return outcome,
         }
+        // Only a contacted candidate is an attempt: a skipped one must not
+        // turn an all-timeouts route into a 503 or inflate attempt metrics.
+        state.attempts += 1;
         let attempt_result = route_attempt_for_target(
             &node,
             &mut tcp_stream,
@@ -1505,3 +1512,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "transport_route_admission_tests.rs"]
+mod admission_tests;
