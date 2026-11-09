@@ -309,7 +309,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         clear_peer_capsule(peer_capsule_id);
         reservation.transfer_to(&target);
         let attempt_started = Instant::now();
-        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
+        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets)
+            .with_caller_completion_cap(request.completion_tokens);
         match super::super::exchange_admission::admit_selected_candidate(
             &node,
             &mut tcp_stream,

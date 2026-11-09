@@ -357,6 +357,67 @@ async fn test_api_proxy_retries_length_finish_success_response_to_next_target() 
 }
 
 #[tokio::test]
+async fn test_api_proxy_delivers_a_length_stop_at_the_callers_own_max_tokens() {
+    let capped_body = json!({
+        "id": "chatcmpl-capped",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "Paris"},
+            "finish_reason": "length"
+        }],
+        "usage": {"prompt_tokens": 25, "completion_tokens": 1, "total_tokens": 26}
+    })
+    .to_string();
+    let other_body = json!({
+        "id": "chatcmpl-other",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "second host"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let (capped_port, capped_rx, capped_handle) = spawn_capturing_upstream(&capped_body).await;
+    let (other_port, other_rx, other_handle) = spawn_capturing_upstream(&other_body).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(single_model_targets("test", &[capped_port, other_port]))
+            .await;
+
+    let body = json!({
+        "model": "test",
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "one token please"}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let capped_raw = String::from_utf8(capped_rx.await.unwrap()).unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("chatcmpl-capped"));
+    assert!(!response.contains("second host"));
+    assert!(capped_raw.contains("one token please"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), other_rx)
+            .await
+            .is_err(),
+        "a reply that stopped at the caller's own max_tokens was replayed on the next host"
+    );
+
+    proxy_handle.abort();
+    let _ = capped_handle.await;
+    other_handle.abort();
+    let _ = other_handle.await;
+}
+
+#[tokio::test]
 async fn test_api_proxy_does_not_retry_generic_bad_request() {
     let bad_request_body = r#"{"error":{"message":"missing required field: messages"}}"#;
     let (bad_port, bad_rx, bad_handle) =

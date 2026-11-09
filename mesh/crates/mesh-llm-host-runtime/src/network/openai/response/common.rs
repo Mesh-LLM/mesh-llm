@@ -154,6 +154,9 @@ pub(in crate::network::openai) struct ResponseRetryPolicy {
     pub(in crate::network::openai) response_quality: bool,
     /// Try the next host on a 402 instead of relaying it.
     pub(in crate::network::openai) gate_unsatisfied: bool,
+    /// The output cap the request set itself. A `length` stop that reached it
+    /// is the reply the caller asked for, not a reason to try the next host.
+    pub(in crate::network::openai) caller_completion_cap: Option<u32>,
 }
 
 impl ResponseRetryPolicy {
@@ -162,6 +165,14 @@ impl ResponseRetryPolicy {
             context_overflow: available,
             response_quality: available,
             gate_unsatisfied: available,
+            caller_completion_cap: None,
+        }
+    }
+
+    pub(in crate::network::openai) fn with_caller_completion_cap(self, cap: Option<u32>) -> Self {
+        Self {
+            caller_completion_cap: cap,
+            ..self
         }
     }
 }
@@ -335,7 +346,7 @@ pub(in crate::network::openai::response) fn retryable_quality_result(
     if !policy.response_quality {
         return None;
     }
-    let failure = response_quality::failure_from_json_body(body)?;
+    let failure = response_quality::failure_from_json_body(body, policy.caller_completion_cap)?;
     tracing::warn!(
         reason = failure.label(),
         "API proxy: upstream returned retryable low-quality success response before commit"
