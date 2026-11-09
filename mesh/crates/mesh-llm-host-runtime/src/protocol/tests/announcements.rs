@@ -146,7 +146,8 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     assert_eq!(roundtripped.claim.node_label.as_deref(), Some("studio"));
 }
 
-pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
+#[test]
+fn mixed_version_peer_ignores_missing_release_attestation() {
     let proto = crate::proto::node::PeerAnnouncement {
         endpoint_id: vec![1; 32],
         role: crate::proto::node::NodeRole::Worker as i32,
