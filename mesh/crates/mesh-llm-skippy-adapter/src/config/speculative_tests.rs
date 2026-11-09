@@ -1621,20 +1621,16 @@ fn native_mtp_is_preferred_only_when_no_pairing_exists() {
     assert_eq!(resolved.speculative.decode.effective_strategy, "native-mtp");
 }
 
-/// The published index (`index.json` at the pinned revision, checked in as
-/// `skippy/evals/dflash-pairings/index.json`, or the copy
-/// `DFLASH_PAIRING_INDEX_FIXTURE` names) resolves every default-on target on
-/// this backend to the plan the bootstrap table resolves.
+/// The pinned index (the checked-in `data/dflash-pairings/index.json`, or the
+/// copy `DFLASH_PAIRING_INDEX_FIXTURE` names) resolves every default-on target
+/// on this backend to the plan the bootstrap table resolves.
 #[test]
 fn the_published_index_resolves_every_default_as_the_table_does() {
     let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE").map_or_else(
-        || {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../skippy/evals/dflash-pairings/index.json")
-        },
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("data/dflash-pairings/index.json"),
         std::path::PathBuf::from,
     );
-    let index = super::dflash_catalog::load_dflash_pairing_index(&path).unwrap();
+    let index = super::dflash_index::load_dflash_pairing_index(&path).unwrap();
     let metal = cfg!(target_os = "macos");
     let (_plain_directory, plain) = default_dflash_target();
     let (_mtp_directory, with_mtp) = native_mtp_target();

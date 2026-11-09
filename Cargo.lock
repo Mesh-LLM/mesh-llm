@@ -5220,6 +5220,7 @@ dependencies = [
  "mesh-llm-config",
  "mesh-llm-events",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-api",
  "skippy-config",
  "skippy-hf-hub",
