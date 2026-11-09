@@ -265,6 +265,10 @@ impl StageOpenAiBackend {
                         json!(record.page_id),
                     );
                     attrs.insert("skippy.exact_cache.queued".to_string(), json!(true));
+                    attrs.insert(
+                        "skippy.exact_cache.recorded_tokens".to_string(),
+                        json!(record.token_count),
+                    );
                     "recorded"
                 }
                 Ok(SessionEndCapture::Skipped) => "record_none",
@@ -276,10 +280,6 @@ impl StageOpenAiBackend {
             attrs.insert(
                 "skippy.kv.decision".to_string(),
                 json!(format!("{decision_prefix}_{decision}")),
-            );
-            attrs.insert(
-                "skippy.exact_cache.recorded_tokens".to_string(),
-                json!(checkpoint_token_count),
             );
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
