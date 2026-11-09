@@ -619,6 +619,9 @@ impl crate::mesh::Node {
     /// hit when it wins clearly, the cheapest cold candidate when that is
     /// estimated cheaper. A marginal difference, or missing, expired,
     /// unmeasured or incomparable evidence, preserves normal candidate order.
+    /// Routing goes through `cache_target_with_lease`; this lease-free form
+    /// lets the tests check the decision on its own.
+    #[cfg(test)]
     pub(crate) async fn select_cache_target(
         &self,
         model: &str,
