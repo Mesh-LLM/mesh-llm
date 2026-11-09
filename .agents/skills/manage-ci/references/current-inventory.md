@@ -923,7 +923,10 @@ continue to compose normally. Seven call sites:
 Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
 directory is preserved; otherwise the action uses the job's runner temporary
-directory. Missing GHA endpoints retain the existing disk-only fallback.
+directory. Missing GHA endpoints, or a missing `ACTIONS_RUNTIME_TOKEN`, retain the
+existing disk-only fallback; shell steps on some runners (notably Depot PR jobs)
+receive the endpoints without the runtime token, so sccache cannot start its GHA
+backend there.
 The action eagerly starts sccache on a unique short Unix socket in both disk-only
 and remote-cache modes, before any parallel compiler clients, and exports that
 endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup

@@ -58,9 +58,12 @@ runs:
         socket_dir="$(mktemp -d /tmp/mesh-sccache.XXXXXXXX)"
         export SCCACHE_SERVER_UDS="$socket_dir/server.sock"
         echo "SCCACHE_SERVER_UDS=$SCCACHE_SERVER_UDS" >> "$GITHUB_ENV"
+        # sccache's GHA backend needs the cache endpoint and a runtime token;
+        # runners that omit either (some Depot PR contexts) fall back to disk.
         if [[ "${SCCACHE_GHA_ENABLED:-}" == "true" &&
-              -z "${ACTIONS_CACHE_URL:-}" &&
-              -z "${ACTIONS_RESULTS_URL:-}" ]]; then
+              ( -z "${ACTIONS_RUNTIME_TOKEN:-}" ||
+                ( -z "${ACTIONS_CACHE_URL:-}" &&
+                  -z "${ACTIONS_RESULTS_URL:-}" ) ) ]]; then
           echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
           echo "SCCACHE_MULTILEVEL_CHAIN=disk" >> "$GITHUB_ENV"
           export SCCACHE_GHA_ENABLED=false
