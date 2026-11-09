@@ -787,6 +787,12 @@ fn noop_raw_waker() -> std::task::RawWaker {
     std::task::RawWaker::new(std::ptr::null(), &VTABLE)
 }
 
+/// Aborts the reader task and joins it so no read outlives a failed deadline.
+async fn settle_reader<T>(reader: &mut JoinHandle<T>) {
+    reader.abort();
+    let _ = reader.await;
+}
+
 /// Cancels a pending read and confirms close wakes the reader.
 async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> Result<()> {
     let live = bounded(
@@ -802,7 +808,7 @@ async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> R
     // before the close, and the `read.await` below it re-registers with the
     // task's own waker, so `close()` - not a repoll from this test - wakes
     // the read at EOF.
-    let reader = {
+    let mut reader = {
         let session = Arc::clone(&session);
         tokio::spawn(async move {
             let mut read = Box::pin(session.next_event());
@@ -816,10 +822,24 @@ async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> R
         })
     };
     let pending = bounded(2, "reader polled pending", polled_rx).await??;
-    // Rust cancels this session by close, not by aborting a recv future. It
-    // runs before the assertions so a failing run still wakes the task.
-    bounded(3, "cancel pending read", session.close()).await?;
-    let event = bounded(5, "cancelled reader EOF", reader).await??;
+    // Rust cancels this session by close, not by aborting a recv future. The
+    // reader's handle stays owned here across both deadlines: if one expires,
+    // the reader is aborted and joined before the error is returned, while
+    // the successful path is unchanged.
+    match bounded(3, "cancel pending read", session.close()).await {
+        Ok(()) => {}
+        Err(error) => {
+            settle_reader(&mut reader).await;
+            return Err(error);
+        }
+    }
+    let event = match tokio::time::timeout(Duration::from_secs(5), &mut reader).await {
+        Ok(join) => join.context("cancelled reader EOF")?,
+        Err(_elapsed) => {
+            settle_reader(&mut reader).await;
+            bail!("cancelled reader EOF deadline expired");
+        }
+    };
     ensure!(
         pending,
         "The native read must be pending before cancellation, not return an early event"
@@ -835,7 +855,13 @@ async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> R
         "close_woke_reader": true,
         "pending_reader_returned_eof": true}),
     )?;
-    bounded(3, "second cancellation close", session.close()).await?;
+    match bounded(3, "second cancellation close", session.close()).await {
+        Ok(()) => {}
+        Err(error) => {
+            settle_reader(&mut reader).await;
+            return Err(error);
+        }
+    }
     ensure!(
         bounded(2, "repeat cancelled read", session.next_event())
             .await?
