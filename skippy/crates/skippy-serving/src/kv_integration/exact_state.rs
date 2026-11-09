@@ -664,6 +664,20 @@ impl KvStageIntegration {
         if !self.should_record() || token_count < self.checkpoint_policy.min_tokens {
             return Ok(SessionEndCapture::Skipped);
         }
+        // A checkpoint the cache already holds needs no copy. A busy or
+        // failing radix proves nothing, so the capture goes ahead; the
+        // session-end admission checks again either way.
+        if let Ok(Some(already_recorded)) =
+            try_touch_exact_state(&self.radix, &identity.namespace, &identity.token_ids)
+            && self.already_recorded_skips(
+                identity,
+                already_recorded,
+                write_through_l3,
+                l3_cost.as_ref(),
+            )
+        {
+            return Ok(SessionEndCapture::Skipped);
+        }
         let Some(retained_reservation) =
             self.reserve_retained_recurrent_host_memory(runtime, session_id, token_count)
         else {
@@ -812,13 +826,7 @@ impl KvStageIntegration {
                     return Err(error);
                 }
             };
-        let probation_recurrence = already_recorded
-            && write_through_l3
-            && l3_cost.is_some()
-            && self.l3.as_ref().is_some_and(|l3| {
-                l3.benefit_tracks_prefix(&identity.namespace, &identity.token_ids)
-            });
-        if already_recorded && !probation_recurrence {
+        if self.already_recorded_skips(identity, already_recorded, write_through_l3, l3_cost) {
             #[cfg(test)]
             crate::frontend::capture_trace::POST_DECODE_NONE_ALREADY_RECORDED
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -837,6 +845,25 @@ impl KvStageIntegration {
         };
         admission_credit.snapshot_reservation = reservation;
         Ok(Some((exact_state_payload, admission_credit)))
+    }
+
+    /// Whether a capture of an identity the cache already holds is skipped:
+    /// it is, unless the disk tier is still measuring the prefix's benefit
+    /// and wants the recurrence.
+    fn already_recorded_skips(
+        &self,
+        identity: &PrefillKvIdentity,
+        already_recorded: bool,
+        write_through_l3: bool,
+        l3_cost: Option<&skippy_cache::policy::CostSample>,
+    ) -> bool {
+        let probation_recurrence = already_recorded
+            && write_through_l3
+            && l3_cost.is_some()
+            && self.l3.as_ref().is_some_and(|l3| {
+                l3.benefit_tracks_prefix(&identity.namespace, &identity.token_ids)
+            });
+        already_recorded && !probation_recurrence
     }
 
     /// Validate an exported payload and queue it for the recorder worker.
