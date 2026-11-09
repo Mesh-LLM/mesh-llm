@@ -305,3 +305,17 @@ fn a_sink_using_the_runtime_does_not_complete_other_parked_sessions() {
     assert!(runtime.parked_session_ends.is_empty());
     assert!(!runtime.completing_parked_session_ends);
 }
+
+#[test]
+fn ending_a_parked_session_again_keeps_its_export() {
+    let seen = Seen::default();
+    let mut runtime = RuntimeState::new_modelless_for_test(1);
+    park_with_export(&mut runtime, "request", sink(&seen));
+
+    runtime.end_session_timed("request").unwrap();
+
+    assert!(seen.lock().unwrap().is_empty(), "the export is still owed");
+    assert_eq!(runtime.parked_session_ends.len(), 1);
+    runtime.complete_parked_session_ends();
+    assert_eq!(*seen.lock().unwrap(), vec![Some("request".to_string())]);
+}

@@ -77,7 +77,17 @@ impl RuntimeState {
     /// End a request's session. A session that owes exports is parked with
     /// its rows intact until [`Self::complete_parked_session_ends`] runs;
     /// any other is dropped as by [`Self::drop_session_timed`].
+    ///
+    /// Ending a session that is already parked (a repeated Stop) changes
+    /// nothing, so its exports still run.
     pub fn end_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
+        if self
+            .parked_session_ends
+            .iter()
+            .any(|parked| parked.session_id == session_id)
+        {
+            return Ok(self.parked_session_stats());
+        }
         if !self.session_end_kv_exports.contains_key(session_id) {
             return self.drop_session_timed(session_id);
         }
