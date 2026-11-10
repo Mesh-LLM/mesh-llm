@@ -96,7 +96,9 @@ impl DecisionCalibration {
 
     /// Temperature for a question kind; 1.0 when the kind is not calibrated.
     pub fn temperature(&self, kind: &str) -> f64 {
-        self.kinds.get(kind).map_or(1.0, KindCalibration::temperature)
+        self.kinds
+            .get(kind)
+            .map_or(1.0, KindCalibration::temperature)
     }
 
     /// True when at least one kind deviates from identity.
@@ -189,9 +191,9 @@ mod tests {
     }
 }
 
-    #[test]
-    fn bare_number_form_also_accepted() {
-        let json = r#"{"kinds": {"noul": 0.89}}"#;
-        let cal: DecisionCalibration = serde_json::from_str(json).unwrap();
-        assert_eq!(cal.temperature("noul"), 0.89);
-    }
+#[test]
+fn bare_number_form_also_accepted() {
+    let json = r#"{"kinds": {"noul": 0.89}}"#;
+    let cal: DecisionCalibration = serde_json::from_str(json).unwrap();
+    assert_eq!(cal.temperature("noul"), 0.89);
+}

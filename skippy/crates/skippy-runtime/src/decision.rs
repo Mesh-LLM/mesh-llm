@@ -8,6 +8,7 @@
 
 use serde_json::{Map, Number, Value};
 
+pub mod bighead;
 pub mod calibration;
 pub mod causal;
 mod diffusion;
