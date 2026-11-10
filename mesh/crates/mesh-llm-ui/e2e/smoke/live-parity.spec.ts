@@ -41,6 +41,7 @@ const LIVE_MODELS = {
 type StreamScenario = {
   deltas?: string[]
   delayMs?: number
+  pauseAfterChunkCount?: number
   failAfterChunkCount?: number
   errorMessage?: string
   status?: number
@@ -144,6 +145,17 @@ async function installLiveBackend(page: Page, scenario: BackendScenario = {}) {
         value: backendState
       })
 
+      let resumeResponseStream: (() => void) | undefined
+      Object.defineProperty(window, '__liveParityResumeResponseStream', {
+        configurable: true,
+        value: () => {
+          if (!resumeResponseStream) throw new Error('No response stream is paused')
+          const resume = resumeResponseStream
+          resumeResponseStream = undefined
+          resume()
+        }
+      })
+
       const originalFetch = window.fetch.bind(window)
 
       function jsonResponse(payload: unknown, status = 200) {
@@ -213,6 +225,7 @@ async function installLiveBackend(page: Page, scenario: BackendScenario = {}) {
                 let timer: number | undefined
 
                 const cleanup = () => {
+                  resumeResponseStream = undefined
                   if (request.signal) {
                     request.signal.removeEventListener('abort', abortStream)
                   }
@@ -263,6 +276,10 @@ async function installLiveBackend(page: Page, scenario: BackendScenario = {}) {
                       )
                     )
                     chunkIndex += 1
+                    if (chunkIndex === responseScenario.pauseAfterChunkCount) {
+                      resumeResponseStream = pump
+                      return
+                    }
                     timer = window.setTimeout(pump, delayMs)
                     return
                   }
@@ -416,6 +433,88 @@ test('streaming failure leaves partial text and recoverable chat state', async (
   await expect(page.getByTestId('chat-send')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Retry last' })).toBeEnabled()
   await expect(page.getByText('Generating response…')).toHaveCount(0)
+})
+
+test('generated images decode after streaming, conversation switching and reload without entering follow-up input', async ({
+  page
+}, testInfo) => {
+  // A real opaque 2x2 RGB PNG, rather than the non-image bytes used by DOM unit tests.
+  const imageUrl =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgaPgPQhAKACX2Bf2gcp/LAAAAAElFTkSuQmCC'
+  const prompt = 'Generate a blue square'
+  const caption = 'Here is your blue square.'
+  const partialBody = `${caption}\n\n![Generated square](${imageUrl}`
+  const completeBody = `${partialBody})`
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ json: [] })
+  )
+  await installLiveBackend(page, {
+    responseScenarios: [{ deltas: [partialBody, ')'], pauseAfterChunkCount: 1 }, { deltas: ['The square is blue.'] }]
+  })
+
+  await page.goto(resolveAppUrl('/chat', testInfo))
+  await page.locator('#prompt-composer').fill(prompt)
+  await page.getByTestId('chat-send').click()
+
+  await expect(page.getByText(caption, { exact: true })).toBeVisible()
+  await expect(page.getByText('[Generated square]', { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Generated square' })).toHaveCount(0)
+  await expect(page.getByTestId('chat-layout')).not.toContainText('base64')
+  await page.evaluate(() =>
+    (window as unknown as { __liveParityResumeResponseStream: () => void }).__liveParityResumeResponseStream()
+  )
+
+  const image = page.getByRole('img', { name: 'Generated square' })
+  await expect(image).toHaveAttribute('src', imageUrl)
+  await expect
+    .poll(() =>
+      image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 2 && node.naturalHeight === 2)
+    )
+    .toBe(true)
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'New', exact: true }).click()
+  await expect(image).toHaveCount(0)
+  await page.getByRole('navigation', { name: 'Conversations' }).getByRole('button').filter({ hasText: prompt }).click()
+  await expect(image).toHaveAttribute('src', imageUrl)
+  await expect
+    .poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 2))
+    .toBe(true)
+
+  await page.locator('#prompt-composer').fill('What color is the square?')
+  await page.getByTestId('chat-send').click()
+  await expect(page.getByText('The square is blue.', { exact: true })).toBeVisible()
+  const { responseRequests } = await readBackendState(page)
+  expect(responseRequests).toHaveLength(2)
+  expect(responseRequests[1]?.input).toEqual([
+    { role: 'user', content: prompt },
+    { role: 'assistant', content: `${caption}\n\n[Generated square]` },
+    { role: 'user', content: 'What color is the square?' }
+  ])
+  expect(JSON.stringify(responseRequests[1])).not.toContain('data:image/')
+  expect(JSON.stringify(responseRequests[1])).not.toContain('base64')
+
+  await expect
+    .poll(() =>
+      page.evaluate((body) => {
+        const stored = JSON.parse(window.localStorage.getItem('mesh-llm.chat-state.live') ?? 'null') as {
+          state?: { threads?: Record<string, Array<{ body: string }>> }
+        } | null
+        return Object.values(stored?.state?.threads ?? {}).some((messages) =>
+          messages.some((message) => message.body === body)
+        )
+      }, completeBody)
+    )
+    .toBe(true)
+  await page.reload()
+  await expect(image).toHaveAttribute('src', imageUrl)
+  await expect
+    .poll(() =>
+      image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 2 && node.naturalHeight === 2)
+    )
+    .toBe(true)
+  await expect(page.getByText(caption, { exact: true })).toBeVisible()
 })
 
 test('live chat uploads an attachment before sending the parity request', async ({ page }, testInfo) => {

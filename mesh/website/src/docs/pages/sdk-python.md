@@ -65,6 +65,18 @@ Provider runtime limits, capabilities and optional thinking/payment observations
 remain separate; absent facts are unknown. See
 [Mesh model discovery](/docs/pages/model-discovery/) for HTTP shapes and migration.
 
+Read advertised output formats from each provider's metadata:
+
+```python
+for provider in details.providers:
+    output_modalities = (provider.metadata or {}).get("output_modalities")
+```
+
+For example, `["text", "image"]` declares image output support. Missing or empty
+values mean unknown; future modality names are preserved. Providers sharing a
+model ID can advertise different outputs. This does not describe image input
+support or decide whether a prompt should generate an image.
+
 ## Protocol-preserving agent requests
 
 `node.inference.chat_completions(body)` and `responses(body)` send the complete

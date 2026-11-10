@@ -103,14 +103,13 @@ image. Missing or empty values mean unknown, including advertisements from
 older peers. Future modality names are preserved. Read each provider's value;
 model-level metadata is present only when every provider agrees.
 
-For a provider from a rich model lookup, read the list as follows. The currently
-pinned Python SDK does not yet expose rich discovery.
+For a provider from a rich model lookup, read the list as follows:
 
 | SDK | Read advertised output modalities |
 |---|---|
 | Rust | `provider.metadata.as_ref().map(\|metadata\| &metadata.output_modalities)` |
 | Node.js | `provider.metadata?.output_modalities` |
-| Python | Pending rich discovery support in the currently pinned SDK. |
+| Python | `(provider.metadata or {}).get("output_modalities")` |
 | Swift | `if case let .object(metadata)? = provider.metadata { print(metadata["output_modalities"] as Any) }` |
 | Kotlin | `provider.metadata?.jsonObject?.get("output_modalities")` (import `kotlinx.serialization.json.jsonObject`) |
 

@@ -22,8 +22,8 @@
     {
       "descriptor_path": "ci/required-sdk-python/sdk-source.json",
       "repository": "Mesh-LLM/mesh-llm-python-sdk",
-      "revision": "0357f19f02cc3c2769ab46b0299af027e07049c1",
-      "manifest_sha256": "774e1fb4c94aff1d134ebdac64ffbad0cdef7288531fc9631140c00d01d74426",
+      "revision": "a6f940116e61b2cc128b9c0b09b28ddee06c6e49",
+      "manifest_sha256": "a66f40c9d40d51118d1f0d2e7b6db22bc6f851f9a1b787a30c3e004fd560daab",
       "purpose": "required external SDK compatibility and embedding clients"
     },
     {
