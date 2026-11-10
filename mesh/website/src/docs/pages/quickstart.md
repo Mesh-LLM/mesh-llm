@@ -44,13 +44,19 @@ Run the setup command after the executable is installed:
 mesh-llm setup
 ```
 
-On Windows PowerShell:
+On Windows, `install.ps1` already runs setup at the end of an interactive
+install, so skip this step if you just saw its summary. To run it again from
+PowerShell:
 
 ```powershell
 mesh-llm.exe setup
 ```
 
-On interactive macOS and Linux terminals, setup can offer to install and enable the background service. The GitHub star prompt only appears when interactive and eligible, and it defaults to Yes.
+On interactive terminals, setup offers to install the background service
+(default Yes) on macOS, Linux and Windows. Accepting it starts a node right
+away, and again at each login, on the console and API ports used below. The
+GitHub star prompt only appears when interactive and eligible, and it defaults
+to Yes.
 
 <a id="3-start-one-private-node"></a>
 
@@ -70,6 +76,23 @@ On Windows PowerShell:
 
 ```powershell
 mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+```
+
+If setup installed the background service, a node already holds these ports
+and this command fails because they are in use. Either load the model
+into the running node, which keeps it in the background without the `my-mesh`
+discovery name:
+
+```sh
+mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+```
+
+or stop the service first and run the command above. On macOS and Linux use
+`mesh-llm stop`; on Windows end the service's scheduled task, which also ends
+its node:
+
+```powershell
+schtasks /End /TN mesh-llm
 ```
 
 Keep this terminal open. A ready node exposes:
@@ -107,6 +130,13 @@ List the models your local node can route to:
 
 ```sh
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
+```
+
+On Windows PowerShell, where `curl` is an alias of `Invoke-WebRequest` and `jq`
+is not installed:
+
+```powershell
+(Invoke-RestMethod http://localhost:9337/v1/models).data.id
 ```
 
 You should see at least one model id. Use that id for direct API calls or agents.
