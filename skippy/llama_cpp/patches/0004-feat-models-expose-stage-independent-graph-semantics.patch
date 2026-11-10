@@ -1,7 +1,7 @@
-From 6439190f803502060b2717f741cb8ce39b3b83f9 Mon Sep 17 00:00:00 2001
+From 09392936039560342d8acf116526ece1f112aec4 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 04/15] feat(models): expose stage-independent graph semantics
+Subject: [PATCH 04/16] feat(models): expose stage-independent graph semantics
 
 ---
  src/llama-context.cpp            |  19 +-
@@ -1928,10 +1928,10 @@ index 7137c58d6..2622c5878 100644
      ggml_tensor * build_rwkv_token_shift_load(
          llm_graph_input_rs * inp,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 3648d3207..fd12f9966 100644
+index dfd78d5af..74bf1ed53 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -3301,24 +3301,6 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+@@ -2894,24 +2894,6 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
      }
  }
  
@@ -1957,10 +1957,10 @@ index 3648d3207..fd12f9966 100644
      // M-RoPE needs the 2D position, the PLE / Engram n-gram hashes need the token id
      return hparams.n_pos_per_embd() > 1 || hparams.ple_n_heads > 0;
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 152da5166..874c3739d 100644
+index cd1539fa0..2be8788e1 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -297,6 +297,10 @@ public:
+@@ -285,6 +285,10 @@ public:
      void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
  
@@ -1971,7 +1971,7 @@ index 152da5166..874c3739d 100644
      // true if llama_kv_cell_ext holds information that has to survive a state save/restore
      bool has_cell_ext() const;
  
-@@ -516,6 +520,7 @@ public:
+@@ -504,6 +508,7 @@ public:
      void set_input_k_shift   (ggml_tensor * dst) const;
      void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -3519,10 +3519,10 @@ index 3300822d2..c764b0d53 100644
      if (layer.time_mix_ln && layer.time_mix_ln_b) {
          // group norm with head_count groups
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
-index 1ae940166..74bc61e56 100644
+index 2931268ba..c044b686b 100644
 --- a/src/skippy/stage_realization.cpp
 +++ b/src/skippy/stage_realization.cpp
-@@ -265,14 +265,13 @@ void skippy_realize_stage_graph(
+@@ -277,14 +277,13 @@ void skippy_realize_stage_graph(
      explicit_import_token_axes.reserve(selection.activation_imports.size());
      for (size_t index = 0; index < selection.activation_imports.size(); ++index) {
          const ggml_tensor * source = selection.activation_imports[index];
@@ -3545,5 +3545,5 @@ index 1ae940166..74bc61e56 100644
  
      std::unordered_map<const ggml_tensor *, ggml_tensor *> replacements;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

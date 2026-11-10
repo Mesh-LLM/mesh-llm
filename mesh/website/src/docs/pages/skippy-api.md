@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **21 headers** and **131 exported functions**.
+Current generated surface: **21 headers** and **130 exported functions**.
 
 ## Quick navigation
 
@@ -199,7 +199,7 @@ Current generated surface: **21 headers** and **131 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>17 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>16 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-memory-cache-capabilities"><code>skippy_model_memory_cache_capabilities</code></a>
         <a href="#skippy-fn-skippy-export-state"><code>skippy_export_state</code></a>
@@ -213,7 +213,6 @@ Current generated surface: **21 headers** and **131 exported functions**.
         <a href="#skippy-fn-skippy-session-verify-rollback-counts"><code>skippy_session_verify_rollback_counts</code></a>
         <a href="#skippy-fn-skippy-export-kv-page"><code>skippy_export_kv_page</code></a>
         <a href="#skippy-fn-skippy-import-kv-page"><code>skippy_import_kv_page</code></a>
-        <a href="#skippy-fn-skippy-import-cachegen-kv-page-v1"><code>skippy_import_cachegen_kv_page_v1</code></a>
         <a href="#skippy-fn-skippy-session-save-prefix"><code>skippy_session_save_prefix</code></a>
         <a href="#skippy-fn-skippy-session-restore-prefix"><code>skippy_session_restore_prefix</code></a>
         <a href="#skippy-fn-skippy-session-memory-used-cells"><code>skippy_session_memory_used_cells</code></a>
@@ -1915,20 +1914,6 @@ LLAMA_API enum skippy_status skippy_import_kv_page(
         struct skippy_error ** out_error);
 ```
 
-<a id="skippy-fn-skippy-import-cachegen-kv-page-v1"></a>
-#### `skippy_import_cachegen_kv_page_v1`
-
-Imports validated CacheGen records directly into resident KV storage.
-
-```cpp
-LLAMA_API enum skippy_status skippy_import_cachegen_kv_page_v1(
-         struct skippy_session * session,
-        const struct skippy_kv_page_desc * desc,
-        const struct skippy_cachegen_record_v1 * records,
-        size_t record_count,
-        struct skippy_error ** out_error);
-```
-
 <a id="skippy-fn-skippy-session-save-prefix"></a>
 #### `skippy_session_save_prefix`
 
@@ -2198,7 +2183,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
 - `asr.h`: `skippy_asr_model`, `skippy_asr_result`, `skippy_asr_info_v1`, `skippy_asr_transcribe_params_v1`, `skippy_asr_segment_v1`, `SKIPPY_ASR_INFO_V1_ABI_VERSION = 1`, `SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SEGMENT_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SAMPLE_RATE = 16000`, `SKIPPY_ASR_MAX_SAMPLES = (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)`
 - `clef.h`: `skippy_clef_model`, `skippy_clef_order`, `skippy_clef_info_v1`, `SKIPPY_CLEF_INFO_V1_ABI_VERSION = 1`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 79`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`, `SKIPPY_FEATURE_CLEF_DECISIONS = (UINT64_C(1) << 42)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 80`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`, `SKIPPY_FEATURE_CLEF_DECISIONS = (UINT64_C(1) << 42)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_token_score_request`, `skippy_iteration_request`
@@ -2211,7 +2196,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
 - `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_state_residency`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`
-- `state.h`: `skippy_memory_cache_capability`, `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_cachegen_record_kind`, `skippy_cachegen_record_v1`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`, `SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION = 1`
+- `state.h`: `skippy_memory_cache_capability`, `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`
 - `system_one.h`: `skippy_model`, `skippy_system_one_slot`
 - `workloads.h`: `skippy_model`, `skippy_session`, `skippy_workload_kind`, `skippy_workload_pooling`, `skippy_workload_info_v1`, `SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION = 1`
 

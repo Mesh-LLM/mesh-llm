@@ -3,7 +3,6 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(super) struct DurableRecordTarget<'a> {
     pub(super) l3: Option<&'a L3Tier>,
-    pub(super) cachegen_enabled: bool,
     #[cfg(test)]
     pub(super) before_l3_spill: Option<&'a dyn Fn()>,
 }
@@ -86,7 +85,6 @@ type DurableSpillWorker = (
 /// Starts the optional bounded worker that isolates durable I/O from L1 publication.
 pub(super) fn start_durable_spill_worker(
     l3: Option<Arc<L3Tier>>,
-    cachegen_enabled: bool,
     byte_cap: u64,
     stage_id: &str,
     #[cfg(test)] received: Arc<std::sync::atomic::AtomicUsize>,
@@ -111,18 +109,14 @@ pub(super) fn start_durable_spill_worker(
                 while pause.load(std::sync::atomic::Ordering::Acquire) {
                     std::thread::sleep(std::time::Duration::from_millis(2));
                 }
-                spill_exact_record_to_l3(&l3, cachegen_enabled, pending);
+                spill_exact_record_to_l3(&l3, pending);
             }
         })?;
     Ok((Some(sender), Some(task)))
 }
 
 /// Persists one exact-state payload without affecting its already-published L1 entry.
-pub(super) fn spill_exact_record_to_l3(
-    l3: &L3Tier,
-    cachegen_enabled: bool,
-    pending: PendingDurableSpill,
-) {
+pub(super) fn spill_exact_record_to_l3(l3: &L3Tier, pending: PendingDurableSpill) {
     let PendingDurableSpill {
         page_id,
         payload,
@@ -139,57 +133,14 @@ pub(super) fn spill_exact_record_to_l3(
         .kv_desc
         .as_ref()
         .and_then(|desc| kv_page_geometry(desc, payload.byte_len()));
-    let cachegen_spill = if cachegen_enabled {
-        match (extra.kv_desc.as_ref(), payload.kv_bytes().ok().flatten()) {
-            (Some(desc), Some(kv)) if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) => {
-                match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
-                    Ok(archive) if archive.bytes.len() < kv.len() => {
-                        let calibration_digest = skippy_cache::segment_digest(&archive.bytes);
-                        Some(l3.spill_cachegen_with_cost(
-                            &namespace,
-                            &token_ids,
-                            &payload,
-                            kv_desc_json.clone().unwrap_or_default(),
-                            skippy_cache::CacheGenKvPayload {
-                                archive: archive.bytes,
-                                decoded_len: desc.payload_bytes,
-                                calibration_digest,
-                            },
-                            l3_cost,
-                        ))
-                    }
-                    Ok(_) => None,
-                    Err(error) => {
-                        static WARNED_CACHEGEN: std::sync::atomic::AtomicBool =
-                            std::sync::atomic::AtomicBool::new(false);
-                        if !WARNED_CACHEGEN.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                            let _ = skippy_events::diagnostics::emit(
-                                skippy_events::diagnostics::ServingDiagnostic::Warning {
-                                    message: "CacheGen encode declined; storing native KV page"
-                                        .to_string(),
-                                    context: Some(format!("page_id={} reason={error:#}", page_id)),
-                                },
-                            );
-                        }
-                        None
-                    }
-                }
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
-    let spill = cachegen_spill.unwrap_or_else(|| {
-        l3.spill_with_cost(
-            &namespace,
-            &token_ids,
-            &payload,
-            kv_desc_json,
-            geometry.as_ref(),
-            l3_cost,
-        )
-    });
+    let spill = l3.spill_with_cost(
+        &namespace,
+        &token_ids,
+        &payload,
+        kv_desc_json,
+        geometry.as_ref(),
+        l3_cost,
+    );
     emit_l3_state_transitions(l3);
     if let Err(error) = spill {
         static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

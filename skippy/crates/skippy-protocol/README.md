@@ -62,10 +62,14 @@ DFlash status lists the encodings it reads (`bf16`, `q8`, `q4`), and the
 DFlash plan sent to every earlier stage names the one they send. A final
 stage that lists none attaches no split DFlash.
 
-Current generation 16 raises the stage frame budget from 8 MiB to 64 MiB, so a
+Generation 16 raises the stage frame budget from 8 MiB to 64 MiB, so a
 prefill chunk of a wide boundary crosses as one frame; a chunk whose output
-still exceeds the budget is sent as consecutive prefill frames. All
-participants must advertise `stage-generation-16`; older peers fail closed.
+still exceeds the budget is sent as consecutive prefill frames.
+
+Current generation 17 removes the experimental CacheGen KV disk codec from
+the stage wire contract: `StageKvCacheConfig` carries no `codec` field and
+the CacheGen import path is gone. All participants must advertise
+`stage-generation-17`; older peers fail closed.
 
 Admission requires mesh-subprotocol control, list-valued status responses,
 strict local-content identity, canonical stage-admission descriptors, and stale

@@ -1,7 +1,7 @@
-From 9fc01de9b3dd2f513a0fa624c8bf377e2c6c96e1 Mon Sep 17 00:00:00 2001
+From a17f9066d96a9e864e88217706d7eaa52e91b21a Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH] models: add Laya decision model support
+Subject: [PATCH 06/16] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -69,7 +69,7 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index d04825da4..54c87b6f2 100644
+index 3ed7fa09d..3cce54b03 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -81,10 +81,10 @@ index d04825da4..54c87b6f2 100644
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -108,6 +108,8 @@ enum skippy_feature {
+@@ -107,6 +107,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
  #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
  
- #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
 +/** @brief Full-model Laya decision reads (`skippy/laya.h`). */
 +#define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
  
@@ -435,15 +435,15 @@ index 3486feb6e..ff95ba534 100644
          case LLM_ARCH_NOMIC_BERT_MOE:
          case LLM_ARCH_EUROBERT:
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 1e1d2d7c8..f806cdbdc 100644
+index 79dc77162..8b3e89d63 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -47,7 +47,8 @@ uint64_t skippy_abi_features(void) {
+@@ -46,7 +46,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
             SKIPPY_FEATURE_UNLOAD_EVENTS |
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
-            SKIPPY_FEATURE_SYSTEM_ONE |
--           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
-+           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
+-           SKIPPY_FEATURE_SYSTEM_ONE;
++           SKIPPY_FEATURE_SYSTEM_ONE |
 +           SKIPPY_FEATURE_LAYA_DECISIONS;
  }
  
@@ -2807,5 +2807,5 @@ index 000000000..8a713d563
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

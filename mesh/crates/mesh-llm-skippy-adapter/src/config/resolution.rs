@@ -17,7 +17,6 @@ use super::types::{
     ResolvedMultimodalConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
     ResolvedStageKvCache, ResolvedThroughputConfig, SkippyConfigResolveRequest,
 };
-use mesh_llm_config::KvDiskCodec;
 use mesh_llm_config::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
 };
@@ -311,10 +310,6 @@ fn resolve_model_fit_config(
     if l2_max_bytes > 0 && matches!(prefix_cache, ResolvedStageKvCache::Disabled) {
         anyhow::bail!("model_fit.cache_ram_mib requires prefix caching to be enabled");
     }
-    let kv_cache_codec = match context.request.mesh_config.runtime.kv_cache.disk.codec {
-        KvDiskCodec::Native => skippy_protocol::StageKvCacheCodec::Native,
-        KvDiskCodec::CacheGen => skippy_protocol::StageKvCacheCodec::CacheGen,
-    };
 
     Ok(ResolvedModelFitConfig {
         ctx_size,
@@ -324,7 +319,6 @@ fn resolve_model_fit_config(
         cache_type_v,
         prefix_cache,
         l2_max_bytes,
-        kv_cache_codec,
         kv_offload,
         kv_offload_resolved,
         kv_unified,

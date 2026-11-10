@@ -35,8 +35,6 @@ pub const FEATURE_UNLOAD_EVENTS: u64 = bindings::skippy::skippy_ffi_bridge_featu
 pub const FEATURE_NON_CHAT_WORKLOADS: u64 =
     bindings::skippy::skippy_ffi_bridge_feature_non_chat_workloads;
 pub const FEATURE_SYSTEM_ONE: u64 = bindings::skippy::skippy_ffi_bridge_feature_system_one;
-pub const FEATURE_CACHEGEN_KV_PAGE: u64 =
-    bindings::skippy::skippy_ffi_bridge_feature_cachegen_kv_page;
 pub const FEATURE_LAYA_DECISIONS: u64 = bindings::skippy::skippy_ffi_bridge_feature_laya_decisions;
 pub const FEATURE_SPEECH_RECOGNITION: u64 =
     bindings::skippy::skippy_ffi_bridge_feature_speech_recognition;

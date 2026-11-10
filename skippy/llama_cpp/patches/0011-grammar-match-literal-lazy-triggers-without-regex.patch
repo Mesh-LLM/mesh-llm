@@ -1,7 +1,7 @@
-From b5f2cf1efb8ca2eeab77267967328bfda8dab1ef Mon Sep 17 00:00:00 2001
+From 3fd4d3b1f52cf7bf54aa951bd46cce31e23fc6f9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
-Subject: [PATCH 11/15] grammar: match literal lazy triggers without regex
+Subject: [PATCH 11/16] grammar: match literal lazy triggers without regex
 
 ---
  src/llama-grammar.cpp                   | 10 ++++
@@ -32,10 +32,10 @@ index 4e096a368..96772743d 100644
          // get from the first matched capturing group to the end of the string
          size_t start = std::string::npos;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index f393c6edc..b8b159025 100644
+index 08f071fec..b0d36d46a 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -196,6 +196,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -195,6 +195,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
      llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
      llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
      llama_build_and_test(test-grammar-parser.cpp  LABEL behavior  LINK llama)
@@ -121,3 +121,6 @@ index 000000000..6df57b5c6
 +    assert(insensitive.find("WORD") == 0);
 +    return 0;
 +}
+-- 
+2.56.0
+

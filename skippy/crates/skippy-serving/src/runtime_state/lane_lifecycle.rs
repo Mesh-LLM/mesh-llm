@@ -452,26 +452,6 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn import_cachegen_kv_page(
-        &mut self,
-        session_id: &str,
-        desc: &RuntimeKvPageDesc,
-        archive: &[u8],
-    ) -> Result<()> {
-        self.abandon_session_end_kv_exports(session_id);
-        let session = self.session(session_id)?;
-        session.import_cachegen_kv_page(desc, archive)?;
-        let token_end = desc
-            .token_start
-            .checked_add(desc.token_count)
-            .ok_or_else(|| anyhow::anyhow!("CacheGen KV page token range overflows"))?;
-        self.session_token_counts
-            .entry(session_id.to_string())
-            .and_modify(|current| *current = (*current).max(token_end))
-            .or_insert(token_end);
-        Ok(())
-    }
-
     pub fn save_resident_prefix(
         &mut self,
         session_id: &str,

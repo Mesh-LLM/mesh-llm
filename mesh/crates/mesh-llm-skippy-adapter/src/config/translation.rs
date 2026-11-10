@@ -450,7 +450,6 @@ impl ResolvedSkippyConfig {
                 shared_prefix_stride_tokens: 0,
                 shared_prefix_record_limit: 0,
                 l2_max_bytes: 0,
-                codec: skippy_protocol::StageKvCacheCodec::Native,
             }),
             ResolvedStageKvCache::Explicit(template) => {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
@@ -462,7 +461,6 @@ impl ResolvedSkippyConfig {
                     shared_prefix_stride_tokens: 128,
                     shared_prefix_record_limit: 2,
                     l2_max_bytes: 0,
-                    codec: skippy_protocol::StageKvCacheCodec::Native,
                 });
                 cache.mode = template.mode.clone();
                 if let Some(value) = template.max_entries {
@@ -490,7 +488,6 @@ impl ResolvedSkippyConfig {
         }
         if let Some(cache) = resolved.as_mut() {
             cache.l2_max_bytes = self.model_fit.l2_max_bytes;
-            cache.codec = self.model_fit.kv_cache_codec;
         }
         Ok(resolved)
     }

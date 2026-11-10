@@ -375,10 +375,6 @@ skippy_abi = "0.1.25"
             16_384
         );
         assert_eq!(defaults.runtime.kv_cache.disk.budget_mib, None);
-        assert_eq!(
-            defaults.runtime.kv_cache.disk.codec,
-            crate::KvDiskCodec::Native
-        );
 
         // The directory must be absolute on the host running the test, and a
         // drive letter is what makes a path absolute on Windows.
@@ -394,7 +390,6 @@ mode = "fixed"
 directory = '{directory}'
 budget_mib = 32768
 minimum_free_mib = 16384
-codec = "cachegen"
 "#
         ))
         .expect("fixed disk-cache config should parse");
@@ -403,10 +398,6 @@ codec = "cachegen"
             Some(KvDiskTierMode::Fixed)
         );
         assert_eq!(fixed.runtime.kv_cache.disk.budget_mib, Some(32_768));
-        assert_eq!(
-            fixed.runtime.kv_cache.disk.codec,
-            crate::KvDiskCodec::CacheGen
-        );
     }
 
     #[test]
@@ -439,6 +430,20 @@ codec = "cachegen"
                 "unexpected error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn disk_cache_config_rejects_removed_cachegen_codec_field() {
+        // The experimental CacheGen disk codec was removed; a config that
+        // still sets `codec` must fail closed at parse time instead of
+        // silently dropping the field and running with native-KV defaults.
+        let error =
+            parse_config_toml("[runtime.kv_cache.disk]\nmode = \"auto\"\ncodec = \"cachegen\"\n")
+                .expect_err("removed disk codec setting must fail to parse");
+        assert!(
+            format!("{error:#}").contains("unknown field `codec`"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
@@ -503,7 +508,6 @@ selection = "vulcan"
         for path in [
             "runtime.kv_cache.disk.mode",
             "runtime.kv_cache.disk.directory",
-            "runtime.kv_cache.disk.codec",
         ] {
             assert_eq!(setting(path).apply_mode, ConfigApplyMode::StaticOnLoad);
             assert_eq!(

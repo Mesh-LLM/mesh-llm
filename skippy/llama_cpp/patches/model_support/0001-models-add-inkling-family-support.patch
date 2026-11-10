@@ -1,7 +1,7 @@
-From 90cd3297774d1ea878c6ed437ac25dfdfd30a0b2 Mon Sep 17 00:00:00 2001
+From bdeffbbef5b1026e7ecb70a0dc37b95185db2faf Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 6 Nov 2026 10:32:22 -0800
-Subject: [PATCH] models: add inkling family support
+Subject: [PATCH 01/16] models: add inkling family support
 
 ---
  common/chat.cpp                      |   8 +
@@ -837,10 +837,10 @@ index cd34e36a9..4ee49d708 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 3257d7f2c..b5bb1cac5 100644
+index cb68e7e53..4b77e6bdd 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -290,6 +290,12 @@ llama_context::llama_context(
+@@ -291,6 +291,12 @@ llama_context::llama_context(
          }
      }
  
@@ -937,10 +937,10 @@ index 53810f36f..e685800f3 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index fd12f9966..8a655a138 100644
+index 74bf1ed53..04fdaef79 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -3268,7 +3268,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
+@@ -2861,7 +2861,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
      }
  }
  
@@ -949,7 +949,7 @@ index fd12f9966..8a655a138 100644
      const int64_t n_tokens = ubatch->n_tokens;
  
      GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-@@ -3278,7 +3278,16 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+@@ -2871,7 +2871,16 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
      const int64_t n_kv = dst->ne[0];
      GGML_ASSERT(dst->ne[1] == n_tokens);
  
@@ -967,7 +967,7 @@ index fd12f9966..8a655a138 100644
      for (int64_t i = 0; i < n_tokens; ++i) {
          const llama_seq_id seq_id = ubatch->seq_id[i][0];
  
-@@ -3289,8 +3298,10 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+@@ -2882,8 +2891,10 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
          for (int64_t j = 0; j < n_kv; ++j) {
              // use the ACTUAL absolute position in the KV cell; physical slot order is not monotonic
              int32_t rel = (int32_t) extent; // zero-bias column
@@ -980,7 +980,7 @@ index fd12f9966..8a655a138 100644
                  if (d >= 0 && d < (llama_pos) extent) {
                      rel = (int32_t) d;
                  }
-@@ -4537,8 +4548,9 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+@@ -4130,8 +4141,9 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
      kv->set_input_pos_bucket(dst, ubatch);
  }
  
@@ -993,10 +993,10 @@ index fd12f9966..8a655a138 100644
  
  void llama_kv_cache_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 874c3739d..7189c4447 100644
+index 2be8788e1..a76a85a88 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -299,7 +299,7 @@ public:
+@@ -287,7 +287,7 @@ public:
  
      // inkling: fill dst I32 [n_kv, n_tokens] with flat rel-bias gather indices,
      // idx(i, j) = i*(extent + 1) + rel; empty/out-of-band cells map to the zero-bias column `extent`
@@ -1005,7 +1005,7 @@ index 874c3739d..7189c4447 100644
  
      // true if llama_kv_cell_ext holds information that has to survive a state save/restore
      bool has_cell_ext() const;
-@@ -520,7 +520,7 @@ public:
+@@ -508,7 +508,7 @@ public:
      void set_input_k_shift   (ggml_tensor * dst) const;
      void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -2877,3 +2877,6 @@ index 538f90013..16842c535 100644
                  } else {
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
+-- 
+2.56.0
+

@@ -28,7 +28,7 @@ fn resident_prefix_is_preferred(matched_tokens: usize, exact_tokens: Option<usiz
 fn preflight_l3_kv_location(
     location: &skippy_cache::L3Location,
 ) -> Result<Option<skippy_runtime::RuntimeKvPageDesc>> {
-    if !location.native_kv_passthrough && !location.cachegen_kv {
+    if !location.native_kv_passthrough {
         return Ok(None);
     }
     let json = location
@@ -37,11 +37,7 @@ fn preflight_l3_kv_location(
         .context("native KV manifest has no runtime page descriptor")?;
     let desc: skippy_runtime::RuntimeKvPageDesc =
         serde_json::from_str(json).context("native KV manifest has an invalid page descriptor")?;
-    let declared_bytes = if location.cachegen_kv {
-        location.kv_decoded_bytes
-    } else {
-        location.kv_bytes
-    };
+    let declared_bytes = location.kv_bytes;
     let kv_bytes = usize::try_from(declared_bytes).context("KV payload length exceeds usize")?;
     desc.validate_payload(kv_bytes)
         .context("native KV manifest page descriptor is incompatible")?;
@@ -1046,10 +1042,9 @@ impl KvStageIntegration {
         if fill.payload.byte_len() == 0 {
             return Ok(None);
         }
-        if (location.native_kv_passthrough || location.cachegen_kv)
+        if location.native_kv_passthrough
             && (fill.token_count != location.token_count
                 || fill.kv_desc_json != location.kv_desc_json
-                || fill.cachegen_kv != location.cachegen_kv
                 || fill.kv_decoded_bytes != location.kv_decoded_bytes)
         {
             return Ok(None);
@@ -1102,16 +1097,7 @@ impl KvStageIntegration {
                         // Same fail-closed checks as a radix restore: a
                         // descriptor that does not describe these bytes, or a
                         // page that is not the whole prefix, is a miss.
-                        let payload_valid = if fill.cachegen_kv {
-                            usize::try_from(desc.payload_bytes)
-                                .ok()
-                                .is_some_and(|raw_len| {
-                                    skippy_cache::cachegen::archive::validate_archive(kv, raw_len)
-                                        .is_ok()
-                                })
-                        } else {
-                            desc.validate_payload(kv.len()).is_ok()
-                        };
+                        let payload_valid = desc.validate_payload(kv.len()).is_ok();
                         if !payload_valid
                             || desc.token_start != 0
                             || desc.token_count != token_count
@@ -1126,11 +1112,7 @@ impl KvStageIntegration {
 
                 if let Some((kv, desc)) = kv_page {
                     let import_started = Instant::now();
-                    if fill.cachegen_kv {
-                        runtime.import_cachegen_kv_page(session_id, desc, kv.as_ref())?;
-                    } else {
-                        runtime.import_kv_page(session_id, desc, kv.as_ref())?;
-                    }
+                    runtime.import_kv_page(session_id, desc, kv.as_ref())?;
                     kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                 }
                 let import_started = Instant::now();
@@ -1147,16 +1129,7 @@ impl KvStageIntegration {
             }
             _ => return Ok(None),
         }
-        let logical_bytes = if fill.cachegen_kv {
-            fill.kv_decoded_bytes.saturating_add(
-                fill.payload
-                    .recurrent_state_bytes()
-                    .map(|bytes| bytes.len() as u64)
-                    .unwrap_or_default(),
-            )
-        } else {
-            fill.payload.byte_len()
-        };
+        let logical_bytes = fill.payload.byte_len();
         let payload_kind = fill.payload.kind();
         let restore_cost = lookup_started.elapsed().as_secs_f64() * 1_000.0;
         l3.benefit_observe_l3_restore(
@@ -1169,24 +1142,6 @@ impl KvStageIntegration {
         // Re-warm the RAM tier off the request path. A drop is fine: the
         // disk copy stays authoritative. The fill claim rides along so the
         // worker releases it only once the entry is radix-resident.
-        if fill.cachegen_kv {
-            return Ok(Some(ExactStateRestore {
-                page_id: identity.page_id.clone(),
-                token_count: token_count as usize,
-                payload_kind,
-                logical_bytes,
-                entries: 0,
-                reconstruct_ms: 0.0,
-                reconstruct_bytes: 0,
-                reconstruct_blocks: 0,
-                lookup_ms,
-                kv_import_ms,
-                recurrent_import_ms,
-                source: "l3-cachegen",
-                fill_ms,
-                rewarm_enqueued: false,
-            }));
-        }
         let l2_promotion_digest = self.l2.as_ref().and_then(|l2| {
             l2.consider_l3_fill(&location.manifest_key, token_count, fill.payload.byte_len())
                 .then(|| location.manifest_key.clone())
@@ -1408,7 +1363,6 @@ mod tests {
             kv_desc_json: Some(serde_json::to_string(desc).unwrap()),
             kv_bytes: desc.payload_bytes,
             native_kv_passthrough: true,
-            cachegen_kv: false,
             kv_decoded_bytes: desc.payload_bytes,
         }
     }

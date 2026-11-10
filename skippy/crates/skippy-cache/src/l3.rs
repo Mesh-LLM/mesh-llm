@@ -85,9 +85,6 @@ pub const CODEC_NATIVE_KV_PAGE: &str = "native-kv-page";
 /// tensor types, geometry, and platform are bound by the exact-state identity
 /// and the serialized runtime page descriptor carried by the manifest.
 pub const CODEC_NATIVE_KV_PAGE_VERSION: u32 = 1;
-/// CacheGen archive followed by an exact recurrent-state tail.
-pub const CODEC_CACHEGEN_KV_ENVELOPE: &str = "cachegen-kv-envelope";
-pub const CODEC_CACHEGEN_KV_ENVELOPE_VERSION: u32 = 1;
 
 /// The codec used to encode a payload's segment bytes, stamped into the
 /// manifest so representations are explicit and negotiable.
@@ -117,20 +114,11 @@ impl PayloadCodec {
         }
     }
 
-    pub fn cachegen_kv_envelope() -> Self {
-        Self {
-            name: CODEC_CACHEGEN_KV_ENVELOPE.to_string(),
-            version: CODEC_CACHEGEN_KV_ENVELOPE_VERSION,
-        }
-    }
-
     /// Whether this build can assemble a payload encoded with this codec.
     /// Only the exact raw name and version are supported; any other name or a
     /// future raw version is unknown and must be refused before assembly.
     pub fn is_supported(&self) -> bool {
-        (self.name == CODEC_RAW && self.version == CODEC_RAW_VERSION)
-            || (self.name == CODEC_CACHEGEN_KV_ENVELOPE
-                && self.version == CODEC_CACHEGEN_KV_ENVELOPE_VERSION)
+        self.name == CODEC_RAW && self.version == CODEC_RAW_VERSION
     }
 }
 
@@ -187,9 +175,9 @@ pub struct SegmentCodecIdentity {
     /// Byte length the codec decodes to. Must equal the assembled payload
     /// region this segment covers; a mismatch is corruption, not a hint.
     pub decoded_len: u64,
-    /// Calibration namespace for lossy codecs (e.g. the CacheGen CDF
-    /// calibration digest). Must be empty for exact codecs; lossy lookups
-    /// only ever match a payload calibrated with the same digest.
+    /// Calibration namespace for lossy codecs. Must be empty for exact
+    /// codecs; lossy lookups only ever match a payload calibrated with the
+    /// same digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration_digest: Option<String>,
 }
@@ -220,10 +208,6 @@ impl SegmentCodecIdentity {
         }
     }
 
-    pub fn cachegen_archive(decoded_len: u64, calibration_digest: String) -> Self {
-        crate::cachegen::lmcache::segment_identity(decoded_len, calibration_digest)
-    }
-
     /// Whether this identity names the supported native KV passthrough
     /// representation. This is stricter than a name check: an identity with
     /// the wrong version, class, or calibration is not native passthrough.
@@ -234,27 +218,16 @@ impl SegmentCodecIdentity {
             && self.calibration_digest.is_none()
     }
 
-    pub fn is_cachegen_archive(&self) -> bool {
-        self.name == crate::cachegen::lmcache::CACHEGEN_CODEC_NAME
-            && self.version == crate::cachegen::lmcache::CACHEGEN_CODEC_VERSION
-            && self.class == CodecClass::Lossy
-            && self
-                .calibration_digest
-                .as_deref()
-                .is_some_and(|digest| !digest.is_empty())
-    }
-
     /// Whether this build can assemble a segment encoded with this identity.
     /// Exact raw and native KV passthrough are implemented. Both assemble
     /// verbatim; anything else is unknown and must be refused before assembly.
     pub fn is_supported(&self) -> bool {
         let supported_representation = (self.name == CODEC_RAW
             && self.version == CODEC_RAW_VERSION)
-            || self.is_native_kv_page()
-            || self.is_cachegen_archive();
+            || self.is_native_kv_page();
         supported_representation
-            && (self.is_cachegen_archive()
-                || (self.class == CodecClass::Exact && self.calibration_digest.is_none()))
+            && self.class == CodecClass::Exact
+            && self.calibration_digest.is_none()
     }
 
     /// Internal consistency the capability negotiation relies on: an exact
@@ -315,8 +288,7 @@ pub struct HandoffManifest {
     pub payload_digest: String,
     pub segments: Vec<HandoffSegmentRef>,
     pub kv_bytes: u64,
-    /// Decoded native KV length. Equal to `kv_bytes` for native pages; for a
-    /// CacheGen envelope `kv_bytes` is the archive boundary.
+    /// Decoded native KV length. Equal to `kv_bytes` for native pages.
     #[serde(default)]
     pub kv_decoded_bytes: u64,
     pub recurrent_bytes: u64,
@@ -368,15 +340,6 @@ impl HandoffManifest {
                 .codec_identity
                 .as_ref()
                 .is_some_and(SegmentCodecIdentity::is_native_kv_page)
-        })
-    }
-
-    pub fn uses_cachegen_kv(&self) -> bool {
-        self.segments.iter().any(|segment| {
-            segment
-                .codec_identity
-                .as_ref()
-                .is_some_and(SegmentCodecIdentity::is_cachegen_archive)
         })
     }
 }
@@ -1983,26 +1946,6 @@ fn manifest_version_is_supported(version: u32) -> bool {
 /// segment index so the offending ref is identifiable in the message.
 fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
     let has_native_kv = manifest.uses_native_kv_passthrough();
-    let has_cachegen_kv = manifest.uses_cachegen_kv();
-    let kv_representation = if has_cachegen_kv {
-        "CacheGen KV"
-    } else {
-        "native KV"
-    };
-    if has_native_kv && has_cachegen_kv {
-        bail!(
-            "manifest {} mixes native and CacheGen KV representations",
-            manifest.payload_digest
-        );
-    }
-    let envelope_is_cachegen =
-        manifest.codec.as_ref() == Some(&PayloadCodec::cachegen_kv_envelope());
-    if envelope_is_cachegen != has_cachegen_kv {
-        bail!(
-            "manifest {} payload codec disagrees with its CacheGen segments",
-            manifest.payload_digest
-        );
-    }
     let has_runtime_descriptor = manifest
         .kv_desc_json
         .as_deref()
@@ -2019,46 +1962,6 @@ fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
             "manifest {} names native KV segments without a current, complete kv-recurrent payload and runtime page descriptor",
             manifest.payload_digest
         );
-    }
-    if has_cachegen_kv
-        && (manifest.version != MANIFEST_VERSION
-            || manifest.payload_kind != "kv-recurrent"
-            || manifest.kv_bytes == 0
-            || manifest.kv_decoded_bytes == 0
-            || !has_runtime_descriptor
-            || manifest.kv_bytes.checked_add(manifest.recurrent_bytes)
-                != Some(manifest.total_bytes)
-            || manifest.codec.as_ref() != Some(&PayloadCodec::cachegen_kv_envelope()))
-    {
-        bail!(
-            "manifest {} names CacheGen KV without a current, complete kv-recurrent envelope and runtime page descriptor",
-            manifest.payload_digest
-        );
-    }
-    if has_cachegen_kv {
-        let mut cachegen_segments = manifest.segments.iter().filter(|segment| {
-            segment
-                .codec_identity
-                .as_ref()
-                .is_some_and(SegmentCodecIdentity::is_cachegen_archive)
-        });
-        let cachegen_segment = cachegen_segments
-            .next()
-            .context("CacheGen manifest has no archive segment")?;
-        let cachegen_identity = cachegen_segment
-            .codec_identity
-            .as_ref()
-            .context("CacheGen archive segment has no codec identity")?;
-        if cachegen_segments.next().is_some()
-            || cachegen_segment.offset != 0
-            || cachegen_segment.bytes != manifest.kv_bytes
-            || cachegen_identity.decoded_len != manifest.kv_decoded_bytes
-        {
-            bail!(
-                "manifest {} CacheGen archive must be one complete KV segment with matching encoded and decoded lengths",
-                manifest.payload_digest
-            );
-        }
     }
     for segment in &manifest.segments {
         let Some(identity) = segment.codec_identity.as_ref() else {
@@ -2086,7 +1989,7 @@ fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
                 segment.bytes
             );
         }
-        if has_native_kv || has_cachegen_kv {
+        if has_native_kv {
             let end = segment
                 .offset
                 .checked_add(segment.bytes)
@@ -2094,20 +1997,15 @@ fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
             let covers_kv = segment.offset < manifest.kv_bytes;
             if covers_kv && end > manifest.kv_bytes {
                 bail!(
-                    "manifest {} segment {} crosses the {kv_representation} boundary at byte {}",
+                    "manifest {} segment {} crosses the native KV boundary at byte {}",
                     manifest.payload_digest,
                     segment.index,
                     manifest.kv_bytes
                 );
             }
-            let expected_kv = if has_cachegen_kv {
-                identity.is_cachegen_archive()
-            } else {
-                identity.is_native_kv_page()
-            };
-            if covers_kv != expected_kv {
+            if covers_kv != identity.is_native_kv_page() {
                 bail!(
-                    "manifest {} segment {} representation disagrees with the {kv_representation} boundary at byte {}",
+                    "manifest {} segment {} representation disagrees with the native KV boundary at byte {}",
                     manifest.payload_digest,
                     segment.index,
                     manifest.kv_bytes

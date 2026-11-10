@@ -281,17 +281,6 @@ fn replay_cached_full_replay_rebuilds_and_reexecutes_gates() {
     replay.finish();
 }
 #[test]
-fn replay_metal_selects_cachegen_gate_without_qualifying_device_execution() {
-    let replay = Replay::new();
-    replay.run(true, false, true, "metal");
-    let calls = replay.calls();
-    assert!(contains(
-        first(&calls, "cmake", true),
-        "test-skippy-cachegen-metal"
-    ));
-    replay.finish();
-}
-#[test]
 fn replay_cached_standard_product_keeps_build_shortcut_and_no_ctest() {
     let replay = Replay::new();
     replay.run(false, false, true, "cpu");

@@ -1,7 +1,8 @@
-From 0fb08138b1b7604222e39ead955fb27b22ddb85b Mon Sep 17 00:00:00 2001
+From c4e7e4f767f968b7c111ebe6c590a4dfa0b37671 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:20:42 +1100
-Subject: [PATCH] test(skippy): cover head-input publication and stage capture
+Subject: [PATCH 14/16] test(skippy): cover head-input publication and stage
+ capture
 
 DeepSeek-V4 publishes the head input as the mean of its hyper-connection
 streams, so the final stage of a split must keep it: its stage capture

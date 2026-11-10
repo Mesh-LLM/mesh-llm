@@ -391,9 +391,9 @@ fn f32_to_f16_bits(value: f32) -> u16 {
 }
 
 /// Shared bit-exact IEEE 754 binary16 conversions. Lived inside this module
-/// historically; exposed as a `pub(crate)` submodule so the CacheGen
-/// reference in `skippy-cache` reuses the exact conversion instead of
-/// duplicating it (a second RNE implementation is a future bit-mismatch).
+/// historically; exposed as a `pub(crate)` submodule so sibling consumers
+/// reuse the exact conversion instead of duplicating it (a second RNE
+/// implementation is a future bit-mismatch).
 pub(crate) mod f16_bits {
     pub fn f32_to_f16_bits(value: f32) -> u16 {
         let bits = value.to_bits();

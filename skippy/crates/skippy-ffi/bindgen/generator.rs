@@ -142,8 +142,8 @@ impl ParseCallbacks for EnumRenamer {
         let enum_screaming = enum_name.to_ascii_uppercase();
         let prefix_tokens: Vec<&str> = enum_screaming.split('_').collect();
         // Prefer the full enum-name prefix, then progressively shorter ones:
-        // upstream declares `SKIPPY_CACHEGEN_RECORD_F16` inside
-        // `skippy_cachegen_record_kind`, omitting the trailing `KIND`.
+        // upstream declares `SKIPPY_KV_PAGE_COMPONENT_BASE` inside
+        // `skippy_kv_page_component_role`, omitting the trailing `ROLE`.
         let stripped = (1..=prefix_tokens.len())
             .rev()
             .map(|count| prefix_tokens[..count].join("_") + "_")

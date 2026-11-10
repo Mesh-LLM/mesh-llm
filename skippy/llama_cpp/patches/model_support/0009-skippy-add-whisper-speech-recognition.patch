@@ -1,7 +1,7 @@
-From d96bec3062e9d6b566576d2e0a11ccc00b24abf6 Mon Sep 17 00:00:00 2001
+From d4cf660b73c0fbd60e79a0094c07834040311771 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
-Subject: [PATCH] skippy: add Whisper speech recognition
+Subject: [PATCH 09/16] skippy: add Whisper speech recognition
 
 Build pinned whisper.cpp on this tree's ggml targets and fold it into
 libllama when SKIPPY_WHISPER_SOURCE_DIR names its source, so the runtime
@@ -216,7 +216,7 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 54c87b6f2..80710eb3b 100644
+index 3cce54b03..80d25f023 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -228,8 +228,8 @@ index 54c87b6f2..80710eb3b 100644
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -110,6 +110,8 @@ enum skippy_feature {
- #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
+@@ -109,6 +109,8 @@ enum skippy_feature {
+ 
  /** @brief Full-model Laya decision reads (`skippy/laya.h`). */
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
 +/** @brief Full-model speech recognition (`skippy/asr.h`). */
@@ -300,13 +300,13 @@ index eab1c3a46..ea0cdd178 100644
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index f806cdbdc..ed9825df3 100644
+index 8b3e89d63..87698aa30 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -48,7 +48,11 @@ uint64_t skippy_abi_features(void) {
+@@ -47,7 +47,11 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
-            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
 -           SKIPPY_FEATURE_LAYA_DECISIONS;
 +           SKIPPY_FEATURE_LAYA_DECISIONS |
 +#if defined(SKIPPY_HAS_WHISPER)
@@ -788,5 +788,5 @@ index 000000000..680549066
 +    delete result;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -1,7 +1,7 @@
-From 5379c658181b619a90ac7abea47eb277b3115e24 Mon Sep 17 00:00:00 2001
+From 48e211a60ed40d44b1471cb943048f5a432c6b30 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH 02/16] feat(skippy): realize admitted stages from live graphs
 
 ---
  common/common.cpp                       |  109 ---
@@ -22,7 +22,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/llama-context.cpp                   |    4 +-
  src/llama-memory-hybrid-idx.cpp         |   10 +
  src/llama-memory-hybrid-idx.h           |    4 +
- src/skippy/abi.cpp                      |   59 ++
+ src/skippy/abi.cpp                      |   58 ++
  src/skippy/activation.cpp               | 1028 ++++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  164 ++++
@@ -73,7 +73,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  907 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  136 +++
- src/skippy/state.cpp                    | 1189 +++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1093 +++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/state_memory.cpp             |  116 +++
@@ -83,7 +83,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
  tests/test-batch-alloc.cpp              |   21 +
- 79 files changed, 16496 insertions(+), 407 deletions(-)
+ 79 files changed, 16399 insertions(+), 407 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -1580,10 +1580,10 @@ index 59940dbb8..1980f48e5 100644
      // state write/load
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 new file mode 100644
-index 000000000..ceed6e5d3
+index 000000000..45e3b4b86
 --- /dev/null
 +++ b/src/skippy/abi.cpp
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,58 @@
 +#include "skippy/common.h"
 +
 +#include <cstdlib>
@@ -1631,8 +1631,7 @@ index 000000000..ceed6e5d3
 +           SKIPPY_FEATURE_DEVICE_EVENTS |
 +           SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
 +           SKIPPY_FEATURE_UNLOAD_EVENTS |
-+           SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
-+           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_NON_CHAT_WORKLOADS;
 +}
 +
 +void skippy_error_free(struct skippy_error * error) {
@@ -15213,10 +15212,10 @@ index 000000000..1cb24c7cb
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..f035ea13f
+index 000000000..1d05583bc
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1189 @@
+@@ -0,0 +1,1093 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -15864,102 +15863,6 @@ index 000000000..f035ea13f
 +        graph->reset();
 +    }
 +    session->n_past = std::max<int32_t>(session->n_past, static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count, std::numeric_limits<int32_t>::max())));
-+    skippy_mtp_clear_session_state(session);
-+    session->verify_checkpoints.clear();
-+    session->ctx->synchronize();
-+    return skippy_success(out_error);
-+}
-+
-+enum skippy_status skippy_import_cachegen_kv_page_v1(struct skippy_session *                  session,
-+                                                     const struct skippy_kv_page_desc *       desc,
-+                                                     const struct skippy_cachegen_record_v1 * records,
-+                                                     size_t                                   record_count,
-+                                                     struct skippy_error **                   out_error) {
-+    if (session == nullptr || session->ctx == nullptr || desc == nullptr || records == nullptr || record_count == 0) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                         "session, descriptor, and CacheGen records are required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (session->n_past != 0) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "CacheGen page import requires a fresh session");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    std::string error;
-+    bool        ok               = false;
-+    bool        unsupported      = false;
-+    bool        invalid_argument = false;
-+    if (desc->codec == SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1) {
-+        auto * iswa = skippy_get_iswa_cache(session);
-+        if (!skippy_validate_composite_desc(*desc, desc->payload_bytes, error)) {
-+            invalid_argument = true;
-+        } else if (iswa == nullptr) {
-+            unsupported = true;
-+            error       = "composite CacheGen page requires ISWA memory";
-+        } else {
-+            const auto     base         = skippy_page_from_component(*desc, desc->components[0]);
-+            const auto     swa          = skippy_page_from_component(*desc, desc->components[1]);
-+            const uint64_t split_offset = desc->components[1].payload_offset;
-+            size_t         split        = 0;
-+            while (split < record_count && records[split].output_offset < split_offset) {
-+                ++split;
-+            }
-+            if (split == 0 || split == record_count) {
-+                invalid_argument = true;
-+                error            = "CacheGen records do not cover both ISWA components";
-+            } else {
-+                bool       base_unsupported = false;
-+                bool       swa_unsupported  = false;
-+                bool       base_invalid     = false;
-+                bool       swa_invalid      = false;
-+                const bool base_valid       = iswa->get_base()->stage_import_cachegen_kv_page(
-+                    session->seq_id, base, records, split, 0, error, base_unsupported, base_invalid, true);
-+                const bool swa_valid =
-+                    base_valid && iswa->get_swa()->stage_import_cachegen_kv_page(
-+                                      session->seq_id, swa, records + split, record_count - split,
-+                                      static_cast<size_t>(split_offset), error, swa_unsupported, swa_invalid, true);
-+                unsupported      = base_unsupported || swa_unsupported;
-+                invalid_argument = base_invalid || swa_invalid;
-+                if (base_valid && swa_valid) {
-+                    bool ignored         = false;
-+                    bool ignored_invalid = false;
-+                    ok = iswa->get_base()->stage_import_cachegen_kv_page(session->seq_id, base, records, split, 0,
-+                                                                         error, ignored, ignored_invalid) &&
-+                         iswa->get_swa()->stage_import_cachegen_kv_page(
-+                             session->seq_id, swa, records + split, record_count - split,
-+                             static_cast<size_t>(split_offset), error, ignored, ignored_invalid);
-+                    invalid_argument = ignored_invalid;
-+                }
-+            }
-+        }
-+        if (!ok && iswa != nullptr) {
-+            iswa->get_base()->seq_rm(session->seq_id, -1, -1);
-+            iswa->get_swa()->seq_rm(session->seq_id, -1, -1);
-+        }
-+    } else if (desc->codec == 0 || desc->codec == SKIPPY_KV_PAGE_CODEC_SINGLE_V1) {
-+        if (auto * kv = skippy_get_kv_cache(session, out_error)) {
-+            ok = kv->stage_import_cachegen_kv_page(session->seq_id, *desc, records, record_count, 0, error, unsupported,
-+                                                   invalid_argument);
-+        } else {
-+            return SKIPPY_STATUS_UNSUPPORTED;
-+        }
-+    } else {
-+        invalid_argument = true;
-+        error            = "unsupported native KV page codec";
-+    }
-+    if (!ok) {
-+        const enum skippy_status status = invalid_argument ?
-+                                              SKIPPY_STATUS_INVALID_ARGUMENT :
-+                                              (unsupported ? SKIPPY_STATUS_UNSUPPORTED : SKIPPY_STATUS_RUNTIME_ERROR);
-+        skippy_set_error(out_error, status, error.c_str());
-+        return status;
-+    }
-+    if (llm_graph_result * graph = session->ctx->get_gf_res_prev_active()) {
-+        graph->reset();
-+    }
-+    session->n_past = std::max<int32_t>(session->n_past,
-+                                        static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count,
-+                                                                                std::numeric_limits<int32_t>::max())));
 +    skippy_mtp_clear_session_state(session);
 +    session->verify_checkpoints.clear();
 +    session->ctx->synchronize();
@@ -17958,3 +17861,6 @@ index c41e91d61..eee60d81d 100644
      t.test("token_batch_explicit_fields", [&](testing & t) {
          llama_token  token[3]    = { 5, 6, 7 };
          llama_pos    pos[3]      = { 3, 4, 5 };
+-- 
+2.56.0
+

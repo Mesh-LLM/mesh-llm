@@ -1,7 +1,7 @@
-From d07d6c5c78bdb9c09d531c3e4681fe0a4cff7139 Mon Sep 17 00:00:00 2001
+From 4c601277457238afc88f6a94e87751dda2113cc0 Mon Sep 17 00:00:00 2001
 From: benthecarman <benthecarman@live.com>
 Date: Wed, 7 Oct 2026 14:42:10 -0500
-Subject: [PATCH 09/15] server: use a secure RNG for generated IDs
+Subject: [PATCH 09/16] server: use a secure RNG for generated IDs
 
 random_string() seeded a fresh mt19937 with a single 32-bit value from
 random_device on every call, so each 32-character ID could take at most
@@ -37,5 +37,5 @@ index 311eb4f12..fba8dfc3f 100644
  
      return result;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

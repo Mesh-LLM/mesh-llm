@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 79;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 80;
 pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
@@ -35,7 +35,6 @@ pub const SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_MAX_DIMS: u32 = 4;
 pub const SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS: u32 = 8;
-pub const SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_TOP_LOGPROBS: u32 = 20;
 pub const SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_LAYA_INFO_V1_ABI_VERSION: u32 = 1;
@@ -1350,33 +1349,6 @@ pub enum skippy_kv_page_component_role {
     Base = 1,
     Swa = 2,
 }
-#[repr(u32)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum skippy_cachegen_record_kind {
-    F16 = 0,
-    Exact = 1,
-    F16Transposed = 2,
-    F32 = 3,
-    F32Transposed = 4,
-    Q8_0 = 5,
-    Q4_0 = 6,
-}
-#[doc = " @brief Describes one validated CacheGen record and its logical page destination."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_cachegen_record_v1 {
-    pub abi_version: u32,
-    pub kind: u32,
-    pub element_bytes: u32,
-    pub reserved0: u32,
-    pub output_offset: u64,
-    pub decoded_bytes: u64,
-    pub token_count: u64,
-    pub token_start: u64,
-    pub total_tokens: u64,
-    pub payload: *const ::std::os::raw::c_void,
-    pub payload_bytes: usize,
-}
 #[doc = " @brief Describes one independently ranged cache in a composite KV page."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -1531,16 +1503,6 @@ unsafe extern "C" {
         desc: *const skippy_kv_page_desc,
         input: *const ::std::os::raw::c_void,
         input_bytes: usize,
-        out_error: *mut *mut skippy_error,
-    ) -> skippy_status;
-}
-unsafe extern "C" {
-    #[doc = " @brief Imports validated CacheGen records directly into resident KV storage."]
-    pub fn skippy_import_cachegen_kv_page_v1(
-        session: *mut skippy_session,
-        desc: *const skippy_kv_page_desc,
-        records: *const skippy_cachegen_record_v1,
-        record_count: usize,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
 }
@@ -2279,7 +2241,6 @@ pub const skippy_ffi_bridge_feature_diagnostic_events: u64 = 34359738368;
 pub const skippy_ffi_bridge_feature_unload_events: u64 = 68719476736;
 pub const skippy_ffi_bridge_feature_non_chat_workloads: u64 = 137438953472;
 pub const skippy_ffi_bridge_feature_system_one: u64 = 274877906944;
-pub const skippy_ffi_bridge_feature_cachegen_kv_page: u64 = 549755813888;
 pub const skippy_ffi_bridge_feature_laya_decisions: u64 = 1099511627776;
 pub const skippy_ffi_bridge_feature_speech_recognition: u64 = 2199023255552;
 pub const skippy_ffi_bridge_feature_clef_decisions: u64 = 4398046511104;

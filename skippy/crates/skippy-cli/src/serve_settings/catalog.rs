@@ -197,13 +197,6 @@ pub const OPTIONS: &[OptionSpec] = &[
         "Prompt reuse: auto, on, off, record",
     ),
     option(
-        "prefix-cache-codec",
-        "cache",
-        "kv_cache.codec",
-        Kind::Text,
-        "Durable representation: native or experimental cachegen",
-    ),
-    option(
         "prefix-cache-budget",
         "cache",
         "kv_cache.max_bytes",

@@ -37,8 +37,7 @@ the prompt cache. Turn it on deliberately.
 ## Configuration surface
 
 The capacity and location settings are expressible through a config file,
-environment variables, and CLI flags. The typed payload codec is configured in
-the file so its process-restart boundary is explicit. Sizes everywhere use
+environment variables, and CLI flags. Sizes everywhere use
 **explicit IEC suffixes**
 (`KiB`, `MiB`, `GiB`, `TiB`) on a positive whole number — for example `32GiB`.
 Bare numbers and decimal/`GB`-style units are rejected.
@@ -48,7 +47,6 @@ Bare numbers and decimal/`GB`-style units are rejected.
 | Mode / fixed budget | `mode` (`off`/`auto`/`fixed`) + `budget_mib` | `MESH_LLM_KV_CACHE_DISK` (`off`/`auto`/`SIZE`) | `--kv-cache-disk off\|auto\|SIZE` |
 | Directory | `directory` (absolute) | `MESH_LLM_KV_CACHE_DISK_DIR` (absolute) | `--kv-cache-disk-dir ABSOLUTE_PATH` |
 | Minimum free reserve | `minimum_free_mib` | `MESH_LLM_KV_CACHE_MIN_FREE` (SIZE) | `--kv-cache-min-free SIZE` |
-| Payload codec | `codec` (`native`/`cachegen`) | — | — |
 
 Standalone `skippy serve` (local and binary stage modes) accepts the same three disk cache CLI flags and
 `MESH_LLM_KV_CACHE_*` environment variables. Mesh configuration-file settings
@@ -67,13 +65,11 @@ Notes:
 - Directories must be absolute. Relative paths (including bare-drive forms like
   `C:\cache` on non-Windows hosts) fail closed rather than resolving under the
   working directory.
-- `codec = "native"` is the default. `codec = "cachegen"` is opt-in and only
-  writes CacheGen archives for explicitly qualified Metal F32/F32, F32/F16,
-  and F16/F32 KV layouts. Every other backend or layout writes native pages.
+- Persisted KV state is always stored as exact native pages.
 
 ### Precedence
 
-Each of the four settings is resolved **independently, field by field**, with
+Each of the three settings is resolved **independently, field by field**, with
 later sources overriding earlier ones:
 
 ```text

@@ -26,7 +26,7 @@ fn l1_is_visible_while_l3_spill_is_blocked() {
         let worker_tier = &tier;
         let worker_budget = &budget;
         let worker = scope.spawn(move || {
-            store_exact_radix_record_with_codec(
+            store_exact_radix_record_with_durable_target(
                 worker_radix,
                 worker_blobs,
                 1,
@@ -34,7 +34,6 @@ fn l1_is_visible_while_l3_spill_is_blocked() {
                 None,
                 DurableRecordTarget {
                     l3: Some(worker_tier),
-                    cachegen_enabled: false,
                     before_l3_spill: Some(&before_l3_spill),
                 },
                 pending("first", &[1, 2], b"first-exact-state", worker_budget),

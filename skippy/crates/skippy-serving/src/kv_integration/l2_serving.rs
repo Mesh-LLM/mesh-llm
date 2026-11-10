@@ -387,7 +387,6 @@ mod tests {
             kv_desc_json: None,
             kv_bytes: 0,
             native_kv_passthrough: false,
-            cachegen_kv: false,
             kv_decoded_bytes: 0,
         }
     }
