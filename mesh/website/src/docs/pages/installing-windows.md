@@ -34,7 +34,11 @@ then doubling, up to five restarts in a row) and writes its output to
 `%LOCALAPPDATA%\mesh-llm\logs\service.log`, keeping the part before in
 `service.previous.log` once it passes 10 MiB. The task runs while you are logged
 in, not before logon. Setup starts the task as soon as it installs it, so a
-node is already running on the console and API ports when setup finishes.
+node is usually running on the console and API ports when setup finishes. Check
+setup's summary: without a desktop session (setup run over SSH, for example)
+the task is installed but cannot start, and setup says it starts at your next
+logon. It does, or start it with `schtasks /Run /TN mesh-llm` once you are
+signed in to the desktop; until then no node holds the ports.
 
 Do not start a second foreground copy on the same ports: load models into the
 running node with `mesh-llm load <model>`, or stop the task with

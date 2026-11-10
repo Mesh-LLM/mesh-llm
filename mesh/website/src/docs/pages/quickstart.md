@@ -66,6 +66,22 @@ The commands below use named Nostr discovery, not a private-mesh setup.
 The discovery name is not an access-control credential. See
 [discovery, join tokens, and admission policy](/docs/pages/private-meshes/#discovery-and-admission).
 
+If setup's summary shows the service running, a node already holds the ports
+below and the `serve` command fails because they are in use. Before running it,
+stop the service: on macOS and Linux with `mesh-llm stop`; on Windows by ending
+its scheduled task, which also ends its node:
+
+```powershell
+schtasks /End /TN mesh-llm
+```
+
+Or skip `serve` and load the model into the running node with
+`mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL`. That node keeps
+running in the background but has no `my-mesh` discovery name, so stop the
+service and use `serve` below before you add another machine in step 7. If
+setup said the service starts at your next logon, no node is running yet and
+`serve` below works as is.
+
 Use this model first on a 12GB+ machine:
 
 ```sh
@@ -76,23 +92,6 @@ On Windows PowerShell:
 
 ```powershell
 mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
-```
-
-If setup installed the background service, a node already holds these ports
-and this command fails because they are in use. Either load the model
-into the running node, which keeps it in the background without the `my-mesh`
-discovery name:
-
-```sh
-mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
-```
-
-or stop the service first and run the command above. On macOS and Linux use
-`mesh-llm stop`; on Windows end the service's scheduled task, which also ends
-its node:
-
-```powershell
-schtasks /End /TN mesh-llm
 ```
 
 Keep this terminal open. A ready node exposes:
