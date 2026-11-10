@@ -9,9 +9,7 @@ use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, S
 use crate::{
     cli::{RuntimeArgs, ServerArgs, SingleStepArgs},
     report::SingleStepReport,
-    support::{
-        ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
-    },
+    support::{activation_width, generate_run_id, spawn_stage_until_ready, temp_config_path_for},
 };
 
 use super::{
@@ -355,32 +353,34 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
     fs::write(&topology_path, serde_json::to_vec_pretty(&topology)?)
         .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
-    let mut stage_command =
-        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
-    stage_command.args([
-        "--stage-transport",
-        "binary",
-        "--worker-only",
-        "--config",
-        config_path
-            .to_str()
-            .context("stage config path is not valid UTF-8")?,
-        "--topology",
-        topology_path
-            .to_str()
-            .context("topology path is not valid UTF-8")?,
-        "--max-inflight",
-        &args.max_inflight.to_string(),
-    ]);
-    configure_child_logs(&mut stage_command, args.child_logs);
-    let mut stage1 = ChildGuard::spawn(stage_command)?;
-
-    let mut stream = connect_ready_child(
-        args.stage1_bind_addr,
-        args.startup_timeout_secs,
-        &mut stage1,
-    )
-    .context("stage 1 binary server did not become ready")?;
+    let config_arg = config_path
+        .to_str()
+        .context("stage config path is not valid UTF-8")?
+        .to_string();
+    let topology_arg = topology_path
+        .to_str()
+        .context("topology path is not valid UTF-8")?
+        .to_string();
+    let max_inflight = args.max_inflight.to_string();
+    let (_stage1, mut stream) =
+        spawn_stage_until_ready(args.stage1_bind_addr, args.startup_timeout_secs, || {
+            let mut stage_command =
+                crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
+            stage_command.args([
+                "--stage-transport",
+                "binary",
+                "--worker-only",
+                "--config",
+                &config_arg,
+                "--topology",
+                &topology_arg,
+                "--max-inflight",
+                &max_inflight,
+            ]);
+            configure_child_logs(&mut stage_command, args.child_logs);
+            stage_command
+        })
+        .context("stage 1 binary server did not become ready")?;
     let request_id = 1;
     let session_id = 1;
     send_generation_config(&mut stream, request_id, session_id, 1)
