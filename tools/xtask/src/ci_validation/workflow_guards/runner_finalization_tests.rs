@@ -50,7 +50,7 @@ fn last(workflows: &mut BTreeMap<String, Node>) -> &mut Node {
 }
 
 #[test]
-fn actual_persistent_jobs_finish_after_uploads() {
+fn actual_persistent_jobs_finish_after_uploads_and_release_cache_save() {
     check(&actual()).unwrap();
 }
 #[test]
@@ -106,6 +106,28 @@ fn actual_cleanup_requires_execution_not_echo_or_masked_failure() {
         *field_mut(last(&mut workflows), "run") = Node::Scalar(run.into());
         assert!(check(&workflows).is_err(), "accepted {run}");
     }
+}
+#[test]
+fn actual_cuda_release_requires_save_before_cleanup_and_restore() {
+    let mut workflows = actual();
+    let steps = steps_mut(job_mut(
+        &mut workflows,
+        "release.yml",
+        "build_native_runtime_linux_x86_64_cuda",
+    ));
+    let length = steps.len();
+    steps.swap(length - 1, length - 2);
+    assert!(check(&workflows).is_err());
+    let mut workflows = actual();
+    steps_mut(job_mut(
+        &mut workflows,
+        "release.yml",
+        "build_native_runtime_linux_x86_64_cuda",
+    ))
+    .retain(|step| {
+        !field(step, "uses").is_some_and(|action| action.starts_with("actions/cache/restore@"))
+    });
+    assert!(check(&workflows).is_err());
 }
 #[test]
 fn outcome_order_and_whitespace_are_semantic_and_known_hosted_selectors_remain() {

@@ -824,11 +824,8 @@ or the existing Cargo xtool alias in a Rust-capable consumer checkout.
 
 Linux CUDA, ROCm and Vulkan release composition jobs use the pinned `public
 cpu` image, retaining producer checksum/import checks, attestation verification,
-and no-driver readiness. Native compiler images and CUDA architecture lists are
-unchanged; the release runs only on GitHub-provided runners, so the amd64 CUDA
-compiler row left its historical ARC self-hosted placement for hosted
-`ubuntu-24.04`, and Depot is never eligible for release legs regardless of
-`DEPOT_RUNNERS_ENABLED`. The
+and no-driver readiness. Native compiler images, CUDA architecture lists and
+the intentional ARC self-hosted amd64 CUDA placement remain unchanged. The
 shared UI producer introduces one dependency before host and Swift production;
 the release canary must compare total execution and phase timings before
 claiming a wall-time improvement.
