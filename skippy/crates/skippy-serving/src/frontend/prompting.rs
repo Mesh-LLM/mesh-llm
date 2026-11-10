@@ -22,6 +22,7 @@ use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
 use skippy_inference_api::generation::GenerationRequest;
+use skippy_inference_api::generation::MessageContent;
 use skippy_runtime::ChatTemplateJsonOptions;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
@@ -68,6 +69,23 @@ impl StageOpenAiBackend {
         request: &GenerationRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
+        // A prefilled assistant message is continued, not rendered as a turn:
+        // templates close every assistant turn, so the model would see a
+        // finished answer and stop. Render the history before it with the
+        // generation prompt and append its text, as llama.cpp's server does.
+        if let Some(continued) = assistant_continuation(request) {
+            let mut history = request.clone();
+            history.messages.pop();
+            history.extra.remove("prefill_assistant");
+            let options = ChatTemplateOptions {
+                add_assistant: true,
+                ..options
+            };
+            let mut prepared = self.prepare_chat_prompt(&history, options)?;
+            prepared.text.push_str(&continued);
+            return Ok(prepared);
+        }
+
         let marker = {
             let runtime = lock_runtime(&self.runtime);
             runtime.media_marker()
@@ -413,4 +431,92 @@ pub(super) fn parse_emulated_chat_output(
         reasoning_content: None,
         tool_calls,
     })
+}
+
+/// The text a `prefill_assistant` request asks the model to continue: the
+/// last message, when the request set `prefill_assistant` and that message is
+/// an assistant one whose content is text only. `None` leaves the request to
+/// the ordinary template rendering.
+fn assistant_continuation(request: &GenerationRequest) -> Option<String> {
+    request
+        .extra
+        .get("prefill_assistant")
+        .filter(|value| !value.is_null())?;
+    let last = request
+        .messages
+        .last()
+        .filter(|message| message.role == "assistant")?;
+    match last.content.as_ref()? {
+        MessageContent::Text(text) => Some(text.clone()),
+        MessageContent::Parts(parts) if parts.iter().all(|part| part.content_type == "text") => {
+            Some(
+                parts
+                    .iter()
+                    .filter_map(|part| part.text.as_deref())
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use skippy_inference_api::generation::GenerationMessage;
+
+    fn request(messages: Vec<(&str, &str)>, prefill: bool) -> GenerationRequest {
+        let mut request = GenerationRequest {
+            messages: messages
+                .into_iter()
+                .map(|(role, content)| GenerationMessage {
+                    role: role.into(),
+                    content: Some(MessageContent::Text(content.into())),
+                    extra: Default::default(),
+                })
+                .collect(),
+            ..GenerationRequest::default()
+        };
+        if prefill {
+            request
+                .extra
+                .insert("prefill_assistant".into(), Value::String("unused".into()));
+        }
+        request
+    }
+
+    #[test]
+    fn a_prefilled_assistant_message_is_continued() {
+        let request = request(vec![("user", "Count."), ("assistant", "1\n2\n")], true);
+        assert_eq!(assistant_continuation(&request).as_deref(), Some("1\n2\n"));
+    }
+
+    #[test]
+    fn without_prefill_or_an_assistant_tail_nothing_is_continued() {
+        let history = request(vec![("user", "Hi."), ("assistant", "Hello.")], false);
+        assert_eq!(assistant_continuation(&history), None);
+        let user_last = request(vec![("user", "Hi.")], true);
+        assert_eq!(assistant_continuation(&user_last), None);
+    }
+
+    #[test]
+    fn text_parts_are_joined_and_other_parts_are_left_to_the_template() {
+        let mut parts = request(vec![("user", "Count.")], true);
+        parts.messages.push(GenerationMessage {
+            role: "assistant".into(),
+            content: Some(MessageContent::Parts(
+                serde_json::from_value(serde_json::json!([
+                    {"type": "text", "text": "1\n"},
+                    {"type": "text", "text": "2\n"}
+                ]))
+                .unwrap(),
+            )),
+            extra: Default::default(),
+        });
+        assert_eq!(assistant_continuation(&parts).as_deref(), Some("1\n2\n"));
+        if let Some(MessageContent::Parts(list)) = &mut parts.messages[1].content {
+            list[1].content_type = "image_url".into();
+        }
+        assert_eq!(assistant_continuation(&parts), None);
+    }
 }
