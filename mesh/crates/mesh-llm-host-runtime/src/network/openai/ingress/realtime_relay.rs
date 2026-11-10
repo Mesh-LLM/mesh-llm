@@ -51,6 +51,8 @@ pub(super) fn is_realtime_upgrade(request: &proxy::BufferedHttpRequest) -> bool 
 fn opens_realtime_session(method: &str, path: &str, raw: &[u8]) -> bool {
     method.eq_ignore_ascii_case("GET")
         && path.split('?').next() == Some(REALTIME_PATH)
+        // A head that does not read back opens no session: the request goes
+        // on as an ordinary one, and what cannot be read is rejected there.
         && header_values_from_raw(raw, "upgrade")
             .unwrap_or_default()
             .iter()
