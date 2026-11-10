@@ -49,6 +49,23 @@ publication, coordinate a compatible host release boundary with the maintainers
 and add truthful machine-readable constraints when that boundary exists.
 Missing metadata is unknown compatibility, not certification of older releases.
 
+## Wallet profile requirements
+
+For initial adoption, the pinned
+[Lexe v0.1.0 release](https://github.com/Mesh-LLM/lexe-wallet-plugin/releases/tag/v0.1.0)
+supports fresh or unpinned profiles. Existing `wallet-lexe` pins require a
+separate identity-checked adoption procedure **before starting this pair**.
+This preset does not implement that procedure. Do not delete wallet pins or
+recovery seeds to bypass an identity mismatch.
+
+Check the existing wallet directory before startup. Binding `lexe-wallet` can
+select `payments/wallets/lexe-wallet` while legacy state remains under
+`payments/wallets/wallet-lexe` or `payments/lexe`. An empty destination can
+cause a new wallet to be provisioned before the engine checks the existing pin;
+the pin then rejects the new identity and the funded wallet remains unavailable
+to this pair. Establish a validated adoption path for existing state before
+startup, and keep the funded wallet state, pins and recovery seeds intact.
+
 ## Install and check
 
 After the host requirements and catalog publication are satisfied:
@@ -81,9 +98,10 @@ must also select a separate wallet directory. Keep existing funded state intact.
 
 Use `mesh-llm plugins list` to check the installed members. After starting the
 node, inspect `GET /api/plugins` on the node API for each member's runtime
-`status` and the engine's `manifest.openai_exchange_status`. A provider listed
-by `GET /api/plugins/providers` as serving `wallet.v1` is available for binding;
-a successful balance operation below verifies that the engine can use its
+`status` and the engine's `manifest.openai_exchange_status`. In
+`GET /api/plugins/providers`, check that the intended `wallet.v1` provider has
+`available: true`; a listed provider with `available: false` cannot be bound.
+A successful balance operation below verifies that the engine can use its
 bound wallet. Inspect the wallet and policy through the control operation:
 
 ```sh

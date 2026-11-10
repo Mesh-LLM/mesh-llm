@@ -1,1 +1,1 @@
-{"name":"payments-lexe","description":"Opt-in Lightning payments with Lexe. Starting the plugins can provision a mainnet wallet; fresh profiles default to free-only.","plugins":["lexe-wallet","pay-lightning"]}
+{"name":"payments-lexe","description":"Opt-in Lightning payments with Lexe for fresh/unpinned profiles. Existing wallet-lexe pins require separate identity-checked adoption. Startup can provision a mainnet wallet; fresh profiles default to free-only.","plugins":["lexe-wallet","pay-lightning"]}
