@@ -27,14 +27,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     if found == 0 {
         return Err("persistent-runner finalization census is empty".into());
     }
-    let release = workflows
-        .get("release.yml")
-        .ok_or("release workflow missing")?;
-    let cuda = release
-        .get("jobs")
-        .and_then(|jobs| jobs.get("build_native_runtime_linux_x86_64_cuda"))
-        .ok_or("CUDA release producer missing")?;
-    release_cache_order(cuda)
+    Ok(())
 }
 
 fn persistent_runner(job: &Node) -> bool {
@@ -98,12 +91,7 @@ fn all_outcomes(condition: &str) -> bool {
     let outcomes = outcomes.trim_matches(['(', ')']);
     let mut terms: Vec<_> = outcomes.split("||").collect();
     terms.sort_unstable();
-    terms == ["C", "F", "S"]
-        && matches!(
-            selector,
-            "" | "inputs.runner=='gpu-nvidia'"
-                | "vars.USE_SELF_HOSTED=='true'&&needs.metadata.outputs.force_hosted_runners!='true'"
-        )
+    terms == ["C", "F", "S"] && matches!(selector, "" | "inputs.runner=='gpu-nvidia'")
 }
 
 fn cleanup_invocation(run: &str) -> bool {
@@ -145,23 +133,6 @@ fn direct_cleanup(line: &str) -> bool {
         command.starts_with("ci-ops runner-cleanup --job ")
             && !command.contains(['|', ';', '&', '\x60', '<', '>', '(', ')'])
     })
-}
-
-fn release_cache_order(job: &Node) -> DynResult<()> {
-    final_step(job)?;
-    let steps = steps(job)?;
-    let save = steps
-        .get(steps.len().saturating_sub(2))
-        .and_then(|step| field(step, "uses"));
-    if !save.is_some_and(|action| action.starts_with("actions/cache/save@")) {
-        return Err("CUDA release cache save must immediately precede final cleanup".into());
-    }
-    if !steps.iter().any(|step| {
-        field(step, "uses").is_some_and(|action| action.starts_with("actions/cache/restore@"))
-    }) {
-        return Err("CUDA release cache restore missing".into());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

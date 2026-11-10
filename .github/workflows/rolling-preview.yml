@@ -53,4 +53,4 @@ jobs:
           set -euo pipefail
           gh workflow run release.yml --ref main \
             -f version="$VERSION" -f preview=true \
-            -f skip_gpu_bundles=false -f force_hosted_runners=true -f use_depot=false
+            -f skip_gpu_bundles=false
