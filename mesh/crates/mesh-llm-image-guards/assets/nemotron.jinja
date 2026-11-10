@@ -1,0 +1,165 @@
+{{ bos_token }}
+{%- if custom_policy is defined and custom_policy and custom_taxonomy is defined and custom_taxonomy -%}
+    {{ raise_exception("Set either custom_policy (Mode A: custom policy) or custom_taxonomy (Mode B: category list only), not both.") }}
+{%- endif -%}
+
+{%- if enable_thinking is defined -%}
+    {%- set thinking_token = "/think" if enable_thinking else "/no_think" -%}
+{%- else -%}
+    {%- set thinking_token = "/no_think" -%}
+{%- endif -%}
+
+{%- set default_output_format = """User Safety: safe or unsafe rating of the user input
+Response Safety: safe or unsafe rating of the assistant response. Omit if no assistant response present.
+Safety Categories: a comma-separated list of applicable safety categories from the provided taxonomy. Omit if all safe or not needed.""" -%}
+
+{%- if custom_policy is defined and custom_policy -%}
+    {%- set prefix = custom_policy ~ """
+<BEGIN CONVERSATION>
+user: """ -%}
+    {%- set suffix = """<END CONVERSATION>
+Output your answer in the following format:
+
+User Safety: safe or unsafe rating of the user input
+Response Safety: safe or unsafe rating of the assistant response. Omit if no assistant response present.
+Safety Categories: a comma-separated list of applicable safety categories from the custom policy. Omit if all safe or not needed.
+
+Only output the answer in the format specified above after thinking about the user input and assistant response.
+
+Do not include anything other than the output in the above format in your response. """ ~ (request_categories or "/no_categories") ~ " " ~ thinking_token ~ "\nOutput:" -%}
+{%- elif custom_taxonomy is defined and custom_taxonomy -%}
+    {%- set prefix = """You are a safety classifier for analyzing interactions between humans and LLMs. Given a request from a human user and a response from an LLM assistant, determine:
+- Whether the user input is safe or unsafe.
+- Whether the LLM assistant response is safe or unsafe.
+- Whether the LLM assistant response is a refusal.
+- If either the user input or assistant response is unsafe, determine the harmful categories that the input or response falls into.
+
+Taxonomy: The following are the list of safety categories that the input and response may fall into.
+""" ~ custom_taxonomy ~ """
+<BEGIN CONVERSATION>
+user: """
+    -%}
+    {%- set suffix = """<END CONVERSATION>
+Output your answer in the following format:
+
+""" ~ default_output_format ~ """
+
+Only output the answer in the format specified above after thinking about the user input and assistant response.
+
+Do not include anything other than the output in the above format in your response. """ ~ (request_categories or "/no_categories") ~ " " ~ thinking_token ~ "\nOutput:"
+    -%}
+{%- else -%}
+    {%- set prefix = """You are a safety classifier for analyzing interactions between humans and LLMs. Given a request from a human user and a response from an LLM assistant, determine:
+- Whether the user input is safe or unsafe.
+- Whether the LLM assistant response is safe or unsafe.
+- Whether the LLM assistant response is a refusal.
+- If either the user input or assistant response is unsafe, determine the harmful categories that the input or response falls into.
+
+Taxonomy: The following are the list of safety categories that the input and response may fall into.
+S1: Violence.
+S2: Sexual.
+S3: Criminal Planning/Confessions.
+S4: Guns and Illegal Weapons.
+S5: Controlled/Regulated Substances.
+S6: Suicide and Self Harm.
+S7: Sexual (minor).
+S8: Hate/Identity Hate.
+S9: PII/Privacy.
+S10: Harassment.
+S11: Threat.
+S12: Profanity.
+S13: Needs Caution.
+S14: Other.
+S15: Manipulation.
+S16: Fraud/Deception.
+S17: Malware.
+S18: High Risk Gov Decision Making.
+S19: Political/Misinformation/Conspiracy.
+S20: Copyright/Trademark/Plagiarism.
+S21: Unauthorized Advice.
+S22: Illegal Activity.
+S23: Immoral/Unethical.
+S24: Economic Harm.
+<BEGIN CONVERSATION>
+user: """
+    -%}
+    {%- set suffix = """<END CONVERSATION>
+Output your answer in the following format:
+
+""" ~ default_output_format ~ """
+
+Only output the answer in the format specified above after thinking about the user input and assistant response.
+
+Do not include anything other than the output in the above format in your response. """ ~ (request_categories or "/no_categories") ~ " " ~ thinking_token ~ "\nOutput:"
+    -%}
+{%- endif -%}
+
+{%- set ns = namespace(prompt='', image_token='') -%}
+
+{%- if messages[0]['role'] == 'system' -%}
+    {%- if messages[0]['content'] is string -%}
+        {%- set first_user_prefix = messages[0]['content'] + '\n\n' -%}
+    {%- else -%}
+        {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
+    {%- endif -%}
+    {%- set loop_messages = messages[1:] -%}
+{%- else -%}
+    {%- set first_user_prefix = "" -%}
+    {%- set loop_messages = messages -%}
+
+{%- endif -%}
+
+{{ "<start_of_turn>user\n" }}
+{%- for message in loop_messages -%}
+    {%- if (message['role'] == 'user') != (loop.index0 % 2 == 0) -%}
+        {{ raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") }}
+    {%- endif -%}
+    {%- if (message['role'] == 'assistant') -%}
+        {%- set role = "model" -%}
+    {%- else -%}
+        {%- set role = message['role'] -%}
+    {%- endif -%}
+
+    {%- if message['content'] is string -%}
+        {%- if (message['role'] == 'user') -%}
+            {# Skippy flattens image parts to a marker before Jinja. Preserve
+               the upstream image-before-prefix training layout for our one
+               private image operation, whose caption is fixed by the plugin. #}
+            {%- if mesh_image_input is defined and mesh_image_input -%}
+                {{ '<mesh_safety_image>' + prefix + 'Classify this image under the fixed child-safety policy.' }}
+            {%- else -%}
+                {{ ns.image_token + prefix + (message['content'] | trim) }}
+            {%- endif -%}
+        {%- else -%}
+            {{ 'response: agent:  ### Answer: ' + (message['content'] | trim) }}
+        {%- endif -%}
+    {%- elif message['content'] is iterable -%}
+        {%- for item in message['content'] -%}
+            {%- if item['type'] == 'image' -%}
+                {%- if loop.last -%}
+                    {{ '<start_of_image>' + ns.prompt | trim }}
+                {%- else -%}
+                    {%- set ns.image_token="<start_of_image>" -%}
+                {%- endif -%}
+            {%- elif item['type'] == 'text' -%}
+                {%- if (message['role'] == 'user') -%}
+                    {%- if loop.last -%}
+                        {{ ns.image_token + prefix + item['text'] | trim }}
+                    {%- else -%}
+                        {%- set ns.prompt = prefix + item['text'] | trim -%}
+                    {%- endif -%}
+
+                {%- else -%}
+                    {{ 'response: agent:  ### Answer: ' + item['text'] | trim }}
+                {%- endif -%}
+
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{ raise_exception("Invalid content type") }}
+    {%- endif -%}
+    {{ '\n' }}
+
+{%- endfor -%}
+
+{{ suffix + "<end_of_turn>\n<start_of_turn>model\n" }}

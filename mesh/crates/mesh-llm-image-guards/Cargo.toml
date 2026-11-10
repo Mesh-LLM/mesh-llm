@@ -1,0 +1,38 @@
+[package]
+name = "mesh-llm-image-guards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Private local safety classifiers for requesting and serving mesh images"
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "get-images"
+path = "src/bin/get-images.rs"
+
+[[bin]]
+name = "serve-images"
+path = "src/bin/serve-images.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0" }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0" }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.78.0", features = ["dynamic-native-runtime"] }
+skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.78.0" }
+skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.78.0", features = ["dynamic-native-runtime"] }
+skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.78.0" }
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0", features = ["dynamic-native-runtime"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"

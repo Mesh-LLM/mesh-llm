@@ -17,7 +17,9 @@ use crate::plugin::openai_exchange::ExchangeOutputDigests;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncWriteExt};
 #[path = "normalized_chat_stream.rs"]
 mod normalized_chat_stream;
 #[path = "normalized_stream_completion.rs"]
@@ -356,7 +358,13 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
 
     let parsed = try_parse_response_headers(&probe.buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
+    let mut body_reader = super::body_reader::BodyReader::new(
+        reader,
+        probe.buffered[parsed.header_end..].to_vec(),
+        parsed.chunked,
+        parsed.content_length,
+    );
+    let mut carry = Vec::new();
     let mut state = ResponsesStreamRelayState::new();
     let mut header = String::from(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
@@ -378,10 +386,22 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     let mut assembly = StreamedChatAssembly::default();
     loop {
         let mut processed = 0usize;
-        while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
+        while let Some((frame_end_rel, delimiter)) = carry[processed..]
+            .windows(2)
+            .position(|bytes| bytes == b"\n\n")
+            .map(|offset| (offset, 2))
+            .into_iter()
+            .chain(
+                carry[processed..]
+                    .windows(4)
+                    .position(|bytes| bytes == b"\r\n\r\n")
+                    .map(|offset| (offset, 4)),
+            )
+            .min_by_key(|(offset, _)| *offset)
+        {
             let frame_end = processed + frame_end_rel;
-            let frame = &carry[processed..frame_end];
-            processed = frame_end + 2;
+            let frame = std::str::from_utf8(&carry[processed..frame_end])?;
+            processed = frame_end + delimiter;
             let data_lines = frame
                 .lines()
                 .filter_map(|line| line.strip_prefix("data:"))
@@ -406,23 +426,19 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
             }
         }
         if processed > 0 {
-            carry = carry[processed..].to_string();
+            carry.drain(..processed);
         }
 
         if progress.done_seen {
             break;
         }
 
-        let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
-        if n == 0 {
+        let Some(bytes) = body_reader.next().await? else {
             break;
-        }
-        let new_data = String::from_utf8_lossy(&chunk[..n]);
-        carry.push_str(&new_data);
-        // Normalize CRLF so frame parsing works for both LF and CRLF upstreams
-        if carry.contains('\r') {
-            carry = carry.replace("\r\n", "\n");
+        };
+        carry.extend(bytes);
+        if carry.len() > 8 * 1024 * 1024 {
+            return Err(anyhow!("upstream SSE frame exceeds 8 MiB"));
         }
     }
 
@@ -784,6 +800,10 @@ async fn emit_translated_stream_done_event(
     write_captured_sse_event(tcp_stream, capture, event_name, &payload).await?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "chunked_image_stream_tests.rs"]
+mod chunked_image_stream_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1174,7 +1194,13 @@ mod tests {
             )
             .await
         });
-        upstream_writer.write_all(upstream).await.unwrap();
+        let framed = [
+            format!("{:x}\r\n", upstream.len()).as_bytes(),
+            upstream,
+            b"\r\n0\r\n\r\n",
+        ]
+        .concat();
+        upstream_writer.write_all(&framed).await.unwrap();
         upstream_writer.shutdown().await.unwrap();
         let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
@@ -1577,7 +1603,13 @@ data: [DONE]\n\n",
             )
             .await
         });
-        upstream_writer.write_all(upstream).await.unwrap();
+        let framed = [
+            format!("{:x}\r\n", upstream.len()).as_bytes(),
+            upstream,
+            b"\r\n0\r\n\r\n",
+        ]
+        .concat();
+        upstream_writer.write_all(&framed).await.unwrap();
         upstream_writer.shutdown().await.unwrap();
         let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();

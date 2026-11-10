@@ -755,6 +755,18 @@ impl PluginManager {
 
     #[cfg(test)]
     pub async fn set_test_inference_endpoints(&self, endpoints: Vec<InferenceEndpointRoute>) {
+        // Route fixtures represent an accepted health snapshot. Populate its
+        // legacy text declaration too, so mandatory admission can distinguish
+        // the fixture from a selected endpoint whose health disappeared.
+        let mut health = self.inner.endpoint_health.lock().await;
+        for endpoint in &endpoints {
+            health
+                .entry(format!("{}:{}", endpoint.plugin_name, endpoint.endpoint_id))
+                .or_insert_with(|| {
+                    health::EndpointHealthState::legacy_test_endpoint(endpoint.models.clone())
+                });
+        }
+        drop(health);
         *self.inner.test_inference_endpoints.lock().await = endpoints;
     }
 

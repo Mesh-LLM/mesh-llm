@@ -657,7 +657,7 @@ const LILICORR_HEADLESS_ENV: &str = "SKIPPY_DFLASH_LILICORR_HEADLESS";
 /// Refuses a LiliCorr draft unless [`LILICORR_HEADLESS_ENV`] asks to run it as
 /// plain DFlash.
 fn check_lilicorr_draft(model: *const Opaque) -> Result<()> {
-    if !meta_usize(model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
+    if meta_usize(model, LILICORR_CANDIDATE_TOPK_KEY)?.is_none_or(|top_k| top_k == 0) {
         return Ok(());
     }
     if !lilicorr_headless_enabled_by(std::env::var(LILICORR_HEADLESS_ENV).ok().as_deref()) {

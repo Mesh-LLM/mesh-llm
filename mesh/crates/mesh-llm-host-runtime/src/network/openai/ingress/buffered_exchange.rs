@@ -38,8 +38,10 @@ pub(super) async fn handle_buffered_api_request(
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
     if lifecycle.owns_parent() {
         request.mark_raw_lifecycle_owned();
+        // Requests can still be rejected by the selected model's mandatory
+        // safety gate. Do not persist the unapproved prompt at this boundary.
         if let Some(body) = request.body_bytes.as_deref() {
-            lifecycle.capture_request_body(body, request.artifact_request_media_kind());
+            lifecycle.defer_request_body(body, request.artifact_request_media_kind());
         }
     }
     let (tcp_stream, mut exchange) =
@@ -50,12 +52,16 @@ pub(super) async fn handle_buffered_api_request(
     if exchange.is_some() {
         request.mark_raw_lifecycle_owned();
     }
+    let (tcp_stream, response_safety) =
+        crate::network::openai::client_stream::ResponseSafetyBuffer::wrap(tcp_stream);
+    lifecycle.with_response_capture_guard(response_safety.capture_guard());
 
     let tcp_stream =
         match maybe_handle_control_request(tcp_stream, &request, &ctx, lifecycle.route_observer())
             .await
         {
             Ok(outcome) => {
+                let outcome = response_safety.finish(ctx.route.node, outcome).await;
                 finish_exchange(&mut exchange, outcome).await;
                 lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
                 return;
@@ -74,6 +80,7 @@ pub(super) async fn handle_buffered_api_request(
         match admit_buffered_api_request(tcp_stream, &ctx, ingress_type, &lifecycle).await {
             Ok(stream) => stream,
             Err(outcome) => {
+                let outcome = response_safety.finish(ctx.route.node, outcome).await;
                 finish_exchange(&mut exchange, outcome).await;
                 lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
                 return;
@@ -89,6 +96,7 @@ pub(super) async fn handle_buffered_api_request(
         )
         .await;
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
+        let outcome = response_safety.finish(ctx.route.node, outcome).await;
         finish_exchange(&mut exchange, outcome).await;
         lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
         return;
@@ -106,6 +114,7 @@ pub(super) async fn handle_buffered_api_request(
                 lifecycle.route_observer(),
             )
             .await;
+            let outcome = response_safety.finish(ctx.route.node, outcome).await;
             finish_exchange(&mut exchange, outcome).await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
@@ -131,6 +140,7 @@ pub(super) async fn handle_buffered_api_request(
                 super::record_pre_routing_rejection(&ctx.route, routing_model.as_deref(), 409)
                     .await;
             }
+            let outcome = response_safety.finish(ctx.route.node, outcome).await;
             finish_exchange(&mut exchange, outcome).await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
@@ -153,6 +163,7 @@ pub(super) async fn handle_buffered_api_request(
                 request.response_adapter,
                 outcome,
             );
+            let outcome = response_safety.finish(ctx.route.node, outcome).await;
             finish_exchange(&mut exchange, outcome).await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
@@ -172,6 +183,7 @@ pub(super) async fn handle_buffered_api_request(
     .await
     {
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
+        let outcome = response_safety.finish(ctx.route.node, outcome).await;
         finish_exchange(&mut exchange, outcome).await;
         lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
         return;
@@ -190,6 +202,7 @@ pub(super) async fn handle_buffered_api_request(
         )
         .await
     };
+    let outcome = response_safety.finish(ctx.route.node, outcome).await;
     if let Some(model) = routing_model.as_deref()
         && !request.is_tokenize_request()
     {

@@ -83,6 +83,10 @@ build-dev backend="" cuda_arch="" rocm_arch="":
 build-openai-exchange-exemplar message_format="human":
     @just with-lld cargo build -p mesh-llm-plugin --example openai-exchange-observer --message-format={{ message_format }}
 
+# Build backend-neutral local image guard plugins against the packaged Skippy runtime.
+build-image-guards:
+    @just with-lld cargo build --locked -p mesh-llm-image-guards --bins
+
 # Produce a local-install archive, with the same plugin.toml/executable layout as releases.
 [unix]
 package-openai-exchange-exemplar:

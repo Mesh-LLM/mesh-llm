@@ -117,7 +117,13 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         .await;
     }
 
-    let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
+    let mut body_reader = super::super::body_reader::BodyReader::new(
+        reader,
+        probe.buffered[parsed.header_end..].to_vec(),
+        parsed.chunked,
+        parsed.content_length,
+    );
+    let mut carry = Vec::new();
     let mut state = ChatStreamNormalizationState::default();
     let mut assembly = StreamedChatAssembly::default();
     let mut observed_usage = None;
@@ -144,10 +150,22 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut upstream_error_seen = false;
     loop {
         let mut processed = 0usize;
-        while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
+        while let Some((frame_end_rel, delimiter)) = carry[processed..]
+            .windows(2)
+            .position(|bytes| bytes == b"\n\n")
+            .map(|offset| (offset, 2))
+            .into_iter()
+            .chain(
+                carry[processed..]
+                    .windows(4)
+                    .position(|bytes| bytes == b"\r\n\r\n")
+                    .map(|offset| (offset, 4)),
+            )
+            .min_by_key(|(offset, _)| *offset)
+        {
             let frame_end = processed + frame_end_rel;
-            let frame = &carry[processed..frame_end];
-            processed = frame_end + 2;
+            let frame = std::str::from_utf8(&carry[processed..frame_end])?;
+            processed = frame_end + delimiter;
             let Some(data) = frame_data(frame) else {
                 continue;
             };
@@ -179,22 +197,19 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
             observe_output_progress(route_observer, upstream_error_seen, &mut first_chunk_seen);
         }
         if processed > 0 {
-            carry = carry[processed..].to_string();
+            carry.drain(..processed);
         }
 
         if done_seen {
             break;
         }
 
-        let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
-        if n == 0 {
+        let Some(bytes) = body_reader.next().await? else {
             break;
-        }
-        let new_data = String::from_utf8_lossy(&chunk[..n]);
-        carry.push_str(&new_data);
-        if carry.contains('\r') {
-            carry = carry.replace("\r\n", "\n");
+        };
+        carry.extend(bytes);
+        if carry.len() > 8 * 1024 * 1024 {
+            return Err(anyhow!("upstream SSE frame exceeds 8 MiB"));
         }
     }
 

@@ -4,6 +4,7 @@ pub(crate) mod automatic;
 pub(crate) mod client_stream;
 mod exchange_admission;
 mod forwarded_request;
+mod image_admission;
 pub(crate) mod ingress;
 pub(crate) mod model_discovery;
 pub(crate) mod model_names;

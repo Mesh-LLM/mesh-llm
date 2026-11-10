@@ -1178,10 +1178,9 @@ pub(super) async fn start_local_openai_model(
         );
     }
     anyhow::ensure!(
-        !plan
-            .breakdown
+        plan.breakdown
             .as_ref()
-            .is_some_and(|breakdown| breakdown.measured_fit == Some(false)),
+            .is_none_or(|breakdown| breakdown.measured_fit != Some(false)),
         "measured native buffers leave no capacity for the minimum context under the current model configuration"
     );
 

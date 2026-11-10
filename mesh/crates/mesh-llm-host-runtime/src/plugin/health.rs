@@ -30,6 +30,22 @@ pub(super) struct EndpointHealthState {
     consecutive_failures: u32,
 }
 
+#[cfg(test)]
+impl EndpointHealthState {
+    pub(super) fn legacy_test_endpoint(models: Vec<String>) -> Self {
+        Self {
+            record: EndpointHealthRecord {
+                state: "healthy".into(),
+                available: true,
+                models,
+                ..Default::default()
+            },
+            first_checked_at: Instant::now(),
+            consecutive_failures: 0,
+        }
+    }
+}
+
 impl PluginManager {
     pub(super) async fn refresh_plugin_endpoints(&self, plugin_name: &str) -> Result<()> {
         let summary = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
@@ -155,6 +171,18 @@ impl PluginManager {
         plugin_name: &str,
         endpoint_id: &str,
     ) -> BTreeMap<String, Vec<String>> {
+        self.endpoint_output_modalities_snapshot(plugin_name, endpoint_id)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Distinguish an accepted legacy text-only declaration from a health
+    /// snapshot that disappeared after this endpoint was selected.
+    pub(crate) async fn endpoint_output_modalities_snapshot(
+        &self,
+        plugin_name: &str,
+        endpoint_id: &str,
+    ) -> Option<BTreeMap<String, Vec<String>>> {
         self.inner
             .endpoint_health
             .lock()
@@ -162,7 +190,6 @@ impl PluginManager {
             .get(&endpoint_key(plugin_name, endpoint_id))
             .filter(|state| state.record.available)
             .map(|state| state.record.model_output_modalities.clone())
-            .unwrap_or_default()
     }
 
     pub async fn inference_endpoints(&self) -> Result<Vec<InferenceEndpointRoute>> {
@@ -938,6 +965,49 @@ mod tests {
 
 #[cfg(test)]
 mod output_modalities_tests;
+
+#[cfg(test)]
+mod safety_snapshot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_health_is_distinct_from_accepted_legacy_text_metadata() {
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        assert!(
+            manager
+                .endpoint_output_modalities_snapshot("provider", "inference")
+                .await
+                .is_none()
+        );
+        manager
+            .set_test_inference_endpoints(vec![InferenceEndpointRoute {
+                plugin_name: "provider".into(),
+                endpoint_id: "inference".into(),
+                protocol: Some("openai_compatible".into()),
+                address: "http://127.0.0.1:1".into(),
+                models: vec!["legacy-text".into()],
+            }])
+            .await;
+        assert_eq!(
+            manager
+                .endpoint_output_modalities_snapshot("provider", "inference")
+                .await,
+            Some(BTreeMap::new())
+        );
+        manager
+            .inner
+            .endpoint_health
+            .lock()
+            .await
+            .remove(&endpoint_key("provider", "inference"));
+        assert!(
+            manager
+                .endpoint_output_modalities_snapshot("provider", "inference")
+                .await
+                .is_none()
+        );
+    }
+}
 
 #[cfg(test)]
 mod managed_task_tests {

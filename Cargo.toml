@@ -32,6 +32,7 @@ members = [
     "mesh/crates/mesh-llm-embedded-runtime",
     "mesh/crates/mesh-llm-ui",
     "mesh/crates/mesh-llm-plugin",
+    "mesh/crates/mesh-llm-image-guards",
     "mesh/crates/mesh-llm-skills",
     "mesh/crates/mesh-llm-plugin-manager",
     "mesh/crates/mesh-native-serving-plugin-api",

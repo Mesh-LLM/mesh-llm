@@ -8,6 +8,52 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const MODEL: &str = "shared-workload-model";
 
 #[tokio::test]
+async fn passive_image_request_requires_local_guard_before_opening_peer_tunnel() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("node");
+    let peer_id = iroh::SecretKey::generate().public();
+    let mut peer = test_peer_serving_model(peer_id, MODEL);
+    let mut advertised = descriptor(Some(ModelWorkloadClass::CausalGeneration), false);
+    advertised.metadata.as_mut().unwrap().output_modalities = vec!["text".into(), "image".into()];
+    peer.served_model_descriptors = vec![advertised];
+    node.insert_test_peer(peer).await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        handle_mesh_request(node, stream.into(), false, AffinityRouter::new()).await;
+    });
+    let body = serde_json::json!({"model": MODEL, "messages": [{"role": "user", "content": "Draw a cat"}]}).to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let mut client = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect");
+    client.write_all(request.as_bytes()).await.expect("request");
+    let mut wire = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.read_to_end(&mut wire),
+    )
+    .await
+    .expect("local admission responds without waiting for an unreachable peer")
+    .expect("response");
+    server.await.expect("handler");
+    let response = String::from_utf8(wire).expect("UTF-8");
+    assert!(
+        response.starts_with("HTTP/1.1 503 Service Unavailable"),
+        "{response}"
+    );
+    assert!(response.contains("image_safety_unavailable"), "{response}");
+}
+
+#[tokio::test]
 async fn document_ocr_requires_ocr_metadata_on_each_target() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
         .await
