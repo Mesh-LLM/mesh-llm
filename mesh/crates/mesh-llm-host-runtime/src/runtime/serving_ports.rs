@@ -16,6 +16,15 @@ use super::serving_surface::bind_runtime_tcp_listener;
 /// bind later, which reports it as before. Port 0 asks the OS for a free port
 /// and is skipped.
 pub(super) async fn ensure_serving_ports_free(options: &RuntimeOptions) -> Result<()> {
+    // Each probe releases its port, so two listeners on one port would pass
+    // here and only collide once the node has started.
+    if options.port != 0 && options.port == options.console {
+        anyhow::bail!(
+            "the API port and the console port are both {}; give them different ports with \
+             --port and --console",
+            options.port
+        );
+    }
     for (port, label, flag) in [
         (options.port, "OpenAI-compatible API", "--port"),
         (options.console, "web console", "--console"),
@@ -25,13 +34,26 @@ pub(super) async fn ensure_serving_ports_free(options: &RuntimeOptions) -> Resul
         }
         match bind_runtime_tcp_listener(port, options.listen_all, label).await {
             Ok(listener) => drop(listener),
-            Err(error) if is_addr_in_use(&error) => {
+            Err(error) if is_addr_in_use(&error) || accepts_local_connections(port) => {
                 anyhow::bail!("{}", port_in_use_message(port, label, flag))
             }
             Err(_) => {}
         }
     }
     Ok(())
+}
+
+/// Whether something already accepts connections on the loopback port. On
+/// Windows a port held exclusively on every address (a node started with
+/// `--listen-all`) fails a loopback bind with access denied rather than
+/// address in use; access denied alone can also mean a reserved port, so
+/// only a listener that answers counts as taken.
+fn accepts_local_connections(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
 }
 
 fn is_addr_in_use(error: &anyhow::Error) -> bool {
@@ -104,6 +126,43 @@ mod tests {
             .to_string();
         assert!(message.contains("web console"));
         assert!(message.contains("--console"));
+    }
+
+    #[tokio::test]
+    async fn a_port_held_on_every_address_is_reported_for_a_loopback_node() {
+        // A node started with --listen-all holds 0.0.0.0:P exclusively; on
+        // Windows a loopback bind of P then fails with access denied rather
+        // than address in use.
+        let holder = crate::network::exclusive_listener::bind_exclusive_tcp_listener("0.0.0.0:0")
+            .await
+            .expect("bind a wildcard holder");
+        let port = holder.local_addr().expect("holder address").port();
+        let options = RuntimeOptions {
+            port,
+            console: 0,
+            ..RuntimeOptions::default()
+        };
+        let message = ensure_serving_ports_free(&options)
+            .await
+            .expect_err("a port held on every address must stop startup")
+            .to_string();
+        assert!(message.contains(&format!("port {port} for the OpenAI-compatible API")));
+        drop(holder);
+    }
+
+    #[tokio::test]
+    async fn the_same_port_for_api_and_console_is_refused() {
+        let options = RuntimeOptions {
+            port: 9337,
+            console: 9337,
+            ..RuntimeOptions::default()
+        };
+        let message = ensure_serving_ports_free(&options)
+            .await
+            .expect_err("one port for both listeners must stop startup")
+            .to_string();
+        assert!(message.contains("both 9337"));
+        assert!(message.contains("--port") && message.contains("--console"));
     }
 
     #[tokio::test]
