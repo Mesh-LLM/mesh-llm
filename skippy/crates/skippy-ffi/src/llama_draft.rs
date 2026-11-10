@@ -205,13 +205,13 @@ mod tests {
         assert_eq!(offset_of!(LlamaModelParams, kv_overrides), 64);
         assert_eq!(offset_of!(LlamaModelParams, load_mtp), 77);
 
-        assert_eq!(size_of::<LlamaContextParams>(), 168);
+        assert_eq!(size_of::<LlamaContextParams>(), 176);
         assert_eq!(offset_of!(LlamaContextParams, flash_attn_type), 52);
         assert_eq!(offset_of!(LlamaContextParams, cb_eval), 88);
         assert_eq!(offset_of!(LlamaContextParams, type_k), 104);
         assert_eq!(offset_of!(LlamaContextParams, moe_cache_size), 112);
-        assert_eq!(offset_of!(LlamaContextParams, embeddings), 136);
-        assert_eq!(offset_of!(LlamaContextParams, samplers), 144);
-        assert_eq!(offset_of!(LlamaContextParams, ctx_other), 160);
+        assert_eq!(offset_of!(LlamaContextParams, embeddings), 144);
+        assert_eq!(offset_of!(LlamaContextParams, samplers), 152);
+        assert_eq!(offset_of!(LlamaContextParams, ctx_other), 168);
     }
 }
