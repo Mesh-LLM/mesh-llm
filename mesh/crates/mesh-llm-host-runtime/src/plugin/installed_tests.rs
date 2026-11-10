@@ -179,7 +179,10 @@ fn settings_only_entry_runs_the_enabled_store_copy() {
         spec.command,
         metadata.executable_path().display().to_string()
     );
-    assert!(!spec.startup.optional);
+    // A bare entry runs the store's copy, which the operator did not choose
+    // by path, so it starts optional: a broken plugin install never stops
+    // the node.
+    assert!(spec.startup.optional);
     assert!(
         spec.installed_metadata
             .as_ref()

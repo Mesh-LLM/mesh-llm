@@ -1,6 +1,3 @@
-use std::io::Write;
-use std::path::Path;
-
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin_manager::InstalledPluginMetadata;
 use mesh_llm_plugin_manager::install::install_plugin_archive;
@@ -9,6 +6,7 @@ use mesh_llm_plugin_manager::{
     default_store_root, install_plugin, update_plugin,
 };
 use reqwest::Client;
+use std::io::Write;
 
 use crate::plugin_sets::{
     RECOMMENDED_SET, fetch_catalog, install_set_command, render_set_show, render_sets_list,
@@ -164,7 +162,6 @@ async fn call(plugin: &str, operation: &str, input: &str, port: u16) -> Result<(
 pub async fn run_plugin_command(
     command: &PluginCommand,
     runtime_rows: Option<&PluginListRows>,
-    _config_path: Option<&Path>,
 ) -> Result<bool> {
     match command {
         PluginCommand::InstallDefaults { .. } => install_defaults_stub()?,

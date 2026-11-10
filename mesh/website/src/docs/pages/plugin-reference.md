@@ -91,7 +91,7 @@ By default, tool, resource, and prompt names should be plugin-namespaced:
 - resource: `blackboard://snapshot`
 - prompt: `blackboard.status_brief`
 
-Friendly aliases may be added for bundled plugins, but the canonical identity should remain namespaced to avoid collisions.
+Friendly aliases may be added for installed plugins, but the canonical identity should remain namespaced to avoid collisions.
 
 ### MCP Streaming
 
