@@ -29,15 +29,25 @@
 //!   applied at serve time: llama.cpp's lora-adapter API is not bound in
 //!   skippy-ffi. Until it is, BigHead serving runs against the un-adapted torso
 //!   (weaker — the A2 skew gate measures exactly this class of train/serve gap).
-//! - Artifact layout: `head.safetensors` (norm weight/bias, q/k projections) plus
-//!   the config below, discovered beside the model like `calibration.json`.
-//!   Safetensors parsing is intentionally not in this module yet; the loader
+//! - Artifact layout: the head ships INSIDE the model GGUF — tensors
+//!   `bighead.norm.weight|bias`, `bighead.q.weight`, `bighead.k.weight` (fp32)
+//!   and `bighead.*` metadata (schema version, pointer_dim, hidden_size,
+//!   per-kind temperatures, absorbing calibration.json's role for BigHead
+//!   models). One file, atomic with the model; the loader reads the head from
+//!   the GGUF skippy is already parsing. A sidecar directory form remains
+//!   useful in development (training writes safetensors before packaging).
+//!   The LoRA adapter that adapts the torso defaults to MERGED into the GGUF
+//!   at packaging time (one weights artifact, two languages); it stays a
+//!   serve-time adapter only if the A2 skew gate shows merging hurts chat.
+//!   Tensor extraction is intentionally not in this module yet; the loader
 //!   takes parsed tensors so both tests and the future integration stay honest.
 
 use serde::{Deserialize, Serialize};
 
-/// BigHead artifact schema (v1), discovered as `<model>.bighead.json` or
-/// `bighead.json` beside the model, exactly like `calibration.json`.
+/// BigHead artifact schema (v1). Shipping form: GGUF metadata keys
+/// `bighead.*` in the model file itself. (`BigHeadConfig` also parses from a
+/// sidecar JSON for development, before packaging merges a trained head into
+/// the GGUF.)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BigHeadConfig {
     #[serde(default)]
