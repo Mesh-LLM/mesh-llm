@@ -180,28 +180,34 @@ pub async fn maybe_auto_update(options: AutoUpdateOptions) -> Result<bool> {
     .await
 }
 
-/// The release version an update would move this host to: the requested
-/// version when one was named, else the latest release. Callers use this to
-/// judge plugin compatibility against the host version that will actually
-/// run, before the upgrade is applied. Fails when no release can be resolved
-/// right now, exactly as `run_update_command` would.
-pub async fn resolve_update_target_version(
-    requested_version: Option<&str>,
-    current_version: &str,
-) -> Result<String> {
-    let Some(release) = resolve_release_info(requested_version).await? else {
-        bail!("Could not check for a release right now. Try again shortly.");
-    };
-    if requested_version.is_none() && !version_newer(&release.version, current_version) {
-        // Nothing to do: the caller is already current. Reporting the
-        // current version keeps plugin checks harmless (they run against the
-        // version that keeps running).
-        return Ok(current_version.to_string());
-    }
-    Ok(release.version)
+/// An update whose every pre-mutating check has passed: the install target,
+/// the release to move to, and the bundle asset that serves it. Preparing
+/// makes no changes to the machine, so a caller can run its own work
+/// (plugin compatibility repairs, for example) between preparation and
+/// [`apply_prepared_update`] knowing the host install itself will not fail
+/// on a condition that was already checked.
+pub struct PreparedUpdate {
+    target: UpdateTarget,
+    release: crate::autoupdate::release_fetch::ReleaseInfo,
+    asset_name: String,
+    requested_version: Option<String>,
 }
 
-pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()> {
+impl PreparedUpdate {
+    /// The host version this update moves to: what plugin compatibility is
+    /// judged against.
+    pub fn release_version(&self) -> &str {
+        &self.release.version
+    }
+}
+
+/// Resolve and preflight an update: the install target, the release, the
+/// bundle asset for this platform, and install-dir writability. `Ok(None)`
+/// means there is nothing to do (already up to date); that case prints its
+/// own line. Every other failure is an `Err` before anything is touched.
+pub async fn prepare_update_command(
+    options: UpdateCommandOptions<'_>,
+) -> Result<Option<PreparedUpdate>> {
     let mut console = mesh_llm_events::console_err();
     let target = require_update_target(options.flavor, options.detect_flavor)?;
     let requested_version = options.requested_version;
@@ -214,7 +220,7 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
             "mesh-llm is already up to date (v{}).",
             options.current_version
         )?;
-        return Ok(());
+        return Ok(None);
     }
     let asset_preference = if requested_version.is_some() {
         ReleaseAssetPreference::VersionedFirst
@@ -243,24 +249,43 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
     if !target.install_dir_is_writable() {
         bail!("{} is not writable.", target.install_dir.display());
     }
+    Ok(Some(PreparedUpdate {
+        target,
+        release,
+        asset_name,
+        requested_version: requested_version.map(str::to_string),
+    }))
+}
+
+/// Download and install a prepared update. Only failures that could not be
+/// preflighted (the download, staging verification) can fail here.
+pub async fn apply_prepared_update(
+    prepared: &PreparedUpdate,
+    current_version: &'static str,
+) -> Result<()> {
+    let mut console = mesh_llm_events::console_err();
+    let target = &prepared.target;
+    let release = &prepared.release;
+    let asset_name = &prepared.asset_name;
+    let requested_version = prepared.requested_version.as_deref();
 
     writeln!(
         console,
         "⬇️ {} mesh-llm v{} -> v{} ({})...",
         describe_requested_update(
             &release.version,
-            options.current_version,
+            current_version,
             requested_version.is_some()
         ),
-        options.current_version,
+        current_version,
         release.version,
         target.bundle_flavor.suffix()
     )?;
     match install_latest_bundle(
         &target.exe,
         &target.install_dir,
-        &release,
-        &asset_name,
+        release,
+        asset_name,
         target.bundle_flavor,
         PostInstallAction::ExitAfterInstall,
     )

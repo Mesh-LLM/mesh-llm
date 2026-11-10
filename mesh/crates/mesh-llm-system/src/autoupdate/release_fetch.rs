@@ -19,6 +19,11 @@ use release_integrity::{
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
+
+/// The directory pre-0.80 release bundles carried bundled default plugin
+/// archives in. Recognized so those bundles still install, never staged:
+/// this host installs plugins from catalog sets only.
+const LEGACY_BUNDLED_PLUGINS_DIR_NAME: &str = "plugins";
 /// The default plugins a release bundles beside the host, which a node
 /// installs from when it starts (`mesh_llm_plugin_manager::bundled`).
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
@@ -696,6 +701,13 @@ fn collect_bundle_files(
             files.push(name);
         }
     }
+
+    // Releases v0.79.x and earlier bundled default plugin archives beside the
+    // host in `plugins/`. Those bundles stay installable (an explicit
+    // `mesh-llm update --version` reaches for them), but the directory is
+    // not staged: this host installs plugins from catalog sets, never from a
+    // directory beside the binary.
+    dirs.retain(|name| name != LEGACY_BUNDLED_PLUGINS_DIR_NAME);
 
     anyhow::ensure!(!files.is_empty(), "Downloaded bundle was empty");
     anyhow::ensure!(

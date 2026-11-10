@@ -22,8 +22,15 @@ pub const RECOMMENDED_SET: &str = "recommended";
 
 /// One catalog snapshot for one operation: the same fetched copy backs set
 /// resolution and installation so membership cannot shift mid-operation.
+/// The request carries a timeout so a stalled catalog server cannot hang a
+/// set command, setup's optional phase, or an upgrade.
 pub async fn fetch_catalog(options: &PluginInstallOptions) -> Result<PluginCatalog> {
-    PluginCatalog::fetch(&Client::new(), &options.catalog_url).await
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("build plugin catalog client")?;
+    let sets_url = mesh_llm_plugin_manager::sets_url_for(&options.catalog_url);
+    PluginCatalog::fetch_with_sets(&client, &options.catalog_url, sets_url.as_deref()).await
 }
 
 /// An operator is attended only on an interactive terminal without
@@ -271,8 +278,21 @@ pub async fn run_optional_plugin_phase(
             Ok(OptionalPluginResult::Skipped)
         }
         OptionalPluginPlan::InstallSet(name) | OptionalPluginPlan::Offer(name) => {
-            let options = PluginInstallOptions::from_env()
-                .context("optional plugin installation needs a plugin store")?;
+            let options = match PluginInstallOptions::from_env() {
+                Ok(options) => options,
+                Err(error) => {
+                    // No usable plugin store on this machine (for example an
+                    // unsupported platform): an incomplete optional install,
+                    // never a failed core setup or upgrade.
+                    let _ = writeln!(
+                        err,
+                        "⚠️  Optional plugin installation needs a plugin store ({error:#}). \
+                         Optional plugin installation incomplete."
+                    );
+                    let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
+                    return Ok(OptionalPluginResult::Incomplete(0));
+                }
+            };
             let catalog = match fetch_catalog(&options).await {
                 Ok(catalog) => catalog,
                 Err(error) => {
@@ -307,14 +327,6 @@ pub async fn run_optional_plugin_phase(
             match install_set_quiet(&catalog, name, &options).await {
                 Ok(result) => {
                     let mut err = mesh_llm_events::console_err();
-                    for (failed_name, reason) in &result.failed {
-                        let _ = writeln!(
-                            err,
-                            "⚠️  Could not install {failed_name}: {reason}. Optional plugin \
-                             installation incomplete."
-                        );
-                    }
-                    let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
                     if result.failed.is_empty() {
                         let _ = writeln!(
                             err,
@@ -323,6 +335,14 @@ pub async fn run_optional_plugin_phase(
                         );
                         Ok(OptionalPluginResult::Installed(result.installed_count()))
                     } else {
+                        for (failed_name, reason) in &result.failed {
+                            let _ = writeln!(
+                                err,
+                                "⚠️  Could not install {failed_name}: {reason}. Optional plugin \
+                                 installation incomplete."
+                            );
+                        }
+                        let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
                         Ok(OptionalPluginResult::Incomplete(result.installed_count()))
                     }
                 }
@@ -397,13 +417,16 @@ pub fn render_update_notices(plan: &mesh_llm_plugin_manager::PluginUpgradePlan) 
 mod tests {
     use super::*;
 
+    const ENTRIES: &str = r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
+"#;
+
+    const SETS: &str = r#"{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules"]}"#;
+
     fn catalog() -> PluginCatalog {
-        PluginCatalog::parse_jsonl(
-            r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
-{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules"]}
-"#,
-        )
-        .unwrap()
+        PluginCatalog::parse_jsonl(ENTRIES)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(SETS).unwrap())
+            .unwrap()
     }
 
     #[test]
@@ -449,12 +472,15 @@ mod tests {
 
     #[test]
     fn an_empty_set_is_not_offered() {
-        let catalog = PluginCatalog::parse_jsonl(
-            r#"{"name":"capsules","description":"Audit","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
-{"name":"empty","description":"Nothing here","plugins":[]}
-"#,
-        )
-        .unwrap();
+        let catalog = PluginCatalog::parse_jsonl(ENTRIES)
+            .unwrap()
+            .with_sets(
+                PluginCatalog::parse_sets_jsonl(
+                    r#"{"name":"empty","description":"Nothing here","plugins":[]}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
         assert!(offer_lines(&catalog, "empty").is_none());
     }
 

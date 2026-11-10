@@ -9,7 +9,7 @@
 //! updates. Optional plugin sets install only when explicitly selected or
 //! accepted at an attended prompt; unattended paths install nothing extra.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use mesh_llm_cli::{BinaryFlavor, Cli, Command};
 use mesh_llm_plugin_manager::{
     PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
@@ -49,24 +49,31 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
             _ => (None, None, false, None, false, false),
         };
 
-    // Resolve the target host version before touching anything, so plugin
-    // compatibility is judged against the release that will actually run.
-    let target_version = autoupdate::resolve_update_target_version(
-        requested_version,
-        mesh_llm_build_info::BUILD_VERSION,
-    )
-    .await
-    .context("Could not check for a release right now. Try again shortly.")?;
-
-    run_plugin_upgrade_checks(&target_version).await?;
-
-    autoupdate::run_update_command(autoupdate::UpdateCommandOptions {
+    // Preflight the host update first: the install target, release, bundle
+    // asset, and writability are all checked before anything is touched, so
+    // plugin repairs never run against a host install that would fail on a
+    // condition already knowable now.
+    let prepared = autoupdate::prepare_update_command(autoupdate::UpdateCommandOptions {
         flavor,
         detect_flavor,
         requested_version,
         current_version: mesh_llm_build_info::BUILD_VERSION,
     })
     .await?;
+
+    // With no newer release the running version stays the target: the same
+    // check still repairs plugins incompatible with the host that keeps
+    // running, and the optional phase proceeds.
+    let target_version = prepared
+        .as_ref()
+        .map(|prepared| prepared.release_version().to_string())
+        .unwrap_or_else(|| mesh_llm_build_info::BUILD_VERSION.to_string());
+
+    run_plugin_upgrade_checks(&target_version).await?;
+
+    if let Some(prepared) = prepared.as_ref() {
+        autoupdate::apply_prepared_update(prepared, mesh_llm_build_info::BUILD_VERSION).await?;
+    }
 
     // The host upgrade landed. Optional plugin installation never fails it:
     // warn, guide a retry, and report the installation as incomplete.
@@ -169,6 +176,8 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
     }
 
     let mut blocking: Vec<String> = Vec::new();
+    // Report every plugin's state before repairing anything: each required
+    // update and each blocker is named, whatever happens next.
     for check in &repairs {
         match &check.verdict {
             PluginUpgradeVerdict::Repair { to, reason } => {
@@ -182,28 +191,6 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
                     "ℹ️  Required plugin update: {} {} -> {to}.",
                     check.name, check.installed_version
                 );
-                let progress = &mut UpdatePluginProgress::default();
-                match repair_incompatible_plugins(&plan, target_version, &options, progress).await {
-                    Ok(repaired) => {
-                        for (name, outcome) in &repaired {
-                            let mut err = mesh_llm_events::console_err();
-                            let state = if outcome.metadata.enabled {
-                                "settings and data preserved"
-                            } else {
-                                "remains disabled"
-                            };
-                            let _ = writeln!(
-                                err,
-                                "✅ Updated {name} to {}; {state}.",
-                                outcome.metadata.installed_version
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        blocking.push(format!("{} could not be updated: {error:#}", check.name));
-                    }
-                }
-                err = mesh_llm_events::console_err();
             }
             PluginUpgradeVerdict::RepairBlocked { reason } => {
                 let _ = writeln!(
@@ -215,6 +202,28 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
             }
             _ => {}
         }
+    }
+    // Attempt every repair once, after the notices: one plugin's failure
+    // never hides another's, and no repaired plugin is installed twice.
+    let repair_progress = &mut UpdatePluginProgress::default();
+    let repairs_outcome =
+        repair_incompatible_plugins(&plan, target_version, &options, repair_progress).await?;
+    let mut err = mesh_llm_events::console_err();
+    for (name, outcome) in &repairs_outcome.repaired {
+        let state = if outcome.metadata.enabled {
+            "settings and data preserved"
+        } else {
+            "remains disabled"
+        };
+        let _ = writeln!(
+            err,
+            "✅ Updated {name} to {}; {state}.",
+            outcome.metadata.installed_version
+        );
+    }
+    for (name, reason) in &repairs_outcome.failed {
+        let _ = writeln!(err, "❌ Required plugin repair failed: {name}: {reason}");
+        blocking.push(format!("{name}: {reason}"));
     }
     if !blocking.is_empty() {
         let mut err = mesh_llm_events::console_err();

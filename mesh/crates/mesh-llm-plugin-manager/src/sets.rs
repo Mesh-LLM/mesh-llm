@@ -5,7 +5,7 @@
 //! set installs its current missing members and does not subscribe the
 //! machine to future membership changes: adding or removing a member later
 //! never silently installs or uninstalls anything here. Set membership grants
-//! no permissions and never enles, disles, or updates an installed
+//! no permissions and never enables, disables, or updates an installed
 //! plugin.
 
 use anyhow::{Context, Result};
@@ -54,7 +54,7 @@ pub fn resolve_set(
     host_version: &str,
 ) -> Result<SetResolution> {
     let set = catalog.find_set(set_name).with_context(|| {
-        format!("Unknown plugin set '{set_name}'. List availle sets: mesh-llm plugins sets list")
+        format!("Unknown plugin set '{set_name}'. List available sets: mesh-llm plugins sets list")
     })?;
     Ok(resolve_members(set, catalog, target, host_version))
 }
@@ -302,17 +302,21 @@ mod tests {
     use super::*;
     use crate::store::InstalledPluginMetadata;
 
-    const CATALOG: &str = r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"},"compatibility":{"min":"0.81.0"}}
+    const ENTRIES: &str = r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"},"compatibility":{"min":"0.81.0"}}
 {"name":"blackboard","description":"Shared notes","github_url":"https://github.com/mesh-llm/blackboard","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v1.1.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
 {"name":"windows-only","description":"A plugin with no Linux build","github_url":"https://github.com/mesh-llm/windows-only","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v2.0.0","sha256":{"x86_64-pc-windows-msvc":"abababababababababababababababababababababababababababababababab"}}
 {"name":"stale","description":"A plugin the new host dropped","github_url":"https://github.com/mesh-llm/stale","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v3.0.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"},"compatibility":{"max":"0.80.0"}}
-{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules","blackboard","windows-only","stale"]}
 "#;
+
+    const SETS: &str = r#"{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules","blackboard","windows-only","stale"]}"#;
 
     const TARGET: &str = "x86_64-unknown-linux-gnu";
 
     fn catalog() -> PluginCatalog {
-        PluginCatalog::parse_jsonl(CATALOG).unwrap()
+        PluginCatalog::parse_jsonl(ENTRIES)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(SETS).unwrap())
+            .unwrap()
     }
 
     fn resolution(host: &str) -> SetResolution {

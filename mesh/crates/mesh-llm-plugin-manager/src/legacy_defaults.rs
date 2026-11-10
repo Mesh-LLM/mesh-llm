@@ -126,6 +126,16 @@ const LEGACY_DEFAULT_ALLOWS: &[(&str, &[Surface])] = &[(
     ],
 )];
 
+/// Whether `name` was one of the bundled-default system's reviewed plugins.
+/// A legacy bundled install may move to a catalog update source only for a
+/// name on this list: the reviewed association is what says the catalog
+/// entry and the bundled plugin are the same package.
+pub fn is_known_legacy_default(name: &str) -> bool {
+    LEGACY_DEFAULT_ALLOWS
+        .iter()
+        .any(|(legacy, _)| *legacy == name)
+}
+
 /// The grants a migrated legacy default-managed install keeps. A known
 /// legacy default keeps exactly what it was reviewed with; any other legacy
 /// default-managed install falls back to [`UNLISTED_DEFAULT_ALLOWS`].

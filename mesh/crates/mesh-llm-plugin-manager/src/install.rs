@@ -298,6 +298,31 @@ async fn catalog_entry_for(
     Ok(catalog.find_exact(name).cloned())
 }
 
+/// Whether the package `entry` names is the package `installed` came from.
+/// A name alone is not identity: a fork or a locally installed archive can
+/// carry a catalog plugin's name, and updating it from the catalog would
+/// silently replace the operator's package. Only a matching GitHub
+/// repository establishes identity; a legacy bundled install of a reviewed
+/// legacy default is the one exception, because the retired bundled system
+/// associated that name with its release repository itself.
+pub(crate) fn source_matches(entry: &CatalogEntry, installed: &InstalledPluginMetadata) -> bool {
+    if installed.source_repository.starts_with("bundled:") {
+        return crate::legacy_defaults::is_known_legacy_default(&installed.name);
+    }
+    if installed.source_repository.starts_with("local:") {
+        // A locally installed archive has no verifiable update source; it
+        // must not be replaced from the catalog by name alone.
+        return false;
+    }
+    let (Ok(installed_source), Ok(entry_source)) = (
+        GitHubPluginSource::from_url(&installed.source_repository),
+        GitHubPluginSource::from_url(&entry.github_url),
+    ) else {
+        return false;
+    };
+    installed_source.repo_slug() == entry_source.repo_slug()
+}
+
 /// Install the release `entry` pins, refusing when the platform has no
 /// pinned archive or the pinned release does not support `host_version`.
 pub(crate) async fn install_pinned_entry(
@@ -307,6 +332,15 @@ pub(crate) async fn install_pinned_entry(
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<InstallOutcome> {
+    if !source_matches(entry, current) {
+        bail!(
+            "'{}' is installed from {} , which is not the catalog entry's repository {}; \
+             refusing to replace a different package by name",
+            current.name,
+            current.source_repository,
+            entry.github_url
+        );
+    }
     let resolved = pinned_entry_source(entry, host_version, options)?;
     install_resolved_plugin(resolved, options, progress, Some(current.clone())).await
 }
@@ -550,7 +584,10 @@ fn build_installed_metadata(
         enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
         default_managed: false,
         host_compatibility: compatibility,
-        allowed_surfaces: None,
+        // A replaced release keeps the surface grants the operator had: a
+        // migrated legacy default must not widen what it may use just
+        // because it was updated or repaired.
+        allowed_surfaces: current.and_then(|metadata| metadata.allowed_surfaces.clone()),
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),

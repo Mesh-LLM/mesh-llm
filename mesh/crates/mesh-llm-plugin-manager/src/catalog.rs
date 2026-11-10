@@ -117,41 +117,97 @@ pub struct PluginCatalog {
 }
 
 impl PluginCatalog {
+    /// Parse `plugins.jsonl`: plugin entries only. Set records live in their
+    /// own file (`parse_sets_jsonl`) so a catalog that publishes sets stays
+    /// readable for hosts built before sets existed.
     pub fn parse_jsonl(input: &str) -> Result<Self> {
         let mut entries = Vec::new();
-        let mut sets = Vec::new();
         for (index, line) in input.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
             let context = format!("plugins.jsonl line {}", index + 1);
-            let value: serde_json::Value =
-                serde_json::from_str(line).with_context(|| format!("parse {context}"))?;
-            if value.get("plugins").is_some() {
-                let set: CatalogSet = serde_json::from_str(line)
-                    .with_context(|| format!("parse set record in {context}"))?;
-                validate_set(&set).with_context(|| context.clone())?;
-                sets.push(set);
-            } else {
-                let entry: CatalogEntry = serde_json::from_str(line)
-                    .with_context(|| format!("parse plugin entry in {context}"))?;
-                entry.validate_pins().with_context(|| context.clone())?;
-                entry
-                    .compatibility
-                    .as_ref()
-                    .map(crate::compatibility::HostCompatibility::validate)
-                    .transpose()
-                    .with_context(|| context.clone())?;
-                entries.push(entry);
-            }
+            let entry: CatalogEntry = serde_json::from_str(line)
+                .with_context(|| format!("parse plugin entry in {context}"))?;
+            entry.validate_pins().with_context(|| context.clone())?;
+            entry
+                .compatibility
+                .as_ref()
+                .map(crate::compatibility::HostCompatibility::validate)
+                .transpose()
+                .with_context(|| context.clone())?;
+            entries.push(entry);
         }
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         ensure_unique_names(&entries)?;
+        Ok(Self {
+            entries,
+            sets: Vec::new(),
+        })
+    }
+
+    /// Parse `plugin-sets.jsonl`: named set records. Membership validation
+    /// against the plugin entries happens in [`Self::with_sets`].
+    pub fn parse_sets_jsonl(input: &str) -> Result<Vec<CatalogSet>> {
+        let mut sets = Vec::new();
+        for (index, line) in input.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let context = format!("plugin-sets.jsonl line {}", index + 1);
+            let set: CatalogSet = serde_json::from_str(line)
+                .with_context(|| format!("parse set record in {context}"))?;
+            validate_set(&set).with_context(|| context.clone())?;
+            sets.push(set);
+        }
         ensure_unique_set_names(&sets)?;
-        ensure_members_exist(&sets, &entries)?;
         sets.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(Self { entries, sets })
+        Ok(sets)
+    }
+
+    /// Attach named sets to this catalog, refusing sets that name plugins the
+    /// catalog does not carry: an unknown member reference is malformed
+    /// membership, not an empty set.
+    pub fn with_sets(mut self, mut sets: Vec<CatalogSet>) -> Result<Self> {
+        ensure_members_exist(&sets, &self.entries)?;
+        sets.sort_by(|left, right| left.name.cmp(&right.name));
+        self.sets = sets;
+        Ok(self)
+    }
+
+    /// Fetch the plugin entries, then the catalog's named sets from
+    /// `sets_url`. A sets file that cannot be fetched yields no sets — an
+    /// absent sets catalog is not an absent plugin catalog, and plugin
+    /// install, search, and repair must keep working without it.
+    pub async fn fetch_with_sets(
+        client: &Client,
+        plugins_url: &str,
+        sets_url: Option<&str>,
+    ) -> Result<Self> {
+        let catalog = Self::fetch(client, plugins_url).await?;
+        let Some(sets_url) = sets_url else {
+            return Ok(catalog);
+        };
+        match client
+            .get(sets_url)
+            .header(reqwest::header::USER_AGENT, crate::github::USER_AGENT)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let body = response
+                    .text()
+                    .await
+                    .with_context(|| format!("read plugin sets catalog {sets_url}"))?;
+                let sets = Self::parse_sets_jsonl(&body)?;
+                catalog.with_sets(sets)
+            }
+            // A missing or unreadable sets file means no sets to offer, not a
+            // failed catalog read.
+            _ => Ok(catalog),
+        }
     }
 
     pub async fn fetch(client: &Client, url: &str) -> Result<Self> {
@@ -212,6 +268,21 @@ fn ensure_unique_names(entries: &[CatalogEntry]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Where the named-set records for the catalog at `catalog_url` live: the
+/// same location with `plugins.jsonl` replaced by `plugin-sets.jsonl`, so a
+/// catalog publisher only ever manages one directory. `None` when the
+/// plugins URL is not a `plugins.jsonl` file (a test fixture or a custom
+/// catalog), where no set file can be derived.
+pub fn sets_url_for(catalog_url: &str) -> Option<String> {
+    let file = catalog_url.rsplit('/').next()?;
+    (file == "plugins.jsonl").then(|| {
+        format!(
+            "{}plugin-sets.jsonl",
+            &catalog_url[..catalog_url.len() - file.len()]
+        )
+    })
 }
 
 fn validate_set(set: &CatalogSet) -> Result<()> {
@@ -385,14 +456,22 @@ mod tests {
         assert!(err.to_string().contains("duplicate"));
     }
 
-    const SET_CATALOG: &str = r#"{"name":"capsules","description":"Audit records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"},"compatibility":{"min":"0.81.0"}}
+    const SET_ENTRIES: &str = r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"},"compatibility":{"min":"0.81.0"}}
 {"name":"blackboard","description":"Shared notes","github_url":"https://github.com/mesh-llm/blackboard","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v1.1.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
-{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules"]}
 "#;
 
+    const RECOMMENDED_SET: &str = r#"{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules"]}"#;
+
+    fn catalog_with_sets(sets: &str) -> PluginCatalog {
+        PluginCatalog::parse_jsonl(SET_ENTRIES)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(sets).unwrap())
+            .unwrap()
+    }
+
     #[test]
-    fn parses_set_records_alongside_plugin_entries() {
-        let catalog = PluginCatalog::parse_jsonl(SET_CATALOG).unwrap();
+    fn sets_parse_from_their_own_file_and_validate_against_entries() {
+        let catalog = catalog_with_sets(&format!("{RECOMMENDED_SET}\n"));
         assert_eq!(catalog.entries().len(), 2);
         assert_eq!(catalog.sets().len(), 1);
         let set = catalog.find_set("recommended").unwrap();
@@ -418,53 +497,83 @@ mod tests {
     }
 
     #[test]
+    fn a_pre_change_host_still_parses_a_plugins_file_with_sets_published() {
+        // Set records never appear in plugins.jsonl; the plugins file keeps
+        // parsing with the parser this code replaced, which knew no sets.
+        let catalog = PluginCatalog::parse_jsonl(SET_ENTRIES).unwrap();
+        assert!(catalog.sets().is_empty());
+        assert_eq!(catalog.entries().len(), 2);
+    }
+
+    #[test]
+    fn sets_url_derivation_replaces_only_the_plugins_file() {
+        assert_eq!(
+            sets_url_for("https://example.com/dir/plugins.jsonl"),
+            Some("https://example.com/dir/plugin-sets.jsonl".to_string())
+        );
+        assert_eq!(
+            sets_url_for("https://example.com/plugins.jsonl"),
+            Some("https://example.com/plugin-sets.jsonl".to_string())
+        );
+        assert_eq!(sets_url_for("https://example.com/custom.jsonl"), None);
+        assert_eq!(
+            sets_url_for("plugins.jsonl"),
+            Some("plugin-sets.jsonl".to_string())
+        );
+    }
+
+    #[test]
     fn set_records_validate_their_names_membership_and_references() {
-        let unknown_member =
-            SET_CATALOG.replace(r#""plugins":["capsules"]"#, r#""plugins":["ghost"]"#);
-        let error = PluginCatalog::parse_jsonl(&unknown_member).unwrap_err();
+        let unknown_member = RECOMMENDED_SET.replace(r#"["capsules"]"#, r#"["ghost"]"#);
+        let error = PluginCatalog::parse_jsonl(SET_ENTRIES)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(&unknown_member).unwrap())
+            .unwrap_err();
         assert!(
             format!("{error:#}").contains("set 'recommended' names 'ghost'"),
             "{error:#}"
         );
 
-        let duplicate_member = SET_CATALOG.replace(
-            r#""plugins":["capsules"]"#,
-            r#""plugins":["capsules","capsules"]"#,
-        );
-        let error = PluginCatalog::parse_jsonl(&duplicate_member).unwrap_err();
+        let duplicate_member =
+            RECOMMENDED_SET.replace(r#"["capsules"]"#, r#"["capsules","capsules"]"#);
+        let error = PluginCatalog::parse_sets_jsonl(&duplicate_member).unwrap_err();
         assert!(format!("{error:#}").contains("more than once"), "{error:#}");
 
-        let bad_name = SET_CATALOG.replace("\"recommended\"", "\"Not A Set!\"");
-        let error = PluginCatalog::parse_jsonl(&bad_name).unwrap_err();
+        let bad_name = RECOMMENDED_SET.replace("\"recommended\"", "\"Not A Set!\"");
+        let error = PluginCatalog::parse_sets_jsonl(&bad_name).unwrap_err();
         assert!(
             format!("{error:#}").contains("plugin set name"),
             "{error:#}"
         );
 
-        let empty_description = SET_CATALOG.replace("Recommended plugins for MeshLLM", "   ");
-        let error = PluginCatalog::parse_jsonl(&empty_description).unwrap_err();
+        let empty_description = RECOMMENDED_SET.replace("Recommended plugins for MeshLLM", "   ");
+        let error = PluginCatalog::parse_sets_jsonl(&empty_description).unwrap_err();
         assert!(
             format!("{error:#}").contains("empty description"),
             "{error:#}"
         );
 
         let duplicate_set = format!(
-            "{SET_CATALOG}{{\"name\":\"recommended\",\"description\":\"Again\",\"plugins\":[\"blackboard\"]}}\n"
+            "{RECOMMENDED_SET}\n{{\"name\":\"recommended\",\"description\":\"Again\",\"plugins\":[\"blackboard\"]}}"
         );
-        let error = PluginCatalog::parse_jsonl(&duplicate_set).unwrap_err();
+        let error = PluginCatalog::parse_sets_jsonl(&duplicate_set).unwrap_err();
         assert!(
             format!("{error:#}").contains("duplicate plugin set"),
             "{error:#}"
         );
 
-        let no_members = SET_CATALOG.replace(r#""plugins":["capsules"]"#, r#""plugins":[]"#);
-        let catalog = PluginCatalog::parse_jsonl(&no_members).unwrap();
+        let no_members = RECOMMENDED_SET.replace(r#"["capsules"]"#, r#"[]"#);
+        let catalog = catalog_with_sets(&no_members);
         assert!(catalog.find_set("recommended").unwrap().plugins.is_empty());
 
-        let nested_set = format!(
-            "{SET_CATALOG}{{\"name\":\"outer\",\"description\":\"Tries to nest\",\"plugins\":[\"recommended\"]}}\n"
+        // A set may not nest another set: members are plugin names only.
+        let nested = format!(
+            "{RECOMMENDED_SET}\n{{\"name\":\"outer\",\"description\":\"Tries to nest\",\"plugins\":[\"recommended\"]}}"
         );
-        let error = PluginCatalog::parse_jsonl(&nested_set).unwrap_err();
+        let error = PluginCatalog::parse_jsonl(SET_ENTRIES)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(&nested).unwrap())
+            .unwrap_err();
         assert!(
             format!("{error:#}").contains("set 'outer' names 'recommended'"),
             "{error:#}"
@@ -472,27 +581,18 @@ mod tests {
     }
 
     #[test]
-    fn a_plugin_entry_without_a_repository_is_not_read_as_a_set() {
-        // A malformed plugin entry must not be swallowed as a set or a set as
-        // an entry: the error names the record kind.
-        let missing_repo = r#"{"name":"capsules","description":"Audit records","author_email":"m@meshllm.cloud","author_name":"Mesh LLM"}"#;
-        let error = PluginCatalog::parse_jsonl(missing_repo).unwrap_err();
+    fn a_malformed_set_record_names_the_file_it_came_from() {
+        let not_a_set = r#"{"name":"recommended","description":"No members key"}"#;
+        let error = PluginCatalog::parse_sets_jsonl(not_a_set).unwrap_err();
         assert!(
-            format!("{error:#}").contains("parse plugin entry"),
-            "{error:#}"
-        );
-
-        let bad_set = r#"{"name":"recommended","description":"No members key","github_url":"https://github.com/mesh-llm/x"}"#;
-        let error = PluginCatalog::parse_jsonl(bad_set).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("parse plugin entry"),
+            format!("{error:#}").contains("parse set record in plugin-sets.jsonl line 1"),
             "{error:#}"
         );
     }
 
     #[test]
     fn an_entry_with_malformed_compatibility_is_refused() {
-        let bad = SET_CATALOG.replace(
+        let bad = SET_ENTRIES.replace(
             r#""compatibility":{"min":"0.81.0"}"#,
             r#""compatibility":{"min":"soon"}"#,
         );

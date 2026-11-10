@@ -672,10 +672,11 @@ Required fields:
 Pin fields, required to install an entry by name. An entry without them stays
 searchable, but `mesh-llm plugins install <name>` refuses it:
 
-| Field     | Meaning                                                                                                   |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| `version` | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                  |
-| `sha256`  | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.      |
+| Field             | Meaning                                                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `version`         | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                   |
+| `sha256`          | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.       |
+| `host_compatibility` | Optional `{"min": "0.81.0", "max": "0.90.0"}` bounds (either may be absent) declaring which MeshLLM host versions the pinned release works with. Installs refuse a release that excludes the running host; upgrades retain the value with the installed record. Absent means unknown, never incompatible. |
 
 ```json
 {
@@ -705,9 +706,33 @@ pins no version, or no digest for your platform, installs nothing.
 A catalog set names plugins without pinning them: sets carry no releases or
 checksums of their own, so the entry's pin is always the authority.
 
+### Set records: `plugin-sets.jsonl`
+
+Set records live in their own file, `plugin-sets.jsonl`, next to
+`plugins.jsonl` in the same dataset directory — never inside `plugins.jsonl`,
+so hosts built before sets existed keep parsing the plugin catalog they
+already know. A host derives the sets URL by replacing the `plugins.jsonl`
+file name; a missing sets file means no sets are offered, never a failed
+catalog read.
+
+```json
+{"name": "recommended", "description": "Recommended plugins for MeshLLM", "plugins": ["capsules"]}
+```
+
+Set rules:
+
+- one set per JSONL line; `name`, `description`, and `plugins` are required
+- set names use plugin-name characters; a set name must be unique
+- `plugins` names catalog entries only (no nested sets), each unique, and
+  every referenced name must exist in `plugins.jsonl` — otherwise the whole
+  sets file is refused with an actionable error
+- membership changes need no host rebuild, and installing a set installs its
+  current members once: later membership changes never touch installed
+  machines
+
 Catalog rules:
 
-- one plugin per JSONL line
+- one plugin per JSONL line in `plugins.jsonl`
 - `name` must be unique within the catalog
 - unknown extra fields are ignored for forward compatibility
 - catalog lookup never downloads native binaries from Hugging Face

@@ -427,21 +427,42 @@ impl ExternalPlugin {
                 self.spec.name
             ),
         };
-        if let Some(keys) = self
+        // A legacy default-managed install keeps only the surfaces it was
+        // reviewed with. The grants normally travel in the record's
+        // `allowed_surfaces`, written when the legacy record was migrated; a
+        // record still carrying `default_managed` with no grants (its
+        // migration failed, or a start raced one) falls back to the retained
+        // legacy grants for its name rather than widening to everything.
+        let legacy_grants = match self
             .spec
             .installed_metadata
             .as_ref()
             .and_then(|metadata| metadata.allowed_surfaces.as_deref())
         {
-            // A legacy default-managed install keeps the surfaces its record
-            // was migrated with. Unrecognized keys narrow (they are dropped);
-            // a record whose keys parse to nothing falls back to the
-            // unlisted-default grants rather than widening.
-            let mut allows = legacy_defaults::parse_allows(keys);
-            if allows.is_empty() {
-                allows = UNLISTED_DEFAULT_ALLOWS.to_vec();
+            Some(keys) => {
+                let mut allows = legacy_defaults::parse_allows(keys);
+                if allows.is_empty() {
+                    allows = UNLISTED_DEFAULT_ALLOWS.to_vec();
+                }
+                allows
             }
-            let removed = restrict_default_plugin(&mut init, &allows, &[]);
+            None if self
+                .spec
+                .installed_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.default_managed) =>
+            {
+                let name = self
+                    .spec
+                    .installed_metadata
+                    .as_ref()
+                    .map_or(self.spec.name.as_str(), |metadata| metadata.name.as_str());
+                legacy_defaults::migrated_allows(name).to_vec()
+            }
+            None => Vec::new(),
+        };
+        if !legacy_grants.is_empty() {
+            let removed = restrict_default_plugin(&mut init, &legacy_grants, &[]);
             if !removed.is_empty() {
                 tracing::warn!(
                     plugin = %self.spec.name,

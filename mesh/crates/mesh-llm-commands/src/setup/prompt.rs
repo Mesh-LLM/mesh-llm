@@ -34,8 +34,12 @@ pub trait SetupPrompter {
     fn confirm(&mut self, prompt: SetupConfirmPrompt) -> Option<bool>;
 }
 
-pub(crate) fn confirm_yes_no(message: &str) -> Option<bool> {
-    match terminal::confirm_yes_no(message, ConfirmDefault::Yes) {
+pub(crate) fn confirm_yes_no(message: &str, default: SetupPromptDefault) -> Option<bool> {
+    let default = match default {
+        SetupPromptDefault::Yes => ConfirmDefault::Yes,
+        SetupPromptDefault::No => ConfirmDefault::No,
+    };
+    match terminal::confirm_yes_no(message, default) {
         Ok(reply) => reply,
         Err(_) => Some(false),
     }

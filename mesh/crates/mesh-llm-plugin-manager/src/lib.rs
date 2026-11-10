@@ -16,7 +16,7 @@ pub mod target;
 mod upgrade;
 
 pub use asset::{AssetMatchKind, PluginAsset, infer_plugin_asset, select_plugin_asset};
-pub use catalog::{CatalogEntry, CatalogSet, PinnedRelease, PluginCatalog};
+pub use catalog::{CatalogEntry, CatalogSet, PinnedRelease, PluginCatalog, sets_url_for};
 pub use compatibility::{
     HostCompatibility, Verdict as CompatibilityVerdict, evaluate as evaluate_compatibility,
 };
@@ -54,6 +54,6 @@ pub use store::{
 };
 pub use target::{ArchiveExt, PluginTarget, UnsupportedTarget};
 pub use upgrade::{
-    PluginUpgradeCheck, PluginUpgradePlan, PluginUpgradeVerdict, plan_plugin_upgrades,
-    repair_incompatible_plugins,
+    PluginUpgradeCheck, PluginUpgradePlan, PluginUpgradeVerdict, RepairOutcome,
+    plan_plugin_upgrades, repair_incompatible_plugins,
 };

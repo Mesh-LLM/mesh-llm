@@ -663,6 +663,31 @@ fn test_collect_bundle_files_rejects_product_v2_without_manifest() {
 }
 
 #[test]
+fn test_collect_bundle_files_tolerates_a_legacy_bundled_plugins_directory() {
+    // Releases up to v0.79.x shipped default plugin archives beside the host
+    // in `plugins/`. Those bundles must stay installable for an explicit
+    // `mesh-llm update --version`, but the directory is never staged: this
+    // host installs plugins from catalog sets only.
+    let dir = temp_dir("self-update-legacy-plugins-dir");
+    std::fs::create_dir_all(dir.join("native-runtimes").join("runtime")).unwrap();
+    std::fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::fs::write(dir.join(mesh_binary_name()), b"binary").unwrap();
+    std::fs::write(dir.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+    std::fs::write(
+        dir.join("plugins").join("capsules-0.1.4.tar.gz"),
+        b"archive",
+    )
+    .unwrap();
+
+    let staged = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap();
+    assert!(
+        !staged.iter().any(|name| name == "plugins"),
+        "the legacy plugins directory is recognized, not installed: {staged:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn test_collect_bundle_files_rejects_unexpected_directory() {
     let dir = temp_dir("self-update-unexpected-dir");
     std::fs::create_dir_all(dir.join("surprise")).unwrap();

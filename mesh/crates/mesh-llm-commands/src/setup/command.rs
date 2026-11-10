@@ -72,7 +72,9 @@ struct CliSetupPrompter;
 
 impl SetupPrompter for CliSetupPrompter {
     fn confirm(&mut self, prompt: SetupConfirmPrompt) -> Option<bool> {
-        confirm_yes_no(prompt.message)
+        // The prompt's declared default reaches the terminal: the plugin-set
+        // offer declines on an empty reply, exactly as its plan promises.
+        confirm_yes_no(prompt.message, prompt.default)
     }
 }
 
