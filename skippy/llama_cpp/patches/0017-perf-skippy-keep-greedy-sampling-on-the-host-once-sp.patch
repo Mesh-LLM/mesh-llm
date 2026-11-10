@@ -1,0 +1,72 @@
+From 747db3c006a3773cf6676cd4580f39202201d058 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 11 Nov 2026 05:43:45 +1100
+Subject: [PATCH] perf(skippy): keep greedy sampling on the host once
+ speculation has run
+
+A greedy session attaches a backend (on-device) sampler, and every
+speculative verify window detaches it again: verification needs every
+output row, which backend sampling forbids. Because the attach happens
+again on each new request, a speculative server paid a sampler clone,
+a device sync and a graph rebuild per request, and greedy decode slowed
+down as requests went on.
+
+The first verify that retires a backend sampler now marks the model,
+and later sessions on it keep sampling on the host. Plain decode, which
+never verifies, keeps the backend sampler.
+
+Greedy decode on a DGX Spark with DFlash, 8 requests, tok/s:
+Qwen3.6-35B-A3B 97.4 -> 133.2 (+37%), Qwen3.5-9B 76.3 -> 82.8 (+8.5%),
+Qwen3.6-27B 37.0 -> 38.4 (+3.8%). Without speculation the backend
+sampler stays attached (35B-A3B 64.7, 9B 38.6 tok/s either way).
+---
+ src/skippy/runtime_types.h  | 4 ++++
+ src/skippy/sampling.cpp     | 4 +++-
+ src/skippy/verification.cpp | 1 +
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index cd8a82f7a..3898ffb3a 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -90,6 +90,10 @@ struct skippy_model {
+     llama_model * mtp_model = nullptr;
+     llama_context * mtp_ctx = nullptr;
+     std::atomic<bool> context_work_pending{false};
++    // Set once a speculative verify window has detached a backend sampler from this context.
++    // Re-attaching it on every later request meant a sampler clone, a device sync and a graph
++    // rebuild each time a verify detached it again, so this model keeps sampling on the host.
++    std::atomic<bool> verify_retired_backend_sampling{false};
+     skippy_runtime_config config = {};
+     std::vector<std::string> activation_import_identities;
+     std::vector<const char *> activation_import_identity_ptrs;
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index f26e2194f..80cc158cd 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -551,7 +551,9 @@ void skippy_refresh_backend_sampling(
+         skippy_session * session,
+         const skippy_sampling_config * sampling) {
+     if (session == nullptr || session->sampling_backend_enabled || session->sampling_backend_retired ||
+-            session->sampling_backend_verifying) {
++            session->sampling_backend_verifying ||
++            (session->stage_model != nullptr &&
++             session->stage_model->verify_retired_backend_sampling.load(std::memory_order_relaxed))) {
+         // Backend initialization belongs to the sampler-chain lifetime. The
+         // scheduler may reset and reuse the same chain on every iteration;
+         // attaching it again violates llama_sampler_chain's one-shot init
+diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
+index 2e9b20c48..80c9da183 100644
+--- a/src/skippy/verification.cpp
++++ b/src/skippy/verification.cpp
+@@ -138,6 +138,7 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+     if (!skippy_retire_backend_sampling(session, out_error)) {
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    session->stage_model->verify_retired_backend_sampling.store(true, std::memory_order_relaxed);
+     session->sampling_backend_verifying = true;
+ 
+     const bool activation_input = skippy_is_filtered(session) && session->stage_model->config.layer_start > 0;
+-- 
+2.54.0 (Apple Git-157)
+
