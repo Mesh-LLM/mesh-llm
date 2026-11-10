@@ -1,7 +1,7 @@
-From b454e8f89e0cc2e30d4845ddfc45c77b9ec71701 Mon Sep 17 00:00:00 2001
+From 48b14c546d96bf0cf81f2b1aeb0cc1601dd1c8ab Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
-Subject: [PATCH 07/15] fix(skippy): keep native MTP state across verify trims
+Subject: [PATCH 07/16] fix(skippy): keep native MTP state across verify trims
 
 A rejected verify window used to cost the MTP sidecar its whole prefix:
 trimming the session cleared the sidecar's cache and seed, so the next
@@ -220,10 +220,10 @@ index d8276944d..3a147d14d 100644
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index f035ea13f..15c48419d 100644
+index 1d05583bc..da9bccbd4 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -852,7 +852,7 @@ enum skippy_status skippy_trim_session(
+@@ -756,7 +756,7 @@ enum skippy_status skippy_trim_session(
      if (session->signal_history.size() > token_count) {
          session->signal_history.resize(static_cast<size_t>(token_count));
      }
@@ -269,5 +269,5 @@ index 0812485d7..bb3c0e621 100644
                  return status;
              }
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -38,7 +38,6 @@ static const uint64_t skippy_ffi_bridge_feature_unload_events = SKIPPY_FEATURE_U
 static const uint64_t skippy_ffi_bridge_feature_non_chat_workloads =
     SKIPPY_FEATURE_NON_CHAT_WORKLOADS;
 static const uint64_t skippy_ffi_bridge_feature_system_one = SKIPPY_FEATURE_SYSTEM_ONE;
-static const uint64_t skippy_ffi_bridge_feature_cachegen_kv_page = SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
 static const uint64_t skippy_ffi_bridge_feature_laya_decisions = SKIPPY_FEATURE_LAYA_DECISIONS;
 static const uint64_t skippy_ffi_bridge_feature_speech_recognition =
     SKIPPY_FEATURE_SPEECH_RECOGNITION;

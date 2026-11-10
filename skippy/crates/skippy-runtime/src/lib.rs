@@ -62,7 +62,6 @@ pub use gguf_writer::{
     ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,
     write_gguf_metadata_from_parts,
 };
-pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
 pub use laya::{LayaMemory, LayaModel, LayaModelInfo};
 pub use logging::{
     LLAMA_LOG_LEVEL_DEBUG, MeasuredNativeBuffers, NativeLogEvent, NativeLogParserMode,

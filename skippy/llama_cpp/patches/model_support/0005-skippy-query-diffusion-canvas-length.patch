@@ -1,7 +1,7 @@
-From 2d8d4463adeab888a1de33ccc728625b7dcea3fd Mon Sep 17 00:00:00 2001
+From 7e1f794c84210249e886d1d694f1282b96222b9b Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:38:59 +1000
-Subject: [PATCH] skippy: query diffusion canvas length
+Subject: [PATCH 05/16] skippy: query diffusion canvas length
 
 Expose the loaded GGUF canvas length so System One callers can size their fixed answer canvas without assuming the model was converted with OpenJEV vLLM defaults.
 
@@ -68,5 +68,5 @@ index d0c51d87a..9cbe792ae 100644
          struct skippy_model * model,
          const llama_token * prompt_tokens,
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

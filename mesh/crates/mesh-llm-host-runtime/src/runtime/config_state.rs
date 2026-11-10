@@ -485,7 +485,7 @@ fn remove_keys(value: &mut serde_json::Value, path: &[&str], keys: &[&str]) {
 }
 
 fn kv_disk_changes_require_restart(old: &KvDiskTierConfig, new: &KvDiskTierConfig) -> bool {
-    old.mode != new.mode || old.directory != new.directory || old.codec != new.codec
+    old.mode != new.mode || old.directory != new.directory
 }
 
 fn kv_disk_dynamic_limits_changed(old: &KvDiskTierConfig, new: &KvDiskTierConfig) -> bool {

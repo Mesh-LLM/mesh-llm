@@ -1107,7 +1107,7 @@ fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
     // unassemblable here, and the refusal names the offending segment.
     let mut tampered = manifest.clone();
     tampered.segments[0].codec_identity = Some(SegmentCodecIdentity {
-        name: "cachegen".to_string(),
+        name: "unknown-lossy".to_string(),
         version: 1,
         class: CodecClass::Lossy,
         decoded_len: tampered.segments[0].bytes,
@@ -1118,7 +1118,7 @@ fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
         .expect_err("an unsupported segment codec must not commit");
     let message = error.to_string();
     assert!(
-        message.contains("segment 0") && message.contains("cachegen"),
+        message.contains("segment 0") && message.contains("unknown-lossy"),
         "commit error should name the segment and codec: {message}"
     );
     drop(store);
@@ -1131,7 +1131,7 @@ fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
     value["segments"][0]["codec_identity"] = serde_json::json!({
-        "name": "cachegen",
+        "name": "unknown-lossy",
         "version": 1,
         "class": "lossy",
         "decoded_len": manifest.segments[0].bytes,

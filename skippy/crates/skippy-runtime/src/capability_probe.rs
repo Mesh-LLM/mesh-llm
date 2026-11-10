@@ -273,12 +273,7 @@ mod tests {
 
     #[test]
     fn named_non_family_bits_are_not_reported_as_reserved() {
-        let report = build_report(
-            FEATURE_KV_EVENTS
-                | skippy_ffi::FEATURE_SYSTEM_ONE
-                | skippy_ffi::FEATURE_CACHEGEN_KV_PAGE,
-            |_| true,
-        );
+        let report = build_report(FEATURE_KV_EVENTS | skippy_ffi::FEATURE_SYSTEM_ONE, |_| true);
         assert_eq!(report.confirmed, FEATURE_KV_EVENTS);
         assert!(report.health_messages.is_empty());
     }

@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 235ab8c05282dca7606ddd566a82a68896f9a92f Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Mon, 9 Nov 2026 15:52:17 +1100
-Subject: [PATCH] models: add Laguna DFlash drafts
+Subject: [PATCH 15/16] models: add Laguna DFlash drafts
 
 Laguna drafters (poolside/Laguna-XS-2.1-DFlash, Laguna-S-2.1-DFlash) read
 the target's layer inputs, including layer n_layer: the last layer's
@@ -483,10 +483,10 @@ index 8c92196cd..276ae1c48 100644
      struct graph : public llm_graph_context {
          graph(const llm_graph_params & params);
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
-index ffa8aa02c..1515bdae1 100644
+index fdcdc631f..725b75ad2 100644
 --- a/src/skippy/tests/graph_contract_cases.cmake
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -145,3 +145,26 @@ add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-i
+@@ -158,3 +158,26 @@ add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-i
      "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
  set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
      FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)
@@ -514,5 +514,5 @@ index ffa8aa02c..1515bdae1 100644
 +set_tests_properties(skippy_laguna_stage_layer_inputs PROPERTIES
 +    FIXTURES_REQUIRED contract-laguna TIMEOUT 900)
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

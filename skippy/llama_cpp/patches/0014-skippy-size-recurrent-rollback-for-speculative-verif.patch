@@ -1,7 +1,7 @@
-From 99891a53bd163329170b5a12f59f9b820651fa33 Mon Sep 17 00:00:00 2001
+From e311afb49ca741dd0bb662450630124a09e35b2a Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
-Subject: [PATCH 14/15] skippy: size recurrent rollback for speculative verify
+Subject: [PATCH 14/16] skippy: size recurrent rollback for speculative verify
 
 Recurrent and hybrid targets verify a speculative window in place only when
 the context keeps a rollback snapshot per window token (n_rs_seq); otherwise
@@ -102,5 +102,5 @@ index 36c972d92..4741f55cb 100644
      skippy_mtp_clear_session_state(session);
      session->sampling_backend_verifying = false;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

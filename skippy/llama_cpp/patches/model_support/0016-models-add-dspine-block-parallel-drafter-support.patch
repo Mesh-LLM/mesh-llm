@@ -1,7 +1,7 @@
-From a071d1256173acfeff6fcd4181f123a4af4f9ea7 Mon Sep 17 00:00:00 2001
+From 8b3d3b49dcf10447454baf15b1fce0d6bf160a73 Mon Sep 17 00:00:00 2001
 From: AjHomelab <31621065+Ajay9o9@users.noreply.github.com>
 Date: Mon, 9 Nov 2026 07:03:22 +1100
-Subject: [PATCH] dflash : add DSpine draft model support
+Subject: [PATCH 16/16] dflash : add DSpine draft model support
 
 Imported from Ajay9o9/llama.cpp@dspine (d493f841b) into the mesh-llm patch
 queue, with a zero-lattice fallback for probe/chunked (non-block-shaped)

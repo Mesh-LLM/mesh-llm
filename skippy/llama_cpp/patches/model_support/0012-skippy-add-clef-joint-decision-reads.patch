@@ -1,7 +1,7 @@
-From 496758edf6baa6855541004c10c9988f201c893c Mon Sep 17 00:00:00 2001
+From 9758c9b319e4446d1b0fa2833c5bacf1c4fb77ce Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:27:44 +1100
-Subject: [PATCH] skippy: add clef joint decision reads
+Subject: [PATCH 12/16] skippy: add clef joint decision reads
 
 Render the systemone template, tokenize the prompt pieces with their
 decision order, and read one score per option from the embeddings output
@@ -180,7 +180,7 @@ index 000000000..cf13822ed
 +
 +#endif // SKIPPY_CLEF_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 93232a2b8..d2ab5d538 100644
+index f9a1dbd11..b27bd7acb 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -188,11 +188,11 @@ index 93232a2b8..d2ab5d538 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 78
-+#define SKIPPY_ABI_VERSION_PATCH 79
++#define SKIPPY_ABI_VERSION_PATCH 80
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -112,6 +112,8 @@ enum skippy_feature {
+@@ -111,6 +111,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
  /** @brief Full-model speech recognition (`skippy/asr.h`). */
  #define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
@@ -240,12 +240,12 @@ index 0e619d785..c2238097e 100644
  target_include_directories(llama PUBLIC ../include)
  target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index ed9825df3..7ad903ff5 100644
+index 87698aa30..3d1ac4c51 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -49,6 +49,7 @@ uint64_t skippy_abi_features(void) {
+@@ -48,6 +48,7 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
-            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
             SKIPPY_FEATURE_LAYA_DECISIONS |
 +           SKIPPY_FEATURE_CLEF_DECISIONS |
  #if defined(SKIPPY_HAS_WHISPER)
@@ -775,5 +775,5 @@ index 000000000..6ccd39221
 +    });
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

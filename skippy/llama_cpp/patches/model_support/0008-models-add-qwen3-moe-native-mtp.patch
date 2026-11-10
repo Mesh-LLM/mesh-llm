@@ -1,7 +1,7 @@
-From f9c1f4d5a6b910791c62db5654904900cd86d20b Mon Sep 17 00:00:00 2001
+From 54c9f86e7dfe859a3dbd4d7388197fa3c0393f8d Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 6 Nov 2026 10:37:00 -0800
-Subject: [PATCH] models: add Qwen3-MoE native MTP
+Subject: [PATCH 08/16] models: add Qwen3-MoE native MTP
 
 ---
  conversion/qwen.py         |  98 ++++++++++++++++
@@ -478,5 +478,5 @@ index d7d1a9024..89b5135a4 100644
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

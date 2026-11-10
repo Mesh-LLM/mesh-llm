@@ -1,7 +1,7 @@
-From cde052e3cb5e74c012996f693357699789ab2f4f Mon Sep 17 00:00:00 2001
+From 4b2077591ef15c6824445265219ab9b0c85e7a99 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 6 Nov 2026 10:37:22 -0800
-Subject: [PATCH] models: expose glm5-next stage graph semantics
+Subject: [PATCH 11/16] models: expose glm5-next stage graph semantics
 
 ---
  src/CMakeLists.txt                          |  12 ++
@@ -406,5 +406,5 @@ index 89b5135a4..682a1b061 100644
              saver.save(path);
              require_fixture_written(path);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

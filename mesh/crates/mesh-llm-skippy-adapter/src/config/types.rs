@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use skippy_protocol::{FlashAttentionType, StageKvCacheCodec, StageKvCacheMode};
+use skippy_protocol::{FlashAttentionType, StageKvCacheMode};
 use skippy_runtime::package::PackageGenerationInfo;
 use skippy_serving::SpeculativeDecodeConfig;
 
@@ -77,7 +77,6 @@ pub struct ResolvedModelFitConfig {
     pub cache_type_v: String,
     pub prefix_cache: ResolvedStageKvCache,
     pub l2_max_bytes: u64,
-    pub kv_cache_codec: StageKvCacheCodec,
     pub kv_offload: String,
     /// Parsed `kv_offload` for the native tri-state control. `None` covers
     /// both "auto" and any value that did not parse to a bool.

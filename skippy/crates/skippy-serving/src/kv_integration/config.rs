@@ -9,7 +9,7 @@ use skippy_cache::{
     ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits,
     UnifiedRadixCache, exact_state_identity_for_stage, numerical_model_identity_for_stage,
 };
-use skippy_protocol::{StageConfig, StageKvCacheCodec, StageKvCacheConfig, StageKvCacheMode};
+use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
 
 use super::{
@@ -198,7 +198,6 @@ impl KvStageIntegration {
         let worker_exact_blobs = exact_blobs.clone();
         let worker_l3 = l3.clone();
         let worker_l2 = l2.clone();
-        let worker_cachegen = cachegen_serving_enabled(config, cache_config.codec);
         let inflight_records: Arc<Mutex<BTreeSet<String>>> = l3.as_ref().map_or_else(
             || Arc::new(Mutex::new(BTreeSet::new())),
             |tier| tier.manager().record_claims(tier.state_identity()),
@@ -241,7 +240,6 @@ impl KvStageIntegration {
         let worker_observer = observer.clone();
         let (durable_spill_tx, durable_spill_task) = start_durable_spill_worker(
             worker_l3.clone(),
-            worker_cachegen,
             EXACT_STATE_RECORD_QUEUE_BYTES,
             &config.stage_id,
             #[cfg(test)]
@@ -278,7 +276,7 @@ impl KvStageIntegration {
                             // Durable I/O runs on its own bounded fail-open
                             // worker so an early page spill cannot head-of-line
                             // block later page records needed by a repeat.
-                            let durable_spill = store_exact_radix_record_with_codec(
+                            let durable_spill = store_exact_radix_record_with_durable_target(
                                 &worker_radix,
                                 &worker_exact_blobs,
                                 exact_max_entries,
@@ -286,7 +284,6 @@ impl KvStageIntegration {
                                 worker_l2.as_ref(),
                                 DurableRecordTarget {
                                     l3: None,
-                                    cachegen_enabled: worker_cachegen,
                                     #[cfg(test)]
                                     before_l3_spill: None,
                                 },
@@ -377,7 +374,6 @@ impl KvStageIntegration {
             exact_state_record_queue_bytes,
             l2,
             l3,
-            cachegen_serving_enabled: worker_cachegen,
             inflight_fills,
             dense_without_recurrent,
         }))
@@ -656,7 +652,7 @@ fn store_exact_radix_record(
     l3: Option<&L3Tier>,
     pending: PendingExactStateRecord,
 ) -> Result<()> {
-    store_exact_radix_record_with_codec(
+    store_exact_radix_record_with_durable_target(
         radix,
         blobs,
         max_entries,
@@ -664,7 +660,6 @@ fn store_exact_radix_record(
         l2,
         DurableRecordTarget {
             l3,
-            cachegen_enabled: false,
             before_l3_spill: None,
         },
         pending,
@@ -672,7 +667,7 @@ fn store_exact_radix_record(
     .map(|_| ())
 }
 
-fn store_exact_radix_record_with_codec(
+fn store_exact_radix_record_with_durable_target(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
     max_entries: usize,
@@ -683,7 +678,6 @@ fn store_exact_radix_record_with_codec(
 ) -> Result<Option<PendingDurableSpill>> {
     let DurableRecordTarget {
         l3,
-        cachegen_enabled,
         #[cfg(test)]
         before_l3_spill,
     } = durable;
@@ -796,54 +790,11 @@ fn store_exact_radix_record_with_codec(
             if let Some(before_l3_spill) = before_l3_spill {
                 before_l3_spill();
             }
-            spill_exact_record_to_l3(l3, cachegen_enabled, durable_spill);
+            spill_exact_record_to_l3(l3, durable_spill);
         }
         return Ok(None);
     }
     Ok(durable_spill)
-}
-
-fn cachegen_serving_enabled(config: &StageConfig, codec: StageKvCacheCodec) -> bool {
-    if codec != StageKvCacheCodec::CacheGen {
-        return false;
-    }
-    let device = config
-        .selected_device
-        .as_ref()
-        .map(|device| device.backend_device.to_ascii_lowercase())
-        .unwrap_or_default();
-    let metal = device.contains("metal") || device.starts_with("mtl");
-    let key = config.cache_type_k.trim().to_ascii_lowercase();
-    let value = config.cache_type_v.trim().to_ascii_lowercase();
-    let qualified = matches!(
-        (key.as_str(), value.as_str()),
-        ("f32", "f32") | ("f32", "f16") | ("f16", "f32")
-    );
-    if metal && qualified {
-        return true;
-    }
-    let _ =
-        skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Warning {
-            message: "CacheGen disk codec unavailable for this model stage; using native KV pages"
-                .to_string(),
-            context: Some(format!(
-                "stage_id={} backend={} cache_type_k={} cache_type_v={}",
-                config.stage_id, device, config.cache_type_k, config.cache_type_v
-            )),
-        });
-    false
-}
-
-fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
-    if desc.component_count != 0 {
-        return false;
-    }
-    matches!(
-        (desc.k_type, desc.v_type),
-        (skippy_runtime::GGML_TYPE_F32, skippy_runtime::GGML_TYPE_F32)
-            | (skippy_runtime::GGML_TYPE_F32, skippy_runtime::GGML_TYPE_F16)
-            | (skippy_runtime::GGML_TYPE_F16, skippy_runtime::GGML_TYPE_F32)
-    )
 }
 
 /// Evicts least-recently-used exact entries while the catalog holds more than
@@ -943,7 +894,6 @@ fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
         max_entries,
         max_bytes,
         l2_max_bytes: 0,
-        codec: skippy_protocol::StageKvCacheCodec::Native,
         min_tokens,
         shared_prefix_stride_tokens,
         shared_prefix_record_limit,
@@ -965,7 +915,7 @@ fn parse_cache_mode(value: &str) -> Option<StageKvCacheMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
+    use skippy_protocol::{FlashAttentionType, LoadMode};
 
     mod cache_admission;
     mod durable_spill;
@@ -1025,188 +975,13 @@ mod tests {
         }
     }
 
-    fn kv_descriptor(k_type: u32, v_type: u32, token_count: u64) -> RuntimeKvPageDesc {
-        let row_bytes = 16_u32;
-        RuntimeKvPageDesc {
-            version: 1,
-            layer_start: 0,
-            layer_end: 1,
-            token_start: 0,
-            token_count,
-            layer_count: 1,
-            k_type,
-            v_type,
-            k_row_bytes: row_bytes,
-            v_row_bytes: row_bytes,
-            v_element_bytes: if v_type == skippy_runtime::GGML_TYPE_F32 {
-                4
-            } else {
-                2
-            },
-            k_idx_row_bytes: 0,
-            payload_bytes: token_count * u64::from(row_bytes) * 2,
-            flags: 0,
-            codec: 0,
-            component_count: 0,
-            components: Box::default(),
-        }
-    }
-
-    fn pending_kv(
-        page_id: &str,
-        tokens: &[i32],
-        desc: RuntimeKvPageDesc,
-        budget: &StorageBudget,
-    ) -> PendingExactStateRecord {
-        PendingExactStateRecord {
-            page_id: page_id.to_string(),
-            payload: skippy_cache::ExactStatePayload::kv_recurrent(
-                vec![0; desc.payload_bytes as usize],
-                Vec::new(),
-            ),
-            extra: super::super::ExactStateExtra {
-                kv_desc: Some(desc),
-            },
-            namespace: "model".to_string(),
-            token_ids: tokens.to_vec(),
-            l3_fill_claim: None,
-            write_through_l3: true,
-            l2_promotion_digest: None,
-            l3_cost: None,
-            admission_credit: budget.credit(),
-        }
-    }
-
     fn test_l3(name: &str) -> (std::path::PathBuf, L3Tier) {
         let root = std::env::temp_dir()
-            .join("skippy-server-cachegen-tests")
+            .join("skippy-server-l3-spill-tests")
             .join(format!("{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let tier = L3Tier::open(&root, 0, "blake3:test-tier".to_string(), 4096).unwrap();
         (root, tier)
-    }
-
-    #[test]
-    fn qualified_cachegen_write_persists_a_compressed_typed_envelope() {
-        let radix = Mutex::new(UnifiedRadixCache::new());
-        let blobs = Mutex::new(CacheBlobStore::new(64));
-        let (root, tier) = test_l3("qualified");
-        let tokens = (0..256).collect::<Vec<_>>();
-        let budget = StorageBudget::new();
-        let desc = kv_descriptor(
-            skippy_runtime::GGML_TYPE_F32,
-            skippy_runtime::GGML_TYPE_F32,
-            tokens.len() as u64,
-        );
-
-        store_exact_radix_record_with_codec(
-            &radix,
-            &blobs,
-            8,
-            limits(0, 0),
-            None,
-            DurableRecordTarget {
-                l3: Some(&tier),
-                cachegen_enabled: true,
-                before_l3_spill: None,
-            },
-            pending_kv("cachegen", &tokens, desc.clone(), &budget),
-        )
-        .unwrap();
-
-        let location = tier
-            .locate_longest("model", &tokens, tokens.len())
-            .unwrap()
-            .expect("CacheGen L3 location");
-        assert!(location.cachegen_kv);
-        assert!(!location.native_kv_passthrough);
-        assert_eq!(location.kv_decoded_bytes, desc.payload_bytes);
-        assert!(location.kv_bytes < location.kv_decoded_bytes);
-        let fill = tier.load(&location).expect("CacheGen L3 fill");
-        assert!(fill.cachegen_kv);
-        let archive = fill.payload.kv_bytes().unwrap().unwrap();
-        skippy_cache::cachegen::archive::validate_archive(
-            archive.as_ref(),
-            desc.payload_bytes as usize,
-        )
-        .expect("serving write must persist a valid CacheGen archive");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn unqualified_cache_layout_falls_back_to_native_l3() {
-        let radix = Mutex::new(UnifiedRadixCache::new());
-        let blobs = Mutex::new(CacheBlobStore::new(64));
-        let (root, tier) = test_l3("fallback");
-        let tokens = (0..8).collect::<Vec<_>>();
-        let budget = StorageBudget::new();
-        let desc = kv_descriptor(
-            skippy_runtime::GGML_TYPE_F16,
-            skippy_runtime::GGML_TYPE_F16,
-            tokens.len() as u64,
-        );
-
-        store_exact_radix_record_with_codec(
-            &radix,
-            &blobs,
-            8,
-            limits(0, 0),
-            None,
-            DurableRecordTarget {
-                l3: Some(&tier),
-                cachegen_enabled: true,
-                before_l3_spill: None,
-            },
-            pending_kv("native", &tokens, desc, &budget),
-        )
-        .unwrap();
-
-        let location = tier
-            .locate_longest("model", &tokens, tokens.len())
-            .unwrap()
-            .expect("native L3 location");
-        assert!(!location.cachegen_kv);
-        assert!(location.native_kv_passthrough);
-        assert_eq!(location.kv_bytes, location.kv_decoded_bytes);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn cachegen_selector_enables_only_qualified_metal_layouts() {
-        let mut config = test_config("future/model");
-        config.selected_device = Some(StageDevice {
-            backend_device: "MTL0".to_string(),
-            stable_id: None,
-            index: Some(0),
-            vram_bytes: None,
-        });
-        config.cache_type_k = "f32".to_string();
-        config.cache_type_v = "f16".to_string();
-        assert!(cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-
-        config.cache_type_k = "f16".to_string();
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-        config.cache_type_k = "f32".to_string();
-        config.selected_device.as_mut().unwrap().backend_device = "CUDA0".to_string();
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-        config.selected_device = None;
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::Native
-        ));
     }
 
     #[test]
@@ -1832,7 +1607,6 @@ mod tests {
             max_entries: 512,
             max_bytes: 0,
             l2_max_bytes: 0,
-            codec: skippy_protocol::StageKvCacheCodec::Native,
             min_tokens: 1,
             shared_prefix_stride_tokens: 1,
             shared_prefix_record_limit: 1,
@@ -1865,7 +1639,6 @@ mod reserved_admission_harness {
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
-                codec: skippy_protocol::StageKvCacheCodec::Native,
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 0,

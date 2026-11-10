@@ -1,7 +1,8 @@
-From 1a469ba388e6631d22e7eae3fdec94cfa3f7a3fa Mon Sep 17 00:00:00 2001
+From 4ac34300fedbfbb5fa4cdce8e75ee7cd028cb3a7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:18:19 +1100
-Subject: [PATCH] skippy: report published layer inputs including head input
+Subject: [PATCH 16/16] skippy: report published layer inputs including head
+ input
 
 ---
  src/llama-context.cpp | 46 ++++++++++++++++++++++++++++++++++++++++++-

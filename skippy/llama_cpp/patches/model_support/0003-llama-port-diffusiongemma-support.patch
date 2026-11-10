@@ -1,7 +1,7 @@
-From 0e0936c2607b2b75efddd1c7ab0ae7db348f1399 Mon Sep 17 00:00:00 2001
+From aebc6bfa44300c27caac67eea07dfe1d5ea4b693 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Fri, 6 Nov 2026 10:33:32 -0800
-Subject: [PATCH] llama: port DiffusionGemma support
+Subject: [PATCH 03/16] llama: port DiffusionGemma support
 
 ---
  common/arg.cpp                                |  90 +-
@@ -2287,10 +2287,10 @@ index 000000000..678611e0d
 +        int                  n_tokens,
 +        float                inv_temp);
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 4bc5c0482..587f5a549 100644
+index b0a1125d6..c897d9d15 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -27,6 +27,7 @@
+@@ -26,6 +26,7 @@
  #include "ggml-cuda/cumsum.cuh"
  #include "ggml-cuda/diagmask.cuh"
  #include "ggml-cuda/diag.cuh"
@@ -2298,10 +2298,10 @@ index 4bc5c0482..587f5a549 100644
  #include "ggml-cuda/fattn.cuh"
  #include "ggml-cuda/fwht.cuh"
  #include "ggml-cuda/getrows.cuh"
-@@ -6896,6 +6897,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
-         return (void *)ggml_cuda_cachegen_decode;
+@@ -6567,6 +6568,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_cuda_get_features;
      }
- #endif // !defined(GGML_USE_MUSA)
 +    if (strcmp(name, "ggml_backend_cuda_diffusion_sample") == 0) {
 +        return (void *)ggml_cuda_diffusion_sample;
 +    }
@@ -3631,5 +3631,5 @@ index d12706299..d7d1a9024 100644
              if (moe && !moe_implemented(arch)) {
                  continue;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -1,36 +1,36 @@
-From 456afbd17b2ecac58e754780a3be0c40146ec844 Mon Sep 17 00:00:00 2001
+From a6a0f7c8310f390e3e0b6444cdb5d0dc088bd73b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 03/15] feat(llama): integrate live stage planning and
+Subject: [PATCH 03/16] feat(llama): integrate live stage planning and
  execution
 
 ---
  include/llama.h                |    7 +
  src/llama-arch.cpp             |   22 +
  src/llama-arch.h               |    2 +
- src/llama-context.cpp          |  591 +++++++++--
- src/llama-context.h            |  102 +-
+ src/llama-context.cpp          |  591 ++++++++++++++---
+ src/llama-context.h            |  102 ++-
  src/llama-ext.h                |    6 +
  src/llama-graph.h              |    6 +
  src/llama-hparams.cpp          |   15 +
  src/llama-hparams.h            |   20 +-
  src/llama-kv-cache-dsv4.cpp    |    6 +-
  src/llama-kv-cache-msa.cpp     |    6 +-
- src/llama-kv-cache.cpp         | 1708 +++++++++++++++++++++++++++++---
- src/llama-kv-cache.h           |   80 +-
+ src/llama-kv-cache.cpp         | 1139 ++++++++++++++++++++++++++++++--
+ src/llama-kv-cache.h           |   68 +-
  src/llama-kv-cells.h           |   67 +-
  src/llama-memory-recurrent.cpp |   47 +-
  src/llama-memory-recurrent.h   |    9 +
  src/llama-mmap.cpp             |   46 +-
  src/llama-mmap.h               |   10 +
- src/llama-model-loader.cpp     |  270 ++++-
+ src/llama-model-loader.cpp     |  270 ++++++--
  src/llama-model-loader.h       |   55 +-
- src/llama-model.cpp            |  171 +++-
+ src/llama-model.cpp            |  171 ++++-
  src/llama-model.h              |   17 +-
  src/llama-quant.cpp            |   12 +-
- src/llama.cpp                  |   91 +-
+ src/llama.cpp                  |   91 ++-
  src/skippy-verify-checkpoint.h |   24 +
- 25 files changed, 3050 insertions(+), 340 deletions(-)
+ 25 files changed, 2550 insertions(+), 259 deletions(-)
  create mode 100644 src/skippy-verify-checkpoint.h
 
 diff --git a/include/llama.h b/include/llama.h
@@ -1643,7 +1643,7 @@ index 2d6bac0cb..8ef36beb3 100644
  
  void llama_kv_cache_msa::clear(bool data) {
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index a1ec67e26..3648d3207 100644
+index a1ec67e26..dfd78d5af 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
@@ -1727,14 +1727,14 @@ index a1ec67e26..3648d3207 100644
 +        const size_t memory_size_total = memory_size_k + memory_size_v + memory_size_k_idx;
 +
 +        constexpr float mib = 1024.0f * 1024.0f;
-+
-+        const std::string k_log = format(", K (%s): %7.2f MiB", ggml_type_name(type_k), (float) memory_size_k / mib);
-+        const std::string v_log = format(", V (%s): %7.2f MiB", ggml_type_name(type_v), (float) memory_size_v / mib);
  
 -        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
 -                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
 -                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
 -                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
++        const std::string k_log = format(", K (%s): %7.2f MiB", ggml_type_name(type_k), (float) memory_size_k / mib);
++        const std::string v_log = format(", V (%s): %7.2f MiB", ggml_type_name(type_v), (float) memory_size_v / mib);
++
 +        std::string k_idx_log;
 +        if (memory_size_k_idx > 0) {
 +            k_idx_log = format(", K_idx (%s): %7.2f MiB", ggml_type_name(GGML_TYPE_F32), (float) memory_size_k_idx / mib);
@@ -1794,8 +1794,7 @@ index a1ec67e26..3648d3207 100644
 -
      bool do_shift = get_has_shift();
 +    bool did_compact = false;
- 
--    return std::make_unique<llama_kv_cache_context>(this, lctx, do_shift, std::move(sc_info));
++
 +    if (optimize) {
 +        if (lctx != nullptr) {
 +            lctx->synchronize();
@@ -1818,7 +1817,8 @@ index a1ec67e26..3648d3207 100644
 +            }
 +        }
 +    }
-+
+ 
+-    return std::make_unique<llama_kv_cache_context>(this, lctx, do_shift, std::move(sc_info));
 +    return std::make_unique<llama_kv_cache_context>(
 +            this,
 +            lctx,
@@ -1912,46 +1912,20 @@ index a1ec67e26..3648d3207 100644
              if (!cells.is_empty(idx)) {
                  assert(cells.seq_count(idx) == 1);
  
-@@ -1208,105 +1341,1172 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
-             }
-         }
-     }
--
--    // note: we want to preserve the invariant that all positions between [pos_min, pos_max] for each sequence
--    //       will be present in the cache. so we have to purge any position which is less than those we would overwrite
--    //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
--    for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
--        if (seq_pos_max_rm[s] == -1) {
-+
-+    // note: we want to preserve the invariant that all positions between [pos_min, pos_max] for each sequence
-+    //       will be present in the cache. so we have to purge any position which is less than those we would overwrite
-+    //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
-+    for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
-+        if (seq_pos_max_rm[s] == -1) {
-+            continue;
-+        }
-+
-+        GGML_ASSERT(s < seq_to_stream.size());
-+
-+        auto & cells = v_cells[seq_to_stream[s]];
-+
-+        if (cells.seq_pos_min(s) <= seq_pos_max_rm[s]) {
-+            LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
-+                    __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
-+
+@@ -1225,7 +1358,8 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+             LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
+                     __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
+ 
+-            seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
 +            // under MSA strict slots this path should be unreachable, since strict MSA placement never selects occupied cells
 +            GGML_ASSERT(seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1));
-+        }
-+    }
-+
-+    // move the head at the end of the slot
-+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-+        auto & head = v_heads[sinfo.strm[s]];
-+
-+        head = sinfo.idxs[s].back() + 1;
-+    }
-+}
-+
+         }
+     }
+ 
+@@ -1237,6 +1371,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+     }
+ }
+ 
 +std::vector<llama_kv_cache::compaction_move> llama_kv_cache::compact_cells() {
 +    std::vector<compaction_move> moves;
 +
@@ -2039,72 +2013,26 @@ index a1ec67e26..3648d3207 100644
 +    }
 +}
 +
-+bool llama_kv_cache::get_can_shift() const {
-+    // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
-+    if (model.arch == LLM_ARCH_STEP35) {
-+        return false;
-+    }
-+    if (hparams.n_pos_per_embd() > 1) {
-+        return false;
-+    }
+ bool llama_kv_cache::get_can_shift() const {
+     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
+     if (model.arch == LLM_ARCH_STEP35) {
+@@ -1245,6 +1466,12 @@ bool llama_kv_cache::get_can_shift() const {
+     if (hparams.n_pos_per_embd() > 1) {
+         return false;
+     }
 +    // shifting would leave k_idx stale
 +    for (const auto & layer : layers) {
 +        if (layer.k_idx) {
 +            return false;
 +        }
 +    }
-+    return true;
-+}
-+
-+uint32_t llama_kv_cache::get_size() const {
-+    const auto & cells = v_cells[seq_to_stream[0]];
-+
-+    return cells.size();
-+}
-+
-+uint32_t llama_kv_cache::get_n_seq_max() const {
-+    return n_seq_max;
-+}
-+
-+uint32_t llama_kv_cache::get_n_stream() const {
-+    return n_stream;
-+}
-+
-+bool llama_kv_cache::get_has_shift() const {
-+    bool result = false;
-+
-+    for (uint32_t s = 0; s < n_stream; ++s) {
-+        result |= v_cells[s].get_has_shift();
-+    }
-+
-+    return result;
-+}
-+
-+ggml_type llama_kv_cache::type_k() const {
-+    return layers[0].k->type;
-+}
-+
-+ggml_type llama_kv_cache::type_v() const {
-+    return layers[0].v->type;
-+}
-+
-+std::vector<uint32_t> llama_kv_cache::get_layer_ids() const {
-+    std::vector<uint32_t> res;
-+    res.reserve(layers.size());
-+
-+    for (const auto & layer : layers) {
-+        res.push_back(layer.il);
-+    }
-+
-+    return res;
-+}
-+
-+ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
-+    const int32_t ikv = map_layer_ids.at(il);
-+
-+    return layers[ikv].k;
-+}
-+
+     return true;
+ }
+ 
+@@ -1297,6 +1524,67 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+     return layers[ikv].k;
+ }
+ 
 +ggml_tensor * llama_kv_cache::get_v_storage(int32_t il) const {
 +    const int32_t ikv = map_layer_ids.at(il);
 +
@@ -2166,18 +2094,13 @@ index a1ec67e26..3648d3207 100644
 +    return result;
 +}
 +
-+const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
-+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
-+
-+    return v_cells[seq_to_stream[seq_id]];
-+}
-+
-+uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
-+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
-+
-+    return seq_to_stream[seq_id];
-+}
-+
+ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
+     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+ 
+@@ -1309,6 +1597,511 @@ uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
+     return seq_to_stream[seq_id];
+ }
+ 
 +uint64_t llama_kv_cache::get_used_cells() const {
 +    uint64_t used = 0;
 +    for (const auto & cells : v_cells) {
@@ -2683,491 +2606,10 @@ index a1ec67e26..3648d3207 100644
 +    return src == static_cast<const char *>(input) + input_bytes;
 +}
 +
-+static uint16_t skippy_cachegen_read_u16(const uint8_t * bytes) {
-+    return static_cast<uint16_t>(bytes[0]) | static_cast<uint16_t>(bytes[1]) << 8;
-+}
-+
-+static uint32_t skippy_cachegen_read_u32(const uint8_t * bytes) {
-+    return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8 |
-+           static_cast<uint32_t>(bytes[2]) << 16 | static_cast<uint32_t>(bytes[3]) << 24;
-+}
-+
-+static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & record,
-+                                             size_t                            expected_rows,
-+                                             size_t                            expected_channels,
-+                                             size_t                            output_element_bytes,
-+                                             size_t                            output_row_bytes,
-+                                             std::string &                     error) {
-+    constexpr size_t header_bytes = 16;
-+    constexpr size_t cdf_entries  = 33;
-+    constexpr size_t max_rows     = 256;
-+    const auto *     payload      = static_cast<const uint8_t *>(record.payload);
-+    if (record.abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION || record.reserved0 != 0 ||
-+        record.element_bytes != output_element_bytes || payload == nullptr || record.payload_bytes < header_bytes ||
-+        record.decoded_bytes == 0 || record.token_count != expected_rows || expected_rows == 0 ||
-+        expected_rows > max_rows || expected_channels == 0 ||
-+        expected_channels > std::numeric_limits<uint32_t>::max()) {
-+        error = "invalid CacheGen record descriptor";
-+        return false;
-+    }
-+    const bool packed = std::memcmp(payload, "LCG2", 4) == 0;
-+    const uint8_t expected_bits = payload[4] == 16 ? 4 : 5;
-+    if ((!packed && std::memcmp(payload, "LCG1", 4) != 0) ||
-+        (packed ? payload[5] != expected_bits : payload[5] != 0) ||
-+        (payload[4] != 16 && payload[4] != 32) ||
-+        skippy_cachegen_read_u16(payload + 6) != expected_rows ||
-+        skippy_cachegen_read_u32(payload + 8) != expected_channels) {
-+        error = "CacheGen record disagrees with its segment header";
-+        return false;
-+    }
-+    if (expected_rows > std::numeric_limits<size_t>::max() / expected_channels ||
-+        expected_rows > std::numeric_limits<size_t>::max() / output_row_bytes ||
-+        record.decoded_bytes != expected_rows * output_row_bytes) {
-+        error = "CacheGen record decoded geometry is inconsistent";
-+        return false;
-+    }
-+    const size_t max_bytes = expected_rows * sizeof(float);
-+    if (header_bytes > std::numeric_limits<size_t>::max() - max_bytes ||
-+        header_bytes + max_bytes > record.payload_bytes) {
-+        error = "CacheGen segment maximum metadata is truncated";
-+        return false;
-+    }
-+    for (size_t row = 0; row < expected_rows; ++row) {
-+        const uint32_t bits = skippy_cachegen_read_u32(payload + header_bytes + row * sizeof(float));
-+        float          value;
-+        std::memcpy(&value, &bits, sizeof(value));
-+        if (!std::isfinite(value) || value < 0.0f) {
-+            error = "CacheGen segment contains an invalid row maximum";
-+            return false;
-+        }
-+    }
-+    const size_t stream_bytes = skippy_cachegen_read_u32(payload + 12);
-+    if (packed) {
-+        const size_t values = expected_rows * expected_channels;
-+        if (values > (std::numeric_limits<size_t>::max() - 7) / expected_bits) {
-+            error = "CacheGen packed segment length overflows";
-+            return false;
-+        }
-+        const size_t expected_stream_bytes = (values * expected_bits + 7) / 8;
-+        if (stream_bytes != expected_stream_bytes ||
-+            stream_bytes != record.payload_bytes - (header_bytes + max_bytes)) {
-+            error = "CacheGen packed segment length is inconsistent";
-+            return false;
-+        }
-+        return true;
-+    }
-+    if (expected_channels > std::numeric_limits<size_t>::max() / (cdf_entries * sizeof(uint16_t)) ||
-+        expected_channels > std::numeric_limits<size_t>::max() / sizeof(uint16_t)) {
-+        error = "CacheGen segment metadata overflows";
-+        return false;
-+    }
-+    const size_t cdf_bytes    = expected_channels * cdf_entries * sizeof(uint16_t);
-+    const size_t length_bytes = expected_channels * sizeof(uint16_t);
-+    if (header_bytes > std::numeric_limits<size_t>::max() - max_bytes ||
-+        header_bytes + max_bytes > std::numeric_limits<size_t>::max() - cdf_bytes ||
-+        header_bytes + max_bytes + cdf_bytes > std::numeric_limits<size_t>::max() - length_bytes) {
-+        error = "CacheGen segment metadata range overflows";
-+        return false;
-+    }
-+    const size_t cdf_offset    = header_bytes + max_bytes;
-+    const size_t length_offset = cdf_offset + cdf_bytes;
-+    const size_t stream_offset = length_offset + length_bytes;
-+    if (stream_offset > record.payload_bytes || stream_bytes != record.payload_bytes - stream_offset) {
-+        error = "CacheGen segment stream length is inconsistent";
-+        return false;
-+    }
-+    for (size_t channel = 0; channel < expected_channels; ++channel) {
-+        const uint8_t * cdf      = payload + cdf_offset + channel * cdf_entries * sizeof(uint16_t);
-+        uint16_t        previous = skippy_cachegen_read_u16(cdf);
-+        if (previous != 0) {
-+            error = "CacheGen segment has an invalid CDF endpoint";
-+            return false;
-+        }
-+        for (size_t entry = 1; entry < cdf_entries; ++entry) {
-+            const uint16_t current = skippy_cachegen_read_u16(cdf + entry * sizeof(uint16_t));
-+            if (current <= previous) {
-+                error = "CacheGen segment CDF is not strictly increasing";
-+                return false;
-+            }
-+            previous = current;
-+        }
-+        if (previous != std::numeric_limits<uint16_t>::max()) {
-+            error = "CacheGen segment has an invalid CDF endpoint";
-+            return false;
-+        }
-+    }
-+    size_t summed_stream_bytes = 0;
-+    for (size_t channel = 0; channel < expected_channels; ++channel) {
-+        const size_t length = skippy_cachegen_read_u16(payload + length_offset + channel * sizeof(uint16_t));
-+        if (length == 0 || length > max_rows || summed_stream_bytes > stream_bytes ||
-+            length > stream_bytes - summed_stream_bytes) {
-+            error = "CacheGen segment has an invalid channel stream length";
-+            return false;
-+        }
-+        summed_stream_bytes += length;
-+    }
-+    if (summed_stream_bytes != stream_bytes) {
-+        error = "CacheGen channel lengths do not cover the segment stream";
-+        return false;
-+    }
-+    return true;
-+}
-+
-+struct skippy_cachegen_job_storage {
-+    ggml_tensor *                           dst = nullptr;
-+    std::vector<ggml_backend_cachegen_tile> tiles;
-+    uint32_t                                channels       = 0;
-+    uint64_t                                token_stride   = 0;
-+    uint64_t                                channel_stride = 0;
-+};
-+
-+bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id                      seq_id,
-+                                                   const skippy_kv_page_desc &       desc,
-+                                                   const skippy_cachegen_record_v1 * records,
-+                                                   size_t                            record_count,
-+                                                   size_t                            output_base,
-+                                                   std::string &                     error,
-+                                                   bool &                            unsupported,
-+                                                   bool &                            invalid_argument,
-+                                                   bool                              validate_only) {
-+    unsupported                 = false;
-+    invalid_argument            = true;
-+    uint8_t validation_sentinel = 0;
-+    if (!stage_import_kv_page(seq_id, desc, &validation_sentinel, desc.payload_bytes, error, true)) {
-+        return false;
-+    }
-+    const auto cachegen_type_supported = [](uint32_t type) {
-+        return type == GGML_TYPE_F16 || type == GGML_TYPE_F32 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0;
-+    };
-+    if (records == nullptr || record_count == 0 || !cachegen_type_supported(desc.k_type) ||
-+        !cachegen_type_supported(desc.v_type)) {
-+        error = "CacheGen import requires non-empty supported K/V records";
-+        return false;
-+    }
-+
-+    const uint32_t                strm = seq_to_stream[seq_id];
-+    std::vector<const kv_layer *> selected;
-+    for (const auto & layer : layers) {
-+        if (layer.il >= static_cast<uint32_t>(desc.layer_start) && layer.il < static_cast<uint32_t>(desc.layer_end) &&
-+            layer.k_stream.size() > strm && layer.k_stream[strm] != nullptr) {
-+            selected.push_back(&layer);
-+        }
-+    }
-+
-+    size_t                                   record_index   = 0;
-+    size_t                                   logical_offset = output_base;
-+    std::vector<skippy_cachegen_job_storage> storage;
-+    storage.reserve(selected.size() * 2);
-+    auto consume_tiles = [&](ggml_tensor * dst, size_t row_bytes, bool transposed) -> bool {
-+        const size_t element_bytes = ggml_type_size(dst->type);
-+        const size_t block_values  = ggml_blck_size(dst->type);
-+        const bool   quantized     = dst->type == GGML_TYPE_Q8_0 || dst->type == GGML_TYPE_Q4_0;
-+        if (element_bytes == 0 || block_values == 0 || row_bytes == 0 || row_bytes % element_bytes != 0 ||
-+            (!quantized && element_bytes != sizeof(uint16_t) && element_bytes != sizeof(float)) ||
-+            (quantized && (transposed || block_values != 32))) {
-+            error = "CacheGen destination element geometry is invalid";
-+            return false;
-+        }
-+        const size_t channels = row_bytes / element_bytes * block_values;
-+        if (channels == 0 || channels > UINT32_MAX) {
-+            error = "CacheGen destination channel count is invalid";
-+            return false;
-+        }
-+        skippy_cachegen_job_storage entry;
-+        entry.dst             = dst;
-+        entry.token_stride    = transposed ? element_bytes : row_bytes;
-+        entry.channel_stride  = transposed ? static_cast<uint64_t>(v_cells[strm].size()) * element_bytes : element_bytes;
-+        entry.channels        = static_cast<uint32_t>(channels);
-+        size_t token_offset   = 0;
-+        while (token_offset < desc.token_count) {
-+            if (record_index >= record_count) {
-+                error = "CacheGen records do not cover the native KV page";
-+                return false;
-+            }
-+            const auto &   record = records[record_index++];
-+            const size_t   rows   = static_cast<size_t>(record.token_count);
-+            uint32_t expected_kind = SKIPPY_CACHEGEN_RECORD_F16;
-+            switch (dst->type) {
-+                case GGML_TYPE_F16:
-+                    expected_kind = transposed ? SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED : SKIPPY_CACHEGEN_RECORD_F16;
-+                    break;
-+                case GGML_TYPE_F32:
-+                    expected_kind = transposed ? SKIPPY_CACHEGEN_RECORD_F32_TRANSPOSED : SKIPPY_CACHEGEN_RECORD_F32;
-+                    break;
-+                case GGML_TYPE_Q8_0:
-+                    expected_kind = SKIPPY_CACHEGEN_RECORD_Q8_0;
-+                    break;
-+                case GGML_TYPE_Q4_0:
-+                    expected_kind = SKIPPY_CACHEGEN_RECORD_Q4_0;
-+                    break;
-+                default:
-+                    GGML_ABORT("unreachable CacheGen destination type");
-+            }
-+            if (record.kind != expected_kind || rows == 0 || rows > desc.token_count - token_offset ||
-+                record.output_offset != logical_offset + (transposed ? 0 : token_offset * row_bytes) ||
-+                record.token_start != (transposed ? token_offset : 0) ||
-+                record.total_tokens != (transposed ? desc.token_count : 0) ||
-+                !skippy_cachegen_validate_segment(record, rows, channels, element_bytes, row_bytes, error)) {
-+                if (error.empty()) {
-+                    error = "CacheGen record order or destination geometry is invalid";
-+                }
-+                return false;
-+            }
-+            entry.tiles.push_back({ record.payload, record.payload_bytes, static_cast<uint32_t>(token_offset),
-+                                    static_cast<uint32_t>(rows) });
-+            token_offset += rows;
-+        }
-+        storage.push_back(std::move(entry));
-+        logical_offset += static_cast<size_t>(desc.token_count) * row_bytes;
-+        return true;
-+    };
-+
-+    for (const auto * layer : selected) {
-+        if (!consume_tiles(layer->k_stream[strm], desc.k_row_bytes, false)) {
-+            return false;
-+        }
-+    }
-+    // MLA caches (DeepSeek/GLM indexers) hold no V stream: their page carries an empty V
-+    // payload and no V records, so V tiles must not be consumed. The mixed-stream check below
-+    // is unreachable today (stage_import_kv_page rejects a V mismatch first) but stays fail-closed.
-+    const bool has_v_payload = desc.v_row_bytes != 0 || desc.v_element_bytes != 0;
-+    for (const auto * layer : selected) {
-+        const bool layer_has_v = layer->v_stream.size() > strm && layer->v_stream[strm] != nullptr;
-+        if (layer_has_v != has_v_payload) {
-+            error = "CacheGen page V streams disagree with its V geometry";
-+            return false;
-+        }
-+        if (!has_v_payload) {
-             continue;
-         }
-+        const size_t v_row_bytes =
-+            v_trans ? static_cast<size_t>(hparams.n_embd_v_gqa(layer->il)) * desc.v_element_bytes : desc.v_row_bytes;
-+        if (!consume_tiles(layer->v_stream[strm], v_row_bytes, v_trans)) {
-+            return false;
-+        }
-+    }
- 
--        GGML_ASSERT(s < seq_to_stream.size());
--
--        auto & cells = v_cells[seq_to_stream[s]];
--
--        if (cells.seq_pos_min(s) <= seq_pos_max_rm[s]) {
--            LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
--                    __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
--
--            seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
-+    const skippy_cachegen_record_v1 * exact = nullptr;
-+    if (desc.k_idx_row_bytes != 0 && (desc.token_count > std::numeric_limits<size_t>::max() / desc.k_idx_row_bytes ||
-+                                      static_cast<size_t>(desc.token_count) * desc.k_idx_row_bytes >
-+                                          std::numeric_limits<size_t>::max() / selected.size())) {
-+        error = "CacheGen exact indexer geometry overflows";
-+        return false;
-+    }
-+    const size_t exact_bytes = static_cast<size_t>(desc.token_count) * desc.k_idx_row_bytes * selected.size();
-+    if (exact_bytes > 0) {
-+        if (record_index >= record_count) {
-+            error = "CacheGen page is missing exact indexer state";
-+            return false;
-         }
-+        exact = &records[record_index++];
-+        if (exact->abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION ||
-+            exact->kind != SKIPPY_CACHEGEN_RECORD_EXACT || exact->element_bytes != 1 || exact->reserved0 != 0 ||
-+            exact->output_offset != logical_offset || exact->decoded_bytes != exact_bytes ||
-+            exact->token_count != desc.token_count || exact->token_start != 0 || exact->total_tokens != 0 ||
-+            exact->payload == nullptr || exact->payload_bytes != exact_bytes) {
-+            error = "CacheGen exact indexer record is invalid";
-+            return false;
-+        }
-+        logical_offset += exact_bytes;
-+    }
-+    if (record_index != record_count || logical_offset != output_base + desc.payload_bytes) {
-+        error = "CacheGen records do not exactly cover the native KV page";
-+        return false;
-     }
- 
--    // move the head at the end of the slot
--    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
--        auto & head = v_heads[sinfo.strm[s]];
-+    ggml_backend_cachegen_decode_t decode = nullptr;
-+    for (const auto & entry : storage) {
-+        if (entry.dst == nullptr || entry.dst->buffer == nullptr) {
-+            error = "CacheGen destination tensor has no backend buffer";
-+            return false;
-+        }
-+        const auto buft      = ggml_backend_buffer_get_type(entry.dst->buffer);
-+        const auto device    = ggml_backend_buft_get_device(buft);
-+        const auto reg       = device == nullptr ? nullptr : ggml_backend_dev_backend_reg(device);
-+        auto       candidate = reg == nullptr ?
-+                                   nullptr :
-+                                   reinterpret_cast<ggml_backend_cachegen_decode_t>(
-+                                       ggml_backend_reg_get_proc_address(reg, "ggml_backend_cachegen_decode"));
-+        if (candidate == nullptr || (decode != nullptr && candidate != decode)) {
-+            invalid_argument = false;
-+            unsupported      = true;
-+            error            = "resident KV backend does not provide typed CacheGen decode";
-+            return false;
-+        }
-+        decode = candidate;
-+    }
-+    invalid_argument = false;
-+    if (validate_only) {
-+        return true;
-+    }
- 
--        head = sinfo.idxs[s].back() + 1;
-+    auto & stream_cells = v_cells[strm];
-+    for (uint32_t i = 0; i < stream_cells.size(); ++i) {
-+        if (stream_cells.seq_has(i, seq_id)) {
-+            invalid_argument = true;
-+            error            = "CacheGen page import requires an empty session KV sequence";
-+            return false;
-+        }
-     }
--}
- 
--bool llama_kv_cache::get_can_shift() const {
--    // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
--    if (model.arch == LLM_ARCH_STEP35) {
-+    llama_ubatch   ubatch   = {};
-+    auto           udata    = std::make_shared<llama_ubatch::data_t>();
-+    const uint32_t n_tokens = static_cast<uint32_t>(desc.token_count);
-+    const uint32_t n_pos    = hparams.n_pos_per_embd();
-+    if (n_pos != 0 && n_tokens > std::numeric_limits<size_t>::max() / n_pos) {
-+        invalid_argument = true;
-+        error            = "CacheGen page position geometry overflows";
-         return false;
-     }
--    if (hparams.n_pos_per_embd() > 1) {
-+    udata->token.resize(n_tokens);
-+    udata->pos.resize(static_cast<size_t>(n_tokens) * n_pos);
-+    udata->n_seq_id.resize(n_tokens, 1);
-+    udata->seq_id.resize(n_tokens);
-+    udata->seq_id_unq = { seq_id };
-+    udata->seq_idx.resize(LLAMA_MAX_SEQ, -1);
-+    udata->seq_idx[seq_id] = 0;
-+    udata->output.resize(n_tokens, 0);
-+    udata->seq_id_data.resize(n_tokens, 0);
-+    for (uint32_t i = 0; i < n_tokens; ++i) {
-+        const llama_pos pos = static_cast<llama_pos>(desc.token_start + i);
-+        for (uint32_t j = 0; j < n_pos; ++j) {
-+            udata->pos[static_cast<size_t>(j) * n_tokens + i] = pos;
-+        }
-+        udata->seq_id_data[i] = seq_id;
-+        udata->seq_id[i]      = &udata->seq_id_data[i];
-+    }
-+    ubatch.b_equal_seqs = true;
-+    ubatch.n_tokens     = n_tokens;
-+    ubatch.n_seq_tokens = n_tokens;
-+    ubatch.n_seqs       = 1;
-+    ubatch.n_seqs_unq   = 1;
-+    ubatch.n_pos        = n_pos;
-+    ubatch.token        = udata->token.data();
-+    ubatch.pos          = udata->pos.data();
-+    ubatch.n_seq_id     = udata->n_seq_id.data();
-+    ubatch.seq_id       = udata->seq_id.data();
-+    ubatch.seq_id_unq   = udata->seq_id_unq.data();
-+    ubatch.seq_idx      = udata->seq_idx.data();
-+    ubatch.output       = udata->output.data();
-+    ubatch.data         = std::move(udata);
-+
-+    const uint32_t  head_before = v_heads[strm];
-+    const slot_info sinfo       = find_slot(ubatch, false);
-+    if (sinfo.empty()) {
-+        error = "failed to allocate KV cache cells for CacheGen page";
-         return false;
-     }
--    return true;
--}
--
--uint32_t llama_kv_cache::get_size() const {
--    const auto & cells = v_cells[seq_to_stream[0]];
--
--    return cells.size();
--}
--
--uint32_t llama_kv_cache::get_n_seq_max() const {
--    return n_seq_max;
--}
--
--uint32_t llama_kv_cache::get_n_stream() const {
--    return n_stream;
--}
-+    apply_ubatch(sinfo, ubatch);
- 
--bool llama_kv_cache::get_has_shift() const {
--    bool result = false;
--
--    for (uint32_t s = 0; s < n_stream; ++s) {
--        result |= v_cells[s].get_has_shift();
-+    std::vector<ggml_backend_cachegen_job> jobs;
-+    jobs.reserve(storage.size());
-+    for (const auto & entry : storage) {
-+        jobs.push_back({ entry.dst, entry.tiles.data(), entry.tiles.size(), sinfo.idxs[0].data(), sinfo.idxs[0].size(),
-+                         entry.channels, entry.token_stride, entry.channel_stride });
-     }
--
--    return result;
--}
--
--ggml_type llama_kv_cache::type_k() const {
--    return layers[0].k->type;
--}
--
--ggml_type llama_kv_cache::type_v() const {
--    return layers[0].v->type;
--}
--
--std::vector<uint32_t> llama_kv_cache::get_layer_ids() const {
--    std::vector<uint32_t> res;
--    res.reserve(layers.size());
--
--    for (const auto & layer : layers) {
--        res.push_back(layer.il);
-+    char backend_error[256] = {};
-+    if (!decode(jobs.data(), jobs.size(), backend_error, sizeof(backend_error))) {
-+        seq_rm(seq_id, static_cast<llama_pos>(desc.token_start),
-+               static_cast<llama_pos>(desc.token_start + desc.token_count));
-+        v_heads[strm] = head_before;
-+        error         = backend_error[0] == '\0' ? "CacheGen backend decode failed" : backend_error;
-+        return false;
-     }
- 
--    return res;
--}
--
--ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
--    const int32_t ikv = map_layer_ids.at(il);
--
--    return layers[ikv].k;
--}
--
--const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
--    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
--
--    return v_cells[seq_to_stream[seq_id]];
--}
--
--uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
--    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
--
--    return seq_to_stream[seq_id];
-+    if (exact != nullptr) {
-+        const char * src       = static_cast<const char *>(exact->payload);
-+        const auto   cell_runs = llama_kv_cache_cell_runs(sinfo.idxs[0]);
-+        for (const auto * layer : selected) {
-+            auto * k_idx = layer->k_idx_stream[strm];
-+            for (const auto & run : cell_runs) {
-+                const size_t run_bytes = static_cast<size_t>(run.count) * desc.k_idx_row_bytes;
-+                ggml_backend_tensor_set(k_idx, src, static_cast<size_t>(run.first) * desc.k_idx_row_bytes, run_bytes);
-+                src += run_bytes;
-+            }
-+        }
-+    }
-+    return true;
- }
- 
  uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
-@@ -1418,10 +2618,51 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
+     uint32_t result = 0;
+ 
+@@ -1418,10 +2211,51 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
      return std::min(std::max(n_pad_cur, GGML_PAD(n_max, n_pad_cur)), get_size());
  }
  
@@ -3212,17 +2654,17 @@ index a1ec67e26..3648d3207 100644
 +    if (!cells.seq_pos_is_cell_contiguous(seq_id)) {
 +        return 0;
 +    }
-+
-+    return pos_max + 1;
-+}
  
 -    auto * k = layers[ikv].k;
++    return pos_max + 1;
++}
++
 +ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
 +    auto * k = graph_k_storage(ctx, il);
  
      const uint64_t kv_size      = get_size();
      const uint64_t n_embd_k_gqa = k->ne[0];
-@@ -1430,18 +2671,17 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1430,18 +2264,17 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
  
      const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
  
@@ -3244,7 +2686,7 @@ index a1ec67e26..3648d3207 100644
  
      const uint64_t kv_size      = get_size();
      const uint64_t n_embd_v_gqa = v->ne[0];
-@@ -1453,29 +2693,45 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1453,29 +2286,45 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
  
      if (!v_trans) {
          // note: v->nb[1] <= v->nb[2]
@@ -3295,7 +2737,7 @@ index a1ec67e26..3648d3207 100644
  
      const int64_t n_embd_head = k_cur->ne[0];
      const int64_t n_head      = k_cur->ne[1];
-@@ -1508,9 +2764,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
+@@ -1508,9 +2357,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
  ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
      GGML_UNUSED(sinfo);
  
@@ -3306,7 +2748,7 @@ index a1ec67e26..3648d3207 100644
  
      const int64_t n_embd_head = v_cur->ne[0];
      const int64_t n_head      = v_cur->ne[1];
-@@ -1572,6 +2826,27 @@ ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama
+@@ -1572,6 +2419,27 @@ ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama
      return k_idxs;
  }
  
@@ -3334,7 +2776,7 @@ index a1ec67e26..3648d3207 100644
  ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
      const uint32_t n_tokens = ubatch.n_tokens;
  
-@@ -1993,6 +3268,57 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
+@@ -1993,6 +2861,57 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
      }
  }
  
@@ -3392,7 +2834,7 @@ index a1ec67e26..3648d3207 100644
  bool llama_kv_cache::has_cell_ext() const {
      // M-RoPE needs the 2D position, the PLE / Engram n-gram hashes need the token id
      return hparams.n_pos_per_embd() > 1 || hparams.ple_n_heads > 0;
-@@ -2087,6 +3413,18 @@ size_t llama_kv_cache::size_v_bytes() const {
+@@ -2087,6 +3006,18 @@ size_t llama_kv_cache::size_v_bytes() const {
      return size_v_bytes;
  }
  
@@ -3411,7 +2853,7 @@ index a1ec67e26..3648d3207 100644
  ggml_tensor * llama_kv_cache::build_rope_shift(
          const llama_cparams & cparams,
                 ggml_context * ctx,
-@@ -2425,6 +3763,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
+@@ -2425,6 +3356,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
          }
      }
  
@@ -3448,7 +2890,7 @@ index a1ec67e26..3648d3207 100644
      if (!v_trans) {
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
-@@ -2755,6 +4123,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
+@@ -2755,6 +3716,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
          }
      }
  
@@ -3517,7 +2959,7 @@ index a1ec67e26..3648d3207 100644
      if (!this->v_trans) {
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
-@@ -2974,8 +4404,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2974,8 +3997,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -3529,7 +2971,7 @@ index a1ec67e26..3648d3207 100644
          status = LLAMA_MEMORY_STATUS_NO_UPDATE;
      }
  }
-@@ -3033,6 +4464,21 @@ uint32_t llama_kv_cache_context::get_n_kv_rows() const {
+@@ -3033,6 +4057,21 @@ uint32_t llama_kv_cache_context::get_n_kv_rows() const {
      return n_kv_rows;
  }
  
@@ -3551,7 +2993,7 @@ index a1ec67e26..3648d3207 100644
  ggml_type llama_kv_cache_context::type_k() const {
      return kv->type_k();
  }
-@@ -3049,6 +4495,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
+@@ -3049,6 +4088,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
      return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
  }
  
@@ -3570,7 +3012,7 @@ index a1ec67e26..3648d3207 100644
  ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
      return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
  }
-@@ -3057,6 +4515,10 @@ ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_
+@@ -3057,6 +4108,10 @@ ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_
      return kv->cpy_v(ctx, v_cur, v_idxs, il, sinfos[i_cur]);
  }
  
@@ -3581,7 +3023,7 @@ index a1ec67e26..3648d3207 100644
  ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
      return kv->build_input_k_idxs(ctx, ubatch);
  }
-@@ -3093,6 +4555,10 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+@@ -3093,6 +4148,10 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
      kv->set_input_pos_bucket(dst, ubatch);
  }
  
@@ -3593,10 +3035,10 @@ index a1ec67e26..3648d3207 100644
      kv->get_prev_tokens(ubatch, n, res);
  }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 5aafbebb3..152da5166 100644
+index 5aafbebb3..cd1539fa0 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -6,12 +6,15 @@
+@@ -6,12 +6,14 @@
  #include "llama-memory.h"
  
  #include <unordered_map>
@@ -3608,11 +3050,10 @@ index 5aafbebb3..152da5166 100644
  struct llama_model;
  struct llama_context;
 +struct skippy_kv_page_desc;
-+struct skippy_cachegen_record_v1;
  
  //
  // llama_kv_cache
-@@ -93,6 +96,12 @@ public:
+@@ -93,6 +95,12 @@ public:
  
      using slot_info_vec_t = std::vector<slot_info>;
  
@@ -3625,7 +3066,7 @@ index 5aafbebb3..152da5166 100644
      // TODO: refactor the memory instances to not depend on `llama_model`
      //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
      //       likely through `struct llama_memory_params`
-@@ -160,6 +169,8 @@ public:
+@@ -160,6 +168,8 @@ public:
      uint32_t get_size()     const;
      uint32_t get_n_seq_max() const;
      uint32_t get_n_stream() const;
@@ -3634,7 +3075,7 @@ index 5aafbebb3..152da5166 100644
  
      bool get_has_shift() const;
  
-@@ -168,7 +179,7 @@ public:
+@@ -168,7 +178,7 @@ public:
  
      std::vector<uint32_t> get_layer_ids() const;
      ggml_tensor * get_k_storage(int32_t il) const;
@@ -3643,7 +3084,7 @@ index 5aafbebb3..152da5166 100644
      const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
  
      // The stream holding seq_id's cells.
-@@ -188,6 +199,37 @@ public:
+@@ -188,6 +198,26 @@ public:
      // undo a state_read() of seq_id (-1 for the whole cache) that another memory module failed to complete
      void state_clear(llama_seq_id seq_id);
  
@@ -3667,21 +3108,10 @@ index 5aafbebb3..152da5166 100644
 +            std::string & error,
 +            bool validate_only = false);
 +
-+    bool stage_import_cachegen_kv_page(
-+            llama_seq_id seq_id,
-+            const skippy_kv_page_desc & desc,
-+            const skippy_cachegen_record_v1 * records,
-+            size_t record_count,
-+            size_t output_base,
-+            std::string & error,
-+            bool & unsupported,
-+            bool & invalid_argument,
-+            bool validate_only = false);
-+
      //
      // graph_build API
      //
-@@ -202,14 +244,18 @@ public:
+@@ -202,14 +232,18 @@ public:
  
      // padded length of the longest cell list of the slices; 0 if kv_rows are not used (multiple streams)
      uint32_t get_n_kv_rows(const llama_ubatch & ubatch) const;
@@ -3700,7 +3130,7 @@ index 5aafbebb3..152da5166 100644
  
      //
      // preparation API
-@@ -229,6 +275,10 @@ public:
+@@ -229,6 +263,10 @@ public:
      // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
      void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
  
@@ -3711,7 +3141,7 @@ index 5aafbebb3..152da5166 100644
      //
      // input API
      //
-@@ -269,9 +319,11 @@ private:
+@@ -269,9 +307,11 @@ private:
  
          ggml_tensor * k;
          ggml_tensor * v;
@@ -3723,7 +3153,7 @@ index 5aafbebb3..152da5166 100644
  
          ggml_tensor * k_rot = nullptr;
          ggml_tensor * v_rot = nullptr;
-@@ -279,6 +331,10 @@ private:
+@@ -279,6 +319,10 @@ private:
  
      bool v_trans = true;  // the value tensor is transposed
  
@@ -3734,7 +3164,7 @@ index 5aafbebb3..152da5166 100644
      const uint32_t n_seq_max = 1;
      const uint32_t n_stream  = 1;
  
-@@ -307,6 +363,9 @@ private:
+@@ -307,6 +351,9 @@ private:
      // env: LLAMA_KV_CACHE_DEBUG
      int debug = 0;
  
@@ -3744,7 +3174,7 @@ index 5aafbebb3..152da5166 100644
      // this is the SWA type of the cache - not to be confused with the model SWA type
      const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
  
-@@ -335,10 +394,15 @@ private:
+@@ -335,10 +382,15 @@ private:
      // model layer id -> KV cache layer id
      std::unordered_map<int32_t, int32_t> map_layer_ids;
  
@@ -3760,7 +3190,7 @@ index 5aafbebb3..152da5166 100644
  
      ggml_tensor * build_rope_shift(
              const llama_cparams & cparams,
-@@ -386,7 +450,8 @@ public:
+@@ -386,7 +438,8 @@ public:
              llama_kv_cache * kv,
              llama_context * lctx,
              bool do_shift,
@@ -3770,7 +3200,7 @@ index 5aafbebb3..152da5166 100644
  
      // used to create a batch processing context from a batch
      llama_kv_cache_context(
-@@ -412,6 +477,7 @@ public:
+@@ -412,6 +465,7 @@ public:
  
      uint32_t get_n_kv() const;
      uint32_t get_n_kv_rows() const;
@@ -3778,7 +3208,7 @@ index 5aafbebb3..152da5166 100644
  
      ggml_type type_k() const;
      ggml_type type_v() const;
-@@ -419,6 +485,11 @@ public:
+@@ -419,6 +473,11 @@ public:
      // get views of the current state of the cache
      ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
      ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
@@ -3790,7 +3220,7 @@ index 5aafbebb3..152da5166 100644
  
      // store k_cur and v_cur in the cache based on the provided head location
      // note: the heads in k_cur and v_cur should be laid out contiguously in memory
-@@ -428,6 +499,7 @@ public:
+@@ -428,6 +487,7 @@ public:
      //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
      ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
      ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
@@ -3798,7 +3228,7 @@ index 5aafbebb3..152da5166 100644
  
      // create destination indices for each head of the current batch for where it would be written in the KV cache
      // the indices address the global KV cache (not per stream) - this is not relevant for the user of this API, but
-@@ -451,8 +523,8 @@ public:
+@@ -451,8 +511,8 @@ public:
  private:
      llama_memory_status status;
  
@@ -5327,5 +4757,5 @@ index 000000000..8793000c1
 +    return true;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

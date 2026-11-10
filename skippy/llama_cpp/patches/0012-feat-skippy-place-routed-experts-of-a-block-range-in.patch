@@ -1,7 +1,7 @@
-From 85bf84039958989b16f16fa0fcb407037579cc00 Mon Sep 17 00:00:00 2001
+From 0556f9000035e5ebbb7e0b4a53a08f1a5ec6350d Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 16 Oct 2026 19:21:00 +0300
-Subject: [PATCH 12/15] feat(skippy): place routed experts of a block range in
+Subject: [PATCH 12/16] feat(skippy): place routed experts of a block range in
  host memory
 
 Add host_expert_layer_start/end to skippy_runtime_config. When the range
@@ -24,7 +24,7 @@ object because llama.cpp borrows both until the load call returns.
  7 files changed, 109 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index b9b5259af..df831c43e 100644
+index cdacbf45a..6c1ab22e6 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -252,5 +252,5 @@ index 471968158..772d380e2 100644
      return passed ? 0 : 1;
  }
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

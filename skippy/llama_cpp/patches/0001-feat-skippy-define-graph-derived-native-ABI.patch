@@ -1,12 +1,12 @@
-From 3424455e99f043132ea9db15ed0561980154bf03 Mon Sep 17 00:00:00 2001
+From 70a4d794d5994651e48c1cd3b54c22ea63d0d3ee Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 01/15] feat(skippy): define graph-derived native ABI
+Subject: [PATCH 01/16] feat(skippy): define graph-derived native ABI
 
 ---
  include/skippy.h                      |  29 +++
  include/skippy/activation.h           |  66 ++++++
- include/skippy/common.h               | 146 ++++++++++++++
+ include/skippy/common.h               | 145 ++++++++++++++
  include/skippy/devices.h              |  56 ++++++
  include/skippy/events.h               | 229 +++++++++++++++++++++
  include/skippy/execution.h            | 264 ++++++++++++++++++++++++
@@ -16,11 +16,11 @@ Subject: [PATCH 01/15] feat(skippy): define graph-derived native ABI
  include/skippy/sampling.h             |  76 +++++++
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 256 +++++++++++++++++++++++
- include/skippy/state.h                | 236 ++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 256 ++++++++++++++++++++++++
+ include/skippy/state.h                | 201 +++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2114 insertions(+)
+ 16 files changed, 2078 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -147,10 +147,10 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..b9b5259af
+index 000000000..cdacbf45a
 --- /dev/null
 +++ b/include/skippy/common.h
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,145 @@
 +#ifndef SKIPPY_COMMON_H
 +#define SKIPPY_COMMON_H
 +
@@ -259,7 +259,6 @@ index 000000000..b9b5259af
 +/** @brief Full-model embedding, reranking, and encoder-decoder execution. */
 +#define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
 +
-+#define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
 +
 +enum skippy_status {
 +    SKIPPY_STATUS_OK                      = 0,
@@ -1818,10 +1817,10 @@ index 000000000..7ffe65277
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..1cfaaa5c6
+index 000000000..a2c8a3665
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,201 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1863,33 +1862,6 @@ index 000000000..1cfaaa5c6
 +enum skippy_kv_page_component_role {
 +    SKIPPY_KV_PAGE_COMPONENT_BASE = 1,
 +    SKIPPY_KV_PAGE_COMPONENT_SWA  = 2,
-+};
-+
-+#define SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION 1
-+
-+enum skippy_cachegen_record_kind {
-+    SKIPPY_CACHEGEN_RECORD_F16            = 0,
-+    SKIPPY_CACHEGEN_RECORD_EXACT          = 1,
-+    SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED = 2,
-+    SKIPPY_CACHEGEN_RECORD_F32            = 3,
-+    SKIPPY_CACHEGEN_RECORD_F32_TRANSPOSED = 4,
-+    SKIPPY_CACHEGEN_RECORD_Q8_0           = 5,
-+    SKIPPY_CACHEGEN_RECORD_Q4_0           = 6,
-+};
-+
-+/** @brief Describes one validated CacheGen record and its logical page destination. */
-+struct skippy_cachegen_record_v1 {
-+    uint32_t abi_version;
-+    uint32_t kind;
-+    uint32_t element_bytes;
-+    uint32_t reserved0;
-+    uint64_t output_offset;
-+    uint64_t decoded_bytes;
-+    uint64_t token_count;
-+    uint64_t token_start;
-+    uint64_t total_tokens;
-+    const void * payload;
-+    size_t payload_bytes;
 +};
 +
 +/** @brief Describes one independently ranged cache in a composite KV page. */
@@ -2016,14 +1988,6 @@ index 000000000..1cfaaa5c6
 +        const struct skippy_kv_page_desc * desc,
 +        const void * input,
 +        size_t input_bytes,
-+        struct skippy_error ** out_error);
-+
-+/** @brief Imports validated CacheGen records directly into resident KV storage. */
-+LLAMA_API enum skippy_status skippy_import_cachegen_kv_page_v1(
-+        struct skippy_session * session,
-+        const struct skippy_kv_page_desc * desc,
-+        const struct skippy_cachegen_record_v1 * records,
-+        size_t record_count,
 +        struct skippy_error ** out_error);
 +
 +/** @brief Saves a session prefix into a resident cache sequence. */
@@ -2249,5 +2213,5 @@ index 000000000..6aff32414
 +
 +#endif  // SKIPPY_WORKLOADS_H
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
