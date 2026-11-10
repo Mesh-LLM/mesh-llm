@@ -25,7 +25,7 @@ Plugin-specific documentation:
 The main goals are:
 
 - keep `mesh-llm` decoupled from specific plugins
-- let bundled plugins be auto-registered without special-casing product behavior
+- let catalog plugin sets be offered without special-casing product behavior
 - make MCP and HTTP first-class host projections
 - support large request and response bodies without blocking control traffic
 - keep plugin author boilerplate low
@@ -558,71 +558,80 @@ only when a newer compatible version exists.
 plugin installed but prevents host startup from launching it. `delete` removes
 the installed archive, extracted files, and local plugin metadata.
 
-## Default Plugins
+## Plugin Sets
 
-The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
-Today it contains `capsules` 0.1.4. Each entry pins a release version, the
-GitHub repository whose release publishes it, and an archive SHA-256 per
-supported platform. Payment and wallet plugins are excluded from the default
-list.
+The catalog publishes named **plugin sets**: a name, a description, and a list
+of catalog plugin names. `recommended` is the set setup and update offer; it
+contains `capsules` today. Membership lives in the catalog, so adding or
+removing a member needs no host rebuild, and installing a set installs its
+current eligible members **once** — a later membership change never installs
+or uninstalls anything on an existing machine. Sets grant no permissions and
+never enable, disable, or update an installed plugin.
 
-**A node installs a default only from its release's bundled copy, never from
-a download.** The bundled copy is the plugin archive in a `plugins/` directory
-beside the `mesh-llm` binary; native packages keep it at
-`lib/mesh-llm/<version>/plugins` and the Homebrew formula under `libexec`.
-`MESH_LLM_BUNDLED_PLUGINS_DIR` names another directory.
-- **When it is installed:** when a node starts, and on `mesh-llm plugins
-  install-defaults`, the host installs each default from that bundled copy,
-  after checking the archive against the compiled pin. Both are local and
-  quick; neither makes a network call.
-- **No bundled copy:** a missing copy is reported. With no `plugins/`
-  directory at all ("this install bundles no plugins") it is an info line;
-  a `plugins/` directory without the archive is a warning. Nothing is
-  downloaded instead, and there is no fallback. A digest mismatch is refused.
-- **What a release bundles:** macOS and Linux release archives carry each
-  pinned default's release archive in `plugins/`. The release job downloads it
-  from the plugin's own GitHub release, checks it against the pin, and fails
-  unless the bundle's host installs it. `mesh-llm update` installs the new
-  release's `plugins/` with the host. A development build carries none, so it
-  reports the info line.
-- **Windows:** the list pins no Windows build, so the default reports "no
-  reviewed release for this platform".
+- `mesh-llm plugins sets list` — discover named sets. Read-only; needs no
+  running node.
+- `mesh-llm plugins sets show NAME` — membership, descriptions, resolved
+  versions, and platform availability. Unavailable platforms and releases
+  incompatible with the host display as unavailable.
+- `mesh-llm plugins sets install NAME` — install the set's current missing
+  members. Idempotent: already-installed members (whatever their state) are
+  skipped, disabled state, settings, and data are preserved, and a partial
+  failure reports every per-plugin result and exits nonzero.
+- `mesh-llm setup` offers the `recommended` set when attended, defaulting to
+  skip; `--plugin-set NAME` selects any catalog set explicitly (and suppresses
+  the prompt), and `--skip-plugin-install` skips optional installation. An
+  optional install that fails never fails setup: it warns and shows the retry
+  command.
+- `mesh-llm update --plugin-set NAME` / `--skip-plugin-install` /
+  `--no-interactive` carry the same choices on the host upgrade. Unattended
+  runs install no optional plugins and never read input.
 
-To turn the defaults off, pass `--no-default-plugins` to `mesh-llm update`, or
-run `mesh-llm plugins install-defaults --off`. Each records the choice in the plugin store:
-an installed default is disabled, and one that is not installed is recorded as
-turned off, so no later start installs it. The record is per plugin: it
-covers the defaults the build that wrote it lists, not a default a later
-release adds. `MESH_LLM_NO_DEFAULT_PLUGINS=1`, or `--no-default-plugins` on
-`serve` or `client`, skips defaults for the processes that see it. Provisioning prints one line for
-a default it leaves alone: one you run from your own `[[plugin]]` entry or
-install, one disabled or turned off, a platform with no reviewed release, or
-an install with no bundled copy.
+Unknown set names are usage errors (`Unknown plugin set 'missing'`), never an
+empty success.
 
-`plugin-install.json` records whether an installation is default managed. A
-new release's bundled copy replaces an enabled default-managed install when
-the node starts. An operator-installed plugin with the same name is left
-alone; so is one the operator runs from a `[[plugin]]` entry that sets
-`command` or `url`. A `[[plugin]]` entry that only holds settings, as the
-console writes when an operator saves one, configures the installed default
-and leaves it default managed. `mesh-llm plugins update` reinstalls a
-default-managed plugin from the bundled copy too. Disabling a default
-preserves the installed record and keeps it at its installed version.
-Deleting a default removes it and records in the plugin store that it stays
-off, so no later start installs it again; `mesh-llm plugins disable <name>`
-records the same for a default that is not installed. `mesh-llm plugins enable
-<name>` undoes that, and the next start installs it from the bundled copy.
-There is no separate offered-defaults state file.
+### Installed-plugin upgrade checks
 
-A default plugin that fails to start is optional: its failure is reported as
-an inactive plugin and does not abort node startup. A default-managed plugin
-keeps only the surfaces its entry allows: before publishing routes, the host
-removes everything else from its initialization manifest and logs a warning
-naming each removed surface. No default entry allows inference endpoints or
-virtual models, so a default plugin cannot serve a model, nor the OpenAI
-exchange hook, which sees every OpenAI exchange the node handles. A
-default-managed plugin that is no longer on this build's list keeps everything
-but serving models and the exchange hook until it is reviewed again.
+Every host upgrade path — `mesh-llm update`, auto-update, and the
+installation/upgrade entrypoints — checks **every installed plugin** against
+the target host version, whatever its set membership or origin:
+
+| Installed plugin state | Attended upgrade | Unattended upgrade |
+|---|---|---|
+| Compatible, current | Keep version | Keep version |
+| Compatible, newer release available | Keep version; show update notice and command | Keep version |
+| Incompatible, compatible update available | Automatically update; explain why | Automatically update; log why |
+| Incompatible, no usable update | Report failed repair; do not activate the plugin | Same; never prompt |
+| Compatibility unknown | Report unknown status and apply existing checks | Same |
+
+Automatic repair uses only verified catalog pins: platform checksum,
+package identity, and target-host compatibility are checked before anything
+is replaced, and settings, data, and enabled state are preserved (a repaired
+disabled plugin stays disabled). A required repair that cannot be made stops
+the managed upgrade before the new host is activated. Compatible plugins are
+never updated automatically — attended upgrades list them with
+`mesh-llm plugins update NAME`. If the catalog is unavailable, an upgrade
+continues only when compatibility is established locally from what the
+installed records retain; otherwise it stays unapplied with an explanation.
+A node start never installs a missing set member; a plugin known to be
+incompatible with the running host is not launched and reports the reason.
+
+Release-specific compatibility metadata travels with the catalog entry (for
+the pinned release) and the packaged `plugin.toml` (`min_host_version` /
+`max_host_version`), and an install retains what its release declared.
+Missing metadata means **unknown**, not incompatible: legacy installs keep
+running under the host's existing checks.
+
+### Legacy default installations
+
+Earlier MeshLLM releases bundled default plugins in `plugins/` beside the
+host and installed them from a compiled-in pin list. That system is retired:
+distributions carry no plugin archives, `plugins install-defaults` is a stub
+that points at sets, and surviving default-managed records migrate to normal
+managed records on first use — keeping their verified identity, settings,
+data, enabled/disabled state, and exact surface grants (no silent grant
+expansion). `--no-default-plugins` remains accepted as a deprecated alias of
+`--skip-plugin-install`, and `MESH_LLM_NO_DEFAULT_PLUGINS=1` still skips
+optional plugin installation; neither suppresses a required repair.
 
 `capsules` keeps a signed record of each request this node serves, on
 the node's own disk. By default it keeps SHA-256 digests of the request and
@@ -693,9 +702,8 @@ whoever controls a repository can replace a release, its assets, and the digests
 it reports, so a rewritten release is refused instead of launched. An entry that
 pins no version, or no digest for your platform, installs nothing.
 
-A default plugin (see [Default Plugins](#default-plugins)) is pinned in the
-default list itself; if its catalog entry also pins this platform, the two pins
-must agree, and the bundled archive must match them both.
+A catalog set names plugins without pinning them: sets carry no releases or
+checksums of their own, so the entry's pin is always the authority.
 
 Catalog rules:
 
@@ -1196,7 +1204,7 @@ Examples:
 - resource: `blackboard://snapshot`
 - prompt: `blackboard.status_brief`
 
-Friendly aliases may be added for bundled plugins, but the canonical identity should remain namespaced to avoid collisions.
+Friendly aliases may be added for well-known plugins, but the canonical identity should remain namespaced to avoid collisions.
 
 ### MCP Streaming
 
@@ -1512,8 +1520,9 @@ local to this node, like the rest of `/api/status`: nothing is gossiped.
 The host advertises the `plugin_status.v1` host capability in its
 `InitializeRequest`. Against a host without it, `publish_status` fails at once;
 a plugin that cannot run without it declares `.required(true)` and then refuses
-to initialize there. A default-managed plugin keeps its declaration only when
-its entry in `DEFAULT_PLUGINS` allows `Surface::StatusContributions`.
+to initialize there. A plugin installed by the retired bundled-default system keeps its
+declaration only when its retained legacy grants allow
+`Surface::StatusContributions`.
 
 ## Local Inference Observation
 
@@ -1531,9 +1540,9 @@ allow_inference_observation = true
 and it calls `PluginContext::subscribe_inference_observation()`, from
 `on_initialized` or any task holding an owned context. Without the declaration
 or the opt-in the host refuses the subscription and sends nothing. The setting
-is read when the plugin subscribes. A default-managed plugin keeps the
-declaration only if its `DEFAULT_PLUGINS` entry allows
-`Surface::InferenceObservation`; an unlisted default never keeps it.
+is read when the plugin subscribes. A plugin installed by the retired
+bundled-default system keeps the declaration only if its retained legacy
+grants allow `Surface::InferenceObservation`.
 
 **What it covers.** The host composes an adapter into the lifecycle observer of
 each local inference frontend, so the feed has what this node executes: local
@@ -1602,7 +1611,6 @@ initialize there.
 The host is responsible for:
 
 - launching plugins
-- registering bundled plugins
 - validating plugin identity
 - keeping the control session alive
 - stream negotiation and cleanup
@@ -1650,7 +1658,6 @@ The following are intentionally left open for implementation design:
 
 ## Architecture Baseline
 
-- bundled plugins may be auto-registered
 - core mesh logic remains plugin-agnostic
 - MCP and HTTP are first-class host projections
 - product APIs depend on capabilities, not plugin IDs

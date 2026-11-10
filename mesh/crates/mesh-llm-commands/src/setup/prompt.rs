@@ -3,12 +3,14 @@ use crate::terminal::{self, ConfirmDefault};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SetupPromptKind {
     InstallService,
+    InstallPlugins,
     GitHubStar,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SetupPromptDefault {
     Yes,
+    No,
 }
 
 impl SetupPromptDefault {
@@ -16,6 +18,7 @@ impl SetupPromptDefault {
         match (self, reply) {
             (_, Some(value)) => value,
             (Self::Yes, None) => true,
+            (Self::No, None) => false,
         }
     }
 }

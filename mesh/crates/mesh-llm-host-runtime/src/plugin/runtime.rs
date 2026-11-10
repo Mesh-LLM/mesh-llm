@@ -17,7 +17,7 @@ use super::{
 use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
-use mesh_llm_plugin_manager::defaults::{UNLISTED_DEFAULT_ALLOWS, default_plugin};
+use mesh_llm_plugin_manager::legacy_defaults::{self, UNLISTED_DEFAULT_ALLOWS};
 use rmcp::model::{InitializeRequestParams, ServerConfig};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -427,22 +427,26 @@ impl ExternalPlugin {
                 self.spec.name
             ),
         };
-        if self
+        if let Some(keys) = self
             .spec
             .installed_metadata
             .as_ref()
-            .is_some_and(|metadata| metadata.default_managed)
+            .and_then(|metadata| metadata.allowed_surfaces.as_deref())
         {
-            let (allows, capabilities) = default_plugin(&self.spec.name)
-                .map_or((UNLISTED_DEFAULT_ALLOWS, &[][..]), |default| {
-                    (default.allows, default.capabilities)
-                });
-            let removed = restrict_default_plugin(&mut init, allows, capabilities);
+            // A legacy default-managed install keeps the surfaces its record
+            // was migrated with. Unrecognized keys narrow (they are dropped);
+            // a record whose keys parse to nothing falls back to the
+            // unlisted-default grants rather than widening.
+            let mut allows = legacy_defaults::parse_allows(keys);
+            if allows.is_empty() {
+                allows = UNLISTED_DEFAULT_ALLOWS.to_vec();
+            }
+            let removed = restrict_default_plugin(&mut init, &allows, &[]);
             if !removed.is_empty() {
                 tracing::warn!(
                     plugin = %self.spec.name,
                     removed = %removed.join(", "),
-                    "Removed what this default plugin is not allowed to use"
+                    "Removed what this plugin's recorded surface grants do not allow"
                 );
             }
         }

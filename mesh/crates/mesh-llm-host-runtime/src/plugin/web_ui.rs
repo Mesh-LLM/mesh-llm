@@ -465,6 +465,9 @@ pub(super) fn installed_metadata_with_web_ui(
         install_path,
         enabled: true,
         default_managed: false,
+        host_compatibility: None,
+        allowed_surfaces: None,
+
         manifest: Some(mesh_llm_plugin_manager::InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: None,

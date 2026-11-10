@@ -180,6 +180,27 @@ pub async fn maybe_auto_update(options: AutoUpdateOptions) -> Result<bool> {
     .await
 }
 
+/// The release version an update would move this host to: the requested
+/// version when one was named, else the latest release. Callers use this to
+/// judge plugin compatibility against the host version that will actually
+/// run, before the upgrade is applied. Fails when no release can be resolved
+/// right now, exactly as `run_update_command` would.
+pub async fn resolve_update_target_version(
+    requested_version: Option<&str>,
+    current_version: &str,
+) -> Result<String> {
+    let Some(release) = resolve_release_info(requested_version).await? else {
+        bail!("Could not check for a release right now. Try again shortly.");
+    };
+    if requested_version.is_none() && !version_newer(&release.version, current_version) {
+        // Nothing to do: the caller is already current. Reporting the
+        // current version keeps plugin checks harmless (they run against the
+        // version that keeps running).
+        return Ok(current_version.to_string());
+    }
+    Ok(release.version)
+}
+
 pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()> {
     let mut console = mesh_llm_events::console_err();
     let target = require_update_target(options.flavor, options.detect_flavor)?;

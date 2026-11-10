@@ -327,6 +327,8 @@ mod tests {
             install_path,
             enabled: true,
             default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
             manifest: None,
             last_protocol_version: None,
             last_status: None,

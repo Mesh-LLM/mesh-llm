@@ -2,7 +2,8 @@ use super::github_runner::{GhCommand, GhCommandError, GhCommandOutput, GhCommand
 use super::service_paths::ServiceInstallContext;
 use super::service_runner::{ServiceCommand, ServiceCommandRunner};
 use super::{
-    SetupActions, SetupConfirmPrompt, SetupGitHubStarPlan, SetupPlatform, SetupPrompter, SetupStep,
+    SetupActions, SetupConfirmPrompt, SetupGitHubStarPlan, SetupPlatform, SetupPluginPlan,
+    SetupPrompter, SetupStep,
 };
 use anyhow::anyhow;
 use std::cell::RefCell;
@@ -36,6 +37,7 @@ impl SetupPrompter for FakePrompter {
 #[derive(Default)]
 pub(super) struct RecordingActions {
     pub(super) steps: Vec<SetupStep>,
+    pub(super) plugin_plans: Vec<SetupPluginPlan>,
     pub(super) github: Vec<SetupGitHubStarPlan>,
     failed_step: Option<SetupStep>,
 }
@@ -44,6 +46,7 @@ impl RecordingActions {
     pub(super) fn failing_on(step: SetupStep) -> Self {
         Self {
             steps: Vec::new(),
+            plugin_plans: Vec::new(),
             github: Vec::new(),
             failed_step: Some(step),
         }
@@ -52,6 +55,10 @@ impl RecordingActions {
 
 impl SetupActions for RecordingActions {
     type Error = anyhow::Error;
+    type PluginInstallFuture<'a>
+        = Ready<Result<(), Self::Error>>
+    where
+        Self: 'a;
     type GitHubStarFuture<'a>
         = Ready<Result<(), Self::Error>>
     where
@@ -66,6 +73,15 @@ impl SetupActions for RecordingActions {
         if self.failed_step == Some(step) {
             return ready(Err(anyhow!("simulated step failure for {step:?}")));
         }
+        ready(Ok(()))
+    }
+
+    fn handle_plugin_install<'a>(
+        &'a mut self,
+        plan: SetupPluginPlan,
+        _prompter: &'a mut dyn SetupPrompter,
+    ) -> Self::PluginInstallFuture<'a> {
+        self.plugin_plans.push(plan);
         ready(Ok(()))
     }
 

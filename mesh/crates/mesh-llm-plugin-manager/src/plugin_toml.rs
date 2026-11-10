@@ -17,6 +17,15 @@ pub struct PluginToml {
     pub name: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
+    /// Oldest MeshLLM host version this package works with, when it declares
+    /// one. Retained with the installed record so later host upgrades can
+    /// judge the installed release without re-deriving it from the catalog.
+    #[serde(default)]
+    pub min_host_version: Option<String>,
+    /// Newest MeshLLM host version this package works with, when it declares
+    /// one.
+    #[serde(default)]
+    pub max_host_version: Option<String>,
 }
 
 pub fn read_plugin_toml(plugin_dir: &Path, plugin_name: &str) -> Result<PluginToml> {

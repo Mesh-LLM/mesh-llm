@@ -6,7 +6,7 @@ use super::summary::{
 };
 use super::{
     SetupActions, SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupOptions,
-    SetupPlan, SetupPrompter, SetupStep,
+    SetupPlan, SetupPluginPlan, SetupPluginSkipReason, SetupPrompter, SetupStep,
     github::{SetupGitHubOutcome, execute_github_star_plan},
     github_runner::{GhCommandRunner, ProcessGhCommandRunner},
     plan_setup,
@@ -21,7 +21,7 @@ use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SetupCommandArgs<'a> {
     pub options: SetupOptions,
     pub environment: SetupEnvironment,
@@ -39,10 +39,14 @@ where
     A: SetupActions,
     A::Error: Into<anyhow::Error>,
 {
-    let plan = plan_setup(options, environment, prompter).map_err(anyhow::Error::new)?;
+    let plan = plan_setup(&options, &environment, prompter).map_err(anyhow::Error::new)?;
     for step in plan.core_steps.iter().copied() {
         actions.run_step(step).await.map_err(Into::into)?;
     }
+    actions
+        .handle_plugin_install(plan.plugins.clone(), prompter)
+        .await
+        .map_err(Into::into)?;
     actions
         .handle_github_star(plan.github_star, prompter)
         .await
@@ -53,7 +57,13 @@ where
 pub async fn run_setup_command(args: SetupCommandArgs<'_>) -> Result<()> {
     let mut prompter = CliSetupPrompter;
     let mut actions = CliSetupActions::new(args.environment, args.configured, args.options.verbose);
-    let plan = run_setup(args.options, args.environment, &mut prompter, &mut actions).await?;
+    let plan = run_setup(
+        args.options.clone(),
+        args.environment,
+        &mut prompter,
+        &mut actions,
+    )
+    .await?;
     print_setup_summary(&plan, &actions, args.options.verbose);
     Ok(())
 }
@@ -74,6 +84,7 @@ pub(crate) struct CliSetupActions<'a> {
     service_runner: Box<dyn ServiceCommandRunner>,
     github_runner: Box<dyn GhCommandRunner>,
     pub(crate) service_outcome: SetupServiceOutcome,
+    pub(crate) plugin_outcome: SetupPluginOutcome,
     pub(crate) github_outcome: SetupGitHubOutcome,
     verbose: bool,
 }
@@ -110,6 +121,7 @@ impl<'a> CliSetupActions<'a> {
             service_runner,
             github_runner,
             service_outcome: SetupServiceOutcome::NotRequested,
+            plugin_outcome: SetupPluginOutcome::NotRequested,
             github_outcome: SetupGitHubOutcome::NotEvaluated,
             verbose,
         }
@@ -214,8 +226,23 @@ pub(crate) enum SetupServiceOutcome {
     PrintedGuidance,
 }
 
+/// What the optional plugin-set phase did. A failed optional install is
+/// `Incomplete`, never a setup failure.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SetupPluginOutcome {
+    #[default]
+    NotRequested,
+    Skipped,
+    Installed(usize),
+    Incomplete,
+}
+
 impl SetupActions for CliSetupActions<'_> {
     type Error = anyhow::Error;
+    type PluginInstallFuture<'a>
+        = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + 'a>>
+    where
+        Self: 'a;
     type GitHubStarFuture<'a>
         = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + 'a>>
     where
@@ -240,6 +267,64 @@ impl SetupActions for CliSetupActions<'_> {
         })
     }
 
+    fn handle_plugin_install<'a>(
+        &'a mut self,
+        plan: SetupPluginPlan,
+        prompter: &'a mut dyn super::SetupPrompter,
+    ) -> Self::PluginInstallFuture<'a> {
+        Box::pin(async move {
+            let optional = match &plan {
+                SetupPluginPlan::Install(name) => {
+                    crate::plugin_sets::OptionalPluginPlan::InstallSet(name.clone())
+                }
+                SetupPluginPlan::Offer => crate::plugin_sets::OptionalPluginPlan::Offer(
+                    crate::plugin_sets::RECOMMENDED_SET.to_string(),
+                ),
+                SetupPluginPlan::Skip(reason) => {
+                    crate::plugin_sets::OptionalPluginPlan::Skip(match reason {
+                        SetupPluginSkipReason::ExplicitSkip => {
+                            Some("Optional plugin installation skipped.".to_string())
+                        }
+                        SetupPluginSkipReason::HiddenPrompt => None,
+                    })
+                }
+            };
+            let result = if matches!(plan, SetupPluginPlan::Skip(_)) {
+                // A skip prints its line; nothing here can fail.
+                crate::plugin_sets::run_optional_plugin_phase(&optional, &mut |_| false)
+                    .await
+                    .unwrap_or(crate::plugin_sets::OptionalPluginResult::Skipped)
+            } else {
+                // The only reader of the terminal: the offer prints its lines
+                // first, then the prompter answers with a No default, so an
+                // unattended or EOF answer declines.
+                let mut prompt = |set: &str| {
+                    let reply = prompter.confirm(super::SetupConfirmPrompt {
+                        kind: super::SetupPromptKind::InstallPlugins,
+                        message: PLUGIN_SET_PROMPT,
+                        default: super::SetupPromptDefault::No,
+                    });
+                    let _ = set;
+                    super::SetupPromptDefault::No.resolve(reply)
+                };
+                // Only a usage error (an unknown explicitly selected set, or
+                // no usable plugin store) propagates; a failed download is
+                // reported as an incomplete optional install.
+                crate::plugin_sets::run_optional_plugin_phase(&optional, &mut prompt).await?
+            };
+            self.plugin_outcome = match result {
+                crate::plugin_sets::OptionalPluginResult::Skipped => SetupPluginOutcome::Skipped,
+                crate::plugin_sets::OptionalPluginResult::Installed(count) => {
+                    SetupPluginOutcome::Installed(count)
+                }
+                crate::plugin_sets::OptionalPluginResult::Incomplete(_) => {
+                    SetupPluginOutcome::Incomplete
+                }
+            };
+            Ok(())
+        })
+    }
+
     fn handle_github_star<'a>(
         &'a mut self,
         plan: SetupGitHubStarPlan,
@@ -252,3 +337,7 @@ impl SetupActions for CliSetupActions<'_> {
         })
     }
 }
+
+/// The prompt message for the plugin-set offer; the offer lines above it
+/// name the set.
+const PLUGIN_SET_PROMPT: &str = "Install this plugin set?";

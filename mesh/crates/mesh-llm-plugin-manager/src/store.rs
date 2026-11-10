@@ -295,8 +295,24 @@ pub struct InstalledPluginMetadata {
     pub downloaded_asset_name: String,
     pub install_path: PathBuf,
     pub enabled: bool,
+    /// Legacy: whether this record was installed by the retired
+    /// bundled-default system. New installs are never default-managed;
+    /// `migrate_legacy_defaults` rewrites surviving records to normal managed
+    /// ones while keeping their verified identity and recorded grants.
     #[serde(default)]
     pub default_managed: bool,
+    /// The host-version compatibility the installed release declared, kept
+    /// from install time so an upgrade judges the installed version rather
+    /// than re-deriving it from the catalog. `None` for legacy installs:
+    /// compatibility is then unknown, not excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_compatibility: Option<crate::compatibility::HostCompatibility>,
+    /// The host surfaces a legacy default-managed install was reviewed to
+    /// use, stored as surface keys and enforced at launch. `None` for a
+    /// plugin whose whole package is trusted as installed (the disclosure at
+    /// install time is the grant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_surfaces: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub manifest: Option<InstalledPluginManifestMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -426,6 +442,29 @@ impl PluginStore {
         metadata.enabled = enabled;
         self.save(&metadata)?;
         Ok(metadata)
+    }
+
+    /// Rewrite surviving legacy default-managed records to normal managed
+    /// ones. The bundled-default system that installed them is retired, so
+    /// the flag no longer means anything; what the operator had keeps its
+    /// verified identity, settings, data, enabled state, and effective
+    /// grants (the legacy surface allowlist, recorded now so it survives).
+    /// Never expands grants and never enables or disables anything. Returns
+    /// the names that were migrated; empty once nothing is left to migrate.
+    pub fn migrate_legacy_defaults(&self) -> Result<Vec<String>> {
+        let mut migrated = Vec::new();
+        for metadata in self.list()? {
+            if !metadata.default_managed {
+                continue;
+            }
+            let mut migrated_metadata = metadata.clone();
+            migrated_metadata.default_managed = false;
+            migrated_metadata.allowed_surfaces =
+                Some(crate::legacy_defaults::migrated_allows_keys(&metadata.name));
+            self.save(&migrated_metadata)?;
+            migrated.push(metadata.name);
+        }
+        Ok(migrated)
     }
 
     pub fn delete(&self, name: &str) -> Result<()> {
@@ -559,6 +598,8 @@ mod tests {
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
             default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 operation_bindings: Vec::new(),

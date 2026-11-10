@@ -396,7 +396,7 @@ This phase should include:
 
 Target behavior:
 
-- bundled plugins remain auto-registered
+- plugin installation flows through catalog sets
 - core mesh logic becomes plugin-agnostic
 
 ### Phase 8: Validation Plugins

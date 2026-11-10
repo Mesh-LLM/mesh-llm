@@ -1,5 +1,5 @@
 use super::SetupPlan;
-use super::command::{CliSetupActions, SetupServiceOutcome};
+use super::command::{CliSetupActions, SetupPluginOutcome, SetupServiceOutcome};
 use super::service::ServiceInstallStatus;
 use crate::runtime_native::{
     SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult, SetupNativeRuntimeStatus,
@@ -54,6 +54,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
         let _ = writeln!(err, "Setup summary");
         let _ = writeln!(err, "- Runtime: {}", runtime_summary(plan, actions));
         let _ = writeln!(err, "- Service: {}", service_summary(plan, actions));
+        let _ = writeln!(err, "- Plugins: {}", plugin_summary(plan, actions));
         let _ = writeln!(
             err,
             "- GitHub star: {}",
@@ -65,8 +66,57 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
     let _ = writeln!(err, "{} Mesh setup complete", style_ok("✓"));
     let _ = writeln!(err, "  Runtime  {}", runtime_brief(plan, actions));
     let _ = writeln!(err, "  Service  {}", service_brief(plan, actions));
+    if let Some(plugins) = plugin_brief(plan, actions) {
+        let _ = writeln!(err, "  Plugins  {plugins}");
+    }
     if let Some(github) = github_brief(actions) {
         let _ = writeln!(err, "  GitHub star  {github}");
+    }
+}
+
+/// One line for the optional plugin phase in the concise summary; `None`
+/// when nothing happened worth a line.
+fn plugin_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> Option<String> {
+    let _ = actions.plugin_outcome;
+    match &plan.plugins {
+        super::SetupPluginPlan::Install(_) | super::SetupPluginPlan::Offer => {
+            Some(match actions.plugin_outcome {
+                SetupPluginOutcome::Installed(count) => format!("installed {count}"),
+                SetupPluginOutcome::Incomplete => {
+                    format!(
+                        "{} incomplete; retry with `mesh-llm plugins sets install`",
+                        style_warn("installation")
+                    )
+                }
+                SetupPluginOutcome::Skipped | SetupPluginOutcome::NotRequested => {
+                    "skipped".to_string()
+                }
+            })
+        }
+        super::SetupPluginPlan::Skip(reason) => match reason {
+            super::SetupPluginSkipReason::ExplicitSkip => Some("skipped".to_string()),
+            super::SetupPluginSkipReason::HiddenPrompt => None,
+        },
+    }
+}
+
+/// The verbose summary line for the optional plugin phase.
+fn plugin_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
+    match plugin_brief(plan, actions) {
+        Some(brief) => format!(
+            "{brief} ({})",
+            match &plan.plugins {
+                super::SetupPluginPlan::Install(name) => format!("--plugin-set {name}"),
+                super::SetupPluginPlan::Offer => "recommended offer".to_string(),
+                super::SetupPluginPlan::Skip(reason) => match reason {
+                    super::SetupPluginSkipReason::ExplicitSkip => {
+                        "--skip-plugin-install".to_string()
+                    }
+                    super::SetupPluginSkipReason::HiddenPrompt => "no prompt available".to_string(),
+                },
+            }
+        ),
+        None => "none (no prompt available and no set selected)".to_string(),
     }
 }
 

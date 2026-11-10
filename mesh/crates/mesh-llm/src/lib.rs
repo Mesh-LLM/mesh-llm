@@ -551,7 +551,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         trust_policy: cli.owner.trust_policy.map(map_trust_policy),
         trust_owner: cli.owner.trust_owner,
         nostr_discovery: cli.nostr_discovery,
-        no_default_plugins: cli.no_default_plugins,
         audit_log_path: cli.logging.audit_log_path,
         audit_log_format: cli.logging.audit_log_format,
         audit_log_level: cli.logging.audit_log_level,

@@ -2,8 +2,8 @@ use super::service_paths::ServiceInstallContext;
 use super::service_runner::{ServiceCommand, ServiceCommandRunner};
 use super::{
     SetupActions, SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan,
-    SetupGitHubStarSkipReason, SetupOptions, SetupPlatform, SetupPrompter, SetupServicePlan,
-    SetupStep, run_setup,
+    SetupGitHubStarSkipReason, SetupOptions, SetupPlatform, SetupPluginPlan, SetupPluginSkipReason,
+    SetupPrompter, SetupServicePlan, SetupStep, run_setup,
 };
 use crate::setup::command::CliSetupActions;
 use crate::setup::github::{SetupGitHubOutcome, github_summary};
@@ -35,11 +35,16 @@ impl SetupPrompter for FakePrompter {
 #[derive(Default)]
 struct FakeActions {
     steps: Vec<SetupStep>,
+    plugins: Vec<SetupPluginPlan>,
     github: Vec<SetupGitHubStarPlan>,
 }
 
 impl SetupActions for FakeActions {
     type Error = anyhow::Error;
+    type PluginInstallFuture<'a>
+        = Ready<Result<(), Self::Error>>
+    where
+        Self: 'a;
     type GitHubStarFuture<'a>
         = Ready<Result<(), Self::Error>>
     where
@@ -51,6 +56,15 @@ impl SetupActions for FakeActions {
 
     fn run_step(&mut self, step: SetupStep) -> Self::StepFuture<'_> {
         self.steps.push(step);
+        ready(Ok(()))
+    }
+
+    fn handle_plugin_install<'a>(
+        &'a mut self,
+        plan: SetupPluginPlan,
+        _prompter: &'a mut dyn SetupPrompter,
+    ) -> Self::PluginInstallFuture<'a> {
+        self.plugins.push(plan);
         ready(Ok(()))
     }
 
@@ -167,6 +181,7 @@ fn github_summary_reports_authenticated_star_success() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Skip,
+        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
         SetupGitHubStarPlan::PromptIfEligible,
     );
 
@@ -181,6 +196,7 @@ async fn service_summary_reports_real_service_installation() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Install,
+        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
         SetupGitHubStarPlan::Skip(SetupGitHubStarSkipReason::AutomaticYes),
     );
     let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -223,6 +239,7 @@ fn github_summary_reports_nonfatal_star_request_failure() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Skip,
+        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
         SetupGitHubStarPlan::PromptIfEligible,
     );
 

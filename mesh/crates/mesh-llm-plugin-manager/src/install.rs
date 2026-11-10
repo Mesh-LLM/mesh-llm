@@ -7,8 +7,9 @@ use sha2::Digest;
 
 use crate::{
     archive::{ExtractedPluginArchive, stage_plugin_archive},
-    catalog::PluginCatalog,
+    catalog::{CatalogEntry, PluginCatalog},
     catalog_pin::CatalogPin,
+    compatibility::{self as compat, HostCompatibility},
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     infer_plugin_asset, select_plugin_asset,
     source_ref::{
@@ -77,6 +78,12 @@ pub enum PluginProgressEvent {
         name: String,
         version: String,
     },
+    /// A condition worth telling the operator about that does not stop the
+    /// operation, such as falling back from an unavailable catalog to a
+    /// plugin's GitHub releases.
+    Warning {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -85,9 +92,9 @@ pub struct PluginInstallOptions {
     pub install_root: PathBuf,
     pub catalog_url: String,
     pub target: PluginTarget,
-    /// This release's bundled default plugins (`crate::bundled`); the only
-    /// place a default plugin is installed from.
-    pub bundled_plugins_dir: Option<PathBuf>,
+    /// The MeshLLM host version compatibility is judged against: the plain
+    /// release version of the running host, without a build suffix.
+    pub host_version: String,
 }
 
 impl PluginInstallOptions {
@@ -100,7 +107,7 @@ impl PluginInstallOptions {
             store_root,
             catalog_url,
             target: PluginTarget::current()?,
-            bundled_plugins_dir: crate::bundled::bundled_plugins_dir(),
+            host_version: mesh_llm_build_info::RELEASE_VERSION.to_string(),
         })
     }
 }
@@ -161,6 +168,8 @@ pub fn install_plugin_archive(
         install_path: extracted.install_path,
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
         default_managed: false,
+        host_compatibility: compatibility_from_package(&extracted.plugin_toml, None),
+        allowed_surfaces: None,
         manifest: extracted.manifest,
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
@@ -217,28 +226,32 @@ pub async fn update_plugin(
 ) -> Result<InstallOutcome> {
     let store = PluginStore::new(&options.store_root);
     let current = store.load(name)?;
-    if current.default_managed {
-        let default = crate::defaults::DEFAULT_PLUGINS
-            .iter()
-            .find(|default| default.name == name)
-            .with_context(|| {
-                format!("default plugin '{name}' has no reviewed pin in this build")
-            })?;
-        let pin = default.pin_for(options.target.triple()).with_context(|| {
-            format!(
-                "default plugin '{name}' has no reviewed pin for {}",
-                options.target.triple()
+    // A catalog entry is the verified source: its pin is immutable and its
+    // release declares which host versions it works with. An explicit update
+    // takes that release when it supports this host, and refuses an
+    // incompatible one rather than installing it. A plugin outside the
+    // catalog updates from its GitHub releases as before, with the digest
+    // GitHub reports as the only cross-check.
+    match catalog_entry_for(name, options).await {
+        Ok(Some(entry)) => {
+            return install_pinned_entry(
+                &current,
+                &entry,
+                &options.host_version,
+                options,
+                progress,
             )
-        })?;
-        // A default moves only to the copy this release bundles; it is never
-        // downloaded.
-        return crate::bundled::install_bundled_default(name, pin, options, progress)?
-            .with_context(|| {
-                format!(
-                    "default plugin '{name}' has no bundled copy in this install; \
-                 a default plugin is never downloaded"
-                )
+            .await;
+        }
+        Ok(None) => {}
+        Err(catalog_error) => {
+            progress.report(PluginProgressEvent::Warning {
+                message: format!(
+                    "Catalog unavailable ({catalog_error:#}); updating {name} from its GitHub \
+                     releases without a catalog pin"
+                ),
             });
+        }
     }
     let source = GitHubPluginSource::from_url(&current.source_repository)?;
     let resolved = ResolvedInstallSource {
@@ -246,8 +259,110 @@ pub async fn update_plugin(
         source,
         version: None,
         pin: None,
+        compatibility: None,
     };
     install_resolved_plugin(resolved, options, progress, Some(current)).await
+}
+
+/// Update (or repair) `current` to the release its catalog entry pins, when
+/// that release is available for the platform and supports `host_version`.
+/// This is the only update source an automatic repair may use: the pin and
+/// its digest are immutable, and the release's own compatibility declaration
+/// is checked before anything is downloaded.
+pub async fn update_plugin_from_catalog(
+    current: &InstalledPluginMetadata,
+    host_version: &str,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let client = Client::new();
+    let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
+    let entry = catalog.find_exact(&current.name).with_context(|| {
+        format!(
+            "'{}' has no catalog entry, so there is no verified update source for it",
+            current.name
+        )
+    })?;
+    install_pinned_entry(current, entry, host_version, options, progress).await
+}
+
+/// The catalog entry for `name`, when the catalog names one. `Ok(None)` means
+/// the catalog was fetched and the plugin is not in it; `Err` means the
+/// catalog itself could not be read, which is not the same as absence.
+async fn catalog_entry_for(
+    name: &str,
+    options: &PluginInstallOptions,
+) -> Result<Option<CatalogEntry>> {
+    let client = Client::new();
+    let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
+    Ok(catalog.find_exact(name).cloned())
+}
+
+/// Install the release `entry` pins, refusing when the platform has no
+/// pinned archive or the pinned release does not support `host_version`.
+pub(crate) async fn install_pinned_entry(
+    current: &InstalledPluginMetadata,
+    entry: &CatalogEntry,
+    host_version: &str,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let resolved = pinned_entry_source(entry, host_version, options)?;
+    install_resolved_plugin(resolved, options, progress, Some(current.clone())).await
+}
+
+/// Install a plugin not yet installed, from its catalog entry's pinned
+/// release, under the same pin and compatibility checks as an update.
+pub async fn install_catalog_entry(
+    entry: &CatalogEntry,
+    host_version: &str,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let resolved = pinned_entry_source(entry, host_version, options)?;
+    install_resolved_plugin(resolved, options, progress, None).await
+}
+
+/// The resolved catalog-pinned source for `entry`, refusing when the platform
+/// has no pinned archive or the pinned release does not support
+/// `host_version`.
+fn pinned_entry_source(
+    entry: &CatalogEntry,
+    host_version: &str,
+    options: &PluginInstallOptions,
+) -> Result<ResolvedInstallSource> {
+    let pin = CatalogPin::for_entry(entry, options.target.triple())?;
+    ensure_compatible_for_host(entry, pin.version().as_str(), host_version)?;
+    let source = GitHubPluginSource::from_url(&entry.github_url)?;
+    Ok(ResolvedInstallSource {
+        plugin_name: entry.name.clone(),
+        source,
+        version: Some(pin.version().clone()),
+        pin: Some(pin),
+        compatibility: entry.compatibility.clone(),
+    })
+}
+
+/// Refuse a pinned release whose compatibility declaration excludes
+/// `host_version`. Unknown compatibility is allowed through: the runtime's
+/// own checks still guard it, and legacy metadata must not make an install
+/// impossible.
+pub(crate) fn ensure_compatible_for_host(
+    entry: &CatalogEntry,
+    pin_version: &str,
+    host_version: &str,
+) -> Result<()> {
+    if let Some(compat::Verdict::Incompatible(reason)) = entry
+        .compatibility
+        .as_ref()
+        .map(|declared| compat::evaluate(Some(declared), host_version))
+    {
+        bail!(
+            "catalog entry '{}' {pin_version} does not support MeshLLM {host_version}: {reason}",
+            entry.name
+        );
+    }
+    Ok(())
 }
 
 struct ResolvedInstallSource {
@@ -261,6 +376,10 @@ struct ResolvedInstallSource {
     /// reference names no catalog entry, so there is nothing to bind it to.
     /// When this is set, `version` is the pin's own version.
     pin: Option<CatalogPin>,
+    /// The pinned release's host compatibility, retained with the installed
+    /// record so upgrades can judge it without re-deriving it from the
+    /// catalog. A GitHub reference names no catalog entry, so there is none.
+    compatibility: Option<HostCompatibility>,
 }
 
 async fn resolve_install_source(
@@ -279,11 +398,13 @@ async fn resolve_install_source(
             let source = GitHubPluginSource::from_url(&entry.github_url)?;
             let pin = CatalogPin::for_entry(entry, options.target.triple())?;
             pin.ensure_matches_request(version.as_ref())?;
+            ensure_compatible_for_host(entry, pin.version().as_str(), &options.host_version)?;
             Ok(ResolvedInstallSource {
                 plugin_name: entry.name.clone(),
                 source,
                 version: Some(pin.version().clone()),
                 pin: Some(pin),
+                compatibility: entry.compatibility.clone(),
             })
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
@@ -291,6 +412,7 @@ async fn resolve_install_source(
             source,
             version,
             pin: None,
+            compatibility: None,
         }),
     }
 }
@@ -416,6 +538,8 @@ fn build_installed_metadata(
     current: Option<&InstalledPluginMetadata>,
     verified_sha256: Option<String>,
 ) -> InstalledPluginMetadata {
+    let compatibility =
+        compatibility_from_package(&extracted.plugin_toml, resolved.compatibility.as_ref());
     InstalledPluginMetadata {
         name: resolved.plugin_name.clone(),
         source_repository: resolved.source.url(),
@@ -424,13 +548,32 @@ fn build_installed_metadata(
         downloaded_asset_name: asset.name.clone(),
         install_path: extracted.install_path,
         enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
-        default_managed: current.is_some_and(|metadata| metadata.default_managed),
+        default_managed: false,
+        host_compatibility: compatibility,
+        allowed_surfaces: None,
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),
         last_error: None,
         verified_sha256,
     }
+}
+
+/// The compatibility an install retains: what the archive's own
+/// `plugin.toml` declares, and otherwise what its catalog entry declared for
+/// the pinned release. `None` when neither declares anything, which means
+/// unknown rather than excluded.
+fn compatibility_from_package(
+    plugin_toml: &crate::plugin_toml::PluginToml,
+    catalog: Option<&HostCompatibility>,
+) -> Option<HostCompatibility> {
+    if plugin_toml.min_host_version.is_some() || plugin_toml.max_host_version.is_some() {
+        return Some(HostCompatibility {
+            min: plugin_toml.min_host_version.clone(),
+            max: plugin_toml.max_host_version.clone(),
+        });
+    }
+    catalog.cloned()
 }
 
 /// Download the asset and verify it against the catalog pin when there is one,
@@ -774,6 +917,7 @@ mod tests {
             source: GitHubPluginSource::from_url("https://github.com/mesh-llm/demo").unwrap(),
             version: None,
             pin: None,
+            compatibility: None,
         };
         let asset = GitHubReleaseAsset {
             name: "demo-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
@@ -879,7 +1023,7 @@ mod tests {
             install_root: temp.path().join("installed"),
             catalog_url: "unused".to_string(),
             target: PluginTarget::current().unwrap(),
-            bundled_plugins_dir: None,
+            host_version: "0.90.0".to_string(),
         };
         let mut events = Vec::new();
 
@@ -985,7 +1129,7 @@ mod tests {
             install_root: root.join("installed"),
             catalog_url: "unused".to_string(),
             target: PluginTarget::from_os_arch(os, arch).unwrap(),
-            bundled_plugins_dir: Some(root.join("bundle")),
+            host_version: "0.90.0".to_string(),
         }
     }
 
@@ -1114,7 +1258,7 @@ mod tests {
             install_root: root.join("installed"),
             catalog_url: serve_catalog(catalog_body),
             target: PluginTarget::from_os_arch("macos", "aarch64").unwrap(),
-            bundled_plugins_dir: None,
+            host_version: "0.90.0".to_string(),
         };
         let parsed = parse_install_ref(name).unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();

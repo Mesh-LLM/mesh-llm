@@ -11,8 +11,8 @@ fn with_plugin_dir<T>(store: &Path, test: impl FnOnce() -> T) -> T {
     mesh_llm_config::with_env_override_for_test("MESH_LLM_PLUGIN_DIR", store, test)
 }
 
-/// A default-managed `capsules` install whose executable exists, as
-/// `mesh-llm plugins install-defaults` leaves it.
+/// A managed `capsules` install whose executable exists, as
+/// `mesh-llm plugins install` leaves it.
 fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetadata {
     let metadata = InstalledPluginMetadata {
         name: "capsules".to_string(),
@@ -22,7 +22,9 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         downloaded_asset_name: "capsules.tar.gz".to_string(),
         install_path: store_root.join("installs").join("capsules"),
         enabled,
-        default_managed: true,
+        default_managed: false,
+        host_compatibility: None,
+        allowed_surfaces: None,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: None,
@@ -177,11 +179,12 @@ fn settings_only_entry_runs_the_enabled_store_copy() {
         spec.command,
         metadata.executable_path().display().to_string()
     );
-    assert!(spec.startup.optional);
+    assert!(!spec.startup.optional);
     assert!(
         spec.installed_metadata
             .as_ref()
-            .is_some_and(|metadata| metadata.default_managed)
+            .is_some_and(|metadata| metadata.allowed_surfaces.is_none()),
+        "a managed install carries no legacy surface record"
     );
 }
 
@@ -194,9 +197,9 @@ fn explicit_installed_command_keeps_its_packaged_web_ui() {
     };
 
     let store = tempfile::TempDir::new().expect("plugin store");
-    for default_managed in [false, true] {
+    for allowed_surfaces in [None, Some(vec!["web_ui".to_string()])] {
         let mut metadata = installed_capsules(store.path(), true);
-        metadata.default_managed = default_managed;
+        metadata.allowed_surfaces = allowed_surfaces;
         let asset_root = metadata.install_path.join("web");
         std::fs::create_dir_all(&asset_root).unwrap();
         metadata.manifest.as_mut().unwrap().web_ui = Some(InstalledPluginWebUiMetadata {

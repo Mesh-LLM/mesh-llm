@@ -4,7 +4,22 @@ use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::source_ref::is_valid_name;
 use crate::{source_ref::PluginVersion, target::PluginTarget};
+
+/// A named group of catalog plugin names, such as `recommended`.
+///
+/// The catalog owns set membership; the host keeps no list of its own, so a
+/// membership change needs no host rebuild. A set carries no release pins:
+/// each referenced plugin entry owns its own versions, checksums, and
+/// compatibility metadata, and a set never grants permissions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogSet {
+    pub name: String,
+    pub description: String,
+    /// The catalog plugin names in this set, each unique.
+    pub plugins: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogEntry {
@@ -21,6 +36,10 @@ pub struct CatalogEntry {
     /// lowercase hex. An install refuses an archive that doesn't match.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sha256: BTreeMap<String, String>,
+    /// Which MeshLLM host versions the pinned release works with. Absent for
+    /// legacy entries: compatibility is then unknown, not excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility: Option<crate::compatibility::HostCompatibility>,
 }
 
 /// The exact release an install of a catalog entry must fetch for one platform.
@@ -94,26 +113,45 @@ pub(crate) fn is_sha256_hex(digest: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCatalog {
     entries: Vec<CatalogEntry>,
+    sets: Vec<CatalogSet>,
 }
 
 impl PluginCatalog {
     pub fn parse_jsonl(input: &str) -> Result<Self> {
         let mut entries = Vec::new();
+        let mut sets = Vec::new();
         for (index, line) in input.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            let entry: CatalogEntry = serde_json::from_str(line)
-                .with_context(|| format!("parse plugins.jsonl line {}", index + 1))?;
-            entry
-                .validate_pins()
-                .with_context(|| format!("plugins.jsonl line {}", index + 1))?;
-            entries.push(entry);
+            let context = format!("plugins.jsonl line {}", index + 1);
+            let value: serde_json::Value =
+                serde_json::from_str(line).with_context(|| format!("parse {context}"))?;
+            if value.get("plugins").is_some() {
+                let set: CatalogSet = serde_json::from_str(line)
+                    .with_context(|| format!("parse set record in {context}"))?;
+                validate_set(&set).with_context(|| context.clone())?;
+                sets.push(set);
+            } else {
+                let entry: CatalogEntry = serde_json::from_str(line)
+                    .with_context(|| format!("parse plugin entry in {context}"))?;
+                entry.validate_pins().with_context(|| context.clone())?;
+                entry
+                    .compatibility
+                    .as_ref()
+                    .map(crate::compatibility::HostCompatibility::validate)
+                    .transpose()
+                    .with_context(|| context.clone())?;
+                entries.push(entry);
+            }
         }
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         ensure_unique_names(&entries)?;
-        Ok(Self { entries })
+        ensure_unique_set_names(&sets)?;
+        ensure_members_exist(&sets, &entries)?;
+        sets.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(Self { entries, sets })
     }
 
     pub async fn fetch(client: &Client, url: &str) -> Result<Self> {
@@ -142,6 +180,15 @@ impl PluginCatalog {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
+    /// The catalog's named sets, sorted by name.
+    pub fn sets(&self) -> &[CatalogSet] {
+        &self.sets
+    }
+
+    pub fn find_set(&self, name: &str) -> Option<&CatalogSet> {
+        self.sets.iter().find(|set| set.name == name)
+    }
+
     pub fn search(&self, query: Option<&str>) -> Vec<&CatalogEntry> {
         let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) else {
             return self.entries.iter().collect();
@@ -162,6 +209,62 @@ fn ensure_unique_names(entries: &[CatalogEntry]) -> Result<()> {
     for pair in entries.windows(2) {
         if pair[0].name == pair[1].name {
             bail!("duplicate plugin catalog entry '{}'", pair[0].name);
+        }
+    }
+    Ok(())
+}
+
+fn validate_set(set: &CatalogSet) -> Result<()> {
+    if !is_valid_name(&set.name) {
+        bail!(
+            "plugin set name {:?} must use lowercase ASCII letters, numbers, and single '-' separators",
+            set.name
+        );
+    }
+    if set.description.trim().is_empty() {
+        bail!("plugin set '{}' has an empty description", set.name);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for member in &set.plugins {
+        if !is_valid_name(member) {
+            bail!(
+                "plugin set '{}' names an invalid plugin {:?}; members must be catalog plugin names",
+                set.name,
+                member
+            );
+        }
+        if !seen.insert(member.as_str()) {
+            bail!(
+                "plugin set '{}' lists '{}' more than once",
+                set.name,
+                member
+            );
+        }
+    }
+    Ok(())
+}
+
+fn ensure_unique_set_names(sets: &[CatalogSet]) -> Result<()> {
+    for pair in sets.windows(2) {
+        if pair[0].name == pair[1].name {
+            bail!("duplicate plugin set '{}'", pair[0].name);
+        }
+    }
+    Ok(())
+}
+
+fn ensure_members_exist(sets: &[CatalogSet], entries: &[CatalogEntry]) -> Result<()> {
+    let names: std::collections::BTreeSet<&str> =
+        entries.iter().map(|entry| entry.name.as_str()).collect();
+    for set in sets {
+        for member in &set.plugins {
+            if !names.contains(member.as_str()) {
+                bail!(
+                    "plugin set '{}' names '{}', which is not a plugin entry in the catalog",
+                    set.name,
+                    member
+                );
+            }
         }
     }
     Ok(())
@@ -243,7 +346,10 @@ mod tests {
 
     #[test]
     fn rejects_malformed_pins() {
-        let uppercase = PINNED.replace("abab", "ABAB");
+        let uppercase = PINNED.replace(
+            "abababababababababababababababababababababababababababababababab",
+            "ABAB",
+        );
         let error = PluginCatalog::parse_jsonl(&uppercase).unwrap_err();
         assert!(format!("{error:#}").contains("invalid sha256"), "{error:#}");
 
@@ -277,5 +383,123 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("duplicate"));
+    }
+
+    const SET_CATALOG: &str = r#"{"name":"capsules","description":"Audit records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"},"compatibility":{"min":"0.81.0"}}
+{"name":"blackboard","description":"Shared notes","github_url":"https://github.com/mesh-llm/blackboard","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v1.1.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
+{"name":"recommended","description":"Recommended plugins for MeshLLM","plugins":["capsules"]}
+"#;
+
+    #[test]
+    fn parses_set_records_alongside_plugin_entries() {
+        let catalog = PluginCatalog::parse_jsonl(SET_CATALOG).unwrap();
+        assert_eq!(catalog.entries().len(), 2);
+        assert_eq!(catalog.sets().len(), 1);
+        let set = catalog.find_set("recommended").unwrap();
+        assert_eq!(set.description, "Recommended plugins for MeshLLM");
+        assert_eq!(set.plugins, ["capsules"]);
+        assert!(catalog.find_set("nope").is_none());
+        // Existing entry behavior is untouched: pins and compatibility parse.
+        let entry = catalog.find_exact("capsules").unwrap();
+        assert_eq!(
+            entry
+                .pinned_release("x86_64-unknown-linux-gnu")
+                .unwrap()
+                .version,
+            "v0.2.0"
+        );
+        assert_eq!(
+            entry.compatibility,
+            Some(crate::compatibility::HostCompatibility {
+                min: Some("0.81.0".into()),
+                max: None,
+            })
+        );
+    }
+
+    #[test]
+    fn set_records_validate_their_names_membership_and_references() {
+        let unknown_member =
+            SET_CATALOG.replace(r#""plugins":["capsules"]"#, r#""plugins":["ghost"]"#);
+        let error = PluginCatalog::parse_jsonl(&unknown_member).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("set 'recommended' names 'ghost'"),
+            "{error:#}"
+        );
+
+        let duplicate_member = SET_CATALOG.replace(
+            r#""plugins":["capsules"]"#,
+            r#""plugins":["capsules","capsules"]"#,
+        );
+        let error = PluginCatalog::parse_jsonl(&duplicate_member).unwrap_err();
+        assert!(format!("{error:#}").contains("more than once"), "{error:#}");
+
+        let bad_name = SET_CATALOG.replace("\"recommended\"", "\"Not A Set!\"");
+        let error = PluginCatalog::parse_jsonl(&bad_name).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("plugin set name"),
+            "{error:#}"
+        );
+
+        let empty_description = SET_CATALOG.replace("Recommended plugins for MeshLLM", "   ");
+        let error = PluginCatalog::parse_jsonl(&empty_description).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("empty description"),
+            "{error:#}"
+        );
+
+        let duplicate_set = format!(
+            "{SET_CATALOG}{{\"name\":\"recommended\",\"description\":\"Again\",\"plugins\":[\"blackboard\"]}}\n"
+        );
+        let error = PluginCatalog::parse_jsonl(&duplicate_set).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("duplicate plugin set"),
+            "{error:#}"
+        );
+
+        let no_members = SET_CATALOG.replace(r#""plugins":["capsules"]"#, r#""plugins":[]"#);
+        let catalog = PluginCatalog::parse_jsonl(&no_members).unwrap();
+        assert!(catalog.find_set("recommended").unwrap().plugins.is_empty());
+
+        let nested_set = format!(
+            "{SET_CATALOG}{{\"name\":\"outer\",\"description\":\"Tries to nest\",\"plugins\":[\"recommended\"]}}\n"
+        );
+        let error = PluginCatalog::parse_jsonl(&nested_set).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("set 'outer' names 'recommended'"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_plugin_entry_without_a_repository_is_not_read_as_a_set() {
+        // A malformed plugin entry must not be swallowed as a set or a set as
+        // an entry: the error names the record kind.
+        let missing_repo = r#"{"name":"capsules","description":"Audit records","author_email":"m@meshllm.cloud","author_name":"Mesh LLM"}"#;
+        let error = PluginCatalog::parse_jsonl(missing_repo).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("parse plugin entry"),
+            "{error:#}"
+        );
+
+        let bad_set = r#"{"name":"recommended","description":"No members key","github_url":"https://github.com/mesh-llm/x"}"#;
+        let error = PluginCatalog::parse_jsonl(bad_set).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("parse plugin entry"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn an_entry_with_malformed_compatibility_is_refused() {
+        let bad = SET_CATALOG.replace(
+            r#""compatibility":{"min":"0.81.0"}"#,
+            r#""compatibility":{"min":"soon"}"#,
+        );
+        let error = PluginCatalog::parse_jsonl(&bad).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("invalid host compatibility bound"),
+            "{error:#}"
+        );
     }
 }

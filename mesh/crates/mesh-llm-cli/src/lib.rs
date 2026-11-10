@@ -22,8 +22,8 @@ pub use parser::{
     AnalyticsCommand, AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope,
     DoctorCommand, GpuCommand, JoiningOptions, KvCacheCommand, KvCacheOptions, LoggingOptions,
     MeshDiscoveryMode, MeshGuardrailCliMode, MeshPolicyOptions, NetworkOptions, NodeModeOptions,
-    NormalizedRuntimeArgs, OwnerOptions, PlacementOptions, PluginCommand, RuntimeSurface,
-    ServingOptions, ServingStrategyCli, SkillAgentArg, SkillCommand, SpeculativeOptions,
-    TrustCommand, TrustPolicy, legacy_runtime_surface_warning, normalize_runtime_surface_args,
-    raw_args_invoke_analytics, validate_discovery_mode_args,
+    NormalizedRuntimeArgs, OwnerOptions, PlacementOptions, PluginCommand, PluginSetsCommand,
+    RuntimeSurface, ServingOptions, ServingStrategyCli, SkillAgentArg, SkillCommand,
+    SpeculativeOptions, TrustCommand, TrustPolicy, legacy_runtime_surface_warning,
+    normalize_runtime_surface_args, raw_args_invoke_analytics, validate_discovery_mode_args,
 };

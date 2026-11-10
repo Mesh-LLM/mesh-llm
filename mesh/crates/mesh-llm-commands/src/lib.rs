@@ -13,6 +13,7 @@ pub mod model_package;
 pub mod operational_logging;
 pub mod owner_control;
 pub mod plugin;
+pub mod plugin_sets;
 pub mod runtime_native;
 pub mod setup;
 pub mod skills;

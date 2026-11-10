@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 
 use crate::{
-    plugin_toml::read_plugin_toml,
+    plugin_toml::{PluginToml, read_plugin_toml},
     store::{
         InstalledPluginManifestMetadata, InstalledPluginWebUiMetadata,
         InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
@@ -24,6 +24,9 @@ const WEB_UI_CONTRIBUTION_SLOTS: [&str; 2] = ["chat_message", "logs_request"];
 pub struct ExtractedPluginArchive {
     pub install_path: PathBuf,
     pub manifest: Option<InstalledPluginManifestMetadata>,
+    /// The packaging metadata the archive itself declares, including any
+    /// host-compatibility bounds.
+    pub plugin_toml: PluginToml,
 }
 
 /// A plugin archive extracted and validated in a staging directory, not yet
@@ -36,6 +39,7 @@ pub struct StagedPluginArchive {
     install_dir: PathBuf,
     plugin_name: String,
     pub manifest: Option<InstalledPluginManifestMetadata>,
+    plugin_toml: PluginToml,
 }
 
 impl StagedPluginArchive {
@@ -49,6 +53,7 @@ impl StagedPluginArchive {
         Ok(ExtractedPluginArchive {
             install_path: final_dir,
             manifest: self.manifest,
+            plugin_toml: self.plugin_toml,
         })
     }
 }
@@ -75,13 +80,14 @@ pub fn stage_plugin_archive(
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
     validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
-    read_plugin_toml(&extracted_root, plugin_name)?;
+    let plugin_toml = read_plugin_toml(&extracted_root, plugin_name)?;
     Ok(StagedPluginArchive {
         staging,
         extracted_root,
         install_dir: install_dir.to_path_buf(),
         plugin_name: plugin_name.to_string(),
         manifest,
+        plugin_toml,
     })
 }
 

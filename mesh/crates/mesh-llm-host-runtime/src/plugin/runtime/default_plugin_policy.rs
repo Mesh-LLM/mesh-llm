@@ -1,5 +1,5 @@
 use super::super::proto;
-use mesh_llm_plugin_manager::defaults::Surface;
+use mesh_llm_plugin_manager::legacy_defaults::Surface;
 
 /// Keep only what a default-managed plugin's entry allows from its initialize
 /// answer: the host surfaces in `allows`, the capability strings in
@@ -92,7 +92,7 @@ pub(super) fn restrict_default_plugin(
 mod tests {
     use super::super::super::proto;
     use super::restrict_default_plugin;
-    use mesh_llm_plugin_manager::defaults::{Surface, UNLISTED_DEFAULT_ALLOWS};
+    use mesh_llm_plugin_manager::legacy_defaults::{Surface, UNLISTED_DEFAULT_ALLOWS};
     use std::sync::atomic::Ordering;
 
     #[test]
@@ -258,7 +258,8 @@ mod tests {
             None,
         );
         spec.name = "capsules".into();
-        spec.installed_metadata.as_mut().unwrap().default_managed = true;
+        spec.installed_metadata.as_mut().unwrap().allowed_surfaces =
+            Some(vec!["web_ui".to_string()]);
         let plugin = super::super::tests::plugin_for_spec(spec);
         plugin.authenticated_peer.store(false, Ordering::Release);
 

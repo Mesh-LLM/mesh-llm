@@ -208,8 +208,6 @@ pub(crate) enum RepositoryCheck {
     LlamaUpstreamRelease,
     SelectedRef,
     DockerPrecheck,
-    BundledPlugins,
-    BundledPluginsCheck,
 }
 
 pub(crate) enum RepositoryCommand<'a> {
@@ -574,8 +572,6 @@ impl<'a> Cli<'a> {
                     "llama-upstream-release" => RepositoryCheck::LlamaUpstreamRelease,
                     "selected-ref" => RepositoryCheck::SelectedRef,
                     "docker-precheck" => RepositoryCheck::DockerPrecheck,
-                    "bundled-plugins" => RepositoryCheck::BundledPlugins,
-                    "bundled-plugins-check" => RepositoryCheck::BundledPluginsCheck,
                     _ => return Err(USAGE.into()),
                 };
                 CliCommand::Check(check, rest)

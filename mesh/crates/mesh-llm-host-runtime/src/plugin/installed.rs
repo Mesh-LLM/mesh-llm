@@ -183,6 +183,15 @@ pub(crate) fn append_installed_plugins(
         return;
     };
     let store = PluginStore::new(root);
+    // Rewrite surviving legacy default-managed records to normal managed ones
+    // so their recorded surface grants carry forward. A failed migration is
+    // reported and leaves the records as they are; startup installs nothing.
+    if let Err(error) = store.migrate_legacy_defaults() {
+        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+            message: format!("Legacy default plugin records were not migrated: {error:#}"),
+            context: Some("plugins".to_string()),
+        });
+    }
     let installed = match store.list() {
         Ok(installed) => installed,
         Err(error) => {
@@ -197,6 +206,10 @@ pub(crate) fn append_installed_plugins(
         names.insert(metadata.name.clone(), ());
         if !metadata.enabled {
             inactive.push(disabled_installed_plugin_summary(&metadata));
+            continue;
+        }
+        if let Some(reason) = incompatible_with_host(&metadata) {
+            inactive.push(incompatible_installed_plugin_summary(&metadata, &reason));
             continue;
         }
         let command = installed_plugin_command(&metadata);
@@ -369,6 +382,48 @@ fn missing_installed_plugin_summary(
         Some(format!(
             "installed plugin executable is missing: {}",
             command.display()
+        )),
+    )
+}
+
+/// Why this installed release cannot run on this host, when that is known:
+/// either its recorded host compatibility excludes this host version, or the
+/// plugin protocol it last spoke is not the one this host speaks. Unknown
+/// metadata never blocks an install: a legacy record keeps starting.
+fn incompatible_with_host(metadata: &InstalledPluginMetadata) -> Option<String> {
+    if let mesh_llm_plugin_manager::compatibility::Verdict::Incompatible(reason) =
+        mesh_llm_plugin_manager::compatibility::evaluate(
+            metadata.host_compatibility.as_ref(),
+            mesh_llm_build_info::RELEASE_VERSION,
+        )
+    {
+        return Some(reason);
+    }
+    if metadata
+        .last_protocol_version
+        .is_some_and(|version| version != mesh_llm_plugin::PROTOCOL_VERSION)
+    {
+        return Some(format!(
+            "speaks plugin protocol {}, this host speaks {}",
+            metadata.last_protocol_version.unwrap_or_default(),
+            mesh_llm_plugin::PROTOCOL_VERSION
+        ));
+    }
+    None
+}
+
+fn incompatible_installed_plugin_summary(
+    metadata: &InstalledPluginMetadata,
+    reason: &str,
+) -> PluginSummary {
+    installed_plugin_summary(
+        metadata,
+        "error",
+        Some(format!(
+            "incompatible with MeshLLM {}: {}; run mesh-llm plugins update {}",
+            mesh_llm_build_info::RELEASE_VERSION,
+            reason,
+            metadata.name
         )),
     )
 }
