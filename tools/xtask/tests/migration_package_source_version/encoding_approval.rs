@@ -44,7 +44,9 @@ const VALID_SOURCES: [(&str, &[u8], &[u8]); 2] = [
     (
         "workspace",
         include_bytes!("../../../../Cargo.toml"),
-        b"0.78.0\n",
+        // xtask takes the workspace version, so this follows each release's
+        // bump of the root Cargo.toml instead of naming one release.
+        concat!(env!("CARGO_PKG_VERSION"), "\n").as_bytes(),
     ),
     (
         "abi",
