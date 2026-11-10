@@ -747,7 +747,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `dflash-drafts-publish.yml` | `publish` | `public cpu`, sha256:f499b79b... -- unconditional, no bare-metal row |
 | `nightly-stability-run.yml` | `stability` | `public cpu`, the image `prepare-automation` verifies (also bakes the node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
-| `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
+| `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; all release legs run GitHub-hosted — amd64 CUDA left its historical ARC self-hosted placement |
 | `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit |
 
 `public cpu` and `public web` are separate image builds (the latter adds

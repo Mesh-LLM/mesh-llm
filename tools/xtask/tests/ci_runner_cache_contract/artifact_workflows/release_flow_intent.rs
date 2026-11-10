@@ -196,26 +196,20 @@ fn graph_release_selector_and_secret_hosts_keep_approved_effective_runner_author
     let metadata = job(&doc, "metadata");
     let selector = action(metadata, "./.github/actions/select-ci-runners");
     assert_eq!(input(selector, "ref"), Some("${{ github.ref }}"));
-    assert_eq!(
-        input(selector, "depot_main_enabled"),
-        // Rolling previews pass force_hosted_runners=true so main dispatches stay
-        // on GitHub-hosted runners, like tagged releases from release/* refs.
-        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}")
-    );
-    assert_eq!(
-        input(selector, "manual_use_depot"),
-        Some("${{ inputs.use_depot == true }}")
-    );
-    assert!(
-        doc.get("on")
-            .unwrap()
-            .get("workflow_dispatch")
-            .unwrap()
-            .get("inputs")
-            .unwrap()
-            .get("use_depot")
-            .is_some()
-    );
+    // The release runs only on GitHub-provided runners: Depot is never
+    // eligible for release legs regardless of the repository's
+    // DEPOT_RUNNERS_ENABLED gate, and no dispatch input re-enables it.
+    assert_eq!(input(selector, "depot_main_enabled"), Some("false"));
+    assert_eq!(input(selector, "manual_use_depot"), None);
+    let dispatch_inputs = doc
+        .get("on")
+        .unwrap()
+        .get("workflow_dispatch")
+        .unwrap()
+        .get("inputs")
+        .unwrap();
+    assert!(dispatch_inputs.get("use_depot").is_none());
+    assert!(dispatch_inputs.get("force_hosted_runners").is_none());
     let selectors = doc
         .get("jobs")
         .unwrap()
