@@ -108,7 +108,7 @@ impl StageSession {
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
         let mut output_desc = empty_raw_activation_desc();
-        let mut output_payload = vec![0_u8; output_capacity];
+        let mut output_payload = crate::host_buffer::native_output_buffer(output_capacity);
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -214,7 +214,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let mut output_desc = empty_raw_activation_desc();
-        let mut output_payload = vec![0_u8; output_capacity];
+        let mut output_payload = crate::host_buffer::native_output_buffer(output_capacity);
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
@@ -337,7 +337,7 @@ impl StageSession {
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
         let mut output_desc = empty_raw_activation_desc();
-        let mut output_payload = vec![0_u8; output_capacity];
+        let mut output_payload = crate::host_buffer::native_output_buffer(output_capacity);
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
@@ -386,7 +386,7 @@ impl StageSession {
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
         let mut output_desc = empty_raw_activation_desc();
-        let mut output_payload = vec![0_u8; output_capacity];
+        let mut output_payload = crate::host_buffer::native_output_buffer(output_capacity);
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut mtp_draft = RawNativeMtpDraft::default();
@@ -489,7 +489,7 @@ impl StageSession {
         let mut output_descs = vec![empty_raw_activation_desc(); requests.len()];
         let mut output_payloads = output_capacities
             .iter()
-            .map(|capacity| vec![0_u8; *capacity])
+            .map(|capacity| crate::host_buffer::native_output_buffer(*capacity))
             .collect::<Vec<_>>();
         let output_payload_ptrs = output_payloads
             .iter_mut()
@@ -674,7 +674,7 @@ impl StageSession {
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
         let mut output_desc = empty_raw_activation_desc();
-        let mut output_payload = vec![0_u8; output_capacity];
+        let mut output_payload = crate::host_buffer::native_output_buffer(output_capacity);
         let mut output_bytes = 0usize;
         let mut predicted = vec![0_i32; token_ids.len()];
         let mut output_token_count = 0usize;
@@ -754,7 +754,7 @@ impl StageSession {
             ));
         }
         let mut output_desc = empty_raw_activation_desc();
-        let mut output_payload = vec![0_u8; output_capacity];
+        let mut output_payload = crate::host_buffer::native_output_buffer(output_capacity);
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
