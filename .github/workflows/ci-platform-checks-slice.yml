@@ -474,6 +474,36 @@ jobs:
           cargo test --locked -p skippy-cli --features dynamic-native-runtime
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Run Windows platform-cfg library tests outside the catalog
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        shell: pwsh
+        env:
+          HF_ENDPOINT: http://127.0.0.1:1
+        run: |
+          # Library tests of crates with cfg(windows)/cfg(unix) code that the
+          # resolver steps above don't reach. The five skippy-model/hub crates
+          # stay on the census unverified list and off the catalog while the
+          # rename map lists them as successors, like `skippy-cli` above.
+          # `skippy-ffi` and `mesh-llm-log-store` are catalog-routed already
+          # (the log store's ACL step above runs two of its tests), and
+          # `mesh-llm-identity` runs again with `host-io`, which gates its
+          # keychain, keystore, node key and ownership modules. Offline: no
+          # test needs the hub.
+          foreach ($crate in @(
+              'skippy-ffi',
+              'skippy-hardware-profile',
+              'skippy-native-runtime',
+              'skippy-model-hf',
+              'skippy-hf-hub',
+              'skippy-model-package',
+              'mesh-llm-log-store'
+          )) {
+            cargo test --locked -p $crate --lib
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          cargo test --locked -p mesh-llm-identity --lib --features host-io
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare Windows automation contract tools
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         id: windows_automation
