@@ -51,7 +51,7 @@ async fn compatibility_response(
 ) -> (u16, serde_json::Value) {
     let anthropic = match header_values_from_raw(&request.raw, "anthropic-version") {
         Ok(values) => !values.is_empty(),
-        Err(()) => return model_error_response(400, "invalid anthropic-version header", false),
+        Err(_) => return model_error_response(400, "invalid anthropic-version header", false),
     };
     match discovery::collect(node).await {
         Ok(models) => models_response(&models, &request.path, anthropic),

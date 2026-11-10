@@ -1,7 +1,8 @@
 //! Body transformations operate on decoded payloads, never HTTP chunk framing.
 
 use super::audio_multipart::multipart_model_value_range;
-use super::{BufferedHttpRequest, MAX_BODY_BYTES, MAX_HEADERS, try_decode_chunked_body};
+use super::buffered_headers::buffered_head_header_capacity;
+use super::{BufferedHttpRequest, MAX_BODY_BYTES, try_decode_chunked_body};
 
 #[cfg(test)]
 mod tests;
@@ -24,8 +25,14 @@ impl BodyHeaders<'_> {
 }
 
 /// Extract framing and media type from complete HTTP request headers.
+///
+/// The request is one ingress kept, with the headers it added, so the head is
+/// parsed with room for all of them rather than for a client's 64: a request
+/// that arrived with 64 would otherwise not parse here, and its body would
+/// silently go out unrewritten.
 fn body_headers(raw: &[u8]) -> Option<BodyHeaders<'_>> {
-    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let (head_end, _) = super::http_header_terminator(raw)?;
+    let mut headers = vec![httparse::EMPTY_HEADER; buffered_head_header_capacity(&raw[..head_end])];
     let mut parsed = httparse::Request::new(&mut headers);
     let httparse::Status::Complete(end) = parsed.parse(raw).ok()? else {
         return None;

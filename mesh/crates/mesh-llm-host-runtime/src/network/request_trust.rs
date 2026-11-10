@@ -175,7 +175,7 @@ pub(crate) enum Unsatisfied {
 /// A head that cannot be read is an error, never "no header".
 fn decide_with(receipts: &ReceiptsConfig, raw: &[u8]) -> Result<RequestTrust, String> {
     let values = header_values_from_raw(raw, MESH_TRUST_HEADER)
-        .map_err(|()| format!("{MESH_TRUST_HEADER} header contains invalid UTF-8"))?;
+        .map_err(|error| error.describe(MESH_TRUST_HEADER))?;
     let required = receipts_required(parse_tiers(&values)?.as_deref(), receipts.require)?;
     Ok(if required {
         RequestTrust::Receipts {
@@ -435,6 +435,20 @@ mod tests {
             panic!("an unsatisfied policy is a 409");
         };
         assert!(why.contains("offline"), "{why}");
+    }
+
+    #[test]
+    fn a_head_that_cannot_be_read_is_no_policy_decision() {
+        let requiring = ReceiptsConfig {
+            require: true,
+            ..Default::default()
+        };
+        for settings in [&ReceiptsConfig::default(), &requiring] {
+            // not "no header, so the node default": an error, which is a 400
+            assert!(decide_with(settings, b"not a request\r\n\r\n").is_err());
+            let cut_off = b"POST /v1/chat/completions HTTP/1.1\r\nx-mesh-trust: receipts\r\n";
+            assert!(decide_with(settings, cut_off).is_err());
+        }
     }
 
     #[test]
