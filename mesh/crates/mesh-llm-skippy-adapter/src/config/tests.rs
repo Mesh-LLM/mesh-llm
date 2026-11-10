@@ -1937,3 +1937,62 @@ pairing_fault = "fail_open"
         "unexpected error: {error}"
     );
 }
+
+fn resolve_batch_for_meta(mesh_config: &MeshConfig, expert_count: u32) -> (u32, u32) {
+    let compact_meta = skippy_model_artifact::gguf::GgufCompactMeta {
+        architecture: "qwen35moe".to_string(),
+        context_length: 65_536,
+        embedding_size: 2048,
+        head_count: 16,
+        kv_head_count: 2,
+        layer_count: 40,
+        key_length: 256,
+        value_length: 256,
+        expert_count,
+        expert_used_count: if expert_count > 0 { 8 } else { 0 },
+        ..Default::default()
+    };
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config,
+        model_id: "unsloth/Qwen3.6-35B-A3B-GGUF",
+        model_path: Path::new("/models/qwen3.6-35b-a3b.gguf"),
+        model_bytes: 22 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: Some(&compact_meta),
+    })
+    .unwrap();
+    (resolved.model_fit.batch, resolved.model_fit.ubatch)
+}
+
+#[test]
+fn expert_models_prefill_in_larger_micro_batches_by_default() {
+    assert_eq!(
+        resolve_batch_for_meta(&MeshConfig::default(), 256),
+        (2048, 2048)
+    );
+    assert_eq!(
+        resolve_batch_for_meta(&MeshConfig::default(), 0),
+        (512, 512)
+    );
+}
+
+#[test]
+fn explicit_and_profile_batches_beat_the_expert_default() {
+    let explicit = parse_config(
+        r#"
+[defaults.model_fit]
+batch = 1024
+ubatch = 256
+"#,
+    );
+    assert_eq!(resolve_batch_for_meta(&explicit, 256), (1024, 256));
+    let saver = parse_config(
+        r#"
+[defaults.throughput]
+tuning_profile = "saver"
+"#,
+    );
+    assert_eq!(resolve_batch_for_meta(&saver, 256), (256, 256));
+}
