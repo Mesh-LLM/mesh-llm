@@ -703,7 +703,7 @@ fn twin_bracket_id(request: &proxy::BufferedHttpRequest) -> Result<Option<String
 /// Parse and validate the raw `x-mesh-target` / `x-mesh-exclude` header
 /// values off `request` in one place, so every caller enforces them the same
 /// way before making a routing decision.
-fn parse_mesh_routing_headers(
+pub(super) fn parse_mesh_routing_headers(
     request: &proxy::BufferedHttpRequest,
 ) -> Result<(Option<iroh::EndpointId>, Vec<iroh::EndpointId>), String> {
     let (target_values, exclude_values) = request.mesh_routing_header_values()?;

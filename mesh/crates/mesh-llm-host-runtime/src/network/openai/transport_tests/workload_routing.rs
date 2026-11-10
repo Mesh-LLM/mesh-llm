@@ -183,6 +183,97 @@ async fn automatic_request_keeps_mesh_candidates_after_model_rewrite() {
     );
 }
 
+/// An automatic request carrying the given routing headers, as ingress leaves
+/// it after resolving the directive to `MODEL`.
+fn automatic_request_with_headers(headers: &[(&str, String)]) -> BufferedHttpRequest {
+    let mut request = request_with_model("/v1/chat/completions", Some("mesh"));
+    crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut request, Some(MODEL));
+    let lines = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    let raw = String::from_utf8(request.raw).expect("utf-8 request");
+    request.raw = raw
+        .replacen(
+            "Host: localhost\r\n",
+            &format!("Host: localhost\r\n{lines}"),
+            1,
+        )
+        .into_bytes();
+    request
+}
+
+#[tokio::test]
+/// Automatic routing widens the host draw to every peer serving the model,
+/// but never past the client's `x-mesh-exclude` / `x-mesh-target`. Ingress
+/// already applied them to the targets it hands over: an excluded peer must
+/// not be re-added, and a target allows no widening at all, so the serving
+/// host is the one `x-mesh-served-by` names.
+async fn automatic_candidates_keep_mesh_routing_headers() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    let excluded = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let other = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    node.set_served_model_descriptors(vec![descriptor(
+        Some(ModelWorkloadClass::CausalGeneration),
+        false,
+    )])
+    .await;
+    let local = election::InferenceTarget::Local(9337);
+    let mut local_targets = election::ModelTargets::default();
+    local_targets
+        .targets
+        .insert(MODEL.into(), vec![local.clone()]);
+    let hex_of = |id: iroh::EndpointId| hex::encode(id.as_bytes());
+    let candidates = |request: BufferedHttpRequest, targets: election::ModelTargets| {
+        let node = node.clone();
+        async move {
+            super::super::route_model::execution_candidates(&node, MODEL, &request, &targets, false)
+                .await
+        }
+    };
+    // Exclude a peer: this node still serves, and the draw covers the others.
+    let request = automatic_request_with_headers(&[("x-mesh-exclude", hex_of(excluded))]);
+    assert_eq!(
+        candidates(request, local_targets.clone()).await,
+        vec![local.clone(), election::InferenceTarget::Remote(other)],
+        "an excluded peer must never be re-added to the draw"
+    );
+    // Exclude this node and a peer: ingress forces the remote pool without them.
+    let request = automatic_request_with_headers(&[(
+        "x-mesh-exclude",
+        format!("{},{}", hex_of(node.id()), hex_of(excluded)),
+    )]);
+    let mut remote_pool = election::ModelTargets::default();
+    remote_pool
+        .targets
+        .insert(MODEL.into(), vec![election::InferenceTarget::Remote(other)]);
+    assert_eq!(
+        candidates(request, remote_pool).await,
+        vec![election::InferenceTarget::Remote(other)],
+        "the forced remote pool must not regain an excluded peer"
+    );
+    // Target a peer: ingress hands over exactly that peer.
+    let request = automatic_request_with_headers(&[("x-mesh-target", hex_of(other))]);
+    let mut forced = election::ModelTargets::default();
+    forced
+        .targets
+        .insert(MODEL.into(), vec![election::InferenceTarget::Remote(other)]);
+    assert_eq!(
+        candidates(request, forced).await,
+        vec![election::InferenceTarget::Remote(other)],
+        "a targeted request is served only by its target"
+    );
+    // Target this node: it serves locally and names itself in x-mesh-served-by.
+    let request = automatic_request_with_headers(&[("x-mesh-target", hex_of(node.id()))]);
+    assert_eq!(
+        candidates(request, local_targets).await,
+        vec![local],
+        "a request targeting this node must not be drawn to a peer"
+    );
+}
+
 #[test]
 /// A peer advertises the model this node serves under its public id, so the
 /// automatic candidate list would hold the same model twice: the identity

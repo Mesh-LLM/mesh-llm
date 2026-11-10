@@ -178,8 +178,7 @@ pub(super) async fn execution_candidates(
         // split instead of whichever node the request happened to reach.
         // The flag, not the name: ingress already rewrote the directive into
         // the resolved model's name before this point.
-        super::super::workload_routing::mesh_candidates(node, model, &request.client_path, targets)
-            .await
+        automatic_execution_candidates(node, model, request, targets).await
     } else {
         super::super::workload_routing::ingress_candidates(
             node,
@@ -189,6 +188,35 @@ pub(super) async fn execution_candidates(
         )
         .await
     }
+}
+
+/// The automatic host draw, bounded by the client's routing headers. Ingress
+/// already applied `x-mesh-target` / `x-mesh-exclude` to `targets`; widening
+/// to every peer must not undo that. A target fixes the host, so nothing is
+/// added; an excluded peer is never re-added. A malformed header was rejected
+/// at ingress, so it cannot reach here, and widens nothing if it does.
+async fn automatic_execution_candidates(
+    node: &mesh::Node,
+    model: &str,
+    request: &BufferedHttpRequest,
+    targets: &election::ModelTargets,
+) -> Vec<election::InferenceTarget> {
+    let path = &request.client_path;
+    let Ok((None, excluded)) = super::super::ingress::parse_mesh_routing_headers(request) else {
+        return super::super::workload_routing::eligible_targets(
+            node,
+            model,
+            path,
+            &targets.candidates(model),
+        )
+        .await;
+    };
+    let mut candidates =
+        super::super::workload_routing::mesh_candidates(node, model, path, targets).await;
+    candidates.retain(|target| {
+        !matches!(target, election::InferenceTarget::Remote(peer) if excluded.contains(peer))
+    });
+    candidates
 }
 
 fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
