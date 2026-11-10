@@ -59,6 +59,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
             "- GitHub star: {}",
             super::github::github_summary(plan, &actions.github_outcome)
         );
+        let _ = writeln!(err, "- Next: {}", next_step(actions));
         return;
     }
 
@@ -68,7 +69,28 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
     if let Some(github) = github_brief(actions) {
         let _ = writeln!(err, "  GitHub star  {github}");
     }
+    let _ = writeln!(err, "  Next     {}", next_step(actions));
 }
+
+/// What to run after setup. With the service running, a node already holds
+/// the default ports, so starting another one there would fail.
+fn next_step(actions: &CliSetupActions<'_>) -> String {
+    let service_running = matches!(
+        actions.service_outcome,
+        SetupServiceOutcome::Installed(ref report)
+            if report.status == ServiceInstallStatus::Started
+    );
+    if service_running {
+        format!(
+            "a node is running: open http://localhost:3131, or load a model with \
+             `mesh-llm load <model>`. Quickstart: {QUICKSTART_URL}"
+        )
+    } else {
+        format!("start a node with `mesh-llm serve --model <model>`. Quickstart: {QUICKSTART_URL}")
+    }
+}
+
+const QUICKSTART_URL: &str = "https://meshllm.cloud/docs/pages/quickstart/";
 
 fn runtime_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
     match plan.runtime {
@@ -245,6 +267,41 @@ mod tests {
             github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
             Some("skipped; gh unavailable".to_string())
         );
+    }
+
+    fn installed_service(status: ServiceInstallStatus) -> SetupServiceOutcome {
+        SetupServiceOutcome::Installed(crate::setup::service::ServiceInstallReport {
+            status,
+            summary: String::new(),
+            messages: Vec::new(),
+            service_file: std::path::PathBuf::new(),
+            env_file: None,
+            runner_file: None,
+        })
+    }
+
+    #[test]
+    fn next_step_loads_into_a_running_service_node() {
+        let mut actions = actions_with_github_outcome(SetupGitHubOutcome::NotAuthenticated);
+        actions.service_outcome = installed_service(ServiceInstallStatus::Started);
+        let next = next_step(&actions);
+        assert!(next.contains("http://localhost:3131"));
+        assert!(next.contains("mesh-llm load <model>"));
+        assert!(!next.contains("mesh-llm serve"));
+    }
+
+    #[test]
+    fn next_step_starts_a_node_when_none_is_running() {
+        for outcome in [
+            SetupServiceOutcome::NotRequested,
+            SetupServiceOutcome::PrintedGuidance,
+            installed_service(ServiceInstallStatus::StartsAtLogon),
+            installed_service(ServiceInstallStatus::NeedsManualStart),
+        ] {
+            let mut actions = actions_with_github_outcome(SetupGitHubOutcome::NotAuthenticated);
+            actions.service_outcome = outcome;
+            assert!(next_step(&actions).contains("mesh-llm serve --model <model>"));
+        }
     }
 
     #[test]
