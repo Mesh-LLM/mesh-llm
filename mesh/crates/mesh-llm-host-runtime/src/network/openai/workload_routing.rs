@@ -494,6 +494,52 @@ pub(super) async fn eligible_targets(
         .collect()
 }
 
+/// Keep the targets whose own descriptor serves the request's image or audio
+/// input. The model was chosen on capabilities pooled across every host, so a
+/// copy of it that cannot see the input must not take the request. When no
+/// target's descriptor says so, the list is returned unchanged rather than
+/// failing a request the model-level check already admitted.
+pub(super) async fn media_capable_targets(
+    node: &mesh::Node,
+    model: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    candidates: Vec<InferenceTarget>,
+) -> Vec<InferenceTarget> {
+    let media = request_media(path, body);
+    if !media.requires_runtime_modality() {
+        return candidates;
+    }
+    let local = node.served_model_descriptors().await;
+    let state = node.state.lock().await;
+    let capable = candidates
+        .iter()
+        .filter(|target| {
+            let descriptors = match target {
+                InferenceTarget::Local(_) => local.as_slice(),
+                InferenceTarget::Remote(peer_id) => state
+                    .peers
+                    .get(peer_id)
+                    .map_or(&[][..], |peer| peer.served_model_descriptors.as_slice()),
+                InferenceTarget::None => return false,
+            };
+            descriptor_for_request(model, path, descriptors).is_some_and(|descriptor| {
+                crate::network::router::model_satisfies_media_requirements(
+                    &descriptor.capabilities,
+                    &media,
+                )
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    drop(state);
+    if capable.is_empty() {
+        candidates
+    } else {
+        capable
+    }
+}
+
 /// Restrict peer IDs using the same per-target workload policy as local ingress.
 pub(super) async fn eligible_remote_hosts(
     node: &mesh::Node,

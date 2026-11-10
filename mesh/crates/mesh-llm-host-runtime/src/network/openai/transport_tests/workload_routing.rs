@@ -274,6 +274,68 @@ async fn automatic_candidates_keep_mesh_routing_headers() {
     );
 }
 
+#[tokio::test]
+/// The automatic draw spans every placement of the chosen model, and the model
+/// was chosen on fleet-wide capabilities. An image request must not land on a
+/// copy of that model whose own descriptor cannot see images; a text request
+/// still draws over both.
+async fn automatic_image_request_draws_only_vision_placements() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    let text_only = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let vision = iroh::SecretKey::generate().public();
+    let mut vision_peer = test_peer_serving_model(vision, MODEL);
+    let mut vision_descriptor = descriptor(Some(ModelWorkloadClass::CausalGeneration), false);
+    vision_descriptor.capabilities.vision = CapabilityLevel::Supported;
+    vision_descriptor.capabilities.multimodal = true;
+    vision_peer.served_model_descriptors = vec![vision_descriptor];
+    node.insert_test_peer(vision_peer).await;
+    let mut pool = election::ModelTargets::default();
+    pool.targets.insert(
+        MODEL.into(),
+        vec![
+            election::InferenceTarget::Remote(text_only),
+            election::InferenceTarget::Remote(vision),
+        ],
+    );
+    let automatic = |content: serde_json::Value| {
+        let mut request = request_with_model("/v1/chat/completions", Some("mesh"));
+        let body = serde_json::json!({
+            "model": "mesh",
+            "messages": [{"role": "user", "content": content}],
+        });
+        let bytes = serde_json::to_vec(&body).expect("serialize body");
+        request.raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            bytes.len()
+        )
+        .into_bytes();
+        request.body_len_bytes = bytes.len();
+        request.body_bytes = Some(bytes);
+        request.body_json = Some(body);
+        // Ingress writes the resolved model back into the body it forwards.
+        crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut request, Some(MODEL));
+        request
+    };
+    let image = automatic(serde_json::json!([
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]));
+    let mut drawn =
+        super::super::route_model::execution_candidates(&node, MODEL, &image, &pool, false).await;
+    drawn.sort_by_key(|target| format!("{target:?}"));
+    assert_eq!(
+        drawn,
+        vec![election::InferenceTarget::Remote(vision)],
+        "an image request draws only the vision-capable placement"
+    );
+    let text = automatic(serde_json::json!("hello"));
+    let drawn =
+        super::super::route_model::execution_candidates(&node, MODEL, &text, &pool, false).await;
+    assert_eq!(drawn.len(), 2, "a text request draws over both placements");
+}
+
 #[test]
 /// A peer advertises the model this node serves under its public id, so the
 /// automatic candidate list would hold the same model twice: the identity

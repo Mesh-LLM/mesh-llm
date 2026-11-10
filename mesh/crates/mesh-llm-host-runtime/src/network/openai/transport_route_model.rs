@@ -194,7 +194,9 @@ pub(super) async fn execution_candidates(
 /// already applied `x-mesh-target` / `x-mesh-exclude` to `targets`; widening
 /// to every peer must not undo that. A target fixes the host, so nothing is
 /// added; an excluded peer is never re-added. A malformed header was rejected
-/// at ingress, so it cannot reach here, and widens nothing if it does.
+/// at ingress, so it cannot reach here, and widens nothing if it does. The
+/// widened draw keeps only placements that can see the request's image or
+/// audio input.
 async fn automatic_execution_candidates(
     node: &mesh::Node,
     model: &str,
@@ -216,7 +218,14 @@ async fn automatic_execution_candidates(
     candidates.retain(|target| {
         !matches!(target, election::InferenceTarget::Remote(peer) if excluded.contains(peer))
     });
-    candidates
+    super::super::workload_routing::media_capable_targets(
+        node,
+        model,
+        path,
+        request.body_json.as_ref(),
+        candidates,
+    )
+    .await
 }
 
 fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
