@@ -1,7 +1,7 @@
-From e009a217e0a36096cb552eb12baf04f0e30dbcf8 Mon Sep 17 00:00:00 2001
+From 527096c225afeca0f942b6fb538ac9b87dd11803 Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
-Subject: [PATCH 10/15] feat(skippy): read selected token scores in causal
+Subject: [PATCH 10/16] feat(skippy): read selected token scores in causal
  batches
 
 Keep full vocabulary logits on the terminal worker and read bounded
@@ -70,7 +70,7 @@ index 0a5980aaa..c7a99d16c 100644
          skippy/tests/hardware_application_probe.cpp)
      target_include_directories(skippy-hardware-application-probe PRIVATE .)
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index 8eec3357a..754045162 100644
+index 2b9593e0c..86ea1ed55 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -5,6 +5,7 @@

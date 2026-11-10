@@ -18,8 +18,8 @@ use std::ffi::{c_char, c_int, c_void};
 use crate::bindings::{llama, mtmd};
 use crate::llama_draft::{LlamaBatch, LlamaContextParams, LlamaModelParams};
 use crate::{
-    LlamaLogCallback, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperGenAudio,
-    MtmdInputChunkType, MtmdInputChunks, Opaque,
+    LlamaLogCallback, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperDecodeBudget,
+    MtmdHelperGenAudio, MtmdInputChunkType, MtmdInputChunks, Opaque,
 };
 
 pub use crate::bindings::skippy::*;
@@ -176,6 +176,15 @@ pub unsafe fn mtmd_helper_eval_chunk_single_with_callback(
             user_data,
         )
     }
+}
+
+/// # Safety
+/// The path must point to a readable projector file for the loaded runtime.
+pub unsafe fn mtmd_helper_get_decode_budget(
+    mmproj_fname: *const c_char,
+    ctx_params: MtmdContextParams,
+) -> MtmdHelperDecodeBudget {
+    unsafe { mtmd::mtmd_helper_get_decode_budget(mmproj_fname, ctx_params) }
 }
 
 /// # Safety

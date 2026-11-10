@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 0aa5d8250686c5f980d5136d5ff21214966b033a Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Mon, 9 Nov 2026 15:52:17 +1100
-Subject: [PATCH] models: add Laguna DFlash drafts
+Subject: [PATCH 15/15] models: add Laguna DFlash drafts
 
 Laguna drafters (poolside/Laguna-XS-2.1-DFlash, Laguna-S-2.1-DFlash) read
 the target's layer inputs, including layer n_layer: the last layer's
@@ -147,7 +147,7 @@ index 29e0b3d6b..3510a0489 100644
 +
 +        yield from super().modify_tensors(data_torch, name, bid)
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index bf964a0dc..b563b6236 100644
+index 7ed746229..f39c71e18 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
 @@ -173,6 +173,7 @@ class Keys:
@@ -483,10 +483,10 @@ index 8c92196cd..276ae1c48 100644
      struct graph : public llm_graph_context {
          graph(const llm_graph_params & params);
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
-index ffa8aa02c..1515bdae1 100644
+index fdcdc631f..725b75ad2 100644
 --- a/src/skippy/tests/graph_contract_cases.cmake
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -145,3 +145,26 @@ add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-i
+@@ -158,3 +158,26 @@ add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-i
      "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
  set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
      FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)

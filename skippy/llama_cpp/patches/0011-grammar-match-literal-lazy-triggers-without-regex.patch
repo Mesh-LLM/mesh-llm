@@ -1,7 +1,7 @@
-From b5f2cf1efb8ca2eeab77267967328bfda8dab1ef Mon Sep 17 00:00:00 2001
+From bc07dd01f2ceacad9401b9da2a3221ec6140a7b4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
-Subject: [PATCH 11/15] grammar: match literal lazy triggers without regex
+Subject: [PATCH 11/16] grammar: match literal lazy triggers without regex
 
 ---
  src/llama-grammar.cpp                   | 10 ++++
@@ -121,3 +121,6 @@ index 000000000..6df57b5c6
 +    assert(insensitive.find("WORD") == 0);
 +    return 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

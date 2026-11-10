@@ -1,7 +1,7 @@
-From 5379c658181b619a90ac7abea47eb277b3115e24 Mon Sep 17 00:00:00 2001
+From 2a25bb39471d6224514c97ff8b6aad95f67730b9 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH 02/16] feat(skippy): realize admitted stages from live graphs
 
 ---
  common/common.cpp                       |  109 ---
@@ -152,7 +152,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/common/common.cpp b/common/common.cpp
-index 75fd39665..87d0f90e8 100644
+index cca920f09..3efca16df 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -67,14 +67,6 @@
@@ -293,7 +293,7 @@ index 75fd39665..87d0f90e8 100644
      const llama_model * model = llama_get_model(ctx);
      const llama_vocab * vocab = llama_model_get_vocab(model);
 diff --git a/common/common.h b/common/common.h
-index 84abddc76..a045c13c7 100644
+index 3aae7a8da..ca08c2dfd 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -43,7 +43,7 @@
@@ -338,7 +338,7 @@ index 84abddc76..a045c13c7 100644
  
  //
  // Model utils
-@@ -1172,13 +1172,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
+@@ -1176,13 +1176,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
  
  // tokenizes a string into a vector of tokens
  // should work similar to Python's `tokenizer.encode`
@@ -354,7 +354,7 @@ index 84abddc76..a045c13c7 100644
      const struct llama_vocab * vocab,
             const std::string & text,
                          bool   add_special,
-@@ -1186,12 +1186,12 @@ std::vector<llama_token> common_tokenize(
+@@ -1190,12 +1190,12 @@ std::vector<llama_token> common_tokenize(
  
  // tokenizes a token into a piece, optionally renders special/control tokens
  // should work similar to Python's `tokenizer.id_to_piece`
@@ -1430,7 +1430,7 @@ index 000000000..7f5064cb5
 +}
 +
 diff --git a/src/llama-batch.cpp b/src/llama-batch.cpp
-index f84c6d50b..3de935917 100644
+index 7fce6624f..65085961b 100644
 --- a/src/llama-batch.cpp
 +++ b/src/llama-batch.cpp
 @@ -28,7 +28,8 @@ llama_batch_allocr::llama_batch_allocr(uint32_t n_pos_per_embd, bool allow_mixed
@@ -1443,7 +1443,7 @@ index f84c6d50b..3de935917 100644
      clear();
  
      this->vocab        = &vocab;
-@@ -166,7 +167,7 @@ bool llama_batch_allocr::init(
+@@ -184,7 +185,7 @@ bool llama_batch_allocr::init(
      pos.resize((size_t) n_tok*n_pos_per_embd);
      for (int32_t i = 0; i < n_tok; ++i) {
          const auto & tok = batch_inp.tokens[i];
@@ -1452,7 +1452,7 @@ index f84c6d50b..3de935917 100644
          for (uint32_t j = 0; j < n_pos_per_embd; ++j) {
              llama_pos p = tok.pos[j];
              if (expand) {
-@@ -365,7 +366,7 @@ bool llama_batch_allocr::init(
+@@ -383,7 +384,7 @@ bool llama_batch_allocr::init(
  
      if (n_pos_per_embd > 1) {
          // in a mixed batch, the first entry of each seq picks the rule
@@ -1461,7 +1461,7 @@ index f84c6d50b..3de935917 100644
          if (mixed) {
              std::vector<bool> seen(n_seq_max, false);
              for (int32_t i = 0; i < batch.n_tokens; ++i) {
-@@ -373,7 +374,7 @@ bool llama_batch_allocr::init(
+@@ -391,7 +392,7 @@ bool llama_batch_allocr::init(
                      const llama_seq_id sid = batch.seq_id[i][s];
                      if (!seen[sid]) {
                          seen[sid] = true;
@@ -1470,7 +1470,7 @@ index f84c6d50b..3de935917 100644
                      }
                  }
              }
-@@ -1469,7 +1470,7 @@ bool llama_batch_ext_set_decision_order(llama_batch_ext * batch, int32_t idx, ll
+@@ -1515,7 +1516,7 @@ bool llama_batch_ext_set_decision_order(llama_batch_ext * batch, int32_t idx, ll
  
  // llama_batch_compat
  
@@ -1479,7 +1479,7 @@ index f84c6d50b..3de935917 100644
      llama_batch_ext * batch_ext = &dst;
  
      if (n_embd_row == 0) {
-@@ -1502,7 +1503,7 @@ void llama_batch_compat::init(llama_batch_ext & dst, const llama_batch & batch_i
+@@ -1548,7 +1549,7 @@ void llama_batch_compat::init(llama_batch_ext & dst, const llama_batch & batch_i
  
          // position(s)
          if (batch_inp.pos) {
@@ -1488,7 +1488,7 @@ index f84c6d50b..3de935917 100644
                  // token batch: one position per token
                  t.pos[0] = batch_inp.pos[i];
              } else {
-@@ -1545,9 +1546,9 @@ void llama_batch_compat::init(llama_batch_ext & dst, const llama_batch & batch_i
+@@ -1591,9 +1592,9 @@ void llama_batch_compat::init(llama_batch_ext & dst, const llama_batch & batch_i
      }
  }
  
@@ -1501,10 +1501,10 @@ index f84c6d50b..3de935917 100644
  
  llama_batch_compat::~llama_batch_compat() {
 diff --git a/src/llama-batch.h b/src/llama-batch.h
-index d2361396c..0e4567d75 100644
+index d16662898..295cdcf4a 100644
 --- a/src/llama-batch.h
 +++ b/src/llama-batch.h
-@@ -163,7 +163,8 @@ public:
+@@ -166,7 +166,8 @@ public:
      bool init(
              const llama_batch_ext & batch_inp,
              const llama_vocab & vocab,
@@ -1514,7 +1514,7 @@ index d2361396c..0e4567d75 100644
  
      const llama_batch & get_batch() const;
  
-@@ -270,10 +271,10 @@ struct llama_batch_compat {
+@@ -274,10 +275,10 @@ struct llama_batch_compat {
      llama_batch_ext * batch_ext;
  
      // n_embd_row is the embd row width of batch_inp, 0 = use the decoder width
@@ -1528,10 +1528,10 @@ index d2361396c..0e4567d75 100644
 +    static void init(llama_batch_ext & batch_ext, const llama_batch & batch_inp, size_t n_embd_row = 0, bool activation_positions = false);
  };
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index a450d8257..9011bef0d 100644
+index 394e39d85..a865d6f2b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2062,7 +2062,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2212,7 +2212,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          }
      }
  
@@ -17958,3 +17958,6 @@ index c41e91d61..eee60d81d 100644
      t.test("token_batch_explicit_fields", [&](testing & t) {
          llama_token  token[3]    = { 5, 6, 7 };
          llama_pos    pos[3]      = { 3, 4, 5 };
+-- 
+2.54.0 (Apple Git-157)
+

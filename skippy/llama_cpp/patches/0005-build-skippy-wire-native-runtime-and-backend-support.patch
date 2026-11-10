@@ -1,7 +1,7 @@
-From b779e79d6529a8bd334a894d0493af45818dc22e Mon Sep 17 00:00:00 2001
+From ce6ec56ac8b9791f5fee939cb94ee64bc8a54dcb Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
+Subject: [PATCH 05/16] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
@@ -31,11 +31,10 @@ Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
  src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
- tools/mtmd/clip.cpp                        |   3 +
  tools/mtmd/mtmd-audio.h                    |   1 +
- tools/mtmd/mtmd-helper.cpp                 |  41 +-
- tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3130 insertions(+), 152 deletions(-)
+ tools/mtmd/mtmd-helper.cpp                 |  47 +-
+ tools/mtmd/mtmd-helper.h                   |  29 +
+ 30 files changed, 3146 insertions(+), 152 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -1814,10 +1813,10 @@ index afb86338a..0427fda49 100644
      // Backend registry
      //
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 92a53bf38..9c8980505 100644
+index 961990f85..9123c0858 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -1485,14 +1485,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -1486,14 +1486,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
      sched->n_graph_inputs = 0;
      sched->is_reset = false;
  
@@ -1850,7 +1849,7 @@ index 92a53bf38..9c8980505 100644
      sched->ctx = ggml_init(params);
      if (sched->ctx == NULL) {
          GGML_ABORT("%s: failed to initialize context\n", __func__);
-@@ -2325,8 +2341,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
+@@ -2334,8 +2350,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
      sched->graph_size      = 0;
      sched->prev_graph_size = 0;
  
@@ -2125,7 +2124,7 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 9c467ce95..4bc5c0482 100644
+index 162a7d28d..596c05226 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -11,6 +11,7 @@
@@ -2584,7 +2583,7 @@ index 5e6099ce1..8c21125d5 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ struct ggml_metal_library {
+@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -4114,25 +4113,11 @@ index 426c48741..0a5980aaa 100644
 +    find_library(SKIPPY_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
-diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index ac99b762e..e91305f56 100644
---- a/tools/mtmd/clip.cpp
-+++ b/tools/mtmd/clip.cpp
-@@ -5785,6 +5785,9 @@ bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
-         cur = ggml_add(ctx0,
-                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
-                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
-+        if (config.power_floor > 0.0f) {
-+            cur = ggml_clamp(ctx0, cur, config.power_floor, FLT_MAX);
-+        }
-         if (config.use_magnitude) {
-             cur = ggml_sqrt(ctx0, cur);
-         }
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index c0751b5e6..ebe4f6397 100644
+index ba71913e0..b1f37748c 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
-@@ -70,6 +70,7 @@ struct mtmd_audio_mel_config {
+@@ -69,6 +69,7 @@ struct mtmd_audio_mel_config {
      float   mel_floor        = 5.960464477539063e-08f;
      bool    mel_floor_add    = false;  // log(x + floor) instead of log(max(x, floor))
      bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
@@ -4141,7 +4126,7 @@ index c0751b5e6..ebe4f6397 100644
  
      const mtmd_audio_cache * cache = nullptr;
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index d86537e55..4bfc58d79 100644
+index d86537e55..8830ba587 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
 @@ -141,6 +141,11 @@ int32_t mtmd_helper_decode_image_chunk(
@@ -4164,7 +4149,20 @@ index d86537e55..4bfc58d79 100644
      const scope_non_causal non_causal(lctx, use_non_causal);
  
      while (i_batch < n_img_batches) { // split into batches
-@@ -209,6 +213,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -201,6 +205,12 @@ int32_t mtmd_helper_decode_image_chunk(
+     return 0;
+ }
+ 
++mtmd_helper_decode_budget mtmd_helper_get_decode_budget(const char * mmproj_fname,
++                                                        mtmd_context_params ctx_params) {
++    const mtmd_memory_usage usage = mtmd_get_memory_usage(mmproj_fname, ctx_params);
++    return { usage.image_max_tokens, usage.use_non_causal };
++}
++
+ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+         struct llama_context * lctx,
+         const mtmd_input_chunk * chunk,
+@@ -209,6 +219,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          int32_t n_batch,
          bool logits_last,
          llama_pos * new_n_past) {
@@ -4190,7 +4188,7 @@ index d86537e55..4bfc58d79 100644
      GGML_ASSERT(n_batch > 0);
      int32_t ret;
      auto chunk_type = mtmd_input_chunk_get_type(chunk);
-@@ -239,6 +262,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -239,6 +268,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                  LOG_ERR("failed to decode text\n");
                  return ret;
              }
@@ -4200,7 +4198,7 @@ index d86537e55..4bfc58d79 100644
              *new_n_past += n_added;
          }
  
-@@ -257,7 +283,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -257,7 +289,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
  
          float * embd = mtmd_get_output_embd(ctx);
@@ -4221,10 +4219,10 @@ index d86537e55..4bfc58d79 100644
              LOG_ERR("failed to decode %s\n", name);
              return ret;
 diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
-index a9ffdf71e..ab65ceb32 100644
+index 8a1d3aae1..80e8ac893 100644
 --- a/tools/mtmd/mtmd-helper.h
 +++ b/tools/mtmd/mtmd-helper.h
-@@ -115,6 +115,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -115,6 +115,35 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                 bool logits_last,
                                                 llama_pos * new_n_past);
  
@@ -4244,6 +4242,22 @@ index a9ffdf71e..ab65ceb32 100644
 +                                                             mtmd_helper_chunk_decode_callback callback,
 +                                                             void *                            user_data);
 +
++// Decode-side budget facts of a projector file, probed without loading its weights.
++// A projector that decodes images with non-causal attention must fit every image
++// chunk in one llama batch and microbatch, so a caller with a smaller decoding
++// context must cap the vision token budget before mtmd_init_from_file().
++struct mtmd_helper_decode_budget {
++    int32_t image_max_tokens; // effective vision token budget; -1 without a vision projector
++    bool    use_non_causal;   // image chunks decode with non-causal attention
++};
++
++/** @brief Probe a projector's vision token budget and non-causal decode requirement. */
++MTMD_API struct mtmd_helper_decode_budget mtmd_helper_get_decode_budget(const char * mmproj_fname,
++                                                                        struct mtmd_context_params ctx_params);
++
  // one decoded sub-batch of embeddings, passed to mtmd_helper_post_decode_callback
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
+-- 
+2.54.0 (Apple Git-157)
+

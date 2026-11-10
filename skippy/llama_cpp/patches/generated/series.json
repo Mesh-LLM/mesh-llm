@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "13543d5294fd709c23700e1225d12b4e2ea97c3dd4779d9ce4802893bfc116a6",
+  "full_patch_sha256": "046c0272984ff94c3c1bf7d4dc63fd99560149351b7a2952a77ecb04c15ecd30",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -59,7 +59,7 @@
         "bailingmoe3"
       ],
       "file": "0006-family-bailingmoe3.patch",
-      "sha256": "0e88f5470e7171c943a9391eac6095b03d60c68bf1b676c617ea8f38674f1d8b",
+      "sha256": "b21e5b14fb7e4fef7defd514b94472a0323b17179d4e02f243f693eab945cbaa",
       "sources": [
         "src/models/bailingmoe3.cpp"
       ]
@@ -101,7 +101,7 @@
         "mistral4"
       ],
       "file": "0010-family-deepseek2--glm47-flash--mistral4.patch",
-      "sha256": "80a2d254bb315f04255083c441817a09326bde2e70ef5889bd269193e6f425c2",
+      "sha256": "d95aa84e7bc7386869efb40cf864a0f17dafbb1c7118f587f29c22fe0bef89c8",
       "sources": [
         "src/models/deepseek2.cpp"
       ]
@@ -111,7 +111,7 @@
         "deepseek32"
       ],
       "file": "0011-family-deepseek32.patch",
-      "sha256": "96f60ba9ee0ccd86d5e00aacf5381c214b281c87885a8547fca4619112eafddc",
+      "sha256": "945eb10483d8cb07c1c17d31770cbc566bfabcdcad2326243c89b50f9fc4eee8",
       "sources": [
         "src/models/deepseek32.cpp"
       ]
@@ -121,7 +121,7 @@
         "deepseek4"
       ],
       "file": "0012-family-deepseek4.patch",
-      "sha256": "3a87724042596596581bb167b89a55336b1095ad9ceca5dda3cfb079e18e2aa0",
+      "sha256": "f744409c30f99e1f0d49220fa1fbb59e92824e488c7421ffa3094799cc512a15",
       "sources": [
         "src/models/deepseek4.cpp"
       ]
@@ -241,7 +241,7 @@
         "glm-dsa"
       ],
       "file": "0024-family-glm-dsa.patch",
-      "sha256": "aa4903d5762f0ae0286fb3fc9d0c7dfb0f91892f485298a5a3a660023da23167",
+      "sha256": "42973bb31bd87491bcb726004f7357d2efc8e3a64dc32fc172a62e75bb5b03b2",
       "sources": [
         "src/models/glm-dsa.cpp"
       ]
@@ -272,7 +272,7 @@
         "glm45-air"
       ],
       "file": "0027-family-glm45-air.patch",
-      "sha256": "f2cb7c71af3ea030e65d45fb6e7b4aa8f7a2b13766d10153e067eccde363f3ea",
+      "sha256": "f79c654b41ba06b02905d5720da2e4a13b1089146349d042cd00aa3dfab8cfb4",
       "sources": [
         "src/models/glm4-moe.cpp"
       ]
@@ -304,7 +304,7 @@
         "minicpm"
       ],
       "file": "0030-family-granite-dense--granite-moe--minicpm.patch",
-      "sha256": "e0065b27b7caf91da15266e391f85ef32b6dac5e006f99ab4be28fd3dd4e62c0",
+      "sha256": "7a566dbd70bfca465e743ac39fe93ab2f1433c7e0324215453bc925d2f55754d",
       "sources": [
         "src/models/granite.cpp"
       ]
@@ -314,7 +314,7 @@
         "granite-hybrid"
       ],
       "file": "0031-family-granite-hybrid.patch",
-      "sha256": "cf56c1da0ddf1289ea28e1cf491304569cf598e211445f23b948fe9f1a3d2196",
+      "sha256": "94fce6f61be9a69ffc9f664be12a758104c160aef570905c69aef4bceaeb55a4",
       "sources": [
         "src/models/granite-hybrid.cpp"
       ]
@@ -324,7 +324,7 @@
         "granite-swa"
       ],
       "file": "0032-family-granite-swa.patch",
-      "sha256": "4e13a8b41040e0fad459f49b712e7a3f0fad4e7a9b2079047f9c5c5cbc09acb0",
+      "sha256": "08b910488028e5ebb4fc59c786e85ed7509165f5e667b3f9c53a8fc8a0aa7c85",
       "sources": [
         "src/models/granite-swa.cpp"
       ]
@@ -364,7 +364,7 @@
         "hy-v3"
       ],
       "file": "0036-family-hy-v3.patch",
-      "sha256": "efbfc119cdbc362326c13b37fb6419de4fc1994812d0cda10a09f211537f720f",
+      "sha256": "8cd1f4128118915e1f4d81b3e2173beb9455f105d546ed06015193575f36b3ed",
       "sources": [
         "src/models/hy-v3.cpp"
       ]
@@ -518,7 +518,7 @@
         "mellum"
       ],
       "file": "0051-family-mellum.patch",
-      "sha256": "9318d2028934d949f5f0325ed9c7e90467822afd1e60947dd396d5496e8cc16e",
+      "sha256": "ce09c83df5f99bd275d6ed38f0dd8162edac2968e7afddf2ffefbf7219567a1f",
       "sources": [
         "src/models/mellum.cpp"
       ]
@@ -528,7 +528,7 @@
         "mimo2"
       ],
       "file": "0052-family-mimo2.patch",
-      "sha256": "81941cd30b1eb9fcbbb8cd7b4dafe76384a8262e641f5a73ee5ba44b0f057f35",
+      "sha256": "056e3cc3e7b4297df4c8f057e079a113f4e65b73f61bdf0d12a921c60416036c",
       "sources": [
         "src/models/mimo2.cpp"
       ]
@@ -558,7 +558,7 @@
         "minimax-m3"
       ],
       "file": "0055-family-minimax-m3.patch",
-      "sha256": "01f3d987fe3609b3b3548851892e1fa270158ff00cfb2fb7e49c1f3407afddc4",
+      "sha256": "397299107fda31325bc555d875aedc98cb4c39b08a26682d9f882cd2947c4e05",
       "sources": [
         "src/models/minimax-m3.cpp"
       ]
@@ -691,7 +691,7 @@
         "qwen3-next"
       ],
       "file": "0068-family-qwen3-next.patch",
-      "sha256": "c076f157f284fef87d83fb985add07a6e85a7d1f05e3a9a706fd1b224e58a3ed",
+      "sha256": "207255737f3dbc87d5361abd02fa5033de879bc34a09ba5301776001c8c2ec7a",
       "sources": [
         "src/models/qwen3next.cpp"
       ]
@@ -711,7 +711,7 @@
         "qwen35"
       ],
       "file": "0070-family-qwen35.patch",
-      "sha256": "78b771ff92c0be25fd1c49fe3276165b628000b6db55e44b6a886f4c36eae41b",
+      "sha256": "b89b5540b2034e10983310ba9cc024313baf0963afb2b76a1a41f65759348135",
       "sources": [
         "src/models/qwen35.cpp"
       ]
@@ -721,7 +721,7 @@
         "qwen35moe"
       ],
       "file": "0071-family-qwen35moe.patch",
-      "sha256": "0bdd6398bad461cf26def75799a013810281882780cbd7b64562366ab499c053",
+      "sha256": "d9c96563d3b7a7b29884d7bb78684b58c3f2c26bf79e2bfa7195e16aa8389a79",
       "sources": [
         "src/models/qwen35moe.cpp"
       ]
@@ -741,7 +741,7 @@
         "qwen4exp"
       ],
       "file": "0073-family-qwen4exp.patch",
-      "sha256": "b95fefe898b7ab7f49f9169059301a317cd81a8b986742e8799df47204770e68",
+      "sha256": "26e3854bc052d8e988f7a151714c81e596d882e21daa84d1100e8cd7c38451db",
       "sources": [
         "src/models/qwen4exp.cpp"
       ]
@@ -812,7 +812,7 @@
         "step35"
       ],
       "file": "0080-family-step35.patch",
-      "sha256": "9c9d75ffb272534fde3bddaa392d03f1cf6e626b553bb69f8422e9eecfaac479",
+      "sha256": "d4b2774705bc637355d082e6d5b5b0a91d52f9656a6622c7cb30b32472c92922",
       "sources": [
         "src/models/step35.cpp"
       ]
@@ -820,7 +820,7 @@
     {
       "families": [],
       "file": "0081-family-unmapped.patch",
-      "sha256": "1fa169a4a1b1609475e37057fa4cb7c390f1d3ffdb85af72218c9ac766e93524",
+      "sha256": "662ff6edc56bc4117607616485838b1746e54a689d4e9feb60c960200c6a640a",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",
