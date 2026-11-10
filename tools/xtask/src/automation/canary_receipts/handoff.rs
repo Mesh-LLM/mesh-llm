@@ -20,6 +20,8 @@ struct Input {
     controller_revision: String,
     #[serde(default)]
     selected_source: String,
+    #[serde(default)]
+    retry_recovered: String,
     evidence: Option<PathBuf>,
     family: Option<Family>,
     outcome: Option<WorkerOutcome>,
@@ -87,6 +89,15 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
         }
         let (identity, count, bundle) = package.publication_context();
         let selected = !input.selected_source.is_empty() && !bundle;
+        let recovered = input.retry_recovered == "true";
+        if !matches!(input.retry_recovered.as_str(), "" | "true" | "false") {
+            return Err("publication retry recovery marker must be true, false or absent".into());
+        }
+        if recovered && selected {
+            return Err(
+                "recovered retry publication does not accept a selected source package".into(),
+            );
+        }
         if selected {
             if identity.pass_id != "verify-1" || bundle {
                 return Err(
@@ -109,6 +120,7 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
             identity,
             count,
             bundle || selected,
+            recovered,
             input
                 .repository
                 .as_deref()
@@ -125,6 +137,9 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
     } else {
         if input.repository.is_some() || input.source_root.is_some() {
             return Err("receipt does not accept publication repository".into());
+        }
+        if !input.retry_recovered.is_empty() {
+            return Err("receipt does not accept the publication recovery marker".into());
         }
         let evidence = input.evidence.as_ref().ok_or("receipt requires evidence")?;
         if !evidence.is_absolute() {
@@ -146,6 +161,7 @@ fn publication_body(
     identity: &crate::automation::canary_receipts::ProducerIdentity,
     count: usize,
     bundle: bool,
+    recovered: bool,
     repository: &str,
     summary: &str,
 ) -> DynResult<String> {
@@ -161,11 +177,122 @@ fn publication_body(
     {
         return Err("publication repository must be OWNER/NAME".into());
     }
-    if !identity.pass_id.starts_with("verify-") || !bundle {
+    let admitted = if recovered {
+        identity.pass_id.starts_with("repair-")
+    } else {
+        identity.pass_id.starts_with("verify-")
+    };
+    if !admitted || !bundle {
         return Err("publication requires the independent verifier package".into());
     }
+    let (lead, evidence) = if recovered {
+        (
+            "Publish the certified llama.cpp candidate and its MeshLLM changes.",
+            "The family pass certified this exact tree green; every infrastructure retry was recovered by trusted reconciliation against the immutable producer package, so no second independent pass was required. Certification ran the complete roster, including single-step, chain, state-handoff, native draft requirements, applicable multimodal smokes, and class-specific workload smoke/oracle lanes for the non-chat families.",
+        )
+    } else {
+        (
+            "Publish the independently certified llama.cpp candidate and its MeshLLM changes.",
+            "Both complete per-family passes succeeded on this exact tree. Each pass independently rebuilt the native/Rust binaries and ran the complete roster, including single-step, chain, state-handoff, native draft requirements, applicable multimodal smokes, and class-specific workload smoke/oracle lanes for the non-chat families.",
+        )
+    };
     Ok(format!(
-        "Publish the independently certified llama.cpp candidate and its MeshLLM changes.\n\nCandidate: `{}`. Both complete per-family passes succeeded on this exact tree. Each pass independently rebuilt the native/Rust binaries and ran the complete roster, including single-step, chain, state-handoff, native draft requirements, applicable multimodal smokes, and class-specific workload smoke/oracle lanes for the non-chat families.\n\nEvidence: https://github.com/{repository}/actions/runs/{} ({}; {count} families).\n\n{summary}",
+        "{lead}\n\nCandidate: `{}`. {evidence}\n\nEvidence: https://github.com/{repository}/actions/runs/{} ({}; {count} families).\n\n{summary}",
         identity.candidate, identity.run_id, identity.pass_id
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(pass_id: &str) -> crate::automation::canary_receipts::ProducerIdentity {
+        crate::automation::canary_receipts::ProducerIdentity {
+            candidate: "a".repeat(40),
+            branch: "llama-canary/repair-1-a4d4f2fd4e".into(),
+            pass_id: pass_id.into(),
+            run_id: "42678880338".into(),
+            run_attempt: crate::automation::canary_receipts::RunAttempt::try_from("1".to_owned())
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn verified_package_publishes_independent_evidence_text() {
+        let body = publication_body(
+            &identity("verify-2"),
+            95,
+            true,
+            false,
+            "Mesh-LLM/mesh-llm",
+            "sum",
+        )
+        .unwrap();
+        assert!(body.contains("independently certified"));
+        assert!(body.contains("Both complete per-family passes succeeded"));
+        assert!(body.contains("verify-2"));
+    }
+
+    #[test]
+    fn recovered_repair_package_publishes_reconciliation_evidence_text() {
+        let body = publication_body(
+            &identity("repair-2"),
+            95,
+            true,
+            true,
+            "Mesh-LLM/mesh-llm",
+            "sum",
+        )
+        .unwrap();
+        assert!(body.contains("trusted reconciliation"));
+        assert!(!body.contains("independently certified"));
+    }
+
+    #[test]
+    fn unrecovered_repair_package_cannot_publish() {
+        assert!(
+            publication_body(
+                &identity("repair-2"),
+                95,
+                true,
+                false,
+                "Mesh-LLM/mesh-llm",
+                "sum"
+            )
+            .is_err()
+        );
+        assert!(
+            publication_body(
+                &identity("repair-2"),
+                95,
+                false,
+                true,
+                "Mesh-LLM/mesh-llm",
+                "sum"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recovered_marker_cannot_launder_a_verify_package() {
+        assert!(
+            publication_body(
+                &identity("verify-1"),
+                95,
+                true,
+                true,
+                "Mesh-LLM/mesh-llm",
+                "sum"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_repository_cannot_publish() {
+        assert!(
+            publication_body(&identity("verify-1"), 95, true, false, "mesh-llm", "sum").is_err()
+        );
+    }
 }
