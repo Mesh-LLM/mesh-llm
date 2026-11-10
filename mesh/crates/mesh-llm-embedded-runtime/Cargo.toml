@@ -19,4 +19,4 @@ dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
 workspace = true
 
 [dependencies]
-mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.78.0", default-features = false }
+mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.79.0", default-features = false }
