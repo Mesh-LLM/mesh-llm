@@ -24,6 +24,7 @@ fn make_listing(
             name: name.map(|s| s.to_string()),
             region: None,
             mesh_id: mesh_id.map(|s| s.to_string()),
+            publisher_serves: None,
         },
         publisher_npub: format!("npub-{}", mesh_id.unwrap_or("test")),
         published_at: 1000,
