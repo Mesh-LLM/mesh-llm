@@ -109,3 +109,94 @@ async fn automatic_ingress_delivers_length_truncated_reply_from_sole_model() {
         assert!(proxy.await.unwrap_err().is_cancelled());
     }
 }
+
+/// An upstream that answers each connection with the next `(status, body)`
+/// in `replies`, counting every request it reads.
+async fn spawn_scripted_upstream(
+    replies: &[(&str, &str)],
+) -> (
+    u16,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let replies = replies
+        .iter()
+        .map(|(status, body)| ((*status).to_string(), (*body).to_string()))
+        .collect::<Vec<_>>();
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let request_count = Arc::clone(&requests);
+    let handle = tokio::spawn(async move {
+        for (status, body) in replies {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let _ = read_raw_http_request(&mut stream).await;
+            request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let reply = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(reply.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        }
+    });
+    (port, requests, handle)
+}
+
+// One model on one host: a single failure cools that host, but the cooling
+// must not lock automatic requests out of the only placement while naming the
+// model would still reach it. The next automatic request must try the host.
+#[tokio::test]
+async fn automatic_ingress_retries_sole_host_after_one_failure() {
+    for directive in ["mesh", "auto"] {
+        let (port, requests, upstream) = spawn_scripted_upstream(&[
+            ("503 Service Unavailable", r#"{"error":"warming"}"#),
+            (
+                "200 OK",
+                r#"{"id":"chatcmpl-sole","object":"chat.completion","model":"sole-worker","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"}}]}"#,
+            ),
+        ])
+        .await;
+        let (address, proxy) =
+            spawn_api_proxy_test_harness(local_targets(&[("sole-worker", port)])).await;
+        let body = json!({
+            "model": directive,
+            "messages": [{"role":"user", "content":"hello"}]
+        })
+        .to_string();
+        let wire = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let first = tokio::time::timeout(
+            Duration::from_secs(30),
+            send_request_and_read_response(address, vec![wire.clone().into_bytes()]),
+        )
+        .await
+        .unwrap();
+        assert!(!first.starts_with("HTTP/1.1 200"), "{directive}: {first}");
+        assert_eq!(
+            requests.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{directive}: the first request reaches the host once"
+        );
+        let second = tokio::time::timeout(
+            Duration::from_secs(30),
+            send_request_and_read_response(address, vec![wire.into_bytes()]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            requests.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "{directive}: the second request must reach the sole host; got {second}"
+        );
+        assert!(second.starts_with("HTTP/1.1 200"), "{directive}: {second}");
+        assert!(second.contains("chatcmpl-sole"), "{directive}: {second}");
+        upstream.await.unwrap();
+        proxy.abort();
+        assert!(proxy.await.unwrap_err().is_cancelled());
+    }
+}

@@ -18,7 +18,11 @@ pub(super) async fn dispatch(
 ) -> proxy::RouteDispatchOutcome {
     let mut exhausted = Vec::new();
     for repicks in 0..=MAX_MODEL_REPICKS {
-        let handoff = AutomaticRetryHandoff::default();
+        let handoff = if repicks == 0 {
+            AutomaticRetryHandoff::default()
+        } else {
+            AutomaticRetryHandoff::for_repick()
+        };
         let route = IngressRouteContext {
             automatic_retry: Some(&handoff),
             requested_by_node_id: ctx.requested_by_node_id.clone(),

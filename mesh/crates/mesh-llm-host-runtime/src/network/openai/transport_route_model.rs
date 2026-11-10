@@ -302,6 +302,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
+    let strict_health = automatic_retry.is_some_and(|handoff| handoff.requires_ready_host());
     let PreparedModelCandidates {
         ranked,
         ordered_candidates,
@@ -314,7 +315,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         affinity,
         ModelCandidatePolicy {
             local_execution_only,
-            strict_health: automatic_retry.is_some(),
+            strict_health,
         },
     )
     .await
@@ -345,7 +346,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         affinity_body,
         affinity,
         cache_target,
-        automatic_retry.is_some(),
+        strict_health,
     )
     else {
         if let Some(handoff) = automatic_retry {
