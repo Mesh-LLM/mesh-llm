@@ -177,10 +177,15 @@ fn publication_body(
     {
         return Err("publication repository must be OWNER/NAME".into());
     }
-    let admitted = if recovered {
-        identity.pass_id.starts_with("repair-")
-    } else {
-        identity.pass_id.starts_with("verify-")
+    let admitted = match super::canary_receipts::pass_identity::PassId::parse(&identity.pass_id) {
+        Ok(pass) => {
+            if recovered {
+                pass.is_repair()
+            } else {
+                !pass.is_repair()
+            }
+        }
+        Err(_) => false,
     };
     if !admitted || !bundle {
         return Err("publication requires the independent verifier package".into());
@@ -294,5 +299,23 @@ mod tests {
         assert!(
             publication_body(&identity("verify-1"), 95, true, false, "mesh-llm", "sum").is_err()
         );
+    }
+
+    #[test]
+    fn malformed_pass_identity_cannot_publish() {
+        for pass_id in ["repair-x", "verify-", "repair-4", "verification"] {
+            assert!(
+                publication_body(
+                    &identity(pass_id),
+                    95,
+                    true,
+                    false,
+                    "Mesh-LLM/mesh-llm",
+                    "sum"
+                )
+                .is_err(),
+                "{pass_id}"
+            );
+        }
     }
 }
