@@ -14,10 +14,13 @@ use super::routing_rank::descriptor_for_model;
 mod audio_multipart;
 use audio_multipart::multipart_model_field;
 mod body_rewrite;
+mod buffered_headers;
 mod effective_entity;
 use crate::network::http_framing::chunked::{ChunkedDecoder, try_decode_chunked_body};
 use crate::network::http_framing::{CRLF, CRLF_HEADER_TERMINATOR, http_header_terminator};
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
+pub(crate) use buffered_headers::header_values_from_raw;
+use buffered_headers::{capsule_nonce_headers_from_raw, untrimmed_header_values_from_raw};
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
@@ -265,9 +268,9 @@ impl BufferedHttpRequest {
     /// an attacker can't smuggle a routing decision past invalid bytes.
     pub fn mesh_routing_header_values(&self) -> Result<(Vec<String>, Vec<String>), String> {
         let target = header_values_from_raw(&self.raw, MESH_TARGET_HEADER)
-            .map_err(|()| format!("{MESH_TARGET_HEADER} header contains invalid UTF-8"))?;
+            .map_err(|error| error.describe(MESH_TARGET_HEADER))?;
         let exclude = header_values_from_raw(&self.raw, MESH_EXCLUDE_HEADER)
-            .map_err(|()| format!("{MESH_EXCLUDE_HEADER} header contains invalid UTF-8"))?;
+            .map_err(|error| error.describe(MESH_EXCLUDE_HEADER))?;
         Ok((target, exclude))
     }
 
@@ -276,7 +279,7 @@ impl BufferedHttpRequest {
     /// whitespace as malformed.
     pub fn twin_bracket_header_values(&self) -> Result<Vec<String>, String> {
         untrimmed_header_values_from_raw(&self.raw, MESH_TWIN_BRACKET_HEADER)
-            .map_err(|()| format!("{MESH_TWIN_BRACKET_HEADER} header contains invalid UTF-8"))
+            .map_err(|error| error.describe(MESH_TWIN_BRACKET_HEADER))
     }
 
     /// The only semantic request media kind trusted by artifact capture.
@@ -1018,77 +1021,6 @@ fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option
 /// trusted origin marker to stamp alongside it. A forwarded (client-supplied)
 /// nonce is returned with no origin marker, so a caller can never make a value
 /// it chose look as though this frontend minted it.
-/// Read the stabilized `x-capsule-client-nonce` / `x-capsule-nonce-origin`
-/// headers back out of an already-rebuilt raw HTTP request.
-///
-/// Only the request-header block is scanned. Used by request-rebuilding proxy
-/// paths (pipeline / MoA) that would otherwise emit an outbound request with no
-/// nonce because they construct it from a parsed JSON body rather than
-/// forwarding `raw`.
-fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>) {
-    let header_end = raw
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .unwrap_or(raw.len());
-    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
-    let mut req = httparse::Request::new(&mut headers_buf);
-    if req
-        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
-        .is_err()
-    {
-        return (None, None);
-    }
-    let nonce_header = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
-    let origin_header = skippy_inference_api::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
-    let find = |name: &str| {
-        req.headers
-            .iter()
-            .find(|header| header.name.eq_ignore_ascii_case(name))
-            .and_then(|header| std::str::from_utf8(header.value).ok())
-            .map(str::to_string)
-    };
-    (find(nonce_header), find(origin_header))
-}
-
-/// Every value of a given header name, read back off an already-rebuilt raw
-/// HTTP request. Only the request-header block is scanned. Order matches the
-/// wire order; duplicates are returned as separate entries. `Err(())` means
-/// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
-/// reject the request rather than silently drop that occurrence.
-pub(crate) fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
-    untrimmed_header_values_from_raw(raw, name).map(|values| {
-        values
-            .iter()
-            .map(|value| value.trim().to_string())
-            .collect()
-    })
-}
-
-/// Every value of header `name`, as UTF-8, exactly as httparse returned it.
-fn untrimmed_header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
-    let header_end = raw
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .unwrap_or(raw.len());
-    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
-    let mut req = httparse::Request::new(&mut headers_buf);
-    if req
-        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
-        .is_err()
-    {
-        return Ok(Vec::new());
-    }
-    req.headers
-        .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case(name))
-        .map(|header| {
-            std::str::from_utf8(header.value)
-                .map(str::to_string)
-                .map_err(|_| ())
-        })
-        .collect()
-}
-
 fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Option<&'static str>) {
     let nonce_header = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
     let inbound = headers

@@ -21,7 +21,7 @@ async fn counting_backend() -> (u16, Arc<AtomicUsize>) {
     let count = served.clone();
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
-            if proxy::read_http_request(&mut stream).await.is_err() {
+            if !read_whole_request(&mut stream).await {
                 continue;
             }
             count.fetch_add(1, Ordering::SeqCst);
@@ -34,6 +34,36 @@ async fn counting_backend() -> (u16, Arc<AtomicUsize>) {
         }
     });
     (port, served)
+}
+
+/// Reads one request, head and `Content-Length` body, as a model runtime's
+/// HTTP server does: with no ceiling of its own on how many headers the
+/// request ingress forwards may carry.
+async fn read_whole_request(stream: &mut tokio::net::TcpStream) -> bool {
+    let mut received = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+            break end + 4;
+        }
+        match stream.read(&mut chunk).await {
+            Ok(read) if read > 0 => received.extend_from_slice(&chunk[..read]),
+            _ => return false,
+        }
+    };
+    let head = String::from_utf8_lossy(&received[..head_end]).to_ascii_lowercase();
+    let body_len = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    while received.len() < head_end + body_len {
+        match stream.read(&mut chunk).await {
+            Ok(read) if read > 0 => received.extend_from_slice(&chunk[..read]),
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn descriptor(workload: mesh::ModelWorkloadClass, receipts: bool) -> mesh::ServedModelDescriptor {
@@ -520,6 +550,29 @@ async fn a_request_a_peer_assigned_is_executed_here_under_no_policy() {
         .await;
     assert_served(&answer);
     assert_eq!(ingress.served_here(), 1);
+}
+
+/// A client may send 64 headers, and ingress adds its own to the request it
+/// keeps. The policy header is one of the 64 and must still be read: a
+/// request this full used to lose it, and was served as if under no policy.
+#[tokio::test]
+async fn the_policy_of_a_request_with_every_header_a_client_may_send_is_honored() {
+    let plain = Ingress::serving(false).await;
+    // Host, Content-Type, Content-Length, Connection and the policy make 5
+    let fillers: String = (0..59).map(|n| format!("x-filler-{n}: v\r\n")).collect();
+    let full = chat(&format!("{RECEIPTS}{fillers}"));
+    let headers = full
+        .split(|byte| *byte == b'\n')
+        .take_while(|line| line != b"\r")
+        .count()
+        - 1;
+    assert_eq!(headers, 64);
+    assert_unsatisfied(&plain.send(full).await);
+    assert_eq!(plain.served_here(), 0, "the policy header was lost");
+
+    // the same full request without the header is served, as before
+    let filler: String = (0..60).map(|n| format!("x-filler-{n}: v\r\n")).collect();
+    assert_served(&plain.send(chat(&filler)).await);
 }
 
 /// `x-mesh-target` narrows where a request may run; under the policy a
