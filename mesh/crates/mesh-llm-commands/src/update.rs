@@ -84,17 +84,26 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         default_plugins_opted_out(),
         is_attended,
     );
-    let installed = run_optional_plugin_phase(&plan, &mut |set| {
+    match run_optional_plugin_phase(&plan, &mut |set| {
         crate::plugin_sets::prompt_install_set(set)
     })
-    .await;
+    .await
+    {
+        Ok(_) => {}
+        // An unknown explicitly selected set is a usage error; the host
+        // upgrade already succeeded, so say what happened instead of
+        // discarding it.
+        Err(error) => {
+            let mut err = mesh_llm_events::console_err();
+            let _ = writeln!(err, "⚠️  {error:#}");
+        }
+    }
     if is_attended && let Some(notices) = update_notices(&target_version).await {
         let mut err = mesh_llm_events::console_err();
         for line in notices {
             let _ = writeln!(err, "{line}");
         }
     }
-    let _ = installed;
     Ok(())
 }
 
@@ -122,7 +131,13 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
         }
     };
     let store = PluginStore::new(&options.store_root);
-    store.migrate_legacy_defaults()?;
+    if let Err(error) = store.migrate_legacy_defaults() {
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(
+            err,
+            "⚠️  Legacy default plugin records were not migrated: {error:#}"
+        );
+    }
     let installed = store.list()?;
     let mut err = mesh_llm_events::console_err();
     if installed.is_empty() {
@@ -203,27 +218,30 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
             _ => {}
         }
     }
-    // Attempt every repair once, after the notices: one plugin's failure
-    // never hides another's, and no repaired plugin is installed twice.
-    let repair_progress = &mut UpdatePluginProgress::default();
-    let repairs_outcome =
-        repair_incompatible_plugins(&plan, target_version, &options, repair_progress).await?;
-    let mut err = mesh_llm_events::console_err();
-    for (name, outcome) in &repairs_outcome.repaired {
-        let state = if outcome.metadata.enabled {
-            "settings and data preserved"
-        } else {
-            "remains disabled"
-        };
-        let _ = writeln!(
-            err,
-            "✅ Updated {name} to {}; {state}.",
-            outcome.metadata.installed_version
-        );
-    }
-    for (name, reason) in &repairs_outcome.failed {
-        let _ = writeln!(err, "❌ Required plugin repair failed: {name}: {reason}");
-        blocking.push(format!("{name}: {reason}"));
+    // Attempt every repair once — but only when nothing already blocks the
+    // upgrade: a repair is chosen for the target host and can exclude the
+    // host that keeps running, so landing repairs the upgrade will not
+    // activate leaves those plugins stopped for no gain.
+    if blocking.is_empty() {
+        let repair_progress = &mut UpdatePluginProgress::default();
+        let repairs_outcome =
+            repair_incompatible_plugins(&plan, target_version, &options, repair_progress).await?;
+        let mut err = mesh_llm_events::console_err();
+        for (name, outcome) in &repairs_outcome.repaired {
+            let state = if outcome.metadata.enabled {
+                "settings and data preserved"
+            } else {
+                "remains disabled"
+            };
+            let _ = writeln!(
+                err,
+                "✅ Updated {name} to {}; {state}.",
+                outcome.metadata.installed_version
+            );
+        }
+        for (name, reason) in &repairs_outcome.failed {
+            blocking.push(format!("{name}: {reason}"));
+        }
     }
     if !blocking.is_empty() {
         let mut err = mesh_llm_events::console_err();

@@ -22,6 +22,15 @@ use crate::{
 pub const DEFAULT_CATALOG_URL: &str =
     "https://huggingface.co/datasets/meshllm/plugin-catalog/resolve/main/plugins.jsonl";
 
+/// The HTTP client every catalog read uses. A request timeout so a stalled
+/// catalog server can never hang an install, update, or host upgrade.
+fn catalog_client() -> Result<Client> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("build plugin catalog client")
+}
+
 pub trait PluginProgressReporter {
     fn report(&mut self, event: PluginProgressEvent);
 }
@@ -275,7 +284,7 @@ pub async fn update_plugin_from_catalog(
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<InstallOutcome> {
-    let client = Client::new();
+    let client = catalog_client()?;
     let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
     let entry = catalog.find_exact(&current.name).with_context(|| {
         format!(
@@ -293,7 +302,7 @@ async fn catalog_entry_for(
     name: &str,
     options: &PluginInstallOptions,
 ) -> Result<Option<CatalogEntry>> {
-    let client = Client::new();
+    let client = catalog_client()?;
     let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
     Ok(catalog.find_exact(name).cloned())
 }
@@ -320,7 +329,10 @@ pub(crate) fn source_matches(entry: &CatalogEntry, installed: &InstalledPluginMe
     ) else {
         return false;
     };
-    installed_source.repo_slug() == entry_source.repo_slug()
+    // GitHub owner and repository names are case-insensitive.
+    installed_source
+        .repo_slug()
+        .eq_ignore_ascii_case(&entry_source.repo_slug())
 }
 
 /// Install the release `entry` pins, refusing when the platform has no
@@ -334,7 +346,7 @@ pub(crate) async fn install_pinned_entry(
 ) -> Result<InstallOutcome> {
     if !source_matches(entry, current) {
         bail!(
-            "'{}' is installed from {} , which is not the catalog entry's repository {}; \
+            "'{}' is installed from {}, which is not the catalog entry's repository {}; \
              refusing to replace a different package by name",
             current.name,
             current.source_repository,
@@ -424,7 +436,7 @@ async fn resolve_install_source(
     match parsed {
         PluginInstallRef::Catalog { name, version } => {
             progress.report(PluginProgressEvent::ResolvingCatalog { name: name.clone() });
-            let client = Client::new();
+            let client = catalog_client()?;
             let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
             let entry = catalog
                 .find_exact(&name)
@@ -586,8 +598,18 @@ fn build_installed_metadata(
         host_compatibility: compatibility,
         // A replaced release keeps the surface grants the operator had: a
         // migrated legacy default must not widen what it may use just
-        // because it was updated or repaired.
-        allowed_surfaces: current.and_then(|metadata| metadata.allowed_surfaces.clone()),
+        // because it was updated or repaired. An unmigrated legacy record
+        // takes its retained legacy grants now, so a direct update can never
+        // clear them.
+        allowed_surfaces: current.and_then(|metadata| match &metadata.allowed_surfaces {
+            Some(allowed) => Some(allowed.clone()),
+            // An unmigrated legacy default takes its retained legacy grants
+            // now: a direct update can never clear them.
+            None if metadata.default_managed => {
+                Some(crate::legacy_defaults::migrated_allows_keys(&metadata.name))
+            }
+            None => None,
+        }),
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),
@@ -707,6 +729,73 @@ fn verify_asset_sha256(asset_name: &str, expected: &str, hasher: sha2::Sha256) -
         bail!("plugin asset checksum mismatch for {asset_name}: expected {expected}, got {actual}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod source_matches_tests {
+    use super::*;
+    use crate::catalog::PluginCatalog;
+    use crate::store::InstalledPluginMetadata;
+
+    fn entry() -> crate::catalog::CatalogEntry {
+        PluginCatalog::parse_jsonl(
+            r#"{"name":"capsules","description":"Audit","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM"}"#,
+        )
+        .unwrap()
+        .find_exact("capsules")
+        .unwrap()
+        .clone()
+    }
+
+    fn installed_from(source: &str) -> InstalledPluginMetadata {
+        let store = PluginStore::new(std::env::temp_dir().join("source-matches-test"));
+        InstalledPluginMetadata {
+            name: "capsules".into(),
+            source_repository: source.into(),
+            installed_version: "v0.1.0".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            downloaded_asset_name: "capsules.tar.gz".into(),
+            install_path: store.root().join("capsules"),
+            enabled: true,
+            default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
+            manifest: None,
+            last_protocol_version: None,
+            last_status: None,
+            last_error: None,
+            verified_sha256: None,
+        }
+    }
+
+    #[test]
+    fn repository_identity_is_case_insensitive_and_name_alone_is_not_enough() {
+        assert!(source_matches(
+            &entry(),
+            &installed_from("https://github.com/Mesh-LLM/Capsules")
+        ));
+        assert!(!source_matches(
+            &entry(),
+            &installed_from("https://github.com/acme/capsules")
+        ));
+        assert!(!source_matches(
+            &entry(),
+            &installed_from("local:/tmp/capsules.tar.gz")
+        ));
+    }
+
+    #[test]
+    fn a_reviewed_legacy_bundled_install_matches_its_associated_entry() {
+        let mut legacy = installed_from("bundled:/opt/plugins/capsules-0.1.4.tar.gz");
+        legacy.name = "capsules".into();
+        assert!(source_matches(&entry(), &legacy));
+        let mut other = installed_from("bundled:/opt/plugins/other-1.0.0.tar.gz");
+        other.name = "other".into();
+        assert!(
+            !source_matches(&entry(), &other),
+            "a bundled install of an unreviewed name has no catalog association"
+        );
+    }
 }
 
 #[cfg(test)]

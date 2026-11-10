@@ -327,13 +327,23 @@ pub async fn run_optional_plugin_phase(
             match install_set_quiet(&catalog, name, &options).await {
                 Ok(result) => {
                     let mut err = mesh_llm_events::console_err();
+                    // Every member is accounted for: what landed, what was
+                    // left as it is (and why), and what failed.
+                    for (skipped_name, reason) in &result.skipped {
+                        let _ = writeln!(err, "ℹ️  {skipped_name} skipped: {reason}");
+                    }
                     if result.failed.is_empty() {
-                        let _ = writeln!(
-                            err,
-                            "✅ Plugin set installed: {} installed.",
-                            result.installed_count()
-                        );
-                        Ok(OptionalPluginResult::Installed(result.installed_count()))
+                        if result.installed_count() == 0 {
+                            let _ = writeln!(err, "ℹ️  No member of this set needed installing.");
+                            Ok(OptionalPluginResult::Skipped)
+                        } else {
+                            let _ = writeln!(
+                                err,
+                                "✅ Plugin set installed: {} installed.",
+                                result.installed_count()
+                            );
+                            Ok(OptionalPluginResult::Installed(result.installed_count()))
+                        }
                     } else {
                         for (failed_name, reason) in &result.failed {
                             let _ = writeln!(

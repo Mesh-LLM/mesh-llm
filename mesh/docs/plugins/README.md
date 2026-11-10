@@ -676,7 +676,7 @@ searchable, but `mesh-llm plugins install <name>` refuses it:
 | ----------------- | ---------------------------------------------------------------------------------------------------------- |
 | `version`         | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                   |
 | `sha256`          | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.       |
-| `host_compatibility` | Optional `{"min": "0.81.0", "max": "0.90.0"}` bounds (either may be absent) declaring which MeshLLM host versions the pinned release works with. Installs refuse a release that excludes the running host; upgrades retain the value with the installed record. Absent means unknown, never incompatible. |
+| `compatibility` | Optional `{"min": "0.81.0", "max": "0.90.0"}` bounds (either may be absent) declaring which MeshLLM host versions the pinned release works with. Installs refuse a release that excludes the running host; upgrades retain the value with the installed record as `host_compatibility`. Absent means unknown, never incompatible. |
 
 ```json
 {

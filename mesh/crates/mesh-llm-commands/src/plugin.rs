@@ -225,6 +225,21 @@ fn install_defaults_stub() -> Result<()> {
     Ok(())
 }
 
+/// Migrate legacy default-managed records before a plugin command, without
+/// letting one unrelated corrupt record block the command: `plugins disable`
+/// is the way out of a misbehaving plugin, so it must keep working. A failed
+/// migration leaves the records as they are; the runtime still applies the
+/// retained legacy grants at launch.
+fn migrate_legacy_records_best_effort(store_root: &std::path::Path) {
+    if let Err(error) = PluginStore::new(store_root).migrate_legacy_defaults() {
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(
+            err,
+            "⚠️  Legacy default plugin records were not migrated: {error:#}"
+        );
+    }
+}
+
 /// `mesh-llm plugins sets list|show|install`.
 async fn run_sets_command(command: &PluginSetsCommand) -> Result<()> {
     let options = PluginInstallOptions::from_env()?;
@@ -301,7 +316,7 @@ async fn install(
 
 async fn update(name: &str) -> Result<()> {
     let options = PluginInstallOptions::from_env()?;
-    PluginStore::new(&options.store_root).migrate_legacy_defaults()?;
+    migrate_legacy_records_best_effort(&options.store_root);
     let mut progress = CliPluginProgress::default();
     let outcome = update_plugin(name, &options, &mut progress).await?;
     progress.finish();
@@ -322,7 +337,7 @@ async fn update(name: &str) -> Result<()> {
 
 fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
-    store.migrate_legacy_defaults()?;
+    migrate_legacy_records_best_effort(store.root());
     set_enabled_in(&store, name, enabled, &mut mesh_llm_events::console_err())
 }
 

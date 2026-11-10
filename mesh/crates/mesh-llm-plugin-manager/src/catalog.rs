@@ -178,9 +178,10 @@ impl PluginCatalog {
     }
 
     /// Fetch the plugin entries, then the catalog's named sets from
-    /// `sets_url`. A sets file that cannot be fetched yields no sets — an
-    /// absent sets catalog is not an absent plugin catalog, and plugin
-    /// install, search, and repair must keep working without it.
+    /// `sets_url`. Anything wrong on the sets side — unreachable, unreadable,
+    /// malformed, or naming unknown plugins — yields a catalog with no sets:
+    /// an absent or broken sets file is never an absent plugin catalog, and
+    /// plugin install, search, and repair keep working without it.
     pub async fn fetch_with_sets(
         client: &Client,
         plugins_url: &str,
@@ -190,23 +191,32 @@ impl PluginCatalog {
         let Some(sets_url) = sets_url else {
             return Ok(catalog);
         };
-        match client
-            .get(sets_url)
-            .header(reqwest::header::USER_AGENT, crate::github::USER_AGENT)
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                let body = response
-                    .text()
-                    .await
-                    .with_context(|| format!("read plugin sets catalog {sets_url}"))?;
-                let sets = Self::parse_sets_jsonl(&body)?;
-                catalog.with_sets(sets)
+        let sets = async {
+            let response = client
+                .get(sets_url)
+                .header(reqwest::header::USER_AGENT, crate::github::USER_AGENT)
+                .send()
+                .await
+                .with_context(|| format!("fetch plugin sets catalog {sets_url}"))?;
+            let status = response.status();
+            if !status.is_success() {
+                bail!("plugin sets catalog request failed: {status} {sets_url}");
             }
-            // A missing or unreadable sets file means no sets to offer, not a
-            // failed catalog read.
-            _ => Ok(catalog),
+            let body = response
+                .text()
+                .await
+                .with_context(|| format!("read plugin sets catalog {sets_url}"))?;
+            let sets = Self::parse_sets_jsonl(&body)?;
+            ensure_members_exist(&sets, &catalog.entries)?;
+            Ok(sets)
+        }
+        .await;
+        match sets {
+            Ok(sets) => Ok(Self {
+                entries: catalog.entries,
+                sets,
+            }),
+            Err(_) => Ok(catalog),
         }
     }
 
