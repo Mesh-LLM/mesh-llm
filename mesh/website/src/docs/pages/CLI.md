@@ -1004,11 +1004,13 @@ Subcommands:
   the local trust allowlist.
 - `auth trust list [--trust-store <PATH>]`: show the current trust store.
 - `auth trust policy <off|prefer-owned|require-owned|allowlist> [--trust-store <PATH>]`:
-  set the trust policy stored in the trust store. `serve` uses it when
-  `--trust-policy` is not passed, from its next start. Trusted owners are only
-  enforced under `allowlist`, and revocations under `require-owned` or
-  `allowlist`; `auth status`, `auth trust add` and `auth trust list` say when
-  the stored policy leaves them unenforced.
+  set the trust policy stored in the trust store. `serve` uses the default
+  store's policy when `--trust-policy` is not passed, from its next start; a
+  different store chosen with `--trust-store` only applies to a
+  `serve --memberships-config` membership whose `trust_store` names it.
+  Trusted owners are only enforced under `allowlist`, and revocations under
+  `require-owned` or `allowlist`; `auth status`, `auth trust add` and
+  `auth trust list` say when the stored policy leaves them unenforced.
 
 `auth init` switches:
 

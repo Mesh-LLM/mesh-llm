@@ -12,7 +12,7 @@ use mesh_llm_identity::{
     default_trust_store_path, keystore_exists, keystore_metadata, load_keystore,
     load_node_key_bytes_from_path, load_node_ownership, load_owner_keypair_from_keychain,
     load_trust_store, save_keystore, save_keystore_with_keychain, save_node_key_bytes_to_path,
-    save_node_ownership, save_trust_store, sign_node_ownership, verify_node_ownership,
+    save_node_ownership, sign_node_ownership, verify_node_ownership,
 };
 use zeroize::Zeroizing;
 
@@ -711,16 +711,19 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
             .then(|| load_node_ownership(&certificate_path))
             .transpose()?;
 
-        let mut trust_store = load_effective_trust_store(&trust_store_path)?;
         if revoke_current {
-            if let Some(ref previous_ownership) = previous_ownership {
-                trust_store
-                    .revoke_node_cert(previous_ownership.claim.cert_id.clone(), reason.clone());
-            }
-            if let Some(ref previous_node_id) = previous_node_id {
-                trust_store.revoke_node_id(previous_node_id.clone(), reason.clone());
-            }
-            save_trust_store(&trust_store_path, &trust_store)?;
+            trust::update_trust_store(&trust_store_path, |trust_store| {
+                if let Some(ref previous_ownership) = previous_ownership {
+                    trust_store
+                        .revoke_node_cert(previous_ownership.claim.cert_id.clone(), reason.clone());
+                }
+                if let Some(ref previous_node_id) = previous_node_id {
+                    trust_store.revoke_node_id(previous_node_id.clone(), reason.clone());
+                }
+                true
+            })?;
+        } else {
+            load_effective_trust_store(&trust_store_path)?;
         }
 
         let new_key = SecretKey::generate();
@@ -780,10 +783,11 @@ pub(crate) fn run_revoke_owner(
     trust_store: Option<PathBuf>,
 ) -> Result<()> {
     let trust_store_path = resolve_trust_store_path(trust_store)?;
-    let mut trust_store = load_effective_trust_store(&trust_store_path)?;
-    trust_store.remove_trusted_owner(&owner_id);
-    trust_store.revoke_owner(owner_id.clone(), reason);
-    save_trust_store(&trust_store_path, &trust_store)?;
+    trust::update_trust_store(&trust_store_path, |trust_store| {
+        trust_store.remove_trusted_owner(&owner_id);
+        trust_store.revoke_owner(owner_id.clone(), reason);
+        true
+    })?;
 
     let _ = emit_audit(audit_events::admin_action(
         Some("system".to_string()),
@@ -813,9 +817,8 @@ pub(crate) fn run_revoke_node(
     }
 
     let trust_store_path = resolve_trust_store_path(trust_store)?;
-    let mut trust_store = load_effective_trust_store(&trust_store_path)?;
 
-    // Validate every requested identifier before mutating the in-memory store.
+    // Validate every requested identifier before touching the store.
     // Mixed cert/node revocation is all-or-nothing.
     let normalized_node_id = node_id
         .as_deref()
@@ -823,16 +826,17 @@ pub(crate) fn run_revoke_node(
         .transpose()?
         .map(hex::encode);
 
-    if let Some(cert_id) = cert_id.as_ref() {
-        trust_store.revoke_node_cert(cert_id.clone(), reason.clone());
-    }
-    if let Some(normalized) = normalized_node_id.as_ref() {
-        trust_store.revoke_node_id(normalized.clone(), reason);
-    }
-
     // Persistence is the commit point. Emit success output and audit records
     // only after every requested revocation is durable.
-    save_trust_store(&trust_store_path, &trust_store)?;
+    trust::update_trust_store(&trust_store_path, |trust_store| {
+        if let Some(cert_id) = cert_id.as_ref() {
+            trust_store.revoke_node_cert(cert_id.clone(), reason.clone());
+        }
+        if let Some(normalized) = normalized_node_id.as_ref() {
+            trust_store.revoke_node_id(normalized.clone(), reason);
+        }
+        true
+    })?;
 
     let mut err = mesh_llm_events::console_err();
     if let Some(cert_id) = cert_id.as_ref() {

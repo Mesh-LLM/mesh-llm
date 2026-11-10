@@ -697,9 +697,12 @@ fn apply_windows_owner_only_acl(path: &std::path::Path, directory: bool) -> io::
     } else {
         format!("{user}:F")
     };
+    // icacls reports every processed file on stdout, which belongs to the
+    // command that opened the audit file.
     let status = std::process::Command::new("icacls")
         .arg(path)
         .args(["/inheritance:r", "/grant:r", &grant])
+        .stdout(std::process::Stdio::null())
         .status()?;
     if status.success() {
         Ok(())

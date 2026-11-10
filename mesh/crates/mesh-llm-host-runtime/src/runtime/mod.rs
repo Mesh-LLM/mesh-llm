@@ -146,6 +146,7 @@ use self::shutdown_signal::*;
 use self::startup_handles::*;
 pub(crate) use self::startup_models::StartupPinnedGpuTarget;
 use self::startup_models::*;
+pub use self::tracing_writer::initialize_audit_logging_for_cli;
 use self::tracing_writer::*;
 
 #[cfg(test)]
