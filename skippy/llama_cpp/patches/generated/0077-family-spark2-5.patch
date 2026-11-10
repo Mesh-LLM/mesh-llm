@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/spark2-5.cpp b/src/models/spark2-5.cpp
-index 970b32ba603ce5977875cf326a0971b9b6cafa0c..7fee374517dbe9b6ebbb199e9c6b07e0384c9649 100644
+index e90184d8e8665038cff07de511db69dc81fe904c..32b45d898e77dd59a625f7b8faffadb34c2e6cae 100644
 --- a/src/models/spark2-5.cpp
 +++ b/src/models/spark2-5.cpp
-@@ -67,6 +67,8 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -67,6 +67,8 @@ llama_model_spark2_5::graph::graph(const llm_graph_params & params) : llm_graph_
      const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 970b32ba603ce5977875cf326a0971b9b6cafa0c..7fee374517dbe9b6ebbb199e9c6b07e0
          ggml_tensor * inpSA = inpL;
          ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
          cb(cur, "attn_norm", il);
-@@ -132,6 +134,7 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -125,6 +127,7 @@ llama_model_spark2_5::graph::graph(const llm_graph_params & params) : llm_graph_
          cb(cur, "l_out", il);
  
          inpL = cur;

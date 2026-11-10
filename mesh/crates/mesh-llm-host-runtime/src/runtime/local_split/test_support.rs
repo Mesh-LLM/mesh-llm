@@ -706,6 +706,10 @@ fn write_fake_native_mtp_gguf_model(path: &Path) {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
+)]
 async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9339 })
         .await
@@ -841,6 +845,10 @@ fn split_dflash_spec<'a>(
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
+)]
 async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9342 })
         .await
@@ -943,6 +951,10 @@ fn write_fake_dflash_draft(path: &Path, target_layers: &[u32]) {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
+)]
 async fn split_load_of_a_cataloged_target_serves_its_default_dflash_draft() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9341 })
         .await

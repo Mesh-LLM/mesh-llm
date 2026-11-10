@@ -179,6 +179,7 @@ int main(int argc, char **argv) {
     for (const auto &entry : {std::pair{"glm-dsa.cpp", "glm_dsa_top_k_sideband"},
                               {"kimi-k3.cpp", "kimi_k3_residual_sideband"},
                               {"hyperconnection.cpp", "hyperconnection_activation_frontier"},
+                              {"hyperconnection-uninitialized.cpp", "hyperconnection_activation_frontier"},
                               {"rwkv-first-value.cpp", "rwkv_first_value_sideband"}}) {
       auto report = invoke(tool, root, temp / (std::string(entry.first) + ".json"), entry.first);
       const auto &record = builder(report);
@@ -230,6 +231,8 @@ int main(int argc, char **argv) {
     check(tool, root, temp, "two-loops.cpp", "unsupported_shape", {}, "multiple equally ranked layer block loops");
     check(tool, root, temp, "nonlocal-exit.cpp", "unsupported_shape", {}, "block loop contains a non-local exit");
     check(tool, root, temp, "embedding-prelude-else.cpp", "unsupported_shape", {}, "pre-loop activation conditional has an else branch");
+    check(tool, root, temp, "hyperconnection-unproven.cpp", "unsupported_shape", {},
+          "layer-carried activation differs from the embedding without a proven hyperconnection prelude");
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "fixture failure: " << error.what() << '\n';

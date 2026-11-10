@@ -6,14 +6,14 @@
 //! cache on first load and serves without speculation if it cannot.
 //!
 //! The default draft comes from, in order: the layer package's own `dflash`
-//! proposer, the pairing index published on Hugging Face at the revision this
-//! release pins, and, until that index is published and cached, the bootstrap
-//! table compiled in here.
+//! proposer, the pairing index this release pins by content hash, and, until
+//! that index is cached (or if it cannot be read or fails its hash), the
+//! bootstrap table compiled in here.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, RwLock};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use hf_hub::RepoTypeModel;
 use skippy_model_artifact::gguf::{
     GgufCompactMeta, scan_gguf_compact_meta, scan_gguf_dflash_target_layers,
@@ -25,44 +25,8 @@ pub use skippy_package_format::{
 };
 use skippy_runtime::package::PackageGenerationInfo;
 
-/// The Hugging Face repo that publishes the DFlash pairing index.
-pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
-/// The index file in [`DFLASH_PAIRING_INDEX_REPO`].
-pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
-/// The one index commit this release trusts.
-pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> =
-    Some("91c1cb2cc50f4087ac73a7a74b01670a18015059");
-
-/// A pairing index file pinned to one commit of a Hugging Face repo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DFlashPairingIndexPin {
-    pub repo: &'static str,
-    pub revision: &'static str,
-    pub file: &'static str,
-}
-
-impl DFlashPairingIndexPin {
-    /// The index this release trusts, once it is published.
-    pub fn shipped() -> Option<Self> {
-        DFLASH_PAIRING_INDEX_REVISION.map(|revision| Self {
-            repo: DFLASH_PAIRING_INDEX_REPO,
-            revision,
-            file: DFLASH_PAIRING_INDEX_FILE,
-        })
-    }
-
-    /// Where the Hugging Face cache keeps the index once fetched.
-    pub fn cache_path(&self) -> PathBuf {
-        huggingface_snapshot_path(self.repo, RepoTypeModel, self.revision).join(self.file)
-    }
-}
-
-/// Reads and validates a pairing index file.
-pub fn load_dflash_pairing_index(path: &Path) -> Result<DFlashPairingIndex> {
-    let json = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    DFlashPairingIndex::from_json(&json)
-        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
-}
+#[cfg(test)]
+use super::dflash_index::load_dflash_pairing_index;
 
 static INSTALLED_INDEX: RwLock<Option<Arc<Vec<DFlashPairing>>>> = RwLock::new(None);
 static BOOTSTRAP_PAIRINGS: LazyLock<Arc<Vec<DFlashPairing>>> =
@@ -136,13 +100,12 @@ pub struct DefaultDFlash {
     pub source: DFlashPairingSource,
 }
 
-/// The pairings this release ships, used only until the published index is
-/// cached.
+/// The pairings this release falls back to until the pinned index is cached,
+/// or when it cannot be read or fails its hash.
 ///
-/// TODO: delete once `meshllm/dflash-pairings` is published and
-/// [`DFLASH_PAIRING_INDEX_REVISION`] pins it; the index then carries these
-/// pairings (`skippy/evals/dflash-pairings/index.json` is generated from this
-/// table).
+/// TODO: delete once packages declare their drafts; the index
+/// (`data/dflash-pairings/index.json`) is the source of truth, and a test
+/// checks that it pairs every target here the same way.
 pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
     vec![
         // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
@@ -326,6 +289,64 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
                 bytes: 1_357_001_312,
             },
             max_draft_tokens: 7,
+            backends: DFlashBackends::NotMetal,
+        },
+        // Laguna-S-2.1 (Poolside, 118B MoE with 8B active). Poolside's own BF16
+        // GGUF of the draft reads target layers 2, 11, 20, 30, 39 and 48 (the
+        // last layer's output) with a 512-token sliding window. A DGX Spark
+        // decodes chat 1.45x and agent turns 1.6x faster. Community Q8_0 GGUFs
+        // without the window metadata lose all acceptance past 16K of history.
+        // Off on Metal: Laguna's target returns NaN logits there for short
+        // prompts (f16 overflow in the MoE down projection). Laguna-XS-2.1
+        // has no default until a Q8_0 of its draft that keeps the window is
+        // published; the community GGUFs drop it or use another layout.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 48,
+                embedding_length: 3072,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "poolside/Laguna-S-2.1-GGUF".to_string(),
+                revision: "19036076775e9ba6758595f78af99cb976ef8ff0".to_string(),
+                file: "laguna-s-2.1-DFlash-BF16.gguf".to_string(),
+                sha256: "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4"
+                    .to_string(),
+                bytes: 2_233_764_224,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::NotMetal,
+        },
+        // DeepSeek-V4-Flash-0731 ships its DSpark draft in the checkpoint: three
+        // uncompressed DSV4 blocks with hyper-connections and a Markov head,
+        // reading target layers 41..=43 (43 being the output head's input),
+        // drafting a 5-token block from the anchor on. DeepSeek-V4-Flash and
+        // its Vision-Exp fine-tune have the same shape but other weights, so
+        // the name breaks the tie. The GGUFs carry no MTP head, so the draft
+        // replaces plain decoding. On one DGX Spark (UD-Q2_K_XL) greedy chat
+        // decodes 34.0 tok/s (18.2 off), sampled at T=0.7 33.3 (18.2) and
+        // agentic coding 28.1 (14.0). Split across two Sparks (UD-Q4_K_XL)
+        // greedy chat decodes 22.7 tok/s (14.5 off) on the LAN and 19.6
+        // (11.3) with 20 ms per hop. Metal is untested.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "deepseek4".to_string(),
+                layer_count: 43,
+                embedding_length: 4096,
+                expert_count: 256,
+                family: Some("DeepSeek-V4-Flash-0731".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "unsloth/DeepSeek-V4-Flash-0731-GGUF".to_string(),
+                revision: "fbbb5b93fb787c21338159b0af3318bb3f4d9768".to_string(),
+                file: "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf".to_string(),
+                sha256: "2c7ac54b0b64a99df1f139a9f1371a00198265e1d6a614b77597d20a655a4249"
+                    .to_string(),
+                bytes: 10_896_057_440,
+            },
+            max_draft_tokens: 5,
             backends: DFlashBackends::NotMetal,
         },
     ]
@@ -620,41 +641,12 @@ mod tests {
         pairing_in(&bootstrap_pairings(), meta, metal).map(|pairing| pairing.draft.repo.clone())
     }
 
-    const INDEX_PATH: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../skippy/evals/dflash-pairings/index.json"
-    );
-
-    /// The bootstrap table as the index `meshllm/dflash-pairings` publishes.
-    fn generated_index_json() -> String {
-        let index = DFlashPairingIndex {
-            schema_version: skippy_package_format::DFLASH_PAIRING_INDEX_SCHEMA_VERSION,
-            pairings: bootstrap_pairings(),
-        };
-        serde_json::to_string_pretty(&index).unwrap() + "\n"
-    }
-
-    /// `UPDATE_DFLASH_PAIRINGS_INDEX=1` rewrites the checked-in index from
-    /// the bootstrap table.
-    #[test]
-    fn the_checked_in_index_is_the_bootstrap_table() {
-        let generated = generated_index_json();
-        if std::env::var_os("UPDATE_DFLASH_PAIRINGS_INDEX").is_some() {
-            std::fs::write(INDEX_PATH, &generated).unwrap();
-        }
-        let checked_in = std::fs::read_to_string(INDEX_PATH).unwrap();
-        assert_eq!(
-            checked_in, generated,
-            "regenerate with UPDATE_DFLASH_PAIRINGS_INDEX=1 cargo test -p mesh-llm-skippy-adapter the_checked_in_index"
-        );
-        let index = load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap();
-        assert_eq!(index.pairings, bootstrap_pairings());
-    }
-
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B and
-    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block).
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B,
+    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block), Laguna-S-2.1 and
+    /// DeepSeek-V4-Flash-0731, plus Laguna-XS-2.1, which has no default draft
+    /// yet.
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
@@ -689,15 +681,31 @@ mod tests {
                 ),
             ),
             ("Nemotron-3.5-Lightning-30B-A3B", lightning),
+            (
+                "Laguna-XS-2.1",
+                named(target_meta("laguna", 40, 2048, 256), "Laguna XS 2.1"),
+            ),
+            (
+                "Laguna-S-2.1",
+                named(target_meta("laguna", 48, 3072, 256), "Laguna S 2.1"),
+            ),
+            (
+                "DeepSeek-V4-Flash-0731",
+                named(
+                    target_meta("deepseek4", 43, 4096, 256),
+                    "Deepseek-V4-Flash-0731",
+                ),
+            ),
         ]
     }
 
-    /// The published index: the checked-in copy of `index.json` at
-    /// [`DFLASH_PAIRING_INDEX_REVISION`], or the file
+    /// The pinned index: the checked-in `index.json`, or the file
     /// `DFLASH_PAIRING_INDEX_FIXTURE` names (a fresh download, say).
     fn published_index() -> DFlashPairingIndex {
-        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE")
-            .map_or_else(|| PathBuf::from(INDEX_PATH), PathBuf::from);
+        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE").map_or_else(
+            || PathBuf::from(super::super::dflash_index::INDEX_PATH),
+            PathBuf::from,
+        );
         load_dflash_pairing_index(&path).unwrap()
     }
 
@@ -770,6 +778,54 @@ mod tests {
         );
         // Native MTP stays Lightning's default on Metal.
         assert_eq!(repo("Nemotron-3.5-Lightning-30B-A3B", true), None);
+        assert_eq!(
+            repo("DeepSeek-V4-Flash-0731", false).as_deref(),
+            Some("unsloth/DeepSeek-V4-Flash-0731-GGUF")
+        );
+        assert_eq!(repo("DeepSeek-V4-Flash-0731", true), None);
+    }
+
+    #[test]
+    fn deepseek_v4_flash_0731_is_told_from_deepseek_v4_flash_by_name() {
+        const DSPARK: &str = "unsloth/DeepSeek-V4-Flash-0731-GGUF";
+        let dsv4 = target_meta("deepseek4", 43, 4096, 256);
+        for name in [
+            "Deepseek-V4-Flash-0731",
+            "DeepSeek V4 Flash 0731",
+            "deepseek-v4-flash-0731",
+        ] {
+            assert_eq!(
+                repo(&named(dsv4.clone(), name), false).as_deref(),
+                Some(DSPARK),
+                "{name}"
+            );
+        }
+        // The original release and its vision fine-tune share the shape but
+        // not the draft's training.
+        for name in ["DeepSeek-V4-Flash", "DeepSeek-V4-Flash-Vision-Exp"] {
+            assert_eq!(repo(&named(dsv4.clone(), name), false), None, "{name}");
+        }
+        assert_eq!(repo(&dsv4, false), None);
+    }
+
+    #[test]
+    fn the_published_index_pairs_laguna_s_off_metal_and_not_laguna_xs() {
+        let index = published_index();
+        let repo = |model: &str, metal| {
+            let (_, meta) = default_targets()
+                .into_iter()
+                .find(|(name, _)| *name == model)
+                .unwrap();
+            pairing_in(&index.pairings, &meta, metal).map(|pairing| pairing.draft.repo.clone())
+        };
+        assert_eq!(
+            repo("Laguna-S-2.1", false).as_deref(),
+            Some("poolside/Laguna-S-2.1-GGUF")
+        );
+        assert_eq!(repo("Laguna-S-2.1", true), None);
+        // Laguna-XS-2.1 waits for a published draft with its sliding window.
+        assert_eq!(repo("Laguna-XS-2.1", false), None);
+        assert_eq!(repo("Laguna-XS-2.1", true), None);
     }
 
     #[test]
@@ -909,6 +965,9 @@ mod tests {
             ("nemotron_3.5_lightning", "Nemotron-3.5-Lightning", true),
             ("Nemotron-3-Nano-30B-A3B", "Nemotron-3.5-Lightning", false),
             ("Gemma-4-E4B-It", "Nemotron-3.5-Bolt", false),
+            ("Deepseek-V4-Flash-0731", "DeepSeek-V4-Flash-0731", true),
+            ("DeepSeek-V4-Flash", "DeepSeek-V4-Flash-0731", false),
+            ("DeepSeek-V4-Flash-07310", "DeepSeek-V4-Flash-0731", false),
         ] {
             assert_eq!(names_family(name, family), expected, "{name}");
         }
@@ -1102,23 +1161,5 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&index).unwrap()).unwrap();
         let error = load_dflash_pairing_index(&path).unwrap_err().to_string();
         assert!(error.contains("sha256"), "{error}");
-    }
-
-    #[test]
-    fn the_index_is_pinned_to_one_revision_of_its_repo() {
-        assert_eq!(DFLASH_PAIRING_INDEX_REPO, "meshllm/dflash-pairings");
-        assert_eq!(DFLASH_PAIRING_INDEX_FILE, "index.json");
-        if let Some(revision) = DFLASH_PAIRING_INDEX_REVISION {
-            assert_eq!(revision.len(), 40);
-            assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        }
-        let pin = DFlashPairingIndexPin {
-            repo: DFLASH_PAIRING_INDEX_REPO,
-            revision: "0123456789abcdef0123456789abcdef01234567",
-            file: DFLASH_PAIRING_INDEX_FILE,
-        };
-        assert!(pin.cache_path().ends_with(
-            "models--meshllm--dflash-pairings/snapshots/0123456789abcdef0123456789abcdef01234567/index.json"
-        ));
     }
 }

@@ -332,12 +332,37 @@ fn certify_files(args: &[String]) -> DynResult<Value> {
     }
     let runtime_manifest = read_json(&manifests[0])?;
     let runtime = required(&runtime_manifest, "runtime")?;
-    if runtime["skippy_abi"] != result["native_recipe"]["skippy_abi"] {
+    let recipe = &result["native_recipe"];
+    let source_root = if args.iter().any(|arg| arg == "--source-root") {
+        PathBuf::from(option(args, "--source-root")?)
+    } else {
+        std::env::current_dir()?
+    };
+    let (expected_recipe, expected_patch_digest) =
+        crate::automation::canary_package_closure::native_runtime_recipe(&source_root)?;
+    if *recipe != expected_recipe {
+        return Err(error(
+            "checked-in roster differs from the tested native source recipe",
+        ));
+    }
+    if string(runtime, "skippy_abi")? != string(recipe, "skippy_abi")? {
         return Err(error(
             "loaded native runtime ABI differs from the checked-in roster",
         ));
     }
-    result["native_runtime"] = json!({"id":runtime["id"], "skippy_abi":runtime["skippy_abi"]});
+    let build = required(&runtime_manifest, "build")?;
+    for (key, expected) in [
+        ("llama_upstream_sha", string(recipe, "llama_upstream_sha")?),
+        ("llama_patch_digest", expected_patch_digest.as_str()),
+    ] {
+        if string(build, key)? != expected {
+            return Err(error(format!(
+                "loaded native runtime {key} differs from the checked-in roster"
+            )));
+        }
+    }
+    result["native_runtime"] = json!({"id":runtime["id"], "skippy_abi":runtime["skippy_abi"],
+        "llama_upstream_sha":build["llama_upstream_sha"], "llama_patch_digest":build["llama_patch_digest"]});
     let responses = Path::new(option(args, "--responses-dir")?);
     let mut cold_warm = Vec::new();
     for index in 1..=2 {
@@ -484,6 +509,23 @@ mod tests {
         let root = unique_temp_dir("split-payload-certifier");
         fs::create_dir_all(root.join("runtime/cpu"))?;
         fs::create_dir_all(root.join("responses"))?;
+        fs::create_dir_all(root.join("source/skippy/llama_cpp/patches"))?;
+        fs::create_dir_all(root.join("source/skippy/crates/skippy-ffi/src"))?;
+        fs::write(
+            root.join("source/skippy/llama_cpp/upstream.txt"),
+            "a".repeat(40),
+        )?;
+        fs::write(
+            root.join("source/skippy/llama_cpp/patches/0001-core.patch"),
+            b"core",
+        )?;
+        fs::write(
+            root.join("source/skippy/crates/skippy-ffi/src/lib.rs"),
+            "pub const ABI_VERSION_MAJOR: u32 = 0;\npub const ABI_VERSION_MINOR: u32 = 1;\npub const ABI_VERSION_PATCH: u32 = 67;\n",
+        )?;
+        let (recipe, patch_digest) =
+            crate::automation::canary_package_closure::native_runtime_recipe(&root.join("source"))?;
+
         fixture_file(
             &root,
             "evidence.json",
@@ -507,16 +549,12 @@ mod tests {
             &json!({"artifacts":[{
             "id":"artifact","revision":"pinned-revision","sha256":"digest"}]}),
         )?;
-        fixture_file(
-            &root,
-            "roster.json",
-            &json!({"native_recipe":{"skippy_abi":"0.1.67"}}),
-        )?;
+        fixture_file(&root, "roster.json", &json!({"native_recipe":recipe}))?;
         fixture_file(
             &root,
             "runtime/cpu/manifest.json",
             &json!({"runtime":{
-            "id":"cpu","skippy_abi":"0.1.67"}}),
+            "id":"cpu","skippy_abi":"0.1.67"}, "build": {"llama_upstream_sha":"a".repeat(40), "llama_patch_digest":patch_digest}}),
         )?;
         for (index, cached) in [(1, 0), (2, 8)] {
             fixture_file(
@@ -539,6 +577,7 @@ mod tests {
         fixture_file(&root, "seed.jsonl", &event(0, "ResidentKv"))?;
         fixture_file(&root, "worker.jsonl", &event(1, "ResidentKv"))?;
         let options = [
+            ("--source-root", "source"),
             ("--evidence", "evidence.json"),
             ("--expectations", "expectations.json"),
             ("--model-manifest", "manifest.json"),
@@ -574,6 +613,45 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(passed["cold_warm"][1]["cached_tokens"], 8);
+        let matching_runtime = read_json(&root.join("runtime/cpu/manifest.json"))?;
+        for key in ["llama_upstream_sha", "llama_patch_digest"] {
+            let mut stale = matching_runtime.clone();
+            stale["build"][key] = json!("old source recipe, same ABI");
+            fixture_file(&root, "runtime/cpu/manifest.json", &stale)?;
+            assert!(certify_command(&args).is_err());
+            let rejected = read_json(&root.join("result.json"))?;
+            assert_eq!(rejected["status"], "fail");
+            assert!(rejected["error"].as_str().unwrap().contains(key));
+            stale["build"].as_object_mut().unwrap().remove(key);
+            fixture_file(&root, "runtime/cpu/manifest.json", &stale)?;
+            assert!(certify_command(&args).is_err());
+        }
+        fixture_file(&root, "runtime/cpu/manifest.json", &matching_runtime)?;
+        fs::write(
+            root.join("source/skippy/llama_cpp/patches/0001-core.patch"),
+            b"new queue",
+        )?;
+        let (updated_recipe, _) =
+            crate::automation::canary_package_closure::native_runtime_recipe(&root.join("source"))?;
+        fixture_file(
+            &root,
+            "roster.json",
+            &json!({"native_recipe":updated_recipe}),
+        )?;
+        assert!(certify_command(&args).is_err());
+        let rejected = read_json(&root.join("result.json"))?;
+        assert!(
+            rejected["error"]
+                .as_str()
+                .unwrap()
+                .contains("llama_patch_digest")
+        );
+        fs::write(
+            root.join("source/skippy/llama_cpp/patches/0001-core.patch"),
+            b"core",
+        )?;
+        fixture_file(&root, "roster.json", &json!({"native_recipe":recipe}))?;
+
         fixture_file(&root, "worker.jsonl", &event(1, "FullState"))?;
         assert!(certify_command(&args).is_err());
         let failed = read_json(&root.join("result.json"))?;

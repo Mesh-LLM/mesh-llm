@@ -1,6 +1,7 @@
 #[path = "transport_route_exhaustion.rs"]
 mod exhaustion;
 
+use super::super::exchange_admission::SelectedRouteAdmission;
 use super::*;
 use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_context};
 use crate::network::reservations::RoutingReservation;
@@ -346,11 +347,11 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         // peer's capsule_id and misattribute it to this attempt.
         clear_peer_capsule(peer_capsule_id);
         reservation.transfer_to(&target);
-        state.attempts += 1;
         let attempt_started = Instant::now();
         let mut retry_policy = ResponseRetryPolicy::next_target_available(
             idx + 1 < total_targets || automatic_retry.is_some(),
-        );
+        )
+        .with_caller_completion_cap(request.completion_tokens);
         // An answer the last host produced is terminal even for an automatic
         // directive: the model spill covers uncommitted exhaustion (busy,
         // unavailable, 402, context overflow), not a delivered response the
@@ -359,19 +360,26 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         // rejecting it here turned a served answer into "all eligible
         // automatic models exhausted" (CI smoke, max_tokens 4, 2026-11-08).
         retry_policy.response_quality = idx + 1 < total_targets;
-        if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
+        match super::super::exchange_admission::admit_selected_candidate(
             &node,
             &mut tcp_stream,
             request,
             Some(model),
             "mesh",
             super::super::exchange_admission::SelectedRouteTarget::Mesh(&target),
-            state.attempts,
+            idx + 1,
+            idx + 1 < total_targets,
         )
         .await
         {
-            return outcome;
+            SelectedRouteAdmission::Proceed => {}
+            // A plugin said no to this peer, not to the request: try the next.
+            SelectedRouteAdmission::NextCandidate => continue,
+            SelectedRouteAdmission::Rejected(outcome) => return outcome,
         }
+        // Only a contacted candidate is an attempt: a skipped one must not
+        // turn an all-timeouts route into a 503 or inflate attempt metrics.
+        state.attempts += 1;
         let attempt_result = route_attempt_for_target(
             &node,
             &mut tcp_stream,
@@ -625,10 +633,13 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableUnavailable => {
             handle_retryable_route_model_unavailable(node, target, state)
         }
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
+            // Committed, so terminal here; but the inference failed, so the
+            // request counts as failed, not as the success its 200 head says.
+            record_route_model_unavailable(node, model, state.attempts);
             RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
                 status_code,
-                reason: "upstream_stream_incomplete",
+                reason: cause.reason(),
             })
         }
         RouteAttemptResult::ClientDisconnected => {
@@ -827,3 +838,7 @@ fn record_route_model_attempt(
 #[cfg(test)]
 #[path = "transport_route_model_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transport_route_admission_tests.rs"]
+mod admission_tests;

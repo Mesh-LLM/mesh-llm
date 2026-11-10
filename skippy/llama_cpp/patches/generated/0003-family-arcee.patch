@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/arcee.cpp b/src/models/arcee.cpp
-index 81e3b828f7e26090eb5a00d5324ea9fd82dc6a9d..c65db4bd6ad6f19ff9b7e9a48d3683d65a698bc9 100644
+index 58607d82e7cfd0f63a3af0b5891b8861175bb301..ef5d67a021ff827bcba77a476c471745ea1afc04 100644
 --- a/src/models/arcee.cpp
 +++ b/src/models/arcee.cpp
-@@ -66,6 +66,8 @@ llama_model_arcee::graph::graph(const llama_model & model, const llm_graph_param
+@@ -66,6 +66,8 @@ llama_model_arcee::graph::graph(const llm_graph_params & params) : llm_graph_con
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 81e3b828f7e26090eb5a00d5324ea9fd82dc6a9d..c65db4bd6ad6f19ff9b7e9a48d3683d6
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -136,6 +138,7 @@ llama_model_arcee::graph::graph(const llama_model & model, const llm_graph_param
+@@ -124,6 +126,7 @@ llama_model_arcee::graph::graph(const llm_graph_params & params) : llm_graph_con
  
          // input for next layer
          inpL = cur;

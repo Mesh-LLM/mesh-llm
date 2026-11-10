@@ -189,6 +189,9 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     /// attention layers slides over a window; stage 0 sends no feature rows
     /// for prompt tokens before it.
     pub(in crate::frontend) split_dflash_context_window: Option<u32>,
+    /// The most bytes of feature rows later stages add to each prompt token,
+    /// which stage 0 leaves room for when it sizes prefill frames.
+    pub(in crate::frontend) split_dflash_downstream_bytes_per_token: usize,
     /// The final stage's draft-context counters, from its latest replies.
     pub(in crate::frontend) split_dflash_health: SplitDFlashHealth,
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
@@ -423,6 +426,10 @@ pub(in crate::frontend) struct GeneratedText {
     /// One entry per completion token, when the request asked for logprobs.
     pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
     pub(in crate::frontend) activation_wire: Option<ActivationWireStats>,
+    /// Filled in once the generation finishes, and handed to the stats
+    /// observer after admission has been timed. `None` when no observer is
+    /// installed.
+    pub(in crate::frontend) generation_stats: Option<crate::generation_stats::GenerationStats>,
 }
 
 /// Encoded activation bytes stage 0 wrote to the next stage for one response:

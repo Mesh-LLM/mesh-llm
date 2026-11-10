@@ -670,10 +670,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   invoking Goose; valid candidate failures from a mixed pass are retained.
   Repeated infrastructure failure, or corrupt/foreign/contract evidence, stops
   without invoking Goose. There are at most three distributed repair attempts.
-  Every edited candidate must
+  Outside the recovered-retry exception below, every edited candidate must
   rebuild and rerun the complete candidate family pass, followed by a fresh
   independent build and complete family pass on the same commit. Agent test
-  results must never replace either trusted full pass. Coding turns are admitted
+  results must never replace trusted certification. Coding turns are admitted
   only within a bounded repair window. Each returned candidate receives a full,
   separately bounded verification pass; earlier repairs and failed gates must
   not shorten that pass. Outer workflow limits must cover each admitted repair
@@ -697,6 +697,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+Successful same-candidate infrastructure retries reuse the original complete
+family results and the admitted retry receipts. Reconciliation marks this case
+`retry_recovered=true`; all three outer `verify_*` jobs skip it, and attempt
+selection may continue to publication without another native build or family
+matrix. This is the exception to the independent-pass requirements below.
+Unrecovered or invalid evidence still blocks publication. A new candidate or
+producer identity invalidates earlier receipts and requires fresh validation.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,

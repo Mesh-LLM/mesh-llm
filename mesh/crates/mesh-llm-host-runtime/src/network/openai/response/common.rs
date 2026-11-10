@@ -145,10 +145,33 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     /// the same request through, so the fan-out tries the next one.
     RetryableGateUnsatisfied,
     RetryableResponseQuality(ResponseQualityFailure),
+    /// The response head (and possibly output) already reached the client, so
+    /// the attempt is terminal: nothing is replayed on another target. It is
+    /// still a failed inference, never a success.
     CommittedStreamFailure {
         status_code: u16,
+        cause: CommittedStreamFailureCause,
     },
     ClientDisconnected,
+}
+
+/// Why a committed stream failed. Bounded on purpose: it labels routing
+/// feedback and terminal events, never the backend's own message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::network::openai) enum CommittedStreamFailureCause {
+    /// The upstream stream ended or broke before its terminal frame.
+    Truncated,
+    /// The upstream sent an explicit error frame inside a 200 stream.
+    BackendError,
+}
+
+impl CommittedStreamFailureCause {
+    pub(in crate::network::openai) fn reason(self) -> &'static str {
+        match self {
+            Self::Truncated => "upstream_stream_incomplete",
+            Self::BackendError => "upstream_stream_error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +182,9 @@ pub(in crate::network::openai) struct ResponseRetryPolicy {
     pub(in crate::network::openai) availability: bool,
     /// Try the next host on a 402 instead of relaying it.
     pub(in crate::network::openai) gate_unsatisfied: bool,
+    /// The output cap the request set itself. A `length` stop that reached it
+    /// is the reply the caller asked for, not a reason to try the next host.
+    pub(in crate::network::openai) caller_completion_cap: Option<u32>,
 }
 
 impl ResponseRetryPolicy {
@@ -168,6 +194,14 @@ impl ResponseRetryPolicy {
             response_quality: available,
             availability: available,
             gate_unsatisfied: available,
+            caller_completion_cap: None,
+        }
+    }
+
+    pub(in crate::network::openai) fn with_caller_completion_cap(self, cap: Option<u32>) -> Self {
+        Self {
+            caller_completion_cap: cap,
+            ..self
         }
     }
 }
@@ -218,7 +252,14 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
         RouteAttemptResult::RetryableGateUnsatisfied => "retryable_gate_unsatisfied",
         RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
-        RouteAttemptResult::CommittedStreamFailure { .. } => "committed_stream_failure",
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: CommittedStreamFailureCause::Truncated,
+            ..
+        } => "committed_stream_failure",
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: CommittedStreamFailureCause::BackendError,
+            ..
+        } => "committed_stream_backend_error",
         RouteAttemptResult::ClientDisconnected => "client_disconnected",
     }
 }
@@ -363,7 +404,7 @@ pub(in crate::network::openai::response) fn retryable_quality_result(
     if !policy.response_quality {
         return None;
     }
-    let failure = response_quality::failure_from_json_body(body)?;
+    let failure = response_quality::failure_from_json_body(body, policy.caller_completion_cap)?;
     tracing::warn!(
         reason = failure.label(),
         "API proxy: upstream returned retryable low-quality success response before commit"

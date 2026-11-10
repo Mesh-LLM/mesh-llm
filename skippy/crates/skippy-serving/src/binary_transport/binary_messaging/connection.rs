@@ -895,6 +895,9 @@ fn handle_binary_connection_messages(
                         &record_session_key,
                         &record_message,
                         &record_tokens,
+                        // The prompt's state is recorded on the first decode
+                        // step; copying its KV rows now would stall decode.
+                        crate::kv_integration::ExactStateKvExport::AtSessionEnd,
                     ))
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;

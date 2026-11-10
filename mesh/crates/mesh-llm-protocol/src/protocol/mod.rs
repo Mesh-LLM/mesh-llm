@@ -25,6 +25,7 @@ pub const STREAM_PEER_DOWN: u8 = 0x06;
 pub const STREAM_PEER_LEAVING: u8 = 0x07;
 pub const STREAM_PLUGIN_CHANNEL: u8 = 0x08;
 pub const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
+pub const STREAM_PLUGIN_MESH_STREAM: u8 = 0x0a;
 /// Reserved legacy mesh-plane config subscription stream ID.
 ///
 /// Config and inventory control now live exclusively on `mesh-llm-control/2`;
@@ -874,19 +875,16 @@ pub fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameError> {
 /// length prefix, so a peer that claims a large frame and then stalls holds
 /// only as much memory as it actually sent.
 pub async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
-    const READ_CHUNK_BYTES: usize = 64 * 1024;
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_CONTROL_FRAME_BYTES {
         anyhow::bail!("control frame too large: {} bytes", len);
     }
-    let mut buf = Vec::with_capacity(len.min(READ_CHUNK_BYTES));
-    let mut chunk = vec![0u8; len.min(READ_CHUNK_BYTES)];
+    let mut buf = Vec::new();
     while buf.len() < len {
-        let wanted = (len - buf.len()).min(chunk.len());
-        match recv.read(&mut chunk[..wanted]).await? {
-            Some(read) => buf.extend_from_slice(&chunk[..read]),
+        match recv.read_chunk(len - buf.len()).await? {
+            Some(chunk) => buf.extend_from_slice(&chunk),
             None => anyhow::bail!("control frame ended after {} of {} bytes", buf.len(), len),
         }
     }
@@ -1003,6 +1001,38 @@ mod tests {
     };
     use prost::Message;
 
+    #[tokio::test]
+    async fn read_len_prefixed_returns_full_max_size_body() {
+        const ALPN: &[u8] = b"mesh-llm/test-frame";
+        let bind = |alpn: Option<&[u8]>| {
+            let mut b = Endpoint::builder(iroh::endpoint::presets::Minimal)
+                .relay_mode(iroh::endpoint::RelayMode::Disabled)
+                .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+                .unwrap();
+            if let Some(alpn) = alpn {
+                b = b.alpns(vec![alpn.to_vec()]);
+            }
+            b.bind()
+        };
+        let server = bind(Some(ALPN)).await.unwrap();
+        let client = bind(None).await.unwrap();
+        let body: Vec<u8> = (0..MAX_CONTROL_FRAME_BYTES).map(|i| i as u8).collect();
+        let sent = body.clone();
+        let addr = server.addr();
+        let writer = tokio::spawn(async move {
+            let conn = client.connect(addr, ALPN).await.unwrap();
+            let (mut send, _recv) = conn.open_bi().await.unwrap();
+            write_len_prefixed(&mut send, &sent).await.unwrap();
+            send.finish().unwrap();
+            let _ = conn.closed().await;
+        });
+        let conn = server.accept().await.unwrap().await.unwrap();
+        let (_send, mut recv) = conn.accept_bi().await.unwrap();
+        assert_eq!(read_len_prefixed(&mut recv).await.unwrap(), body);
+        conn.close(0u32.into(), b"done");
+        writer.await.unwrap();
+    }
+
     fn control_plane_test_config() -> NodeConfigSnapshot {
         NodeConfigSnapshot {
             version: 1,
@@ -1062,6 +1092,23 @@ mod tests {
         assert_eq!(ALPN_CONTROL_V2, b"mesh-llm-control/2");
         assert_eq!(ALPN_V1, b"mesh-llm/1");
         assert_eq!(ALPN_V0, b"mesh-llm/0");
+        let ids = [
+            STREAM_GOSSIP,
+            STREAM_TUNNEL,
+            STREAM_TUNNEL_MAP,
+            STREAM_TUNNEL_HTTP,
+            STREAM_ROUTE_REQUEST,
+            STREAM_PEER_DOWN,
+            STREAM_PEER_LEAVING,
+            STREAM_PLUGIN_CHANNEL,
+            STREAM_PLUGIN_BULK_TRANSFER,
+            STREAM_PLUGIN_MESH_STREAM,
+        ];
+        assert_eq!(
+            ids,
+            [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a]
+        );
+        assert_eq!(STREAM_NATIVE_CHAT, 0x0f);
         assert_eq!(STREAM_CONFIG_SUBSCRIBE, 0x0b);
         assert_eq!(STREAM_CONFIG_PUSH, 0x0c);
         assert_eq!(STREAM_SUBPROTOCOL, 0x0d);

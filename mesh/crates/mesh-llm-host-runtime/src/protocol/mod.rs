@@ -14,7 +14,15 @@ use anyhow::Result;
 pub(crate) use convert::*;
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
-pub(crate) use mesh_llm_protocol::protocol::{ControlFrameError, ValidateControlFrame};
+pub use mesh_llm_protocol::protocol::STREAM_TUNNEL_HTTP;
+pub(crate) use mesh_llm_protocol::protocol::{
+    ControlFrameError, MAX_CONTROL_FRAME_BYTES, STREAM_DIRECT_PATH_REQUEST, STREAM_GOSSIP,
+    STREAM_NATIVE_CHAT, STREAM_PEER_DOWN, STREAM_PEER_LEAVING, STREAM_PLUGIN_BULK_TRANSFER,
+    STREAM_PLUGIN_CHANNEL, STREAM_PLUGIN_MESH_STREAM, STREAM_ROUTE_REQUEST, STREAM_SUBPROTOCOL,
+    STREAM_TUNNEL, STREAM_TUNNEL_MAP, ValidateControlFrame, read_len_prefixed,
+};
+#[cfg(test)]
+pub(crate) use mesh_llm_protocol::protocol::{STREAM_CONFIG_PUSH, STREAM_CONFIG_SUBSCRIBE};
 use prost::Message;
 
 #[cfg(test)]
@@ -24,29 +32,6 @@ pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 #[cfg(test)]
 pub const ALPN: &[u8] = ALPN_V1;
 pub(crate) const NODE_PROTOCOL_GENERATION: u32 = 1;
-pub(crate) const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
-
-pub(crate) const STREAM_GOSSIP: u8 = 0x01;
-pub(crate) const STREAM_TUNNEL: u8 = 0x02;
-pub(crate) const STREAM_TUNNEL_MAP: u8 = 0x03;
-pub const STREAM_TUNNEL_HTTP: u8 = 0x04;
-pub(crate) const STREAM_ROUTE_REQUEST: u8 = 0x05;
-pub(crate) const STREAM_PEER_DOWN: u8 = 0x06;
-pub(crate) const STREAM_PEER_LEAVING: u8 = 0x07;
-pub(crate) const STREAM_PLUGIN_CHANNEL: u8 = 0x08;
-pub(crate) const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
-pub(crate) const STREAM_PLUGIN_MESH_STREAM: u8 = 0x0a;
-// Stream IDs 0x0b and 0x0c remain reserved for the retired mesh-plane config
-// subscription and push operations. Config and inventory control now live
-// exclusively on `mesh-llm-control/2`.
-#[cfg(test)]
-pub(crate) const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
-#[cfg(test)]
-pub(crate) const STREAM_CONFIG_PUSH: u8 = 0x0c;
-pub(crate) const STREAM_SUBPROTOCOL: u8 = 0x0d;
-pub(crate) const STREAM_DIRECT_PATH_REQUEST: u8 = 0x0e;
-pub(crate) const STREAM_NATIVE_CHAT: u8 = 0x0f;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ControlProtocol {
     ProtoV1,
@@ -81,10 +66,6 @@ pub(crate) fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameE
         return Err(ControlFrameError::OversizeFrame { size: body.len() });
     }
     Ok(())
-}
-
-pub(crate) async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
-    read_frame(recv, MAX_CONTROL_FRAME_BYTES).await
 }
 
 /// Reads one length-prefixed frame of at most `max_len` bytes.

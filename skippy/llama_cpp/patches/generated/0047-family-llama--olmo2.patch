@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
-index db2de3afd72a1d41df80b73b76f3bcfe05a69ffe..1e1ccf957465b9395c0c2862ad28c19b1e920cda 100644
+index c0a3e8295da9ed2d35b909fad4ccccc86a8dda8e..e0939c7cb83612115b8dffcb77a03caeecd7d557 100644
 --- a/src/models/olmo2.cpp
 +++ b/src/models/olmo2.cpp
-@@ -85,6 +85,8 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+@@ -100,6 +100,8 @@ llama_model_olmo2::graph<iswa>::graph(const llm_graph_params & params) : llm_gra
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index db2de3afd72a1d41df80b73b76f3bcfe05a69ffe..1e1ccf957465b9395c0c2862ad28c19b
          ggml_tensor * inpSA = inpL;
  
          cur = inpL;
-@@ -184,6 +186,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+@@ -171,6 +173,7 @@ llama_model_olmo2::graph<iswa>::graph(const llm_graph_params & params) : llm_gra
  
          // input for next layer
          inpL = cur;

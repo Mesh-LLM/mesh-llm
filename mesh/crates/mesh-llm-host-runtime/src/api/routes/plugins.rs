@@ -1022,7 +1022,6 @@ mod tests {
             downloaded_asset_name: format!("{name}.tar.gz"),
             install_path,
             enabled: true,
-            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {

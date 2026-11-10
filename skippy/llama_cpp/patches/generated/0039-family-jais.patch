@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/jais.cpp b/src/models/jais.cpp
-index 446b56617555bb41fcc3cd4c79f32c86da4efcf7..521dc1acf884dfd0fb827e2bfd7856b157474041 100644
+index daa3315bfc306f3f26d974dcb657c0100f4ac3d4..291509332da0cbf27a3a61d8c4ab9ac3d6450a88 100644
 --- a/src/models/jais.cpp
 +++ b/src/models/jais.cpp
-@@ -67,6 +67,8 @@ llama_model_jais::graph::graph(const llama_model & model, const llm_graph_params
+@@ -67,6 +67,8 @@ llama_model_jais::graph::graph(const llm_graph_params & params) : llm_graph_cont
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 446b56617555bb41fcc3cd4c79f32c86da4efcf7..521dc1acf884dfd0fb827e2bfd7856b1
          cur = build_norm(inpL,
                  model.layers[il].attn_norm,
                  model.layers[il].attn_norm_b,
-@@ -114,6 +116,7 @@ llama_model_jais::graph::graph(const llama_model & model, const llm_graph_params
+@@ -114,6 +116,7 @@ llama_model_jais::graph::graph(const llm_graph_params & params) : llm_graph_cont
  
          // input for next layer
          inpL = cur;

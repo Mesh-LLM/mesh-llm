@@ -2073,6 +2073,22 @@ mod reserved_admission_harness {
     /// record_exact_state releases its real credit when the radix lock is
     /// busy: the capture is skipped without waiting and the inflight page is
     /// released.
+    /// A sliding-window cache can reuse rows below the boundary before the
+    /// session ends, so its stage copies them with the recurrent state.
+    #[test]
+    fn a_sliding_window_stage_does_not_defer_its_kv_copy() {
+        let (kv, _) = harness();
+        assert_eq!(
+            kv.exact_state_payload(),
+            Some(StagePrefixCachePayload::KvRecurrent)
+        );
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        assert!(kv.defers_kv_copy(&mut runtime, SESSION, 3));
+
+        runtime.sliding_window_kv_for_test = true;
+        assert!(!kv.defers_kv_copy(&mut runtime, SESSION, 3));
+    }
+
     #[test]
     fn record_exact_state_releases_credit_when_radix_is_busy() {
         let (kv, config) = harness();
@@ -2176,6 +2192,89 @@ mod reserved_admission_harness {
             "credit released on the already-recorded skip"
         );
         assert!(kv.inflight_records.lock().unwrap().is_empty());
+    }
+
+    fn seed_exact_state(
+        kv: &KvStageIntegration,
+        identity: &crate::kv_integration::PrefillKvIdentity,
+    ) {
+        kv.radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert_recurrent(
+                identity.namespace.clone(),
+                &identity.token_ids,
+                32,
+                RadixExactEntry::new(
+                    "pre-existing".to_string(),
+                    ExactStatePayload::full_state(vec![9]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
+            )
+            .expect("pre-seeding the radix must succeed");
+    }
+
+    fn record_at_session_end(
+        kv: &Arc<KvStageIntegration>,
+        runtime: &mut RuntimeState,
+        identity: &crate::kv_integration::PrefillKvIdentity,
+    ) -> anyhow::Result<crate::kv_integration::SessionEndCapture> {
+        kv.record_exact_state_at_session_end(
+            runtime,
+            SESSION,
+            identity,
+            CaptureAdmission::BestEffort,
+            None,
+            true,
+        )
+    }
+
+    /// A deferred capture of a checkpoint the cache already holds copies
+    /// nothing at registration. (The modelless runtime fails any export, so
+    /// reaching one would return an error.)
+    #[test]
+    fn a_deferred_capture_of_a_cached_checkpoint_skips_at_registration() {
+        let (kv, config) = harness();
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
+        seed_exact_state(&kv, &chat_identity);
+
+        let captured = record_at_session_end(&kv, &mut runtime, &chat_identity);
+
+        assert!(
+            matches!(
+                captured,
+                Ok(crate::kv_integration::SessionEndCapture::Skipped)
+            ),
+            "{captured:?}"
+        );
+        assert_eq!(outstanding(&kv), 0);
+        assert!(kv.inflight_records.lock().unwrap().is_empty());
+    }
+
+    /// A miss, and a radix too busy to say, both go on to copy the
+    /// recurrent state; session-end admission checks the radix again.
+    #[test]
+    fn a_deferred_capture_goes_ahead_on_a_miss_or_a_busy_radix() {
+        let (kv, config) = harness();
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
+
+        assert!(
+            record_at_session_end(&kv, &mut runtime, &chat_identity).is_err(),
+            "a miss reaches the recurrent export"
+        );
+
+        seed_exact_state(&kv, &chat_identity);
+        let radix_guard = kv.radix.lock().unwrap();
+        let captured = record_at_session_end(&kv, &mut runtime, &chat_identity);
+        drop(radix_guard);
+        assert!(
+            captured.is_err(),
+            "a busy radix reaches the recurrent export"
+        );
+        assert_eq!(outstanding(&kv), 0);
     }
 
     /// record_exact_state releases its real credit when the payload export

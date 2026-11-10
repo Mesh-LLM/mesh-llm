@@ -194,6 +194,31 @@ impl StageSession {
         token_start: u64,
         token_count: u64,
     ) -> Result<u64> {
+        self.kv_page_size_query(layer_start, layer_end, token_start, token_count)
+            .map(|(bytes, _)| bytes)
+    }
+
+    /// The layout [`Self::export_kv_page`] would describe, without copying
+    /// state. A memory with a sliding-window cache reports
+    /// [`skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1`].
+    pub fn kv_page_layout(
+        &mut self,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<RuntimeKvPageDesc> {
+        self.kv_page_size_query(layer_start, layer_end, token_start, token_count)
+            .map(|(_, desc)| desc.into())
+    }
+
+    fn kv_page_size_query(
+        &mut self,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<(u64, RawKvPageDesc)> {
         let mut desc = RawKvPageDesc::default();
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
@@ -211,7 +236,7 @@ impl StageSession {
                 &mut error,
             )
         };
-        size_query_result(status, error, bytes)
+        size_query_result(status, error, bytes).map(|bytes| (bytes, desc))
     }
 
     pub fn export_state(&mut self, layer_start: i32, layer_end: i32) -> Result<Vec<u8>> {

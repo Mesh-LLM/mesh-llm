@@ -1,5 +1,4 @@
 mod affected_crates;
-mod bundled_plugins;
 pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
@@ -36,8 +35,6 @@ pub(crate) fn run_check(
         RepositoryCheck::LlamaUpstreamRelease => upstream_release::run(args),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
-        RepositoryCheck::BundledPlugins => bundled_plugins::list(args, default_root),
-        RepositoryCheck::BundledPluginsCheck => bundled_plugins::bundle_check(args),
     }
 }
 

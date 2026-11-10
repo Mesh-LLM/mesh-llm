@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mpt.cpp b/src/models/mpt.cpp
-index 69d8b8c66bca1c391a26125fa586a75479190487..2cbbce302f58c18f61554b62a2f7a08ec86a7cb1 100644
+index 774907b4de64ff286250b1ff417d92093587d91c..0289715fbd00a53e1ce8351240a7f39c82a8bf96 100644
 --- a/src/models/mpt.cpp
 +++ b/src/models/mpt.cpp
-@@ -90,6 +90,8 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
+@@ -90,6 +90,8 @@ llama_model_mpt::graph::graph(const llm_graph_params & params) : llm_graph_conte
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 69d8b8c66bca1c391a26125fa586a75479190487..2cbbce302f58c18f61554b62a2f7a08e
          ggml_tensor * attn_norm;
  
          attn_norm = build_norm(inpL, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, il);
-@@ -152,6 +154,7 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
+@@ -152,6 +154,7 @@ llama_model_mpt::graph::graph(const llm_graph_params & params) : llm_graph_conte
  
          // input for next layer
          inpL = cur;

@@ -7,6 +7,7 @@
 
 mod argv;
 mod certification;
+mod dflash_draft;
 mod family_roster;
 mod fields;
 mod generate;
@@ -31,6 +32,7 @@ pub(crate) enum ModelsCommand {
     RestoreInputs,
     ParityDownload,
     ProjectorDownload,
+    DflashDraftConvert,
 }
 
 impl ModelsCommand {
@@ -41,6 +43,7 @@ impl ModelsCommand {
             "restore-inputs" => Some(Self::RestoreInputs),
             "projector-download" => Some(Self::ProjectorDownload),
             "parity-download" => Some(Self::ParityDownload),
+            "dflash-draft-convert" => Some(Self::DflashDraftConvert),
             _ => None,
         }
     }
@@ -56,12 +59,17 @@ pub(crate) fn run(
     if matches!(command, ModelsCommand::ProjectorDownload) {
         return projector_download::run(args);
     }
+    if matches!(command, ModelsCommand::DflashDraftConvert) {
+        return dflash_draft::run(args);
+    }
     let report = match command {
         ModelsCommand::Generate => generate::run(Path::new(&root()?), args),
         ModelsCommand::Resolve => resolve::run(args),
         ModelsCommand::RestoreInputs => restore_inputs::run(args),
         ModelsCommand::ParityDownload => parity_download::run(args),
-        ModelsCommand::ProjectorDownload => unreachable!("projector dispatch returned"),
+        ModelsCommand::ProjectorDownload | ModelsCommand::DflashDraftConvert => {
+            unreachable!("direct dispatch returned")
+        }
     };
     report.emit()
 }
