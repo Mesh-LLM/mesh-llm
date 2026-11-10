@@ -673,6 +673,10 @@ mesh-llm plugins install mesh-llm/cool-plugin
 mesh-llm plugins install https://github.com/mesh-llm/cool-plugin
 ```
 
+The proposed opt-in [`payments-lexe` preset](presets/payments-lexe/README.md)
+groups the Lightning engine and Lexe wallet provider. Its review payload includes
+release pins, setup requirements and the separate live-catalog publication steps.
+
 ## Core Principles
 
 ### 1. Plugins Are Explicit
