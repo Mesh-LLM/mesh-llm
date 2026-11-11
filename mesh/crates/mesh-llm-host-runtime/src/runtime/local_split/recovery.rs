@@ -114,6 +114,15 @@ pub(super) fn split_missing_active_stage_nodes(
     missing
 }
 
+/// Adds the nodes of `more` that `nodes` does not hold yet.
+pub(super) fn split_add_stage_nodes(nodes: &mut Vec<iroh::EndpointId>, more: &[iroh::EndpointId]) {
+    for node_id in more {
+        if !nodes.contains(node_id) {
+            nodes.push(*node_id);
+        }
+    }
+}
+
 /// The nodes of `unconfirmed` that are connected again.
 pub(super) fn split_rejoined_stage_nodes(
     unconfirmed: &[iroh::EndpointId],

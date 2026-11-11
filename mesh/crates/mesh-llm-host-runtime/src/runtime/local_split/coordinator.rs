@@ -2,7 +2,7 @@ use super::activation_codec::SplitActivationCodec;
 use super::loading::{configured_split_activation_codec, stage_health_ticks};
 use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
-    split_active_stage_nodes_pending_eligibility, split_connected_node_ids,
+    split_active_stage_nodes_pending_eligibility, split_add_stage_nodes, split_connected_node_ids,
     split_locked_loss_recovery_decision, split_loss_recovery_decision,
     split_missing_active_stage_nodes, split_participants_meet_minimum, split_rejoined_stage_nodes,
     split_stages_meet_minimum, split_unavailable_active_stage_nodes, split_withdraw_grace_action,
@@ -299,11 +299,7 @@ impl SplitTopologyCoordinator {
             &connected_node_ids,
             &runtime_statuses,
         );
-        for node_id in unconfirmed_stage_nodes {
-            if !unavailable_stage_nodes.contains(&node_id) {
-                unavailable_stage_nodes.push(node_id);
-            }
-        }
+        split_add_stage_nodes(&mut unavailable_stage_nodes, &unconfirmed_stage_nodes);
         let pending_eligibility_nodes = split_active_stage_nodes_pending_eligibility(
             &self.active,
             &connected_node_ids,
