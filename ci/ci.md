@@ -288,8 +288,9 @@ skip their native builds and complete family matrices; selection retains the
 certified package and can continue to publication. The `retry_recovered`
 marker flows through attempt selection, the `result` job outputs and the
 publication input; the handoff gate admits the recovered `repair-*` package
-only when that marker is present. This retry exception also
-applies to explicit selected-source publication. Other candidates retain the
+only when that marker is present. Explicit selected-source publication
+still requires the unchanged independent `verify-1` package; the recovery
+marker is not propagated on that path. Other candidates retain the
 independent-pass requirements described below, and changed producer identities
 cannot reuse prior receipts.
 
