@@ -109,6 +109,7 @@ export default [
     description: "Connect agent tools and OpenAI-compatible applications.",
     links: [
       ["Coding agents", "/docs/pages/agents/"],
+      ["Paid inference (Lightning)", "/docs/pages/lightning-payments/"],
       ["exo comparison", "/docs/pages/exo-comparison/"]
     ]
   },
