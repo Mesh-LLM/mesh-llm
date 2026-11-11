@@ -1,4 +1,4 @@
-From c3ea04e0cb0f947878791fdf9e7293157d8e5ad6 Mon Sep 17 00:00:00 2001
+From ce3482bd1db2205be2a81b7d7fa2ec74a811d7f9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 02:04:42 -0500
 Subject: [PATCH] skippy: add receipt recorder and replay
@@ -77,11 +77,13 @@ storing every matmul column. Replaces skippy_model_set_receipt_tap and
 the serving context's eval-callback hooks it needed.
 ABI 0.1.78 -> 0.1.91.
 ---
+ ggml/include/ggml.h                    |  10 +
  ggml/src/ggml-cpu/ops.cpp              |  10 +-
  ggml/src/ggml-cuda/ggml-cuda.cu        |   4 +
  ggml/src/ggml-cuda/receipt-digest.cu   | 353 +++++++++
  ggml/src/ggml-cuda/receipt-digest.cuh  |  46 ++
  ggml/src/ggml-metal/ggml-metal.cpp     |   8 +
+ ggml/src/ggml.c                        |  15 +
  include/skippy.h                       |   1 +
  include/skippy/common.h                |   2 +-
  include/skippy/receipts.h              | 719 ++++++++++++++++++
@@ -103,7 +105,7 @@ ABI 0.1.78 -> 0.1.91.
  src/skippy/receipts_draw.cpp           | 172 +++++
  src/skippy/receipts_draw.h             |  33 +
  src/skippy/receipts_glue.cpp           | 406 ++++++++++
- src/skippy/receipts_graph.cpp          | 811 ++++++++++++++++++++
+ src/skippy/receipts_graph.cpp          | 812 ++++++++++++++++++++
  src/skippy/receipts_internal.h         | 407 ++++++++++
  src/skippy/receipts_layers.cpp         | 610 +++++++++++++++
  src/skippy/receipts_layers.h           | 162 ++++
@@ -125,7 +127,7 @@ ABI 0.1.78 -> 0.1.91.
  tests/test-skippy-kv-page-export.cpp   |  67 ++
  tests/test-skippy-receipt-classify.cpp | 532 +++++++++++++
  tests/test-skippy-receipt-draw.cpp     | 137 ++++
- 48 files changed, 8293 insertions(+), 5 deletions(-)
+ 50 files changed, 8319 insertions(+), 5 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/receipt-digest.cu
  create mode 100644 ggml/src/ggml-cuda/receipt-digest.cuh
  create mode 100644 include/skippy/receipts.h
@@ -154,17 +156,38 @@ ABI 0.1.78 -> 0.1.91.
  create mode 100644 tests/test-skippy-receipt-classify.cpp
  create mode 100644 tests/test-skippy-receipt-draw.cpp
 
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 973aea25b..7d99d6785 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -2550,6 +2550,16 @@ extern "C" {
+             struct ggml_tensor * a,
+             int32_t              n_kv_max);
+ 
++    // Ask the op to sum the values of an F16 V in F32. GGML_PREC_F32 is set on
++    // every attention op and the CPU kernel does not read it for V, so a
++    // caller that needs the exact sum asks here. Off by default.
++    GGML_API void ggml_flash_attn_ext_set_f32_value_sum(
++            struct ggml_tensor * a,
++            bool                 f32_value_sum);
++
++    GGML_API bool ggml_flash_attn_ext_get_f32_value_sum(
++            const struct ggml_tensor * a);
++
+     GGML_API void ggml_flash_attn_ext_add_sinks(
+             struct ggml_tensor * a,
+             struct ggml_tensor * sinks);
 diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
-index 1884600e6..27250dd41 100644
+index 1884600e6..b0338bf62 100644
 --- a/ggml/src/ggml-cpu/ops.cpp
 +++ b/ggml/src/ggml-cpu/ops.cpp
 @@ -8895,6 +8895,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
      GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
      GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
  
-+    // an F16 V is summed in F16 unless the node asks for F32 accumulation: the
++    // an F16 V is summed in F16 unless the node asks for an F32 value sum: the
 +    // F16 sum of a long context drifts from the exact one by percents
-+    const bool acc_f16 = v->type == GGML_TYPE_F16 && ggml_prec_get_acc(dst) != GGML_PREC_F32;
++    const bool acc_f16 = v->type == GGML_TYPE_F16 && !ggml_flash_attn_ext_get_f32_value_sum(dst);
 +
      int ith = params->ith;
  
@@ -649,6 +672,32 @@ index 528853974..b61a1c719 100644
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index c6a080d22..532f7231d 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -5682,6 +5682,21 @@ void ggml_flash_attn_ext_set_n_kv_max(
+     ggml_set_op_params_i32(a, 4, n_kv_max);
+ }
+ 
++void ggml_flash_attn_ext_set_f32_value_sum(
++        struct ggml_tensor * a,
++        bool                 f32_value_sum) {
++    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
++
++    ggml_set_op_params_i32(a, 5, f32_value_sum ? 1 : 0);
++}
++
++bool ggml_flash_attn_ext_get_f32_value_sum(
++        const struct ggml_tensor * a) {
++    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
++
++    return ggml_get_op_params_i32(a, 5) != 0;
++}
++
+ void ggml_flash_attn_ext_add_sinks(
+         struct ggml_tensor * a,
+         struct ggml_tensor * sinks) {
 diff --git a/include/skippy.h b/include/skippy.h
 index 48e0be2cf..8df2bc6bd 100644
 --- a/include/skippy.h
@@ -4044,10 +4093,10 @@ index 000000000..8d8c8086e
 +}
 diff --git a/src/skippy/receipts_graph.cpp b/src/skippy/receipts_graph.cpp
 new file mode 100644
-index 000000000..42ab2cffc
+index 000000000..74a183141
 --- /dev/null
 +++ b/src/skippy/receipts_graph.cpp
-@@ -0,0 +1,811 @@
+@@ -0,0 +1,812 @@
 +// Receipt tensors of a built graph: which ones a recorder, replay or glue
 +// evaluation reports. Reading them back is in receipts_readback.cpp.
 +
@@ -4574,6 +4623,7 @@ index 000000000..42ab2cffc
 +        ggml_tensor * node = ggml_graph_node(gf, i);
 +        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
 +            ggml_prec_set_acc(node, GGML_PREC_F32);
++            ggml_flash_attn_ext_set_f32_value_sum(node, true);
 +        }
 +    }
 +}
