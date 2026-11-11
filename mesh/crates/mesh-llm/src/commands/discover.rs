@@ -252,7 +252,6 @@ fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) ->
 
     let mut tally = StopTally::default();
     // First, so the service host cannot restart the node stopped below.
-    #[cfg(windows)]
     writeln_some(
         err,
         tally.record_service(mesh_llm_commands::uninstall::end_background_service()),
@@ -277,7 +276,6 @@ fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) ->
     Ok(())
 }
 
-#[cfg(windows)]
 fn writeln_some(err: &mut impl Write, line: Option<String>) -> std::io::Result<()> {
     match line {
         Some(line) => writeln!(err, "{line}"),
@@ -321,7 +319,6 @@ impl StopTally {
     }
 
     /// The line for the Windows background service, when there was one.
-    #[cfg(any(windows, test))]
     fn record_service(
         &mut self,
         stop: mesh_llm_commands::uninstall::BackgroundServiceStop,

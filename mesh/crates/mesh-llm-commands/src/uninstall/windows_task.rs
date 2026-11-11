@@ -162,6 +162,10 @@ pub enum BackgroundServiceStop {
 /// task, as uninstall does; the host's job takes the node down with it. The
 /// task stays registered and starts again at the next logon.
 pub fn end_background_service() -> BackgroundServiceStop {
+    // Only Windows installs this service; `stop` calls this on every platform.
+    if !cfg!(windows) {
+        return BackgroundServiceStop::NotRunning;
+    }
     let Some(local_data_root) = dirs::data_local_dir() else {
         return BackgroundServiceStop::NotRunning;
     };
