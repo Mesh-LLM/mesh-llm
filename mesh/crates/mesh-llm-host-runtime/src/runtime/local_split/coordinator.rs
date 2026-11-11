@@ -4,8 +4,8 @@ use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
     split_active_stage_nodes_pending_eligibility, split_connected_node_ids,
     split_locked_loss_recovery_decision, split_loss_recovery_decision,
-    split_missing_active_stage_nodes, split_participants_meet_minimum, split_stages_meet_minimum,
-    split_unavailable_active_stage_nodes, split_withdraw_grace_action,
+    split_missing_active_stage_nodes, split_participants_meet_minimum, split_rejoined_stage_nodes,
+    split_stages_meet_minimum, split_unavailable_active_stage_nodes, split_withdraw_grace_action,
 };
 use super::{
     OpenAiGuardrailPolicyHandle, RuntimeSliceStagePlan, SPLIT_PARTICIPANT_STABLE_FOR,
@@ -163,6 +163,12 @@ pub(super) struct SplitTopologyCoordinator {
     /// only, `topology_events::classify_connection_changes`; carries no
     /// routing/election authority of its own).
     pub(super) previously_unavailable_stage_nodes: Vec<iroh::EndpointId>,
+    /// Active stage nodes seen off the mesh that have not answered for their
+    /// stages since. A node that restarted holds no stage and refuses a status
+    /// query for a topology it no longer knows. The refusal reads as a
+    /// transient failure, which keeps the stage's last Ready status, so until
+    /// such a node answers, its stages count as unavailable.
+    pub(super) unconfirmed_stage_nodes: Vec<iroh::EndpointId>,
     /// A locked topology may be withdrawn after stage loss, but never replaced
     /// or collapsed to a local fallback.
     pub(super) topology_locked: bool,
@@ -282,14 +288,22 @@ impl SplitTopologyCoordinator {
         self.node
             .refresh_stage_runtime_statuses(Duration::from_secs(2))
             .await;
-        let runtime_statuses = self.node.stage_runtime_statuses().await;
         let missing_stage_nodes =
             split_missing_active_stage_nodes(&self.active, &connected_node_ids);
-        let unavailable_stage_nodes = split_unavailable_active_stage_nodes(
+        let unconfirmed_stage_nodes = self
+            .confirm_rejoined_stage_nodes(&missing_stage_nodes, &connected_node_ids)
+            .await;
+        let runtime_statuses = self.node.stage_runtime_statuses().await;
+        let mut unavailable_stage_nodes = split_unavailable_active_stage_nodes(
             &self.active,
             &connected_node_ids,
             &runtime_statuses,
         );
+        for node_id in unconfirmed_stage_nodes {
+            if !unavailable_stage_nodes.contains(&node_id) {
+                unavailable_stage_nodes.push(node_id);
+            }
+        }
         let pending_eligibility_nodes = split_active_stage_nodes_pending_eligibility(
             &self.active,
             &connected_node_ids,
@@ -332,6 +346,40 @@ impl SplitTopologyCoordinator {
         }
         self.apply_replan_candidate(reason, snapshot.participants.len(), candidate)
             .await
+    }
+
+    /// Asks each active stage node that was off the mesh and is back for its
+    /// stages, and returns those that gave no answer. A node stays unconfirmed
+    /// from the tick it is first seen missing until it answers.
+    async fn confirm_rejoined_stage_nodes(
+        &mut self,
+        missing_stage_nodes: &[iroh::EndpointId],
+        connected_node_ids: &[iroh::EndpointId],
+    ) -> Vec<iroh::EndpointId> {
+        let mut unanswered = Vec::new();
+        for node_id in split_rejoined_stage_nodes(&self.unconfirmed_stage_nodes, connected_node_ids)
+        {
+            if !self
+                .node
+                .confirm_peer_stage_runtime_statuses(node_id, Duration::from_secs(2))
+                .await
+            {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    topology_id = self.active.topology_id,
+                    generation = self.active.generation,
+                    node = %node_id.fmt_short(),
+                    "split stage peer rejoined but does not answer for its stage; counting it unavailable"
+                );
+                unanswered.push(node_id);
+            }
+        }
+        self.unconfirmed_stage_nodes = missing_stage_nodes
+            .iter()
+            .chain(&unanswered)
+            .copied()
+            .collect();
+        unanswered
     }
 
     /// Loss recovery may offer the candidate as a replacement split, so on a

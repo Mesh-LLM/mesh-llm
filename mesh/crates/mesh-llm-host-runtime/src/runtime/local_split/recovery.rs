@@ -114,6 +114,18 @@ pub(super) fn split_missing_active_stage_nodes(
     missing
 }
 
+/// The nodes of `unconfirmed` that are connected again.
+pub(super) fn split_rejoined_stage_nodes(
+    unconfirmed: &[iroh::EndpointId],
+    connected_node_ids: &[iroh::EndpointId],
+) -> Vec<iroh::EndpointId> {
+    unconfirmed
+        .iter()
+        .filter(|node_id| connected_node_ids.contains(node_id))
+        .copied()
+        .collect()
+}
+
 pub(super) fn split_unavailable_active_stage_nodes(
     active: &SplitTopologyGeneration,
     connected_node_ids: &[iroh::EndpointId],

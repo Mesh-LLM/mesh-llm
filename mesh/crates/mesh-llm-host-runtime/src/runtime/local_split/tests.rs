@@ -1346,6 +1346,15 @@ fn split_missing_active_stage_nodes_ignores_unused_lost_nodes() {
 }
 
 #[test]
+fn split_rejoined_stage_nodes_are_the_unconfirmed_nodes_back_on_the_mesh() {
+    assert_eq!(
+        split_rejoined_stage_nodes(&[make_id(2), make_id(3)], &[make_id(1), make_id(2)]),
+        vec![make_id(2)]
+    );
+    assert!(split_rejoined_stage_nodes(&[], &[make_id(1), make_id(2)]).is_empty());
+}
+
+#[test]
 fn split_unavailable_active_stage_nodes_includes_failed_stage_without_missing_peer() {
     let active = SplitTopologyGeneration::new(
         "topology-a".into(),
