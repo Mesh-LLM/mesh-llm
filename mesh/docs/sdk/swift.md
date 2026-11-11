@@ -4,7 +4,7 @@ Add the tagged Swift package to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.78.0"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.79.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [
