@@ -76,7 +76,9 @@ schtasks /End /TN mesh-llm
 ```
 
 Or skip `serve` and load the model into the running node with
-`mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL`. That node keeps
+`mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL`. `load` waits at most
+30 seconds and a model still downloading keeps loading after it returns, so run
+`mesh-llm status` until the model is listed as `Ready` before step 4. That node keeps
 running in the background but has no `my-mesh` discovery name, so stop the
 service and use `serve` below before you add another machine in step 7. If
 setup said the service starts at your next logon, no node is running yet and
@@ -105,6 +107,13 @@ If the model does not load, stop Mesh and use the [model picker](/docs/pages/cho
 
 ```sh
 mesh-llm stop
+```
+
+On Windows, if you loaded the model into the background service, end its task
+instead: `mesh-llm stop` ends that node, but the service starts it again.
+
+```powershell
+schtasks /End /TN mesh-llm
 ```
 
 ## 4. Chat in the console
