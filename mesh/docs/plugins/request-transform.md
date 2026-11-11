@@ -74,6 +74,13 @@ requests the plugin was installed to rewrite.
   peer applies to a forwarded request.
 - A plugin that declared a transform and is restarting or has failed is
   unavailable, so requests are rejected until it is back.
+- **Input size:** the request reaches the plugin in one control frame, so a
+  request whose normalized body (with request objects inlined) is over about
+  16 MiB is rejected with `400` before the plugin is called.
+- **Start eagerly:** do not set `lazy_start` on a transform plugin. A deferred
+  plugin has not declared its capabilities yet, so like any other capability
+  its transform is not seen, and requests pass untransformed, until something
+  else starts it.
 - The transform runs once per client request. It runs before routing, retries
   and virtual-model orchestration.
 

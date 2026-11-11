@@ -17,6 +17,8 @@ use std::time::Duration;
 
 /// Generous: a transform may extract a document (OCR) before inference.
 const TRANSFORM_TIMEOUT: Duration = Duration::from_secs(300);
+/// The plugin control frame limit (16 MiB), less room for the envelope.
+const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024 - 64 * 1024;
 /// The handler name sent in `InvokeServiceRequest.service_name`.
 const SERVICE_NAME: &str = "request_transform";
 
@@ -88,6 +90,17 @@ impl PluginManager {
         plugin_name: &str,
         input: &RequestTransformInput,
     ) -> Result<RequestTransformOutput> {
+        let input_json = serde_json::to_string(input)?;
+        // The input goes to the plugin in one control frame, which its reader
+        // caps at 16 MiB and treats as a broken connection beyond that. An
+        // inlined request object can push a small request past it.
+        if input_json.len() > MAX_INPUT_BYTES {
+            bail!(
+                "request too large for request transform plugin '{plugin_name}' \
+                 ({} bytes, limit {MAX_INPUT_BYTES})",
+                input_json.len()
+            );
+        }
         if self.is_test_bridge_enabled(plugin_name) {
             return self
                 .mcp_request(plugin_name, "request_transform/invoke", input)
@@ -98,7 +111,6 @@ impl PluginManager {
             .plugins
             .get(plugin_name)
             .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
-        let input_json = serde_json::to_string(input)?;
         let response = plugin
             .invoke_service(
                 proto::ServiceKind::RequestTransform,
@@ -335,5 +347,17 @@ mod tests {
             error.to_string().contains("may not change `max_tokens`"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_input_too_large_for_one_plugin_frame_is_rejected() {
+        let mut body = request();
+        body["messages"][0]["content"] = json!("x".repeat(MAX_INPUT_BYTES));
+        let error = manager(&["c-noop"])
+            .await
+            .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("request too large"), "{error}");
     }
 }
