@@ -1,4 +1,5 @@
 use super::commands::{Cli, Command, MeshDiscoveryMode};
+use super::subcommand_options::DiscoverArgs;
 
 pub fn validate_discovery_mode_args(cli: &Cli) -> anyhow::Result<()> {
     if cli.joining.mesh_discovery_mode != MeshDiscoveryMode::Mdns {
@@ -14,7 +15,7 @@ pub fn validate_discovery_mode_args(cli: &Cli) -> anyhow::Result<()> {
     if !cli.network.relay_auth.is_empty() {
         anyhow::bail!("--relay-auth is only valid with --mesh-discovery-mode nostr");
     }
-    if let Some(Command::Discover { relay, .. }) = cli.command.as_ref()
+    if let Some(Command::Discover(DiscoverArgs { relay, .. })) = cli.command.as_ref()
         && !relay.is_empty()
     {
         anyhow::bail!("discover --relay is only valid with --mesh-discovery-mode nostr");

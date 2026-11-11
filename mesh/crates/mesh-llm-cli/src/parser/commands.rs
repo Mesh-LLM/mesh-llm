@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use super::subcommand_options::{DiscoverArgs, ModelPrepareArgs, SetupArgs, UninstallArgs};
 use super::top_level_options::{
     JoiningOptions, KvCacheOptions, LoggingOptions, MeshPolicyOptions, NetworkOptions,
     NodeModeOptions, OwnerOptions, PlacementOptions, ServingOptions, SpeculativeOptions,
@@ -616,56 +617,9 @@ pub enum Command {
         command: Option<DoctorCommand>,
     },
     /// Bootstrap a new installation.
-    Setup {
-        /// Automatically answer yes to prompts.
-        #[arg(long)]
-        yes: bool,
-        /// Run without prompting for interactive input.
-        #[arg(long = "no-interactive")]
-        no_interactive: bool,
-        /// Install and enable the mesh-llm service.
-        #[arg(long, conflicts_with = "no_service")]
-        service: bool,
-        /// Skip installing and enabling the mesh-llm service.
-        #[arg(long = "no-service", conflicts_with = "service")]
-        no_service: bool,
-        /// Skip downloading or configuring the native runtime.
-        #[arg(long = "skip-runtime")]
-        skip_runtime: bool,
-        /// Print detailed setup paths, commands, and follow-up guidance.
-        #[arg(long)]
-        verbose: bool,
-    },
+    Setup(SetupArgs),
     /// Remove mesh-llm binaries, service files, and optional caches.
-    Uninstall {
-        /// Print what would be removed without changing the machine.
-        #[arg(long)]
-        dry_run: bool,
-        /// Do not prompt before removing files and services.
-        #[arg(long)]
-        yes: bool,
-        /// Preserve native runtime caches.
-        #[arg(long)]
-        keep_cache: bool,
-        /// Preserve setup-owned service helper files.
-        #[arg(long)]
-        keep_service_files: bool,
-        /// Also remove ~/.mesh-llm configuration and identity data.
-        #[arg(long, conflicts_with = "keep_config")]
-        purge_config: bool,
-        /// Explicitly preserve ~/.mesh-llm configuration and identity data.
-        #[arg(long, conflicts_with = "purge_config")]
-        keep_config: bool,
-        /// Override the installed binary path to remove.
-        #[arg(long)]
-        binary_path: Option<std::path::PathBuf>,
-        /// Print machine-readable JSON.
-        #[arg(long)]
-        json: bool,
-        /// Print detailed cleanup steps and removed paths.
-        #[arg(long)]
-        verbose: bool,
-    },
+    Uninstall(UninstallArgs),
     /// Load a local model into a running mesh-llm instance.
     Load {
         /// Model name/path/url to load
@@ -696,26 +650,7 @@ pub enum Command {
         port: u16,
     },
     /// Discover meshes and optionally auto-join one.
-    Discover {
-        /// Filter by mesh name (case-insensitive exact match)
-        #[arg(long)]
-        name: Option<String>,
-        /// Filter by model name (substring match)
-        #[arg(long)]
-        model: Option<String>,
-        /// Filter by minimum VRAM (GB)
-        #[arg(long)]
-        min_vram: Option<f64>,
-        /// Filter by region
-        #[arg(long)]
-        region: Option<String>,
-        /// Print the invite token of the best match (for piping to --join)
-        #[arg(long)]
-        auto: bool,
-        /// Nostr relay URLs (default: see DEFAULT_RELAYS)
-        #[arg(long)]
-        relay: Vec<String>,
-    },
+    Discover(DiscoverArgs),
     /// Rotate all identity keys (node + Nostr).
     #[command(hide = true)]
     RotateKey,
@@ -817,70 +752,7 @@ pub enum Command {
         hide = true,
         aliases = ["model-package", "skippy-model-package"]
     )]
-    ModelPrepare {
-        /// Source HuggingFace model ref (e.g. unsloth/Qwen3-235B-A22B-GGUF:UD-Q4_K_XL).
-        source_repo: Option<String>,
-
-        /// Quantization variant (deprecated; prefer source refs like repo:Q4_K_M).
-        #[arg(long)]
-        quant: Option<String>,
-
-        /// Target repo for the layer package (auto-derived if omitted).
-        #[arg(long)]
-        target: Option<String>,
-
-        /// Override model ID in the manifest.
-        #[arg(long)]
-        model_id: Option<String>,
-
-        /// HF Job hardware flavor. Use auto for the default CPU splitter baseline.
-        #[arg(long, default_value = "auto")]
-        flavor: String,
-
-        /// Requested job timeout; raised automatically by model-size minimums.
-        #[arg(long, default_value = "1h")]
-        timeout: String,
-
-        /// Branch or tag of mesh-llm to build in the job [default: main].
-        #[arg(long, default_value = "main")]
-        mesh_llm_ref: String,
-
-        /// Explicitly keep this as a dry run. This is the default unless --confirm is set.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Actually submit the HF Job. Without this, the command only prints plan, spec, and max cost.
-        #[arg(long)]
-        confirm: bool,
-
-        /// Stream job logs after submission until completion.
-        #[arg(long)]
-        follow: bool,
-
-        /// Emit JSON output.
-        #[arg(long)]
-        json: bool,
-
-        /// Check status of a previously submitted job.
-        #[arg(long)]
-        status: Option<String>,
-
-        /// Fetch logs for a previously submitted job.
-        #[arg(long)]
-        logs: Option<String>,
-
-        /// Cancel a running job.
-        #[arg(long)]
-        cancel: Option<String>,
-
-        /// List recent skippy-model-package jobs.
-        #[arg(long)]
-        list: bool,
-
-        /// Upload the latest job script to the meshllm bucket (requires org access).
-        #[arg(long)]
-        update_script: bool,
-    },
+    ModelPrepare(ModelPrepareArgs),
     /// Manage owner identity and keystore.
     Auth {
         #[command(subcommand)]
@@ -1110,7 +982,7 @@ mod tests {
         for spelling in ["model-prepare", "model-package", "skippy-model-package"] {
             let cli = Cli::try_parse_from(["mesh-llm", spelling, "owner/model"])
                 .expect("model preparation spelling should parse");
-            assert!(matches!(cli.command, Some(Command::ModelPrepare { .. })));
+            assert!(matches!(cli.command, Some(Command::ModelPrepare(_))));
         }
     }
 
