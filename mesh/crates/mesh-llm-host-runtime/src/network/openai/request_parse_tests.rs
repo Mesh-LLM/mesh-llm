@@ -1345,3 +1345,57 @@ async fn only_realtime_upgrades_keep_bytes_after_the_head() {
         String::from_utf8_lossy(&other.raw)
     );
 }
+
+/// Routing sizes context from `body_len_bytes`. Once a PDF is replaced by a
+/// short stub, the PDF's base64 must not make every sized model look too small.
+#[tokio::test]
+async fn document_rewrites_size_routing_by_the_forwarded_body() {
+    use super::super::document_ingest::tests::{FakeAnswer, FakeDocumentPlugin, pdf_data_url};
+    let fake = FakeDocumentPlugin::new(FakeAnswer::Text {
+        text: "<mesh-document token=\"t\"/>".into(),
+        route_model: Some("mesh-docs".into()),
+    });
+    let manager = fake.plugin_manager().await;
+    let data_url = pdf_data_url();
+    let body = serde_json::json!({
+        "model": "qwen",
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "summarise"},
+            {"type": "file", "file": {"file_data": data_url, "filename": "a.pdf"}},
+        ]}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
+    client.write_all(request.as_bytes()).await.unwrap();
+    client.shutdown().await.unwrap();
+
+    let parsed = read_http_request_with_limits_with_context(
+        &mut server,
+        HTTP_READ_LIMITS,
+        Some(&manager),
+        RequestOrigin {
+            local_listener: true,
+            loopback: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let header_end = parsed
+        .raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap()
+        + 4;
+    let forwarded = parsed.raw.len() - header_end;
+    assert!(
+        forwarded < body.len(),
+        "the stub is shorter than the PDF part"
+    );
+    assert_eq!(parsed.body_len_bytes, forwarded);
+    assert_eq!(parsed.model_name.as_deref(), Some("mesh-docs"));
+}

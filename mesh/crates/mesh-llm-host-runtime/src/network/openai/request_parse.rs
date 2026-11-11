@@ -391,6 +391,9 @@ struct RequestRewriteOutcome {
     rewritten_body: Option<Vec<u8>>,
     /// The model the document plugin routed this request to, if any.
     document_route_model: Option<String>,
+    /// Attached PDFs were replaced by text, so the forwarded body, not the
+    /// client's, is what a backend's context must hold.
+    documents_rewritten: bool,
 }
 
 // ── Request parsing ──
@@ -550,7 +553,10 @@ where
         parsed.request_id,
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
-    let body_len_bytes = body.len();
+    let body_len_bytes = match rewrite.rewritten_body.as_deref() {
+        Some(forwarded) if rewrite.documents_rewritten => forwarded.len(),
+        _ => body.len(),
+    };
     let body_bytes = if body.is_empty() { None } else { Some(body) };
 
     Ok(BufferedHttpRequest {
@@ -703,6 +709,7 @@ async fn rewrite_request_body_for_forwarding(
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
         document_route_model: None,
+        documents_rewritten: false,
     };
     if !requires_json_transform {
         return Ok(outcome);
@@ -740,6 +747,7 @@ async fn rewrite_request_body_for_forwarding(
             .await?
         {
             outcome.document_route_model = rewrite.route_model;
+            outcome.documents_rewritten = true;
             changed = true;
         }
     }
