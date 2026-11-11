@@ -7,7 +7,9 @@ use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 
 use crate::{
+    placement::{reject_escaping_links, replace_plugin_dir},
     plugin_toml::read_plugin_toml,
+    source_ref::is_valid_name,
     store::{
         InstalledPluginManifestMetadata, InstalledPluginWebUiMetadata,
         InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
@@ -62,6 +64,12 @@ pub fn stage_plugin_archive(
     plugin_name: &str,
     install_dir: &Path,
 ) -> Result<StagedPluginArchive> {
+    // The name becomes the install directory under `install_dir`; check it
+    // here as well as where it was chosen, since `.` and `..` would put the
+    // package at the install root or above it.
+    if !is_valid_name(plugin_name) {
+        bail!("invalid plugin name: {plugin_name}");
+    }
     let staging = tempfile::Builder::new()
         .prefix("mesh-plugin-extract-")
         .tempdir()
@@ -73,6 +81,7 @@ pub fn stage_plugin_archive(
     }
 
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
+    reject_escaping_links(&extracted_root)?;
     validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
     read_plugin_toml(&extracted_root, plugin_name)?;
@@ -383,25 +392,6 @@ fn validate_packaged_manifest(
     Ok(())
 }
 
-fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> Result<()> {
-    if to.exists() {
-        let backup_parent = tempfile::Builder::new()
-            .prefix(&format!("{plugin_name}-previous-"))
-            .tempdir_in(to.parent().unwrap_or_else(|| Path::new(".")))
-            .with_context(|| format!("create plugin install backup for {}", to.display()))?;
-        let backup_dir = backup_parent.path().join(plugin_name);
-        move_dir(to, &backup_dir)
-            .with_context(|| format!("backup previous plugin install {}", to.display()))?;
-        if let Err(error) = move_dir(from, to) {
-            let _ = move_dir(&backup_dir, to);
-            return Err(error).with_context(|| format!("replace plugin install {}", to.display()));
-        }
-    } else {
-        move_dir(from, to).with_context(|| format!("install plugin to {}", to.display()))?;
-    }
-    Ok(())
-}
-
 fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
     let file = fs::File::open(archive_path)
         .with_context(|| format!("open plugin archive {}", archive_path.display()))?;
@@ -486,34 +476,6 @@ fn validate_plugin_root(
             "installed plugin is missing executable {}",
             executable.display()
         );
-    }
-    Ok(())
-}
-
-fn copy_dir_and_remove(from: &Path, to: &Path) -> Result<()> {
-    copy_dir(from, to)?;
-    fs::remove_dir_all(from)
-        .with_context(|| format!("remove copied plugin source {}", from.display()))?;
-    Ok(())
-}
-
-fn move_dir(from: &Path, to: &Path) -> Result<()> {
-    fs::rename(from, to).or_else(|_| copy_dir_and_remove(from, to))
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    fs::create_dir_all(to).with_context(|| format!("create directory {}", to.display()))?;
-    for entry in fs::read_dir(from).with_context(|| format!("read directory {}", from.display()))? {
-        let entry = entry?;
-        let from_path = entry.path();
-        let to_path = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&from_path, &to_path)?;
-        } else {
-            fs::copy(&from_path, &to_path).with_context(|| {
-                format!("copy {} to {}", from_path.display(), to_path.display())
-            })?;
-        }
     }
     Ok(())
 }
@@ -1135,22 +1097,21 @@ mod tests {
         assert!(web_ui.validation.reason.unwrap().contains("remote URL"));
     }
 
+    /// Stage a package carrying one symlink and expect it to be refused
+    /// before anything reaches `installed/`.
     #[cfg(unix)]
-    #[test]
-    fn symlink_escape_web_ui_bundle_path_records_invalid_ui() {
+    fn assert_link_refuses_the_package(link_path: &str, link_target: &Path, expected: &str) {
         let temp = TempDir::new().unwrap();
         let install_dir = temp.path().join("installed");
         let archive_path = temp.path().join("demo.tar.gz");
-        let outside = temp.path().join("outside-ui");
-        fs::create_dir_all(&outside).unwrap();
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = web_ui_manifest("web-ui");
 
         write_tar_gz_with_symlink(SymlinkArchive {
             archive_path: &archive_path,
             plugin_name: "demo",
-            link_path: "web-ui",
-            link_target: &outside,
+            link_path,
+            link_target,
             files: &[
                 ("plugin.toml", b"name = \"demo\""),
                 (executable_name.as_str(), b""),
@@ -1159,69 +1120,66 @@ mod tests {
         })
         .unwrap();
 
-        let extracted = extract_plugin_archive(
+        let Err(error) = extract_plugin_archive(
             &archive_path,
             ArchiveExt::TarGz,
             std::env::consts::EXE_SUFFIX,
             "demo",
             &install_dir,
-        )
-        .expect("symlink escape should be recorded as web UI invalidity");
-        let web_ui = extracted
-            .manifest
-            .and_then(|manifest| manifest.web_ui)
-            .unwrap();
-
-        assert_eq!(
-            web_ui.validation.status,
-            InstalledPluginWebUiValidationStatus::Invalid
-        );
-        assert!(web_ui.validation.reason.unwrap().contains("escapes"));
+        ) else {
+            panic!("a package with link {link_path} -> {link_target:?} was installed");
+        };
+        assert!(error.to_string().contains(expected), "{error:#}");
+        assert!(!install_dir.join("demo").exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn symlink_escape_web_ui_entry_script_records_invalid_ui() {
-        let temp = TempDir::new().unwrap();
-        let install_dir = temp.path().join("installed");
-        let archive_path = temp.path().join("demo.tar.gz");
-        let outside_script = temp.path().join("outside.js");
+    fn a_web_ui_bundle_linked_outside_the_package_refuses_it() {
+        let outside = TempDir::new().unwrap();
+        assert_link_refuses_the_package("web-ui", outside.path(), "absolute path");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_web_ui_entry_script_linked_outside_the_package_refuses_it() {
+        let outside = TempDir::new().unwrap();
+        let outside_script = outside.path().join("outside.js");
         fs::write(&outside_script, "export const outside = true;").unwrap();
-        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
-        let manifest = web_ui_manifest("web-ui");
+        assert_link_refuses_the_package("web-ui/assets/main.js", &outside_script, "absolute path");
+    }
 
-        write_tar_gz_with_symlink(SymlinkArchive {
-            archive_path: &archive_path,
-            plugin_name: "demo",
-            link_path: "web-ui/assets/main.js",
-            link_target: &outside_script,
-            files: &[
-                ("plugin.toml", b"name = \"demo\""),
-                (executable_name.as_str(), b""),
-                (PACKAGED_MANIFEST_FILE, manifest.as_slice()),
-                ("web-ui/assets/settings.js", b"export {};"),
-            ],
-        })
-        .unwrap();
+    #[cfg(unix)]
+    #[test]
+    fn a_skills_directory_linked_above_the_package_refuses_it() {
+        assert_link_refuses_the_package("skills", Path::new("../.."), "escapes");
+    }
 
-        let extracted = extract_plugin_archive(
+    #[test]
+    fn staging_refuses_dot_plugin_names() -> Result<()> {
+        let temp = TempDir::new()?;
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_tar_gz(
             &archive_path,
-            ArchiveExt::TarGz,
-            std::env::consts::EXE_SUFFIX,
             "demo",
-            &install_dir,
-        )
-        .expect("entry-script symlink escape should mark only the web UI invalid");
-        let web_ui = extracted
-            .manifest
-            .and_then(|manifest| manifest.web_ui)
-            .unwrap();
-
-        assert_eq!(
-            web_ui.validation.status,
-            InstalledPluginWebUiValidationStatus::Invalid
-        );
-        assert!(web_ui.validation.reason.unwrap().contains("escapes"));
+            &[("plugin.toml", b"name = \"demo\""), ("demo", b"")],
+        )?;
+        let install_dir = temp.path().join("installed");
+        // `..-plugin` is a valid repository name whose plugin name is `..`.
+        let repo = crate::source_ref::GitHubPluginSource {
+            owner: "mesh-llm".into(),
+            repo: "..-plugin".into(),
+        };
+        for name in [".", "..", repo.plugin_name()] {
+            let Err(error) =
+                stage_plugin_archive(&archive_path, ArchiveExt::TarGz, "", name, &install_dir)
+            else {
+                panic!("{name} was staged");
+            };
+            assert!(error.to_string().contains("invalid plugin name"), "{error}");
+        }
+        assert!(!install_dir.exists());
+        Ok(())
     }
 }
 
