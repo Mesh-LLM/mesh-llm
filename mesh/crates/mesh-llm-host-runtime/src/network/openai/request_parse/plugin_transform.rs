@@ -156,6 +156,7 @@ mod tests {
             body["messages"][0]["content"],
             "/v1/messages via /v1/chat/completions"
         );
+        assert_eq!(request.body_len_bytes, body.to_string().len());
         assert_eq!(request.body_json.unwrap(), body);
 
         let chat = json!({"model": "m", "messages": [{"role": "user", "content": "hello"}]});

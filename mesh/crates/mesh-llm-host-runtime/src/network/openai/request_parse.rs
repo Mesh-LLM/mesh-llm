@@ -369,6 +369,8 @@ struct RequestRewriteOutcome {
     request_path: String,
     response_adapter: ResponseAdapter,
     rewritten_body: Option<Vec<u8>>,
+    /// A plugin request transform replaced the body.
+    transformed: bool,
 }
 
 // ── Request parsing ──
@@ -525,7 +527,12 @@ where
         parsed.request_id,
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
-    let body_len_bytes = body.len();
+    // Context budgets follow what reaches the model: a transform may replace
+    // a large attachment with a little text, or the reverse.
+    let body_len_bytes = match rewrite.rewritten_body.as_deref() {
+        Some(forwarded) if rewrite.transformed => forwarded.len(),
+        _ => body.len(),
+    };
     let body_bytes = if body.is_empty() { None } else { Some(body) };
 
     Ok(BufferedHttpRequest {
@@ -670,6 +677,7 @@ async fn rewrite_request_body_for_forwarding(
         request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
+        transformed: false,
     };
     if !requires_json_transform {
         return Ok(outcome);
@@ -698,13 +706,14 @@ async fn rewrite_request_body_for_forwarding(
             changed = true;
         }
     }
-    changed |= plugin_transform::apply_request_transforms(
+    outcome.transformed = plugin_transform::apply_request_transforms(
         transformer,
         &outcome.request_path,
         path,
         body_json,
     )
     .await?;
+    changed |= outcome.transformed;
     if changed {
         outcome.rewritten_body = Some(
             serde_json::to_vec(body_json)
