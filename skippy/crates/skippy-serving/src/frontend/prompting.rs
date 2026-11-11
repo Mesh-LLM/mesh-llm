@@ -73,17 +73,21 @@ impl StageOpenAiBackend {
         // templates close every assistant turn, so the model would see a
         // finished answer and stop. Render the history before it with the
         // generation prompt and append its text, as llama.cpp's server does.
+        // A generation prompt that leaves a reasoning block open would put the
+        // text inside it, so that case keeps the ordinary rendering.
         if let Some(continued) = assistant_continuation(request) {
             let mut history = request.clone();
             history.messages.pop();
             history.extra.remove("prefill_assistant");
-            let options = ChatTemplateOptions {
+            let continuation_options = ChatTemplateOptions {
                 add_assistant: true,
-                ..options
+                ..options.clone()
             };
-            let mut prepared = self.prepare_chat_prompt(&history, options)?;
-            prepared.text.push_str(&continued);
-            return Ok(prepared);
+            let mut prepared = self.prepare_chat_prompt(&history, continuation_options)?;
+            if !generation_prompt_opens_reasoning(prepared.chat_parse_metadata.as_deref()) {
+                prepared.text.push_str(&continued);
+                return Ok(prepared);
+            }
         }
 
         let marker = {
@@ -435,8 +439,8 @@ pub(super) fn parse_emulated_chat_output(
 
 /// The text a `prefill_assistant` request asks the model to continue: the
 /// last message, when the request set `prefill_assistant` and that message is
-/// an assistant one whose content is text only. `None` leaves the request to
-/// the ordinary template rendering.
+/// an assistant one with text-only content and no other field. `None` leaves
+/// the request to the ordinary template rendering, which sees every field.
 fn assistant_continuation(request: &GenerationRequest) -> Option<String> {
     request
         .extra
@@ -445,19 +449,50 @@ fn assistant_continuation(request: &GenerationRequest) -> Option<String> {
     let last = request
         .messages
         .last()
-        .filter(|message| message.role == "assistant")?;
-    match last.content.as_ref()? {
-        MessageContent::Text(text) => Some(text.clone()),
-        MessageContent::Parts(parts) if parts.iter().all(|part| part.content_type == "text") => {
-            Some(
-                parts
-                    .iter()
-                    .filter_map(|part| part.text.as_deref())
-                    .collect(),
-            )
-        }
-        _ => None,
+        .filter(|message| message.role == "assistant" && message.extra.is_empty())?;
+    let content = last.content.as_ref()?;
+    let text_only = match content {
+        MessageContent::Text(_) => true,
+        MessageContent::Parts(parts) => parts.iter().all(|part| part.content_type == "text"),
+        MessageContent::Other(_) => false,
+    };
+    if !text_only {
+        return None;
     }
+    // The same text the template would have rendered: parts joined by "\n".
+    crate::frontend::message_content_to_generation_text(content, "", &mut Vec::new()).ok()
+}
+
+/// Whether the rendered generation prompt ends inside a reasoning block: it
+/// contains the template's thinking start tag and no end tag after it.
+fn generation_prompt_opens_reasoning(metadata_json: Option<&str>) -> bool {
+    let Some(metadata) = metadata_json.and_then(|json| serde_json::from_str::<Value>(json).ok())
+    else {
+        return false;
+    };
+    let prompt = metadata
+        .get("generation_prompt")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(start_tag) = metadata
+        .get("thinking_start_tag")
+        .and_then(Value::as_str)
+        .filter(|tag| !tag.is_empty())
+    else {
+        return false;
+    };
+    let Some(opened) = prompt.rfind(start_tag) else {
+        return false;
+    };
+    let after = &prompt[opened + start_tag.len()..];
+    !metadata
+        .get("thinking_end_tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|tag| !tag.is_empty())
+        .any(|tag| after.contains(tag))
 }
 
 #[cfg(test)]
@@ -500,23 +535,59 @@ mod continuation_tests {
     }
 
     #[test]
-    fn text_parts_are_joined_and_other_parts_are_left_to_the_template() {
+    fn text_parts_are_joined_as_the_template_would_and_other_parts_are_left_to_it() {
         let mut parts = request(vec![("user", "Count.")], true);
         parts.messages.push(GenerationMessage {
             role: "assistant".into(),
             content: Some(MessageContent::Parts(
                 serde_json::from_value(serde_json::json!([
-                    {"type": "text", "text": "1\n"},
-                    {"type": "text", "text": "2\n"}
+                    {"type": "text", "text": "first"},
+                    {"type": "text", "text": "second"}
                 ]))
                 .unwrap(),
             )),
             extra: Default::default(),
         });
-        assert_eq!(assistant_continuation(&parts).as_deref(), Some("1\n2\n"));
+        assert_eq!(
+            assistant_continuation(&parts).as_deref(),
+            Some("first\nsecond")
+        );
         if let Some(MessageContent::Parts(list)) = &mut parts.messages[1].content {
             list[1].content_type = "image_url".into();
         }
         assert_eq!(assistant_continuation(&parts), None);
+    }
+
+    #[test]
+    fn a_prefill_with_other_fields_is_left_to_the_template() {
+        let mut with_tool_calls = request(vec![("user", "Run it."), ("assistant", "Sure.")], true);
+        with_tool_calls.messages[1].extra.insert(
+            "tool_calls".into(),
+            serde_json::json!([{"id": "call_1", "type": "function"}]),
+        );
+        assert_eq!(assistant_continuation(&with_tool_calls), None);
+    }
+
+    fn metadata(generation_prompt: &str) -> String {
+        serde_json::json!({
+            "generation_prompt": generation_prompt,
+            "thinking_start_tag": "<think>",
+            "thinking_end_tags": ["</think>"],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn an_open_reasoning_block_in_the_generation_prompt_is_detected() {
+        assert!(generation_prompt_opens_reasoning(Some(&metadata(
+            "<|im_start|>assistant\n<think>\n"
+        ))));
+        assert!(!generation_prompt_opens_reasoning(Some(&metadata(
+            "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        ))));
+        assert!(!generation_prompt_opens_reasoning(Some(&metadata(
+            "<|im_start|>assistant\n"
+        ))));
+        assert!(!generation_prompt_opens_reasoning(None));
     }
 }
