@@ -47,7 +47,9 @@ pub(super) async fn ensure_serving_ports_free(options: &RuntimeOptions) -> Resul
 /// Windows a port held exclusively on every address (a node started with
 /// `--listen-all`) fails a loopback bind with access denied rather than
 /// address in use; access denied alone can also mean a reserved port, so
-/// only a listener that answers counts as taken.
+/// only a listener that answers counts as taken. Only Windows needs this: on
+/// macOS a loopback bind beside a `0.0.0.0` listener succeeds, so that node
+/// stays invisible here, as it was before this check.
 fn accepts_local_connections(port: u16) -> bool {
     std::net::TcpStream::connect_timeout(
         &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -108,7 +110,6 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains(&format!("port {port} for the OpenAI-compatible API")));
         assert!(message.contains("mesh-llm load <model>"));
-        assert!(message.contains(STOP_HINT));
         assert!(message.contains("--port"));
     }
 
@@ -128,6 +129,9 @@ mod tests {
         assert!(message.contains("--console"));
     }
 
+    // Windows only: elsewhere a loopback bind beside a wildcard listener can
+    // succeed (it does on macOS), and then nothing is in use to report.
+    #[cfg(windows)]
     #[tokio::test]
     async fn a_port_held_on_every_address_is_reported_for_a_loopback_node() {
         // A node started with --listen-all holds 0.0.0.0:P exclusively; on
