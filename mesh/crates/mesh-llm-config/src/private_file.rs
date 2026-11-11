@@ -86,13 +86,6 @@ pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<(
         let _ = fs::remove_file(&tmp);
         return Err(error);
     }
-    #[cfg(windows)]
-    if target.exists()
-        && let Err(error) = fs::remove_file(target)
-    {
-        let _ = fs::remove_file(&tmp);
-        return Err(error);
-    }
     if let Err(error) = fs::rename(&tmp, target) {
         let _ = fs::remove_file(&tmp);
         return Err(error);
@@ -779,6 +772,39 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|name| name.ends_with(".tmp"))
             .collect()
+    }
+
+    #[test]
+    fn replacing_a_private_file_never_leaves_it_missing_for_a_reader() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = Arc::new(temp.path().join("config.toml"));
+        write_private_file(&path, b"first").unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (path, done) = (Arc::clone(&path), Arc::clone(&done));
+            std::thread::spawn(move || {
+                let mut missing = 0u32;
+                while !done.load(Ordering::Relaxed) {
+                    if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        missing += 1;
+                    }
+                }
+                missing
+            })
+        };
+        for _ in 0..200 {
+            write_private_file(&path, b"replaced").unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+        assert_eq!(
+            reader.join().unwrap(),
+            0,
+            "a reader found no file mid-replace"
+        );
     }
 
     #[test]

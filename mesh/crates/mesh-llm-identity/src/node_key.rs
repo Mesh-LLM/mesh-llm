@@ -206,11 +206,6 @@ fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), CryptoError> 
         file.sync_all()?;
         drop(file);
 
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
-
         std::fs::rename(&tmp_path, path)?;
 
         #[cfg(unix)]
@@ -232,6 +227,38 @@ fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), CryptoError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacing_a_node_key_never_leaves_it_missing_for_a_reader() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let path = Arc::new(temp_node_key_path());
+        write_bytes_atomically(&path, b"first").unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (path, done) = (Arc::clone(&path), Arc::clone(&done));
+            std::thread::spawn(move || {
+                let mut missing = 0u32;
+                while !done.load(Ordering::Relaxed) {
+                    if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        missing += 1;
+                    }
+                }
+                missing
+            })
+        };
+        for _ in 0..200 {
+            write_bytes_atomically(&path, b"replaced").unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+        assert_eq!(
+            reader.join().unwrap(),
+            0,
+            "a reader found no file mid-replace"
+        );
+    }
 
     fn temp_node_key_path() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mesh-node-key-{}", rand::random::<u64>()));

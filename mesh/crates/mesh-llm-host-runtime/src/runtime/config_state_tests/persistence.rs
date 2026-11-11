@@ -284,3 +284,36 @@ fn config_sync_apply_does_not_persist_the_lifecycle_log_parser_env_override() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn replacing_the_config_never_leaves_it_missing_for_a_reader() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dir = test_dir();
+    let path = Arc::new(dir.join("config.toml"));
+    super::super::atomic_write(&path, b"first").unwrap();
+    let done = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let (path, done) = (Arc::clone(&path), Arc::clone(&done));
+        std::thread::spawn(move || {
+            let mut missing = 0u32;
+            while !done.load(Ordering::Relaxed) {
+                if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                {
+                    missing += 1;
+                }
+            }
+            missing
+        })
+    };
+    for _ in 0..200 {
+        super::super::atomic_write(&path, b"replaced").unwrap();
+    }
+    done.store(true, Ordering::Relaxed);
+    assert_eq!(
+        reader.join().unwrap(),
+        0,
+        "a reader found no file mid-replace"
+    );
+}
