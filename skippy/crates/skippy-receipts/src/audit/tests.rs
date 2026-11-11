@@ -102,9 +102,10 @@ fn each_backend_names_its_own_profiles() {
     use crate::ggml_types::{GGML_F16, GGML_F32, GGML_Q8_0};
     assert_eq!(BackendFamily::of("CPU"), Some(BackendFamily::Cpu));
     assert_eq!(BackendFamily::of("CUDA0"), Some(BackendFamily::Cuda));
+    assert_eq!(BackendFamily::of("MTL0"), Some(BackendFamily::Metal));
     // a backend without measured profiles has no family: Vulkan's kernels
-    // round in ways no profile models, and Metal's prefill fits none
-    for unprofiled in ["Vulkan0", "Vulkan1", "MTL0", "Metal", "ROCm0", ""] {
+    // round in ways no profile models
+    for unprofiled in ["Vulkan0", "Vulkan1", "Metal", "ROCm0", ""] {
         assert_eq!(BackendFamily::of(unprofiled), None, "{unprofiled}");
         assert!(BackendFamily::checked(unprofiled).is_err());
     }
@@ -132,6 +133,20 @@ fn each_backend_names_its_own_profiles() {
         profiles_for(BackendFamily::Cuda, crate::ggml_types::GGML_Q2_K)
             .unwrap()
             .contains(&Profile::Q8Mul64F32)
+    );
+    // Metal: f32 activations in decode, f16 ones rounded either way in
+    // prefill; no bf16 profile
+    assert_eq!(
+        profiles_for(BackendFamily::Metal, GGML_Q8_0),
+        Some(&[Profile::Raw, Profile::F16Weights, Profile::F16WeightsRtz][..])
+    );
+    assert_eq!(
+        profiles_for(BackendFamily::Metal, crate::ggml_types::GGML_Q4_K),
+        None
+    );
+    assert_eq!(
+        profiles_for(BackendFamily::Metal, crate::ggml_types::GGML_BF16),
+        None
     );
     // types without a reference dequantization or a known profile have none
     assert_eq!(profiles_for(BackendFamily::Cpu, 19), None);

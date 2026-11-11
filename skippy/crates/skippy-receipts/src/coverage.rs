@@ -54,7 +54,7 @@ pub fn unauditable(receipt: &Receipt, weights: &WeightFile, runtime: &str) -> Op
         let Some(family) = BackendFamily::of(&stage.backend) else {
             return Some(format!(
                 "stage {} ran on backend {}, whose rounding no profile models: an audit \
-                 covers CPU and CUDA stages",
+                 covers CPU, CUDA and Metal stages",
                 stage.stage_index, stage.backend
             ));
         };
@@ -73,6 +73,17 @@ pub fn unauditable(receipt: &Receipt, weights: &WeightFile, runtime: &str) -> Op
         }
     }
     match weights.tensors.get(head_weight(weights)) {
+        Some(tensor)
+            if receipt.stages.last().is_some_and(|stage| {
+                BackendFamily::of(&stage.backend) == Some(BackendFamily::Metal)
+                    && profiles_for(BackendFamily::Metal, tensor.ggml_type).is_none()
+            }) =>
+        {
+            Some(format!(
+                "no rounding profile for output weights ({}) on the terminal backend",
+                type_name(tensor.ggml_type)
+            ))
+        }
         Some(tensor) if !crate::dequant::supports(tensor.ggml_type) => Some(format!(
             "no reference decoding of {} output weights",
             type_name(tensor.ggml_type)
@@ -143,6 +154,25 @@ mod tests {
             weights.tensors.get_mut(*name).unwrap().ggml_type = ggml_type;
         }
         weights
+    }
+
+    #[test]
+    fn metal_requires_qualified_layer_and_head_matrix_types() {
+        assert_eq!(
+            unauditable(
+                &receipt("MTL0", None),
+                &weights(GGML_Q8_0, GGML_Q8_0),
+                RUNTIME
+            ),
+            None
+        );
+        for (layer, head) in [
+            (GGML_F32, GGML_Q8_0),
+            (GGML_Q8_0, GGML_F32),
+            (GGML_Q8_0, crate::ggml_types::GGML_Q6_K),
+        ] {
+            assert!(unauditable(&receipt("MTL0", None), &weights(layer, head), RUNTIME).is_some());
+        }
     }
 
     #[test]

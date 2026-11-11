@@ -104,6 +104,7 @@ impl Reader<'_> {
     /// The reading of `opened` under one profile.
     fn read_as(&self, profile: Profile, opened: &Opened, rows: &[(usize, Vec<f64>)]) -> Reading {
         let mut activation = profile.apply(&opened.activation);
+        let rows = super::weight_rounding::rows_for(profile, rows);
         let reference: Vec<(usize, f64)> = rows
             .iter()
             .map(|(r, w)| (*r, dot(w, &activation) + self.head.bias_of(*r)))
@@ -157,6 +158,7 @@ fn check(reading: &Reading, products: &[f64], checked: &[(usize, Vec<f64>)]) -> 
         .map(|(&y, reference)| (f64::from(y) - reference).powi(2))
         .sum();
     let error = difference.sqrt() / opened_logits::norm(&reading.unbiased);
+    let checked = super::weight_rounding::rows_for(reading.profile, checked);
     let rows: Vec<(usize, &[f64])> = checked.iter().map(|(r, w)| (*r, w.as_slice())).collect();
     let row_error = audit::column_error(&rows, &reading.activation, &reading.unbiased);
     LogitsCheck {
@@ -200,8 +202,13 @@ fn check_all(
     positions: &[&Position],
     readings: &[Reading],
 ) -> Result<(Vec<LogitsCheck>, Vec<Vec<f64>>)> {
-    let activations: Vec<Vec<f64>> = readings.iter().map(|r| r.activation.clone()).collect();
-    let products = reader.head.products(reader.weights, &activations)?;
+    let activations: Vec<_> = readings
+        .iter()
+        .map(|r| (r.activation.as_slice(), r.profile.rounds_weights()))
+        .collect();
+    let products = reader
+        .head
+        .products_with_rounding(reader.weights, &activations)?;
     let checks = readings
         .iter()
         .zip(&products)

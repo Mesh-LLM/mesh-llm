@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 
-use crate::activation_rounding::Profile;
+use crate::activation_rounding::{Profile, round_to_f16};
 use crate::draw::DrawStream;
 use crate::error_bound::{all_finite, exceeds, worst_of};
 use crate::glue::PlannedMatmul;
@@ -42,9 +42,12 @@ pub(crate) fn allowed_failing_columns(columns: usize) -> usize {
     2 + columns / 32
 }
 
-/// The backends with measured rounding profiles. Metal has none: through
-/// `skippy serve`, its prefill outputs differ from every profile by up to
-/// 8e-4, which would fail honest nodes (RECEIPTS_MEASUREMENTS.md, "Detection").
+/// The backends with measured rounding profiles.
+///
+/// Metal Q8_0 profiles are measured on an Apple M5 Max through `skippy
+/// serve`: raw, nearest-f16 weights/activations, and nearest-f16 weights
+/// with toward-zero-f16 activations. Each column is checked against these
+/// profiles, not a claimed kernel label (RECEIPTS_MEASUREMENTS.md).
 ///
 /// Vulkan has none either. Its integer-dot kernels round K-quant weights
 /// in a way no profile models, so an honest node with Q4_K_M weights on
@@ -57,6 +60,7 @@ pub(crate) fn allowed_failing_columns(columns: usize) -> usize {
 pub enum BackendFamily {
     Cpu,
     Cuda,
+    Metal,
 }
 
 impl BackendFamily {
@@ -66,6 +70,8 @@ impl BackendFamily {
             Some(Self::Cpu)
         } else if backend.starts_with("CUDA") {
             Some(Self::Cuda)
+        } else if backend.starts_with("MTL") {
+            Some(Self::Metal)
         } else {
             None
         }
@@ -95,11 +101,11 @@ pub(crate) fn profiles_for(family: BackendFamily, weight_type: u32) -> Option<&'
         GGML_Q4_K, GGML_Q5_0, GGML_Q5_K, GGML_Q6_K, GGML_Q8_0,
     };
     use Profile::{
-        Bf16, CpuQ8, CpuQ8K, F16, Q8DivHalf, Q8Mul64F32, Q8MulF32, Q8MulHalf, Q8MulHalfSums,
-        Q8MulHalfSumsDp4a, Raw,
+        Bf16, CpuQ8, CpuQ8K, F16, F16Weights, F16WeightsRtz, Q8DivHalf, Q8Mul64F32, Q8MulF32,
+        Q8MulHalf, Q8MulHalfSums, Q8MulHalfSumsDp4a, Raw,
     };
     let profiles: &'static [Profile] = match (family, weight_type) {
-        (_, GGML_F32) => &[Raw],
+        (BackendFamily::Cpu | BackendFamily::Cuda, GGML_F32) => &[Raw],
         (BackendFamily::Cpu, GGML_F16) => &[F16],
         (BackendFamily::Cpu, GGML_BF16) => &[Bf16],
         (BackendFamily::Cpu, GGML_Q8_0 | GGML_Q4_0 | GGML_Q5_0 | GGML_IQ4_NL) => &[CpuQ8],
@@ -118,6 +124,10 @@ pub(crate) fn profiles_for(family: BackendFamily, weight_type: u32) -> Option<&'
             &[Q8DivHalf, Q8MulF32, F16]
         }
         (BackendFamily::Cuda, GGML_Q2_K) => &[Q8DivHalf, Q8Mul64F32, F16],
+        // f32 activations in decode (`mul_mv`); f16 activations and weights
+        // in prefill (`mul_mm`), the activation rounded to nearest without
+        // the tensor API and truncated with it; bf16 weights are not measured
+        (BackendFamily::Metal, GGML_Q8_0) => &[Raw, F16Weights, F16WeightsRtz],
         _ => return None,
     };
     Some(profiles)
@@ -442,6 +452,7 @@ fn matmul_errors(
     let shape = matmul_slices(tensor, m, x.len(), y.len())?;
     let picked = cache.picked(&m.weight, shape.m, router, seed);
     let sums = profiles.iter().any(|p| p.block_sums().is_some());
+    let rounds_weights = profiles.iter().any(|p| p.rounds_weights());
     let mut checks = Vec::with_capacity(shape.slices.len());
     for g in cache.checked_slices(m, position, shape.slices.len()) {
         let (base, input) = shape.slices[g];
@@ -461,6 +472,13 @@ fn matmul_errors(
                 true => picked
                     .iter()
                     .map(|&r| cache.blocks[&key(r)].as_slice())
+                    .collect(),
+                false => Vec::new(),
+            },
+            f16_rows: match rounds_weights {
+                true => picked
+                    .iter()
+                    .map(|&r| round_to_f16(&cache.rows[&key(r)]))
                     .collect(),
                 false => Vec::new(),
             },

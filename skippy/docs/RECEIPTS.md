@@ -118,15 +118,20 @@ The full list, with the threat model, is in
   when `[receipts] enabled` is on.
 - The weights are F32, F16, BF16, Q8_0, Q4_0, Q5_0, IQ4_NL, IQ4_XS or a
   K-quant from Q2_K to Q6_K. Dense and MoE models are supported.
-- The backend is the CPU or CUDA. A stage on another backend (Vulkan,
-  Metal or ROCm) issues no receipts: its recorder does not start, the
-  stage serves normally, and `skippy serve` prints one warning,
-  `Receipts stay off for this model stage`, with the reason. The auditor
-  has no rounding profiles for those backends, so a receipt that names
-  one gets no audit. A Mesh node does not advertise receipts for a
-  runtime on such a backend. Vulkan lost its profiles on 2026-11-10: an
-  honest Vulkan node with Q4_K_M weights on an integrated GPU passed 2 of
-  16 audits.
+- The backend is CPU, CUDA, or experimentally Metal on the exact device
+  `Apple M5 Max`. Metal requires every matrix in the actual loaded GGUF
+  artifacts (including embeddings and the output head) to be Q8_0, full
+  offload to one unambiguously selected GPU, no host experts, and no
+  disabled op offload. Implicit multi-shard GGUF loading is refused;
+  explicitly supplied parts are all checked. This checks artifact metadata
+  and placement configuration, not a resident-tensor attestation. No other
+  Apple GPU or Metal matrix type is qualified.
+- Unqualified stages, including Vulkan and ROCm, serve normally without
+  receipts. `skippy serve` prints `Receipts stay off for this model stage`
+  with the reason; Mesh derives its receipts flag from the attached recorder,
+  not the requested setting. The auditor refuses missing backend/type
+  profiles. Vulkan lost its profiles on 2026-11-10: an honest Vulkan node
+  with Q4_K_M weights on an integrated GPU passed 2 of 16 audits.
 - The model uses flash attention. A stage with a transposed V cache gets
   no receipt.
 - The KV cache stores f16 rows, which is the default. A stage with a
@@ -980,8 +985,9 @@ A node advertises a model with receipts only when all of these are true:
 
 - the loaded runtime issues receipts, because its recorder started. The
   recorder does not start on a stage with a quantized KV cache, or on a
-  backend other than the CPU and CUDA.
-- the backend of the runtime has rounding profiles: the CPU or CUDA.
+  backend outside the [qualified serving requirements](#requirements).
+- the backend/type pair has rounding profiles: CPU, CUDA, or qualified
+  Metal Q8_0.
 - the model serves chat completions.
 - every instance of the model issues receipts.
 - the receipts name a file of a Hugging Face repository at a commit.
@@ -1336,7 +1342,10 @@ places:
 | `op ... is not in the receipt op table` | The graph uses a ggml op that the classifier does not know | Serve this model without receipts. Report the op |
 | `the V cache is stored transposed; receipts need flash attention` | Flash attention is off | Turn flash attention on |
 | `no audit covers a quantized KV cache` | A KV cache type of the stage is q8_0 or q4_0. Such a stage also logs `receipts stay off for this stage` when it starts, and then no response carries a receipt | Set both KV cache types of the stage to f16 |
-| `an audit covers CPU and CUDA alone` | The stage runs on Vulkan, Metal, ROCm or another backend without rounding profiles. It logs `receipts stay off for this stage` when it starts, and no response carries a receipt | Serve on the CPU or CUDA |
+| `an audit covers CPU, CUDA and Metal alone` | The stage runs on Vulkan, ROCm or another backend without rounding profiles | Serve on a qualified backend |
+| `Metal GPUs measured` | The selected Metal device is not exactly `Apple M5 Max`, or selection is ambiguous | Serve without receipts or use a qualified device |
+| `Metal placement is unqualified` | Partial offload, host experts, split GPU placement, or disabled op offload | Use full offload to one GPU with op offload enabled |
+| `Metal tensor coverage is unqualified` | A loaded matrix is not Q8_0, metadata cannot be read, or GGUF shards are implicit | Use qualified Q8_0 artifacts and explicitly enumerate loaded parts, or serve without receipts |
 | `which nothing commits` | A layer reads a value from another layer that is not the residual stream | Serve this model without receipts |
 | `more than receipts leave unchecked` | Token-mixing ops read more than 1% of the weight bytes of the layer directly | Serve this model without receipts |
 | `token mixing reaches the layer output without a weight matmul` | The classifier cannot bound a token-mixing region | Serve this model without receipts |
@@ -1374,7 +1383,7 @@ Two errors stop a stage at startup:
 | `got no receipt:` | The turn got no receipt | See [A turn gets no receipt](#a-turn-gets-no-receipt) |
 | `the receipt is version N, and this verifier checks version 7` | The node and the auditor are different releases | Use the same release on both sides |
 | `the node ran ..., and this verifier runs ...` | The Skippy ABI or the llama.cpp build differs | Use the same release on both sides |
-| `ran on backend ..., whose rounding no profile models` | A stage ran on Vulkan, Metal, ROCm or another backend without profiles | None. Such a stage cannot be audited. A current node issues no receipts on such a backend |
+| `ran on backend ..., whose rounding no profile models` | A stage ran on Vulkan, ROCm or another backend without profiles | None. Such a stage cannot be audited. A current node issues no receipts on such a backend |
 | `no rounding profile for ... weights` | A stage multiplies a weight type without a profile, for example q4_1 or q5_1 | None |
 | `stored KV rows of type ...: an audit covers a cache of f16 or f32 rows` | A stage has a quantized KV cache | None. A current node issues no receipts with such a cache |
 | `no reference decoding of ... output weights` | The auditor cannot decode the type of the output matrix | None |
@@ -1522,8 +1531,9 @@ tables, and the numbers of earlier builds, are in
 
 - The limits that are still open are in
   [Open limitations](../../mesh/docs/design/RECEIPTS.md#open-limitations).
-  The most important ones for an operator: only CPU and CUDA stages are
-  audited, attention is a loose check, an audit checks two positions of a
+  The most important ones for an operator: CPU, CUDA and narrowly qualified
+  experimental Metal Q8_0 stages are audited, attention is a loose check,
+  an audit checks two positions of a
   cached prefix, and the tags of a reasoning budget are the statement of
   the node.
 - `GET /v1/models` on a Mesh client node still lists the model of a peer

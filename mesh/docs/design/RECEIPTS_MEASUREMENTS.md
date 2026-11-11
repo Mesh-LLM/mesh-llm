@@ -515,6 +515,50 @@ family. Replay on Metal needed one correction: Metal has no pinned host
 buffers, and its asynchronous read accepts only memory that it mapped. So
 the recorder reads values into pageable memory with blocking copies.
 
+**Apple M5 Max, Q8_0 through `skippy serve` (2026-11-11).** This is a
+separate qualification from the historical M6 result above, not an explanation
+of the difference between machines. Qwen3-4B Q8_0 two-stage serving passed
+fresh short, long and cached-prefix-reuse audits and offline rechecks with the
+default environment and with `GGML_METAL_TENSOR_DISABLE=1`. The variable is
+presence-based: setting it to `0` also disables tensor support. Default logs
+reported tensor support available, batch limit 2048 and ubatch limit 512;
+that does not establish every request's kernel dispatch.
+
+The Q8_0 verifier tries raw products, nearest-f16 weights and activations,
+and nearest-f16 weights with toward-zero-f16 activations per checked column.
+A standalone K=2560, M=128 probe fit raw products for N<=16 and the
+rounded-weight/toward-zero-activation profile for N>=17 on both native pins
+`620d2225c` and `372dc5ca157276beb6c67b2e92477e8d662e964a`. These probes do
+not qualify every served batch/head shape or establish a native-pin regression.
+Head keys project the rounded weights, rather than rounding their projections.
+Matrix tolerance (1e-3), head tolerance (1e-5), and bounded repair rules are
+unchanged.
+
+A fresh ignored native test runs real Q8_0 and Q6_K execution against a Q8_0
+claim: Q8 passes, while Q6 is numerically rejected by the normal audit and
+offline recheck with fresh version-7 signed evidence. It constructs test-only
+recorders below production admission; it is not a dishonest split-chain CLI
+control. Production Q6 serving returned ordinary inference successfully but
+started neither stage's receipt recorder. A separate native host test confirms
+that Q8 attaches the recorder/router and sets the receipts trust flag, whereas
+Q6 and partial offload leave all three off.
+
+Serving admission is intentionally narrow: exact `Apple M5 Max`, all matrix
+metadata Q8_0 (including the embedding and output head), full single-device
+GPU placement, and no host experts or disabled op offload. Implicit GGUF shard
+discovery is refused; explicit ordered parts are checked individually. This is
+artifact/configuration admission, not resident-tensor attestation. Metal F32,
+BF16, Q4 and Q6 matrices and other Apple devices remain unqualified.
+
+The served runtime identifies llama.cpp
+`372dc5ca157276beb6c67b2e92477e8d662e964a`, patch digest
+`a5afd80e9e65041199dbae2c8d1abcb0a7bbd5c4e6476b394274b8b81f1350a0`,
+and Skippy ABI 0.1.81. Independent binary-fraction fixtures cover matrix and
+both head verification paths, corruption, legacy head-key rebuilding and
+rounding-boundary repair. These results support this restricted experimental
+configuration; they make no new M6, exhaustive dispatch, or split-chain
+cheating claim.
+
 **ARM CPU (DGX Spark, Neon with i8mm and SVE), lab harness.** The CPU
 profile matches as on x86: `e` ≤ 4e-7 for q4_K, q4_0 (repacked) and q8_0,
 and ≤ 9e-7 for q4_1 with the rule above.

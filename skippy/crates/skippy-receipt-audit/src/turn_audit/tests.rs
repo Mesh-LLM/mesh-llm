@@ -470,7 +470,7 @@ fn a_cheated_column_fails_though_the_layer_does_not_load() {
 fn a_receipt_this_verifier_cannot_audit_is_no_audit_before_any_challenge() {
     let client = Client::new();
     let mut other_runtime = Turn::new();
-    other_runtime.receipt.stages[0].backend = "MTL0".into();
+    other_runtime.receipt.stages[0].backend = "Vulkan0".into();
     let node = Node {
         turn: other_runtime.bound(client.key.public(), turn::GREEDY),
         // the node is never asked
@@ -481,7 +481,7 @@ fn a_receipt_this_verifier_cannot_audit_is_no_audit_before_any_challenge() {
     let TurnAudit::NoAudit(output) = audit else {
         panic!("not no audit");
     };
-    assert!(output.reason.contains("MTL0"), "{}", output.reason);
+    assert!(output.reason.contains("Vulkan0"), "{}", output.reason);
     assert_eq!(
         serde_json::to_value(&output).unwrap()["outcome"],
         "no_audit"

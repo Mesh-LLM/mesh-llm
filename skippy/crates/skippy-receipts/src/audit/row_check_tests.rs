@@ -135,7 +135,8 @@ fn a_weight_the_client_cannot_read_blames_nobody() {
     .unwrap_err();
     assert!(NodeFault::find(&error).is_none(), "{error:#}");
     // nor does a backend without rounding profiles
-    let error = check_rows(&weights(), &layer, Routers::Planned(&plan), SEED, "MTL0").unwrap_err();
+    let error =
+        check_rows(&weights(), &layer, Routers::Planned(&plan), SEED, "Vulkan0").unwrap_err();
     assert!(NodeFault::find(&error).is_none(), "{error:#}");
 }
 

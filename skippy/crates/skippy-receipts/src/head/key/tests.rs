@@ -144,6 +144,8 @@ fn a_key_survives_a_round_trip_and_fits_only_its_matrix() {
     let weights = model();
     let key = HeadKey::build(&weights, [9; 32]).unwrap();
     let text = serde_json::to_string(&key).unwrap();
+    // Non-Q8 keys keep the old representation and remain usable.
+    assert!(!text.contains("f16_vectors"));
     let back: HeadKey = serde_json::from_str(&text).unwrap();
     assert_eq!(back, key);
     assert!(back.fits(&weights));
@@ -181,6 +183,7 @@ fn scaled_logits_fail_when_the_model_has_no_scale() {
 fn toy_key() -> Key {
     Key {
         signs: vec![0b0101, 0b0011, 0b1110],
+        f16_vectors: Vec::new(),
         vectors: vec![
             vec![1.0, -2.0, 0.5],
             vec![0.25, 3.0, -1.0],
@@ -207,7 +210,7 @@ fn a_rounding_the_node_took_the_other_way_explains_the_key_residuals() {
         .iter()
         .map(|v| v[1] * -0.02 + v[2] * 0.004)
         .collect();
-    let (taken, left) = explained(&key, &residuals, &flips);
+    let (taken, left) = explained(&key.vectors, &residuals, &flips);
     assert_eq!(taken, vec![1]);
     assert!(left < 1e-12);
     // both of them
@@ -217,7 +220,7 @@ fn a_rounding_the_node_took_the_other_way_explains_the_key_residuals() {
         .zip(&residuals)
         .map(|(v, r)| r + v[0] * 0.01)
         .collect();
-    assert_eq!(explained(&key, &both, &flips).0, vec![0, 1]);
+    assert_eq!(explained(&key.vectors, &both, &flips).0, vec![0, 1]);
 }
 
 #[test]
@@ -229,11 +232,11 @@ fn residuals_no_flip_explains_are_left_as_they_are() {
     // a changed logit moves every residual by its sign, which no
     // activation flip reproduces
     let residuals = [0.3, -0.3, 0.3, 0.3];
-    let (taken, left) = explained(&key, &residuals, &flips);
+    let (taken, left) = explained(&key.vectors, &residuals, &flips);
     assert!(taken.len() <= 1);
     assert!(left > 0.25, "{left}");
     // a residual that is not a number is left as the worst there is
-    let (_, left) = explained(&key, &[0.0, f64::NAN, 0.0, 0.0], &flips);
+    let (_, left) = explained(&key.vectors, &[0.0, f64::NAN, 0.0, 0.0], &flips);
     assert_eq!(left, f64::INFINITY);
 }
 

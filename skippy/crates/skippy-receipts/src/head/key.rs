@@ -9,7 +9,10 @@
 //! logit by more than the rounding shows up, since it does not know `r`.
 //! The check also compares a few rows of `W` with `y` like any matmul,
 //! always including the sampled token's, and judges the greedy choice on
-//! `y` itself.
+//! `y` itself. Q8 keys also hold `rᵀ round_f16(W)` for kernels that
+//! round each weight before multiplying. Both sets use the same secret
+//! signs and are built in the same pass; rounded sums are not equivalent.
+//! Old Q8 keys without this second set are rebuilt by the cache loader.
 //!
 //! The key must stay secret, so it lives only on the client. Someone who
 //! rechecks evidence without it compares the logits with every row of the
@@ -52,6 +55,10 @@ pub struct HeadKey {
     seed: String,
     /// Per vector, `rᵀW` as base64 little-endian f64.
     vectors: Vec<String>,
+    /// `rᵀ round_f16(W)`, not `round_f16(rᵀW)`. Old Q8 keys lack these
+    /// and fail `fits`, so the existing key-file loader rebuilds them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    f16_vectors: Vec<String>,
 }
 
 /// The key without its secrets: a log line or a panic message must not
@@ -71,6 +78,17 @@ struct Key {
     /// Per row, the sign bits of the vectors.
     signs: Vec<u8>,
     vectors: Vec<Vec<f64>>,
+    f16_vectors: Vec<Vec<f64>>,
+}
+
+impl Key {
+    fn vectors_for(&self, profile: Profile) -> &[Vec<f64>] {
+        if profile.rounds_weights() {
+            &self.f16_vectors
+        } else {
+            &self.vectors
+        }
+    }
 }
 
 impl HeadKey {
@@ -82,6 +100,11 @@ impl HeadKey {
         let tensor = weights.tensor(weight)?;
         let (rows, width) = (tensor.rows(), usize::try_from(tensor.row_len())?);
         let signs = signs(&seed, rows);
+        let vector_count = if tensor.ggml_type == crate::ggml_types::GGML_Q8_0 {
+            2 * KEY_VECTORS
+        } else {
+            KEY_VECTORS
+        };
         let threads = std::thread::available_parallelism()
             .map_or(1, std::num::NonZero::get)
             .min(16) as u64;
@@ -92,12 +115,19 @@ impl HeadKey {
                 .map(|first| {
                     let signs = &signs;
                     scope.spawn(move || -> Result<Vec<Vec<f64>>> {
-                        let mut sums = vec![vec![0.0f64; width]; KEY_VECTORS];
+                        let mut sums = vec![vec![0.0f64; width]; vector_count];
                         let range = first..(first + span).min(rows);
                         weights.stream_rows(weight, range, &mut |row, values| {
+                            let rounded = (vector_count > KEY_VECTORS)
+                                .then(|| crate::activation_rounding::round_to_f16(values));
                             for (k, sum) in sums.iter_mut().enumerate() {
-                                let r = sign(signs, row, k);
-                                for (s, w) in sum.iter_mut().zip(values) {
+                                let r = sign(signs, row, k % KEY_VECTORS);
+                                let weights = if k < KEY_VECTORS {
+                                    values
+                                } else {
+                                    rounded.as_deref().expect("rounded vectors have weights")
+                                };
+                                for (s, w) in sum.iter_mut().zip(weights) {
                                     *s += r * w;
                                 }
                             }
@@ -114,7 +144,7 @@ impl HeadKey {
                 })
                 .collect::<Result<Vec<_>>>()
         })?;
-        let mut vectors = vec![vec![0.0f64; width]; KEY_VECTORS];
+        let mut vectors = vec![vec![0.0f64; width]; vector_count];
         for part in parts {
             for (all, sums) in vectors.iter_mut().zip(part) {
                 for (a, s) in all.iter_mut().zip(sums) {
@@ -127,7 +157,14 @@ impl HeadKey {
             dims: tensor.dims.clone(),
             ggml_type: tensor.ggml_type,
             seed: hex::encode(seed),
-            vectors: vectors.iter().map(|v| encode_f64(v)).collect(),
+            vectors: vectors[..KEY_VECTORS]
+                .iter()
+                .map(|v| encode_f64(v))
+                .collect(),
+            f16_vectors: vectors[KEY_VECTORS..]
+                .iter()
+                .map(|v| encode_f64(v))
+                .collect(),
         })
     }
 
@@ -153,13 +190,27 @@ impl HeadKey {
             .iter()
             .map(|v| decode_f64(v))
             .collect::<Result<Vec<_>>>()?;
-        let finite = |v: &Vec<f64>| v.iter().all(|x| x.is_finite());
-        if vectors.len() != KEY_VECTORS || vectors.iter().any(|v| v.len() != width || !finite(v)) {
+        let f16_vectors = self
+            .f16_vectors
+            .iter()
+            .map(|v| decode_f64(v))
+            .collect::<Result<Vec<_>>>()?;
+        let valid = |vectors: &[Vec<f64>]| {
+            vectors.len() == KEY_VECTORS
+                && vectors
+                    .iter()
+                    .all(|v| v.len() == width && v.iter().all(|x| x.is_finite()))
+        };
+        if !valid(&vectors)
+            || (self.ggml_type == crate::ggml_types::GGML_Q8_0 && !valid(&f16_vectors))
+            || (!f16_vectors.is_empty() && !valid(&f16_vectors))
+        {
             bail!("the head key does not fit the output matrix");
         }
         Ok(Key {
             signs: signs(&seed, rows),
             vectors,
+            f16_vectors,
         })
     }
 }
@@ -265,6 +316,8 @@ fn check_profile(
     weight_rows: &[(usize, Vec<f64>)],
 ) -> LogitsCheck {
     let mut xp = profile.apply(x);
+    let weight_rows = super::weight_rounding::rows_for(profile, weight_rows);
+    let vectors = c.key.vectors_for(profile);
     let reference: Vec<(usize, f64)> = weight_rows
         .iter()
         .map(|(r, w)| (*r, dot(w, &xp) + c.head.bias_of(*r)))
@@ -273,15 +326,13 @@ fn check_profile(
     // the logits the matrix alone gives, before any scale or bias
     let unbiased = unbiased(c.head, y, scale);
     let norm = opened_logits::norm(&unbiased);
-    let residuals: Vec<f64> = c
-        .key
-        .vectors
+    let residuals: Vec<f64> = vectors
         .iter()
         .enumerate()
         .map(|(k, v)| signed_sum(c.key, k, &unbiased) - dot(v, &xp))
         .collect();
     let flips = rounding_flips::flips(profile, x, &xp);
-    let (taken, key_error) = explained(c.key, &residuals, &flips);
+    let (taken, key_error) = explained(vectors, &residuals, &flips);
     for flip in taken.iter().map(|&f| &flips[f]) {
         for &(i, change) in &flip.changes {
             xp[i] += change;
@@ -305,11 +356,11 @@ fn check_profile(
 
 /// The flips that best explain the key's `residuals`, at most
 /// two of them, and the largest residual they leave.
-fn explained(key: &Key, residuals: &[f64], flips: &[Flip]) -> (Vec<usize>, f64) {
+fn explained(vectors: &[Vec<f64>], residuals: &[f64], flips: &[Flip]) -> (Vec<usize>, f64) {
     let effects: Vec<Vec<f64>> = flips
         .iter()
         .map(|flip| {
-            key.vectors
+            vectors
                 .iter()
                 .map(|v| flip.changes.iter().map(|&(i, d)| v[i] * d).sum())
                 .collect()
@@ -355,12 +406,11 @@ fn encode_f64(values: &[f64]) -> String {
 
 fn decode_f64(text: &str) -> Result<Vec<f64>> {
     let bytes = crate::wire::decode_bytes(text).context("decode a head key vector")?;
-    Ok(bytes
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| f64::from_le_bytes(*c))
-        .collect())
+    let (values, remainder) = bytes.as_chunks::<8>();
+    if !remainder.is_empty() {
+        bail!("a head key vector has an incomplete f64");
+    }
+    Ok(values.iter().map(|c| f64::from_le_bytes(*c)).collect())
 }
 
 #[cfg(test)]

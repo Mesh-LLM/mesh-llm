@@ -59,6 +59,10 @@ mod downstream;
 mod http_api;
 mod kept_turns;
 mod kv_cache;
+#[cfg(test)]
+mod metal_negative_tests;
+mod metal_placement;
+mod metal_weights;
 mod native;
 mod refusal;
 mod reply_limits;
@@ -222,19 +226,45 @@ fn next_stage(
 ///
 /// A stage no audit covers gets none of that: one with a quantized KV
 /// cache ([`kv_cache`]), or on a backend without rounding profiles, such
-/// as Vulkan or Metal ([`audited_backend`]). It issues no receipts and
-/// serves as if they were off. The reason is logged here, once.
+/// as Vulkan. Metal additionally requires a measured device
+/// ([`audited_backend`]), full single-device placement ([`metal_placement`]),
+/// and Q8_0 matrices in the loaded artifacts ([`metal_weights`]). A refused
+/// stage serves as if receipts were off. The reason is logged here, once.
 pub fn start(
     options: ReceiptsOptions,
     config: &StageConfig,
     runtime: Arc<Mutex<RuntimeState>>,
 ) -> Result<()> {
     check_listen(&options)?;
-    let backend = skippy_runtime::backend_devices()
-        .ok()
-        .and_then(|devices| devices.into_iter().next())
-        .map_or_else(|| "unknown".to_string(), |device| device.name);
-    let unaudited = kv_cache::unaudited(config).or_else(|| audited_backend::unaudited(&backend));
+    let devices = skippy_runtime::backend_devices().unwrap_or_default();
+    let device = if devices.iter().any(|device| {
+        matches!(
+            skippy_receipts::audit::BackendFamily::of(&device.name),
+            Some(skippy_receipts::audit::BackendFamily::Metal)
+        )
+    }) {
+        metal_placement::device(config, &devices)
+    } else {
+        devices.first()
+    };
+    let backend = device
+        .as_ref()
+        .map_or_else(|| "unknown".to_string(), |device| device.name.clone());
+    let description = device
+        .as_ref()
+        .and_then(|device| device.description.as_deref());
+    let unaudited = kv_cache::unaudited(config)
+        .or_else(|| audited_backend::unaudited(&backend, description))
+        .or_else(|| {
+            matches!(
+                skippy_receipts::audit::BackendFamily::of(&backend),
+                Some(skippy_receipts::audit::BackendFamily::Metal)
+            )
+            .then(|| {
+                metal_placement::unaudited(config).or_else(|| metal_weights::unaudited(config))
+            })
+            .flatten()
+        });
     if let Some(reason) = unaudited {
         tracing::warn!(
             stage = config.stage_index,

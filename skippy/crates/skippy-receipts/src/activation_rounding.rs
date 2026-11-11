@@ -12,6 +12,14 @@
 pub enum Profile {
     Raw,
     F16,
+    /// The activation and the dequantized weights both rounded to f16 and
+    /// accumulated in f32, as Metal's `mul_mm` prefill kernel computes
+    /// without the tensor API.
+    F16Weights,
+    /// [`Self::F16Weights`] with the activation truncated to f16 (rounded
+    /// toward zero) instead of to nearest, as Metal 4's `matmul2d` computes
+    /// the prefill `mul_mm` with the tensor API, fed f32 activations.
+    F16WeightsRtz,
     /// Rounded to bf16, as CPU bf16 dot products and cuBLAS bf16 do.
     Bf16,
     /// CUDA `quantize_q8_1` (MMVQ): d = amax/127, q = round(x/d), d stored as f16.
@@ -43,6 +51,8 @@ impl Profile {
         match self {
             Self::Raw => "raw",
             Self::F16 => "f16",
+            Self::F16Weights => "f16_weights",
+            Self::F16WeightsRtz => "f16_weights_rtz",
             Self::Bf16 => "bf16",
             Self::Q8DivHalf => "q8_32_div_dh",
             Self::Q8MulHalf => "q8_32_mul_dh",
@@ -53,6 +63,11 @@ impl Profile {
             Self::CpuQ8 => "cpu_q8_0",
             Self::CpuQ8K => "cpu_q8_K",
         }
+    }
+
+    /// Whether the weights meet the activation rounded to f16 too.
+    pub(crate) fn rounds_weights(self) -> bool {
+        matches!(self, Self::F16Weights | Self::F16WeightsRtz)
     }
 
     /// For the profiles that apply a weight's minimum to block sums of the
@@ -68,10 +83,11 @@ impl Profile {
     pub fn apply(self, x: &[f32]) -> Vec<f64> {
         match self {
             Self::Raw => x.iter().map(|&v| f64::from(v)).collect(),
-            Self::F16 => x
+            Self::F16 | Self::F16Weights => x
                 .iter()
                 .map(|&v| f64::from(half::f16::from_f32(v).to_f32()))
                 .collect(),
+            Self::F16WeightsRtz => x.iter().map(|&v| f64::from(truncate_to_f16(v))).collect(),
             Self::Bf16 => x
                 .iter()
                 .map(|&v| f64::from(half::bf16::from_f32(v).to_f32()))
@@ -85,6 +101,33 @@ impl Profile {
             Self::CpuQ8K => quantize_q8_k(x),
         }
     }
+}
+
+/// `v` rounded toward zero to the f16 grid: the f16 value nearest zero
+/// among those around `v`, so the largest finite one above the f16 range.
+/// Infinities and NaN pass through.
+fn truncate_to_f16(v: f32) -> f32 {
+    const F16_MAX: f32 = 65504.0;
+    let f16_min_normal = 2f32.powi(-14);
+    let f16_subnormal_step = 2f32.powi(-24);
+    let magnitude = v.abs();
+    if !v.is_finite() {
+        v
+    } else if magnitude >= 65536.0 {
+        F16_MAX.copysign(v)
+    } else if magnitude < f16_min_normal {
+        (v / f16_subnormal_step).trunc() * f16_subnormal_step
+    } else {
+        // the f16 mantissa keeps the top 10 of the 23 f32 mantissa bits
+        f32::from_bits(v.to_bits() & !0x1fff)
+    }
+}
+
+/// Dequantized weights as an f16 kernel holds them.
+pub(crate) fn round_to_f16(w: &[f64]) -> Vec<f64> {
+    w.iter()
+        .map(|&v| f64::from(half::f16::from_f64(v).to_f32()))
+        .collect()
 }
 
 fn quantize_q8_blocks(profile: Profile, x: &[f32]) -> Vec<f64> {
@@ -173,6 +216,43 @@ mod tests {
         let y = Profile::Q8Mul64F32.apply(&x);
         assert!((y[63] - 32.0 * 4.0 / 127.0).abs() < 1e-6);
         assert!((y[64] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn f16_truncation_rounds_toward_zero() {
+        let nearest = |v: f32| half::f16::from_f32(v).to_f32();
+        // 1.0009 is 0.92 of an f16 ulp above 1: nearest goes up, truncation down
+        assert_eq!(nearest(1.0009), 1.000_976_6);
+        assert_eq!(truncate_to_f16(1.0009), 1.0);
+        assert_eq!(truncate_to_f16(-1.0009), -1.0);
+        assert_eq!(truncate_to_f16(1.000_976_6), 1.000_976_6);
+        // subnormals: 1.5 steps rounds to 2 steps (ties to even), truncates to 1
+        let step = 2f32.powi(-24);
+        assert_eq!(nearest(1.5 * step), 2.0 * step);
+        assert_eq!(truncate_to_f16(1.5 * step), step);
+        assert_eq!(truncate_to_f16(-0.25 * step), -0.0);
+        // above the f16 range: nearest overflows, truncation saturates
+        assert!(nearest(65520.0).is_infinite());
+        assert_eq!(truncate_to_f16(65520.0), 65504.0);
+        assert_eq!(truncate_to_f16(-1e9), -65504.0);
+        assert!(truncate_to_f16(f32::NAN).is_nan());
+        assert_eq!(truncate_to_f16(f32::INFINITY), f32::INFINITY);
+        // never farther from zero than the value, never below the nearest f16 under it
+        let mut state = 0x9e37_79b9u32;
+        for _ in 0..100_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = f32::from_bits(state);
+            if !v.is_finite() || v.abs() >= 65504.0 {
+                continue;
+            }
+            let t = truncate_to_f16(v);
+            assert!(t.abs() <= v.abs(), "{v} -> {t}");
+            assert_eq!(nearest(t), t, "{t} is not an f16 value");
+            let ulp = (nearest(v).abs().max(t.abs()) * 2f32.powi(-10)).max(step);
+            assert!((v - t).abs() <= ulp, "{v} -> {t}");
+        }
     }
 
     #[test]

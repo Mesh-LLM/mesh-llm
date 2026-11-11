@@ -864,9 +864,14 @@ challenge. The correction needs authentication between stages.
 
 The weight types with rounding profiles are f32, f16, bf16, q8_0, q4_0,
 q5_0, iq4_nl, iq4_xs and the K-quants q2_K to q6_K. The backend families
-with profiles are the CPU and CUDA. Vulkan, Metal and ROCm have no
-profiles. A stage on a backend without profiles issues no receipts, and
-a receipt that names one is not audited.
+with profiles are CPU, CUDA, and Metal for Q8_0 matrices only. Metal
+serving admission is experimental and restricted to the exact `Apple M5 Max`
+device, full single-GPU offload, no host experts, and Q8_0 matrices in all
+explicitly loaded artifacts, including embeddings and the output head.
+Implicit multi-shard GGUF loading is not admitted. These are artifact/config
+checks, not resident-placement attestation. Vulkan and ROCm have no profiles.
+A stage without qualified coverage issues no receipts; a receipt with a
+missing backend/type profile is not audited.
 
 The auditor refuses to read a claimed GGUF over these limits. A refusal is
 no audit and says nothing about the node.
@@ -1203,15 +1208,19 @@ This is the single list for all receipts documents.
    built. In Mesh, the receipts VRF key is a new key per request.
 6. **Splits with remote stages.** A split that a node coordinates with a
    stage on another node does not satisfy the `receipts` tier.
-7. **Backends and models.** Only CPU and CUDA stages are audited. Metal
-   is not audited, because its prefill rounding fits no profile. ROCm has
-   no profile. Vulkan is not audited either. On 2026-11-10, an honest
+7. **Backends and models.** CPU, CUDA and experimentally admitted Metal
+   Q8_0 stages are audited. Metal is restricted to the exact Apple M5 Max
+   device and the artifact/placement requirements above. Other Metal devices
+   and matrix types remain unqualified; the historical M6 prefill result
+   is not superseded by the M5 measurements. ROCm has no profile.
+   Vulkan is not audited either. On 2026-11-10, an honest
    Vulkan node with Q4_K_M weights on an integrated GPU passed 2 of 16
    audits, because the integer-dot kernels round K-quant weights in a way
    that no profile models. Q8_0 weights passed there with 1% of margin.
    See [the measurement](RECEIPTS_MEASUREMENTS.md#vulkan-on-the-final-build).
-   A stage on one of these backends issues no receipts, and a Mesh
-   runtime on one does not advertise the `receipts` flag. Vulkan needs a
+   A stage outside admitted coverage issues no receipts, and a Mesh
+   runtime without an attached recorder does not advertise the `receipts`
+   flag. Vulkan needs a
    profile for the integer-dot kernels on K-quants, and more margin for
    Q8_0 on integrated GPUs, before it can come back. DSA models have no
    opening design. Draft-model speculation is not tested.

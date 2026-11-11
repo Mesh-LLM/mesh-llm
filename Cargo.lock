@@ -9181,6 +9181,7 @@ dependencies = [
  "skippy-model-artifact",
  "skippy-package-format",
  "skippy-protocol",
+ "skippy-receipt-audit",
  "skippy-receipts",
  "skippy-runtime",
  "skippy-scheduler",

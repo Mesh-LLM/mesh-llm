@@ -53,6 +53,7 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+skippy-receipt-audit = { path = "../skippy-receipt-audit", version = "0.79.0" }
 skippy-runtime = { path = "../skippy-runtime", version = "0.79.0", features = ["test-support"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

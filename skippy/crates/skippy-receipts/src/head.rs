@@ -39,9 +39,12 @@ use crate::wire::{HeadOpening, Receipt};
 pub mod draw;
 pub mod every_row;
 pub mod key;
+#[cfg(test)]
+mod metal_tests;
 pub mod opened_logits;
 pub mod reasoning_budget;
 pub mod sampling;
+mod weight_rounding;
 
 use reasoning_budget::Forcing;
 use sampling::TokenRule;
@@ -290,6 +293,18 @@ impl OutputHead {
         weights: &WeightFile,
         inputs: &[Vec<f64>],
     ) -> Result<Vec<Vec<f64>>> {
+        let inputs: Vec<_> = inputs.iter().map(|x| (x.as_slice(), false)).collect();
+        self.products_with_rounding(weights, &inputs)
+    }
+
+    /// Products with each activation and its weight-rounding choice. A
+    /// mixed batch still reads the output matrix only once.
+    fn products_with_rounding(
+        &self,
+        weights: &WeightFile,
+        inputs: &[(&[f64], bool)],
+    ) -> Result<Vec<Vec<f64>>> {
+        let rounds_weights = inputs.iter().any(|(_, rounded)| *rounded);
         let rows = weights.tensor(&self.weight)?.rows();
         let threads = std::thread::available_parallelism()
             .map_or(1, std::num::NonZero::get)
@@ -304,8 +319,15 @@ impl OutputHead {
                         let mut out =
                             vec![Vec::with_capacity((range.end - first) as usize); inputs.len()];
                         weights.each_row(&self.weight, range, &mut |_, values| {
-                            for (products, x) in out.iter_mut().zip(inputs) {
-                                products.push(values.iter().zip(x).map(|(w, v)| w * v).sum());
+                            let rounded = rounds_weights
+                                .then(|| crate::activation_rounding::round_to_f16(values));
+                            for (products, (x, round)) in out.iter_mut().zip(inputs) {
+                                let row = if *round {
+                                    rounded.as_deref().expect("rounded input has weights")
+                                } else {
+                                    values
+                                };
+                                products.push(row.iter().zip(*x).map(|(w, v)| w * v).sum());
                             }
                         })?;
                         Ok(out)
