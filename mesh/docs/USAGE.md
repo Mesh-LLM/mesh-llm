@@ -10,19 +10,19 @@ For command-by-command CLI usage, model resolution rules, and JSON automation ex
 Install the latest release executable:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 On Windows, use PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 
 To opt into the latest published prerelease bundle instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash -s -- --pre-release
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --pre-release
 ```
 
 The installer puts `mesh-llm` on your `PATH`. After install, run `mesh-llm setup`
