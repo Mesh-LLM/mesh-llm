@@ -690,7 +690,8 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableTimeout => {
             handle_retryable_route_model_timeout(node, target, state)
         }
-        RouteAttemptResult::RetryableUnavailable => {
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             handle_retryable_route_model_unavailable(node, target, state)
         }
         RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {

@@ -445,15 +445,21 @@ pub async fn handle_mesh_request(
     };
 
     // Manifest-declared virtual models run through their owning plugin.
-    // Tokenization remains a direct capability RPC.
-    let tcp_stream = match super::virtual_model::route_virtual_model_or_passthrough(
-        &node,
-        tcp_stream,
-        &mut request,
-        lifecycle.route_observer(),
-    )
-    .await
-    {
+    // Tokenization remains a direct capability RPC. A plugin's own nested
+    // single-model call (one-use capability) must not re-enter the plugin;
+    // the bootstrap proxy serves the same port before the full API proxy.
+    let tcp_stream = if super::nested_inference::consume(request.request_id) {
+        Ok(tcp_stream)
+    } else {
+        super::virtual_model::route_virtual_model_or_passthrough(
+            &node,
+            tcp_stream,
+            &mut request,
+            lifecycle.route_observer(),
+        )
+        .await
+    };
+    let tcp_stream = match tcp_stream {
         Ok(stream) => stream,
         Err(outcome) => {
             // A virtual-model plugin handled the request and consumed the
@@ -984,7 +990,8 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
             (!(200..400).contains(status_code)).then_some("upstream_status"),
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
-        RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => (None, Some("unavailable")),
         RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
@@ -1064,7 +1071,10 @@ fn handle_mesh_attempt_result(
             handle_retryable_mesh_response_quality(context, failure)
         }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
-        RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
+            handle_retryable_mesh_unavailable(context)
+        }
         RouteAttemptResult::CommittedStreamFailure { .. } => {
             // Terminal once committed, and a failed request, not a success.
             context.node.record_routed_request(
@@ -1141,7 +1151,8 @@ fn terminal_outcome_for_mesh_route_result(
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
-        | RouteAttemptResult::RetryableUnavailable => {
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             crate::logging::TerminalOutcome::Failed("mesh_route_unavailable".into())
         }
     }
@@ -1739,7 +1750,8 @@ pub async fn route_to_target(
         | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
-        | RouteAttemptResult::RetryableUnavailable => {
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             node.record_routed_request(
                 model,
                 1,
@@ -1863,7 +1875,8 @@ pub async fn route_http_endpoint_request(
         | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
-        | RouteAttemptResult::RetryableUnavailable => {
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             node.record_routed_request(
                 model,
                 1,

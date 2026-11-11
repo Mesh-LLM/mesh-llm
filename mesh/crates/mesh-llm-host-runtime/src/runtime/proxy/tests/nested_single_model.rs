@@ -48,3 +48,54 @@ async fn nested_single_model_directive_bypasses_installed_override() {
     proxy.abort();
     upstream.await.unwrap();
 }
+
+#[tokio::test]
+async fn nested_single_model_directive_skips_override_on_bootstrap_proxy() {
+    use crate::network::openai::virtual_model::InferenceRpcBridge;
+    let manager = start_standalone_virtual_model_plugin_manager(
+        "mesh",
+        json!({"id":"override", "model":"plugin-worker", "choices":[]}),
+    )
+    .await;
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    node.set_plugin_manager(manager.clone()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // The bootstrap proxy's accept loop: every connection goes straight to
+    // `handle_mesh_request`, without the buffered ingress that consumes the
+    // nested capability.
+    let bootstrap = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let node = node.clone();
+            tokio::spawn(async move {
+                Box::pin(crate::network::openai::transport::handle_mesh_request(
+                    node,
+                    stream.into(),
+                    true,
+                    affinity::AffinityRouter::default(),
+                ))
+                .await;
+            });
+        }
+    });
+    let bridge = InferenceRpcBridge::new(port, manager);
+    let result = bridge
+        .infer(
+            &json!({
+                "model_id":"mesh",
+                "single_model_only":true,
+                "request":{"messages":[{"role":"user","content":"hello"}]},
+            })
+            .to_string(),
+        )
+        .await;
+    let rendered = match &result {
+        Ok(rpc) => rpc.result_json.clone(),
+        Err(error) => format!("{error:?}"),
+    };
+    assert!(!rendered.contains("plugin-worker"), "{rendered}");
+    bootstrap.abort();
+}

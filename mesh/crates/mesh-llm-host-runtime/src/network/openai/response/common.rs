@@ -134,6 +134,10 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     },
     RetryableTimeout,
     RetryableUnavailable,
+    /// The peer answered 502–504 itself. Treated like `RetryableUnavailable`,
+    /// except that the same host is not retried on a fresh tunnel: the host
+    /// is up and said its backend is not, so the request moves on.
+    RetryableUpstreamUnavailable,
     RetryableShedding {
         retry_after: std::time::Duration,
     },
@@ -229,7 +233,7 @@ pub(in crate::network::openai::response) fn retry_before_relay(
             });
         }
         if matches!(probe.status_code, 502..=504) {
-            return Some(RouteAttemptResult::RetryableUnavailable);
+            return Some(RouteAttemptResult::RetryableUpstreamUnavailable);
         }
     }
     if retry_policy.context_overflow && probe.retryable_context_overflow {
@@ -259,6 +263,7 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::Delivered { .. } => "delivered",
         RouteAttemptResult::RetryableTimeout => "retryable_timeout",
         RouteAttemptResult::RetryableUnavailable => "retryable_unavailable",
+        RouteAttemptResult::RetryableUpstreamUnavailable => "retryable_upstream_unavailable",
         RouteAttemptResult::RetryableShedding { .. } => "retryable_shedding",
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
         RouteAttemptResult::RetryableGateUnsatisfied => "retryable_gate_unsatisfied",
@@ -294,7 +299,8 @@ pub(in crate::network::openai) fn target_health_outcome_for_attempt(
             retry_after: *retry_after,
         },
         RouteAttemptResult::RetryableTimeout => TargetHealthOutcome::Timeout,
-        RouteAttemptResult::RetryableUnavailable => TargetHealthOutcome::Unavailable,
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => TargetHealthOutcome::Unavailable,
         RouteAttemptResult::RetryableContextOverflow => TargetHealthOutcome::ContextOverflow,
         RouteAttemptResult::RetryableResponseQuality(_) => TargetHealthOutcome::Rejected,
         RouteAttemptResult::CommittedStreamFailure { .. } => TargetHealthOutcome::Unavailable,
@@ -460,7 +466,8 @@ pub(in crate::network::openai) fn attempt_outcome_for_result(
             delivered_attempt_outcome(*status_code)
         }
         RouteAttemptResult::RetryableTimeout => crate::network::metrics::AttemptOutcome::Timeout,
-        RouteAttemptResult::RetryableUnavailable => {
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             crate::network::metrics::AttemptOutcome::Unavailable
         }
         RouteAttemptResult::RetryableShedding { .. } => {
@@ -538,7 +545,7 @@ mod tests {
         for status in [502, 503, 504] {
             assert_eq!(
                 retry_before_relay(&probe(status), policy),
-                Some(RouteAttemptResult::RetryableUnavailable)
+                Some(RouteAttemptResult::RetryableUpstreamUnavailable)
             );
         }
         assert_eq!(retry_before_relay(&probe(500), policy), None);

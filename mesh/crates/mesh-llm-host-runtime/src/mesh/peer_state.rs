@@ -568,12 +568,15 @@ impl Node {
     /// Peers that accept inference only as spillover capacity.
     pub(crate) async fn deprioritized_peer_ids(&self) -> std::collections::HashSet<EndpointId> {
         use crate::proto::node::InferenceAdmissionState;
-        self.peers()
+        self.state
+            .lock()
             .await
-            .into_iter()
+            .peers
+            .values()
             .filter(|peer| {
-                peer.inference_admission_state
-                    == Some(InferenceAdmissionState::AcceptingDeprioritized)
+                peer.is_admitted()
+                    && peer.inference_admission_state
+                        == Some(InferenceAdmissionState::AcceptingDeprioritized)
             })
             .map(|peer| peer.id)
             .collect()

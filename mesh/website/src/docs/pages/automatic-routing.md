@@ -22,7 +22,9 @@ model and is unaffected by anything on this page.
 ## What you get
 
 By default, `mesh` picks **one model** that can handle the request (tools,
-images, context length) and answers from it, streaming or not. The machine is
+images, context length) and answers from it, streaming or not. If no online
+model advertises tool support, a tool request still goes to one of the
+available models, which may not handle tools. The machine is
 chosen from every machine serving that model: measured speed weighs the
 choice, along with current load and session affinity, so faster machines
 usually take more of the traffic.
@@ -41,7 +43,8 @@ machine disappears mid-answer, the response is cut short.
 
 ## Mixture-of-Agents plugin (opt-in)
 
-Mesh ships a built-in Mixture-of-Agents (MoA) plugin: several models answer,
+Mesh ships a built-in Mixture-of-Agents (MoA) plugin: several placements
+(machines serving a model, possibly the same model) answer,
 and one synthesises the result. It is **off by default**. Enable it in
 `~/.mesh-llm/config.toml`:
 
@@ -51,8 +54,10 @@ name = "mesh-moa"
 ```
 
 With it enabled, non-streaming text chat sent to `mesh` is answered by the
-committee (responses carry `x-moa-*` headers). When only one model is eligible,
-or every eligible model is small (under 10B parameters) or of unknown size, the
+committee (responses carry `x-moa-*` headers) when at least two placements are
+eligible and at least one has a known size of 10B parameters or more. When
+only one placement is eligible, or every eligible one is small (under 10B) or
+of unknown size, the
 plugin answers from one model and sends no `x-moa-*` headers. Streaming,
 image/audio/file requests and named models still use a single model. See
 `mesh/evals/moa-openrouter/RESULTS.md` for when a committee helps.

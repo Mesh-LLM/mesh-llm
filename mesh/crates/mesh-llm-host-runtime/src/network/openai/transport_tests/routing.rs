@@ -251,6 +251,10 @@ fn test_remote_retry_policy_only_retries_uncommitted_failures() {
     assert!(!should_retry_uncommitted_remote_attempt(
         RouteAttemptResult::RetryableContextOverflow
     ));
+    // A peer that answered 502–504 itself moves on rather than being asked again.
+    assert!(!should_retry_uncommitted_remote_attempt(
+        RouteAttemptResult::RetryableUpstreamUnavailable
+    ));
     assert!(!should_retry_uncommitted_remote_attempt(
         RouteAttemptResult::RetryableResponseQuality(ResponseQualityFailure::EmptyAssistantOutput)
     ));
