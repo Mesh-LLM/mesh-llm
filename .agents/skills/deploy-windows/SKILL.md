@@ -28,14 +28,14 @@ it fetches the GGUF on first use. Do NOT pre-download with `hf` CLI tools.
 ## Install (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 
 Force a flavor non-interactively:
 
 ```powershell
 $env:MESH_LLM_INSTALL_FLAVOR = "vulkan"
-irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 
 Facts:
