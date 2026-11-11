@@ -167,20 +167,29 @@ impl AffinityRouter {
             .reserve(model, candidates, spread_limit, preferred, affinity_applied)
     }
 
-    /// Two-choice host pick over `candidates` for a request without affinity;
-    /// see [`RoutingReservations::two_choice`].
-    pub(crate) fn two_choice_target(
+    /// Two-choice host pick and reservation over `candidates` for a request
+    /// without affinity; see [`RoutingReservations::reserve_two_choice`].
+    /// Hosts with a reputation penalty, and those `deprioritized` marks, are
+    /// spillover: drawn only when no other candidate remains.
+    pub(crate) fn reserve_two_choice_target(
         &self,
         model: &str,
         candidates: &[election::InferenceTarget],
+        deprioritized: impl Fn(&election::InferenceTarget) -> bool,
         weight_of: impl Fn(&election::InferenceTarget) -> crate::network::router::PlacementWeight,
-    ) -> Option<election::InferenceTarget> {
+    ) -> Option<(election::InferenceTarget, RoutingReservation)> {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-        self.reservations
-            .two_choice(model, candidates, weight_of, seed)
+        let penalized = self.target_health.penalized_targets(model, candidates);
+        self.reservations.reserve_two_choice(
+            model,
+            candidates,
+            |target| penalized.contains(target) || deprioritized(target),
+            weight_of,
+            seed,
+        )
     }
 
     /// Look up a previously-classified model name for an auto-routed session.

@@ -170,12 +170,17 @@ impl TargetHealth {
                 state.record_reputation_penalty(key, now, 1, self.config);
             }
             TargetHealthOutcome::Shedding { retry_after } => {
-                let failures = state.entries.get(&key).map_or(0, |entry| entry.failures);
+                let existing = state.entries.get(&key);
+                let failures = existing.map_or(0, |entry| entry.failures);
+                // A busy reply never shortens a longer cooldown already running.
+                let cool_until = existing
+                    .map_or(now, |entry| entry.cool_until)
+                    .max(now + retry_after.min(Duration::from_secs(30)));
                 state.entries.insert(
                     key.clone(),
                     TargetEntry {
                         failures,
-                        cool_until: now + retry_after.min(Duration::from_secs(30)),
+                        cool_until,
                     },
                 );
                 state.touch_key(&key);
@@ -258,6 +263,29 @@ impl TargetHealth {
             state.routes_avoided = state.routes_avoided.saturating_add(cooling as u64);
             state.reputation_ordered_candidates(&model, &eligible, now)
         }
+    }
+
+    /// The `candidates` that currently carry a reputation penalty for `model`.
+    pub(crate) fn penalized_targets(
+        &self,
+        model: &str,
+        candidates: &[InferenceTarget],
+    ) -> Vec<InferenceTarget> {
+        let Some(model) = normalized_model(Some(model)) else {
+            return Vec::new();
+        };
+        let mut state = self.inner.lock().unwrap();
+        state.prune_expired(Instant::now(), self.config);
+        candidates
+            .iter()
+            .filter(|target| {
+                state.reputation_score(&TargetKey {
+                    model: model.clone(),
+                    target: (*target).clone(),
+                }) > 0
+            })
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn reputation_stats(&self) -> TargetReputationStats {
@@ -535,6 +563,46 @@ mod tests {
         let state = health.inner.lock().unwrap();
         assert!(state.reputation.is_empty());
         assert_eq!(state.entries.values().next().unwrap().failures, 0);
+    }
+
+    #[test]
+    fn shedding_never_shortens_a_longer_cooldown() {
+        let health = TargetHealth::new();
+        let candidates = vec![local(9001), local(9002)];
+        health.record_outcome(Some("qwen"), &local(9001), TargetHealthOutcome::Unavailable);
+        health.record_outcome(
+            Some("qwen"),
+            &local(9001),
+            TargetHealthOutcome::Shedding {
+                retry_after: Duration::ZERO,
+            },
+        );
+        assert_eq!(
+            health.strict_eligible_candidates("qwen", &candidates),
+            vec![local(9002)],
+            "the 30 s failure cooldown must outlast a zero Retry-After"
+        );
+        assert_eq!(
+            health.inner.lock().unwrap().entries[&TargetKey {
+                model: "qwen".into(),
+                target: local(9001),
+            }]
+                .failures,
+            1
+        );
+    }
+
+    #[test]
+    fn penalized_targets_lists_only_penalized_candidates() {
+        let health = TargetHealth::new();
+        let candidates = vec![local(9001), local(9002)];
+        assert!(health.penalized_targets("qwen", &candidates).is_empty());
+        health.record_outcome(Some("qwen"), &local(9002), TargetHealthOutcome::Timeout);
+        assert_eq!(
+            health.penalized_targets("qwen", &candidates),
+            vec![local(9002)]
+        );
+        assert!(health.penalized_targets("other", &candidates).is_empty());
     }
 
     #[test]

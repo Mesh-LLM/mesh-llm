@@ -38,6 +38,7 @@ fn mesh_request_plan_with_equivalents(
         equivalent_hosts,
         target_hosts,
         placements,
+        deprioritized: Default::default(),
         affinity_applied,
     }
 }

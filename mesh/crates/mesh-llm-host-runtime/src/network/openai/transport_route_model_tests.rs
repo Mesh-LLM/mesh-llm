@@ -876,9 +876,56 @@ fn automatic_reservation_never_restores_all_cooling_placements() {
                 &affinity,
                 cache_target,
                 true,
+                &Default::default(),
             )
             .is_none()
         );
         assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+}
+
+#[test]
+fn two_choice_keeps_penalized_and_deprioritized_hosts_as_spillover() {
+    // Equal weights: before, the draw ignored health order, so a penalized or
+    // deprioritized host still took about half the new sessions.
+    let healthy = election::InferenceTarget::Local(9001);
+    let penalized = election::InferenceTarget::Local(9002);
+    let affinity = AffinityRouter::new();
+    // A timeout then a success: no cooldown left, but a reputation penalty.
+    affinity.record_target_outcome(Some("qwen"), &penalized, TargetHealthOutcome::Timeout);
+    affinity.record_target_outcome(Some("qwen"), &penalized, TargetHealthOutcome::Success);
+    let ranked =
+        RankedCandidates::with_equivalent_prefix(vec![healthy.clone(), penalized.clone()], 2);
+    for _ in 0..50 {
+        let route = select_and_reserve_model_route(
+            &election::ModelTargets::default(),
+            &ranked,
+            "qwen",
+            None,
+            &affinity,
+            None,
+        )
+        .unwrap();
+        assert_eq!(route.selection.target, healthy);
+    }
+
+    let peer = SecretKey::generate().public();
+    let near = election::InferenceTarget::Local(9003);
+    let spill = election::InferenceTarget::Remote(peer);
+    let deprioritized = std::collections::HashSet::from([peer]);
+    let ranked = RankedCandidates::with_equivalent_prefix(vec![spill.clone(), near.clone()], 2);
+    for _ in 0..50 {
+        let route = select_and_reserve_model_route_with_health(
+            &election::ModelTargets::default(),
+            &ranked,
+            "qwen",
+            None,
+            &AffinityRouter::new(),
+            None,
+            false,
+            &deprioritized,
+        )
+        .unwrap();
+        assert_eq!(route.selection.target, near);
     }
 }

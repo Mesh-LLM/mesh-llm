@@ -344,6 +344,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
     let cache_target =
         cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
+    let deprioritized = node.deprioritized_peer_ids().await;
     let Some(ReservedModelRoute {
         selection,
         ordered,
@@ -356,6 +357,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         affinity,
         cache_target,
         strict_health,
+        &deprioritized,
     )
     else {
         if let Some(handoff) = automatic_retry {
@@ -538,9 +540,11 @@ fn select_and_reserve_model_route(
         affinity,
         cache_target,
         false,
+        &Default::default(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_and_reserve_model_route_with_health(
     targets: &election::ModelTargets,
     ranked: &RankedCandidates<election::InferenceTarget>,
@@ -549,6 +553,7 @@ fn select_and_reserve_model_route_with_health(
     affinity: &AffinityRouter,
     cache_target: Option<election::InferenceTarget>,
     strict_health: bool,
+    deprioritized: &std::collections::HashSet<iroh::EndpointId>,
 ) -> Option<ReservedModelRoute> {
     // Cache lookup can await while another request cools a target. Refresh
     // health once here, then use exactly this snapshot for selection,
@@ -567,31 +572,48 @@ fn select_and_reserve_model_route_with_health(
     }
     // No affinity: replace the round-robin default with the two-choice draw
     // (capacity × locality weighted, fewer local in-flight wins) so a faster
-    // or nearer replica carries proportionally more of the new sessions.
-    let mut pinned = selection.affinity_applied;
-    if !selection.affinity_applied
-        && let Some(target) = affinity.two_choice_target(model, &ordered, |target| {
-            ranked
-                .placements
-                .get(target)
-                .copied()
-                .unwrap_or_else(PlacementWeight::unmeasured)
-        })
-    {
-        selection.target = target;
-        // The draw already weighed load per unit of capacity; the
-        // reservation must not re-spread it by raw in-flight count.
-        pinned = true;
-    }
-    // Health policy can remove or reorder candidates, so the original
-    // equivalent run can shrink or disappear. Never let its old length admit
-    // a lower-ranked fallback.
-    let spread_limit = ordered
-        .iter()
-        .take_while(|candidate| ranked.ordered[..ranked.equivalent_prefix].contains(candidate))
-        .count();
-    let (target, reservation) =
-        affinity.reserve_route(model, &ordered, spread_limit, &selection.target, pinned)?;
+    // or nearer replica carries proportionally more of the new sessions. The
+    // draw reserves its pick itself; the reservation must not re-spread it by
+    // raw in-flight count.
+    let drawn = if selection.affinity_applied {
+        None
+    } else {
+        affinity.reserve_two_choice_target(
+            model,
+            &ordered,
+            |target| {
+                matches!(target, election::InferenceTarget::Remote(peer) if deprioritized.contains(peer))
+            },
+            |target| {
+                ranked
+                    .placements
+                    .get(target)
+                    .copied()
+                    .unwrap_or_else(PlacementWeight::unmeasured)
+            },
+        )
+    };
+    let (target, reservation) = match drawn {
+        Some(drawn) => drawn,
+        None => {
+            // Health policy can remove or reorder candidates, so the original
+            // equivalent run can shrink or disappear. Never let its old length
+            // admit a lower-ranked fallback.
+            let spread_limit = ordered
+                .iter()
+                .take_while(|candidate| {
+                    ranked.ordered[..ranked.equivalent_prefix].contains(candidate)
+                })
+                .count();
+            affinity.reserve_route(
+                model,
+                &ordered,
+                spread_limit,
+                &selection.target,
+                selection.affinity_applied,
+            )?
+        }
+    };
     selection.target = target;
     move_target_first(&mut ordered, &selection.target);
     Some(ReservedModelRoute {

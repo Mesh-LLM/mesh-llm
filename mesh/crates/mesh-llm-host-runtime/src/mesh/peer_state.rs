@@ -565,6 +565,20 @@ impl Node {
             .and_then(|p| p.current_direct_rtt_ms())
     }
 
+    /// Peers that accept inference only as spillover capacity.
+    pub(crate) async fn deprioritized_peer_ids(&self) -> std::collections::HashSet<EndpointId> {
+        use crate::proto::node::InferenceAdmissionState;
+        self.peers()
+            .await
+            .into_iter()
+            .filter(|peer| {
+                peer.inference_admission_state
+                    == Some(InferenceAdmissionState::AcceptingDeprioritized)
+            })
+            .map(|peer| peer.id)
+            .collect()
+    }
+
     /// All host IDs serving a model, with a healthy hash-preferred host first.
     /// Paused peers are excluded; deprioritized peers remain spillover capacity.
     pub async fn hosts_for_model(&self, model: &str) -> Vec<EndpointId> {

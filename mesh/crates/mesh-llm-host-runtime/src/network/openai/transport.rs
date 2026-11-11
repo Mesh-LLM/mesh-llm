@@ -304,6 +304,8 @@ struct MeshRequestPlan {
     equivalent_hosts: usize,
     /// Capacity and RTT per host for the two-choice pick of new sessions.
     placements: std::collections::HashMap<iroh::EndpointId, PlacementWeight>,
+    /// Hosts that accept work only as spillover capacity.
+    deprioritized: std::collections::HashSet<iroh::EndpointId>,
     affinity_applied: bool,
 }
 
@@ -618,6 +620,7 @@ async fn build_mesh_request_plan(
         target_hosts,
         equivalent_hosts,
         placements,
+        deprioritized: node.deprioritized_peer_ids().await,
         affinity_applied: prepared.affinity_applied,
     })
 }
@@ -888,25 +891,32 @@ fn reserve_mesh_request_target(
             .copied()
             .map(election::InferenceTarget::Remote)
             .collect::<Vec<_>>();
-        let preferred = if plan.affinity_applied {
-            candidates.first()?.clone()
+        // Affinity pins its host; so does the two-choice draw, which already
+        // weighed load per unit of capacity and reserves its own pick. Neither
+        // is re-spread by the reservation's raw in-flight scan.
+        let (selected, reservation) = if plan.affinity_applied {
+            let preferred = candidates.first()?.clone();
+            affinity.reserve_route(model, &candidates, plan.equivalent_hosts, &preferred, true)?
         } else {
             // New session: two-choice draw weighted by capacity × locality,
-            // fewer local in-flight wins; see `RoutingReservations::two_choice`.
-            affinity.two_choice_target(model, &candidates, |target| match target {
-                election::InferenceTarget::Remote(host) => plan
-                    .placements
-                    .get(host)
-                    .copied()
-                    .unwrap_or_else(PlacementWeight::unmeasured),
-                _ => PlacementWeight::unmeasured(),
-            })?
+            // fewer local in-flight wins; see
+            // `RoutingReservations::reserve_two_choice`.
+            affinity.reserve_two_choice_target(
+                model,
+                &candidates,
+                |target| {
+                    matches!(target, election::InferenceTarget::Remote(host) if plan.deprioritized.contains(host))
+                },
+                |target| match target {
+                    election::InferenceTarget::Remote(host) => plan
+                        .placements
+                        .get(host)
+                        .copied()
+                        .unwrap_or_else(PlacementWeight::unmeasured),
+                    _ => PlacementWeight::unmeasured(),
+                },
+            )?
         };
-        // Affinity pins its host; so does the two-choice draw, which already
-        // weighed load per unit of capacity and must not be re-spread by the
-        // reservation's raw in-flight scan.
-        let (selected, reservation) =
-            affinity.reserve_route(model, &candidates, plan.equivalent_hosts, &preferred, true)?;
         if let election::InferenceTarget::Remote(selected_host) = selected {
             move_target_first(&mut target_hosts, &selected_host);
         }

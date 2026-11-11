@@ -4,7 +4,6 @@
 use crate::inference::election;
 use crate::network::router::PlacementWeight;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -30,8 +29,9 @@ fn decrement(counts: &mut HashMap<ReservationKey, usize>, key: &ReservationKey) 
 #[derive(Clone, Default)]
 pub(crate) struct RoutingReservations {
     counts: ReservationCounts,
-    /// Shared round-robin position for equal-weight two-choice first draws.
-    round_robin: Arc<AtomicU64>,
+    /// Round-robin position per model for equal-weight two-choice first
+    /// draws, so traffic for one model never moves another model's turn.
+    round_robin: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl RoutingReservations {
@@ -119,8 +119,52 @@ impl RoutingReservations {
     /// when it is near and the first is far — but never when its rank class is worse than the first's:
     /// pressure never redirects a request to a measurably slower or
     /// smaller-context target. One load comparison stops a gateway herding
-    /// onto a host whose gossiped speed is stale. `None` only when
-    /// `candidates` is empty.
+    /// onto a host whose gossiped speed is stale.
+    ///
+    /// Targets `spillover` marks (penalized or deprioritized hosts) are drawn
+    /// only when every candidate is one. The pick is reserved under the same
+    /// lock that read the loads, so concurrent requests cannot all see the
+    /// same idle host and pile onto it. `None` only when `candidates` is empty.
+    pub(crate) fn reserve_two_choice(
+        &self,
+        model: &str,
+        candidates: &[election::InferenceTarget],
+        spillover: impl Fn(&election::InferenceTarget) -> bool,
+        weight_of: impl Fn(&election::InferenceTarget) -> PlacementWeight,
+        seed: u64,
+    ) -> Option<(election::InferenceTarget, RoutingReservation)> {
+        let preferred: Vec<election::InferenceTarget> = candidates
+            .iter()
+            .filter(|candidate| !spillover(candidate))
+            .cloned()
+            .collect();
+        let candidates = if preferred.is_empty() {
+            candidates
+        } else {
+            preferred.as_slice()
+        };
+        if candidates.is_empty() {
+            return None;
+        }
+        let mut counts = self.counts.lock().unwrap();
+        let winner = self.two_choice_index(model, candidates, weight_of, seed, &counts);
+        let key = ReservationKey {
+            model: model.to_string(),
+            target: candidates[winner].clone(),
+        };
+        *counts.entry(key.clone()).or_insert(0) += 1;
+        drop(counts);
+        Some((
+            candidates[winner].clone(),
+            RoutingReservation {
+                counts: Arc::clone(&self.counts),
+                key,
+            },
+        ))
+    }
+
+    /// The two-choice pick alone, released at once; for tests that tally draws.
+    #[cfg(test)]
     pub(crate) fn two_choice(
         &self,
         model: &str,
@@ -128,11 +172,20 @@ impl RoutingReservations {
         weight_of: impl Fn(&election::InferenceTarget) -> PlacementWeight,
         seed: u64,
     ) -> Option<election::InferenceTarget> {
-        if candidates.is_empty() {
-            return None;
-        }
+        self.reserve_two_choice(model, candidates, |_| false, weight_of, seed)
+            .map(|(target, _reservation)| target)
+    }
+
+    fn two_choice_index(
+        &self,
+        model: &str,
+        candidates: &[election::InferenceTarget],
+        weight_of: impl Fn(&election::InferenceTarget) -> PlacementWeight,
+        seed: u64,
+        counts: &HashMap<ReservationKey, usize>,
+    ) -> usize {
         if candidates.len() == 1 {
-            return Some(candidates[0].clone());
+            return 0;
         }
         let placements: Vec<PlacementWeight> = candidates.iter().map(&weight_of).collect();
         let mut rng = crate::network::router::SplitMix64::new(seed);
@@ -151,7 +204,11 @@ impl RoutingReservations {
             .iter()
             .all(|weight| (weight - weights[0]).abs() <= f64::EPSILON * weights[0]);
         let first = if all_equal {
-            self.round_robin.fetch_add(1, Ordering::Relaxed) as usize % candidates.len()
+            let mut turns = self.round_robin.lock().unwrap();
+            let turn = turns.entry(model.to_string()).or_insert(0);
+            let first = *turn as usize % candidates.len();
+            *turn = turn.wrapping_add(1);
+            first
         } else {
             crate::network::router::weighted_index(&weights, rng.next_f64())
         };
@@ -169,9 +226,8 @@ impl RoutingReservations {
                 second_rank = placements[second].rank,
                 "two-choice host pick: second draw not eligible"
             );
-            return Some(candidates[first].clone());
+            return first;
         }
-        let counts = self.counts.lock().unwrap();
         let load = |index: usize| {
             counts
                 .get(&ReservationKey {
@@ -218,7 +274,7 @@ impl RoutingReservations {
             second_in_flight = load(second),
             "two-choice host pick"
         );
-        Some(candidates[winner].clone())
+        winner
     }
 
     /// Total in-flight reservations across all models and targets.
@@ -559,6 +615,52 @@ mod tests {
             reservations.two_choice("model", &[], |_| placement(1.0, None, 0), 1),
             None
         );
+    }
+
+    #[test]
+    fn two_choice_round_robin_turns_are_per_model() {
+        // Interleaved models must not share one turn counter: with a shared
+        // counter, model-a would always land on even turns, so on one host.
+        let reservations = RoutingReservations::default();
+        let targets = [local(1), local(2)];
+        let mut picks = Vec::new();
+        for _ in 0..4 {
+            for model in ["model-a", "model-b"] {
+                let target = reservations
+                    .two_choice(model, &targets, |_| placement(1.0, None, 0), 7)
+                    .expect("pick");
+                if model == "model-a" {
+                    picks.push(target);
+                }
+            }
+        }
+        assert_eq!(picks, [local(1), local(2), local(1), local(2)]);
+    }
+
+    #[test]
+    fn reserve_two_choice_holds_its_pick_and_keeps_spillover_last() {
+        let reservations = RoutingReservations::default();
+        let targets = [local(1), local(2)];
+        let spill = |target: &election::InferenceTarget| *target == local(2);
+        let mut held = Vec::new();
+        for seed in 0..6 {
+            let (target, reservation) = reservations
+                .reserve_two_choice("model", &targets, spill, |_| placement(1.0, None, 0), seed)
+                .expect("pick");
+            assert_eq!(
+                target,
+                local(1),
+                "a spillover host waits while another remains"
+            );
+            held.push(reservation);
+        }
+        assert_eq!(reservations.active_count("model", &local(1)), 6);
+        drop(held);
+        assert_eq!(reservations.active_total(), 0);
+        let (target, _reservation) = reservations
+            .reserve_two_choice("model", &[local(2)], spill, |_| placement(1.0, None, 0), 1)
+            .expect("spillover still serves when it is all there is");
+        assert_eq!(target, local(2));
     }
 
     #[test]
