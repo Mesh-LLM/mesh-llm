@@ -74,8 +74,10 @@ impl StageOpenAiBackend {
         // finished answer and stop. Render the history before it with the
         // generation prompt and append its text, as llama.cpp's server does.
         // A generation prompt that leaves a reasoning block open would put the
-        // text inside it, so that case keeps the ordinary rendering.
-        if let Some(continued) = assistant_continuation(request) {
+        // text inside it, and a grammar or schema would not account for the
+        // text already written, so those cases keep the ordinary rendering,
+        // as does a prefill with no history before it.
+        if let Some(continued) = continued_prefill(request, &options) {
             let mut history = request.clone();
             history.messages.pop();
             history.extra.remove("prefill_assistant");
@@ -463,6 +465,16 @@ fn assistant_continuation(request: &GenerationRequest) -> Option<String> {
     crate::frontend::message_content_to_generation_text(content, "", &mut Vec::new()).ok()
 }
 
+/// The prefill to continue, or `None` to keep the ordinary rendering: also
+/// when a grammar or schema constrains the output (it would not account for
+/// the text already written) or nothing comes before the prefill.
+fn continued_prefill(request: &GenerationRequest, options: &ChatTemplateOptions) -> Option<String> {
+    if options.grammar.is_some() || options.json_schema.is_some() || request.messages.len() < 2 {
+        return None;
+    }
+    assistant_continuation(request)
+}
+
 /// Whether the rendered generation prompt ends inside a reasoning block: it
 /// contains the template's thinking start tag and no end tag after it.
 fn generation_prompt_opens_reasoning(metadata_json: Option<&str>) -> bool {
@@ -556,6 +568,27 @@ mod continuation_tests {
             list[1].content_type = "image_url".into();
         }
         assert_eq!(assistant_continuation(&parts), None);
+    }
+
+    #[test]
+    fn a_constrained_output_or_an_empty_history_is_left_to_the_template() {
+        let prefilled = request(vec![("user", "Give JSON."), ("assistant", "{")], true);
+        let plain = ChatTemplateOptions::default();
+        assert_eq!(continued_prefill(&prefilled, &plain).as_deref(), Some("{"));
+        for options in [
+            ChatTemplateOptions {
+                json_schema: Some("{\"type\":\"object\"}".into()),
+                ..ChatTemplateOptions::default()
+            },
+            ChatTemplateOptions {
+                grammar: Some("root ::= \"x\"".into()),
+                ..ChatTemplateOptions::default()
+            },
+        ] {
+            assert_eq!(continued_prefill(&prefilled, &options), None);
+        }
+        let alone = request(vec![("assistant", "1\n")], true);
+        assert_eq!(continued_prefill(&alone, &plain), None);
     }
 
     #[test]
