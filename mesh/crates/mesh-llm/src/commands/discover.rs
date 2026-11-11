@@ -422,4 +422,33 @@ mod stop_tests {
             Some("Nothing running.")
         );
     }
+
+    #[test]
+    fn the_background_service_counts_like_an_owner() {
+        use mesh_llm_commands::uninstall::BackgroundServiceStop;
+
+        let mut tally = StopTally::default();
+        assert_eq!(
+            tally.record_service(BackgroundServiceStop::NotRunning),
+            None
+        );
+        assert_eq!(tally.finish().expect("exit 0"), Some("Nothing running."));
+
+        let mut tally = StopTally::default();
+        let ended = tally
+            .record_service(BackgroundServiceStop::Ended)
+            .expect("an ended service is reported");
+        assert!(ended.contains("Ended the background service"));
+        assert_eq!(tally.finish().expect("exit 0"), None);
+
+        let mut tally = StopTally::default();
+        let still = tally
+            .record_service(BackgroundServiceStop::StillRunning(vec![
+                "access denied".to_string(),
+            ]))
+            .expect("a service still running is reported");
+        assert!(still.contains("(access denied)"));
+        assert!(still.contains("schtasks -End -TN mesh-llm"));
+        tally.finish().expect_err("the service is still running");
+    }
 }
