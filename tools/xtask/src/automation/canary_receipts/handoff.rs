@@ -233,9 +233,9 @@ mod tests {
             "sum",
         )
         .unwrap();
-        assert!(body.contains("independently certified"));
-        assert!(body.contains("Both complete per-family passes succeeded"));
         assert!(body.contains("verify-2"));
+        assert!(body.contains("42678880338"));
+        assert!(body.contains(&"a".repeat(40)));
     }
 
     #[test]
@@ -249,8 +249,8 @@ mod tests {
             "sum",
         )
         .unwrap();
-        assert!(body.contains("trusted reconciliation"));
         assert!(!body.contains("independently certified"));
+        assert!(body.contains("repair-2"));
     }
 
     #[test]
@@ -317,5 +317,131 @@ mod tests {
                 "{pass_id}"
             );
         }
+    }
+
+    const PLAN: &[u8] =
+        include_bytes!("../../../tests/migration_canary_receipts/fixtures/plan.json");
+
+    fn write_package(
+        root: &std::path::Path,
+        pass_id: &str,
+        mesh_source: Option<&str>,
+        bundle: bool,
+    ) -> (std::path::PathBuf, Digest) {
+        let package = root.join("package");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("plan.json"), PLAN).unwrap();
+        let artifacts: [(&str, &[u8]); 4] = [
+            ("binaries.tar", b"binaries"),
+            ("workload-oracles.tar", b"oracles"),
+            ("llama-source.bundle", b"llama bundle"),
+            ("llama-source.json", b"llama provenance"),
+        ];
+        for (name, bytes) in artifacts {
+            fs::write(package.join(name), bytes).unwrap();
+        }
+        if bundle {
+            fs::write(package.join("candidate.bundle"), b"candidate bundle").unwrap();
+        }
+        let source = "a".repeat(40);
+        let mut identity = serde_json::json!({
+            "schema": 3,
+            "platform": "macos-arm64-metal",
+            "candidate": source,
+            "base": source,
+            "branch": format!("llama-canary/{pass_id}-aaaaaaaaaa"),
+            "pass_id": pass_id,
+            "run_id": "123",
+            "run_attempt": "1",
+            "controller": "b".repeat(40),
+            "plan_sha256": Digest::of_bytes(PLAN),
+            "binaries_sha256": Digest::of_bytes(b"binaries"),
+            "workload_oracles_sha256": Digest::of_bytes(b"oracles"),
+            "llama_bundle_sha256": Digest::of_bytes(b"llama bundle"),
+            "llama_provenance_sha256": Digest::of_bytes(b"llama provenance"),
+        });
+        if bundle {
+            identity["bundle_sha256"] =
+                serde_json::to_value(Digest::of_bytes(b"candidate bundle")).unwrap();
+        }
+        if let Some(mesh_source) = mesh_source {
+            identity["mesh_source"] = mesh_source.into();
+        }
+        let identity = serde_json::to_vec(&identity).unwrap();
+        fs::write(package.join("identity.json"), &identity).unwrap();
+        (package, Digest::of_bytes(&identity))
+    }
+
+    fn publication_input(
+        package: &std::path::Path,
+        identity_sha256: &Digest,
+        retry_recovered: &str,
+        selected_source: &str,
+    ) -> Input {
+        Input {
+            package: package.to_path_buf(),
+            identity_sha256: identity_sha256.clone(),
+            run_id: "123".into(),
+            run_attempt: "1".into(),
+            controller_revision: "b".repeat(40),
+            selected_source: selected_source.into(),
+            retry_recovered: retry_recovered.into(),
+            evidence: None,
+            family: None,
+            outcome: None,
+            runner: None,
+            repository: Some("Mesh-LLM/mesh-llm".into()),
+            source_root: None,
+        }
+    }
+
+    #[test]
+    fn recovered_repair_package_publishes_through_execute() {
+        let root = tempfile::tempdir().unwrap();
+        let (package, identity_sha256) = write_package(root.path(), "repair-1", None, true);
+        fs::write(package.join("upstream-summary.md"), "summary").unwrap();
+        let input = publication_input(&package, &identity_sha256, "true", "");
+        execute(&input, true).unwrap();
+        let body = fs::read_to_string(package.join("pr-body.md")).unwrap();
+        assert!(body.contains("repair-1"));
+        assert!(!body.contains("independently certified"));
+    }
+
+    #[test]
+    fn execute_rejects_malformed_recovery_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let (package, identity_sha256) = write_package(root.path(), "repair-1", None, true);
+        let input = publication_input(&package, &identity_sha256, "yes", "");
+        let error = execute(&input, true).unwrap_err();
+        assert!(error.to_string().contains("must be true, false or absent"));
+    }
+
+    #[test]
+    fn execute_rejects_recovered_selected_source_package() {
+        let root = tempfile::tempdir().unwrap();
+        let source = "a".repeat(40);
+        let (package, identity_sha256) =
+            write_package(root.path(), "repair-1", Some(&source), false);
+        let input = publication_input(&package, &identity_sha256, "true", &source);
+        let error = execute(&input, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not accept a selected source package")
+        );
+    }
+
+    #[test]
+    fn receipt_rejects_recovery_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let (package, identity_sha256) = write_package(root.path(), "repair-1", None, true);
+        let mut input = publication_input(&package, &identity_sha256, "true", "");
+        input.repository = None;
+        let error = execute(&input, false).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("receipt does not accept the publication recovery marker")
+        );
     }
 }
