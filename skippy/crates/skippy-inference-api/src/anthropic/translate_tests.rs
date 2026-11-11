@@ -528,3 +528,43 @@ fn error_bodies_map_to_anthropic_kinds() {
         AnthropicMessagesStreamEvent::Error { error } if error.kind == "api_error"
     ));
 }
+
+#[test]
+fn a_pdf_document_block_becomes_a_file_part() {
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": [
+            {"type": "document", "title": "report.pdf", "citations": {"enabled": true},
+             "cache_control": {"type": "ephemeral"},
+             "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0x"}},
+            {"type": "text", "text": "summarise"}
+        ]}]
+    }));
+    let Some(MessageContent::Parts(parts)) = &chat.messages[0].content else {
+        panic!("expected content parts: {:?}", chat.messages[0].content);
+    };
+    assert_eq!(parts[0].content_type, "file");
+    assert_eq!(
+        parts[0].extra["file"],
+        json!({"file_data": "data:application/pdf;base64,JVBERi0x", "filename": "report.pdf"})
+    );
+    assert_eq!(parts[1].text.as_deref(), Some("summarise"));
+}
+
+#[test]
+fn other_document_sources_are_rejected() {
+    for source in [
+        json!({"type": "url", "url": "https://example.com/a.pdf"}),
+        json!({"type": "text", "media_type": "text/plain", "data": "hi"}),
+        json!({"type": "base64", "media_type": "application/pdf", "data": ""}),
+    ] {
+        let request = serde_json::from_value(json!({
+            "model": "m",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": [{"type": "document", "source": source}]}]
+        }))
+        .expect("request parses");
+        assert!(messages_request_to_generation(request).is_err());
+    }
+}

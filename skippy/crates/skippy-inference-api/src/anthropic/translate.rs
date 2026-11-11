@@ -329,7 +329,7 @@ fn expand_message(
                         {
                             continue;
                         }
-                        media_parts.push(image_part(value)?);
+                        media_parts.push(media_part(value)?);
                     }
                 }
             }
@@ -372,6 +372,61 @@ fn expand_message(
             }
             Ok(())
         }
+    }
+}
+
+fn media_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
+    if value.get("type").and_then(Value::as_str) == Some("document") {
+        return document_part(value);
+    }
+    image_part(value)
+}
+
+/// An Anthropic base64 PDF `document` block becomes an OpenAI `file` part,
+/// which the mesh's document plugin extracts before routing. `title`,
+/// `context`, `citations` and `cache_control` only shape Anthropic's own
+/// answer and are dropped (the title is kept as the filename).
+fn document_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
+    const FIELDS: [&str; 6] = [
+        "type",
+        "source",
+        "title",
+        "context",
+        "citations",
+        "cache_control",
+    ];
+    if value
+        .as_object()
+        .is_none_or(|object| object.keys().any(|key| !FIELDS.contains(&key.as_str())))
+    {
+        return Err(InferenceError::invalid_request(
+            "unsupported document field",
+        ));
+    }
+    let source = &value["source"];
+    match (source["type"].as_str(), source["media_type"].as_str()) {
+        (Some("base64"), Some("application/pdf")) => {
+            let data = source["data"]
+                .as_str()
+                .filter(|data| !data.is_empty())
+                .ok_or_else(|| InferenceError::invalid_request("document source requires data"))?;
+            let mut file = serde_json::Map::new();
+            file.insert(
+                "file_data".into(),
+                json!(format!("data:application/pdf;base64,{data}")),
+            );
+            if let Some(title) = value["title"].as_str().filter(|title| !title.is_empty()) {
+                file.insert("filename".into(), json!(title));
+            }
+            Ok(MessageContentPart {
+                content_type: "file".into(),
+                text: None,
+                extra: BTreeMap::from([("file".into(), Value::Object(file))]),
+            })
+        }
+        _ => Err(InferenceError::invalid_request(
+            "document source must be a base64 PDF",
+        )),
     }
 }
 
@@ -464,7 +519,7 @@ fn tool_result_content(
                         extra: BTreeMap::new(),
                     });
                 } else {
-                    parts.push(image_part(block)?);
+                    parts.push(media_part(block)?);
                 }
             }
         }
