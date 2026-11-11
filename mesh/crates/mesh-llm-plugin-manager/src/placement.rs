@@ -146,6 +146,8 @@ fn package_path(root: &Path, relative: &[OsString]) -> std::path::PathBuf {
 /// copy moved aside is the only complete one left, it is kept and the error
 /// says where.
 pub(crate) fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> Result<()> {
+    let install_parent = to.parent().unwrap_or_else(|| Path::new("."));
+    remove_stale_backups(install_parent, plugin_name);
     if !to.exists() {
         return place_staged_tree(from, to)
             .with_context(|| format!("install plugin to {}", to.display()));
@@ -153,8 +155,8 @@ pub(crate) fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> R
     // A fixed prefix: a long plugin name plus a prefix and random suffix
     // could exceed the file name limit.
     let backup_parent = tempfile::Builder::new()
-        .prefix(".previous-")
-        .tempdir_in(to.parent().unwrap_or_else(|| Path::new(".")))
+        .prefix(BACKUP_PREFIX)
+        .tempdir_in(install_parent)
         .with_context(|| format!("create plugin install backup for {}", to.display()))?;
     let backup_dir = backup_parent.path().join(plugin_name);
     let moved = place_tree(to, &backup_dir)
@@ -188,6 +190,34 @@ pub(crate) fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> R
     // too, only its files are left behind.
     let _ = remove_tree(backup_parent.path());
     Ok(())
+}
+
+const BACKUP_PREFIX: &str = ".previous-";
+
+/// Remove the backups an earlier replace of `plugin_name` could not delete:
+/// on Windows a running executable cannot be deleted, so updating a plugin
+/// while the node still runs it leaves its backup behind. Only `.previous-*`
+/// directories holding this plugin's directory are touched, so another
+/// plugin's replace in progress keeps its backup; one that still cannot be
+/// removed is left for a later replace.
+fn remove_stale_backups(install_parent: &Path, plugin_name: &str) {
+    let Ok(entries) = fs::read_dir(install_parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(BACKUP_PREFIX)
+        {
+            continue;
+        }
+        let backup = entry.path();
+        let is_dir = fs::symlink_metadata(&backup).is_ok_and(|metadata| metadata.is_dir());
+        if is_dir && fs::symlink_metadata(backup.join(plugin_name)).is_ok() {
+            let _ = remove_tree(&backup);
+        }
+    }
 }
 
 /// Put the previous install back after a failed replacement. The failed move
@@ -707,6 +737,75 @@ mod tests {
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<std::io::Result<_>>()?;
         assert_eq!(leftovers, vec![std::ffi::OsString::from("demo")]);
+        Ok(())
+    }
+
+    fn entry_names(dir: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+        let mut names: Vec<_> = fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        names.sort();
+        Ok(names)
+    }
+
+    fn staged_demo(root: &Path, round: u32) -> Result<std::path::PathBuf> {
+        let from = root.join(format!("staging-{round}")).join("demo");
+        fs::create_dir_all(&from)?;
+        fs::write(from.join("demo.exe"), format!("binary {round}"))?;
+        Ok(from)
+    }
+
+    // Windows keeps a running executable's file from being deleted, so the
+    // backup of an install whose plugin still runs (an update while the node
+    // is up) cannot be removed by the replace that made it.
+    #[cfg(windows)]
+    #[test]
+    fn a_backup_left_by_a_running_executable_is_removed_by_the_next_replace() -> Result<()> {
+        let temp = TempDir::new()?;
+        let install_dir = temp.path().join("installed");
+        let to = install_dir.join("demo");
+        fs::create_dir_all(&to)?;
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot is set on Windows");
+        let exe = to.join("demo.exe");
+        fs::copy(Path::new(&system_root).join(r"System32\PING.EXE"), &exe)?;
+        let mut running = std::process::Command::new(&exe)
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()?;
+
+        replace_plugin_dir(&staged_demo(temp.path(), 1)?, &to, "demo")?;
+        let names = entry_names(&install_dir)?;
+        assert_eq!(
+            names.len(),
+            2,
+            "the running executable keeps its backup: {names:?}"
+        );
+
+        running.kill()?;
+        running.wait()?;
+        replace_plugin_dir(&staged_demo(temp.path(), 2)?, &to, "demo")?;
+
+        assert_eq!(fs::read(to.join("demo.exe"))?, b"binary 2");
+        assert_eq!(entry_names(&install_dir)?, ["demo"]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_replace_leaves_other_plugins_backups_alone() -> Result<()> {
+        let temp = TempDir::new()?;
+        let install_dir = temp.path().join("installed");
+        let to = install_dir.join("demo");
+        fs::create_dir_all(&to)?;
+        fs::write(to.join("demo.exe"), b"binary 0")?;
+        // Another plugin's backup, as a replace of it running now would hold.
+        let other = install_dir.join(".previous-other").join("other");
+        fs::create_dir_all(&other)?;
+        fs::write(other.join("other.exe"), b"")?;
+
+        replace_plugin_dir(&staged_demo(temp.path(), 1)?, &to, "demo")?;
+
+        assert!(other.join("other.exe").exists());
+        assert_eq!(entry_names(&install_dir)?, [".previous-other", "demo"]);
         Ok(())
     }
 }
