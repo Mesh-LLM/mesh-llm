@@ -215,7 +215,9 @@ name = "mesh-moa"
 
 in `~/.mesh-llm/config.toml` (or the file passed with `--config`; only `enabled` may be set on this entry, as for `blobstore`);
 the committee then overrides non-streaming text chat to `mesh`, while
-streaming and media keep core routing. Operator-blocked peers are omitted
+streaming and media keep core routing. With a single eligible model, or when
+every eligible model is under 10B parameters or of unknown size, the plugin
+answers from one model and sets no `x-moa-*` headers. Operator-blocked peers are omitted
 from candidate snapshots.
 
 Host inference accepts concrete model ids by default. `single_model_only`

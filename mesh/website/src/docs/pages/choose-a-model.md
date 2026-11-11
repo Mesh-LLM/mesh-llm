@@ -46,10 +46,11 @@ For multi-machine large-model serving, use catalog entries with layer packages. 
 
 ## Letting Mesh choose
 
-If you would rather not pick per request, send `"model": "mesh"` and Mesh picks
-one suitable model and spreads traffic across the machines serving it. An
-opt-in Mixture-of-Agents plugin can answer with a committee instead. See
-[Automatic routing](/docs/pages/automatic-routing/).
+If you would rather not pick per request, send `"model": "mesh"`. By default
+Mesh picks one suitable model and spreads traffic across the machines serving
+it. An installed virtual-model plugin can take over non-streaming text chat
+instead; the built-in Mixture-of-Agents plugin, for example, answers with a
+committee. See [Automatic routing](/docs/pages/automatic-routing/).
 
 To choose by size or cost yourself, read `/v1/models`: each entry carries
 `parameter_count_b`, `parameter_size`, `quant`, `context_length`, and current

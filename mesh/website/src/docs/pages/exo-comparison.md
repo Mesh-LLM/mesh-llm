@@ -40,7 +40,7 @@ layer splits, and one OpenAI-compatible endpoint served through a mesh of peers.
   - A public or private mesh with catalog-backed model references and operator controls
   - Layer packages for very large GGUF models that won't fit on a single device
   - Agent and tool integrations with built-in launchers for Goose, Claude Code, OpenCode, and Pi
-  - An opt-in Mixture-of-Agents plugin that answers `model: "mesh"` with a committee of models
+  - An opt-in Mixture-of-Agents plugin that answers non-streaming `model: "mesh"` text chat with a committee of models (one model when only small or single candidates are eligible)
 - **Use exo when you want:**
   - An Apple Silicon-native cluster with automatic device discovery and zero-config setup
   - RDMA over Thunderbolt 5 for high-bandwidth, low-latency multi-device inference

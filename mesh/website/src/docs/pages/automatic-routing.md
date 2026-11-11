@@ -22,10 +22,16 @@ model and is unaffected by anything on this page.
 ## What you get
 
 By default, `mesh` picks **one model** that can handle the request (tools,
-images, context length) and answers from it, streaming or not. Traffic is
-spread across every machine serving that model in proportion to its measured
-speed, and a busy or failing machine is skipped before the first byte is sent.
-If every machine for that model fails, Mesh tries another compatible model.
+images, context length) and answers from it, streaming or not. The machine is
+chosen from every machine serving that model: measured speed weighs the
+choice, along with current load and session affinity, so faster machines
+usually take more of the traffic.
+
+A machine that is busy (`429`) or unavailable (`502`–`504`) is skipped before
+the first byte is sent; a `500` is returned as is. If every machine for the
+model is busy or unavailable, Mesh tries another compatible model, up to three
+more. A timeout may move the request to another machine of the same model,
+but never to another model.
 
 If you send an image and **no** online model supports image input, the request
 fails with `422` rather than quietly answering the text part of your question.
@@ -45,8 +51,10 @@ name = "mesh-moa"
 ```
 
 With it enabled, non-streaming text chat sent to `mesh` is answered by the
-committee (responses carry `x-moa-*` headers). Streaming, image/audio/file
-requests and named models still use a single model. See
+committee (responses carry `x-moa-*` headers). When only one model is eligible,
+or every eligible model is small (under 10B parameters) or of unknown size, the
+plugin answers from one model and sends no `x-moa-*` headers. Streaming,
+image/audio/file requests and named models still use a single model. See
 `mesh/evals/moa-openrouter/RESULTS.md` for when a committee helps.
 
 ## Discovering what is available
