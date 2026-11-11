@@ -317,6 +317,9 @@ struct MeshAttemptState {
     attempts: usize,
     last_retryable: bool,
     refreshed: bool,
+    /// Prompt bytes of the request body, to learn the model's bytes per token
+    /// from the reply's `usage.prompt_tokens`.
+    prompt_bytes: Option<usize>,
 }
 
 enum MeshAttemptDisposition {
@@ -601,12 +604,18 @@ async fn build_mesh_request_plan(
         &resolved_hosts,
         affinity,
     );
+    let request_cost = crate::network::affinity::request_cost_input(
+        super::workload_routing::affinity_body(request),
+        affinity,
+        effective_model.as_deref().unwrap_or_default(),
+    );
     let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
         node,
         effective_model.as_deref(),
         required_tokens,
         &mut prepared,
         affinity,
+        request_cost,
     )
     .await;
     Ok(MeshRequestPlan {
@@ -662,6 +671,7 @@ async fn order_mesh_target_hosts(
     required_tokens: Option<u32>,
     prepared: &mut PreparedTargets,
     affinity: &AffinityRouter,
+    request_cost: mesh_llm_routing::request_cost::RequestCostInput,
 ) -> (Vec<iroh::EndpointId>, usize) {
     let target_hosts: Vec<iroh::EndpointId> = prepared
         .ordered
@@ -686,19 +696,9 @@ async fn order_mesh_target_hosts(
             .copied()
             .map(election::InferenceTarget::Remote)
             .collect();
-        prepared.cache_target = match affinity.lookup_cache_lease(name, prefix_hash, &candidates) {
-            Some(target) => Some(target),
-            None => {
-                let lease_epoch = affinity.cache_lease_epoch();
-                let selected = node
-                    .select_cache_target(name, prefix_hash, &candidates)
-                    .await;
-                if let Some(target) = selected.as_ref() {
-                    affinity.remember_cache_lease_if_epoch(name, prefix_hash, target, lease_epoch);
-                }
-                selected
-            }
-        };
+        prepared.cache_target = node
+            .cache_target_with_lease(affinity, name, prefix_hash, &candidates, request_cost)
+            .await;
         prepared.affinity_applied |= prepared.cache_target.is_some();
         affinity.record_cache_probe(prepared.cache_target.is_some());
         if let Some(election::InferenceTarget::Remote(cache_host)) = prepared.cache_target.as_ref()
@@ -791,6 +791,9 @@ async fn route_mesh_request_attempts(
         attempts: 0,
         last_retryable: false,
         refreshed: false,
+        prompt_bytes: crate::network::affinity::prompt_bytes(
+            super::workload_routing::affinity_body(request),
+        ),
     };
     for (idx, target_host) in target_hosts.iter().enumerate() {
         transfer_mesh_reservation(reservation.as_mut(), *target_host);
@@ -1017,6 +1020,14 @@ fn handle_mesh_attempt_result(
                     usage.completion_tokens,
                     outcome,
                 );
+                if (200..300).contains(&status_code)
+                    && let Some(((model, bytes), tokens)) = context
+                        .effective_model
+                        .zip(context.state.prompt_bytes)
+                        .zip(usage.prompt_tokens)
+                {
+                    context.affinity.observe_prompt_size(model, bytes, tokens);
+                }
             }
             handle_delivered_mesh_attempt(context, status_code);
             MeshAttemptDisposition::Return(RouteAttemptResult::Delivered {
