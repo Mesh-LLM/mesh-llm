@@ -94,11 +94,13 @@ pub(super) async fn handle_buffered_api_request(
         return;
     }
 
-    // Retain directive intent before resolution rewrites the concrete body.
+    // Retain directive intent before resolution rewrites the concrete body. A
+    // request that names no model is routed automatically too, so once a model
+    // is chosen for it, it may spill to another model the same way.
     let automatic_single_model = request
         .model_name
         .as_deref()
-        .is_some_and(automatic::is_directive);
+        .is_none_or(automatic::is_directive);
     let single_model_only = super::super::nested_inference::consume(request.request_id);
     let decision = match prepare_auto_route_decision_with_mode(
         &mut request,
@@ -176,7 +178,7 @@ pub(super) async fn handle_buffered_api_request(
     let tcp_stream = tcp_stream;
     let outcome = {
         let route_observer = lifecycle.route_observer();
-        if automatic_single_model {
+        if automatic_single_model && routing_model.is_some() {
             automatic_dispatch::dispatch(
                 tcp_stream,
                 &mut request,

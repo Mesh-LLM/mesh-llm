@@ -225,6 +225,13 @@ async fn collect_available_models_for_auto_route(
             }
         }
     }
+    // A virtual model is a plugin's own directive, never a concrete model, so
+    // an automatic pick must not land on one (and loop back into the plugin).
+    if let Some(plugin_manager) = plugin_manager
+        && let Ok(virtual_models) = plugin_manager.virtual_models().await
+    {
+        available_models.retain(|name| !virtual_models.iter().any(|route| route.model_id == *name));
+    }
     available_models
 }
 

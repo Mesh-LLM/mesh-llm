@@ -200,3 +200,37 @@ async fn automatic_ingress_retries_sole_host_after_one_failure() {
         assert!(proxy.await.unwrap_err().is_cancelled());
     }
 }
+
+// A request that names no model is routed automatically, so it spills across
+// models like `mesh` instead of relaying the first model's 429.
+#[tokio::test]
+async fn model_less_ingress_spills_to_another_model() {
+    let mut entries = Vec::new();
+    let mut upstreams = Vec::new();
+    for name in ["worker-a", "worker-b"] {
+        let (port, captured, task) =
+            spawn_status_upstream("429 Too Many Requests", r#"{"error":"busy"}"#).await;
+        entries.push((name, port));
+        upstreams.push((captured, task));
+    }
+    let (address, proxy) = spawn_api_proxy_test_harness(local_targets(&entries)).await;
+    let body = json!({"messages": [{"role":"user", "content":"hello"}]}).to_string();
+    let wire = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = tokio::time::timeout(
+        Duration::from_secs(30),
+        send_request_and_read_response(address, vec![wire.into_bytes()]),
+    )
+    .await
+    .unwrap();
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    assert!(response.contains("exhausted after 2 model(s)"), "{response}");
+    for (mut captured, task) in upstreams {
+        assert!(captured.try_recv().is_ok(), "both models must be tried");
+        task.await.unwrap();
+    }
+    proxy.abort();
+    assert!(proxy.await.unwrap_err().is_cancelled());
+}

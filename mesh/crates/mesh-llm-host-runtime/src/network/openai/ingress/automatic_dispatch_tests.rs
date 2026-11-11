@@ -185,3 +185,87 @@ async fn named_model_never_spills_to_another_model() {
 async fn automatic_internal_server_error_stays_terminal() {
     dispatch_fixture(500, 500, 1, true).await;
 }
+
+// The chosen model can lose its last host between selection and dispatch.
+// An automatic request must then try another model, not answer 404.
+#[tokio::test]
+async fn automatic_model_without_a_host_spills_to_another_model() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (b, upstream) = backend(200, "model-b", calls.clone()).await;
+    let mut targets = election::ModelTargets::default();
+    targets
+        .targets
+        .insert("model-b".into(), vec![election::InferenceTarget::Local(b)]);
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: None,
+        requested_by_node_id: None,
+        automatic_retry: None,
+        exchange_channel: None,
+    };
+    let body = r#"{"model":"model-a","messages":[{"role":"user","content":"hello"}]}"#;
+    let wire = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    client.write_all(wire.as_bytes()).await.unwrap();
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut stream = stream;
+    let mut request = proxy::read_http_request(&mut stream).await.unwrap();
+    let client = tokio::spawn(async move {
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.unwrap();
+        response
+    });
+    let mut model = Some("model-a".into());
+    let outcome = automatic_dispatch::dispatch(
+        stream.into(),
+        &mut request,
+        &ctx,
+        &mut model,
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(10), client)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_dispatch_result(outcome, &response, model.as_deref(), 200);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    upstream.await.unwrap();
+    node.endpoint.close().await;
+}
+
+#[tokio::test]
+async fn automatic_model_pool_never_offers_a_virtual_model() {
+    let plugin_manager =
+        crate::runtime::proxy::tests::start_standalone_virtual_model_plugin_manager(
+            "test-virtual",
+            serde_json::json!({"id": "chatcmpl-virtual", "choices": []}),
+        )
+        .await;
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+    let mut targets = election::ModelTargets::default();
+    for name in ["test-virtual", "concrete"] {
+        targets
+            .targets
+            .insert(name.into(), vec![election::InferenceTarget::Local(9001)]);
+    }
+    let models =
+        collect_available_models_for_auto_route(&node, &targets, Some(&plugin_manager)).await;
+    assert_eq!(models, vec!["concrete".to_string()]);
+    node.endpoint.close().await;
+}
