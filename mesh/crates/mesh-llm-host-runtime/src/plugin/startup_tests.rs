@@ -452,3 +452,31 @@ fn builtin_moa_plugin_is_off_unless_configured() {
         "unexpected error: {error}"
     );
 }
+
+#[test]
+#[serial_test::serial]
+fn builtin_moa_plugin_refuses_operation_bindings() {
+    let mut entry = builtin_toggle_entry(MOA_PLUGIN_ID, None);
+    entry.operation_bindings = vec![mesh_llm_config::PluginOperationBinding {
+        name: "storage".into(),
+        provider: "blobstore".into(),
+        capability: None,
+        setup_directory: false,
+        profile: String::new(),
+        setup_operation: String::new(),
+        setup_input_json: String::new(),
+        operations: vec!["get".into()],
+    }];
+    let error = resolve_plugins(
+        &MeshConfig {
+            plugins: vec![entry],
+            ..MeshConfig::default()
+        },
+        private_host_mode(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("only `enabled` may be set"),
+        "unexpected error: {error}"
+    );
+}

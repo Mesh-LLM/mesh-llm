@@ -359,6 +359,14 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         }
         if entry.name == MOA_PLUGIN_ID {
             ensure_builtin_entry_only_toggles_enabled(entry)?;
+            // The committee runs with the host's own grants; bindings here
+            // would be dropped without effect, so refuse them.
+            if !entry.operation_bindings.is_empty() {
+                bail!(
+                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
+                    entry.name
+                );
+            }
             moa_enabled = enabled;
             continue;
         }
