@@ -676,7 +676,7 @@ mod tests {
         for name in [".", "..", "..."] {
             assert!(store.delete(name).is_err(), "{name}");
             assert!(store.save(&metadata(name)).is_err(), "{name}");
-            assert!(store.set_default_turned_off(name, true).is_err(), "{name}");
+            assert!(store.set_enabled(name, false).is_err(), "{name}");
         }
         assert!(sibling.exists());
         assert_eq!(store.list().unwrap().len(), 1);
