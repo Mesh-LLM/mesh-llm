@@ -107,6 +107,13 @@ If the model does not load, stop Mesh and use the [model picker](/docs/pages/cho
 mesh-llm stop
 ```
 
+On Windows, if you loaded the model into the background service, end its task
+instead: `mesh-llm stop` ends that node, but the service starts it again.
+
+```powershell
+schtasks /End /TN mesh-llm
+```
+
 ## 4. Chat in the console
 
 Open:
