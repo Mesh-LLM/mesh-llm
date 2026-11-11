@@ -67,8 +67,13 @@ requests the plugin was installed to rewrite.
   never reaches a model untransformed. The error message goes back to the
   client.
 - **Content only:** the replacement must be a JSON object with the same
-  `model` and `stream` as the request. Routing and the response format were
-  already chosen from them.
+  `model`, `stream` and output budget (`max_tokens`, `max_completion_tokens`,
+  `max_output_tokens`, `n_predict`) as the request. Routing, the context check
+  and the response format were already chosen from them.
+- **Size:** the replacement may be at most 8 MiB once serialized, the limit a
+  peer applies to a forwarded request.
+- A plugin that declared a transform and is restarting or has failed is
+  unavailable, so requests are rejected until it is back.
 - The transform runs once per client request. It runs before routing, retries
   and virtual-model orchestration.
 
@@ -84,6 +89,9 @@ The host normalizes file attachments to Chat content parts:
 | Messages document `source` of type `file` / `url` | `input_file` with `file_id` / `file_url` |
 | Messages document `source` of type `text` | a text part |
 
+A Messages document with a non-empty `context` or with `citations.enabled:
+true` is rejected with `400`: neither survives normalization.
+
 Messages documents inside `tool_result` content, which Claude Code's Read tool
 sends for PDFs, are normalized the same way inside the resulting `tool`
 message.
@@ -93,4 +101,3 @@ message.
 - The client-only `mesh-client` crate keeps its own Responses parser. It has
   no plugin host and still rejects flat `input_file` blocks.
 - Transforms do not see `/v1/completions`, embeddings or `count_tokens`.
-- The 8 MiB request body limit applies before the transform.

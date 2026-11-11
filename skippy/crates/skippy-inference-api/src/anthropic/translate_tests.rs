@@ -595,7 +595,8 @@ fn text_documents_become_text_and_bad_documents_are_rejected() {
         "model": "m",
         "max_tokens": 16,
         "messages": [{"role": "user", "content": [
-            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}}
+            {"type": "document", "citations": {"enabled": false},
+             "source": {"type": "text", "media_type": "text/plain", "data": "notes"}}
         ]}]
     }));
     assert_eq!(
@@ -607,6 +608,8 @@ fn text_documents_become_text_and_bad_documents_are_rejected() {
         json!({"type": "document", "source": {"type": "base64", "data": "x"}}),
         json!({"type": "document", "source": {"type": "content", "content": []}}),
         json!({"type": "document", "unknown": 1, "source": {"type": "file", "file_id": "f"}}),
+        json!({"type": "document", "context": "in thousands", "source": {"type": "file", "file_id": "f"}}),
+        json!({"type": "document", "citations": {"enabled": true}, "source": {"type": "file", "file_id": "f"}}),
     ] {
         let request = serde_json::from_value(json!({
             "model": "m",

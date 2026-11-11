@@ -22,6 +22,9 @@ const SERVICE_NAME: &str = "request_transform";
 
 impl PluginManager {
     /// Plugins declaring request transforms, in call order, with availability.
+    /// A plugin that declared one earlier in this manager's lifetime stays
+    /// listed, unavailable, while it restarts or after it failed: its live
+    /// provider entry is gone then, and requests must not skip its transform.
     async fn request_transform_plugins(&self) -> Result<Vec<(String, bool)>> {
         let mut plugins: Vec<(String, bool)> = self
             .capability_providers()
@@ -30,16 +33,25 @@ impl PluginManager {
             .filter(|provider| provider.capability == REQUEST_TRANSFORM_CAPABILITY)
             .map(|provider| (provider.plugin_name, provider.available))
             .collect();
-        plugins.sort();
+        plugins.extend(
+            self.inner
+                .capability_registration
+                .plugins_for(REQUEST_TRANSFORM_CAPABILITY)?
+                .into_iter()
+                .map(|plugin_name| (plugin_name, false)),
+        );
+        // Sorting puts `true` after `false`; keep each plugin's best entry.
+        plugins.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
         plugins.dedup_by(|a, b| a.0 == b.0);
         Ok(plugins)
     }
 
-    /// Whether any plugin declares a request transform.
+    /// Whether any plugin declares a request transform. An error counts as
+    /// yes, so the request reaches `transform_request` and is rejected there.
     pub(crate) async fn has_request_transforms(&self) -> bool {
         self.request_transform_plugins()
             .await
-            .is_ok_and(|plugins| !plugins.is_empty())
+            .map_or(true, |plugins| !plugins.is_empty())
     }
 
     /// Run every request transform over `body`. Returns whether any changed it.
@@ -107,14 +119,24 @@ impl PluginManager {
     }
 }
 
-/// A transform rewrites content; it does not choose the model or change how
-/// the response is framed, which routing and response adapters already
-/// decided from the original request.
+/// Fields routing and response adapters already decided from the original
+/// request: the model, how the response is framed, and the output budget the
+/// context check reserved.
+const FIXED_FIELDS: &[&str] = &[
+    "model",
+    "stream",
+    "max_tokens",
+    "max_completion_tokens",
+    "max_output_tokens",
+    "n_predict",
+];
+
+/// A transform rewrites content; it may not change [`FIXED_FIELDS`].
 fn check_replacement(plugin_name: &str, before: &Value, after: &Value) -> Result<()> {
     if !after.is_object() {
         bail!("request transform plugin '{plugin_name}' returned a non-object body");
     }
-    for key in ["model", "stream"] {
+    for key in FIXED_FIELDS {
         if before.get(key) != after.get(key) {
             bail!("request transform plugin '{plugin_name}' may not change `{key}`");
         }
@@ -154,6 +176,11 @@ mod tests {
                     "d-model" => {
                         let mut body = input.body;
                         body["model"] = json!("other");
+                        RequestTransformOutput::replaced(body)
+                    }
+                    "f-budget" => {
+                        let mut body = input.body;
+                        body["max_tokens"] = json!(100_000);
                         RequestTransformOutput::replaced(body)
                     }
                     _ => {
@@ -227,6 +254,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_transform_plugin_that_lost_its_providers_still_rejects() {
+        // A crashed plugin's provider entries are cleared until it restarts.
+        let manager = manager(&["c-noop"]).await;
+        manager
+            .plugin_summary_producer("c-noop")
+            .clear_plugin_reports("c-noop");
+        manager.publish_plugin_providers("c-noop", Vec::new());
+        assert!(manager.has_request_transforms().await);
+        let error = manager
+            .transform_request(
+                "/v1/chat/completions",
+                "/v1/chat/completions",
+                &mut request(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("unavailable"), "{error}");
+    }
+
+    #[tokio::test]
     async fn an_unchanged_answer_keeps_the_body() {
         let manager = manager(&["c-noop"]).await;
         let mut body = request();
@@ -269,6 +316,23 @@ mod tests {
             .unwrap_err();
         assert!(
             error.to_string().contains("may not change `model`"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transform_may_not_change_the_output_budget() {
+        let error = manager(&["f-budget"])
+            .await
+            .transform_request(
+                "/v1/chat/completions",
+                "/v1/chat/completions",
+                &mut request(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("may not change `max_tokens`"),
             "{error}"
         );
     }

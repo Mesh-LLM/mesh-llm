@@ -7,7 +7,8 @@ use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
-    ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
+    ResponseAdapter, normalize_openai_compat_request, release_request_objects_with,
+    resolve_request_object_references,
 };
 use super::routing_rank::descriptor_for_model;
 
@@ -706,21 +707,41 @@ async fn rewrite_request_body_for_forwarding(
             changed = true;
         }
     }
-    outcome.transformed = plugin_transform::apply_request_transforms(
-        transformer,
-        &outcome.request_path,
-        path,
-        body_json,
-    )
-    .await?;
-    changed |= outcome.transformed;
-    if changed {
-        outcome.rewritten_body = Some(
-            serde_json::to_vec(body_json)
-                .context("serialize normalized OpenAI-compatible request body")?,
-        );
+    let transformed = async {
+        let transformed = plugin_transform::apply_request_transforms(
+            transformer,
+            &outcome.request_path,
+            path,
+            body_json,
+        )
+        .await?;
+        if !(changed || transformed) {
+            return Ok((transformed, None));
+        }
+        let rewritten = serde_json::to_vec(body_json)
+            .context("serialize normalized OpenAI-compatible request body")?;
+        // A peer reading the forwarded request enforces the same limit.
+        if transformed && rewritten.len() > MAX_BODY_BYTES {
+            bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+        }
+        Ok((transformed, Some(rewritten)))
     }
-    Ok(outcome)
+    .await;
+    match transformed {
+        Ok((transformed, rewritten_body)) => {
+            outcome.transformed = transformed;
+            outcome.rewritten_body = rewritten_body;
+            Ok(outcome)
+        }
+        Err(error) => {
+            // The request never starts, so nothing else releases these.
+            if let Some(plugin_manager) = plugin_manager {
+                release_request_objects_with(plugin_manager, &outcome.request_object_request_ids)
+                    .await;
+            }
+            Err(error)
+        }
+    }
 }
 
 fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {

@@ -408,6 +408,27 @@ fn document_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
             "unsupported document field",
         ));
     }
+    // Neither survives normalization, so asking for them is an error rather
+    // than a silent loss: `context` would vanish before the model sees it and
+    // the answer could not carry citations.
+    if object
+        .get("context")
+        .is_some_and(|context| !context.is_null() && context.as_str() != Some(""))
+    {
+        return Err(InferenceError::invalid_request(
+            "document context is not supported",
+        ));
+    }
+    if object
+        .get("citations")
+        .and_then(|citations| citations.get("enabled"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Err(InferenceError::invalid_request(
+            "document citations are not supported",
+        ));
+    }
     let source = object
         .get("source")
         .and_then(Value::as_object)

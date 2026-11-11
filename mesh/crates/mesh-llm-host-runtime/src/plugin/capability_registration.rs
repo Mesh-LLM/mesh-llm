@@ -2,35 +2,47 @@
 //! Remember declarations for this manager's lifetime without retaining callable
 //! operations, endpoints, or manifests after a plugin disconnects.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
-#[cfg(test)]
 use anyhow::{Result, anyhow};
 
 use super::PluginCapabilityProvider;
 #[cfg(test)]
 use super::PluginManager;
 
+/// Each declared capability, with the plugins that declared it.
 #[derive(Default)]
-pub(super) struct CapabilityRegistration(Mutex<BTreeSet<String>>);
+pub(super) struct CapabilityRegistration(Mutex<BTreeMap<String, BTreeSet<String>>>);
 
 impl CapabilityRegistration {
     pub(super) fn record(&self, providers: &[PluginCapabilityProvider]) {
         // A poisoned registry stays poisoned: readers must fail closed rather
         // than interpret loss of registration evidence as an absent provider.
         if let Ok(mut known) = self.0.lock() {
-            known.extend(providers.iter().map(|provider| provider.capability.clone()));
+            for provider in providers {
+                known
+                    .entry(provider.capability.clone())
+                    .or_default()
+                    .insert(provider.plugin_name.clone());
+            }
         }
     }
 
     #[cfg(test)]
     fn contains(&self, capability: &str) -> Result<bool> {
-        Ok(self
-            .0
+        Ok(self.lock()?.contains_key(capability))
+    }
+
+    /// The plugins that have declared `capability` in this manager's lifetime.
+    pub(super) fn plugins_for(&self, capability: &str) -> Result<BTreeSet<String>> {
+        Ok(self.lock()?.get(capability).cloned().unwrap_or_default())
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, BTreeSet<String>>>> {
+        self.0
             .lock()
-            .map_err(|_| anyhow!("capability registration lock poisoned"))?
-            .contains(capability))
+            .map_err(|_| anyhow!("capability registration lock poisoned"))
     }
 }
 

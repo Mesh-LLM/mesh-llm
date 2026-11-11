@@ -81,10 +81,12 @@ mod tests {
             Box::pin(async move {
                 let input: RequestTransformInput = serde_json::from_str(&params_json).unwrap();
                 let mut body = input.body;
-                body["messages"] = json!([{
-                    "role": "user",
-                    "content": format!("{} via {}", input.client_path, input.path),
-                }]);
+                let content = if body["messages"][0]["content"] == "bloat" {
+                    "x".repeat(super::super::MAX_BODY_BYTES)
+                } else {
+                    format!("{} via {}", input.client_path, input.path)
+                };
+                body["messages"] = json!([{"role": "user", "content": content}]);
                 Ok(RpcResult {
                     result_json: serde_json::to_string(&RequestTransformOutput::replaced(body))
                         .unwrap(),
@@ -199,6 +201,32 @@ mod tests {
         )
         .await;
         assert_eq!(forwarded_body(&request), embeddings);
+    }
+
+    #[tokio::test]
+    async fn a_transform_may_not_grow_the_body_past_the_forwarding_limit() {
+        let manager = stamping_manager().await;
+        let body =
+            json!({"model": "m", "messages": [{"role": "user", "content": "bloat"}]}).to_string();
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        client.write_all(request.as_bytes()).await.unwrap();
+        let error = super::super::read_http_request_with_limits_with_context(
+            &mut server,
+            super::super::HTTP_READ_LIMITS,
+            Some(&manager),
+            RequestTransforms::Apply,
+        )
+        .await
+        .map_err(super::super::OpenAiRequestReadError::into_error)
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("transformed request body exceeds"),
+            "{error:#}"
+        );
     }
 
     #[test]
