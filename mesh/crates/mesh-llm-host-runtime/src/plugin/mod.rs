@@ -34,6 +34,7 @@ pub(crate) mod mcp;
 pub mod openai_exchange;
 mod operation_bindings;
 pub(crate) mod operations;
+mod request_transform;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -1248,6 +1249,7 @@ impl PluginManager {
                 proto::ServiceKind::OpenaiExchange => {
                     bail!("OpenAI lifecycle services have no MCP projection")
                 }
+                proto::ServiceKind::RequestTransform => "request_transform/invoke",
                 proto::ServiceKind::Unspecified => {
                     bail!("Service kind is required for test plugin '{plugin_name}'")
                 }

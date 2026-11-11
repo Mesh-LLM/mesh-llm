@@ -412,6 +412,7 @@ pub async fn handle_mesh_request(
     let mut request = match read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
+        super::request_parse::RequestTransforms::Apply,
     )
     .await
     {

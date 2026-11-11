@@ -576,6 +576,9 @@ enum ServiceKind {
   SERVICE_KIND_VIRTUAL_MODEL = 5;
   // Host-private lifecycle service, never projected as MCP or plugin HTTP.
   SERVICE_KIND_OPENAI_EXCHANGE = 6;
+  // Host-private request transform (request_transform.v1), never projected
+  // as MCP or plugin HTTP.
+  SERVICE_KIND_REQUEST_TRANSFORM = 7;
 }
 
 message InvokeServiceRequest {

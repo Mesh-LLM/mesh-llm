@@ -1691,9 +1691,16 @@ async fn handle_api_proxy_connection_inner(
         .peer_blocks
         .without_blocked(&targets, crate::network::peer_blocks::now_ms());
     let plugin_manager = node.plugin_manager().await;
+    // A request a peer forwarded was transformed on the node its client used.
+    let transforms = if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
+        super::request_parse::RequestTransforms::Skip
+    } else {
+        super::request_parse::RequestTransforms::Apply
+    };
     match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
+        transforms,
     )
     .await
     {
