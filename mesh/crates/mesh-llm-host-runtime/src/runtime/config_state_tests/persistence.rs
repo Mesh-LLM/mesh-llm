@@ -288,32 +288,37 @@ fn config_sync_apply_does_not_persist_the_lifecycle_log_parser_env_override() {
 #[test]
 fn replacing_the_config_never_leaves_it_missing_for_a_reader() {
     use std::sync::Arc;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let dir = test_dir();
     let path = Arc::new(dir.join("config.toml"));
     super::super::atomic_write(&path, b"first").unwrap();
     let done = Arc::new(AtomicBool::new(false));
+    // Both threads start together, so the reader runs while the file is
+    // being replaced, not after.
+    let start = Arc::new(Barrier::new(2));
     let reader = {
-        let (path, done) = (Arc::clone(&path), Arc::clone(&done));
+        let (path, done, start) = (Arc::clone(&path), Arc::clone(&done), Arc::clone(&start));
         std::thread::spawn(move || {
-            let mut missing = 0u32;
+            let (mut missing, mut reads) = (0u32, 0u32);
+            start.wait();
             while !done.load(Ordering::Relaxed) {
+                reads += 1;
                 if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
                 {
                     missing += 1;
                 }
             }
-            missing
+            (missing, reads)
         })
     };
+    start.wait();
     for _ in 0..200 {
         super::super::atomic_write(&path, b"replaced").unwrap();
     }
     done.store(true, Ordering::Relaxed);
-    assert_eq!(
-        reader.join().unwrap(),
-        0,
-        "a reader found no file mid-replace"
-    );
+    let (missing, reads) = reader.join().unwrap();
+    assert!(reads > 0, "the reader never read during the replacements");
+    assert_eq!(missing, 0, "a reader found no file mid-replace");
 }
