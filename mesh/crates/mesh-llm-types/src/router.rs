@@ -122,7 +122,10 @@ pub fn media_requirements(body: &Value) -> MediaRequirements {
                         requirements.has_media = true;
                         requirements.needs_vision = true;
                     }
-                    if block.get("audio_url").is_some() || block.get("audio").is_some() {
+                    if block.get("audio_url").is_some()
+                        || block.get("audio").is_some()
+                        || block.get("input_audio").is_some()
+                    {
                         requirements.has_media = true;
                         requirements.needs_audio = true;
                     }
@@ -183,6 +186,21 @@ mod tests {
         assert!(result.needs_vision);
         assert!(result.needs_audio);
         assert!(result.requires_runtime_modality());
+    }
+
+    #[test]
+    fn detects_untyped_input_audio_block() {
+        // OpenAI's own shape names the payload `input_audio`; a client that
+        // leaves out `type` must still be treated as sending audio.
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": [{"input_audio": {"data": "...", "format": "wav"}}]
+            }]
+        });
+        let result = media_requirements(&body);
+        assert!(result.has_media);
+        assert!(result.needs_audio);
     }
 
     #[test]
