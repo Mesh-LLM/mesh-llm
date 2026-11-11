@@ -288,18 +288,8 @@ impl SplitTopologyCoordinator {
         self.node
             .refresh_stage_runtime_statuses(Duration::from_secs(2))
             .await;
-        let missing_stage_nodes =
-            split_missing_active_stage_nodes(&self.active, &connected_node_ids);
-        let unconfirmed_stage_nodes = self
-            .confirm_rejoined_stage_nodes(&missing_stage_nodes, &connected_node_ids)
-            .await;
-        let runtime_statuses = self.node.stage_runtime_statuses().await;
-        let mut unavailable_stage_nodes = split_unavailable_active_stage_nodes(
-            &self.active,
-            &connected_node_ids,
-            &runtime_statuses,
-        );
-        split_add_stage_nodes(&mut unavailable_stage_nodes, &unconfirmed_stage_nodes);
+        let (missing_stage_nodes, unavailable_stage_nodes) =
+            self.active_stage_loss(&connected_node_ids).await;
         let pending_eligibility_nodes = split_active_stage_nodes_pending_eligibility(
             &self.active,
             &connected_node_ids,
@@ -342,6 +332,28 @@ impl SplitTopologyCoordinator {
         }
         self.apply_replan_candidate(reason, snapshot.participants.len(), candidate)
             .await
+    }
+
+    /// The active stage nodes that are off the mesh, and those unavailable:
+    /// off the mesh, with a failed or stopped stage, or back on the mesh
+    /// without answering for their stages.
+    async fn active_stage_loss(
+        &mut self,
+        connected_node_ids: &[iroh::EndpointId],
+    ) -> (Vec<iroh::EndpointId>, Vec<iroh::EndpointId>) {
+        let missing_stage_nodes =
+            split_missing_active_stage_nodes(&self.active, connected_node_ids);
+        let unconfirmed_stage_nodes = self
+            .confirm_rejoined_stage_nodes(&missing_stage_nodes, connected_node_ids)
+            .await;
+        let runtime_statuses = self.node.stage_runtime_statuses().await;
+        let mut unavailable_stage_nodes = split_unavailable_active_stage_nodes(
+            &self.active,
+            connected_node_ids,
+            &runtime_statuses,
+        );
+        split_add_stage_nodes(&mut unavailable_stage_nodes, &unconfirmed_stage_nodes);
+        (missing_stage_nodes, unavailable_stage_nodes)
     }
 
     /// Asks each active stage node that was off the mesh and is back for its
