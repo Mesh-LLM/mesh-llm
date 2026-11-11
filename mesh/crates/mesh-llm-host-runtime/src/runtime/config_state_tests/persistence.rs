@@ -294,27 +294,36 @@ fn replacing_the_config_never_leaves_it_missing_for_a_reader() {
     let path = Arc::new(dir.join("config.toml"));
     super::super::atomic_write(&path, b"first").unwrap();
     let done = Arc::new(AtomicBool::new(false));
-    let reads = Arc::new(AtomicU32::new(0));
+    // Set once the first replacement is done; only reads started after it
+    // count, so a counted read overlaps the replacements.
+    let replacing = Arc::new(AtomicBool::new(false));
+    let reads_during = Arc::new(AtomicU32::new(0));
     let reader = {
-        let (path, done, reads) = (Arc::clone(&path), Arc::clone(&done), Arc::clone(&reads));
+        let (path, done, replacing, reads_during) = (
+            Arc::clone(&path),
+            Arc::clone(&done),
+            Arc::clone(&replacing),
+            Arc::clone(&reads_during),
+        );
         std::thread::spawn(move || {
             let mut missing = 0u32;
-            while !done.load(Ordering::Relaxed) {
+            while !done.load(Ordering::SeqCst) {
+                let started_during = replacing.load(Ordering::SeqCst);
                 if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
                 {
                     missing += 1;
                 }
-                reads.fetch_add(1, Ordering::SeqCst);
+                if started_during {
+                    reads_during.fetch_add(1, Ordering::SeqCst);
+                }
             }
             missing
         })
     };
     super::super::atomic_write(&path, b"replaced").unwrap();
-    // Wait, within a bound, for a read that completes after the first
-    // replacement, so at least one falls between the first and the last.
-    let after_first = reads.load(Ordering::SeqCst);
+    replacing.store(true, Ordering::SeqCst);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while reads.load(Ordering::SeqCst) == after_first {
+    while reads_during.load(Ordering::SeqCst) == 0 {
         assert!(
             std::time::Instant::now() < deadline,
             "the reader never read during the replacements"
@@ -324,7 +333,7 @@ fn replacing_the_config_never_leaves_it_missing_for_a_reader() {
     for _ in 1..200 {
         super::super::atomic_write(&path, b"replaced").unwrap();
     }
-    done.store(true, Ordering::Relaxed);
+    done.store(true, Ordering::SeqCst);
     assert_eq!(
         reader.join().unwrap(),
         0,
