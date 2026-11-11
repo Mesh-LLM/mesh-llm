@@ -100,10 +100,6 @@ async fn send_json_with_status_and_headers_inner(
     Ok(())
 }
 
-pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
-    send_openai_error(stream, 400, msg, None).await
-}
-
 /// Write a locally generated bounded OpenAI JSON error and record the exact
 /// body only after the client write succeeds. The observer remains the narrow
 /// logging boundary: it receives no request headers or arbitrary media type.
@@ -114,6 +110,27 @@ pub(crate) async fn send_error_observed(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> std::io::Result<()> {
     send_openai_error(stream, code, msg, Some(route_observer)).await
+}
+
+/// A request-reader failure: 400 for a malformed request, or the status and
+/// OpenAI error code of a document failure.
+pub(crate) async fn send_read_failure_error(
+    stream: ClientStream,
+    code: u16,
+    msg: &str,
+    error_code: Option<&str>,
+) -> std::io::Result<()> {
+    send_openai_error_with(stream, code, msg, error_code, None, None).await
+}
+
+pub(crate) async fn send_read_failure_error_observed(
+    stream: ClientStream,
+    code: u16,
+    msg: &str,
+    error_code: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    send_openai_error_with(stream, code, msg, error_code, None, Some(route_observer)).await
 }
 
 pub(crate) async fn send_400_observed(

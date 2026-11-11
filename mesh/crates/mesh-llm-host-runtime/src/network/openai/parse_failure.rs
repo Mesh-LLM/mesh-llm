@@ -7,7 +7,7 @@
 use crate::network::openai::client_stream::ClientStream;
 
 use super::request_parse::OpenAiRequestReadError;
-use super::response::{send_400, send_400_observed};
+use super::response::{send_read_failure_error, send_read_failure_error_observed};
 use super::transport::RouteDispatchOutcome;
 use crate::logging::OpenAiLifecycleAttachment;
 
@@ -29,13 +29,22 @@ pub(crate) async fn send_read_failure(
     error: &OpenAiRequestReadError,
 ) -> RouteDispatchOutcome {
     let mut lifecycle = attach_read_failure_logging(error);
+    let status = error.status();
+    let message = error.to_string();
     let result = if let Some(lifecycle) = lifecycle.as_ref() {
-        send_400_observed(tcp_stream, &error.to_string(), lifecycle.route_observer()).await
+        send_read_failure_error_observed(
+            tcp_stream,
+            status.status,
+            &message,
+            status.code.as_deref(),
+            lifecycle.route_observer(),
+        )
+        .await
     } else {
-        send_400(tcp_stream, &error.to_string()).await
+        send_read_failure_error(tcp_stream, status.status, &message, status.code.as_deref()).await
     };
     let outcome = match result {
-        Ok(()) => RouteDispatchOutcome::Responded(400),
+        Ok(()) => RouteDispatchOutcome::Responded(status.status),
         Err(_) => RouteDispatchOutcome::Dropped("response_write_failed"),
     };
     if let Some(lifecycle) = lifecycle.as_mut() {

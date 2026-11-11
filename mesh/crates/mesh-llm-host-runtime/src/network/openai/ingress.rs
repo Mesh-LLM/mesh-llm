@@ -1691,9 +1691,15 @@ async fn handle_api_proxy_connection_inner(
         .peer_blocks
         .without_blocked(&targets, crate::network::peer_blocks::now_ms());
     let plugin_manager = node.plugin_manager().await;
+    let origin = if ingress_type == crate::runtime::IngressType::LocalOpenAi {
+        super::document_ingest::RequestOrigin::local(source_addr)
+    } else {
+        super::document_ingest::RequestOrigin::default()
+    };
     match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
+        origin,
     )
     .await
     {

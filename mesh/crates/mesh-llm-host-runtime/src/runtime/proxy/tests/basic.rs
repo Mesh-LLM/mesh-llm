@@ -1817,3 +1817,95 @@ async fn anthropic_count_upstream_error_uses_anthropic_envelope() {
     proxy.abort();
     upstream.await.unwrap();
 }
+
+#[tokio::test]
+async fn test_api_proxy_replaces_pdf_attachment_with_document_plugin_text() {
+    use crate::network::openai::document_ingest::tests::{
+        FakeAnswer, FakeDocumentPlugin, pdf_data_url,
+    };
+    let fake = FakeDocumentPlugin::new(FakeAnswer::Text {
+        text: "EXTRACTED PDF TEXT".into(),
+        route_model: None,
+    });
+    let (upstream_port, upstream_rx, upstream_handle) =
+        spawn_capturing_upstream(r#"{"ok":true}"#).await;
+    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness_with_plugin_manager(
+        local_targets(&[("test", upstream_port)]),
+        fake.plugin_manager().await,
+    )
+    .await;
+
+    let body = json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "summarise"},
+            {"type": "file", "file": {"file_data": pdf_data_url(), "filename": "a.pdf"}},
+        ]}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nX-Mesh-Documents: inline\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(raw.contains("EXTRACTED PDF TEXT"), "{raw}");
+    assert!(!raw.contains("application/pdf"), "{raw}");
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["caller"]["loopback"], true);
+    assert_eq!(requests[0]["caller"]["mode_header"], "inline");
+    assert_eq!(fake.staged_files(), 0);
+
+    proxy_handle.abort();
+    let _ = upstream_handle.await;
+}
+
+#[tokio::test]
+async fn test_api_proxy_document_plugin_error_never_reaches_the_backend() {
+    use crate::network::openai::document_ingest::tests::{
+        FakeAnswer, FakeDocumentPlugin, pdf_data_url,
+    };
+    let fake = FakeDocumentPlugin::new(FakeAnswer::Error {
+        status: 422,
+        code: "pdf_no_text_layer".into(),
+    });
+    let (upstream_port, upstream_rx, upstream_handle) =
+        spawn_capturing_upstream(r#"{"unexpected":true}"#).await;
+    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness_with_plugin_manager(
+        local_targets(&[("test", upstream_port)]),
+        fake.plugin_manager().await,
+    )
+    .await;
+
+    // A Responses request exercises the same step after normalization.
+    let body = json!({
+        "model": "test",
+        "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": "summarise"},
+            {"type": "input_file", "input_file": {"url": pdf_data_url()}},
+        ]}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(response.starts_with("HTTP/1.1 422"), "{response}");
+    assert!(response.contains("pdf_no_text_layer"), "{response}");
+    assert_eq!(fake.requests().len(), 1);
+    assert_eq!(fake.staged_files(), 0);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), upstream_rx)
+            .await
+            .is_err(),
+        "backend must not be called"
+    );
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}

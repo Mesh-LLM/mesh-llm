@@ -2,6 +2,7 @@ pub(crate) mod accept;
 pub(crate) mod auto_route;
 pub(crate) mod automatic;
 pub(crate) mod client_stream;
+pub(crate) mod document_ingest;
 mod exchange_admission;
 mod forwarded_request;
 pub(crate) mod ingress;

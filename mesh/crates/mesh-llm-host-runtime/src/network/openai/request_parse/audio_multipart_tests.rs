@@ -13,9 +13,14 @@ async fn duplicate_content_type_is_rejected_before_body_routing() {
         let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
         client.write_all(request.as_bytes()).await.unwrap();
         client.shutdown().await.unwrap();
-        let error = read_http_request_with_limits_with_context(&mut server, HTTP_READ_LIMITS, None)
-            .await
-            .unwrap_err();
+        let error = read_http_request_with_limits_with_context(
+            &mut server,
+            HTTP_READ_LIMITS,
+            None,
+            RequestOrigin::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("duplicate Content-Type"));
     }
 }
@@ -140,10 +145,14 @@ async fn oversized_multipart_model_is_rejected_before_audio_routing() {
             let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
             client.write_all(request.as_bytes()).await.unwrap();
             client.shutdown().await.unwrap();
-            let error =
-                read_http_request_with_limits_with_context(&mut server, HTTP_READ_LIMITS, None)
-                    .await
-                    .unwrap_err();
+            let error = read_http_request_with_limits_with_context(
+                &mut server,
+                HTTP_READ_LIMITS,
+                None,
+                RequestOrigin::default(),
+            )
+            .await
+            .unwrap_err();
             assert_eq!(error.context().unwrap().client_path, path);
             assert!(error.to_string().contains("256-byte limit"));
         }
@@ -176,9 +185,14 @@ async fn duplicate_multipart_model_is_rejected_before_audio_routing() {
         let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
         client.write_all(request.as_bytes()).await.unwrap();
         client.shutdown().await.unwrap();
-        let error = read_http_request_with_limits_with_context(&mut server, HTTP_READ_LIMITS, None)
-            .await
-            .unwrap_err();
+        let error = read_http_request_with_limits_with_context(
+            &mut server,
+            HTTP_READ_LIMITS,
+            None,
+            RequestOrigin::default(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.context().unwrap().client_path, path);
         assert!(
             error

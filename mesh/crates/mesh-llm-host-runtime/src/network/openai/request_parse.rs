@@ -6,6 +6,7 @@ use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::document_ingest::{self, DocumentIngestError, RequestOrigin};
 use super::request_normalize::{
     ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
 };
@@ -133,6 +134,13 @@ pub(crate) struct OpenAiRequestReadError {
     context: Option<ParsedOpenAiRequestContext>,
 }
 
+/// HTTP status and OpenAI error code a reader failure should be sent with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadFailureStatus {
+    pub(crate) status: u16,
+    pub(crate) code: Option<String>,
+}
+
 impl OpenAiRequestReadError {
     fn before_headers(error: anyhow::Error) -> Self {
         Self {
@@ -153,6 +161,20 @@ impl OpenAiRequestReadError {
 
     pub(crate) fn context(&self) -> Option<&ParsedOpenAiRequestContext> {
         self.context.as_ref()
+    }
+
+    /// 400 for a malformed request; a document failure keeps its own status.
+    pub(crate) fn status(&self) -> ReadFailureStatus {
+        match self.error.downcast_ref::<DocumentIngestError>() {
+            Some(error) => ReadFailureStatus {
+                status: error.status,
+                code: Some(error.code.clone()),
+            },
+            None => ReadFailureStatus {
+                status: 400,
+                code: None,
+            },
+        }
     }
 
     fn into_error(self) -> anyhow::Error {
@@ -367,6 +389,8 @@ struct RequestRewriteOutcome {
     request_path: String,
     response_adapter: ResponseAdapter,
     rewritten_body: Option<Vec<u8>>,
+    /// The model the document plugin routed this request to, if any.
+    document_route_model: Option<String>,
 }
 
 // ── Request parsing ──
@@ -388,9 +412,15 @@ where
 pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
+    origin: RequestOrigin,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
-    let result =
-        read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await;
+    let result = read_http_request_with_limits_with_context(
+        stream,
+        HTTP_READ_LIMITS,
+        plugin_manager,
+        origin,
+    )
+    .await;
     match &result {
         Ok(request) => stream.set_client_path(&request.client_path),
         Err(error) => {
@@ -410,15 +440,21 @@ pub(super) async fn read_http_request_with_limits<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    read_http_request_with_limits_with_context(stream, limits, plugin_manager)
-        .await
-        .map_err(OpenAiRequestReadError::into_error)
+    read_http_request_with_limits_with_context(
+        stream,
+        limits,
+        plugin_manager,
+        RequestOrigin::default(),
+    )
+    .await
+    .map_err(OpenAiRequestReadError::into_error)
 }
 
 async fn read_http_request_with_limits_with_context<S>(
     stream: &mut S,
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
+    origin: RequestOrigin,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -451,11 +487,18 @@ where
     };
     let requires_json_transform =
         request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some());
+    let documents = DocumentContext {
+        origin,
+        mode_header: header_values_from_raw(&raw, document_ingest::DOCUMENT_MODE_HEADER)
+            .ok()
+            .and_then(|values| values.into_iter().next()),
+    };
     let rewrite = rewrite_request_body_for_forwarding(
         &parsed.path,
         &body,
         plugin_manager,
         requires_json_transform,
+        &documents,
     )
     .await
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
@@ -486,6 +529,8 @@ where
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
             None => None,
         }
+    } else if let Some(model) = rewrite.document_route_model.clone() {
+        Some(model)
     } else {
         metadata.as_ref().and_then(|value| value.model.clone())
     };
@@ -637,11 +682,19 @@ fn system_one_forward_path(path: &str) -> String {
     }
 }
 
+/// Caller facts the document step needs, gathered by the reader.
+#[derive(Debug, Default)]
+struct DocumentContext {
+    origin: RequestOrigin,
+    mode_header: Option<String>,
+}
+
 async fn rewrite_request_body_for_forwarding(
     path: &str,
     body: &[u8],
     plugin_manager: Option<&plugin::PluginManager>,
     requires_json_transform: bool,
+    documents: &DocumentContext,
 ) -> Result<RequestRewriteOutcome> {
     let mut outcome = RequestRewriteOutcome {
         body_json: None,
@@ -649,6 +702,7 @@ async fn rewrite_request_body_for_forwarding(
         request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
+        document_route_model: None,
     };
     if !requires_json_transform {
         return Ok(outcome);
@@ -674,6 +728,18 @@ async fn rewrite_request_body_for_forwarding(
                 .await?;
         if !resolved_request_ids.is_empty() {
             outcome.request_object_request_ids = resolved_request_ids;
+            changed = true;
+        }
+        if outcome.request_path.split('?').next() == Some("/v1/chat/completions")
+            && let Some(rewrite) = document_ingest::prepare_request_documents(
+                body_json,
+                plugin_manager,
+                documents.origin,
+                documents.mode_header.as_deref(),
+            )
+            .await?
+        {
+            outcome.document_route_model = rewrite.route_model;
             changed = true;
         }
     }
@@ -1160,6 +1226,7 @@ fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_prese
                     || body_text.contains("\"mesh_token\"")
                     || body_text.contains("\"input_audio\"")
                     || body_text.contains("\"input_image\"")
+                    || document_ingest::body_may_contain_pdf(body_text)
             }))
 }
 
