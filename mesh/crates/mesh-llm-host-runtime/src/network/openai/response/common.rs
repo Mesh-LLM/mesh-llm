@@ -221,7 +221,7 @@ pub(in crate::network::openai::response) fn retry_before_relay(
                 probe.header_end,
                 "retry-after",
             )
-            .and_then(|value| value.parse::<u64>().ok())
+            .and_then(|value| retry_after_seconds(&value, chrono::Utc::now()))
             .unwrap_or(2)
             .min(30);
             return Some(RouteAttemptResult::RetryableShedding {
@@ -239,6 +239,17 @@ pub(in crate::network::openai::response) fn retry_before_relay(
         return Some(RouteAttemptResult::RetryableGateUnsatisfied);
     }
     None
+}
+
+/// `Retry-After` is either delay-seconds or an HTTP-date (RFC 9110 §10.2.3).
+/// A date already past means retry now.
+fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some((at.timestamp() - now.timestamp()).max(0) as u64)
 }
 
 pub(in crate::network::openai) fn route_attempt_result_label(
@@ -538,6 +549,23 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn retry_after_accepts_an_http_date() {
+        let now = chrono::DateTime::parse_from_rfc2822("Wed, 21 Oct 2015 07:28:00 GMT")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            retry_after_seconds("Wed, 21 Oct 2015 07:28:12 GMT", now),
+            Some(12)
+        );
+        assert_eq!(
+            retry_after_seconds("Wed, 21 Oct 2015 07:27:00 GMT", now),
+            Some(0)
+        );
+        assert_eq!(retry_after_seconds(" 5 ", now), Some(5));
+        assert_eq!(retry_after_seconds("soon", now), None);
     }
 
     #[test]
