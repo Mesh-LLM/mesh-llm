@@ -210,7 +210,8 @@ Switches:
 - `--owner-key <OWNER_KEY>`: keystore used to attest this runtime node.
 - `--owner-required`: fail startup if owner attestation cannot be loaded.
 - `--node-label <NODE_LABEL>`: attach a human label to this runtime node certificate.
-- `--trust-policy <TRUST_POLICY>`: override peer ownership trust policy.
+- `--trust-policy <TRUST_POLICY>`: override the trust policy stored in the
+  trust store (set with `auth trust policy`; `off` when unset).
 - `--trust-owner <TRUST_OWNER>`: add trusted owner IDs on top of the local trust store.
 - `--mesh-guardrails <MODE>`: server-side mesh guardrail mode for hosted
   Skippy backends (`disabled`, `metrics`, or `enforce`; default `disabled`).

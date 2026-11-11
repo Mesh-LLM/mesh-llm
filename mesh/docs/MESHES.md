@@ -386,7 +386,9 @@ status fields, and testing boundary.
 For controlled membership, initialize an owner key and configure owner
 allowlisting on the participating nodes. The default trust policy is `off`;
 `require-owned` requires valid ownership but is not an owner allowlist.
-`allowlist` additionally checks the owner against the local trusted-owner set:
+`allowlist` additionally checks the owner against the local trusted-owner set.
+Owners added with `auth trust add` are only enforced under `allowlist`, and
+revocations under `require-owned` or `allowlist`:
 
 ```bash
 mesh-llm auth init
@@ -398,6 +400,16 @@ mesh-llm serve --model Qwen3-14B \
   --trust-owner <owner-id>
 ```
 
+To keep the policy in the trust store instead, so a bare `mesh-llm serve` (for
+example a service installed with `mesh-llm setup --service`) enforces it, set it
+once. `--trust-policy` still overrides the stored policy, and running nodes pick
+up the change at their next start:
+
+```bash
+mesh-llm auth trust add <owner-id>
+mesh-llm auth trust policy allowlist
+```
+
 Related commands:
 
 ```bash
@@ -406,6 +418,7 @@ mesh-llm auth sign-node --node-label studio
 mesh-llm auth trust add <owner-id>
 mesh-llm auth trust list
 mesh-llm auth trust remove <owner-id>
+mesh-llm auth trust policy <off|prefer-owned|require-owned|allowlist>
 ```
 
 ## Serve one model into several meshes

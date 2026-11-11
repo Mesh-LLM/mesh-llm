@@ -122,4 +122,32 @@ pub(super) const DESCRIPTORS: &[Descriptor] = &[
         false,
         RawKind::None,
     ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "policy", "off"],
+        NONE,
+        &["--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "policy", "prefer-owned"],
+        NONE,
+        &["--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "policy", "require-owned"],
+        NONE,
+        &["--trust-store"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "auth", "trust", "policy", "allowlist"],
+        NONE,
+        &["--trust-store"],
+        false,
+        RawKind::None,
+    ),
 ];

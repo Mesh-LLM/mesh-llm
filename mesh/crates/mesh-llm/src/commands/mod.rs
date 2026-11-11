@@ -10,7 +10,7 @@ mod plugin_cli;
 mod runtime;
 mod setup;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mesh_llm_cli::{Cli, Command};
 
 use self::analytics::dispatch_analytics_command;
@@ -46,7 +46,20 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
 
 async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
-        Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),
+        Command::Auth { command } => {
+            mesh_llm_host_runtime::command_support::audit::initialize_audit_logging_for_cli(
+                cli.config.as_deref(),
+                cli.logging.audit_log_path.clone(),
+                cli.logging.audit_log_format,
+                cli.logging.audit_log_level,
+            )
+            .context("Failed to initialize auth audit logging")?;
+            let result = mesh_llm_commands::auth::run_auth_command(command);
+            let flushed = mesh_llm_events::audit::flush_audit()
+                .await
+                .context("Failed to flush the auth audit log");
+            result.and(flushed)
+        }
         Command::KvCache { command } => {
             mesh_llm_commands::kv_cache::dispatch_kv_cache_command(command).await
         }

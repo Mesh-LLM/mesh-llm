@@ -1,4 +1,5 @@
 use super::*;
+use mesh_llm_identity::save_trust_store;
 use serial_test::serial;
 
 fn temporary_auth_test_dir(label: &str) -> std::path::PathBuf {

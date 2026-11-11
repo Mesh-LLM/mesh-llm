@@ -72,3 +72,7 @@ pub mod config {
 pub mod runtime_instances {
     pub use crate::runtime::instance::{LocalInstanceSnapshot, runtime_root, scan_local_instances};
 }
+
+pub mod audit {
+    pub use crate::runtime::initialize_audit_logging_for_cli;
+}

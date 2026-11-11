@@ -141,6 +141,14 @@ pub(super) fn format_auth(command: &mesh_llm_cli::AuthCommand, assembly: &mut Su
                 assembly.command.push_str(" auth trust list");
                 assembly.redact("--trust-store", trust_store.is_some());
             }
+            TrustCommand::Policy {
+                policy,
+                trust_store,
+            } => {
+                assembly.command.push_str(" auth trust policy ");
+                assembly.command.push_str(policy.as_str());
+                assembly.redact("--trust-store", trust_store.is_some());
+            }
         },
     }
 }
