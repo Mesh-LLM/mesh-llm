@@ -1,4 +1,4 @@
-From b3639c953ebf82e5d0a7e3abce574341091b05ac Mon Sep 17 00:00:00 2001
+From 1353ab0211308f15f0cd5451d03d842d719eae1b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 02:04:42 -0500
 Subject: [PATCH] skippy: add receipt recorder and replay
@@ -31,7 +31,11 @@ to pinned host memory in small pieces while later ubatches compute,
 so the decoding thread does not wait for the copy. Such a ubatch is
 reported two ubatches later, before the next KV-cache change, or when
 the caller calls skippy_model_flush_receipt_recorder; other devices
-report it at once. Reports keep their order either way.
+report it at once. Reports keep their order either way. Values the
+host can read in place are read directly after one synchronization,
+without the staging copy: a backend says which of its buffers those
+are through ggml_backend_buffer_is_host_readable, which Metal exports
+for its shared buffers.
 A device whose backend exports ggml_backend_receipt_digest, as CUDA
 does through ggml_backend_reg_get_proc_address, hashes the values
 where they are instead: the recorder reports a 32-byte BLAKE3 digest
@@ -77,6 +81,7 @@ ABI 0.1.78 -> 0.1.91.
  ggml/src/ggml-cuda/ggml-cuda.cu        |   4 +
  ggml/src/ggml-cuda/receipt-digest.cu   | 353 +++++++++
  ggml/src/ggml-cuda/receipt-digest.cuh  |  46 ++
+ ggml/src/ggml-metal/ggml-metal.cpp     |   8 +
  include/skippy.h                       |   1 +
  include/skippy/common.h                |   2 +-
  include/skippy/receipts.h              | 719 ++++++++++++++++++
@@ -104,10 +109,11 @@ ABI 0.1.78 -> 0.1.91.
  src/skippy/receipts_layers.h           | 162 ++++
  src/skippy/receipts_mixing_state.cpp   | 156 ++++
  src/skippy/receipts_mixing_state.h     |  34 +
- src/skippy/receipts_readback.cpp       | 977 +++++++++++++++++++++++++
+ src/skippy/receipts_readback.cpp       | 985 +++++++++++++++++++++++++
  src/skippy/receipts_scratch.h          |  48 ++
  src/skippy/receipts_source.cpp         |  10 +
  src/skippy/receipts_state.cpp          | 261 +++++++
+ src/skippy/receipts_storage.h          |  23 +
  src/skippy/receipts_token_axis.cpp     | 425 +++++++++++
  src/skippy/receipts_token_axis.h       | 116 +++
  src/skippy/receipts_values.h           |  80 ++
@@ -115,10 +121,11 @@ ABI 0.1.78 -> 0.1.91.
  src/skippy/sampling_config.cpp         |   5 +
  src/skippy/stage_realization.cpp       |   1 +
  tests/CMakeLists.txt                   |   2 +
+ tests/skippy-receipt-storage.h         |  43 ++
  tests/test-skippy-kv-page-export.cpp   |  67 ++
- tests/test-skippy-receipt-classify.cpp | 530 ++++++++++++++
+ tests/test-skippy-receipt-classify.cpp | 532 +++++++++++++
  tests/test-skippy-receipt-draw.cpp     | 137 ++++
- 45 files changed, 8209 insertions(+), 5 deletions(-)
+ 48 files changed, 8293 insertions(+), 5 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/receipt-digest.cu
  create mode 100644 ggml/src/ggml-cuda/receipt-digest.cuh
  create mode 100644 include/skippy/receipts.h
@@ -139,9 +146,11 @@ ABI 0.1.78 -> 0.1.91.
  create mode 100644 src/skippy/receipts_scratch.h
  create mode 100644 src/skippy/receipts_source.cpp
  create mode 100644 src/skippy/receipts_state.cpp
+ create mode 100644 src/skippy/receipts_storage.h
  create mode 100644 src/skippy/receipts_token_axis.cpp
  create mode 100644 src/skippy/receipts_token_axis.h
  create mode 100644 src/skippy/receipts_values.h
+ create mode 100644 tests/skippy-receipt-storage.h
  create mode 100644 tests/test-skippy-receipt-classify.cpp
  create mode 100644 tests/test-skippy-receipt-draw.cpp
 
@@ -620,6 +629,26 @@ index 000000000..c4100f38c
 +        int              n_cells,
 +        uint64_t       * bases,
 +        void           * out);
+diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
+index 528853974..b61a1c719 100644
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -1012,7 +1012,15 @@ static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, b
+     ggml_metal_fusion_info_set_enabled((struct ggml_metal_fusion_info *) finfo, enabled);
+ }
+ 
++// CPU-readable storage is separate from CPU backend compatibility (is_host).
++static bool ggml_backend_metal_buffer_is_host_readable(ggml_backend_buffer_t buffer) {
++    return buffer != nullptr && buffer->iface.get_tensor == ggml_backend_metal_buffer_shared_get_tensor;
++}
++
+ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
++    if (strcmp(name, "ggml_backend_buffer_is_host_readable") == 0) {
++        return (void *)ggml_backend_metal_buffer_is_host_readable;
++    }
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_metal_get_features;
+     }
 diff --git a/include/skippy.h b/include/skippy.h
 index 48e0be2cf..8df2bc6bd 100644
 --- a/include/skippy.h
@@ -6231,10 +6260,10 @@ index 000000000..01d8a995f
 +        std::vector<skippy_receipt_state> & states);
 diff --git a/src/skippy/receipts_readback.cpp b/src/skippy/receipts_readback.cpp
 new file mode 100644
-index 000000000..b6390a6e8
+index 000000000..971d193c1
 --- /dev/null
 +++ b/src/skippy/receipts_readback.cpp
-@@ -0,0 +1,977 @@
+@@ -0,0 +1,985 @@
 +// Reading a computed ubatch's receipt tensors back to the host, and reporting
 +// them.
 +//
@@ -6251,10 +6280,12 @@ index 000000000..b6390a6e8
 +// large copy would hold the stage's own small readbacks behind it.
 +//
 +// Replays and glue evaluations, devices without asynchronous copies, and
-+// values only the host holds are read and reported at once.
++// values the host holds or can read in place, such as those in Metal's shared
++// buffers, are read and reported at once.
 +
 +#include "receipts_internal.h"
 +#include "receipts_values.h"
++#include "receipts_storage.h"
 +
 +#include "ggml-backend.h"
 +#include "llama-batch.h"
@@ -7194,19 +7225,25 @@ index 000000000..b6390a6e8
 +        return;
 +    }
 +    place_in_host_block(capture, sched, rec, roots, size);
-+    if (deferrable && start_transfer(capture, compute, rec, copies, size)) {
++    // values the host can read in place, such as Metal's shared buffers, need
++    // one fence rather than a staging copy for each tensor
++    const bool host_readable = std::all_of(copies.begin(), copies.end(), [](const value_copy & c) {
++        return skippy_receipt_storage_host_readable(root_of(c.src)->buffer);
++    });
++    if (deferrable && !host_readable && start_transfer(capture, compute, rec, copies, size)) {
 +        capture.pending.push_back(std::move(rec));
 +        return;
 +    }
 +    finish_pending(capture, 0);
-+    if (!rec.pinned) {
++    const bool read_async = rec.pinned && !host_readable;
++    if (!read_async) {
 +        // the blocking copies below must not read values still being computed
 +        ggml_backend_sched_synchronize(sched);
 +    }
 +    for (const value_copy & c : copies) {
 +        ggml_backend_t backend = tensor_backend(sched, c.src);
 +        auto * src = const_cast<ggml_tensor *>(c.src);
-+        read_to_host(backend, src, rec.block + c.dst_offset, c.src_offset, c.size, rec.pinned);
++        read_to_host(backend, src, rec.block + c.dst_offset, c.src_offset, c.size, read_async);
 +    }
 +    ggml_backend_sched_synchronize(sched);
 +    deliver(capture, rec);
@@ -7548,6 +7585,35 @@ index 000000000..582607858
 +    std::lock_guard<std::mutex> lock(recorder->state_mutex);
 +    recorder->state_reported.erase(seq);
 +    return skippy_success(out_error);
++}
+diff --git a/src/skippy/receipts_storage.h b/src/skippy/receipts_storage.h
+new file mode 100644
+index 000000000..1f4adbb1c
+--- /dev/null
++++ b/src/skippy/receipts_storage.h
+@@ -0,0 +1,23 @@
++#pragma once
++
++#include "ggml-backend.h"
++
++// True means synchronous tensor_get reads CPU-accessible storage without a device copy.
++// This does not imply CPU backend compatibility or synchronization with pending device work.
++inline bool skippy_receipt_storage_host_readable(ggml_backend_buffer_t buffer) {
++    if (buffer == nullptr) {
++        return false;
++    }
++    if (ggml_backend_buffer_is_host(buffer)) {
++        return true;
++    }
++    ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(buffer));
++    ggml_backend_reg_t reg = dev != nullptr ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    if (reg == nullptr) {
++        return false;
++    }
++    using host_readable_fn = bool (*)(ggml_backend_buffer_t);
++    auto host_readable = reinterpret_cast<host_readable_fn>(
++            ggml_backend_reg_get_proc_address(reg, "ggml_backend_buffer_is_host_readable"));
++    return host_readable != nullptr && host_readable(buffer);
 +}
 diff --git a/src/skippy/receipts_token_axis.cpp b/src/skippy/receipts_token_axis.cpp
 new file mode 100644
@@ -8260,6 +8326,55 @@ index b8b159025..e3e90ddbb 100644
      llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
+diff --git a/tests/skippy-receipt-storage.h b/tests/skippy-receipt-storage.h
+new file mode 100644
+index 000000000..0ba005299
+--- /dev/null
++++ b/tests/skippy-receipt-storage.h
+@@ -0,0 +1,43 @@
++#pragma once
++
++#include "../src/skippy/receipts_storage.h"
++#include "../ggml/src/ggml-backend-impl.h"
++
++#include <cstring>
++
++namespace receipt_storage_tests {
++
++inline bool readable(ggml_backend_buffer_t buffer) {
++    return buffer->context != nullptr;
++}
++
++inline void * lookup(ggml_backend_reg_t, const char * name) {
++    return std::strcmp(name, "ggml_backend_buffer_is_host_readable") == 0
++            ? reinterpret_cast<void *>(readable) : nullptr;
++}
++
++inline void run(void (*check)(bool, const char *)) {
++    check(!skippy_receipt_storage_host_readable(nullptr), "missing storage is not readable");
++    auto host = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), 64);
++    check(host != nullptr && skippy_receipt_storage_host_readable(host), "CPU storage is readable");
++    ggml_backend_buffer_free(host);
++
++    ggml_backend_reg reg = {};
++    ggml_backend_device dev = {};
++    ggml_backend_buffer_type buft = {};
++    ggml_backend_buffer buffer = {};
++    buffer.buft = &buft;
++    check(!skippy_receipt_storage_host_readable(&buffer), "missing device fails closed");
++    buft.device = &dev;
++    check(!skippy_receipt_storage_host_readable(&buffer), "missing registry fails closed");
++    dev.reg = &reg;
++    check(!skippy_receipt_storage_host_readable(&buffer), "absent capability retains staging");
++    reg.iface.get_proc_address = lookup;
++    check(!skippy_receipt_storage_host_readable(&buffer), "private storage retains staging");
++    buffer.context = &buffer;
++    check(skippy_receipt_storage_host_readable(&buffer), "shared storage permits direct readback");
++    buffer.context = nullptr;
++    check(!skippy_receipt_storage_host_readable(&buffer), "storage decisions are not cached across batches");
++}
++
++} // namespace receipt_storage_tests
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 index 0fb9f036a..397331063 100644
 --- a/tests/test-skippy-kv-page-export.cpp
@@ -8361,14 +8476,15 @@ index 0fb9f036a..397331063 100644
  }
 diff --git a/tests/test-skippy-receipt-classify.cpp b/tests/test-skippy-receipt-classify.cpp
 new file mode 100644
-index 000000000..d705b0673
+index 000000000..a8c9eb5aa
 --- /dev/null
 +++ b/tests/test-skippy-receipt-classify.cpp
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,532 @@
 +// Receipt layer classification on small synthetic graphs: what is a weight
 +// matmul, what mixes tokens, what is glue, and which graphs are refused.
 +
 +#include "../src/skippy/receipts_layers.h"
++#include "skippy-receipt-storage.h"
 +
 +#include "ggml.h"
 +
@@ -8836,6 +8952,7 @@ index 000000000..d705b0673
 +}  // namespace
 +
 +int main() {
++    receipt_storage_tests::run(check);
 +    for (const int64_t n : {1, 2, 7}) {
 +        dense_attention_layer(n);
 +        moe_layer(n);
