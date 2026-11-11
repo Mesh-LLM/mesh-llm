@@ -32,7 +32,8 @@ pub use llama::{
 pub use mtmd::{
     mtmd_bitmap_free, mtmd_bitmap_get_n_bytes, mtmd_context_params_default, mtmd_decode_use_mrope,
     mtmd_default_marker, mtmd_free, mtmd_gen_audio_get_info, mtmd_helper_bitmap_init_from_buf,
-    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_reset,
+    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output,
+    mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
     mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
     mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
     mtmd_helper_init_opt_default, mtmd_helper_video_free, mtmd_input_chunks_free,

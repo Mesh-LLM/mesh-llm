@@ -210,8 +210,20 @@ record_failure_class() {
 }
 
 verification_source_inspection() {
-  local verb="$1" log="${2:-}" transaction_root input status
-  [[ "$HARNESS_MODE" == verify ]] || return 1
+  local verb="$1" log="${2:-}" transaction_root input status selected_source
+  case "$HARNESS_MODE" in
+    verify) ;;
+    verify-build|native-build)
+      [[ -n "${CANARY_INPUT_BUNDLE:-}" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  if [[ "$HARNESS_MODE" != verify ]]; then
+    selected_source="${CANARY_MESH_SOURCE:-$BASE_HEAD}"
+    if [[ "$CANDIDATE_BASE_HEAD" != "$selected_source" && "$CERTIFIED_SHA" != "$selected_source" ]]; then
+      echo "bundle candidate is not based on the frozen selected source" >&2
+      return 1
+    fi
+  fi
   case "$verb" in
     verification-source-admit|verification-manifest-policy|verification-parity-inventory|verification-split-roster-check) ;;
     *) echo "unsupported independent verification inspection" >&2; return 1 ;;
@@ -219,7 +231,8 @@ verification_source_inspection() {
   repair_workload_controller_unchanged || return 1
   transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/independent-verification.XXXXXXXX")" || return 1
   input="$transaction_root/input.json"
-  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+  # Selected-source builds use the recovery commit as BASE_HEAD; the verifier runs from frozen main.
+  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "${CANARY_CONTROLLER_SHA:-$BASE_HEAD}" \
     --arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
     --arg base "$CANDIDATE_BASE_HEAD" --arg candidate "$CERTIFIED_SHA" --arg tree "$VERIFICATION_TREE" \
     '{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},
@@ -953,6 +966,12 @@ fi
 
 load_candidate_bundle
 trap cleanup_verification_worktree EXIT
+if [[ ( "$HARNESS_MODE" == verify-build || "$HARNESS_MODE" == native-build ) &&
+    "$CANDIDATE_BASE_HEAD" != "${CANARY_MESH_SOURCE:-$BASE_HEAD}" &&
+    "$CERTIFIED_SHA" != "${CANARY_MESH_SOURCE:-$BASE_HEAD}" ]]; then
+  echo "bundle candidate is not based on the frozen selected source" >&2
+  exit 1
+fi
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
 if [[ "$HARNESS_MODE" == verify ]]; then

@@ -8,7 +8,7 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 mod wire;
@@ -253,12 +253,16 @@ fn verify_file_checksums(
     kind: &str,
     checksums: &BTreeMap<String, String>,
 ) -> Result<()> {
+    // Read before any file is opened: a stamp is trusted or recorded only
+    // when it predates this by SETTLE_WINDOW, so an edit made after this point
+    // always carries a later change time.
+    let started = verification_clock();
     for (relative, expected) in checksums {
         let path = checked_runtime_path(root, relative)?;
         let expected = normalize_sha256(expected)?;
         // Taken before hashing, so a write during the hash leaves a stale
         // stamp and the next verification hashes again.
-        let stamp = FileStamp::of(&path)?;
+        let stamp = FileStamp::of(&path)?.filter(|stamp| stamp.settled_at(started));
         let key = (path, expected);
         if stamp.is_some() && verified_files().get(&key) == stamp.as_ref() {
             continue;
@@ -277,6 +281,29 @@ fn verify_file_checksums(
     Ok(())
 }
 
+/// A cached hash is trusted, and recorded, only for a file whose last change is
+/// at least this old when verification starts.
+///
+/// Linux kernels before 6.13 stamp ctime from the coarse (jiffy) clock, and
+/// some filesystems keep 1 s or 2 s timestamps, so a same-length rewrite that
+/// restores the modification time can land in the same tick as the change a
+/// cached stamp recorded and leave every field identical. Once the recorded
+/// change is older than the coarsest granularity, any later edit gets a later
+/// change time. This is git's "racily clean" rule.
+const SETTLE_WINDOW: Duration = Duration::from_secs(2);
+
+/// The time a verification starts.
+fn verification_clock() -> SystemTime {
+    #[cfg(test)]
+    {
+        SystemTime::now() + tests::CLOCK_AHEAD.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        SystemTime::now()
+    }
+}
+
 /// A runtime file's length and modification time when it was hashed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileStamp {
@@ -290,6 +317,26 @@ struct FileStamp {
 }
 
 impl FileStamp {
+    /// Whether a later edit is guaranteed to change this stamp: its
+    /// modification and change times are at least [`SETTLE_WINDOW`] before
+    /// `now`.
+    fn settled_at(&self, now: SystemTime) -> bool {
+        let old_enough =
+            |at: SystemTime| now.duration_since(at).is_ok_and(|age| age >= SETTLE_WINDOW);
+        #[cfg(unix)]
+        let changed = {
+            let (seconds, nanos) = self.changed;
+            u64::try_from(seconds)
+                .ok()
+                .zip(u32::try_from(nanos).ok())
+                .and_then(|(s, n)| SystemTime::UNIX_EPOCH.checked_add(Duration::new(s, n)))
+                .is_some_and(old_enough)
+        };
+        #[cfg(not(unix))]
+        let changed = true;
+        changed && old_enough(self.modified)
+    }
+
     /// `None` where the filesystem keeps no modification time: such a file is
     /// hashed on every verification.
     fn of(path: &Path) -> Result<Option<Self>> {
@@ -413,6 +460,14 @@ mod tests {
     thread_local! {
         /// Files `sha256_file` hashed on this test's thread.
         pub(super) static HASHED: Cell<usize> = const { Cell::new(0) };
+        /// How far this test's verification clock runs ahead of real time.
+        pub(super) static CLOCK_AHEAD: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+
+    /// Runs verifications on this thread with a clock far enough ahead that
+    /// freshly written files count as settled.
+    fn settled_clock() {
+        CLOCK_AHEAD.with(|ahead| ahead.set(SETTLE_WINDOW * 300));
     }
 
     fn cpu_runtime_manifest() -> NativeRuntimeManifest {
@@ -441,6 +496,7 @@ mod tests {
 
     #[test]
     fn reading_a_manifest_again_hashes_only_changed_files() {
+        settled_clock();
         let temp = tempfile::tempdir().unwrap();
         let library = temp.path().join("lib/libllama.so");
         fs::create_dir_all(library.parent().unwrap()).unwrap();
@@ -472,8 +528,27 @@ mod tests {
         assert_eq!(hashed(), before + 2);
     }
 
-    /// A same-length rewrite that puts the old modification time back still
-    /// changes the inode change time, so it is hashed again and rejected.
+    /// A file changed within the settle window is hashed on every read: its
+    /// stamp is neither trusted nor recorded, since an edit in the same
+    /// timestamp tick would leave it unchanged.
+    #[test]
+    fn a_recently_changed_file_is_hashed_on_every_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("lib/libllama.so");
+        fs::create_dir_all(library.parent().unwrap()).unwrap();
+        fs::write(&library, b"native runtime").unwrap();
+        cpu_runtime_manifest().write_to_dir(temp.path()).unwrap();
+        let hashed = || HASHED.with(Cell::get);
+        let before = hashed();
+
+        NativeRuntimeManifest::read_from_dir(temp.path()).unwrap();
+        NativeRuntimeManifest::read_from_dir(temp.path()).unwrap();
+        assert_eq!(hashed(), before + 2, "a fresh file is not cached");
+    }
+
+    /// A same-length rewrite that puts the old modification time back within
+    /// one timestamp tick of the first verification is still rejected: the
+    /// first verification found the file unsettled and cached nothing.
     #[cfg(unix)]
     #[test]
     fn a_rewrite_with_its_modification_time_restored_is_hashed_again() {

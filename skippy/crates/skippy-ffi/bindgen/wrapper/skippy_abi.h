@@ -20,6 +20,8 @@
  * macOS, Linux, and Windows toolchains.
  */
 
+/* Bindgen must see the concrete descriptor before runtime.h forwards it. */
+#include "skippy/activation.h"
 #include "skippy.h"
 
 #include <stdint.h>

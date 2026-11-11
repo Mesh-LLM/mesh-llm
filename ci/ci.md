@@ -281,8 +281,17 @@ Only a passing repaired benchmark emits a publication artifact. The hosted
 publisher uses Conventional Commit titles. Independent verification in a fresh
 job, as used by the llama canary, remains a follow-up for this older repair path.
 
-**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. The
+**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch.
+Successful same-candidate infrastructure reconciliation emits
+`retry_recovered=true`. In that case `verify_1`, `verify_2`, and `verify_3`
+skip their native builds and complete family matrices; selection retains the
+certified package and can continue to publication. This retry exception also
+applies to explicit selected-source publication. Other candidates retain the
+independent-pass requirements described below, and changed producer identities
+cannot reuse prior receipts.
+
+The controller freezes one main source SHA and the upstream target before any
+hardware work. The
 default target is the newest published llama.cpp release or prerelease, resolved
 by the Rust `repository llama-upstream-release` command. The managed resolver
 compares publication times across the paginated metadata feed, excluding drafts.
@@ -345,7 +354,8 @@ modes, `upstream_sha` cannot be combined with this input. Keep the Actions workf
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
-Only two green passes permit the managed lab publisher to create a PR to `main`
+Two green passes, or the successful same-candidate retry exception above,
+permit the managed lab publisher to create a PR to `main`
 with that exact commit. Both modes keep its existing pin and never invoke Goose.
 The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
@@ -447,6 +457,8 @@ it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
+Bundle-backed native builds inspect parity against the admitted exact candidate;
+the controller parity inventory checks only the frozen selected source.
 
 The family matrix is submitted in ascending estimated model bytes, with family
 name breaking ties. Balanced shard membership remains unchanged. This puts
@@ -525,7 +537,7 @@ worker failures remain recoverable by later bounded repair passes;
 runner/workflow failures receive one targeted same-candidate recheck. A clean
 recheck plus retained initial successes completes that immutable full pass;
 repeated infrastructure failure or invalid aggregate evidence stops. Only
-complete independent success permits publication.
+complete independent success or successful same-candidate recovery permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 Build evidence explicitly includes hidden run-owned `.deps` state and native
@@ -763,14 +775,25 @@ Release efficiency TODOs:
   canary. QA: verify all host/runtime hashes, no-driver readiness, SDK resources,
   and per-phase timings on Linux amd64/arm64, macOS, and Windows.
 
+Protected `main` requires the complete version update to land through a PR
+with successful checks before dispatch. The workflow reapplies the same script
+idempotently and pushes the unchanged commit. If version preparation has not
+landed, branch rules can reject the workflow's new version commit; the release
+process does not bypass those rules.
+
 `scripts/release-version.sh` is the single owner of the tracked release-version
 surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
-every release job that can reach cargo — including the canary-skipped
-`metadata` and `publish` jobs — initializes sccache before its first cargo
-call. The artifact-only composition jobs never call cargo, and `tools/xtask`
-enforces both halves. On a non-canary `release.yml` dispatch, the metadata job
-applies that script, creates a linear release-source commit when needed, and
-fast-forwards `main` before the build graph begins. `just release` only
+every release job that can reach cargo — including `metadata`, which runs on
+canary dispatches too, and the canary-skipped `publish` and `release_notes`
+jobs — initializes sccache before its first cargo call. The artifact-only
+composition jobs never call cargo, and `tools/xtask` enforces both halves. The
+Cargo-reach check recognizes direct `cargo` invocations and the named helpers
+`release-version.sh`, `publish-crates.sh`, `release-notes-generate.sh` and
+`package-release.sh`; other scripts that invoke Cargo are not covered unless the
+validator is extended to detect them. On a non-canary `release.yml` dispatch,
+metadata reapplies the prepared version. If a diff remains, it attempts a new
+release-source commit and main push; protected `main` rejects that unreviewed
+update before the build graph begins. `just release` only
 performs local preflight, dispatches that workflow, and waits for its result.
 Canary dispatches do not mutate `main` or publish. Release tags and releases are immutable on
 the manual release path: a non-canary dispatch refuses an already-existing tag
@@ -820,9 +843,12 @@ graph is the evidence for that version-only source commit.
 
 After a stable release publishes, the `release_notes` job regroups the
 GitHub-generated body into Keep a Changelog sections through the Rust `cargo
-xtool release` notes-link, notes-classify and notes-regroup commands. A deterministic pass
-classifies each entry from the Conventional Commits type on the canonical
-squash-merge commit between the comparison base and the tag; an optional agent
+xtool release` notes-link, notes-classify and notes-regroup commands. The job
+uses the pinned Rust toolchain and job-local sccache initialized before the
+notes helper runs. The release compiler contract checks this helper's indirect
+Cargo calls. The deterministic pass classifies each entry from the Conventional
+Commits type on the canonical squash-merge commit between the comparison base
+and the tag; an optional agent
 review pass then reclassifies what commit metadata could not place. Both passes
 render through the same validator, which refuses a plan that does not cover the
 published body exactly, and the job re-verifies the live body after editing.
@@ -841,6 +867,8 @@ That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
 
+The non-canary path below assumes the version-preparation PR has merged.
+
 ```mermaid
 flowchart TD
     JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch"]
@@ -848,8 +876,8 @@ flowchart TD
     DISPATCH --> META["Resolve version and highest prior stable notes tag"]
     META --> PATH{"Canary?"}
     PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update main"]
-    PATH -- "non-canary dispatch" --> BUMP["Run release-version.sh"]
-    BUMP --> VERSION_COMMIT["Commit tracked version surface<br/>fast-forward main"]
+    PATH -- "non-canary dispatch" --> BUMP["Reapply release-version.sh"]
+    BUMP --> VERSION_COMMIT["Use prepared main SHA<br/>unchanged main push"]
     CANARY --> BUILD["Build, compose, and smoke artifact matrix"]
     VERSION_COMMIT --> BUILD
     BUILD --> PUBLISHABLE{"Canary?"}
@@ -1352,12 +1380,7 @@ Every product has three immutable layers:
 
 `compose-product-input` verifies checksums, manifests and host import policy,
 then composes exact producer bytes without compiling or substituting inputs.
-In release, `scripts/package-release.sh` then adds `plugins/` to the macOS and
-Linux bundles: the default plugin archives the host pins, downloaded from each
-plugin's own GitHub release and checked against the pinned SHA-256, after
-which the bundle's own host must install each one as a default
-(`repository bundled-plugins` and `repository bundled-plugins-check`; see
-`RELEASE.md`). Nothing builds those plugins in this repository.
+Nothing builds those plugins in this repository.
 Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.
@@ -2108,7 +2131,9 @@ project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
 selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
 state directory and uses the prepared SDK interpreter when available, otherwise
 the installed `python3`. Interpreter downloads are disabled. Both upstream
-Jinja and FP8 conversion tests remain selected by the complete native suite. The lock requires Python 3.12 or newer and includes NumPy, PyTorch, Safetensors and Transformers. The optional developer
+Jinja and FP8 conversion tests remain selected by the complete native suite.
+The locked environment requires Python 3.12 or newer and includes NumPy,
+PyTorch, Safetensors and Transformers. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 

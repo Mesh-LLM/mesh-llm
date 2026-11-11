@@ -187,9 +187,16 @@ mod dynamic {
         }))
     }
 
+    /// Counts startup resolution attempts so tests can prove a mode never reaches the native loader.
+    #[cfg(test)]
+    pub(crate) static STARTUP_RESOLUTION_ATTEMPTS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
+        #[cfg(test)]
+        STARTUP_RESOLUTION_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let outcome = try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,

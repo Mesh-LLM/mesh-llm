@@ -515,7 +515,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         command_is_update: matches!(cli.command, Some(mesh_llm_cli::Command::Update { .. })),
         command_uses_machine_output: command_uses_machine_output(cli.command.as_ref()),
         draft: cli.speculative.draft,
-        draft_max: cli.speculative.draft_max,
         no_draft: cli.speculative.no_draft,
         speculative_overrides,
         strategy: cli.placement.strategy.map(map_serving_strategy),
@@ -552,7 +551,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         trust_policy: cli.owner.trust_policy.map(map_trust_policy),
         trust_owner: cli.owner.trust_owner,
         nostr_discovery: cli.nostr_discovery,
-        no_default_plugins: cli.no_default_plugins,
         audit_log_path: cli.logging.audit_log_path,
         audit_log_format: cli.logging.audit_log_format,
         audit_log_level: cli.logging.audit_log_level,
@@ -606,6 +604,23 @@ fn speculative_overrides_from_cli(
         .speculative
         .speculative_ngram_fallback
         .map(|fallback| fallback.as_str().to_string());
+    // `--draft` and `--draft-max` set `draft_model` and `draft_max_tokens`,
+    // as the config file would. A relative draft path is anchored to the
+    // directory the command ran from.
+    overrides.draft_model = cli.speculative.draft.as_deref().map(|path| {
+        std::path::absolute(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string()
+    });
+    overrides.draft_max_tokens = cli.speculative.draft_max.map(u32::from);
+    // `--no-draft` turns the automatic defaults off as `spec_default = false`
+    // does: no sibling draft, catalog DFlash pairing or native MTP unless a
+    // strategy or draft is configured.
+    overrides.spec_default = cli
+        .speculative
+        .no_draft
+        .then_some(mesh_llm_host_runtime::sdk::config::BoolOrAuto::Bool(false));
     (overrides != Default::default()).then_some(overrides)
 }
 
@@ -888,6 +903,52 @@ mod cli_entrypoint_tests {
         assert_eq!(config.ngram_min, Some(2));
         assert_eq!(config.ngram_max, Some(6));
         assert_eq!(config.ngram_max_proposal_tokens, Some(5));
+    }
+
+    #[test]
+    fn cli_no_draft_turns_the_automatic_speculative_defaults_off() {
+        let parse = |args: &[&str]| {
+            let normalized = mesh_llm_cli::normalize_runtime_surface_args(
+                ["mesh-llm", "serve"].iter().chain(args).copied(),
+            );
+            mesh_llm_cli::Cli::try_parse_from(normalized.normalized).expect("CLI parses")
+        };
+
+        let config = super::speculative_overrides_from_cli(&parse(&["--no-draft"]))
+            .expect("--no-draft produces an override");
+        assert_eq!(
+            config.spec_default,
+            Some(mesh_llm_config::BoolOrAuto::Bool(false))
+        );
+        assert!(super::speculative_overrides_from_cli(&parse(&[])).is_none());
+    }
+
+    #[test]
+    fn cli_draft_flags_set_the_draft_model_and_its_token_cap() {
+        let parse = |args: &[&str]| {
+            let normalized = mesh_llm_cli::normalize_runtime_surface_args(
+                ["mesh-llm", "serve"].iter().chain(args).copied(),
+            );
+            mesh_llm_cli::Cli::try_parse_from(normalized.normalized).expect("CLI parses")
+        };
+
+        let config = super::speculative_overrides_from_cli(&parse(&[
+            "--draft",
+            "drafts/small.gguf",
+            "--draft-max",
+            "5",
+        ]))
+        .expect("draft flags produce an override");
+        let draft = std::path::PathBuf::from(config.draft_model.expect("draft model"));
+        assert!(draft.is_absolute(), "{}", draft.display());
+        assert!(draft.ends_with("drafts/small.gguf"));
+        assert_eq!(config.draft_max_tokens, Some(5));
+
+        // Without the flag the cap stays unset, so the config file or the
+        // runtime default decides it.
+        let cli = parse(&["--draft", "drafts/small.gguf"]);
+        let config = super::speculative_overrides_from_cli(&cli).expect("override");
+        assert_eq!(config.draft_max_tokens, None);
     }
 
     #[test]

@@ -167,7 +167,6 @@ mod tests {
             downloaded_asset_name: format!("{name}-x86_64-unknown-linux-gnu.tar.gz"),
             install_path,
             enabled: true,
-            default_managed: false,
             manifest: None,
 
             last_protocol_version: None,

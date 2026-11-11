@@ -50,6 +50,8 @@ on:
     outputs:
       green:
         value: ${{ jobs.reconcile.outputs.green || jobs.aggregate.outputs.green }}
+      retry_recovered:
+        value: ${{ jobs.reconcile.outputs.retry_recovered }}
       package:
         value: ${{ jobs.combine.outputs.package }}
       identity:
@@ -723,6 +725,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
     outputs:
       green: ${{ steps.reconcile.outputs.green }}
+      retry_recovered: ${{ steps.reconcile.outputs.retry_recovered }}
       state: ${{ steps.reconcile.outputs.state }}
       repairable: ${{ steps.reconcile.outputs.repairable }}
       failure_class: ${{ steps.reconcile.outputs.failure_class }}

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/minimax-m2.cpp b/src/models/minimax-m2.cpp
-index 8b80eab2da1979b16629d4ef66c4eca0282390f8..2d6175807b8794215a96e08a2ab58f361cbb4953 100644
+index 5b8258255f095dbb19bec0f378e329b395fb27e7..83f2ad2f562c0abfcbc60c70bb69677b683c78db 100644
 --- a/src/models/minimax-m2.cpp
 +++ b/src/models/minimax-m2.cpp
-@@ -60,6 +60,8 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
+@@ -60,6 +60,8 @@ llama_model_minimax_m2::graph::graph(const llm_graph_params & params) : llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 8b80eab2da1979b16629d4ef66c4eca0282390f8..2d6175807b8794215a96e08a2ab58f36
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -147,6 +149,7 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
+@@ -138,6 +140,7 @@ llama_model_minimax_m2::graph::graph(const llm_graph_params & params) : llm_grap
  
          // input for next layer
          inpL = cur;

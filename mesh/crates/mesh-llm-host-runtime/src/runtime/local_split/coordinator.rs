@@ -74,7 +74,7 @@ impl SplitTopologyGeneration {
 
     /// Run this generation with `choice` on every hop. The codec rides each
     /// stage's load request and the topology hash, so all stages of one
-    /// generation use the coordinator's choice. Every stage-generation-15
+    /// generation use the coordinator's choice. Every stage-generation-16
     /// peer decodes every codec, so no choice needs a capability check.
     pub(super) fn with_activation_codec(mut self, choice: SplitActivationCodec) -> Self {
         self.activation_codec = choice.codec;
@@ -111,6 +111,20 @@ impl SplitTopologyGeneration {
         }
         Ok(self)
     }
+}
+
+/// A replan candidate whose stage placement is planned but whose native stage
+/// admissions are not realized yet.
+///
+/// Planning a placement is arithmetic over the participant snapshot.
+/// Realizing its admissions opens the model and runs the native stage planner
+/// for every stage and graph profile, which takes seconds and stalls the
+/// decode in flight on this node. The periodic tick therefore decides on
+/// planned candidates and realizes one only when it is about to be loaded or
+/// offered as the replacement for a lost stage.
+pub(super) struct PlannedReplanCandidate {
+    pub(super) generation: SplitTopologyGeneration,
+    planned: super::PlannedRuntimeSliceTopology,
 }
 
 pub(super) struct SplitTopologyCoordinator {
@@ -296,13 +310,17 @@ impl SplitTopologyCoordinator {
             None
         };
 
+        let stage_loss = !missing_stage_nodes.is_empty() || !unavailable_stage_nodes.is_empty();
+        let (candidate, loss_candidate) = self
+            .split_candidate_on_stage_loss(reason, candidate, stage_loss)
+            .await;
         if let Some(should_continue) = self
             .handle_loss_recovery(
                 reason,
                 &connected_node_ids,
                 &missing_stage_nodes,
                 &unavailable_stage_nodes,
-                candidate.as_ref(),
+                loss_candidate.as_ref(),
             )
             .await
         {
@@ -316,12 +334,33 @@ impl SplitTopologyCoordinator {
             .await
     }
 
+    /// Loss recovery may offer the candidate as a replacement split, so on a
+    /// stage loss it is realized first and moves to the second slot; a
+    /// candidate whose admissions fail is no candidate. Without a loss the
+    /// replan decision needs only the placement, so it stays planned.
+    async fn split_candidate_on_stage_loss(
+        &self,
+        reason: &'static str,
+        candidate: Option<PlannedReplanCandidate>,
+        stage_loss: bool,
+    ) -> (
+        Option<PlannedReplanCandidate>,
+        Option<SplitTopologyGeneration>,
+    ) {
+        match candidate {
+            Some(candidate) if stage_loss => {
+                (None, self.realize_replan_candidate(reason, candidate).await)
+            }
+            candidate => (candidate, None),
+        }
+    }
+
     fn replan_candidate(
         &self,
         reason: &'static str,
         snapshot: &SplitParticipantSnapshot,
         unavailable_stage_nodes: &[iroh::EndpointId],
-    ) -> Option<SplitTopologyGeneration> {
+    ) -> Option<PlannedReplanCandidate> {
         let planned_participants =
             split_recovery_candidate_participants(&snapshot.participants, unavailable_stage_nodes);
         if !split_participants_meet_minimum(&planned_participants) {
@@ -341,16 +380,18 @@ impl SplitTopologyCoordinator {
         reason: &'static str,
         planned_participants: &[SplitParticipant],
         excluded: &[SplitParticipantExclusion],
-    ) -> Option<SplitTopologyGeneration> {
+    ) -> Option<PlannedReplanCandidate> {
         match self.plan_replan_candidate(planned_participants) {
-            Ok(candidate) if split_candidate_stage0_is_local(self.node.id(), &candidate) => {
+            Ok(candidate)
+                if split_candidate_stage0_is_local(self.node.id(), &candidate.generation) =>
+            {
                 Some(candidate)
             }
             Ok(candidate) => {
                 tracing::debug!(
                     model_ref = self.model_ref,
                     reason,
-                    candidate_stages = ?split_stage_plan_labels(&candidate.stages),
+                    candidate_stages = ?split_stage_plan_labels(&candidate.generation.stages),
                     "split topology replan skipped; stage 0 would move to another node"
                 );
                 None
@@ -552,21 +593,23 @@ impl SplitTopologyCoordinator {
         &mut self,
         reason: &'static str,
         participant_count: usize,
-        candidate: Option<SplitTopologyGeneration>,
+        candidate: Option<PlannedReplanCandidate>,
     ) -> bool {
         let Some(candidate) = split_candidate_for_replan(participant_count, candidate) else {
             return true;
         };
 
         let (replan_decision, replan_decision_reason) =
-            split_replan_decision_with_reason(&self.active, &candidate);
+            split_replan_decision_with_reason(&self.active, &candidate.generation);
         match replan_decision {
             SplitReplanDecision::Keep => {
-                self.log_replan_keep(reason, &candidate, replan_decision_reason);
+                self.log_replan_keep(reason, &candidate.generation, replan_decision_reason);
             }
             SplitReplanDecision::Candidate => {
-                self.apply_selected_replan_candidate(reason, candidate, replan_decision_reason)
-                    .await;
+                if let Some(candidate) = self.realize_replan_candidate(reason, candidate).await {
+                    self.apply_selected_replan_candidate(reason, candidate, replan_decision_reason)
+                        .await;
+                }
             }
         }
         true
@@ -686,7 +729,7 @@ impl SplitTopologyCoordinator {
     fn plan_replan_candidate(
         &self,
         planned_participants: &[SplitParticipant],
-    ) -> Result<SplitTopologyGeneration> {
+    ) -> Result<PlannedReplanCandidate> {
         let generation = self.active.generation.saturating_add(1);
         let run_id = format!("mesh-split-{}-g{}", now_unix_nanos(), generation);
         let topology_id = format!("topology-{run_id}");
@@ -703,25 +746,64 @@ impl SplitTopologyCoordinator {
             &[],
             resources,
         )?;
-        let admissions = super::realize_split_stage_admissions(
-            &self.model_path,
-            &self.model_ref,
-            &self.package,
-            &planned,
-            &self.runtime_profile,
-        )?;
-        let stages = planned.stages;
+        let stages = planned.stages.clone();
         let participants = split_participants_for_stages(planned_participants, &stages);
         anyhow::ensure!(
             split_stages_meet_minimum(&stages),
             "split runtime needs at least two stage participants"
         );
-        SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
-            .with_activation_codec(configured_split_activation_codec(
-                &self.mesh_config,
-                self.config_model_id.as_deref(),
-            ))
-            .with_admissions(admissions)
+        let generation =
+            SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+                .with_activation_codec(configured_split_activation_codec(
+                    &self.mesh_config,
+                    self.config_model_id.as_deref(),
+                ));
+        Ok(PlannedReplanCandidate {
+            generation,
+            planned,
+        })
+    }
+
+    /// Realize a planned candidate's native stage admissions off the async
+    /// runtime. `None` when realization fails, as if no candidate was planned.
+    async fn realize_replan_candidate(
+        &self,
+        reason: &'static str,
+        candidate: PlannedReplanCandidate,
+    ) -> Option<SplitTopologyGeneration> {
+        let PlannedReplanCandidate {
+            generation,
+            planned,
+        } = candidate;
+        let model_path = self.model_path.clone();
+        let model_ref = self.model_ref.clone();
+        let package = self.package.clone();
+        let runtime_profile = self.runtime_profile.clone();
+        let realized = tokio::task::spawn_blocking(move || {
+            super::realize_split_stage_admissions(
+                &model_path,
+                &model_ref,
+                &package,
+                &planned,
+                &runtime_profile,
+            )
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|admissions| admissions)
+        .and_then(|admissions| generation.with_admissions(admissions));
+        match realized {
+            Ok(candidate) => Some(candidate),
+            Err(err) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    error = %err,
+                    "split topology replan candidate failed"
+                );
+                None
+            }
+        }
     }
 
     fn local_model_fits(&self) -> bool {
@@ -1279,10 +1361,10 @@ pub(super) fn split_recovery_candidate_participants(
         .collect()
 }
 
-pub(super) fn split_candidate_for_replan(
+pub(super) fn split_candidate_for_replan<T>(
     participant_count: usize,
-    candidate: Option<SplitTopologyGeneration>,
-) -> Option<SplitTopologyGeneration> {
+    candidate: Option<T>,
+) -> Option<T> {
     if participant_count < SPLIT_DEFAULT_MIN_PARTICIPANTS {
         return None;
     }

@@ -74,7 +74,6 @@ pub struct RuntimeOptions {
     pub command_is_update: bool,
     pub command_uses_machine_output: bool,
     pub draft: Option<PathBuf>,
-    pub draft_max: u16,
     pub no_draft: bool,
     pub speculative_overrides: Option<SpeculativeConfig>,
     /// Serving intent, composed into the settings it implies before the
@@ -113,8 +112,6 @@ pub struct RuntimeOptions {
     pub trust_policy: Option<TrustPolicy>,
     pub trust_owner: Vec<String>,
     pub nostr_discovery: bool,
-    /// Skip installing the default plugins when this node starts.
-    pub no_default_plugins: bool,
     pub audit_log_path: Option<PathBuf>,
     pub audit_log_format: AuditLogFormat,
     pub audit_log_level: AuditLevel,
@@ -168,7 +165,6 @@ impl Default for RuntimeOptions {
             command_is_update: false,
             command_uses_machine_output: false,
             draft: None,
-            draft_max: 8,
             no_draft: false,
             speculative_overrides: None,
             strategy: None,
@@ -205,7 +201,6 @@ impl Default for RuntimeOptions {
             trust_policy: None,
             trust_owner: Vec::new(),
             nostr_discovery: false,
-            no_default_plugins: false,
             audit_log_path: None,
             audit_log_format: AuditLogFormat::JsonLines,
             audit_log_level: AuditLevel::Info,

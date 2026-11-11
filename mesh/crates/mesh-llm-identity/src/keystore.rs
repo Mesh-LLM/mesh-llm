@@ -312,13 +312,9 @@ pub fn write_keystore_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), 
         file.sync_all()?;
         drop(file);
 
-        // On Windows, `rename` fails if the destination already exists.
-        // Remove the destination first for Windows; on Unix the rename is atomic.
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
-
+        // `rename` replaces an existing destination on Windows as well as on
+        // Unix, so the file is never missing: removing it first would leave
+        // a window where a reader finds no file and falls back to defaults.
         std::fs::rename(&tmp_path, path)?;
 
         // fsync the parent directory on Unix so the rename survives a crash.
@@ -595,6 +591,37 @@ mod tests {
         let loaded = load_keystore(&path, None).unwrap();
         assert_eq!(loaded.owner_id(), kp2.owner_id());
 
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn replacing_a_file_never_leaves_it_missing_for_a_reader() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let path = Arc::new(temp_keystore_path());
+        write_keystore_bytes_atomically(&path, b"{}").unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (path, done) = (Arc::clone(&path), Arc::clone(&done));
+            std::thread::spawn(move || {
+                let mut missing = 0u32;
+                while !done.load(Ordering::Relaxed) {
+                    if matches!(fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        missing += 1;
+                    }
+                }
+                missing
+            })
+        };
+        for _ in 0..200 {
+            write_keystore_bytes_atomically(&path, b"{\"replaced\":true}").unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+
+        assert_eq!(reader.join().unwrap(), 0, "a reader found no file mid-save");
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 

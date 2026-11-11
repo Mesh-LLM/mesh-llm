@@ -1134,6 +1134,8 @@ quant matches, and the draft is pinned to a Hugging Face revision and SHA-256:
 | Qwen3-Coder-Next | `AtomicChat/Qwen3-Coder-Next-DFlash-GGUF` | Metal only |
 | Nemotron-3.5-Bolt-E4B | `unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF` | all |
 | Nemotron-3.5-Lightning-30B-A3B | `magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF` (DSpark) | CUDA and others |
+| Laguna-S-2.1 | `poolside/Laguna-S-2.1-GGUF` (`laguna-s-2.1-DFlash-BF16.gguf`) | CUDA and others |
+| DeepSeek-V4-Flash-0731 | `unsloth/DeepSeek-V4-Flash-0731-GGUF` (DSpark, `dspark-…-Q8_0.gguf`) | CUDA and others |
 
 Nemotron-3.5-Bolt-E4B has Gemma-4-E4B-It's shape and Nemotron-3.5-Lightning-30B-A3B
 has Nemotron-3-Nano-30B-A3B's; both are told apart by their GGUF names. Lightning's
@@ -1141,6 +1143,10 @@ draft is a DSpark draft: a DFlash draft with a Markov head that conditions each
 drafted token on the one before it. It replaces Lightning's native MTP head on
 CUDA; on Metal, which has no NVFP4 kernels for the draft, native MTP stays the
 default.
+
+DeepSeek-V4-Flash-0731 ships its DSpark draft in the checkpoint; it is told apart
+from DeepSeek-V4-Flash, which has the same shape, by name. Its GGUFs carry no MTP
+head, so the draft replaces plain decoding.
 
 A load uses the draft once it is in the Hugging Face cache. A missing draft
 downloads in the background and the load does not wait for it: it serves with

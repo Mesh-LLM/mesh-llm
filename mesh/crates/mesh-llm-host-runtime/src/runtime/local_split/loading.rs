@@ -482,6 +482,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     spec.node
         .record_stage_status(Some(spec.node.id()), stage0_status)
         .await;
+    super::super::local::report_split_model_loaded_analytics(&model_ref, &spec.package.package_ref);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
