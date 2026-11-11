@@ -193,6 +193,23 @@ mod tests {
     }
 
     #[test]
+    fn every_qualifying_candidate_within_the_equivalence_band_is_kept() {
+        // 700, 760 and 850 ms all meet 900 ms; 760 is within 10 % of 700
+        // (up to 770), 850 is not.
+        let candidates = [
+            candidate(1, Some(700), None, Some(0)),
+            candidate(2, Some(760), None, Some(0)),
+            candidate(3, Some(850), None, Some(0)),
+        ];
+        let assessment = assess_first_token(request(1_000, 0), &candidates, POLICY);
+        assert_eq!(assessment.qualifying.len(), 3);
+        assert_eq!(
+            assessment.equivalent,
+            [InferenceTarget::Local(1), InferenceTarget::Local(2)]
+        );
+    }
+
+    #[test]
     fn a_longer_prompt_leaves_only_the_host_that_holds_it_in_cache() {
         // 3,000 tokens: A cold at 0.7 ms/token is 2,100 ms; B has 2,900 of
         // them cached, so it prefills 100 tokens plus a 30 ms restore.
