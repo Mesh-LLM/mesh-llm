@@ -542,6 +542,9 @@ runner/workflow failures receive one targeted same-candidate recheck. A clean
 recheck plus retained initial successes completes that immutable full pass;
 repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success or successful same-candidate recovery permits publication.
+Unchanged selected-source publication retains `retry_recovered=true` through
+final selection and exports that exact reconciled repair commit from the frozen
+controller checkout; it does not require a skipped `verify-1` package.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 Build evidence explicitly includes hidden run-owned `.deps` state and native

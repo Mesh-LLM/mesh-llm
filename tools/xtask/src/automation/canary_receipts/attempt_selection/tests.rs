@@ -68,19 +68,19 @@ fn recovered_same_candidate_retry_skips_verification_and_can_publish() {
         "true"
     );
     let attempts = decode(&value.to_string()).unwrap();
-    assert_eq!(
-        select_final(
-            true,
-            false,
-            &"a".repeat(40),
-            JobResult::Success,
-            &attempts,
-            true
-        )
-        .unwrap()
-        .outputs()["publish"],
-        "true"
-    );
+    let selected_result = select_final(
+        true,
+        false,
+        &"a".repeat(40),
+        JobResult::Success,
+        &attempts,
+        true,
+    )
+    .unwrap()
+    .outputs();
+    assert_eq!(selected_result["publish"], "true");
+    assert_eq!(selected_result["retry_recovered"], "true");
+    assert_eq!(selected_result["head"], "a".repeat(40));
     assert_eq!(
         final_outputs(true, true, &"c".repeat(40), JobResult::Success, value).unwrap()["retry_recovered"],
         "true"

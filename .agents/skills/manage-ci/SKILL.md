@@ -729,6 +729,10 @@ The `retry_recovered` marker flows through attempt selection, the `result` job
 outputs and the publication input; the handoff gate admits the recovered
 `repair-*` package only when that marker is present, and ordinary candidates
 still require a `verify-*` package.
+This also applies to unchanged selected-source `certify-and-publish` runs:
+final selection retains the recovery marker, and the publisher exports the
+exact selected repair commit from the frozen controller checkout. It does not
+require a `verify-1` package after successful retry reconciliation.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,

@@ -175,3 +175,31 @@ fn selected_publication_cli_requires_explicit_action_and_both_complete_passes() 
     assert!(output.status.success(), "{output:?}");
     assert!(bytes.contains("state=failed"));
 }
+
+#[test]
+fn selected_publication_cli_preserves_recovery_when_independent_pass_is_skipped() {
+    let mut repair = green("failure");
+    repair["outputs"]["retry_recovered"] = json!("true");
+    let skipped = json!({"result":"skipped","outputs":{}});
+    let mut args = attempt_args(repair.clone(), skipped.clone());
+    args[2] = "false".into();
+    args.push("--publish-selected".into());
+    let (output, _) = invoke(&args);
+    assert!(output.status.success(), "{output:?}");
+    let decision: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut args = final_args(json!({
+        "repair_1":repair,"verify_1":skipped,
+        "attempt_1":{"result":"success","outputs":decision}
+    }));
+    args[4] = "false".into();
+    args[6] = "a".repeat(40);
+    args.push("--publish-selected".into());
+    let (output, bytes) = invoke(&args);
+    assert!(output.status.success(), "{output:?}");
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["publish"], "true");
+    assert_eq!(result["retry_recovered"], "true");
+    assert_eq!(result["head"], "a".repeat(40));
+    assert!(bytes.contains("retry_recovered=true\n"));
+    assert!(bytes.ends_with("publish=true\n"));
+}
