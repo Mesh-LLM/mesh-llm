@@ -11,7 +11,7 @@ mod runtime;
 mod setup;
 
 use anyhow::Result;
-use mesh_llm_cli::{Cli, Command};
+use mesh_llm_cli::{Cli, Command, DiscoverArgs, ModelPrepareArgs, UninstallArgs};
 
 use self::analytics::dispatch_analytics_command;
 use self::config::dispatch_config_command;
@@ -58,7 +58,7 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
             )
             .await
         }
-        Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
+        Command::ModelPrepare(_) => dispatch_model_prepare(cmd).await,
         Command::Hermes(args) => mesh_llm_commands::agent_cli::config_write::run(args, true).await,
         Command::Openclaw(args) => {
             mesh_llm_commands::agent_cli::config_write::run(args, false).await
@@ -105,13 +105,13 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Runtime { .. } | Command::KvCache { .. } => {
             unreachable!("runtime and kv-cache commands are dispatched before general commands")
         }
-        Command::Setup { .. } => {
+        Command::Setup(_) => {
             dispatch_setup_command(cmd, cli.config.as_deref(), cli.placement.llama_flavor).await
         }
         Command::Analytics { command } => {
             dispatch_analytics_command(command, cli.config.as_deref())
         }
-        Command::Uninstall {
+        Command::Uninstall(UninstallArgs {
             dry_run,
             yes,
             keep_cache,
@@ -121,7 +121,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             binary_path,
             json,
             verbose,
-        } => mesh_llm_commands::uninstall::run_uninstall_command(
+        }) => mesh_llm_commands::uninstall::run_uninstall_command(
             mesh_llm_commands::uninstall::UninstallOptions {
                 dry_run: *dry_run,
                 yes: *yes,
@@ -155,14 +155,14 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Status { port } => run_status(*port).await,
         Command::Stop => run_stop(),
         Command::ServiceHost => mesh_llm_commands::setup::run_service_host(),
-        Command::Discover {
+        Command::Discover(DiscoverArgs {
             name,
             model,
             min_vram,
             region,
             auto,
             relay,
-        } => {
+        }) => {
             run_discover(DiscoverOptions {
                 name: name.clone(),
                 model: model.clone(),
@@ -188,7 +188,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
                 .await
         }
-        Command::ModelPrepare { .. }
+        Command::ModelPrepare(_)
         | Command::Auth { .. }
         | Command::Hermes(_)
         | Command::Openclaw(_) => unreachable!("handled by dispatch_command"),
@@ -219,7 +219,7 @@ async fn dispatch_agent_command(cmd: &Command) -> Result<()> {
 }
 
 async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
-    let Command::ModelPrepare {
+    let Command::ModelPrepare(ModelPrepareArgs {
         source_repo,
         quant,
         target,
@@ -236,7 +236,7 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
         cancel,
         list,
         update_script,
-    } = cmd
+    }) = cmd
     else {
         unreachable!("dispatch_model_prepare called for non-model-prepare command");
     };

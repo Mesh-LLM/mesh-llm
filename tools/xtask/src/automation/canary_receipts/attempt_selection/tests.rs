@@ -51,6 +51,7 @@ fn recovered_same_candidate_retry_skips_verification_and_can_publish() {
     let decision = attempt(true, repair.clone(), skipped.clone()).unwrap();
     assert_eq!(decision["state"], "green");
     assert_eq!(decision["package"], "producer-package");
+    assert_eq!(decision["retry_recovered"], "true");
     let value = json!({
         "repair_1":repair, "verify_1":skipped,
         "attempt_1":{"result":"success","outputs":decision}
@@ -78,6 +79,10 @@ fn recovered_same_candidate_retry_skips_verification_and_can_publish() {
         )
         .unwrap()
         .outputs()["publish"],
+        "true"
+    );
+    assert_eq!(
+        final_outputs(true, true, &"c".repeat(40), JobResult::Success, value).unwrap()["retry_recovered"],
         "true"
     );
 }
@@ -126,6 +131,7 @@ fn reconciled_green_survives_earlier_failed_nested_jobs_and_uses_verifier_identi
     assert_eq!(result["state"], "green");
     assert_eq!(result["package"], "independent-package");
     assert_eq!(result["identity"], "c".repeat(64));
+    assert_eq!(result["retry_recovered"], "false");
     assert_eq!(
         attempt(true, green("success", 'a'), green("success", 'c')).unwrap()["failure_stage"],
         "independent-verification-identity"
