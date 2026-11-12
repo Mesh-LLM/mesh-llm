@@ -180,11 +180,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`nightly-stability.yml` calls the fixed GitHub-hosted
+`nightly-stability.yml` is manual-only while daily execution is paused pending
+setup qualification. It calls the fixed GitHub-hosted
 `nightly-stability-run.yml`; the reusable run executes both the general
 stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
 both evidence sets, and fails after both have had a chance to run.
-`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted schedule
+`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted manual workflow
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
@@ -1663,9 +1664,6 @@ native `trajectory-reader` library and its `prompt_command` integration target. 
 `scripts/` ownership pattern; deployment assets live under `mesh/deploy/`.
 Protected catalogs and required checks are unchanged.
 
-The dormant `docker-precheck.yml` reusable validates the relocated product
-crate/script COPY roots and Mesh entrypoint path. It remains unreferenced;
-this repair does not add a workflow caller or change required checks.
 versioned local dependencies, and resolves each versioned sidecar from the same
 source layout, so a relocated-only checkout can propagate a version without a
 root `website/`, `sdk/` or `docs/` tree. The website recipes consume the
