@@ -17,7 +17,7 @@ Atomic event IDs: `184`
 | 8.6 | `StageTopologyEventKind` | `mesh-llm-host-runtime`, `skippy-topology` | `inference::skippy::stage`, `runtime::local_split::loading` | `trusted_local` | `state_transition` | 10 |
 | 8.7 | `SessionEventKind` | `skippy-runtime`, `skippy-serving` | `skippy_runtime`, `skippy_serving::runtime_state` | `trusted_local` | `state_transition` | 12 |
 | 8.8 | `RequestEventKind` | `mesh-llm-host-runtime`, `skippy-inference-api` | `logging::openai_lifecycle`, `skippy_inference_api::router` | `trusted_local` | `state_transition` | 11 |
-| 8.9 | `PrefillEventKind` | `skippy-serving`, `mesh-llm-host-runtime` | `skippy_serving::frontend::generation_receipt`, `inference::pipeline` | `trusted_local` | `state_transition` | 12 |
+| 8.9 | `PrefillEventKind` | `skippy-serving`, `mesh-llm-host-runtime` | `skippy_serving::frontend::generation_receipt`, `inference::skippy::runtime_events::facts` | `trusted_local` | `state_transition` | 12 |
 | 8.10 | `GenerationEventKind` | `skippy-serving`, `skippy-inference-api` | `skippy_serving::frontend`, `skippy_inference_api::sse` | `trusted_local` | `state_transition` | 12 |
 | 8.11 | `KvRuntimeStateEventKind` | `skippy-serving`, `mesh-llm-host-runtime`, `skippy-cache` | `skippy_serving::runtime_state`, `inference::skippy::runtime_events::SkippyKvRuntimeEventObserver` | `trusted_local` | `state_transition` | 12 |
 | 8.12 | `ResourceHealthEventKind` | `mesh-llm-host-runtime`, `skippy-runtime` | `system::native_runtime`, `skippy_runtime::devices` | `trusted_local` | `state_transition` | 9 |
