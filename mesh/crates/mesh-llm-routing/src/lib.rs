@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub mod affinity;
 pub mod cache_aware;
 pub mod cache_inventory;
+pub mod latency_target;
 pub mod request_cost;
 
 /// Calculate total model size, summing all split files if present.

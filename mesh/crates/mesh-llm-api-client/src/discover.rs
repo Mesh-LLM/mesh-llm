@@ -69,6 +69,16 @@ impl From<mesh_client::network::nostr::DiscoveredMesh> for PublicMesh {
 pub async fn discover_public_meshes(
     query: PublicMeshQuery,
 ) -> Result<Vec<PublicMesh>, MeshApiError> {
+    Ok(discover_matching_listings(&query)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+async fn discover_matching_listings(
+    query: &PublicMeshQuery,
+) -> Result<Vec<mesh_client::network::nostr::DiscoveredMesh>, MeshApiError> {
     let relays = resolve_relays(&query.relays);
     let filter = mesh_client::network::nostr::MeshFilter {
         model: query.model.clone(),
@@ -85,7 +95,6 @@ pub async fn discover_public_meshes(
     Ok(discovered
         .into_iter()
         .filter(|mesh| matches_target_name(mesh, query.target_name.as_deref()))
-        .map(Into::into)
         .collect())
 }
 
@@ -115,11 +124,7 @@ impl ClientBuilder {
 }
 
 pub async fn select_public_mesh(query: PublicMeshQuery) -> Result<PublicMesh, MeshApiError> {
-    let meshes = discover_public_meshes(query.clone()).await?;
-    let discovered = meshes
-        .into_iter()
-        .map(public_mesh_to_discovered)
-        .collect::<Vec<_>>();
+    let discovered = discover_matching_listings(&query).await?;
 
     match mesh_client::network::nostr::smart_auto(
         &discovered,
@@ -127,15 +132,34 @@ pub async fn select_public_mesh(query: PublicMeshQuery) -> Result<PublicMesh, Me
         query.target_name.as_deref(),
         None,
     ) {
-        mesh_client::network::nostr::AutoDecision::Join { mut candidates } => candidates
-            .drain(..)
-            .next()
-            .map(|(_, mesh)| PublicMesh::from(mesh))
-            .ok_or(MeshApiError::NoPublicMeshFound),
+        mesh_client::network::nostr::AutoDecision::Join { candidates } => {
+            prefer_serving_publishers(candidates.into_iter().map(|(_, mesh)| mesh).collect())
+                .into_iter()
+                .next()
+                .map(PublicMesh::from)
+                .ok_or(MeshApiError::NoPublicMeshFound)
+        }
         mesh_client::network::nostr::AutoDecision::StartNew { .. } => {
             Err(MeshApiError::NoPublicMeshFound)
         }
     }
+}
+
+/// A thin client tunnels its HTTP requests to the listing's invite endpoint,
+/// so the listing's publisher has to serve a model itself: a client or an
+/// idle worker answers 503. Order candidates by what the publisher declares
+/// (serves, then not declared by an older node, then does not serve),
+/// keeping the scoring order within each group. Nothing is dropped, so an
+/// older mesh stays reachable (#2765).
+fn prefer_serving_publishers(
+    mut candidates: Vec<mesh_client::network::nostr::DiscoveredMesh>,
+) -> Vec<mesh_client::network::nostr::DiscoveredMesh> {
+    candidates.sort_by_key(|mesh| match mesh.listing.publisher_serves {
+        Some(true) => 0,
+        None => 1,
+        Some(false) => 2,
+    });
+    candidates
 }
 
 fn resolve_relays(relays: &[String]) -> Vec<String> {
@@ -164,32 +188,19 @@ fn matches_target_name(
         .unwrap_or(false)
 }
 
-fn public_mesh_to_discovered(mesh: PublicMesh) -> mesh_client::network::nostr::DiscoveredMesh {
-    mesh_client::network::nostr::DiscoveredMesh {
-        listing: mesh_client::network::nostr::MeshListing {
-            invite_token: mesh.invite_token,
-            serving: mesh.serving,
-            wanted: mesh.wanted,
-            on_disk: mesh.on_disk,
-            total_vram_bytes: mesh.total_vram_bytes,
-            node_count: mesh.node_count,
-            client_count: mesh.client_count,
-            max_clients: mesh.max_clients,
-            name: mesh.name,
-            region: mesh.region,
-            mesh_id: mesh.mesh_id,
-        },
-        publisher_npub: mesh.publisher_npub,
-        published_at: mesh.published_at,
-        expires_at: mesh.expires_at,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{PublicMesh, matches_target_name};
+    use super::{PublicMesh, matches_target_name, prefer_serving_publishers};
 
     fn sample_mesh(name: Option<&str>) -> mesh_client::network::nostr::DiscoveredMesh {
+        listing_from(name, None, "npub1test")
+    }
+
+    fn listing_from(
+        name: Option<&str>,
+        publisher_serves: Option<bool>,
+        publisher: &str,
+    ) -> mesh_client::network::nostr::DiscoveredMesh {
         mesh_client::network::nostr::DiscoveredMesh {
             listing: mesh_client::network::nostr::MeshListing {
                 invite_token: "mesh-test:abc123".to_string(),
@@ -203,11 +214,31 @@ mod tests {
                 name: name.map(str::to_string),
                 region: Some("AU".to_string()),
                 mesh_id: Some("mesh-1".to_string()),
+                publisher_serves,
             },
-            publisher_npub: "npub1test".to_string(),
+            publisher_npub: publisher.to_string(),
             published_at: 1,
             expires_at: Some(2),
         }
+    }
+
+    #[test]
+    fn a_serving_publisher_is_chosen_before_a_client_or_idle_one() {
+        // Scoring order: a client-published listing first, as on the public
+        // mesh in #2228, then an older node's, then a serving host's.
+        let ordered = prefer_serving_publishers(vec![
+            listing_from(None, Some(false), "client"),
+            listing_from(None, None, "older"),
+            listing_from(None, Some(true), "host-a"),
+            listing_from(None, Some(true), "host-b"),
+        ]);
+        let publishers: Vec<&str> = ordered
+            .iter()
+            .map(|mesh| mesh.publisher_npub.as_str())
+            .collect();
+        // Serving hosts first in their scoring order, then the undeclared
+        // listing, and the client-published one last but still reachable.
+        assert_eq!(publishers, ["host-a", "host-b", "older", "client"]);
     }
 
     #[test]

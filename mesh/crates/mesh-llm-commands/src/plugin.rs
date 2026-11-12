@@ -1025,9 +1025,9 @@ mod tests {
         use clap::Parser;
         let cli = mesh_llm_cli::Cli::try_parse_from(["mesh-llm", "setup", "--no-default-plugins"])
             .unwrap();
-        let Some(mesh_llm_cli::Command::Setup {
+        let Some(mesh_llm_cli::Command::Setup(mesh_llm_cli::SetupArgs {
             no_default_plugins, ..
-        }) = cli.command
+        })) = cli.command
         else {
             panic!("setup command");
         };

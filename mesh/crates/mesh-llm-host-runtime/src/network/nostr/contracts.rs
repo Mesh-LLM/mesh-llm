@@ -50,6 +50,11 @@ pub struct MeshListing {
     /// Stable mesh identity — all nodes in the same mesh share this ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_id: Option<String>,
+    /// Whether this publishing node serves a model itself, so a thin client
+    /// tunnelling to the invite endpoint gets an answer. `None` from nodes
+    /// that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_serves: Option<bool>,
 }
 
 /// Discovered mesh from Nostr.

@@ -138,10 +138,10 @@ pub fn emit_cli_process_event(family: CliCommandFamily, outcome: CliCommandOutco
 /// Classify a parsed command for operational events without including argument values.
 pub fn command_family(command: &Command) -> CliCommandFamily {
     match command {
-        Command::Models { .. } | Command::Download { .. } | Command::ModelPrepare { .. } => {
+        Command::Models { .. } | Command::Download { .. } | Command::ModelPrepare(_) => {
             CliCommandFamily::Models
         }
-        Command::Update { .. } | Command::Setup { .. } | Command::Uninstall { .. } => {
+        Command::Update { .. } | Command::Setup(_) | Command::Uninstall(_) => {
             CliCommandFamily::Installation
         }
         Command::Gpus { .. } => CliCommandFamily::Hardware,
@@ -156,7 +156,7 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         | Command::ServiceHost => CliCommandFamily::Runtime,
         Command::Config { .. } | Command::Analytics { .. } => CliCommandFamily::Configuration,
         Command::Doctor { .. } => CliCommandFamily::Diagnostics,
-        Command::Discover { .. } => CliCommandFamily::Discovery,
+        Command::Discover(_) => CliCommandFamily::Discovery,
         Command::RotateKey | Command::Auth { .. } => CliCommandFamily::Identity,
         Command::Goose { .. }
         | Command::Claude { .. }
@@ -185,6 +185,7 @@ mod tests {
     use super::*;
     use anyhow::{Error, anyhow};
     use clap::Parser;
+    use mesh_llm_cli::DiscoverArgs;
     use mesh_llm_events::{clear_output_sink, set_cli_command_event_verbose, set_output_sink};
     use std::io;
 
@@ -283,14 +284,14 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn explicit_handler_rejection_maps_to_rejected_without_error_detail() {
-        let command = Command::Discover {
+        let command = Command::Discover(DiscoverArgs {
             name: Some("private-mesh".to_string()),
             model: None,
             min_vram: None,
             region: Some("private-region".to_string()),
             auto: false,
             relay: vec!["wss://relay.private.example/?token=private-token".to_string()],
-        };
+        });
         let result: Result<()> = Err(Error::new(CommandDispatchRejected)
             .context("private command rejection detail with private-token"));
         let events = lifecycle_events(&command, &result);
@@ -387,14 +388,14 @@ mod tests {
                 .expect("recording bridge mutex poisoned")
                 .push((family, outcome));
         }));
-        let boundary = CommandDispatchBoundary::start(&Command::Discover {
+        let boundary = CommandDispatchBoundary::start(&Command::Discover(DiscoverArgs {
             name: Some("private-mesh".to_string()),
             model: None,
             min_vram: None,
             region: Some("private-region".to_string()),
             auto: false,
             relay: vec!["wss://relay.private.example/?token=private-token".to_string()],
-        });
+        }));
         boundary.finish(&Err(Error::new(CommandDispatchRejected)
             .context("private command rejection detail with private-token")));
         assert_eq!(

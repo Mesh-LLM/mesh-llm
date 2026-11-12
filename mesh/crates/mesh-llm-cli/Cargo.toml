@@ -13,6 +13,9 @@ categories = ["command-line-interface"]
 [lints]
 workspace = true
 
+[features]
+dynamic-native-runtime = ["skippy-commands/dynamic-native-runtime"]
+
 [dependencies]
 skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.79.0" }
 anyhow.workspace = true
