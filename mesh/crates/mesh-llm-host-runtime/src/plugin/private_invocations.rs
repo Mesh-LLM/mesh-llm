@@ -17,11 +17,11 @@
 //! A plugin keeps working on a call the host sends no cancel for. So a
 //! private call runs to the plugin's reply on its own task
 //! ([`run_to_reply`]): a client that goes away does not end the binding.
-//! A call that ends without a reply (the host's deadline passed) keeps the
-//! plugin private, with the same limit, for [`ABANDONED_LINGER`] after it. A
-//! virtual-model turn or request transform that times out also restarts an
-//! external plugin, which ends its work; an exchange hook past its deadline
-//! is not restarted.
+//! A call that ends without a reply keeps the plugin private, with the same
+//! limit, for [`ABANDONED_LINGER`] after it. A virtual-model turn or request
+//! transform that times out restarts an external plugin, which ends its
+//! work. An exchange hook is not restarted at its deadline; its binding is
+//! held until the plugin replies or disconnects instead.
 // shortcut: per plugin, not per request. A per-request token would need the
 // plugin protocol to echo it back on nested calls.
 
@@ -323,6 +323,40 @@ mod tests {
         done_rx.await.unwrap();
         for _ in 0..100 {
             if invocations.nested_scope("moa").is_none() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("the plugin stayed private after it replied");
+    }
+
+    #[tokio::test]
+    async fn a_call_past_its_deadline_stays_private_until_it_replies() {
+        // As an exchange hook: the host gives up at the deadline, the plugin
+        // is not restarted and replies later. No linger, so only the held
+        // call keeps the plugin private.
+        let invocations = PrivateInvocations {
+            linger: Duration::ZERO,
+            ..PrivateInvocations::default()
+        };
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let call = async move {
+            reply_rx.await.ok();
+            let _ = done_tx.send(());
+            Ok(())
+        };
+        let held = run_to_reply(Some(invocations.begin("hook", None)), call);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
+        assert!(tokio::time::timeout_at(deadline, held).await.is_err());
+        assert_eq!(
+            invocations.nested_scope("hook"),
+            Some(NestedScope::NodeCircle)
+        );
+        reply_tx.send(()).unwrap();
+        done_rx.await.unwrap();
+        for _ in 0..100 {
+            if invocations.nested_scope("hook").is_none() {
                 return;
             }
             tokio::task::yield_now().await;

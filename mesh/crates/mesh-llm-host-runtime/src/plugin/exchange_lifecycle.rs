@@ -513,22 +513,26 @@ async fn invoke_phase(
     }
     let input = serde_json::to_string(&event).map_err(|_| HookFailure::Internal)?;
     let reply = match private_call {
-        // Waits for the plugin's reply until the deadline even if this
-        // exchange is dropped; see `private_invocations::run_to_reply`.
+        // The exchange waits until its deadline. The private binding is
+        // held on its own task until the plugin replies or disconnects,
+        // even past that deadline or if this exchange is dropped: the hook
+        // may still be working and calling back.
         Some(call) => {
             let (manager, name, declaration) =
                 (manager.clone(), name.to_string(), declaration.clone());
-            super::private_invocations::run_to_reply(Some(call), async move {
+            let held = super::private_invocations::run_to_reply(Some(call), async move {
                 let plugin = manager
                     .inner
                     .plugins
                     .get(&name)
                     .ok_or_else(|| anyhow::anyhow!("Unknown plugin '{name}'"))?;
                 plugin
-                    .invoke_exchange_service(&declaration, &input, deadline)
+                    .invoke_exchange_service_until_reply(&declaration, &input)
                     .await
-            })
-            .await
+            });
+            tokio::time::timeout_at(deadline, held)
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("Plugin exchange hook deadline expired")))
         }
         None => {
             plugin

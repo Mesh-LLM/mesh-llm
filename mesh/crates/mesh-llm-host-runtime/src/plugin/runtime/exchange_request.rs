@@ -33,9 +33,24 @@ impl ExternalPlugin {
         input_json: &str,
         deadline: Instant,
     ) -> Result<proto::InvokeServiceResponse> {
-        let response = tokio::time::timeout_at(
+        tokio::time::timeout_at(
             deadline,
-            self.request_lifecycle_once(
+            self.invoke_exchange_service_until_reply(declaration, input_json),
+        )
+        .await
+        .context("Plugin exchange hook deadline expired")?
+    }
+
+    /// [`Self::invoke_exchange_service`] without a deadline: waits until the
+    /// plugin replies or its connection ends. A private hook's binding is
+    /// held this long, past the deadline the exchange itself waits for.
+    pub(crate) async fn invoke_exchange_service_until_reply(
+        &self,
+        declaration: &proto::OpenAiExchangeHookManifest,
+        input_json: &str,
+    ) -> Result<proto::InvokeServiceResponse> {
+        let response = self
+            .request_lifecycle_once(
                 proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
                     invocation_id: None,
                     kind: proto::ServiceKind::OpenaiExchange as i32,
@@ -43,10 +58,8 @@ impl ExternalPlugin {
                     input_json: input_json.to_owned(),
                 }),
                 LifecycleOperation::Callback(declaration),
-            ),
-        )
-        .await
-        .context("Plugin exchange hook deadline expired")??;
+            )
+            .await?;
         match response.payload {
             Some(proto::envelope::Payload::InvokeServiceResponse(response)) => Ok(response),
             Some(proto::envelope::Payload::ErrorResponse(error)) => Err(super::plugin_error(

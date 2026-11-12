@@ -145,7 +145,8 @@ only what the circle serves.
   without a reply, the plugin stays private for five more minutes, since it
   may still be working. A virtual-model turn or request transform that
   times out also restarts the plugin, which ends that work. An exchange hook
-  that runs more than five minutes past its deadline is not covered.
+  is not restarted, so it stays private past its deadline until it replies
+  or its connection ends.
   What a plugin does on its own, outside these calls, is up to the plugin:
   install only plugins you trust.
 - A trailing `@private` or `@incognito` is reserved. A model name that is
