@@ -42,6 +42,8 @@ pub(super) struct RecordingActions {
     pub(super) plugin_plans: Vec<SetupPluginPlan>,
     pub(super) github: Vec<SetupGitHubStarPlan>,
     failed_step: Option<SetupStep>,
+    /// Make `check_installed_plugins` return an error.
+    pub(super) plugin_check_fails: bool,
 }
 
 impl RecordingActions {
@@ -52,6 +54,7 @@ impl RecordingActions {
             plugin_plans: Vec::new(),
             github: Vec::new(),
             failed_step: Some(step),
+            plugin_check_fails: false,
         }
     }
 }
@@ -82,6 +85,9 @@ impl SetupActions for RecordingActions {
 
     fn check_installed_plugins(&mut self) -> Self::PluginInstallFuture<'_> {
         self.order.push("plugin-check");
+        if self.plugin_check_fails {
+            return ready(Err(anyhow!("simulated plugin check error")));
+        }
         ready(Ok(()))
     }
 

@@ -43,10 +43,12 @@ where
     for step in plan.core_steps.iter().copied() {
         actions.run_step(step).await.map_err(Into::into)?;
     }
-    actions
-        .check_installed_plugins()
-        .await
-        .map_err(Into::into)?;
+    // The host is already replaced: a failed check is reported, never fatal.
+    if let Err(error) = actions.check_installed_plugins().await {
+        let error: anyhow::Error = error.into();
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(err, "⚠️  Installed plugin check failed: {error:#}");
+    }
     actions
         .handle_plugin_install(plan.plugins.clone(), prompter)
         .await
@@ -94,6 +96,10 @@ pub(crate) struct CliSetupActions<'a> {
     /// The installed-plugin check refused: some plugin is not known to run on
     /// the host now installed.
     pub(crate) plugin_check_refused: bool,
+    /// Whether `check_installed_plugins` consults the machine's plugin store.
+    /// Tests that exercise other setup behavior turn it off so they never read
+    /// the developer's real store or reach the plugin catalog.
+    run_plugin_check: bool,
     pub(crate) github_outcome: SetupGitHubOutcome,
     verbose: bool,
 }
@@ -132,6 +138,7 @@ impl<'a> CliSetupActions<'a> {
             service_outcome: SetupServiceOutcome::NotRequested,
             plugin_outcome: SetupPluginOutcome::NotRequested,
             plugin_check_refused: false,
+            run_plugin_check: true,
             github_outcome: SetupGitHubOutcome::NotEvaluated,
             verbose,
         }
@@ -145,14 +152,16 @@ impl<'a> CliSetupActions<'a> {
         service_runner: Box<dyn ServiceCommandRunner>,
         github_runner: Box<dyn GhCommandRunner>,
     ) -> Self {
-        Self::with_support(
+        let mut actions = Self::with_support(
             environment,
             configured,
             Some(service_context),
             service_runner,
             github_runner,
             false,
-        )
+        );
+        actions.run_plugin_check = false;
+        actions
     }
 
     async fn install_runtime(&mut self) -> Result<()> {
@@ -281,6 +290,9 @@ impl SetupActions for CliSetupActions<'_> {
         Box::pin(async move {
             // The host is already replaced, so a failure is reported with the
             // retry command rather than failing setup.
+            if !self.run_plugin_check {
+                return Ok(());
+            }
             let host_version = mesh_llm_build_info::RELEASE_VERSION;
             if let Err(error) = crate::update::check_installed_plugins_for_host(host_version).await
             {

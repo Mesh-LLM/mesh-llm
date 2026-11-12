@@ -138,3 +138,32 @@ async fn run_setup_does_not_check_plugins_when_core_setup_fails() {
 
     assert!(!actions.order.contains(&"plugin-check"));
 }
+
+// The host is already replaced when setup runs, so an error from the plugin
+// check is reported and setup carries on to the optional phase.
+#[tokio::test]
+async fn run_setup_continues_when_the_plugin_check_errors() {
+    let options = SetupOptions {
+        no_interactive: true,
+        ..SetupOptions::default()
+    };
+    let environment = SetupEnvironment {
+        platform: SetupPlatform::Linux,
+        interactive: false,
+    };
+    let mut prompter = FakePrompter::default();
+    let mut actions = RecordingActions::default();
+    actions.plugin_check_fails = true;
+
+    run_setup(options, environment, &mut prompter, &mut actions)
+        .await
+        .expect("a failed plugin check must not fail setup");
+
+    assert!(actions.order.contains(&"plugin-check"));
+    assert!(
+        actions.order.contains(&"plugin-install"),
+        "{:?}",
+        actions.order
+    );
+    assert_eq!(actions.github.len(), 1);
+}
