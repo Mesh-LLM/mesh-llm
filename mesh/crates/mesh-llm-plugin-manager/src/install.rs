@@ -8,8 +8,8 @@ use sha2::Digest;
 mod package;
 
 use package::{
-    build_installed_metadata, compatibility_from_package, extract_for_install, retained_surfaces,
-    unchanged_install,
+    build_installed_metadata, compatibility_from_package, extract_for_install,
+    retained_remote_install, retained_surfaces, unchanged_install,
 };
 
 use crate::{
@@ -527,6 +527,14 @@ async fn install_resolved_plugin(
             selected
         }
         Err(error) => return Err(error),
+    };
+    let current = match current {
+        Some(metadata) => Some(metadata),
+        None => retained_remote_install(
+            &PluginStore::new(&options.store_root),
+            &resolved.plugin_name,
+            &resolved.source,
+        )?,
     };
     let asset = release
         .asset_by_name(&selected.name)

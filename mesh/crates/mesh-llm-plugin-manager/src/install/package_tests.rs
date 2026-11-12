@@ -157,6 +157,77 @@ fn replacement_keeps_grants_and_disabled_state_but_not_old_binary_status() {
 }
 
 #[test]
+fn partial_package_bounds_retain_the_other_catalog_bound() {
+    let catalog = HostCompatibility {
+        min: Some("0.70.0".into()),
+        max: Some("0.79.0".into()),
+    };
+    for (package, min, max) in [
+        (
+            PluginToml {
+                min_host_version: Some("0.75.0".into()),
+                ..PluginToml::default()
+            },
+            "0.75.0",
+            "0.79.0",
+        ),
+        (
+            PluginToml {
+                max_host_version: Some("0.78.0".into()),
+                ..PluginToml::default()
+            },
+            "0.70.0",
+            "0.78.0",
+        ),
+    ] {
+        let effective = compatibility_from_package(&package, Some(&catalog)).unwrap();
+        assert_eq!(effective.min.as_deref(), Some(min));
+        assert_eq!(effective.max.as_deref(), Some(max));
+        assert!(matches!(
+            compat::evaluate(Some(&effective), "0.80.0"),
+            compat::Verdict::Incompatible(_)
+        ));
+    }
+}
+
+#[test]
+fn remote_reinstall_retains_state_only_for_the_same_repository() {
+    let root = tempfile::tempdir().unwrap();
+    let store = PluginStore::new(root.path());
+    let incoming = GitHubPluginSource::from_url("https://github.com/MESH-LLM/DEMO").unwrap();
+    assert!(
+        retained_remote_install(&store, "demo", &incoming)
+            .unwrap()
+            .is_none()
+    );
+    for (source, accepted) in [
+        ("https://github.com/mesh-llm/demo", true),
+        ("https://github.com/operator/demo", false),
+        ("local:/operator/demo.tar.gz", false),
+        ("bundled:/operator/demo.tar.gz", false),
+    ] {
+        let mut current = replacement(None, PluginToml::default());
+        current.source_repository = source.into();
+        current.enabled = false;
+        current.allowed_surfaces = Some(Vec::new());
+        store.save(&current).unwrap();
+
+        let retained = retained_remote_install(&store, "demo", &incoming);
+        if accepted {
+            assert_eq!(retained.unwrap(), Some(current.clone()));
+        } else {
+            assert!(
+                retained
+                    .unwrap_err()
+                    .to_string()
+                    .contains("refusing to replace")
+            );
+        }
+        assert_eq!(store.load("demo").unwrap(), current);
+    }
+}
+
+#[test]
 fn an_unchanged_incompatible_release_cannot_succeed_as_a_repair() {
     let current = replacement(
         None,

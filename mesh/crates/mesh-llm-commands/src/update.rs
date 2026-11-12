@@ -1,6 +1,6 @@
 //! `mesh-llm update`: upgrade the host and take care of installed plugins.
 //!
-//! Every managed upgrade path checks **all** installed plugins against the
+//! The explicit update command checks **all** installed plugins against the
 //! target host version — set membership never filters the inventory. Known
 //! incompatibilities are repaired automatically from verified catalog pins
 //! before the new host is activated; a repair that cannot be made stops the
@@ -56,6 +56,7 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         current_version: mesh_llm_build_info::BUILD_VERSION,
     })
     .await?;
+    validate_plugin_set_handoff(plugin_set, cfg!(windows) && prepared.is_some())?;
 
     // With no newer release the running version stays the target: the same
     // check still repairs plugins incompatible with the host that keeps
@@ -100,9 +101,7 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
     .await
     {
         Ok(_) => {}
-        // An unknown explicitly selected set is a usage error; the host
-        // upgrade already succeeded, so say what happened instead of
-        // discarding it.
+        // Preserve the completed host result even if optional work fails.
         Err(error) => {
             let mut err = mesh_llm_events::console_err();
             let _ = writeln!(err, "⚠️  {error:#}");
@@ -285,6 +284,20 @@ async fn update_notices(target_version: &str) -> Option<Vec<String>> {
     (!lines.is_empty()).then_some(lines)
 }
 
+/// Installer handoff exits this process before it can honor a selected set.
+/// Reject that combination before any plugin repair or host replacement.
+fn validate_plugin_set_handoff(plugin_set: Option<&str>, windows_handoff: bool) -> Result<()> {
+    if windows_handoff && let Some(name) = plugin_set {
+        bail!(
+            "Windows host installer handoff cannot complete --plugin-set {name}. \
+             Run the host update without --plugin-set, then run \
+             `mesh-llm plugins sets install {name}` after the installer finishes. \
+             No plugin repairs or host update were applied."
+        );
+    }
+    Ok(())
+}
+
 fn binary_flavor_to_backend(flavor: Option<BinaryFlavor>) -> Option<backend::BinaryFlavor> {
     flavor.map(|flavor| match flavor {
         BinaryFlavor::Cpu => backend::BinaryFlavor::Cpu,
@@ -310,5 +323,27 @@ impl PluginProgressReporter for UpdatePluginProgress {
             }
             other => self.inner.report(other),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_plugin_set_handoff;
+
+    #[test]
+    fn an_explicit_set_cannot_be_discarded_by_windows_installer_handoff() {
+        let error = validate_plugin_set_handoff(Some("extra"), true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("mesh-llm plugins sets install extra")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("No plugin repairs or host update were applied")
+        );
+        assert!(validate_plugin_set_handoff(None, true).is_ok());
+        assert!(validate_plugin_set_handoff(Some("extra"), false).is_ok());
     }
 }

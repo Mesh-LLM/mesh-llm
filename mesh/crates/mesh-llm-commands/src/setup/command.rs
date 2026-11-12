@@ -312,9 +312,8 @@ impl SetupActions for CliSetupActions<'_> {
                     });
                     super::SetupPromptDefault::No.resolve(reply)
                 };
-                // Only a usage error (an unknown explicitly selected set, or
-                // no usable plugin store) propagates; a failed download is
-                // reported as an incomplete optional install.
+                // The core steps already succeeded; optional selection and
+                // download failures are reported as incomplete installation.
                 crate::plugin_sets::run_optional_plugin_phase(
                     &optional,
                     mesh_llm_build_info::RELEASE_VERSION,

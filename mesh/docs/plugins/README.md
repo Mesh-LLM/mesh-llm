@@ -585,10 +585,15 @@ never enable, disable, or update an installed plugin.
   command.
 - `mesh-llm update --plugin-set NAME` / `--skip-plugin-install` /
   `--no-interactive` carry the same choices on the host upgrade. Unattended
-  runs install no optional plugins and never read input.
+  runs install no optional plugins and never read input. When Windows must
+  hand off to its host installer, an explicit `--plugin-set` is rejected before
+  plugin repairs or host replacement. Update without that flag, then run
+  `mesh-llm plugins sets install NAME` after the installer finishes.
 
-Unknown set names are usage errors (`Unknown plugin set 'missing'`), never an
-empty success.
+Unknown set names report `Unknown plugin set 'missing'`, never an empty
+success. The standalone set command fails; setup and update report optional
+installation as incomplete while preserving their completed core result and
+showing a retry command.
 
 ### Installed-plugin upgrade checks
 
@@ -619,7 +624,9 @@ incompatible with the running host is not launched and reports the reason.
 
 Release-specific compatibility metadata travels with the catalog entry (for
 the pinned release) and the packaged `plugin.toml` (`min_host_version` /
-`max_host_version`), and an install retains what its release declared.
+`max_host_version`), and an install retains its effective bounds. An explicit
+package bound takes precedence over the corresponding catalog bound; an
+omitted package bound keeps the catalog declaration.
 Missing metadata means **unknown**, not incompatible: legacy installs keep
 running under the host's existing checks.
 

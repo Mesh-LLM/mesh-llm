@@ -11,7 +11,7 @@ use std::io::{IsTerminal, Write};
 use anyhow::{Context, Result};
 use mesh_llm_plugin_manager::{
     MemberAvailability, PluginCatalog, PluginInstallOptions, PluginProgressEvent,
-    PluginProgressReporter, PluginStore, SetInstallResult, set_offer_summary,
+    PluginProgressReporter, SetInstallResult,
 };
 use reqwest::Client;
 
@@ -96,26 +96,35 @@ pub fn render_set_show(
     Ok(lines)
 }
 
-/// The prompt line an attended offer prints before asking, describing the
-/// set and its resolvable members. `None` when the set is absent or empty,
-/// so callers skip an unnecessary prompt.
-pub fn offer_lines(catalog: &PluginCatalog, set_name: &str) -> Option<Vec<String>> {
-    let (description, members) = set_offer_summary(catalog, set_name)?;
+/// Describe an attended offer's set and eligible pinned members. Skip the
+/// prompt when the set is absent or nothing supports this target and host.
+pub fn offer_lines(
+    catalog: &PluginCatalog,
+    set_name: &str,
+    target: &str,
+    host_version: &str,
+) -> Option<Vec<String>> {
+    let resolution =
+        mesh_llm_plugin_manager::resolve_set(catalog, set_name, target, host_version).ok()?;
+    let members: Vec<_> = resolution
+        .members
+        .iter()
+        .filter(|member| member.availability == MemberAvailability::Available)
+        .map(|member| {
+            format!(
+                "  {} {}",
+                member.name,
+                member.version.as_deref().unwrap_or("-")
+            )
+        })
+        .collect();
     if members.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("ℹ️  {set_name} plugin set")];
-    let mut joined = String::new();
-    for (index, (name, version)) in members.iter().enumerate() {
-        let member = format!("  {name} {version}");
-        joined.push_str(&member);
-        if index + 1 < members.len() {
-            joined.push('\n');
-        }
-    }
-    let _ = description;
-    lines.push(joined);
-    Some(lines)
+    Some(vec![
+        format!("ℹ️  {set_name} plugin set — {}", resolution.description),
+        members.join("\n"),
+    ])
 }
 
 /// Ask whether to install `set_name`, defaulting to No. An EOF, a read
@@ -140,14 +149,18 @@ pub async fn install_set_command(
     options: &PluginInstallOptions,
 ) -> Result<SetInstallResult> {
     let mut err = mesh_llm_events::console_err();
-    if let Some(lines) = offer_lines(catalog, set_name) {
+    if let Some(lines) = offer_lines(
+        catalog,
+        set_name,
+        options.target.triple(),
+        &options.host_version,
+    ) {
         for line in lines {
             let _ = writeln!(err, "{line}");
         }
     }
     let _ = writeln!(err, "ℹ️  Installing plugin set: {set_name}");
-    let store = PluginStore::new(&options.store_root);
-    store.migrate_legacy_defaults()?;
+    crate::plugin::migrate_legacy_records_best_effort(&options.store_root);
     let result = mesh_llm_plugin_manager::install_named_set(
         catalog,
         set_name,
@@ -326,11 +339,13 @@ pub async fn run_optional_plugin_phase(
                 }
             };
             if matches!(plan, OptionalPluginPlan::Offer(_)) {
-                let Some(lines) = offer_lines(&catalog, name) else {
+                let Some(lines) =
+                    offer_lines(&catalog, name, options.target.triple(), host_version)
+                else {
                     let _ = writeln!(
                         err,
-                        "ℹ️  The catalog publishes no '{name}' plugin set with members; nothing \
-                         to install."
+                        "ℹ️  No members of plugin set '{name}' can be installed for this platform \
+                         and host; nothing to offer."
                     );
                     return Ok(OptionalPluginResult::Skipped);
                 };
@@ -344,56 +359,57 @@ pub async fn run_optional_plugin_phase(
             } else {
                 let _ = writeln!(err, "ℹ️  Installing plugin set: {name}");
             }
-            match install_set_quiet(&catalog, name, &options).await {
-                Ok(result) => {
-                    let mut err = mesh_llm_events::console_err();
-                    // Every member is accounted for: what landed, what was
-                    // left as it is (and why), and what failed.
-                    for (skipped_name, reason) in &result.skipped {
-                        let _ = writeln!(err, "ℹ️  {skipped_name} skipped: {reason}");
-                    }
-                    if result.failed.is_empty() {
-                        if result.installed_count() == 0 {
-                            let _ = writeln!(err, "ℹ️  No member of this set needed installing.");
-                            Ok(OptionalPluginResult::Skipped)
-                        } else {
-                            let _ = writeln!(
-                                err,
-                                "✅ Plugin set installed: {} installed.",
-                                result.installed_count()
-                            );
-                            Ok(OptionalPluginResult::Installed(result.installed_count()))
-                        }
-                    } else {
-                        for (failed_name, reason) in &result.failed {
-                            let _ = writeln!(
-                                err,
-                                "⚠️  Could not install {failed_name}: {reason}. Optional plugin \
-                                 installation incomplete."
-                            );
-                        }
-                        let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
-                        Ok(OptionalPluginResult::Incomplete(result.installed_count()))
-                    }
-                }
-                Err(error) => {
-                    // An unknown explicitly-selected set is a usage error,
-                    // never a successful empty selection: surface it.
-                    if format!("{error:#}").contains("Unknown plugin set") {
-                        return Err(error);
-                    }
-                    // Any other resolution failure (a download, a vanished
-                    // entry) is an incomplete optional install, not a failed
-                    // host operation.
-                    let mut err = mesh_llm_events::console_err();
+            Ok(report_optional_set_result(
+                name,
+                install_set_quiet(&catalog, name, &options).await,
+            ))
+        }
+    }
+}
+
+/// Core setup/update has already succeeded: even an invalid optional
+/// selection must be reported without discarding that result or its summary.
+fn report_optional_set_result(
+    name: &str,
+    result: Result<SetInstallResult>,
+) -> OptionalPluginResult {
+    let mut err = mesh_llm_events::console_err();
+    match result {
+        Ok(result) => {
+            for (skipped_name, reason) in &result.skipped {
+                let _ = writeln!(err, "ℹ️  {skipped_name} skipped: {reason}");
+            }
+            if result.failed.is_empty() {
+                if result.installed_count() == 0 {
+                    let _ = writeln!(err, "ℹ️  No member of this set needed installing.");
+                    OptionalPluginResult::Skipped
+                } else {
                     let _ = writeln!(
                         err,
-                        "⚠️  {error:#}. Optional plugin installation incomplete."
+                        "✅ Plugin set installed: {} installed.",
+                        result.installed_count()
                     );
-                    let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
-                    Ok(OptionalPluginResult::Incomplete(0))
+                    OptionalPluginResult::Installed(result.installed_count())
                 }
+            } else {
+                for (failed_name, reason) in &result.failed {
+                    let _ = writeln!(
+                        err,
+                        "⚠️  Could not install {failed_name}: {reason}. Optional plugin \
+                         installation incomplete."
+                    );
+                }
+                let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
+                OptionalPluginResult::Incomplete(result.installed_count())
             }
+        }
+        Err(error) => {
+            let _ = writeln!(
+                err,
+                "⚠️  {error:#}. Optional plugin installation incomplete."
+            );
+            let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
+            OptionalPluginResult::Incomplete(0)
         }
     }
 }
@@ -493,11 +509,51 @@ mod tests {
     }
 
     #[test]
-    fn the_offer_names_the_set_and_its_members() {
-        let lines = offer_lines(&catalog(), "recommended").unwrap();
-        assert_eq!(lines[0], "ℹ️  recommended plugin set");
+    fn the_offer_names_the_set_description_and_eligible_members() {
+        let lines = offer_lines(
+            &catalog(),
+            "recommended",
+            "x86_64-unknown-linux-gnu",
+            "0.90.0",
+        )
+        .unwrap();
+        assert_eq!(
+            lines[0],
+            "ℹ️  recommended plugin set — Recommended plugins for MeshLLM"
+        );
         assert!(lines[1].contains("capsules v0.2.0"), "{lines:?}");
-        assert!(offer_lines(&catalog(), "missing").is_none());
+        assert!(offer_lines(&catalog(), "missing", "x86_64-unknown-linux-gnu", "0.90.0").is_none());
+    }
+
+    #[test]
+    fn sets_with_no_platform_or_host_compatible_members_are_not_offered() {
+        assert!(offer_lines(&catalog(), "recommended", "aarch64-apple-darwin", "0.90.0").is_none());
+        let entries = ENTRIES.replace(
+            "\"version\":\"v0.2.0\"",
+            "\"version\":\"v0.2.0\",\"compatibility\":{\"max\":\"0.89.0\"}",
+        );
+        let catalog = PluginCatalog::parse_jsonl(&entries)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(SETS).unwrap())
+            .unwrap();
+        assert!(
+            offer_lines(
+                &catalog,
+                "recommended",
+                "x86_64-unknown-linux-gnu",
+                "0.90.0"
+            )
+            .is_none()
+        );
+        assert!(
+            offer_lines(
+                &catalog,
+                "recommended",
+                "x86_64-unknown-linux-gnu",
+                "0.89.0"
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -511,7 +567,75 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-        assert!(offer_lines(&catalog, "empty").is_none());
+        assert!(offer_lines(&catalog, "empty", "x86_64-unknown-linux-gnu", "0.90.0").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_corrupt_record_does_not_block_set_installation() {
+        use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, PluginTarget};
+
+        let root = tempfile::tempdir().unwrap();
+        let options = PluginInstallOptions {
+            store_root: root.path().join("store"),
+            install_root: root.path().join("installed"),
+            catalog_url: "unused".into(),
+            target: PluginTarget::from_os_arch("linux", "x86_64").unwrap(),
+            host_version: "0.90.0".into(),
+        };
+        let store = PluginStore::new(&options.store_root);
+        let installed = InstalledPluginMetadata {
+            name: "capsules".into(),
+            source_repository: "https://github.com/Mesh-LLM/capsules".into(),
+            installed_version: "v0.2.0".into(),
+            target_triple: options.target.triple().into(),
+            downloaded_asset_name: "capsules.tar.gz".into(),
+            install_path: options.install_root.join("capsules"),
+            enabled: false,
+            default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: Some(Vec::new()),
+            manifest: None,
+            last_protocol_version: None,
+            last_status: None,
+            last_error: None,
+            verified_sha256: None,
+        };
+        store.save(&installed).unwrap();
+        let corrupt = options.store_root.join("broken/plugin-install.json");
+        std::fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+        std::fs::write(&corrupt, b"invalid metadata").unwrap();
+        assert!(store.migrate_legacy_defaults().is_err());
+
+        let result = install_set_command(&catalog(), "recommended", &options)
+            .await
+            .unwrap();
+
+        assert!(result.is_complete());
+        assert_eq!(result.installed_count(), 0);
+        assert_eq!(result.skipped.len(), 1);
+        assert!(result.skipped[0].1.contains("disabled"));
+        assert_eq!(store.load("capsules").unwrap(), installed);
+        assert_eq!(std::fs::read(corrupt).unwrap(), b"invalid metadata");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_optional_set_is_incomplete_but_the_standalone_command_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let options = PluginInstallOptions {
+            store_root: root.path().join("store"),
+            install_root: root.path().join("installed"),
+            catalog_url: "unused".into(),
+            target: mesh_llm_plugin_manager::PluginTarget::from_os_arch("linux", "x86_64").unwrap(),
+            host_version: "0.90.0".into(),
+        };
+        let error = install_set_command(&catalog(), "missing", &options)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("Unknown plugin set 'missing'"));
+        assert_eq!(
+            report_optional_set_result("missing", Err(error)),
+            OptionalPluginResult::Incomplete(0)
+        );
     }
 
     #[test]

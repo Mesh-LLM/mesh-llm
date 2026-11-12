@@ -32,7 +32,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
             operation_bindings: Vec::new(),
             peer_blocks: false,
         }),
-        last_protocol_version: Some(1),
+        last_protocol_version: Some(mesh_llm_plugin::PROTOCOL_VERSION),
         last_status: Some("installed".to_string()),
         last_error: None,
         verified_sha256: None,
@@ -189,6 +189,41 @@ fn settings_only_entry_runs_the_enabled_store_copy() {
             .is_some_and(|metadata| metadata.allowed_surfaces.is_none()),
         "a managed install carries no legacy surface record"
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn configured_store_copies_cannot_bypass_host_compatibility() {
+    let root = tempfile::TempDir::new().unwrap();
+    for protocol_mismatch in [false, true] {
+        let mut metadata = installed_capsules(root.path(), true);
+        if protocol_mismatch {
+            metadata.last_protocol_version = Some(mesh_llm_plugin::PROTOCOL_VERSION + 1);
+        } else {
+            metadata.host_compatibility =
+                Some(mesh_llm_plugin_manager::compatibility::HostCompatibility {
+                    min: None,
+                    max: Some("0.0.0".into()),
+                });
+        }
+        PluginStore::new(root.path()).save(&metadata).unwrap();
+        let command = metadata.executable_path().display().to_string();
+        for configured_command in [None, Some(command.as_str())] {
+            let resolved = with_plugin_dir(root.path(), || {
+                configured_external_plugin_spec(&capsules_entry(configured_command))
+            })
+            .unwrap();
+            let ConfiguredExternalPlugin::Inactive(summary) = resolved else {
+                panic!("configured store copies must receive the same compatibility check");
+            };
+            assert!(summary.error.unwrap().contains("incompatible with MeshLLM"));
+        }
+        let unrelated = with_plugin_dir(root.path(), || {
+            configured_external_plugin_spec(&capsules_entry(Some("operator-command")))
+        })
+        .unwrap();
+        assert!(matches!(unrelated, ConfiguredExternalPlugin::Active(_)));
+    }
 }
 
 #[test]

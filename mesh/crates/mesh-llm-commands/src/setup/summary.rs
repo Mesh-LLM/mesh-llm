@@ -79,14 +79,17 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
 /// One line for the optional plugin phase in the concise summary; `None`
 /// when nothing happened worth a line.
 fn plugin_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> Option<String> {
-    let _ = actions.plugin_outcome;
+    let set_name = match &plan.plugins {
+        super::SetupPluginPlan::Install(name) => name.as_str(),
+        _ => crate::plugin_sets::RECOMMENDED_SET,
+    };
     match &plan.plugins {
         super::SetupPluginPlan::Install(_) | super::SetupPluginPlan::Offer => {
             Some(match actions.plugin_outcome {
                 SetupPluginOutcome::Installed(count) => format!("installed {count}"),
                 SetupPluginOutcome::Incomplete => {
                     format!(
-                        "{} incomplete; retry with `mesh-llm plugins sets install`",
+                        "{} incomplete; retry with `mesh-llm plugins sets install {set_name}`",
                         style_warn("installation")
                     )
                 }
@@ -336,6 +339,31 @@ mod tests {
         );
         actions.github_outcome = github_outcome;
         actions
+    }
+
+    #[test]
+    fn incomplete_plugin_summary_includes_the_selected_set_in_the_retry() {
+        let mut actions = actions_with_github_outcome(SetupGitHubOutcome::NotEvaluated);
+        actions.plugin_outcome = SetupPluginOutcome::Incomplete;
+        for (plugins, name) in [
+            (
+                crate::setup::SetupPluginPlan::Install("extra".into()),
+                "extra",
+            ),
+            (crate::setup::SetupPluginPlan::Offer, "recommended"),
+        ] {
+            let plan = SetupPlan::new(
+                crate::setup::SetupRuntimePlan::Skip,
+                crate::setup::SetupServicePlan::Skip,
+                plugins,
+                crate::setup::SetupGitHubStarPlan::Skip(
+                    crate::setup::SetupGitHubStarSkipReason::HiddenPrompt,
+                ),
+            );
+            let retry = format!("`mesh-llm plugins sets install {name}`");
+            assert!(plugin_brief(&plan, &actions).unwrap().contains(&retry));
+            assert!(plugin_summary(&plan, &actions).contains(&retry));
+        }
     }
 
     #[test]

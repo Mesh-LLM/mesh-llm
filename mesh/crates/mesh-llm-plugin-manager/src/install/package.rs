@@ -9,7 +9,8 @@ use crate::{
     github::GitHubReleaseAsset,
     install::{InstallOutcome, PluginInstallOptions},
     plugin_toml::PluginToml,
-    store::InstalledPluginMetadata,
+    source_ref::GitHubPluginSource,
+    store::{InstalledPluginMetadata, PluginStore},
     target::{ArchiveExt, PluginTarget},
 };
 
@@ -37,6 +38,31 @@ pub(super) fn extract_for_install(
         bail!("plugin '{name}' does not support MeshLLM {host_version}: {reason}");
     }
     staged.commit()
+}
+
+/// A remote reinstall keeps operator state only for the same repository.
+/// Resolve the asset's final plugin name before looking up this record.
+pub(super) fn retained_remote_install(
+    store: &PluginStore,
+    name: &str,
+    source: &GitHubPluginSource,
+) -> Result<Option<InstalledPluginMetadata>> {
+    let current = store.load_optional(name)?;
+    if let Some(current) = current.as_ref() {
+        let same_source =
+            GitHubPluginSource::from_url(&current.source_repository).is_ok_and(|installed| {
+                installed
+                    .repo_slug()
+                    .eq_ignore_ascii_case(&source.repo_slug())
+            });
+        anyhow::ensure!(
+            same_source,
+            "'{name}' is installed from {}; refusing to replace a different package by name with {}",
+            current.source_repository,
+            source.url()
+        );
+    }
+    Ok(current)
 }
 
 /// A same-tag fast path cannot turn a known incompatible install into success.
@@ -105,16 +131,22 @@ pub(super) fn retained_surfaces(current: Option<&InstalledPluginMetadata>) -> Op
     })
 }
 
-/// Package declarations take precedence over catalog declarations, just as
-/// they do in the installed record used by startup and later host upgrades.
+/// Explicit package bounds take precedence; omitted bounds retain the catalog
+/// declaration used to admit the pinned release.
 pub(super) fn compatibility_from_package(
     plugin_toml: &PluginToml,
     catalog: Option<&HostCompatibility>,
 ) -> Option<HostCompatibility> {
     if plugin_toml.min_host_version.is_some() || plugin_toml.max_host_version.is_some() {
         return Some(HostCompatibility {
-            min: plugin_toml.min_host_version.clone(),
-            max: plugin_toml.max_host_version.clone(),
+            min: plugin_toml
+                .min_host_version
+                .clone()
+                .or_else(|| catalog.and_then(|bounds| bounds.min.clone())),
+            max: plugin_toml
+                .max_host_version
+                .clone()
+                .or_else(|| catalog.and_then(|bounds| bounds.max.clone())),
         });
     }
     catalog.cloned()

@@ -230,7 +230,7 @@ fn install_defaults_stub() -> Result<()> {
 /// is the way out of a misbehaving plugin, so it must keep working. A failed
 /// migration leaves the records as they are; the runtime still applies the
 /// retained legacy grants at launch.
-fn migrate_legacy_records_best_effort(store_root: &std::path::Path) {
+pub(crate) fn migrate_legacy_records_best_effort(store_root: &std::path::Path) {
     if let Err(error) = PluginStore::new(store_root).migrate_legacy_defaults() {
         let mut err = mesh_llm_events::console_err();
         let _ = writeln!(

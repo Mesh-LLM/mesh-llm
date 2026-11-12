@@ -105,6 +105,14 @@ pub(crate) fn configured_external_plugin_spec(
         )));
     }
 
+    if let Some(metadata) = installed_metadata.as_ref()
+        && let Some(reason) = incompatible_with_host(metadata)
+    {
+        return Ok(ConfiguredExternalPlugin::Inactive(
+            incompatible_installed_plugin_summary(metadata, &reason),
+        ));
+    }
+
     let command = match command {
         Some(command) => command,
         None => match installed_plugin_command_for_name(&entry.name) {
