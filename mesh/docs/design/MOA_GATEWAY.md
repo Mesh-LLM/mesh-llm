@@ -316,8 +316,9 @@ With the plugin registered:
 
 1. Ingress (`try_handle_virtual_model_intercept` in `ingress.rs`) sees that
    `mesh` is a plugin-declared virtual model and hands the request to the
-   plugin with a snapshot of the callable candidate models. Requests that set
-   `x-mesh-target` / `x-mesh-exclude` are rejected with 409.
+   plugin with a snapshot of the callable candidate models. Non-streaming
+   text chat that sets `x-mesh-target` / `x-mesh-exclude` is rejected with
+   409; streaming and media requests never reach this check (item 2).
 2. The plugin overrides only eligible non-streaming text chat. Streaming and
    media requests keep core routing: `automatic::content_mode` returns
    `SingleModel` for them, so ingress resolves a concrete model and never
