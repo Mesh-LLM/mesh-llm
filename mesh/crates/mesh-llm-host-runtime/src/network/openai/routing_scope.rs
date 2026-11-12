@@ -16,12 +16,18 @@
 //! instead.
 
 use super::client_stream::ClientStream;
-use super::request_parse::{BufferedHttpRequest, header_values_from_raw, rewrite_model_field};
+use super::request_parse::{
+    BufferedHttpRequest, header_values_from_parsed_raw, rewrite_model_field,
+};
 use crate::mesh::{self, OwnerScope};
 use crate::runtime::IngressType;
 
 pub(crate) const MESH_SCOPE_HEADER: &str = "x-mesh-scope";
 pub(crate) const PRIVATE_SCOPE: &str = "private";
+/// Narrows a private request to these owners (comma-separated), within this
+/// node's circle. A plugin's nested call carries the circle of the request
+/// that caused it here; it can never widen the node's own.
+pub(crate) const MESH_SCOPE_OWNERS_HEADER: &str = "x-mesh-scope-owners";
 /// Header values that select private scope; the first is canonical.
 const PRIVATE_SCOPE_ALIASES: [&str; 2] = [PRIVATE_SCOPE, "incognito"];
 /// Reserved model-name suffixes that select private scope.
@@ -73,7 +79,7 @@ pub(crate) struct ScopeRejection {
 /// or repeated header counts as private: callers use this to fail closed
 /// before the request is fully resolved.
 pub(crate) fn head_requests_private_scope(raw: &[u8]) -> bool {
-    match header_values_from_raw(raw, MESH_SCOPE_HEADER) {
+    match header_values_from_parsed_raw(raw, MESH_SCOPE_HEADER) {
         Ok(values) => values.len() > 1 || values.iter().any(|value| is_private_scope_value(value)),
         Err(()) => true,
     }
@@ -86,8 +92,8 @@ fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeR
         status: 400,
         message,
     };
-    let header = match header_values_from_raw(&request.raw, MESH_SCOPE_HEADER)
-        .map_err(|()| bad(format!("{MESH_SCOPE_HEADER} header contains invalid UTF-8")))?
+    let header = match header_values_from_parsed_raw(&request.raw, MESH_SCOPE_HEADER)
+        .map_err(|()| bad(format!("could not read the {MESH_SCOPE_HEADER} header")))?
         .as_slice()
     {
         [] => false,
@@ -140,10 +146,34 @@ pub(crate) async fn resolve(
                 .to_string(),
         });
     };
+    let scope = match requested_owners(&request.raw)? {
+        Some(owners) => scope.intersect(&owners),
+        None => scope,
+    };
     if let Some(base) = private_model_base(request.model_name.as_deref()).map(str::to_string) {
         rewrite_model_field(request, &base);
     }
     Ok(Some(scope))
+}
+
+/// The owners named in [`MESH_SCOPE_OWNERS_HEADER`], if the head has it.
+fn requested_owners(raw: &[u8]) -> Result<Option<OwnerScope>, ScopeRejection> {
+    let values = header_values_from_parsed_raw(raw, MESH_SCOPE_OWNERS_HEADER).map_err(|()| {
+        ScopeRejection {
+            status: 400,
+            message: format!("could not read the {MESH_SCOPE_OWNERS_HEADER} header"),
+        }
+    })?;
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let owners = values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty())
+        .map(str::to_string);
+    Ok(Some(OwnerScope::of(owners)))
 }
 
 /// [`resolve`] for a request entering this node's API ingress. Returns
@@ -186,10 +216,12 @@ async fn peer_private_scope(
     request: &BufferedHttpRequest,
     requested_by: Option<iroh::EndpointId>,
 ) -> Option<OwnerScope> {
-    let marked = matches!(
-        header_values_from_raw(&request.raw, MESH_SCOPE_HEADER).as_deref(),
-        Ok([value]) if is_private_scope_value(value)
-    );
+    // An unreadable head counts as marked: narrowing is the safe side.
+    let marked = match header_values_from_parsed_raw(&request.raw, MESH_SCOPE_HEADER).as_deref() {
+        Ok([value]) => is_private_scope_value(value),
+        Ok(_) => false,
+        Err(()) => true,
+    };
     if !marked {
         return None;
     }
@@ -277,5 +309,28 @@ mod tests {
                 "{headers}"
             );
         }
+        // Forwarding adds headers past the client limit; they still count.
+        let limit = crate::network::openai::request_parse::MAX_HEADERS;
+        let full = "x-filler: 1\r\n".repeat(limit) + "x-mesh-scope: private\r\n";
+        assert!(head_requests_private_scope(head(&full).as_bytes()));
+        // A head that cannot be read in full could hide the header.
+        let many = "x-filler: 1\r\n".repeat(2 * limit + 1);
+        assert!(head_requests_private_scope(head(&many).as_bytes()));
+    }
+
+    #[test]
+    fn a_nested_call_names_the_owners_it_keeps_to() {
+        let head = |headers: &str| format!("POST /v1/chat/completions HTTP/1.1\r\n{headers}\r\n");
+        assert_eq!(requested_owners(head("").as_bytes()).unwrap(), None);
+        let owners = requested_owners(head("x-mesh-scope-owners: a, b,\r\n").as_bytes())
+            .unwrap()
+            .unwrap();
+        assert_eq!(owners, OwnerScope::of(["a".to_string(), "b".to_string()]));
+        // Narrowing only: owners the node does not trust stay out.
+        let circle = OwnerScope::of(["b".to_string(), "c".to_string()]);
+        assert_eq!(circle.intersect(&owners), OwnerScope::new("b"));
+        let many =
+            "x-filler: 1\r\n".repeat(2 * crate::network::openai::request_parse::MAX_HEADERS + 1);
+        assert!(requested_owners(head(&many).as_bytes()).is_err());
     }
 }

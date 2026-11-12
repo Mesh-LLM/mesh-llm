@@ -45,7 +45,7 @@ impl OwnerScope {
     }
 
     /// Exactly these owners' nodes; no owners admits no peer at all.
-    fn of(owner_ids: impl IntoIterator<Item = String>) -> Self {
+    pub(crate) fn of(owner_ids: impl IntoIterator<Item = String>) -> Self {
         let mut scope = Self {
             owner_ids: Vec::new(),
         };
@@ -63,6 +63,23 @@ impl OwnerScope {
         trusted: impl IntoIterator<Item = &'a str>,
     ) -> Self {
         Self::of(std::iter::once(owner_id.into()).chain(trusted.into_iter().map(str::to_string)))
+    }
+
+    pub(crate) fn owner_ids(&self) -> &[String] {
+        &self.owner_ids
+    }
+
+    /// The owners in both scopes: a request limited by both reaches only
+    /// their common nodes.
+    pub(crate) fn intersect(&self, other: &OwnerScope) -> OwnerScope {
+        Self {
+            owner_ids: self
+                .owner_ids
+                .iter()
+                .filter(|owner| other.owner_ids.contains(owner))
+                .cloned()
+                .collect(),
+        }
     }
 
     /// Whether a peer with this verified ownership belongs to the scope.

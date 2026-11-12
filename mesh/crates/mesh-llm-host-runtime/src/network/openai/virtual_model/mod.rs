@@ -84,11 +84,17 @@ impl InferenceRpcBridge {
                 capability.request_id().as_uuid().to_string(),
             );
         }
-        if self.plugins.private_invocation_active(plugin_name) {
+        if let Some(scope) = self.plugins.private_nested_scope(plugin_name) {
             request_builder = request_builder.header(
                 super::routing_scope::MESH_SCOPE_HEADER,
                 super::routing_scope::PRIVATE_SCOPE,
             );
+            if let crate::plugin::private_invocations::NestedScope::Owners(owners) = scope {
+                request_builder = request_builder.header(
+                    super::routing_scope::MESH_SCOPE_OWNERS_HEADER,
+                    owners.owner_ids().join(","),
+                );
+            }
         }
         if let Some(target_node_id) = request.target_node_id {
             request_builder =
@@ -333,8 +339,7 @@ fn invoke_in_scope<'a>(
     input_json: &'a str,
 ) -> impl std::future::Future<Output = anyhow::Result<mesh_llm_plugin::VirtualModelResponse>> + 'a {
     let private_turn = mesh::current_owner_scope()
-        .is_some()
-        .then(|| plugins.begin_private_invocation(&route.plugin_name));
+        .map(|scope| plugins.begin_private_invocation(&route.plugin_name, Some(scope)));
     async move {
         let response = plugins
             .invoke_virtual_model(route, input_json, Some(std::time::Duration::from_secs(300)))

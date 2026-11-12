@@ -480,6 +480,10 @@ async fn invoke_phase(
     phase_deadline: (&str, Instant),
 ) -> Result<OpenAiExchangeDecision, HookFailure> {
     let (phase, deadline) = phase_deadline;
+    // A hook's own inference for a private request stays private, from the
+    // moment it can see the request: the body stream is sent first.
+    let private_call = crate::mesh::current_owner_scope()
+        .map(|scope| manager.begin_private_invocation(name, Some(scope)));
     if let Some(encoded) = event["body_hex"].as_str() {
         let bytes = hex::decode(encoded).map_err(|_| HookFailure::Internal)?;
         if bytes.len() as u64 > grant.max_body_bytes {
@@ -508,10 +512,6 @@ async fn invoke_phase(
         event["body_stream_kind"] = json!(kind);
     }
     let input = serde_json::to_string(&event).map_err(|_| HookFailure::Internal)?;
-    // A hook's own inference for a private request stays private.
-    let private_call = crate::mesh::current_owner_scope()
-        .is_some()
-        .then(|| manager.begin_private_invocation(name));
     let reply = plugin
         .invoke_exchange_service(declaration, &input, deadline)
         .await;

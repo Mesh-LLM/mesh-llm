@@ -54,12 +54,13 @@ pub(super) async fn apply_request_transforms(
                 && is_transformable_path(client_path) =>
         {
             // Transforms run before the scope is resolved; a transform's own
-            // inference for a private request must stay private regardless.
+            // inference for a private request must stay private regardless,
+            // including a bare `@private` model that ingress rejects later.
             let private = private_hint
-                || crate::network::openai::routing_scope::private_model_base(
-                    body.get("model").and_then(serde_json::Value::as_str),
-                )
-                .is_some();
+                || body
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(crate::network::openai::routing_scope::has_private_model_suffix);
             plugin_manager
                 .transform_request(request_path, client_path, body, private)
                 .await

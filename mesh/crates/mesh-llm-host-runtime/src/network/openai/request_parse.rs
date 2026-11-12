@@ -1171,19 +1171,39 @@ pub(crate) fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<Strin
     })
 }
 
+/// [`header_values_from_raw`] for a header that must not be missed: a head
+/// that cannot be parsed (too many headers, say) is `Err(())` too, rather
+/// than reading as one without the header.
+pub(crate) fn header_values_from_parsed_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    let values = header_values_in(raw, name, true)?;
+    Ok(values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .collect())
+}
+
 /// Every value of header `name`, as UTF-8, exactly as httparse returned it.
 fn untrimmed_header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    header_values_in(raw, name, false)
+}
+
+fn header_values_in(raw: &[u8], name: &str, strict: bool) -> Result<Vec<String>, ()> {
     let header_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .unwrap_or(raw.len());
-    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let head = &raw[..header_end.saturating_add(4).min(raw.len())];
+    // A rebuilt head can hold more than MAX_HEADERS: ingress bounded the
+    // client's headers, and forwarding adds its own. Room for every line, up
+    // to a bound no rebuilt head reaches.
+    let lines = head.split(|byte| *byte == b'\n').count();
+    let mut headers_buf = vec![httparse::EMPTY_HEADER; lines.min(2 * MAX_HEADERS)];
     let mut req = httparse::Request::new(&mut headers_buf);
-    if req
-        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
-        .is_err()
-    {
-        return Ok(Vec::new());
+    match req.parse(head) {
+        Ok(httparse::Status::Complete(_)) => {}
+        _ if strict => return Err(()),
+        Err(_) => return Ok(Vec::new()),
+        Ok(httparse::Status::Partial) => {}
     }
     req.headers
         .iter()

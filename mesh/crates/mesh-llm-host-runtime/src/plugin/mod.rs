@@ -956,18 +956,23 @@ impl PluginManager {
             .await
     }
 
-    /// Mark `plugin_name` as running a private virtual-model turn until the
-    /// guard drops; see [`private_invocations`].
+    /// Mark `plugin_name` as handling a private request until the guard
+    /// drops; `owners` is that request's scope, when it has one yet. See
+    /// [`private_invocations`].
     pub(crate) fn begin_private_invocation(
         &self,
         plugin_name: &str,
+        owners: Option<crate::mesh::OwnerScope>,
     ) -> private_invocations::PrivateInvocationGuard {
-        self.inner.private_invocations.begin(plugin_name)
+        self.inner.private_invocations.begin(plugin_name, owners)
     }
 
-    /// Whether nested inference from `plugin_name` must stay private.
-    pub(crate) fn private_invocation_active(&self, plugin_name: &str) -> bool {
-        self.inner.private_invocations.is_active(plugin_name)
+    /// How nested inference from `plugin_name` must be scoped, if private.
+    pub(crate) fn private_nested_scope(
+        &self,
+        plugin_name: &str,
+    ) -> Option<private_invocations::NestedScope> {
+        self.inner.private_invocations.nested_scope(plugin_name)
     }
 
     pub async fn invoke_virtual_model(

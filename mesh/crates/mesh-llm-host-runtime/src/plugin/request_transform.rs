@@ -75,14 +75,9 @@ impl PluginManager {
                 client_path: client_path.to_string(),
                 body: body.clone(),
             };
-            let private_call = private.then(|| self.begin_private_invocation(&plugin_name));
-            let output = self.invoke_request_transform(&plugin_name, &input).await;
-            if output.is_ok()
-                && let Some(call) = private_call
-            {
-                call.finish();
-            }
-            let output = output?;
+            let output = self
+                .invoke_request_transform(&plugin_name, &input, private)
+                .await?;
             let Some(replacement) = output.body else {
                 continue;
             };
@@ -97,6 +92,7 @@ impl PluginManager {
         &self,
         plugin_name: &str,
         input: &RequestTransformInput,
+        private: bool,
     ) -> Result<RequestTransformOutput> {
         let input_json = serde_json::to_string(input)?;
         // The input goes to the plugin in one control frame, which its reader
@@ -109,16 +105,30 @@ impl PluginManager {
                 input_json.len()
             );
         }
+        // Transforms run before the request is scoped: nested calls keep to
+        // this node's trust circle, the one the request will get. The plugin
+        // is done once it replies, whatever the reply says; only a call that
+        // ends without one leaves the plugin private for a while.
+        let private_call = || private.then(|| self.begin_private_invocation(plugin_name, None));
+        let replied = |call: Option<super::private_invocations::PrivateInvocationGuard>| {
+            if let Some(call) = call {
+                call.finish();
+            }
+        };
         if self.is_test_bridge_enabled(plugin_name) {
-            return self
+            let call = private_call();
+            let output = self
                 .mcp_request(plugin_name, "request_transform/invoke", input)
                 .await;
+            replied(call);
+            return output;
         }
         let plugin = self
             .inner
             .plugins
             .get(plugin_name)
             .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
+        let call = private_call();
         let response = plugin
             .invoke_service(
                 proto::ServiceKind::RequestTransform,
@@ -127,6 +137,7 @@ impl PluginManager {
                 Some(TRANSFORM_TIMEOUT),
             )
             .await?;
+        replied(call);
         if response.is_error {
             bail!(
                 "request transform plugin '{plugin_name}' failed: {}",

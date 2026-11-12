@@ -45,9 +45,18 @@ async fn nested_calls_are_private_only_while_a_private_turn_runs() {
     let port = listener.local_addr().unwrap().port();
     let bridge = InferenceRpcBridge::new(port, plugins.clone());
 
-    let turn = plugins.begin_private_invocation("moa");
+    let turn = plugins.begin_private_invocation(
+        "moa",
+        Some(crate::mesh::OwnerScope::of([
+            "a".to_string(),
+            "b".to_string(),
+        ])),
+    );
     let sent = nested_request(&bridge, "moa", listener).await;
     assert!(sent.contains("x-mesh-scope: private"), "{sent}");
+    // The request's own circle travels with the call, so the node does not
+    // swap in its own.
+    assert!(sent.contains("x-mesh-scope-owners: a,b"), "{sent}");
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
