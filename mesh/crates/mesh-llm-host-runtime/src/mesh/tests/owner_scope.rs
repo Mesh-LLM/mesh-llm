@@ -76,6 +76,7 @@ async fn a_private_request_cannot_open_a_tunnel_to_a_stranger() {
 #[tokio::test]
 async fn election_targets_keep_local_and_owned_hosts_only() {
     let (node, mine, theirs, forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
     let mut targets = ModelTargets::default();
     targets.targets.insert(
         MODEL.to_string(),
@@ -93,11 +94,18 @@ async fn election_targets_keep_local_and_owned_hosts_only() {
         scoped.targets[MODEL],
         vec![InferenceTarget::Local(9000), InferenceTarget::Remote(mine)]
     );
+
+    // A scope narrowed to other owners leaves this node out.
+    let scoped = node
+        .targets_in_owner_scope(&OwnerScope::new("them"), &targets)
+        .await;
+    assert_eq!(scoped.targets[MODEL], vec![InferenceTarget::Remote(theirs)]);
 }
 
 #[tokio::test]
 async fn a_local_split_with_a_stranger_stage_is_not_private() {
     let (node, mine, theirs, _forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
     let split = |model: &str, stage_node: EndpointId| crate::mesh::StageTopologyInstance {
         topology_id: format!("topology-{model}"),
         run_id: "run".to_string(),

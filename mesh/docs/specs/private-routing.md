@@ -126,11 +126,16 @@ only what the circle serves.
 - Plugins: while a plugin handles a private request (a virtual-model turn
   such as the MoA committee, an OpenAI exchange hook, or a request
   transform), every inference request that plugin makes back to the host is
-  sent with `x-mesh-scope: private` and `x-mesh-scope-owners`, the owners
-  of the request it is handling. The host scopes that call to those owners,
-  within its own circle, so a plugin running on a trusted owner's node
-  cannot reach owners the entry node does not trust. The owners header can
-  only narrow a private request, never widen it. This is per plugin, not
+  sent with `x-mesh-scope: private`. A virtual-model turn or exchange hook
+  already has its request's owner scope, so its calls also carry
+  `x-mesh-scope-owners` with those owners. The host scopes such a call to
+  them, within its own circle (this node included only if its owner is
+  named), so a plugin running on a trusted owner's node cannot reach owners
+  the entry node does not trust. A request transform runs before its request
+  is scoped, at the node the client used, so its calls send only the private
+  header and get that node's circle, unless another private request the
+  plugin handles at the same time names owners. The owners header can only
+  narrow a private request, never widen it. This is per plugin, not
   per request: a public request the same plugin handles at the same moment
   is narrowed too, and private requests from different circles at once
   leave only their common owners. The plugin stays private until it

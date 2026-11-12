@@ -63,6 +63,18 @@ struct State {
     lingering: BTreeMap<String, Vec<(Instant, Option<OwnerScope>)>>,
 }
 
+impl State {
+    /// Forget `plugin`'s lingering limits that have expired.
+    fn reap(&mut self, plugin: &str, now: Instant) {
+        if let Some(lingering) = self.lingering.get_mut(plugin) {
+            lingering.retain(|(until, _)| *until > now);
+            if lingering.is_empty() {
+                self.lingering.remove(plugin);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct PrivateInvocations {
     state: Arc<Mutex<State>>,
@@ -97,6 +109,7 @@ impl PrivateInvocations {
     /// `None` leaves them to this node's trust circle.
     pub(crate) fn begin(&self, plugin: &str, owners: Option<OwnerScope>) -> PrivateInvocationGuard {
         let mut state = self.lock();
+        state.reap(plugin, Instant::now());
         let id = state.next_id;
         state.next_id += 1;
         state
@@ -116,13 +129,7 @@ impl PrivateInvocations {
     /// private: the intersection of every limit in force for it.
     pub(crate) fn nested_scope(&self, plugin: &str) -> Option<NestedScope> {
         let mut state = self.lock();
-        let now = Instant::now();
-        if let Some(lingering) = state.lingering.get_mut(plugin) {
-            lingering.retain(|(until, _)| *until > now);
-            if lingering.is_empty() {
-                state.lingering.remove(plugin);
-            }
-        }
+        state.reap(plugin, Instant::now());
         let active = state
             .active
             .get(plugin)
@@ -202,6 +209,8 @@ impl Drop for PrivateInvocationGuard {
                 .or_default()
                 .push((Instant::now() + linger, owners));
         }
+        // Expired entries go even if the plugin never calls back.
+        state.reap(&self.plugin, Instant::now());
     }
 }
 
@@ -268,6 +277,19 @@ mod tests {
         };
         drop(short.begin("moa", None));
         assert_eq!(short.nested_scope("moa"), None);
+    }
+
+    #[test]
+    fn expired_lingers_are_reaped_without_a_nested_call() {
+        let invocations = PrivateInvocations {
+            linger: Duration::ZERO,
+            ..PrivateInvocations::default()
+        };
+        for _ in 0..3 {
+            drop(invocations.begin("moa", None));
+        }
+        assert!(invocations.lock().lingering.is_empty());
+        assert!(invocations.lock().active.is_empty());
     }
 
     #[tokio::test]

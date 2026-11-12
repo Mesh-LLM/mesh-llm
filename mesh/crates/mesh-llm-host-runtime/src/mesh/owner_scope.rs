@@ -46,15 +46,13 @@ impl OwnerScope {
 
     /// Exactly these owners' nodes; no owners admits no peer at all.
     pub(crate) fn of(owner_ids: impl IntoIterator<Item = String>) -> Self {
-        let mut scope = Self {
-            owner_ids: Vec::new(),
-        };
-        for owner in owner_ids {
-            if !scope.owner_ids.contains(&owner) {
-                scope.owner_ids.push(owner);
-            }
+        let mut seen = HashSet::new();
+        Self {
+            owner_ids: owner_ids
+                .into_iter()
+                .filter(|owner| seen.insert(owner.clone()))
+                .collect(),
         }
-        scope
     }
 
     /// `owner_id`'s nodes and those of every owner in `trusted`.
@@ -72,11 +70,12 @@ impl OwnerScope {
     /// The owners in both scopes: a request limited by both reaches only
     /// their common nodes.
     pub(crate) fn intersect(&self, other: &OwnerScope) -> OwnerScope {
+        let other: HashSet<&String> = other.owner_ids.iter().collect();
         Self {
             owner_ids: self
                 .owner_ids
                 .iter()
-                .filter(|owner| other.owner_ids.contains(owner))
+                .filter(|owner| other.contains(owner))
                 .cloned()
                 .collect(),
         }
@@ -161,16 +160,25 @@ impl super::Node {
         use crate::inference::election::InferenceTarget;
         let in_scope = self.peers_in_scope(scope).await;
         let me = self.endpoint.id();
+        // A narrowed scope (a plugin's nested call) may leave out this
+        // node's own owner; then this node is out of scope too.
+        let me_in_scope = self
+            .local_verified_owner_id()
+            .await
+            .is_some_and(|owner| scope.owner_ids.contains(&owner));
         let leaky_splits: HashSet<String> = {
             let topologies = self.stage_topologies.lock().await;
             topologies
                 .topologies
                 .values()
                 .filter(|topology| {
-                    topology
-                        .stages
-                        .iter()
-                        .any(|stage| stage.node_id != me && !in_scope.contains(&stage.node_id))
+                    topology.stages.iter().any(|stage| {
+                        if stage.node_id == me {
+                            !me_in_scope
+                        } else {
+                            !in_scope.contains(&stage.node_id)
+                        }
+                    })
                 })
                 .map(|topology| topology.model_id.clone())
                 .collect()
@@ -180,7 +188,7 @@ impl super::Node {
             let local_leaks = leaky_splits.contains(model);
             hosts.retain(|target| match target {
                 InferenceTarget::Remote(peer) => in_scope.contains(peer),
-                InferenceTarget::Local(_) => !local_leaks,
+                InferenceTarget::Local(_) => me_in_scope && !local_leaks,
                 InferenceTarget::None => true,
             });
         }
