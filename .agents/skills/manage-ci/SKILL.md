@@ -705,6 +705,10 @@ selection may continue to publication without another native build or family
 matrix. This is the exception to the independent-pass requirements below.
 Unrecovered or invalid evidence still blocks publication. A new candidate or
 producer identity invalidates earlier receipts and requires fresh validation.
+The `retry_recovered` marker flows through attempt selection, the `result` job
+outputs and the publication input; the handoff gate admits the recovered
+`repair-*` package only when that marker is present, and ordinary candidates
+still require a `verify-*` package.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,
