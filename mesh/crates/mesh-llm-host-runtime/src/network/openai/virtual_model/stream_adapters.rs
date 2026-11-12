@@ -276,7 +276,7 @@ mod tests {
 
     fn chat_completion() -> Value {
         json!({
-            "id": "chatcmpl-moa-deadbeef",
+            "id": "chatcmpl-virtual-deadbeef",
             "object": "chat.completion",
             "created": 1_600_000_000,
             "model": "mesh",
@@ -379,7 +379,7 @@ mod tests {
         // id, both derived from the `created` timestamp the committed phase
         // baked into `response.created`.
         let mut body = chat_completion();
-        super::super::progress::align_committed_body(&mut body, "chatcmpl-moa-deadbeef", 42);
+        super::super::progress::align_committed_body(&mut body, "chatcmpl-virtual-deadbeef", 42);
 
         let events = responses_stream_events(
             &body,

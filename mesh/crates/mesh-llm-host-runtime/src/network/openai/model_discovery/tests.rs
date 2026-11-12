@@ -93,7 +93,15 @@ async fn passive_discovery_keeps_ocr_and_protocol_specific_shared_identity() {
     assert_eq!(filtered["data"].as_array().unwrap().len(), 2);
     let (status, compatibility) = request(node.clone(), "/v1/models", "").await;
     assert_eq!(status, 200);
-    assert_eq!(compatibility["data"].as_array().unwrap().len(), 2);
+    // The two chat models plus the automatic directive.
+    assert_eq!(compatibility["data"].as_array().unwrap().len(), 3);
+    assert!(
+        compatibility["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "mesh")
+    );
     assert!(
         compatibility["data"]
             .as_array()

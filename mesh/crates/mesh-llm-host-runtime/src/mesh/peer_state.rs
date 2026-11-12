@@ -367,6 +367,23 @@ pub(crate) fn resolve_peer_leaving(
         })?;
     Ok(EndpointId::from(pk))
 }
+/// Hosts that can serve one model right now, as seen from this node.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelPlacements {
+    /// This node serves the model and is accepting work.
+    pub local: bool,
+    /// Routable, unpaused, unblocked peers that advertise the model.
+    pub remote: Vec<EndpointId>,
+}
+
+impl ModelPlacements {
+    /// Number of hosts, never below one so a model without a visible placement
+    /// (fresh gossip, local target table not yet caught up) still gets a draw.
+    pub fn count(&self) -> usize {
+        (usize::from(self.local) + self.remote.len()).max(1)
+    }
+}
+
 impl Node {
     pub async fn mesh_catalog(&self) -> Vec<String> {
         // Snapshot each lock independently to avoid holding multiple locks.
@@ -472,6 +489,97 @@ impl Node {
         let mut result: Vec<String> = served.into_iter().collect();
         result.sort();
         result
+    }
+
+    /// Where each of `models` can be served right now: this node (when it is a
+    /// serving host whose local admission is not paused or withdrawn) plus the
+    /// routable, unpaused, unblocked peers that advertise the model. Automatic
+    /// routing weights a model's share by the capacity of these placements, so
+    /// a model on twenty hosts is drawn about twenty times as often as the
+    /// same-speed model on one host, instead of each *name* getting an equal
+    /// draw. Deprioritized peers stay placements: they still accept work.
+    pub async fn placements_for_models(
+        &self,
+        models: &[String],
+    ) -> std::collections::BTreeMap<String, ModelPlacements> {
+        use crate::proto::node::InferenceAdmissionState;
+        let local_serves = if matches!(*self.role.lock().await, NodeRole::Client) {
+            Vec::new()
+        } else {
+            let advertisement = self
+                .activity_policy_guard
+                .advertisement_decision(self.public_mesh);
+            if advertisement.withdraw_model_availability
+                || matches!(
+                    advertisement.admission_state,
+                    Some(
+                        InferenceAdmissionState::RemotePaused | InferenceAdmissionState::AllPaused
+                    )
+                )
+            {
+                Vec::new()
+            } else {
+                self.hosted_models.lock().await.clone()
+            }
+        };
+        let peers = self.routable_peers().await;
+        let state = self.state.lock().await;
+        let serving: Vec<&PeerInfo> = peers
+            .iter()
+            .filter(|p| is_routing_eligible(p, &state))
+            .filter(|p| {
+                !matches!(
+                    p.inference_admission_state,
+                    Some(
+                        InferenceAdmissionState::RemotePaused | InferenceAdmissionState::AllPaused
+                    )
+                )
+            })
+            .collect();
+        let now_ms = crate::network::peer_blocks::now_ms();
+        models
+            .iter()
+            .map(|model| {
+                let mut remote: Vec<EndpointId> = serving
+                    .iter()
+                    .filter(|p| routes_http_model(p, model))
+                    .map(|p| p.id)
+                    .collect();
+                self.peer_blocks.retain_unblocked(&mut remote, now_ms);
+                let placements = ModelPlacements {
+                    local: local_serves.iter().any(|m| m == model),
+                    remote,
+                };
+                (model.clone(), placements)
+            })
+            .collect()
+    }
+
+    /// Most recent direct RTT to `peer`, when this node has measured one.
+    pub async fn peer_rtt_ms(&self, peer: &EndpointId) -> Option<u32> {
+        self.state
+            .lock()
+            .await
+            .peers
+            .get(peer)
+            .and_then(|p| p.current_direct_rtt_ms())
+    }
+
+    /// Peers that accept inference only as spillover capacity.
+    pub(crate) async fn deprioritized_peer_ids(&self) -> std::collections::HashSet<EndpointId> {
+        use crate::proto::node::InferenceAdmissionState;
+        self.state
+            .lock()
+            .await
+            .peers
+            .values()
+            .filter(|peer| {
+                peer.is_admitted()
+                    && peer.inference_admission_state
+                        == Some(InferenceAdmissionState::AcceptingDeprioritized)
+            })
+            .map(|peer| peer.id)
+            .collect()
     }
 
     /// All host IDs serving a model, with a healthy hash-preferred host first.

@@ -341,3 +341,35 @@ fn pagination_rejects_stale_or_invalid_cursors_and_combines_filters() {
     .unwrap();
     assert!(empty.data.is_empty());
 }
+
+#[test]
+fn automatic_directive_is_listed_when_an_llm_is_available() {
+    let mut catalog = BTreeMap::new();
+    insert_automatic_directive(&mut catalog, "node");
+    assert!(!finish_model(catalog["mesh"].clone()).is_available_llm());
+
+    let mut catalog = BTreeMap::new();
+    let llm = model("qwen", ModelWorkloadClass::CausalGeneration);
+    catalog.insert(llm.id.clone(), llm);
+    insert_automatic_directive(&mut catalog, "node");
+    let models: Vec<_> = catalog.into_values().map(finish_model).collect();
+    let (status, body) = crate::network::openai::models_response(&models, "/v1/models", false);
+    assert_eq!(status, 200);
+    let ids: Vec<_> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|model| model["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["mesh", "qwen"]);
+}
+
+#[test]
+fn automatic_directive_keeps_a_plugin_registered_entry() {
+    let mut plugin = model("mesh", ModelWorkloadClass::CausalGeneration);
+    plugin.kind = MeshModelKind::Virtual;
+    plugin.providers[0].plugin = Some("mesh-moa".to_string());
+    let mut catalog = BTreeMap::from([("mesh".to_string(), plugin.clone())]);
+    insert_automatic_directive(&mut catalog, "node");
+    assert_eq!(catalog["mesh"], plugin);
+}
