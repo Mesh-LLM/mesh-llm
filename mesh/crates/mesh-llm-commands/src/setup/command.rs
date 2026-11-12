@@ -91,6 +91,9 @@ pub(crate) struct CliSetupActions<'a> {
     github_runner: Box<dyn GhCommandRunner>,
     pub(crate) service_outcome: SetupServiceOutcome,
     pub(crate) plugin_outcome: SetupPluginOutcome,
+    /// The installed-plugin check refused: some plugin is not known to run on
+    /// the host now installed.
+    pub(crate) plugin_check_refused: bool,
     pub(crate) github_outcome: SetupGitHubOutcome,
     verbose: bool,
 }
@@ -128,6 +131,7 @@ impl<'a> CliSetupActions<'a> {
             github_runner,
             service_outcome: SetupServiceOutcome::NotRequested,
             plugin_outcome: SetupPluginOutcome::NotRequested,
+            plugin_check_refused: false,
             github_outcome: SetupGitHubOutcome::NotEvaluated,
             verbose,
         }
@@ -280,6 +284,7 @@ impl SetupActions for CliSetupActions<'_> {
             let host_version = mesh_llm_build_info::RELEASE_VERSION;
             if let Err(error) = crate::update::check_installed_plugins_for_host(host_version).await
             {
+                self.plugin_check_refused = true;
                 let mut err = mesh_llm_events::console_err();
                 let _ = writeln!(
                     err,

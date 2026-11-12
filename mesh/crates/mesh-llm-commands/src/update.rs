@@ -73,7 +73,7 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         default_plugins_opted_out(),
         is_attended,
     );
-    apply_host_after_plugin_gate(&target_version, run_plugin_upgrade_checks, async || {
+    apply_host_after_plugin_gate(&target_version, async || {
         // Windows exits during installer handoff, so report notices and any
         // unfinished optional work before handing control to the installer.
         if is_attended && let Some(notices) = update_notices(&target_version).await {
@@ -148,15 +148,13 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Replace the host only after the plugin gate passes. The one place the
-/// order is decided, so the gate cannot be skipped by a caller reordering
-/// steps in [`run_update`].
+/// Replace the host only after the plugin gate passes. `run_update` reaches
+/// `apply` only through here, so the gate runs on every update.
 async fn apply_host_after_plugin_gate(
     target_version: &str,
-    gate: impl AsyncFnOnce(&str) -> Result<()>,
     apply: impl AsyncFnOnce() -> Result<()>,
 ) -> Result<()> {
-    gate(target_version).await?;
+    run_plugin_upgrade_checks(target_version).await?;
     apply().await
 }
 
@@ -223,6 +221,7 @@ impl PluginProgressReporter for UpdatePluginProgress {
 #[cfg(test)]
 mod tests {
     use super::{apply_host_after_plugin_gate, validate_plugin_set_handoff};
+    use crate::plugin_upgrade_test_support::{with_plugin_store, write_plugin};
 
     #[test]
     fn an_explicit_set_cannot_be_discarded_by_windows_installer_handoff() {
@@ -241,39 +240,48 @@ mod tests {
         assert!(validate_plugin_set_handoff(Some("extra"), false).is_ok());
     }
 
-    #[tokio::test]
-    async fn the_host_is_replaced_only_after_the_plugin_gate_passes() {
-        let log = std::cell::RefCell::new(Vec::<String>::new());
-        apply_host_after_plugin_gate(
-            "0.81.0",
-            async |version| {
-                log.borrow_mut().push(format!("gate {version}"));
-                Ok(())
-            },
-            async || {
-                log.borrow_mut().push("apply".to_string());
-                Ok(())
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(*log.borrow(), ["gate 0.81.0", "apply"]);
+    #[test]
+    #[serial_test::serial]
+    fn the_host_is_not_replaced_while_an_installed_plugin_cannot_run_on_it() {
+        with_plugin_store(|store| {
+            write_plugin(store, "0.1.0", Some("0.5.0"));
+            let applied = std::cell::Cell::new(false);
+            let result =
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(apply_host_after_plugin_gate(
+                        mesh_llm_build_info::RELEASE_VERSION,
+                        async || {
+                            applied.set(true);
+                            Ok(())
+                        },
+                    ));
+            let error = result.expect_err("an unrepairable plugin must refuse the upgrade");
+            assert!(
+                error.to_string().contains("Upgrade not applied"),
+                "{error:#}"
+            );
+            assert!(!applied.get(), "host replaced despite a refused gate");
+        });
     }
 
-    #[tokio::test]
-    async fn a_refused_plugin_gate_leaves_the_host_unreplaced() {
-        let applied = std::cell::Cell::new(false);
-        let error = apply_host_after_plugin_gate(
-            "0.81.0",
-            async |_| anyhow::bail!("plugin lexe could not be repaired"),
-            async || {
-                applied.set(true);
-                Ok(())
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("could not be repaired"));
-        assert!(!applied.get(), "host replaced despite a refused gate");
+    #[test]
+    #[serial_test::serial]
+    fn the_host_is_replaced_when_installed_plugins_pass_the_gate() {
+        with_plugin_store(|store| {
+            write_plugin(store, "0.1.0", None);
+            let applied = std::cell::Cell::new(false);
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(apply_host_after_plugin_gate(
+                    mesh_llm_build_info::RELEASE_VERSION,
+                    async || {
+                        applied.set(true);
+                        Ok(())
+                    },
+                ))
+                .unwrap();
+            assert!(applied.get());
+        });
     }
 }

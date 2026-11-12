@@ -46,10 +46,19 @@ where
     if skip { None } else { check().await }
 }
 
+/// The automatic update at node start. It owes installed plugins the same
+/// check and repairs `mesh-llm update` runs before it replaces the host, so
+/// the only way to reach `maybe_auto_update` here is with that gate.
+pub(super) async fn auto_update_with_plugin_gate(
+    options: autoupdate::AutoUpdateOptions,
+) -> anyhow::Result<bool> {
+    autoupdate::maybe_auto_update(options, auto_update_plugin_gate).await
+}
+
 /// The plugin compatibility check and repairs `mesh-llm update` runs before
 /// it replaces the host, run here before an automatic update does. A refusal
 /// keeps the running host, so the node starts on the version it has.
-pub(super) async fn auto_update_plugin_gate(target_version: &str) -> anyhow::Result<()> {
+async fn auto_update_plugin_gate(target_version: &str) -> anyhow::Result<()> {
     mesh_llm_plugin_manager::upgrade_gate::check_and_repair_installed_plugins(
         target_version,
         mesh_llm_plugin::PROTOCOL_VERSION,
@@ -126,5 +135,61 @@ mod tests {
         })
         .await;
         assert_eq!(notice.map(|notice| notice.message).as_deref(), Some("new"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_auto_update_gate_refuses_a_plugin_the_target_host_cannot_run() {
+        let store = tempfile::tempdir().unwrap();
+        let path = store.path().to_str().unwrap().to_string();
+        let gate = |plugin_max: Option<&str>| {
+            let plugins = mesh_llm_plugin_manager::PluginStore::new(store.path());
+            for existing in plugins.list().unwrap() {
+                std::fs::remove_dir_all(plugins.root().join(&existing.name)).ok();
+            }
+            plugins
+                .save(&mesh_llm_plugin_manager::InstalledPluginMetadata {
+                    name: "lexe".into(),
+                    source_repository: "https://github.com/mesh-llm/lexe".into(),
+                    installed_version: "v1.0.0".into(),
+                    target_triple: mesh_llm_plugin_manager::PluginTarget::current()
+                        .unwrap()
+                        .triple()
+                        .into(),
+                    downloaded_asset_name: "lexe.tar.gz".into(),
+                    install_path: store.path().join("lexe"),
+                    enabled: true,
+                    default_managed: false,
+                    host_compatibility: Some(mesh_llm_plugin_manager::HostCompatibility {
+                        min: Some("0.1.0".into()),
+                        max: plugin_max.map(str::to_string),
+                    }),
+                    allowed_surfaces: None,
+                    manifest: None,
+                    last_protocol_version: Some(mesh_llm_plugin::PROTOCOL_VERSION),
+                    last_status: None,
+                    last_error: None,
+                    verified_sha256: None,
+                })
+                .unwrap();
+            // Nothing listens on the catalog, so the gate decides from what
+            // the installed record retained and never reaches the network.
+            mesh_llm_config::with_env_override_for_test("MESH_LLM_PLUGIN_DIR", &path, || {
+                mesh_llm_config::with_env_override_for_test(
+                    "MESH_LLM_PLUGIN_CATALOG_URL",
+                    "http://127.0.0.1:1/plugins.jsonl",
+                    || {
+                        tokio::runtime::Runtime::new()
+                            .unwrap()
+                            .block_on(auto_update_plugin_gate("0.81.0"))
+                    },
+                )
+            })
+        };
+        assert!(
+            gate(Some("0.5.0")).is_err(),
+            "incompatible plugin not refused"
+        );
+        assert!(gate(None).is_ok(), "compatible plugin was refused");
     }
 }
