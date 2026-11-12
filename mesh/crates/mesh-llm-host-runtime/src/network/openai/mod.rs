@@ -26,3 +26,6 @@ pub(crate) mod transport;
 pub(crate) mod virtual_model;
 
 pub(crate) mod workload_routing;
+
+#[cfg(test)]
+mod channel_admission_tests;

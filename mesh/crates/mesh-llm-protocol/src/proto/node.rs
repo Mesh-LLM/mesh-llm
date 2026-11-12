@@ -126,12 +126,23 @@ pub struct NodeRecord {
     pub admission_state: i32,
     #[prost(message, repeated, tag = "21")]
     pub throughput: ::prost::alloc::vec::Vec<AdvertisedModelThroughput>,
+    /// Original pre-plugin gate messages, retained opaquely for old readers.
+    /// Message and bytes fields have the same length-delimited wire encoding.
+    #[prost(bytes = "vec", repeated, tag = "22")]
+    pub legacy_lightning_offers: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag = "23")]
     pub owner_attestation: ::core::option::Option<SignedNodeOwnership>,
     #[prost(message, optional, tag = "24")]
     pub genesis_policy: ::core::option::Option<SignedMeshGenesisPolicy>,
     #[prost(message, optional, tag = "25")]
     pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
+}
+/// Decode-only projection of the old LightningOffer wire message. Prices,
+/// invoice settings and payment protocol details are intentionally not read.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LegacyModelGate {
+    #[prost(string, tag = "1")]
+    pub model: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TransportAddr {
@@ -285,6 +296,10 @@ pub struct PeerAnnouncement {
     /// verify independently.
     #[prost(message, optional, tag = "51")]
     pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
+    /// Original pre-plugin gate messages. Read only the LegacyModelGate projection
+    /// for admission; relay every other byte unchanged so old readers keep the gate.
+    #[prost(bytes = "vec", repeated, tag = "52")]
+    pub legacy_lightning_offers: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     /// Public keys plugins on this node sign with, each bound to this node's key;
     /// see `PluginKey`. At most 16, one per plugin.
     #[prost(message, repeated, tag = "53")]

@@ -954,6 +954,7 @@ pub(crate) fn local_ann_to_proto_ann(
         serialized_addr,
         hosted_models: ann.hosted_models.clone().unwrap_or_default(),
         hosted_models_known: Some(ann.hosted_models.is_some()),
+        legacy_lightning_offers: served_descriptors::relay_legacy_model_gates(&ann),
         served_model_identities,
         served_model_descriptors,
         served_model_runtime,
@@ -1306,7 +1307,7 @@ pub(crate) fn proto_ann_to_local(
             .as_ref()
             .and_then(proto_claimed_log_head_to_local),
     };
-    served_descriptors::restore_served_descriptors(pa, &mut ann);
+    served_descriptors::restore_served_descriptors(pa, &mut ann)?;
     ann.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&ann);
     ann.cache_affinity = sanitize_cache_affinity_for_ann(&ann);
     Some((addr, ann))

@@ -43,6 +43,7 @@ pub(crate) fn node_record_from_wire_ann(
         subprotocols: ann.subprotocols.clone(),
         admission_state: ann.inference_admission_state.unwrap_or_default(),
         throughput: ann.advertised_model_throughput.clone(),
+        legacy_lightning_offers: ann.legacy_lightning_offers.clone(),
         owner_attestation: ann.owner_attestation.clone(),
         genesis_policy: ann.genesis_policy.clone(),
         release_attestation: ann.release_attestation.clone(),
@@ -80,6 +81,7 @@ pub(crate) fn node_record_to_local(
             .filter_map(|descriptor| descriptor.identity.clone())
             .collect(),
         served_model_runtime: record.served_runtime.clone(),
+        legacy_lightning_offers: record.legacy_lightning_offers.clone(),
         owner_attestation: record.owner_attestation.clone(),
         hardware: record.hardware.clone(),
         first_joined_mesh_ts: record.first_joined_mesh_ts,
