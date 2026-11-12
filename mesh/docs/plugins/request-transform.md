@@ -103,6 +103,14 @@ Messages documents inside `tool_result` content, which Claude Code's Read tool
 sends for PDFs, are normalized the same way inside the resulting `tool`
 message.
 
+Parts made from a flat Responses `input_file` or a Messages `document` also
+carry `"mesh_requires_transform": true`. These forms were rejected before
+request transforms existed, and they still are when none converts them: if a
+part with this flag is left after every transform has run (or no plugin
+declares one), the request fails with `400`. A transform handles one by
+replacing the part, for example with text. Chat `file` parts and nested
+Responses `input_file` parts have no flag and reach the backend as before.
+
 ## Not covered yet
 
 - The client-only `mesh-client` crate keeps its own Responses parser. It has

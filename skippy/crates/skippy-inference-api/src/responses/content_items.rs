@@ -81,11 +81,13 @@ pub(super) fn translate_responses_content_item(item: &Value) -> Result<Value, In
         "input_file" | "file" => {
             // OpenAI's own Responses form is flat: `file_data`, `file_id` or
             // `file_url` beside `type`; older clients nest a container.
-            let mut container = object_or_url_container(
+            let nested = object_or_url_container(
                 object.get("input_file").or_else(|| object.get("file")),
                 object.get("url").and_then(Value::as_str),
-            )
-            .unwrap_or_default();
+            );
+            // Only the nested form was accepted before request transforms.
+            let flat = nested.is_none();
+            let mut container = nested.unwrap_or_default();
             for key in [
                 "file_data",
                 "file_id",
@@ -119,7 +121,11 @@ pub(super) fn translate_responses_content_item(item: &Value) -> Result<Value, In
                     "responses input_file block is missing file_data/file_id/file_url/url",
                 ));
             }
-            Ok(serde_json::json!({"type": "input_file", "input_file": container}))
+            let mut part = serde_json::json!({"type": "input_file", "input_file": container});
+            if flat {
+                part[crate::generation::REQUIRES_TRANSFORM_KEY] = Value::Bool(true);
+            }
+            Ok(part)
         }
         other => Err(InferenceError::unsupported(format!(
             "unsupported /v1/responses content block type '{other}'"
@@ -154,6 +160,11 @@ mod tests {
             let part = translate_responses_content_item(&item).unwrap();
             assert_eq!(part["type"], "input_file");
             assert_eq!(part["input_file"][key], value, "{item}");
+            assert_eq!(
+                part[crate::generation::REQUIRES_TRANSFORM_KEY],
+                true,
+                "{item}"
+            );
         }
         let part = translate_responses_content_item(
             &json!({"type": "input_file", "filename": "a.pdf", "file_data": "x"}),
@@ -171,6 +182,10 @@ mod tests {
         .unwrap();
         assert_eq!(part["input_file"]["url"], "data:text/plain;base64,aGVsbG8=");
         assert_eq!(part["input_file"]["file_name"], "hello.txt");
+        assert!(
+            part.get(crate::generation::REQUIRES_TRANSFORM_KEY)
+                .is_none()
+        );
     }
 
     #[test]

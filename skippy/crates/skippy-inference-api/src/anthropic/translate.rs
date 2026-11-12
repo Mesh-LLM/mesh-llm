@@ -18,7 +18,7 @@ use crate::common::{PromptCacheRetention, ReasoningConfig, ReasoningEffort};
 use crate::errors::InferenceError;
 use crate::generation::{
     GenerationEvent, GenerationMessage, GenerationRequest, GenerationResponse, MessageContent,
-    MessageContentPart,
+    MessageContentPart, REQUIRES_TRANSFORM_KEY,
 };
 
 /// Anthropic stop reasons. `refusal` maps from the OpenAI content-filter
@@ -485,7 +485,10 @@ fn document_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
     Ok(MessageContentPart {
         content_type: "input_file".into(),
         text: None,
-        extra: BTreeMap::from([("input_file".into(), Value::Object(file))]),
+        extra: BTreeMap::from([
+            ("input_file".into(), Value::Object(file)),
+            (REQUIRES_TRANSFORM_KEY.into(), json!(true)),
+        ]),
     })
 }
 

@@ -715,6 +715,7 @@ async fn rewrite_request_body_for_forwarding(
             body_json,
         )
         .await?;
+        plugin_transform::reject_parts_needing_transform(body_json)?;
         if !(changed || transformed) {
             return Ok((transformed, None));
         }

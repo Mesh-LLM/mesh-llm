@@ -563,6 +563,9 @@ fn pdf_documents_become_input_file_parts() {
         json!({"file_url": "https://example.com/a.pdf"})
     );
     assert_eq!(parts[3], json!({"type": "text", "text": "summarize"}));
+    for part in &parts[..3] {
+        assert_eq!(part[REQUIRES_TRANSFORM_KEY], true, "{part}");
+    }
 }
 
 #[test]
@@ -587,6 +590,7 @@ fn documents_inside_tool_results_are_kept() {
         tool["content"][0]["input_file"]["file_data"],
         "data:application/pdf;base64,JVBERi0="
     );
+    assert_eq!(tool["content"][0][REQUIRES_TRANSFORM_KEY], true);
 }
 
 #[test]

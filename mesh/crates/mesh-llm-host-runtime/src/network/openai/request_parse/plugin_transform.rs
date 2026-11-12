@@ -7,7 +7,8 @@
 //! already transformed there, so its ingress skips them.
 
 use crate::plugin;
-use anyhow::Result;
+use anyhow::{Result, bail};
+use skippy_inference_api::REQUIRES_TRANSFORM_KEY;
 
 /// Whether this ingress runs plugin request transforms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +58,30 @@ pub(super) async fn apply_request_transforms(
         }
         _ => Ok(false),
     }
+}
+
+/// Reject a request that still holds an attachment only a transform can use
+/// (an Anthropic `document` or a flat Responses `input_file`). These were
+/// rejected before transforms existed, so without a plugin that converts them
+/// they still are, instead of reaching a backend that would answer without
+/// them.
+pub(super) fn reject_parts_needing_transform(body: &serde_json::Value) -> Result<()> {
+    let needs_transform = body
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("content")?.as_array())
+        .flatten()
+        .any(|part| {
+            part.get(REQUIRES_TRANSFORM_KEY)
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        });
+    if needs_transform {
+        bail!("document attachments need a request transform plugin to convert them to text");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -226,6 +251,92 @@ mod tests {
         assert!(
             format!("{error:#}").contains("transformed request body exceeds"),
             "{error:#}"
+        );
+    }
+
+    async fn read_without_plugins(
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<super::super::BufferedHttpRequest> {
+        let body = body.to_string();
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        client.write_all(request.as_bytes()).await.unwrap();
+        super::super::read_http_request_with_limits_with_context(
+            &mut server,
+            super::super::HTTP_READ_LIMITS,
+            None,
+            RequestTransforms::Apply,
+        )
+        .await
+        .map_err(super::super::OpenAiRequestReadError::into_error)
+    }
+
+    fn pdf_document() -> serde_json::Value {
+        json!({"type": "document", "source":
+            {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}})
+    }
+
+    #[tokio::test]
+    async fn documents_without_a_transform_are_rejected_as_before() {
+        let messages = json!({"model": "m", "max_tokens": 16, "messages": [
+            {"role": "user", "content": [pdf_document(), {"type": "text", "text": "summarize"}]}
+        ]});
+        let tool_result = json!({"model": "m", "max_tokens": 16, "messages": [
+            {"role": "user", "content": "read it"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": [pdf_document()]}]}
+        ]});
+        let flat_file = json!({"model": "m", "input": [{"role": "user", "content": [
+            {"type": "input_file", "file_data": "data:application/pdf;base64,JVBERi0="},
+            {"type": "input_text", "text": "summarize"}
+        ]}]});
+        for (path, body) in [
+            ("/v1/messages", messages),
+            ("/v1/messages", tool_result),
+            ("/v1/responses", flat_file),
+        ] {
+            let error = read_without_plugins(path, body).await.unwrap_err();
+            assert!(
+                format!("{error:#}").contains("need a request transform plugin"),
+                "{path}: {error:#}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn files_accepted_before_transforms_still_pass_without_one() {
+        let nested_file = json!({"model": "m", "input": [{"role": "user", "content": [
+            {"type": "input_file", "input_file": {"url": "data:text/plain;base64,aGVsbG8="}},
+            {"type": "input_text", "text": "summarize"}
+        ]}]});
+        let request = read_without_plugins("/v1/responses", nested_file)
+            .await
+            .unwrap();
+        let body = forwarded_body(&request);
+        assert_eq!(body["messages"][0]["content"][0]["type"], "input_file");
+        assert!(
+            body["messages"][0]["content"][0]
+                .get(REQUIRES_TRANSFORM_KEY)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transform_that_converts_documents_lets_them_through() {
+        let manager = stamping_manager().await;
+        let messages = json!({"model": "m", "max_tokens": 16, "messages": [
+            {"role": "user", "content": [pdf_document(), {"type": "text", "text": "summarize"}]}
+        ]});
+        let request = read("/v1/messages", messages, &manager, RequestTransforms::Apply).await;
+        assert_eq!(
+            forwarded_body(&request)["messages"][0]["content"],
+            "/v1/messages via /v1/chat/completions"
         );
     }
 
