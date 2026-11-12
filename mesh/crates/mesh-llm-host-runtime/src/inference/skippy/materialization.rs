@@ -20,8 +20,8 @@ pub use cache_management::{
 };
 pub use package_download::{
     StagePackageRef, download_package_v2_to_local, is_layer_package_ref,
-    resolve_hf_package_to_local, resolve_package_v2_full_model_to_local,
-    resolve_package_v2_stage_to_local,
+    resolve_hf_package_to_local, resolve_hf_package_upstream_to_local,
+    resolve_package_v2_full_model_to_local, resolve_package_v2_stage_to_local,
 };
 
 pub fn configure_materialized_stage_cache() {
