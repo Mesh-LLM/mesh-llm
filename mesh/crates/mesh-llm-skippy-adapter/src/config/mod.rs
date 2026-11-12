@@ -24,6 +24,9 @@ mod tests;
 mod speculative_tests;
 
 #[cfg(test)]
+mod dflash_drafts_tests;
+
+#[cfg(test)]
 mod exact_head_tests;
 
 #[cfg(test)]
@@ -32,6 +35,8 @@ mod hardware_tests;
 #[cfg(test)]
 mod hardware_translation_tests;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use dflash::with_default_dflash_drafts;
 pub use dflash_catalog::{
     DFlashBackends, DFlashDraft, DFlashPairing, DFlashPairingIndex, DFlashPairingSource,
     DFlashTarget, DefaultDFlash, check_split_dflash_draft, dflash_draft_cache_path,

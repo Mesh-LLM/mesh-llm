@@ -285,8 +285,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 Successful same-candidate infrastructure reconciliation emits
 `retry_recovered=true`. In that case `verify_1`, `verify_2`, and `verify_3`
 skip their native builds and complete family matrices; selection retains the
-certified package and can continue to publication. This retry exception also
-applies to explicit selected-source publication. Other candidates retain the
+certified package and can continue to publication. The `retry_recovered`
+marker flows through attempt selection, the `result` job outputs and the
+publication input; the handoff gate admits the recovered `repair-*` package
+only when that marker is present. Explicit selected-source publication
+still requires the unchanged independent `verify-1` package; the recovery
+marker is not propagated on that path. Other candidates retain the
 independent-pass requirements described below, and changed producer identities
 cannot reuse prior receipts.
 
@@ -1129,7 +1133,10 @@ model cadence, device gates and protected action references remain unchanged.
   backend-independent, so another backend would buy a duplicate of the same
   evidence.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
-  that join only their matching immutable host and runtime artifacts.
+  that join only their matching immutable host and runtime artifacts. The
+  Windows row also runs the release packager (`package-release.ps1` in its
+  pre-stamped/pre-verified mode) on the composed product, so release-only
+  native-path failures surface in CI instead of hours into a release run.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   focused Windows log-store privacy ACL checks, and the Windows CPU native
   Skippy probes (`windows-skippy-probes`, #2222 item 2). That row is selected
@@ -1380,12 +1387,7 @@ Every product has three immutable layers:
 
 `compose-product-input` verifies checksums, manifests and host import policy,
 then composes exact producer bytes without compiling or substituting inputs.
-In release, `scripts/package-release.sh` then adds `plugins/` to the macOS and
-Linux bundles: the default plugin archives the host pins, downloaded from each
-plugin's own GitHub release and checked against the pinned SHA-256, after
-which the bundle's own host must install each one as a default
-(`repository bundled-plugins` and `repository bundled-plugins-check`; see
-`RELEASE.md`). Nothing builds those plugins in this repository.
+Nothing builds those plugins in this repository.
 Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.
@@ -2136,7 +2138,9 @@ project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
 selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
 state directory and uses the prepared SDK interpreter when available, otherwise
 the installed `python3`. Interpreter downloads are disabled. Both upstream
-Jinja and FP8 conversion tests remain selected by the complete native suite. The lock requires Python 3.12 or newer and includes NumPy, PyTorch, Safetensors and Transformers. The optional developer
+Jinja and FP8 conversion tests remain selected by the complete native suite.
+The locked environment requires Python 3.12 or newer and includes NumPy,
+PyTorch, Safetensors and Transformers. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 

@@ -1,11 +1,11 @@
-use super::{Cli, Command};
+use super::{Cli, Command, UninstallArgs};
 use clap::Parser;
 
 #[test]
 fn uninstall_defaults_to_confirming_real_changes() {
     let cli = Cli::parse_from(["mesh-llm", "uninstall"]);
 
-    let Some(Command::Uninstall {
+    let Some(Command::Uninstall(UninstallArgs {
         dry_run,
         yes,
         keep_cache,
@@ -15,7 +15,7 @@ fn uninstall_defaults_to_confirming_real_changes() {
         binary_path,
         json,
         verbose,
-    }) = cli.command
+    })) = cli.command
     else {
         panic!("expected uninstall command");
     };
@@ -47,7 +47,7 @@ fn uninstall_accepts_automation_flags() {
         "--verbose",
     ]);
 
-    let Some(Command::Uninstall {
+    let Some(Command::Uninstall(UninstallArgs {
         dry_run,
         yes,
         keep_cache,
@@ -57,7 +57,7 @@ fn uninstall_accepts_automation_flags() {
         binary_path,
         json,
         verbose,
-    }) = cli.command
+    })) = cli.command
     else {
         panic!("expected uninstall command");
     };
@@ -80,11 +80,11 @@ fn uninstall_accepts_automation_flags() {
 fn uninstall_accepts_purge_config() {
     let cli = Cli::parse_from(["mesh-llm", "uninstall", "--purge-config"]);
 
-    let Some(Command::Uninstall {
+    let Some(Command::Uninstall(UninstallArgs {
         purge_config,
         keep_config,
         ..
-    }) = cli.command
+    })) = cli.command
     else {
         panic!("expected uninstall command");
     };

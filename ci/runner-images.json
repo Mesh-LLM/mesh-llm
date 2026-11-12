@@ -489,6 +489,19 @@
         }
       ]
     },
+    "dflash-drafts-publish": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "dflash-drafts-publish.yml",
+          "job": "publish",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
     "scripted-binary-smoke": {
       "image_id": "public-cpu",
       "scope": "ordinary",

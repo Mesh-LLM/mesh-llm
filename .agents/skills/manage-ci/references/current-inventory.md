@@ -136,6 +136,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; grants `packages: read` to pull its pinned GHCR runner image; workflow-commit controller validates locked historical metadata and the source's literal roster through Rust, then publishes from the immutable release source |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `dflash-pairings-publish.yml` (`Publish DFlash pairing index`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**`, dispatch on `main` | Publishes the checked-in DFlash pairing index to Hugging Face `meshllm/dflash-pairings` with `HF_TOKEN`: uploads `index/<sha256>.json` only when absent (never overwritten or deleted; an existing copy must hash to its name), refreshes the human-facing root `index.json` and `README.md`, then re-downloads and hashes the published file. Releases pin the index by `DFLASH_PAIRING_INDEX_SHA256`. GitHub-hosted with the pinned `public cpu` image for the `hf` CLI; one non-cancelling concurrency group per commit, so no pending publication is replaced; only the run whose pairings still match `main` refreshes the root copies |
+| `dflash-drafts-publish.yml` (`Publish DFlash draft conversions`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/**`, dispatch on `main` | Converts each DFlash draft in the checked-in manifest that is not yet on Hugging Face and uploads it to its `meshllm/` repo with `HF_TOKEN`. Sources are fetched by revision; `cargo xtool models dflash-draft-convert` (Rust, no Python) hashes every source file against the manifest, converts, and keeps the output only when it matches the entry's SHA-256 and size. Nothing is overwritten: an existing file must already hash to the manifest, and the target is re-checked with the token before upload. GitHub-hosted with the pinned `public cpu` image (Rust, git, jq, `hf` CLI) and `prepare-automation`; the token reaches only the upload step; one global non-cancelling concurrency group serializes runs (a replaced pending run loses nothing: each run publishes every unpublished draft in its manifest) |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
@@ -191,8 +192,12 @@ source SHA, and uploads the reproducible failure log.
 Successful same-candidate infrastructure reconciliation emits
 `retry_recovered=true`. In that case `verify_1`, `verify_2`, and `verify_3`
 skip their native builds and complete family matrices; selection retains the
-certified package and can continue to publication. This retry exception also
-applies to explicit selected-source publication. Other candidates retain the
+certified package and can continue to publication. The `retry_recovered`
+marker flows through attempt selection, the `result` job outputs and the
+publication input; the handoff gate admits the recovered `repair-*` package
+only when that marker is present. Explicit selected-source publication
+still requires the unchanged independent `verify-1` package; the recovery
+marker is not propagated on that path. Other candidates retain the
 independent-pass requirements described below, and changed producer identities
 cannot reuse prior receipts.
 
@@ -743,10 +748,11 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `mesh/website` | `public ui`, `public browser`, existing `public web`, respectively |
 | `website-pages.yml` | `build` | `public web` |
 | `dflash-pairings-publish.yml` | `publish` | `public cpu`, sha256:f499b79b... -- unconditional, no bare-metal row |
+| `dflash-drafts-publish.yml` | `publish` | `public cpu`, sha256:f499b79b... -- unconditional, no bare-metal row |
 | `nightly-stability-run.yml` | `stability` | `public cpu`, the image `prepare-automation` verifies (also bakes the node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
-| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit; packaging also fetches the pinned default-plugin archives from their GitHub releases (curl, HTTPS only) and checks them against the pins |
+| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit |
 
 `public cpu` and `public web` are separate image builds (the latter adds
 `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
@@ -921,7 +927,10 @@ continue to compose normally. Seven call sites:
 Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
 directory is preserved; otherwise the action uses the job's runner temporary
-directory. Missing GHA endpoints retain the existing disk-only fallback.
+directory. Missing GHA endpoints, or a missing `ACTIONS_RUNTIME_TOKEN`, retain the
+existing disk-only fallback; shell steps on some runners (notably Depot PR jobs)
+receive the endpoints without the runtime token, so sccache cannot start its GHA
+backend there.
 The action eagerly starts sccache on a unique short Unix socket in both disk-only
 and remote-cache modes, before any parallel compiler clients, and exports that
 endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
@@ -1055,11 +1064,8 @@ Release host producers use `upload-automation` to publish one immutable xtask
 per OS/architecture and source SHA. Every release composer has its host producer
 in `needs` and uses `restore-automation` to verify checksums/source identity and
 export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap.
-Composition is not fully offline: on macOS and Linux, `package-release.sh`
-fetches each default plugin archive the host pins (`repository bundled-plugins`)
-from that plugin's GitHub release over HTTPS, checks it against the pinned
-SHA-256, places it under `plugins/`, and runs `repository bundled-plugins-check`
-with the composed host. The shared
+Composition is fully offline: `package-release.sh` places no plugins in any
+bundle. The shared
 artifact actions remain reusable; L2 bare-hosted callers use hosted-bare preparation.
 Windows release composers no longer use `prepare-automation`; the release workflow has
 no setup-python steps. Runtime-package verification embeds the GLIBC policy
@@ -1762,7 +1768,9 @@ project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
 selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
 state directory and uses the prepared SDK interpreter when available, otherwise
 the installed `python3`. Interpreter downloads are disabled. Both upstream
-Jinja and FP8 conversion tests remain selected by the complete native suite. The lock requires Python 3.12 or newer and includes NumPy, PyTorch, Safetensors and Transformers. The optional developer
+Jinja and FP8 conversion tests remain selected by the complete native suite.
+The locked environment requires Python 3.12 or newer and includes NumPy,
+PyTorch, Safetensors and Transformers. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 

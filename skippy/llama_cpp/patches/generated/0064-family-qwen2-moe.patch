@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
-index bbfbbe3c5bd365950b174cd7c14928ddd553b76e..417e8c203d14d5be23418ebb22115b6a5491833e 100644
+index 256c91a8f209364616dc3ea9aafbf6ff9f62809a..f851bb076aae95a35af921fc2c0e0fe040d3c85d 100644
 --- a/src/models/qwen2moe.cpp
 +++ b/src/models/qwen2moe.cpp
-@@ -84,6 +84,8 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -84,6 +84,8 @@ llama_model_qwen2moe::graph::graph(const llm_graph_params & params) : llm_graph_
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index bbfbbe3c5bd365950b174cd7c14928ddd553b76e..417e8c203d14d5be23418ebb22115b6a
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -177,6 +179,7 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -168,6 +170,7 @@ llama_model_qwen2moe::graph::graph(const llm_graph_params & params) : llm_graph_
  
          // input for next layer
          inpL = cur;

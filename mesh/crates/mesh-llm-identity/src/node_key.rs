@@ -206,11 +206,6 @@ fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), CryptoError> 
         file.sync_all()?;
         drop(file);
 
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
-
         std::fs::rename(&tmp_path, path)?;
 
         #[cfg(unix)]
@@ -232,6 +227,61 @@ fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), CryptoError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacing_a_node_key_never_leaves_it_missing_for_a_reader() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+        let path = Arc::new(temp_node_key_path());
+        write_bytes_atomically(&path, b"first").unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        // Set once the first replacement is done; only reads started after it
+        // count, so a counted read overlaps the replacements.
+        let replacing = Arc::new(AtomicBool::new(false));
+        let reads_during = Arc::new(AtomicU32::new(0));
+        let reader = {
+            let (path, done, replacing, reads_during) = (
+                Arc::clone(&path),
+                Arc::clone(&done),
+                Arc::clone(&replacing),
+                Arc::clone(&reads_during),
+            );
+            std::thread::spawn(move || {
+                let mut missing = 0u32;
+                while !done.load(Ordering::SeqCst) {
+                    let started_during = replacing.load(Ordering::SeqCst);
+                    if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        missing += 1;
+                    }
+                    if started_during {
+                        reads_during.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                missing
+            })
+        };
+        write_bytes_atomically(&path, b"replaced").unwrap();
+        replacing.store(true, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while reads_during.load(Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader never read during the replacements"
+            );
+            std::thread::yield_now();
+        }
+        for _ in 1..200 {
+            write_bytes_atomically(&path, b"replaced").unwrap();
+        }
+        done.store(true, Ordering::SeqCst);
+        assert_eq!(
+            reader.join().unwrap(),
+            0,
+            "a reader found no file mid-replace"
+        );
+    }
 
     fn temp_node_key_path() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mesh-node-key-{}", rand::random::<u64>()));

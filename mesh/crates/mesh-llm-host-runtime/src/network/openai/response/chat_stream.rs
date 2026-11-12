@@ -1,7 +1,7 @@
 use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
 use super::common::{
-    ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
-    sse_data_frame_is_openai_error,
+    CommittedStreamFailureCause, ResponseRetryPolicy, RouteAttemptResult,
+    parse_token_usage_from_json_body, sse_data_frame_is_openai_error,
 };
 use super::probe::{
     ResponseProbe, append_capsule_nonce_headers, append_mesh_request_id_header,
@@ -306,11 +306,9 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
         // never sent [DONE]: report the failure reason it carried rather than
         // a generic incomplete-stream truncation.
         route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::Delivered {
+        return Ok(RouteAttemptResult::CommittedStreamFailure {
             status_code: 200,
-            usage: None,
-            cache_cost: None,
-            output_digests: Default::default(),
+            cause: CommittedStreamFailureCause::BackendError,
         });
     }
     if !state.done_seen {

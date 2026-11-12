@@ -1,0 +1,609 @@
+From a071d1256173acfeff6fcd4181f123a4af4f9ea7 Mon Sep 17 00:00:00 2001
+From: AjHomelab <31621065+Ajay9o9@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 07:03:22 +1100
+Subject: [PATCH] dflash : add DSpine draft model support
+
+Imported from Ajay9o9/llama.cpp@dspine (d493f841b) into the mesh-llm patch
+queue, with a zero-lattice fallback for probe/chunked (non-block-shaped)
+batches so the nextn readout stays defined, and a docs/speculative.md
+section for the DFlash2-detected DSpine path.
+
+Review hardening on top of the import:
+
+- the bridge write and the lattice skip (rather than GGML_ASSERT-abort)
+  unified-KV batches whose sequences are not block-aligned;
+- the lattice requires an exact block_size batch, so a microbatch that
+  splits the noise block yields an empty lattice (wasted round) instead
+  of a mispacked one;
+- the refinement table applies the output scale and any output-head
+  LoRA, matching the adapter-inclusive logits the walker selects from;
+- the docs section records the local-download conversion flow and the
+  --spec-draft-n-ubatch >= block size requirement.
+---
+ conversion/qwen.py             |  80 +++++++++++++
+ docs/speculative.md            |  40 +++++++
+ gguf-py/gguf/constants.py      |  18 +++
+ gguf-py/gguf/tensor_mapping.py |  24 ++++
+ src/llama-arch.cpp             |  12 ++
+ src/llama-arch.h               |   6 +
+ src/llama-model.h              |  10 ++
+ src/llama-quant.cpp            |   5 +
+ src/models/dflash.cpp          | 209 +++++++++++++++++++++++++++++++++
+ 9 files changed, 404 insertions(+)
+
+diff --git a/conversion/qwen.py b/conversion/qwen.py
+index e678bd042..6682de472 100644
+--- a/conversion/qwen.py
++++ b/conversion/qwen.py
+@@ -1009,6 +1009,9 @@ class DFlashModel(Qwen3Model):
+         causal = self.hparams.get("is_causal")
+         if causal is None:
+             causal = dflash_config.get("causal")
++        if causal is None:
++            # DSpine drafts train causal draft attention under draft_block_causal
++            causal = dflash_config.get("draft_block_causal")
+         if causal is not None:
+             self.gguf_writer.add_causal_attention(bool(causal))
+ 
+@@ -1018,6 +1021,45 @@ class DFlashModel(Qwen3Model):
+             head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+             self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
+ 
++        if self._is_dspine():
++            self.gguf_writer.add_selector_top_k(self._dspine_head_topk())
++
++    # DSpine = DFlash + a code bridge after every layer + the serial last-write refinement
++    def _is_dspine(self) -> bool:
++        return "selected_prefix_code_bridge" in self.hparams.get("dflash_config", {})
++
++    def _dspine_head_topk(self) -> int:
++        cfg = self.hparams["dflash_config"]
++        n_layer = self.hparams["num_hidden_layers"]
++        if cfg.get("selected_prefix_terminal", True) or cfg.get("selected_prefix_terminal_residual_rank", 0):
++            raise ValueError("DSpine: only terminal-disabled code bridges are supported")
++        if cfg.get("selected_prefix_feature_write_mode") != "independent" or cfg.get("selected_prefix_feature_writes") is not True:
++            raise ValueError("DSpine: only independent learned feature writes are supported")
++        if not cfg.get("draft_block_causal") or not self.hparams.get("is_causal", True):
++            raise ValueError("DSpine: the draft block must be causal")
++        if cfg.get("selected_prefix_feature_next_token_rows", False):
++            raise ValueError("DSpine: next-token rows are not supported")
++        if list(cfg.get("selected_prefix_feature_layers", [])) != list(range(1, n_layer + 1)):
++            raise ValueError("DSpine: every draft layer must carry a bridge write")
++        second = self.hparams.get("code_bridge_second_pass", {})
++        refine = cfg.get("selected_prefix_last_write_refine")
++        if second:
++            if second.get("mode") != "serial_table" or int(second.get("first_exact", -1)) != n_layer - 1:
++                raise ValueError("DSpine: only the serial_table refinement of the last write is supported")
++            top_k = int(second["head_topk"])
++            if refine is not None and (refine.get("kind") != "exact_sender" or int(refine.get("head_topk", top_k)) != top_k):
++                raise ValueError("DSpine: unsupported selected_prefix_last_write_refine")
++        else:
++            # released checkpoints (e.g. tencent/Qwen3-8B-DSpine-b16) declare no
++            # second_pass block; the exact_sender last-write refinement is the
++            # serial table over the last bridge write
++            if refine is None or refine.get("kind") != "exact_sender":
++                raise ValueError("DSpine: only exact_sender last-write refinement is supported")
++            top_k = int(refine["head_topk"])
++        if top_k < 2 or top_k * (top_k + 1) > self.hparams["hidden_size"]:
++            raise ValueError("DSpine: head_topk does not fit the lattice rows")
++        return top_k
++
+     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+         yield from super().generate_extra_tensors()
+ 
+@@ -1115,6 +1157,44 @@ class DFlashModel(Qwen3Model):
+         ):
+             name += ".weight"
+ 
++        if self._is_dspine():
++            yield from self._modify_dspine_tensors(data_torch, name, bid)
++            return
++
++        yield from super().modify_tensors(data_torch, name, bid)
++
++    def _modify_dspine_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
++        bridge = "model.selected_prefix_bridge."
++        n_layer = self.hparams["num_hidden_layers"]
++
++        # format version markers: validate and drop
++        if name in ("model.draft_block_causal_version", "model.last_write_refine_version",
++                    bridge + "independent_write_version", bridge + "terminal_disabled_version"):
++            if int(LazyTorchTensor.to_eager(data_torch).item()) != 1:
++                raise ValueError(f"DSpine: unsupported {name}")
++            return
++
++        # terminal projection is disabled, its weight must be all zero
++        if name == bridge + "out.weight":
++            if torch.count_nonzero(LazyTorchTensor.to_eager(data_torch)).item() != 0:
++                raise ValueError("DSpine: terminal-disabled checkpoint has a nonzero terminal projection")
++            return
++
++        # split the stacked per-layer read/write weights; the last layer reads with read_weight
++        if name == bridge + "early_read_weights":
++            for il in range(n_layer - 1):
++                yield from super().modify_tensors(data_torch[il], f"model.layers.{il}.selected_prefix_bridge.read.weight", il)
++            return
++        if name == bridge + "read_weight":
++            yield from super().modify_tensors(data_torch, f"model.layers.{n_layer - 1}.selected_prefix_bridge.read.weight", n_layer - 1)
++            return
++        if name == bridge + "feature_write_weights":
++            for il in range(n_layer):
++                yield from super().modify_tensors(data_torch[il], f"model.layers.{il}.selected_prefix_bridge.write.weight", il)
++            return
++        if name == bridge + "codebook":
++            name += ".weight"
++
+         yield from super().modify_tensors(data_torch, name, bid)
+ 
+ 
+diff --git a/docs/speculative.md b/docs/speculative.md
+index d8f3bcb39..28a03957d 100644
+--- a/docs/speculative.md
++++ b/docs/speculative.md
+@@ -115,6 +115,46 @@ See:
+ 
+ - #25173
+ 
++### DSpine
++
++DSpine is a DFlash-family block-parallel drafter: the draft still decodes a whole block of tokens
++in a single forward pass, but a per-layer _code bridge_ conditions each row of the block on its
++predecessor through the network depth (adjacent causal injection). Each row's hidden state reads a
++gated message from the previous row built from a learned codebook, so the block decode recovers
++left-to-right signal without extra passes. After the block logits are produced, a serial
++_last-write refinement_ rebuilds the final layer's write for every exact predecessor candidate,
++yielding a K x K transition table over the top-K candidates per row, packed in the DFlash2 lattice
++layout. The DFlash2 sampler walks this lattice greedily (or samples it with `--spec-draft-sampling probabilistic`),
++so the accepted prefix is chosen from the full candidate lattice rather than from the single top-1 path.
++
++The draft is a small Tencent checkpoint trained for a specific target (for example
++[`tencent/Qwen3-8B-DSpine-b16`](https://huggingface.co/tencent/Qwen3-8B-DSpine-b16) for
++`Qwen/Qwen3-8B`). Convert it with `--target-model-dir` so it inherits the target's tokenizer and
++token embeddings. The converter reads both checkpoints from the local filesystem, so download them
++first (`--remote` is only supported for the draft argument, not for `--target-model-dir`):
++
++```bash
++hf download tencent/Qwen3-8B-DSpine-b16 --local-dir Qwen3-8B-DSpine-b16
++hf download Qwen/Qwen3-8B --local-dir Qwen3-8B
++
++python convert_hf_to_gguf.py Qwen3-8B-DSpine-b16 \
++    --target-model-dir Qwen3-8B --outtype bf16 --outfile Qwen3-8B-DSpine.gguf
++
++llama-server -m Qwen3-8B.gguf -md Qwen3-8B-DSpine.gguf \
++    --spec-type draft-dflash --spec-draft-n-max 15 -fa on --jinja
++```
++
++There is no separate `--spec-type` for DSpine: the converter records `dflash.selector_top_k` and the
++bridge tensors, so the DFlash2 path detects the code bridge and the refinement lattice from the draft
++model's tensors. `--spec-draft-n-max` is clamped to the draft model's trained block size minus one.
++Keep `--spec-draft-n-ubatch` at or above the block size (16): a smaller microbatch splits the block
++across chunks, so no full lattice is built and the proposal is skipped (correct, but the round is
++wasted).
++
++See:
++
++- arXiv 2609.36173 (Draft in Parallel, Condition Through Depth: Adjacent Causal Injection)
++
+ ### n-gram Cache (`ngram-cache`)
+ 
+ An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index b563b6236..8cb07fcaa 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -1442,6 +1442,12 @@ class MODEL_TENSOR(IntEnum):
+     DFLASH_SELECTOR_PREV   = auto()
+     DFLASH_SELECTOR_NEXT   = auto()
+     DFLASH_SELECTOR_HIDDEN = auto()
++    DSPINE_CODEBOOK        = auto()
++    DSPINE_GATE            = auto()
++    DSPINE_PRED_GATE       = auto()
++    DSPINE_PREV            = auto()
++    DSPINE_READ            = auto()
++    DSPINE_WRITE           = auto()
+     LILICORR_TOKEN_PROJ           = auto()
+     LILICORR_PASS_HIDDEN_PROJ     = auto()
+     LILICORR_SLOT_EMBD            = auto()
+@@ -2402,6 +2408,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+     MODEL_TENSOR.DFLASH_SELECTOR_PREV:      "selector_predecessor",
+     MODEL_TENSOR.DFLASH_SELECTOR_NEXT:      "selector_successor",
+     MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN:    "selector_hidden",
++    MODEL_TENSOR.DSPINE_CODEBOOK:           "dspine_codebook",
++    MODEL_TENSOR.DSPINE_GATE:               "dspine_gate",
++    MODEL_TENSOR.DSPINE_PRED_GATE:          "dspine_pred_gate",
++    MODEL_TENSOR.DSPINE_PREV:               "dspine_prev",
++    MODEL_TENSOR.DSPINE_READ:               "blk.{bid}.dspine_read",
++    MODEL_TENSOR.DSPINE_WRITE:              "blk.{bid}.dspine_write",
+     MODEL_TENSOR.LILICORR_TOKEN_PROJ:                   "lilicorr.token_proj",
+     MODEL_TENSOR.LILICORR_PASS_HIDDEN_PROJ:             "lilicorr.pass_hidden_proj",
+     MODEL_TENSOR.LILICORR_SLOT_EMBD:                    "lilicorr.slot_embedding",
+@@ -6249,6 +6261,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.DFLASH_SELECTOR_PREV,
+         MODEL_TENSOR.DFLASH_SELECTOR_NEXT,
+         MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN,
++        MODEL_TENSOR.DSPINE_CODEBOOK,
++        MODEL_TENSOR.DSPINE_GATE,
++        MODEL_TENSOR.DSPINE_PRED_GATE,
++        MODEL_TENSOR.DSPINE_PREV,
++        MODEL_TENSOR.DSPINE_READ,
++        MODEL_TENSOR.DSPINE_WRITE,
+         MODEL_TENSOR.LILICORR_TOKEN_PROJ,
+         MODEL_TENSOR.LILICORR_PASS_HIDDEN_PROJ,
+         MODEL_TENSOR.LILICORR_SLOT_EMBD,
+diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
+index 8888dc76e..5dd8c85be 100644
+--- a/gguf-py/gguf/tensor_mapping.py
++++ b/gguf-py/gguf/tensor_mapping.py
+@@ -1722,6 +1722,30 @@ class TensorNameMap:
+         MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN: (
+             "model.candidate_selector.hidden_projection",
+         ),
++
++        MODEL_TENSOR.DSPINE_CODEBOOK: (
++            "model.selected_prefix_bridge.codebook", # dspine
++        ),
++
++        MODEL_TENSOR.DSPINE_GATE: (
++            "model.selected_prefix_bridge.gate", # dspine
++        ),
++
++        MODEL_TENSOR.DSPINE_PRED_GATE: (
++            "model.selected_prefix_bridge.predecessor_gate", # dspine
++        ),
++
++        MODEL_TENSOR.DSPINE_PREV: (
++            "model.selected_prefix_bridge.prev", # dspine
++        ),
++
++        MODEL_TENSOR.DSPINE_READ: (
++            "model.layers.{bid}.selected_prefix_bridge.read", # dspine (split from read_weight + early_read_weights)
++        ),
++
++        MODEL_TENSOR.DSPINE_WRITE: (
++            "model.layers.{bid}.selected_prefix_bridge.write", # dspine (split from feature_write_weights)
++        ),
+         MODEL_TENSOR.LILICORR_ATTN_IN_PROJ: (
+             "model.lilicorr.layers.{bid}.attn.in_proj",
+         ),
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 984d38a42..7bf497b1b 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -926,6 +926,12 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_DFLASH_SELECTOR_PREV,                   "selector_predecessor" },
+     { LLM_TENSOR_DFLASH_SELECTOR_NEXT,                   "selector_successor" },
+     { LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,                 "selector_hidden" },
++    { LLM_TENSOR_DSPINE_CODEBOOK,                        "dspine_codebook" },
++    { LLM_TENSOR_DSPINE_GATE,                            "dspine_gate" },
++    { LLM_TENSOR_DSPINE_PRED_GATE,                       "dspine_pred_gate" },
++    { LLM_TENSOR_DSPINE_PREV,                            "dspine_prev" },
++    { LLM_TENSOR_DSPINE_READ,                            "blk.%d.dspine_read" },
++    { LLM_TENSOR_DSPINE_WRITE,                           "blk.%d.dspine_write" },
+     { LLM_TENSOR_LILICORR_TOKEN_PROJ,                    "lilicorr.token_proj" },
+     { LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,              "lilicorr.pass_hidden_proj" },
+     { LLM_TENSOR_LILICORR_SLOT_EMBD,                     "lilicorr.slot_embedding" },
+@@ -1340,6 +1346,12 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_DFLASH_SELECTOR_PREV,       {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
+     {LLM_TENSOR_DFLASH_SELECTOR_NEXT,       {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
+     {LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_DSPINE_CODEBOOK,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
++    {LLM_TENSOR_DSPINE_GATE,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_DSPINE_PRED_GATE,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_DSPINE_PREV,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_DSPINE_READ,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_DSPINE_WRITE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_LILICORR_TOKEN_PROJ,        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_LILICORR_SLOT_EMBD,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_ADD}},
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index f39f71ec3..037bbd02e 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -930,6 +930,12 @@ enum llm_tensor {
+     LLM_TENSOR_DFLASH_SELECTOR_PREV,
+     LLM_TENSOR_DFLASH_SELECTOR_NEXT,
+     LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
++    LLM_TENSOR_DSPINE_CODEBOOK,
++    LLM_TENSOR_DSPINE_GATE,
++    LLM_TENSOR_DSPINE_PRED_GATE,
++    LLM_TENSOR_DSPINE_PREV,
++    LLM_TENSOR_DSPINE_READ,
++    LLM_TENSOR_DSPINE_WRITE,
+     LLM_TENSOR_LILICORR_TOKEN_PROJ,
+     LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,
+     LLM_TENSOR_LILICORR_SLOT_EMBD,
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 6bf0ba2f9..dc84985b5 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -405,6 +405,9 @@ struct llama_layer {
+     struct ggml_tensor * dflash_ffn_conv_base  = nullptr;
+     struct ggml_tensor * dflash_ffn_conv_proj  = nullptr;
+ 
++    struct ggml_tensor * dspine_read  = nullptr;
++    struct ggml_tensor * dspine_write = nullptr;
++
+     struct ggml_tensor * lilicorr_attn_norm       = nullptr;
+     struct ggml_tensor * lilicorr_mlp_norm        = nullptr;
+     struct ggml_tensor * lilicorr_attn_in_proj    = nullptr;
+@@ -907,6 +910,13 @@ struct llama_model {
+     struct ggml_tensor * dflash_selector_next   = nullptr;
+     struct ggml_tensor * dflash_selector_hidden = nullptr;
+ 
++    // DSpine code bridge
++    struct ggml_tensor * dspine_codebook  = nullptr;
++    struct ggml_tensor * dspine_gate      = nullptr;
++    struct ggml_tensor * dspine_gate_b    = nullptr;
++    struct ggml_tensor * dspine_pred_gate = nullptr;
++    struct ggml_tensor * dspine_prev      = nullptr;
++
+     struct ggml_tensor * lilicorr_token_proj          = nullptr;
+     struct ggml_tensor * lilicorr_token_proj_b        = nullptr;
+     struct ggml_tensor * lilicorr_token_proj_s        = nullptr;
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 2c90b2331..313f43f04 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -381,6 +381,11 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
+         quantize &= name.find("hc_")            == std::string::npos;
+     }
+ 
++    // dspine: the code bridge projections are small and steer every draft row, keep them accurate
++    if (arch == LLM_ARCH_DFLASH) {
++        quantize &= name.find("dspine_") == std::string::npos || name.find("dspine_codebook") != std::string::npos;
++    }
++
+     // kimi-k31: the indexer picks the top-k cells, so keep its projections accurate
+     if (arch == LLM_ARCH_KIMI_K31) {
+         quantize &= name.find("indexer.attn_q_b") == std::string::npos;
+diff --git a/src/models/dflash.cpp b/src/models/dflash.cpp
+index 52d146ae5..0913a99c3 100644
+--- a/src/models/dflash.cpp
++++ b/src/models/dflash.cpp
+@@ -435,6 +435,31 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+             layer.dflash_ffn_conv_proj  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_PROJ,  "weight", i), { n_embd, projected }, 0);
+         }
+     }
++
++    // DSpine: code bridge after every layer, its last write is refined over the top-k lattice
++    const struct ggml_tensor * dspine_codebook_meta = ml->get_tensor_meta("dspine_codebook.weight");
++    const struct ggml_tensor * dspine_gate_meta     = ml->get_tensor_meta("dspine_gate.weight");
++    if (dspine_codebook_meta && dspine_gate_meta) {
++        const int64_t code = dspine_codebook_meta->ne[0];
++        const int64_t rank = dspine_gate_meta->ne[1];
++        const int64_t top_k = hparams.dflash_selector_top_k;
++        if (top_k < 2 || n_embd < top_k * (top_k + 1) || selector_meta || hparams.dflash_block_size < 2) {
++            throw std::runtime_error("invalid DSpine metadata");
++        }
++
++        dspine_codebook  = create_tensor(tn(LLM_TENSOR_DSPINE_CODEBOOK,  "weight"), { code, n_vocab }, 0);
++        dspine_gate      = create_tensor(tn(LLM_TENSOR_DSPINE_GATE,      "weight"), { code, rank }, 0);
++        dspine_gate_b    = create_tensor(tn(LLM_TENSOR_DSPINE_GATE,      "bias"),   { rank }, 0);
++        dspine_pred_gate = create_tensor(tn(LLM_TENSOR_DSPINE_PRED_GATE, "weight"), { code, rank }, 0);
++        dspine_prev      = create_tensor(tn(LLM_TENSOR_DSPINE_PREV,      "weight"), { code, rank }, 0);
++        for (int i = 0; i < n_layer; ++i) {
++            layers[i].dspine_read  = create_tensor(tn(LLM_TENSOR_DSPINE_READ,  "weight", i), { n_embd, code }, 0);
++            layers[i].dspine_write = create_tensor(tn(LLM_TENSOR_DSPINE_WRITE, "weight", i), { rank, n_embd }, 0);
++        }
++
++        LLAMA_LOG_INFO("%s: DSpine code bridge (code = %lld, rank = %lld, top-k = %lld)\n", __func__,
++                (long long) code, (long long) rank, (long long) top_k);
++    }
+ }
+ 
+ // Laguna drafters RMS-norm each captured target feature before fc: view the
+@@ -810,6 +835,182 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
+     ggml_build_forward_expand(g.gf, packed);
+ }
+ 
++// DSpine pre-write state of the last layer, read again by the lattice
++struct dspine_stash {
++    ggml_tensor * raw = nullptr; // [n_embd, n_tokens]
++    ggml_tensor * rms = nullptr; // [1, n_tokens]
++    ggml_tensor * q   = nullptr; // [rank, n_tokens] gate projection of each row's own code, no bias
++};
++
++// anchor (token 0) of every block
++static ggml_tensor * dspine_anchor_ids(llm_graph_context & g, ggml_tensor * tokens, int64_t block, int64_t n_blocks) {
++    return ggml_cont_1d(g.ctx0, ggml_view_2d(g.ctx0, tokens, 1, n_blocks, block * tokens->nb[0], 0), n_blocks);
++}
++
++// DSpine code bridge write after layer il: every row reads a unit code from its hidden state (the anchor row
++// uses its token's codebook row), then row t gets a gated message from the code of row t-1
++static ggml_tensor * build_dspine_write(llm_graph_context & g, const llama_model & model,
++        ggml_tensor * cur, ggml_tensor * tokens, int il, dspine_stash * stash) {
++    ggml_context * ctx0 = g.ctx0;
++
++    const auto & layer = model.layers[il];
++
++    const int64_t n_embd   = cur->ne[0];
++    const int64_t n_tokens = cur->ne[1];
++    const int64_t n_blocks = g.ubatch.n_seqs_unq;
++    const int64_t code     = model.dspine_codebook->ne[0];
++    const int64_t rank     = model.dspine_gate->ne[1];
++    const float   eps      = g.hparams.f_norm_rms_eps;
++
++    // unified-KV batches can mix sequences of unequal length; the bridge only
++    // understands block-shaped batches, so skip those instead of aborting
++    if (n_blocks <= 0 || n_tokens % n_blocks != 0) {
++        return cur;
++    }
++    const int64_t block = n_tokens / n_blocks;
++    if (block < 2) {
++        return cur;
++    }
++
++    // codes are L2-normalized, so the read is scale-invariant and only the rms is kept for the write
++    ggml_tensor * rms = ggml_sqrt(ctx0, ggml_scale(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, cur)), 1.0f/n_embd));
++
++    ggml_tensor * codes = g.build_lora_mm(layer.dspine_read, ggml_rms_norm(ctx0, cur, eps));
++    codes = ggml_scale(ctx0, ggml_l2_norm(ctx0, codes, eps), sqrtf((float) code));
++    g.cb(codes, "dspine_codes", il);
++
++    ggml_tensor * anchor_codes = ggml_get_rows(ctx0, model.dspine_codebook, dspine_anchor_ids(g, tokens, block, n_blocks));
++    anchor_codes = ggml_scale(ctx0, ggml_reshape_3d(ctx0, anchor_codes, code, 1, n_blocks), sqrtf((float) code));
++
++    codes = ggml_reshape_3d(ctx0, codes, code, block, n_blocks);
++    codes = ggml_concat(ctx0, anchor_codes,
++            ggml_cont(ctx0, ggml_view_3d(ctx0, codes, code, block - 1, n_blocks, codes->nb[1], codes->nb[2], codes->nb[1])), 1);
++    codes = ggml_reshape_2d(ctx0, codes, code, n_tokens);
++
++    ggml_tensor * q = ggml_reshape_3d(ctx0, g.build_lora_mm(model.dspine_gate,      codes), rank, block, n_blocks);
++    ggml_tensor * s = ggml_reshape_3d(ctx0, g.build_lora_mm(model.dspine_pred_gate, codes), rank, block, n_blocks);
++    ggml_tensor * v = ggml_reshape_3d(ctx0, g.build_lora_mm(model.dspine_prev,      codes), rank, block, n_blocks);
++
++    const auto rows = [&](ggml_tensor * t, int64_t beg) {
++        return ggml_view_3d(ctx0, t, rank, block - 1, n_blocks, t->nb[1], t->nb[2], beg * t->nb[1]);
++    };
++
++    // message(t) = sigmoid(Wg c_t + Wp c_(t-1) + b) * (Wv c_(t-1)), nothing for the anchor row
++    ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_add(ctx0, ggml_add(ctx0, rows(q, 1), rows(s, 0)), model.dspine_gate_b));
++    ggml_tensor * msg  = ggml_mul(ctx0, gate, rows(v, 0));
++
++    ggml_tensor * delta = g.build_lora_mm(layer.dspine_write, ggml_reshape_2d(ctx0, msg, rank, (block - 1) * n_blocks));
++    delta = ggml_pad_ext(ctx0, ggml_reshape_3d(ctx0, delta, n_embd, block - 1, n_blocks), 0, 0, 1, 0, 0, 0, 0, 0);
++    delta = ggml_mul(ctx0, ggml_reshape_2d(ctx0, delta, n_embd, n_tokens), rms);
++
++    if (stash) {
++        stash->raw = cur;
++        stash->rms = rms;
++        stash->q   = ggml_reshape_2d(ctx0, q, rank, n_tokens);
++    }
++
++    return ggml_add(ctx0, cur, delta);
++}
++
++// DSpine serial refinement: redo the last bridge write once per exact predecessor candidate and score the top-k
++// candidates of every row, packed like the DFlash2 lattice: [cand (k), scores (k x k, predecessor-major)]
++static void build_dspine_lattice(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens,
++        ggml_tensor * output, ggml_tensor * output_s, const dspine_stash & stash) {
++    ggml_context * ctx0 = g.ctx0;
++    auto         & res  = g.res;
++
++    const int64_t n_embd   = g.n_embd;
++    const int64_t n_tokens = g.n_tokens;
++    const int64_t n_blocks = g.ubatch.n_seqs_unq;
++    const int64_t top_k    = g.hparams.dflash_selector_top_k;
++    const int64_t code     = model.dspine_codebook->ne[0];
++    const int64_t rank     = model.dspine_gate->ne[1];
++
++    const int64_t block = n_blocks > 0 && n_tokens % n_blocks == 0 ? n_tokens / n_blocks : -1;
++    // the walk reads one full block_size lattice: emit an empty one for probe,
++    // chunked, or unequal-length batches so the nextn readout stays
++    // well-defined (the round is wasted, never mispacked) instead of leaving
++    // t_h_nextn unset
++    if (block != (int64_t) g.hparams.dflash_block_size || stash.raw == nullptr) {
++        ggml_tensor * empty = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens), 0.0f);
++        res->t_h_nextn = empty;
++        ggml_build_forward_expand(g.gf, empty);
++        return;
++    }
++    const int64_t n_pos = block - 1;
++
++    // rows 1..block-1 of every block, with a broadcast candidate dim: [ne0, 1, n_pos, n_blocks]
++    const auto pos_rows = [&](ggml_tensor * t) {
++        ggml_tensor * t3 = ggml_reshape_3d(ctx0, t, t->ne[0], block, n_blocks);
++        t3 = ggml_cont(ctx0, ggml_view_3d(ctx0, t3, t->ne[0], n_pos, n_blocks, t3->nb[1], t3->nb[2], t3->nb[1]));
++        return ggml_reshape_4d(ctx0, t3, t->ne[0], 1, n_pos, n_blocks);
++    };
++
++    ggml_tensor * cand = ggml_reshape_3d(ctx0, ggml_top_k(ctx0, res->t_logits, top_k), top_k, block, n_blocks);
++    ggml_tensor * cand_run = ggml_cont(ctx0, ggml_view_3d(ctx0, cand, top_k, n_pos, n_blocks, cand->nb[1], cand->nb[2], cand->nb[1]));
++
++    // exact predecessor codes: the anchor for row 1, the candidates of row t-1 for row t
++    ggml_tensor * pred = ggml_get_rows(ctx0, model.dspine_codebook, dspine_anchor_ids(g, tokens, block, n_blocks));
++    pred = ggml_repeat_4d(ctx0, ggml_reshape_4d(ctx0, pred, code, 1, 1, n_blocks), code, top_k, 1, n_blocks);
++    if (n_pos > 1) {
++        ggml_tensor * prev_ids = ggml_cont(ctx0, ggml_view_3d(ctx0, cand_run, top_k, n_pos - 1, n_blocks, cand_run->nb[1], cand_run->nb[2], 0));
++        ggml_tensor * prev = ggml_get_rows(ctx0, model.dspine_codebook, ggml_reshape_1d(ctx0, prev_ids, top_k * (n_pos - 1) * n_blocks));
++        pred = ggml_concat(ctx0, pred, ggml_reshape_4d(ctx0, prev, code, top_k, n_pos - 1, n_blocks), 2);
++    }
++    pred = ggml_scale(ctx0, ggml_reshape_2d(ctx0, pred, code, top_k * n_pos * n_blocks), sqrtf((float) code));
++
++    ggml_tensor * gp = ggml_reshape_4d(ctx0, g.build_lora_mm(model.dspine_pred_gate, pred), rank, top_k, n_pos, n_blocks);
++    ggml_tensor * pv = ggml_reshape_4d(ctx0, g.build_lora_mm(model.dspine_prev,      pred), rank, top_k, n_pos, n_blocks);
++
++    ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_add(ctx0, ggml_add(ctx0, gp, pos_rows(stash.q)), model.dspine_gate_b));
++    ggml_tensor * msg  = ggml_mul(ctx0, gate, pv);
++
++    const auto & last = model.layers[g.n_layer - 1];
++    ggml_tensor * delta = g.build_lora_mm(last.dspine_write, ggml_reshape_2d(ctx0, msg, rank, top_k * n_pos * n_blocks));
++    delta = ggml_reshape_4d(ctx0, delta, n_embd, top_k, n_pos, n_blocks);
++
++    ggml_tensor * refined = ggml_add(ctx0, ggml_mul(ctx0, delta, pos_rows(stash.rms)), pos_rows(stash.raw));
++    refined = g.build_norm(refined, model.output_norm, NULL, LLM_NORM_RMS, -1);
++    g.cb(refined, "dspine_refined", -1);
++
++    // table[k][j]: logit of candidate k after the write with predecessor candidate j
++    ggml_tensor * cand_flat = ggml_reshape_1d(ctx0, cand_run, top_k * n_pos * n_blocks);
++    ggml_tensor * head = ggml_get_rows(ctx0, output, cand_flat);
++    // candidate selection reads t_logits, which carries the output scale and
++    // any output-head LoRA; the table must score against the same adapted head
++    // or the walk can pick a candidate the adapted logits would not
++    if (output_s) {
++        head = ggml_mul(ctx0, head, output_s);
++    }
++    head = ggml_reshape_4d(ctx0, head, n_embd, top_k, n_pos, n_blocks);
++    ggml_tensor * table = ggml_mul_mat(ctx0, head, refined);
++    for (const auto & lora : *g.loras) {
++        llama_adapter_lora_weight * lw = lora.first->get_weight(output);
++        if (lw == nullptr) {
++            continue;
++        }
++        const float scale = lw->get_scale(lora.first->alpha, lora.second);
++        ggml_tensor * a = ggml_reshape_4d(ctx0,
++                ggml_mul_mat(ctx0, lw->a, ggml_reshape_2d(ctx0, refined, n_embd, top_k * n_pos * n_blocks)),
++                lw->a->ne[1], top_k, n_pos, n_blocks);
++        ggml_tensor * b = ggml_reshape_4d(ctx0,
++                ggml_get_rows(ctx0, lw->b, cand_flat), lw->b->ne[0], top_k, n_pos, n_blocks);
++        table = ggml_add(ctx0, table, ggml_scale(ctx0, ggml_mul_mat(ctx0, b, a), scale));
++    }
++
++    ggml_tensor * row = ggml_concat(ctx0,
++            ggml_cast(ctx0, cand_run, GGML_TYPE_F32),
++            ggml_reshape_3d(ctx0, table, top_k * top_k, n_pos, n_blocks), 0);
++    row = ggml_pad(ctx0, row, n_embd - top_k - top_k * top_k, 0, 0, 0);
++
++    ggml_tensor * packed = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1, n_blocks), 0.0f);
++    packed = ggml_reshape_2d(ctx0, ggml_concat(ctx0, packed, row, 1), n_embd, n_tokens);
++    g.cb(packed, "dspine_lattice", -1);
++
++    res->t_h_nextn = packed;
++    ggml_build_forward_expand(g.gf, packed);
++}
++
+ static void build_lilicorr_scores(llm_graph_context & g, const llama_model & model,
+         ggml_tensor * tok_embd, ggml_tensor * anchors) {
+     ggml_context * ctx0 = g.ctx0;
+@@ -1130,6 +1331,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+     }
+     cb(inpL, "inp_noise_embd", -1);
+ 
++    dspine_stash dspine;
++
+     for (int il = 0; il < n_layer; ++il) {
+         const auto & layer = model.layers[il];
+ 
+@@ -1243,6 +1446,10 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+         if (layer.out_scale) {
+             cur = ggml_mul(ctx0, cur, layer.out_scale);
+         }
++
++        if (layer.dspine_write) {
++            cur = build_dspine_write(*this, model, cur, inp_tokens, il, il == n_layer - 1 ? &dspine : nullptr);
++        }
+         cb(cur, "l_out", il);
+ 
+         inpL = cur;
+@@ -1304,6 +1511,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+ 
+     if (model.dflash_selector_hidden) {
+         build_dflash2_selector(*this, model, inp_tokens);
++    } else if (model.dspine_codebook) {
++        build_dspine_lattice(*this, model, inp_tokens, output, output_s, dspine);
+     } else if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
+         build_lilicorr_scores(*this, model, tok_embd, inp_anchor);
+     }
+-- 
+2.56.0
+

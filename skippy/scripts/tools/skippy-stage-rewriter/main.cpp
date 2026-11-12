@@ -755,8 +755,10 @@ hyperconnectionPrelude(const CompoundStmt *constructor_body,
 
     bool VisitVarDecl(VarDecl *decl) {
       const auto offset = fileOffset(decl->getBeginLoc(), sm_);
-      if (decl->getName() == carried_ && decl->hasInit() && offset &&
-          *offset < loop_offset_) {
+      // The carried activation may be declared without an initializer; its
+      // first assignment then defines it (upstream xing4-0). Uniqueness is
+      // still required, so shadowed declarations are refused.
+      if (decl->getName() == carried_ && offset && *offset < loop_offset_) {
         result_ = result_ == nullptr ? decl : nullptr;
         ambiguous_ |= result_ == nullptr;
       }
@@ -795,19 +797,38 @@ hyperconnectionPrelude(const CompoundStmt *constructor_body,
     return call;
   };
 
-  if (const auto *call =
-          is_repeat_call(carried_decl->getInit(), embedding_activation)) {
-    repeat_call = call;
-    repeat_is_initializer = true;
+  if (const auto *initializer = carried_decl->getInit()) {
+    if (const auto *call = is_repeat_call(initializer, embedding_activation)) {
+      repeat_call = call;
+      repeat_is_initializer = true;
+    }
   }
+  // An uninitialized carried declaration is defined by its first assignment.
+  // That assignment must derive the carried activation from the embedding
+  // itself, and the proven repeat must follow it. An initialized declaration
+  // keeps the stricter shape where every pre-loop assignment is the repeat.
+  const BinaryOperator *defining_assignment = nullptr;
   for (const BinaryOperator *assignment :
        assignmentsTo(constructor_body, carried)) {
     const auto offset = fileOffset(assignment->getBeginLoc(), sm);
     if (!offset || *offset >= *loop_offset) {
       continue;
     }
+    if (repeat_is_initializer) {
+      // A second derivation of the carried activation would break the proof.
+      return std::nullopt;
+    }
     const auto *call = is_repeat_call(assignment->getRHS(), carried);
-    if (call == nullptr || repeat_call != nullptr) {
+    if (call == nullptr) {
+      if (carried_decl->getInit() != nullptr || defining_assignment != nullptr ||
+          repeat_call != nullptr ||
+          !containsName(assignment->getRHS(), embedding_activation)) {
+        return std::nullopt;
+      }
+      defining_assignment = assignment;
+      continue;
+    }
+    if (repeat_call != nullptr) {
       return std::nullopt;
     }
     repeat_assignment = assignment;
@@ -846,8 +867,14 @@ hyperconnectionPrelude(const CompoundStmt *constructor_body,
         !containsName(statement, embedding_activation)) {
       continue;
     }
-    const auto carried_init_range =
-        tokenRange(carried_decl->getInit()->getSourceRange(), sm, lang);
+    if (statement == defining_assignment) {
+      continue;
+    }
+    std::optional<std::pair<uint64_t, uint64_t>> carried_init_range;
+    if (carried_decl->getInit() != nullptr) {
+      carried_init_range =
+          tokenRange(carried_decl->getInit()->getSourceRange(), sm, lang);
+    }
     if (carried_init_range &&
         statement_range->first <= carried_init_range->first &&
         statement_range->first + statement_range->second >=

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/phi2.cpp b/src/models/phi2.cpp
-index de14cfe37b8486ddd6ec10dcdaacc36571e12db4..6a6e56b85f41aed5e337bfdee4995802b0b39af4 100644
+index 90c502cfdee47cd9658cce0a15818fab0392c2f3..4d56f0abb926d8c8de588f3b7719b6f1c7040fb5 100644
 --- a/src/models/phi2.cpp
 +++ b/src/models/phi2.cpp
-@@ -64,6 +64,8 @@ llama_model_phi2::graph::graph(const llama_model & model, const llm_graph_params
+@@ -64,6 +64,8 @@ llama_model_phi2::graph::graph(const llm_graph_params & params) : llm_graph_cont
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index de14cfe37b8486ddd6ec10dcdaacc36571e12db4..6a6e56b85f41aed5e337bfdee4995802
          attn_norm_output = build_norm(inpL,
                  model.layers[il].attn_norm,
                  model.layers[il].attn_norm_b,
-@@ -121,6 +123,7 @@ llama_model_phi2::graph::graph(const llama_model & model, const llm_graph_params
+@@ -112,6 +114,7 @@ llama_model_phi2::graph::graph(const llm_graph_params & params) : llm_graph_cont
  
          // input for next layer
          inpL = cur;

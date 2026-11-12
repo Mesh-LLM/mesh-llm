@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/rwkv6.cpp b/src/models/rwkv6.cpp
-index c2ae9290984796f06e089ef34cbfbc938cd053dc..12e39034e2c0ea37b638d87ea3bd4e24eeda4cba 100644
+index c6df75ae59808b010a460904fdef0a98d5176e86..4993798dbdda9f7718b22665c2e59579b4443ad8 100644
 --- a/src/models/rwkv6.cpp
 +++ b/src/models/rwkv6.cpp
-@@ -110,6 +110,8 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
+@@ -110,6 +110,8 @@ llama_model_rwkv6::graph::graph(const llm_graph_params & params) :
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index c2ae9290984796f06e089ef34cbfbc938cd053dc..12e39034e2c0ea37b638d87ea3bd4e24
          const llama_layer * layer = &model.layers[il];
          inpL                      = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
  
-@@ -169,6 +171,7 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
+@@ -169,6 +171,7 @@ llama_model_rwkv6::graph::graph(const llm_graph_params & params) :
  
          // input for next layer
          inpL = cur;
@@ -30,10 +30,10 @@ index c2ae9290984796f06e089ef34cbfbc938cd053dc..12e39034e2c0ea37b638d87ea3bd4e24
      cur = inpL;
      cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
 diff --git a/src/models/rwkv6qwen2.cpp b/src/models/rwkv6qwen2.cpp
-index 0e5561c1957ab73dd41d6eb2856fab61e124489f..2f1fc2380acde3e37ddeaffdb59f2fe6033ac5b3 100644
+index e81c0132f8cfb56ed50917cf1c9aa6c8e9c17e3e..2403ab3cae1eabdcc8311eee7e28181a799e8371 100644
 --- a/src/models/rwkv6qwen2.cpp
 +++ b/src/models/rwkv6qwen2.cpp
-@@ -98,6 +98,8 @@ llama_model_rwkv6qwen2::graph::graph(const llama_model & model, const llm_graph_
+@@ -98,6 +98,8 @@ llama_model_rwkv6qwen2::graph::graph(const llm_graph_params & params) : llm_buil
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -42,7 +42,7 @@ index 0e5561c1957ab73dd41d6eb2856fab61e124489f..2f1fc2380acde3e37ddeaffdb59f2fe6
          const llama_layer * layer = &model.layers[il];
          inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
  
-@@ -150,6 +152,7 @@ llama_model_rwkv6qwen2::graph::graph(const llama_model & model, const llm_graph_
+@@ -150,6 +152,7 @@ llama_model_rwkv6qwen2::graph::graph(const llm_graph_params & params) : llm_buil
  
          // input for next layer
          inpL = cur;

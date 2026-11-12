@@ -89,6 +89,7 @@ pub fn ggml_type_from_cache_code(code: i32) -> Option<GgmlType> {
         value if value == raw::Nvfp4 as i32 => raw::Nvfp4,
         value if value == raw::Q1_0 as i32 => raw::Q1_0,
         value if value == raw::Q2_0 as i32 => raw::Q2_0,
+        value if value == raw::F8E4M3 as i32 => raw::F8E4M3,
         _ => return None,
     };
     Some(value)
@@ -204,13 +205,15 @@ mod tests {
         assert_eq!(offset_of!(LlamaModelParams, kv_overrides), 64);
         assert_eq!(offset_of!(LlamaModelParams, load_mtp), 77);
 
-        assert_eq!(size_of::<LlamaContextParams>(), 168);
+        assert_eq!(size_of::<LlamaContextParams>(), 176);
         assert_eq!(offset_of!(LlamaContextParams, flash_attn_type), 52);
         assert_eq!(offset_of!(LlamaContextParams, cb_eval), 88);
         assert_eq!(offset_of!(LlamaContextParams, type_k), 104);
         assert_eq!(offset_of!(LlamaContextParams, moe_cache_size), 112);
-        assert_eq!(offset_of!(LlamaContextParams, embeddings), 136);
-        assert_eq!(offset_of!(LlamaContextParams, samplers), 144);
-        assert_eq!(offset_of!(LlamaContextParams, ctx_other), 160);
+        assert_eq!(offset_of!(LlamaContextParams, moe_cache_cpu_share), 120);
+        assert_eq!(offset_of!(LlamaContextParams, abort_callback), 128);
+        assert_eq!(offset_of!(LlamaContextParams, embeddings), 144);
+        assert_eq!(offset_of!(LlamaContextParams, samplers), 152);
+        assert_eq!(offset_of!(LlamaContextParams, ctx_other), 168);
     }
 }

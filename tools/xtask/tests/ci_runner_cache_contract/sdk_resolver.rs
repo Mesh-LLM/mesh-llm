@@ -358,7 +358,7 @@ fn actual_native_sdk_macos_resolver_preserves_main_hosted_and_direct_pr_provider
 #[test]
 fn actual_sdk_resolvers_preserve_expiry_and_distinguish_exact_canary_cache_authority() {
     for name in workflows() {
-        for date in ["2026-09-14", "2026-10-04"] {
+        for date in ["2027-09-14", "2027-10-04"] {
             assert_selection(
                 name,
                 Case {
@@ -377,7 +377,7 @@ fn actual_sdk_resolvers_preserve_expiry_and_distinguish_exact_canary_cache_autho
             name,
             Case {
                 pr: "true",
-                date: "2026-10-04",
+                date: "2027-10-04",
                 ..Case::default()
             },
             "depot-ubuntu-24.04-8",
@@ -390,7 +390,7 @@ fn actual_sdk_resolvers_preserve_expiry_and_distinguish_exact_canary_cache_autho
                 reference: "refs/pull/12/merge",
                 canary_reference: "refs/pull/12/merge",
                 main: "false",
-                date: "2026-10-04",
+                date: "2027-10-04",
                 ..Case::default()
             },
             "depot-ubuntu-24.04-8",

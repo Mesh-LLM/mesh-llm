@@ -85,9 +85,6 @@ pub struct PluginInstallOptions {
     pub install_root: PathBuf,
     pub catalog_url: String,
     pub target: PluginTarget,
-    /// This release's bundled default plugins (`crate::bundled`); the only
-    /// place a default plugin is installed from.
-    pub bundled_plugins_dir: Option<PathBuf>,
 }
 
 impl PluginInstallOptions {
@@ -100,7 +97,6 @@ impl PluginInstallOptions {
             store_root,
             catalog_url,
             target: PluginTarget::current()?,
-            bundled_plugins_dir: crate::bundled::bundled_plugins_dir(),
         })
     }
 }
@@ -160,7 +156,6 @@ pub fn install_plugin_archive(
         downloaded_asset_name: asset_name,
         install_path: extracted.install_path,
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
-        default_managed: false,
         manifest: extracted.manifest,
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
@@ -217,29 +212,6 @@ pub async fn update_plugin(
 ) -> Result<InstallOutcome> {
     let store = PluginStore::new(&options.store_root);
     let current = store.load(name)?;
-    if current.default_managed {
-        let default = crate::defaults::DEFAULT_PLUGINS
-            .iter()
-            .find(|default| default.name == name)
-            .with_context(|| {
-                format!("default plugin '{name}' has no reviewed pin in this build")
-            })?;
-        let pin = default.pin_for(options.target.triple()).with_context(|| {
-            format!(
-                "default plugin '{name}' has no reviewed pin for {}",
-                options.target.triple()
-            )
-        })?;
-        // A default moves only to the copy this release bundles; it is never
-        // downloaded.
-        return crate::bundled::install_bundled_default(name, pin, options, progress)?
-            .with_context(|| {
-                format!(
-                    "default plugin '{name}' has no bundled copy in this install; \
-                 a default plugin is never downloaded"
-                )
-            });
-    }
     let source = GitHubPluginSource::from_url(&current.source_repository)?;
     let resolved = ResolvedInstallSource {
         plugin_name: current.name.clone(),
@@ -424,7 +396,6 @@ fn build_installed_metadata(
         downloaded_asset_name: asset.name.clone(),
         install_path: extracted.install_path,
         enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
-        default_managed: current.is_some_and(|metadata| metadata.default_managed),
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),
@@ -879,7 +850,6 @@ mod tests {
             install_root: temp.path().join("installed"),
             catalog_url: "unused".to_string(),
             target: PluginTarget::current().unwrap(),
-            bundled_plugins_dir: None,
         };
         let mut events = Vec::new();
 
@@ -985,7 +955,6 @@ mod tests {
             install_root: root.join("installed"),
             catalog_url: "unused".to_string(),
             target: PluginTarget::from_os_arch(os, arch).unwrap(),
-            bundled_plugins_dir: Some(root.join("bundle")),
         }
     }
 
@@ -1114,7 +1083,6 @@ mod tests {
             install_root: root.join("installed"),
             catalog_url: serve_catalog(catalog_body),
             target: PluginTarget::from_os_arch("macos", "aarch64").unwrap(),
-            bundled_plugins_dir: None,
         };
         let parsed = parse_install_ref(name).unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();

@@ -14,8 +14,8 @@ use mesh_llm_membership::advertised_throughput::MAX_ADVERTISED_MODEL_NAME_BYTES;
 
 pub(crate) use mesh_llm_membership::advertised_throughput::{
     MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS, MAX_ADVERTISED_THROUGHPUT_SAMPLES,
-    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, THROUGHPUT_SCALE_MILLI, ThroughputMeasurement,
-    ThroughputMeasurementKind, sanitize_model_throughput_hints,
+    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, PrefillMeasurement, THROUGHPUT_SCALE_MILLI,
+    ThroughputMeasurement, ThroughputMeasurementKind, sanitize_model_throughput_hints,
 };
 
 #[path = "metrics/throughput_window.rs"]
@@ -570,6 +570,7 @@ impl RoutingMetrics {
                     .min(MAX_ADVERTISED_TPS_MILLI),
                 throughput_samples: recent.samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
                 measurement,
+                prefill: None,
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -608,6 +609,7 @@ impl RoutingMetrics {
             throughput_samples: recent.samples,
             // Local observation, read straight from the window: no wire age.
             measurement: None,
+            prefill: None,
         })
     }
 
