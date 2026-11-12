@@ -475,7 +475,11 @@ impl RuntimeConfig {
     /// Effective decode microbatch for a non-causal projector image chunk,
     /// mirroring how native context creation resolves the batches: the context
     /// size bounds n_batch, and n_batch bounds n_ubatch. A projector image
-    /// that does not fit this microbatch is rejected at decode time.
+    /// that does not fit this microbatch is rejected at decode time. A
+    /// ctx_size of 0 means automatic on the native side (it resolves to the
+    /// model's training context, which the runtime does not know here); keep
+    /// the conservative 512-token cap so the automatic configuration still
+    /// bounds the image budget instead of collapsing it to zero.
     pub(crate) fn projector_decode_batch(&self) -> u32 {
         self.n_ubatch
             .unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH)
@@ -483,7 +487,11 @@ impl RuntimeConfig {
                 self.n_batch
                     .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count)),
             )
-            .min(self.ctx_size)
+            .min(if self.ctx_size > 0 {
+                self.ctx_size
+            } else {
+                512
+            })
     }
 }
 
@@ -645,6 +653,14 @@ mod tests {
             defaults.projector_decode_batch(),
             LLAMA_SERVER_DEFAULT_N_UBATCH.min(SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH)
         );
+
+        let auto_ctx = RuntimeConfig {
+            ctx_size: 0,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(auto_ctx.projector_decode_batch(), 512);
     }
 
     #[test]

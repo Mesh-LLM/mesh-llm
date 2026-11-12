@@ -8525,7 +8525,7 @@ index 1f4c8a46b..fee4d8fdb 100644
  #include <cstring>
  #include <cstdint>
  #include <filesystem>
-@@ -24,6 +26,21 @@
+@@ -24,6 +26,25 @@
  #include <utility>
  #include <vector>
  
@@ -8537,10 +8537,14 @@ index 1f4c8a46b..fee4d8fdb 100644
 +    std::filesystem::remove(path, ignored);
 +}
 +
++struct fixture_write_error : std::runtime_error {
++    using std::runtime_error::runtime_error;
++};
++
 +static void require_fixture_written(const std::string & path) {
 +    std::error_code error;
 +    if (!std::filesystem::is_regular_file(path, error) || std::filesystem::file_size(path, error) == 0 || error) {
-+        throw std::runtime_error("cannot write model fixture " + path);
++        throw fixture_write_error("cannot write model fixture " + path);
 +    }
 +}
 +
@@ -8949,7 +8953,7 @@ index 1f4c8a46b..fee4d8fdb 100644
              usage(argv);
              return 0;
          } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
-@@ -1878,8 +2112,85 @@ int main(int argc, char ** argv) {
+@@ -1878,8 +2112,87 @@ int main(int argc, char ** argv) {
      init_normal_pool(seed, stdev);
  
      try {
@@ -9027,6 +9031,8 @@ index 1f4c8a46b..fee4d8fdb 100644
 +            if (expect_invalid) {
 +                try {
 +                    save_models(arch_filter, seed, stdev, verbosity, out, text_only, glm_dsa_indexshare);
++                } catch (const fixture_write_error &) {
++                    throw;
 +                } catch (const std::exception &) {
 +                    return 0;
 +                }
