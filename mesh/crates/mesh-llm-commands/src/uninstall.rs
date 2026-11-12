@@ -85,6 +85,8 @@ pub enum RemovePurpose {
     LaunchdLogs,
     ScheduledTaskDefinition,
     WindowsServiceLogs,
+    StartMenuShortcut,
+    ConsoleLauncher,
     NativeRuntimeCache,
     ConfigAndIdentity,
 }
@@ -169,7 +171,10 @@ pub fn plan_uninstall(options: &UninstallOptions, env: &UninstallEnvironment) ->
                 purpose: RemovePurpose::LaunchdLogs,
             });
         }
-        UninstallPlatform::Windows => steps.extend(windows_task::task_file_steps(env)),
+        UninstallPlatform::Windows => {
+            steps.extend(windows_task::task_file_steps(env));
+            steps.extend(windows_task::start_menu_steps(env));
+        }
         UninstallPlatform::Other => {}
     }
     if !options.keep_service_files {
@@ -634,6 +639,8 @@ fn purpose_label(purpose: RemovePurpose) -> &'static str {
         RemovePurpose::LaunchdLogs => "launchd logs",
         RemovePurpose::ScheduledTaskDefinition => "scheduled task definition",
         RemovePurpose::WindowsServiceLogs => "service logs",
+        RemovePurpose::StartMenuShortcut => "Start menu shortcut",
+        RemovePurpose::ConsoleLauncher => "console launcher",
         RemovePurpose::NativeRuntimeCache => "native runtime cache",
         RemovePurpose::ConfigAndIdentity => "configuration and identity",
     }

@@ -142,6 +142,12 @@ pub(super) fn environment(root: &Path) -> BTreeMap<std::ffi::OsString, Value> {
         "MESH_WINDOWS_INSTALL_FIXTURE_CALLS".into(),
         Value::Public(root.join("calls.txt").into_os_string()),
     );
+    // The Start menu folder comes from the shell, not from APPDATA, so the
+    // shortcut would otherwise land in the runner's own Start menu.
+    values.insert(
+        "MESH_LLM_INSTALL_START_MENU_DIR".into(),
+        Value::Public(root.join("start-menu").into_os_string()),
+    );
     let core_modules = system_powershell().parent().unwrap().join("Modules");
     assert!(
         core_modules.is_dir(),
