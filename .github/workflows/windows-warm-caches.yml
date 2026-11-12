@@ -90,6 +90,11 @@ jobs:
         with:
           allow_native_github_cache: "true"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        # sccache 0.17+ expands Cargo's rustc argfile and exceeds the Windows
+        # command-line limit with Rust 1.100's build-dir layout (os error 206,
+        # mozilla/sccache#2787). 0.16.0 passes the argfile through.
+        with:
+          version: v0.16.0
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
@@ -182,6 +187,11 @@ jobs:
         with:
           allow_native_github_cache: "true"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        # sccache 0.17+ expands Cargo's rustc argfile and exceeds the Windows
+        # command-line limit with Rust 1.100's build-dir layout (os error 206,
+        # mozilla/sccache#2787). 0.16.0 passes the argfile through.
+        with:
+          version: v0.16.0
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
