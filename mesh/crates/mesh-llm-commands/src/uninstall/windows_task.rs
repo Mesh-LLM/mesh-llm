@@ -26,6 +26,37 @@ pub(super) fn remove_task_step(env: &UninstallEnvironment) -> UninstallStep {
     }
 }
 
+/// What `install.ps1` adds beside the binary on Windows: the MeshLLM Start menu
+/// shortcut and the console launcher it runs. Without these steps both would
+/// outlive the binary and the shortcut would point at a launcher that fails.
+pub(super) fn start_menu_steps(env: &UninstallEnvironment) -> [UninstallStep; 2] {
+    let install_dir = env
+        .binary_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    [
+        UninstallStep::RemovePath {
+            path: env
+                .config_root
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+                .join(START_MENU_SHORTCUT),
+            purpose: RemovePurpose::StartMenuShortcut,
+        },
+        UninstallStep::RemovePath {
+            path: install_dir.join(CONSOLE_LAUNCHER),
+            purpose: RemovePurpose::ConsoleLauncher,
+        },
+    ]
+}
+
+/// The names `install.ps1` gives the shortcut and the launcher.
+const START_MENU_SHORTCUT: &str = "MeshLLM.lnk";
+const CONSOLE_LAUNCHER: &str = "mesh-llm-console.ps1";
+
 /// What setup wrote for the task: its definition and the service logs.
 pub(super) fn task_file_steps(env: &UninstallEnvironment) -> [UninstallStep; 2] {
     [
@@ -289,6 +320,39 @@ mod tests {
         assert!(
             definition < removed(RemovePurpose::ServiceConfigDir).expect("config directory step")
         );
+    }
+
+    #[test]
+    fn windows_plan_removes_the_start_menu_shortcut_and_console_launcher() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let windows = env(temp.path(), UninstallPlatform::Windows);
+        let plan = plan_uninstall(&options(), &windows);
+        let install_dir = windows
+            .binary_path
+            .parent()
+            .expect("binary has a directory");
+        assert!(
+            plan.steps.contains(&UninstallStep::RemovePath {
+                path: temp
+                    .path()
+                    .join("config/Microsoft/Windows/Start Menu/Programs/MeshLLM.lnk"),
+                purpose: RemovePurpose::StartMenuShortcut,
+            })
+        );
+        assert!(plan.steps.contains(&UninstallStep::RemovePath {
+            path: install_dir.join("mesh-llm-console.ps1"),
+            purpose: RemovePurpose::ConsoleLauncher,
+        }));
+        for platform in [UninstallPlatform::Linux, UninstallPlatform::MacOs] {
+            let plan = plan_uninstall(&options(), &env(temp.path(), platform));
+            assert!(!plan.steps.iter().any(|step| matches!(
+                step,
+                UninstallStep::RemovePath {
+                    purpose: RemovePurpose::StartMenuShortcut | RemovePurpose::ConsoleLauncher,
+                    ..
+                }
+            )));
+        }
     }
 
     #[test]

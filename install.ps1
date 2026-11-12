@@ -4,6 +4,7 @@ param(
     [string]$Flavor,
     [switch]$NoPathUpdate,
     [switch]$NoSetup,
+    [switch]$NoShortcut,
     [switch]$Help
 )
 
@@ -29,6 +30,10 @@ if (Test-Truthy $env:MESH_LLM_INSTALL_PRERELEASE) {
     $PreRelease = $true
 }
 
+if (Test-Truthy $env:MESH_LLM_INSTALL_NO_SHORTCUT) {
+    $NoShortcut = $true
+}
+
 $RequireChecksum = Test-Truthy $env:MESH_LLM_REQUIRE_CHECKSUM
 
 if (-not $Flavor -and $env:MESH_LLM_INSTALL_FLAVOR) {
@@ -42,7 +47,7 @@ if (-not $InstallDir) {
 
 function Show-Usage {
     @"
-Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup]
+Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup] [-NoShortcut]
 
 Options:
   -PreRelease             Install the latest published GitHub prerelease instead of the latest stable release.
@@ -50,6 +55,7 @@ Options:
   -Flavor <FLAVOR>        Legacy compatibility flag. The installer installs the Windows x64 product bundle, including its packaged runtime; ``mesh-llm.exe setup`` may select another compatible runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
   -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
+  -NoShortcut             Do not add the MeshLLM Start menu shortcut, which opens the console and starts the node when it is not running.
   -Help                   Show this help text.
 
 Environment overrides:
@@ -58,6 +64,8 @@ Environment overrides:
   MESH_LLM_INSTALL_PRERELEASE=1
   MESH_LLM_INSTALL_REPO=Mesh-LLM/mesh-llm
   MESH_LLM_REQUIRE_CHECKSUM=1
+  MESH_LLM_INSTALL_NO_SHORTCUT=1
+  MESH_LLM_INSTALL_START_MENU_DIR (folder for the shortcut; defaults to the user's Start menu Programs folder)
 "@
 }
 
@@ -647,6 +655,85 @@ function Add-InstallDirToPath {
     return $true
 }
 
+$ConsoleLauncherName = "mesh-llm-console.ps1"
+
+# Run by the Start menu shortcut: open the console, starting the node first when
+# it is not answering. The node starts through the `mesh-llm` scheduled task when
+# `setup` installed it, else with the command that task runs.
+$ConsoleLauncherScript = @'
+$ErrorActionPreference = 'Stop'
+$mesh = Join-Path $PSScriptRoot 'mesh-llm.exe'
+$console = 'http://127.0.0.1:3131/'
+
+function Test-Console {
+    try {
+        Invoke-WebRequest -Uri ($console + 'api/status') -UseBasicParsing -TimeoutSec 2 | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+if (-not (Test-Console)) {
+    # Start-Process, not &: with 'Stop', Windows PowerShell turns the stderr of a
+    # missing task into a terminating error.
+    $query = Start-Process -FilePath schtasks.exe -ArgumentList '/Query', '/TN', 'mesh-llm' -WindowStyle Hidden -Wait -PassThru
+    if ($query.ExitCode -eq 0) {
+        Start-Process -FilePath schtasks.exe -ArgumentList '/Run', '/TN', 'mesh-llm' -WindowStyle Hidden -Wait
+    } else {
+        Start-Process -FilePath $mesh -ArgumentList 'serve' -WindowStyle Hidden
+    }
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and -not (Test-Console)) {
+        Start-Sleep -Seconds 1
+    }
+}
+
+if (Test-Console) {
+    Start-Process $console
+} else {
+    Add-Type -AssemblyName PresentationFramework
+    [System.Windows.MessageBox]::Show(
+        "MeshLLM did not start within 90 seconds. Run 'mesh-llm status' in PowerShell to see why.",
+        'MeshLLM') | Out-Null
+}
+'@
+
+function Get-StartMenuDir {
+    if ($env:MESH_LLM_INSTALL_START_MENU_DIR) {
+        return $env:MESH_LLM_INSTALL_START_MENU_DIR
+    }
+    return [Environment]::GetFolderPath("Programs")
+}
+
+# A MeshLLM entry in the Start menu, so the console is one click away without
+# opening a terminal. Returns the shortcut path, or $null with -NoShortcut.
+function Install-StartMenuShortcut {
+    param([string]$MeshBinary)
+
+    if ($NoShortcut) {
+        return $null
+    }
+
+    $launcher = Join-Path $InstallDir $ConsoleLauncherName
+    Set-Content -Path $launcher -Value $ConsoleLauncherScript -Encoding UTF8
+
+    $startMenu = Get-StartMenuDir
+    New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
+    $shortcutPath = Join-Path $startMenu "MeshLLM.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.IconLocation = "$MeshBinary,0"
+    $shortcut.Description = "Open the MeshLLM console"
+    # 7: start minimized, so no console window shows while the node starts.
+    $shortcut.WindowStyle = 7
+    $shortcut.Save()
+    return $shortcutPath
+}
+
 function Test-InteractiveSession {
     if ($env:MESH_LLM_INSTALL_INTERACTIVE) {
         return Test-Truthy $env:MESH_LLM_INSTALL_INTERACTIVE
@@ -718,6 +805,11 @@ try {
 
     if ($NoPathUpdate -and -not $pathUpdated) {
         Write-Host "Install directory was not added to PATH. Use the full command below until you add $InstallDir to PATH."
+    }
+
+    $shortcutPath = Install-StartMenuShortcut -MeshBinary $meshBinary
+    if ($shortcutPath) {
+        Write-Host "Added MeshLLM to the Start menu: it opens the console and starts the node when it is not running."
     }
 
     Invoke-SetupOrPrint -MeshBinary $meshBinary
