@@ -19,11 +19,28 @@ struct BatchTiming {
 impl SchedulerWorker {
     /// Align and execute a direct batch, then deliver each request's own result.
     pub(super) fn run_direct_iteration_batch(&mut self) {
-        let batch = take_direct_iteration_batch(
+        let (batch, rejection) = take_batch(
             &mut self.direct_iterations,
+            self.batch_policy.as_ref(),
+            self.active_runtime_sessions,
             self.direct_group_batch_size,
             self.max_direct_iteration_tokens,
         );
+        if let (Some(rejection), Some(telemetry)) = (rejection, self.telemetry.as_ref()) {
+            telemetry.emit(
+                "stage.scheduler_batch_selection_rejected",
+                BTreeMap::from([
+                    (
+                        "skippy.scheduler.batch_policy".to_string(),
+                        json!(self.batch_policy.kind().as_str()),
+                    ),
+                    (
+                        "skippy.scheduler.batch_rejection".to_string(),
+                        json!(rejection.as_str()),
+                    ),
+                ]),
+            );
+        }
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
         let active = retain_active(batch);
         if active.is_empty() {

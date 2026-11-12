@@ -619,6 +619,7 @@ pub(crate) fn runtime_config_from_stage_config(
         kv_lazy_clear: config.kv_lazy_clear,
         kv_release_pages: config.kv_release_pages,
         kv_row_attention: config.kv_row_attention,
+        sample_threads: config.sample_threads,
         projector_path: config.projector_path.clone(),
         projector_use_gpu: config.projector_use_gpu,
         media_marker: config.media_marker.clone(),

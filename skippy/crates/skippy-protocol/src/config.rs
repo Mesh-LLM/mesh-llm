@@ -325,6 +325,48 @@ impl StageActivationCodecPolicy {
     }
 }
 
+/// The algorithm that forms the scheduler's batches: how long a batch waits
+/// for more requests, and which queued requests it takes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchPolicyKind {
+    /// Requests join a batch in the order they arrived, up to the lane count
+    /// and the token budget.
+    #[default]
+    ArrivalOrder,
+}
+
+impl BatchPolicyKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ArrivalOrder => "arrival_order",
+        }
+    }
+}
+
+/// Batch-forming settings. A value left unset is the one the policy chooses
+/// for the backend the stage runs on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchConfig {
+    #[serde(default)]
+    pub policy: Option<BatchPolicyKind>,
+    /// How long a batch of generated tokens waits for the other active
+    /// requests to join it, in microseconds.
+    #[serde(default)]
+    pub decode_window_us: Option<u32>,
+    /// How long a prompt waits for others to join its prefill wave, per
+    /// prompt token, in microseconds. `prefill_coalesce_max_ms` caps the total.
+    #[serde(default)]
+    pub prefill_window_per_token_us: Option<u32>,
+}
+
+impl BatchConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageConfig {
@@ -451,12 +493,21 @@ pub struct StageConfig {
     /// over the whole pool.
     #[serde(default)]
     pub kv_row_attention: Option<bool>,
+    /// Threads that sample the requests of one decode wave. None and zero
+    /// use the scheduler thread plus as many pooled helpers as the wave and
+    /// the hardware allow; one samples every request on the scheduler
+    /// thread; any other value caps the scheduler thread plus helpers.
+    #[serde(default)]
+    pub sample_threads: Option<u32>,
     #[serde(default)]
     pub cache_idle_slots: Option<u32>,
     /// The longest a prompt waits for others to join its prefill wave, in
     /// milliseconds. None is the scheduler's own ceiling; zero never waits.
     #[serde(default)]
     pub prefill_coalesce_max_ms: Option<u32>,
+    /// How the scheduler forms its batches.
+    #[serde(default, skip_serializing_if = "BatchConfig::is_default")]
+    pub batch: BatchConfig,
     /// Exact native tensor names resolved locally from admitted package-v2
     /// tensor IDs. Empty is valid only for an unsplit full-model load.
     #[serde(

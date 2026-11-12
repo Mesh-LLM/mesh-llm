@@ -131,6 +131,7 @@ fn decode_boundary(
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     };
     plan.apply_to(&mut config);
     let selection = select_layer_package_parts(&PackageStageRequest {

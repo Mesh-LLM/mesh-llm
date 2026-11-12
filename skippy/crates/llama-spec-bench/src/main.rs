@@ -357,6 +357,7 @@ fn full_model_config(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Ru
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     })
 }
 

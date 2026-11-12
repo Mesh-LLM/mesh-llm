@@ -149,6 +149,11 @@ pub struct RuntimeConfig {
     /// `Some(true)` use them wherever the backend supports it; `Some(false)`
     /// keeps ordinary attention over the whole pool.
     pub kv_row_attention: Option<bool>,
+    /// Threads that sample the requests of one decode wave. `None` and
+    /// `Some(0)` use the calling thread plus as many pooled helpers as the
+    /// wave and the hardware allow; `Some(1)` samples on the calling thread
+    /// alone; any other value caps the calling thread plus helpers.
+    pub sample_threads: Option<u32>,
     /// Whether the backend offloads host tensor operations to device. `None`
     /// preserves llama.cpp's derived default (enabled).
     pub op_offload: Option<bool>,
@@ -415,6 +420,7 @@ impl RuntimeConfig {
                 kv_lazy_clear: tristate(self.kv_lazy_clear),
                 kv_release_pages: tristate(self.kv_release_pages),
                 kv_row_attention: tristate(self.kv_row_attention),
+                sample_threads: self.sample_threads.unwrap_or(0),
                 op_offload: tristate(self.op_offload),
                 no_host_buffer: self.no_host_buffer,
                 check_tensors: self.check_tensors,
@@ -560,6 +566,7 @@ impl Default for RuntimeConfig {
             kv_lazy_clear: None,
             kv_release_pages: None,
             kv_row_attention: None,
+            sample_threads: None,
             op_offload: None,
             no_host_buffer: false,
             check_tensors: false,
@@ -1109,6 +1116,7 @@ mod tests {
         assert_eq!(raw.kv_lazy_clear, skippy_ffi::TRISTATE_AUTO);
         assert_eq!(raw.kv_release_pages, skippy_ffi::TRISTATE_AUTO);
         assert_eq!(raw.kv_row_attention, skippy_ffi::TRISTATE_AUTO);
+        assert_eq!(raw.sample_threads, 0);
         Ok(())
     }
 
@@ -1121,6 +1129,7 @@ mod tests {
             kv_lazy_clear: Some(false),
             kv_release_pages: Some(false),
             kv_row_attention: Some(true),
+            sample_threads: Some(6),
             ..RuntimeConfig::default()
         }
         .as_raw()?
@@ -1130,6 +1139,7 @@ mod tests {
         assert_eq!(raw.kv_lazy_clear, skippy_ffi::TRISTATE_FALSE);
         assert_eq!(raw.kv_release_pages, skippy_ffi::TRISTATE_FALSE);
         assert_eq!(raw.kv_row_attention, skippy_ffi::TRISTATE_TRUE);
+        assert_eq!(raw.sample_threads, 6);
         Ok(())
     }
 

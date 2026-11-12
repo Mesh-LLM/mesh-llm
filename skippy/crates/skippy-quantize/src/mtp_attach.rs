@@ -212,6 +212,7 @@ fn runtime_config(
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,

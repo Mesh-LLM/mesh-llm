@@ -392,6 +392,7 @@ pub(in crate::frontend) fn draft_runtime_config(
         kv_lazy_clear: config.kv_lazy_clear,
         kv_release_pages: config.kv_release_pages,
         kv_row_attention: config.kv_row_attention,
+        sample_threads: config.sample_threads,
     })
 }
 

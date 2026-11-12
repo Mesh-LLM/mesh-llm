@@ -514,6 +514,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             kv_lazy_clear: None,
             kv_release_pages: None,
             kv_row_attention: None,
+            sample_threads: None,
         },
     ))
 }

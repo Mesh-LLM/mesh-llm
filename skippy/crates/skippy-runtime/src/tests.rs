@@ -128,6 +128,7 @@ mod tests {
             kv_lazy_clear: None,
             kv_release_pages: None,
             kv_row_attention: None,
+            sample_threads: None,
             op_offload: None,
             no_host_buffer: false,
             check_tensors: false,

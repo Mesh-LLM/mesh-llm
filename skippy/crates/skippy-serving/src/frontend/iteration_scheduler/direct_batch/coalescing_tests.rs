@@ -14,7 +14,7 @@ fn worker(commands: std_mpsc::Receiver<SchedulerCommand>) -> SchedulerWorker {
         kv_capacity_tokens: 64,
         max_direct_batch_size: 4,
         direct_group_batch_size: 4,
-        prefill_coalesce_max: std::time::Duration::from_millis(8),
+        batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         // Leave the sentinel command for coalescing or the next idle turn.
         max_commands_per_turn: 0,

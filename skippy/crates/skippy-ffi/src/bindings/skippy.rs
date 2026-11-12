@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 83;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 84;
 pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
@@ -629,6 +629,8 @@ pub struct skippy_runtime_config {
     pub kv_release_pages: i32,
     #[doc = " @brief Whether attention reads a unified pool through per-owner row lists. AUTO and TRUE use row lists wherever the backend supports them; FALSE keeps ordinary attention over the whole pool, to measure one against the other."]
     pub kv_row_attention: i32,
+    #[doc = " @brief Threads that sample the requests of one decode wave. 0 uses the calling thread and as many pooled helpers as the wave and the hardware allow; 1 samples every request on the calling thread; any other value caps the calling thread plus helpers."]
+    pub sample_threads: u32,
     #[doc = " @brief Whether the backend offloads host tensor operations to device (mirrors upstream `op_offload`). SKIPPY_TRISTATE_AUTO preserves llama.cpp's derived default (enabled); FALSE/TRUE force the value."]
     pub op_offload: i32,
     #[doc = " @brief Whether model loading bypasses the host buffer, allowing extra buffers to be used (mirrors upstream `no_host`)."]

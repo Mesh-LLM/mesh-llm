@@ -45,8 +45,10 @@ pub struct ThroughputProfileDefaults {
 /// Resolve named throughput profiles before explicit settings are applied.
 pub fn throughput_profile_defaults(policy: &str) -> ThroughputProfileDefaults {
     match policy {
+        // A doubled micro-batch, and never a smaller batch than `balanced`:
+        // the batch is what lets prompts that arrive together prefill together.
         "throughput" => ThroughputProfileDefaults {
-            batch: Some(UBATCH * 2),
+            batch: Some(BATCH.max(UBATCH * 2)),
             ubatch: Some(UBATCH * 2),
             parallel: Some(2),
             continuous_batching: Some("true".to_string()),
@@ -74,7 +76,7 @@ mod tests {
     fn throughput_profiles_preserve_mesh_tuning_behavior() {
         for (name, batch, ubatch, parallel, continuous) in [
             ("balanced", 2048, 512, 4, "auto"),
-            ("throughput", 1024, 1024, 2, "true"),
+            ("throughput", 2048, 1024, 2, "true"),
             ("saver", 256, 256, 1, "false"),
         ] {
             let profile = throughput_profile_defaults(name);
@@ -82,6 +84,18 @@ mod tests {
             assert_eq!(profile.ubatch, Some(ubatch));
             assert_eq!(profile.parallel, Some(parallel));
             assert_eq!(profile.continuous_batching.as_deref(), Some(continuous));
+        }
+    }
+
+    /// A profile named for throughput must not prefill fewer tokens per
+    /// iteration than the default one, and a batch holds at least one micro-batch.
+    #[test]
+    fn the_throughput_batch_is_never_below_the_balanced_one() {
+        let batch = |name| throughput_profile_defaults(name).batch.unwrap();
+        let ubatch = |name| throughput_profile_defaults(name).ubatch.unwrap();
+        assert!(batch("throughput") >= batch("balanced"));
+        for name in ["balanced", "throughput", "saver"] {
+            assert!(batch(name) >= ubatch(name), "{name}");
         }
     }
 }

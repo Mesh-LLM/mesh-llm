@@ -59,26 +59,12 @@ impl SchedulerWorker {
     /// wave run at once instead of taking a turn of their own, so a request
     /// that is a few milliseconds behind can still submit its prefill in time.
     pub(super) fn coalesce_direct_iterations(&mut self) -> bool {
-        let prefill_tokens = self
-            .direct_iterations
-            .iter()
-            .filter(|request| request.phase == IterationBatchPhase::Prefill)
-            .map(|request| request.token_ids.len())
-            .max();
-        let (target, window) = match prefill_tokens {
-            Some(tokens) => (
-                self.direct_group_batch_size,
-                prefill_coalesce_window(tokens, self.prefill_coalesce_max),
-            ),
-            None => (
-                direct_coalesce_target(
-                    self.active_runtime_sessions,
-                    self.direct_iterations.len(),
-                    self.direct_group_batch_size,
-                ),
-                DIRECT_ITERATION_COALESCE_WINDOW,
-            ),
-        };
+        let Gather { target, window } = self.batch_policy.gather(&BatchView::of(
+            &self.direct_iterations,
+            self.active_runtime_sessions,
+            self.direct_group_batch_size,
+            self.max_direct_iteration_tokens,
+        ));
         let queued_before = self.direct_iterations.len();
         if target <= queued_before {
             return true;

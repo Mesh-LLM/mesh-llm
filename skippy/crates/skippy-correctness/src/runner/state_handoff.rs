@@ -1037,6 +1037,7 @@ fn open_local_state_model(
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     };
     StageModel::open(&stage_resolution.path, &runtime_config)
         .context("failed to open local state handoff stage")
@@ -1619,6 +1620,7 @@ fn build_state_handoff_inputs(
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     };
     let input_model = StageModel::open(&input_resolution.path, &input_config)
         .context("failed to open state handoff input producer")?;

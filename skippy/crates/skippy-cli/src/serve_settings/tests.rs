@@ -1011,6 +1011,39 @@ fn modes_and_budget_dependencies_produce_actionable_errors() {
 }
 
 #[test]
+fn batch_settings_reach_the_stage_config() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--batch-policy",
+        "arrival_order",
+        "--batch-decode-window-us",
+        "500",
+        "--batch-prefill-window-per-token-us",
+        "40",
+        "--sample-threads",
+        "6",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let mut stage: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
+    assert!(stage.batch.is_default());
+    args.public.settings.apply_stage(&mut stage).unwrap();
+    assert_eq!(
+        stage.batch.policy,
+        Some(skippy_protocol::BatchPolicyKind::ArrivalOrder)
+    );
+    assert_eq!(stage.batch.decode_window_us, Some(500));
+    assert_eq!(stage.batch.prefill_window_per_token_us, Some(40));
+    assert_eq!(stage.sample_threads, Some(6));
+}
+
+#[test]
 fn documented_example_is_a_valid_complete_settings_file() {
     let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = package_root.join("../../docs/SERVING_SETTINGS.md");

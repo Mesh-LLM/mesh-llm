@@ -152,9 +152,14 @@ fn serving_config_attrs(config: &StageConfig) -> BTreeMap<String, Value> {
         ("skippy.kv.swa_full", config.swa_full.map(Value::from)),
         (
             "skippy.kv.pool_tokens",
-            config.kv_pool_tokens.map(|tokens| Value::from(tokens.get())),
+            config
+                .kv_pool_tokens
+                .map(|tokens| Value::from(tokens.get())),
         ),
-        ("skippy.kv.lazy_clear", config.kv_lazy_clear.map(Value::from)),
+        (
+            "skippy.kv.lazy_clear",
+            config.kv_lazy_clear.map(Value::from),
+        ),
         (
             "skippy.kv.release_pages",
             config.kv_release_pages.map(Value::from),
@@ -165,13 +170,10 @@ fn serving_config_attrs(config: &StageConfig) -> BTreeMap<String, Value> {
         ),
         (
             "skippy.kv.retention_tokens",
-            config
-                .kv_cache
-                .as_ref()
-                .map(|cache| match cache.retention {
-                    StageKvRetention::Tokens(tokens) => Value::from(tokens),
-                    StageKvRetention::Unbounded => Value::from("unbounded"),
-                }),
+            config.kv_cache.as_ref().map(|cache| match cache.retention {
+                StageKvRetention::Tokens(tokens) => Value::from(tokens),
+                StageKvRetention::Unbounded => Value::from("unbounded"),
+            }),
         ),
         (
             "skippy.scheduler.prefill_coalesce_max_ms",

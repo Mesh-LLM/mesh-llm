@@ -1644,6 +1644,7 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             kv_lazy_clear: None,
             kv_release_pages: None,
             kv_row_attention: None,
+            sample_threads: None,
         },
     )
     .with_context(|| {

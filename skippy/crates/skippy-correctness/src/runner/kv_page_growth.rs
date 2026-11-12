@@ -166,6 +166,7 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     };
     plan.apply_to(&mut config);
     let model = StageModel::open(&args.runtime.model, &config)

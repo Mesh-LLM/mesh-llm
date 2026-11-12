@@ -1,3 +1,4 @@
+mod batch_policy;
 pub(super) mod cache_runtime;
 mod cache_wave;
 mod command_waits;
@@ -8,18 +9,21 @@ mod direct_reply;
 pub(crate) mod readout;
 mod step_telemetry;
 
+use self::batch_policy::{
+    BatchPlatform, BatchPolicy, BatchTuning, BatchView, Gather, batch_policy, take_batch,
+};
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
     should_coalesce_direct_iterations, should_fill_cache_runtime_wave, should_serve_cache_runtime,
     should_suppress_cache_runtime,
 };
 use self::direct_batch::{
-    PIPELINE_DECODE_GROUPS_ENV, direct_coalesce_target, effective_scheduler_lane_count,
-    pipeline_group_batch_size, prefill_coalesce_max, prefill_coalesce_window,
-    resolve_pipeline_decode_groups,
-    scheduler_safe_mode_from_value, should_serve_direct, take_direct_iteration_batch,
+    PIPELINE_DECODE_GROUPS_ENV, effective_scheduler_lane_count, pipeline_group_batch_size,
+    resolve_pipeline_decode_groups, scheduler_safe_mode_from_value, should_serve_direct,
     validate_direct_iteration,
 };
+#[cfg(test)]
+use self::direct_batch::{direct_coalesce_target, take_direct_iteration_batch};
 use self::direct_reply::DirectReply;
 use self::step_telemetry::{StepTiming, sample_kv_used_cells};
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
@@ -398,7 +402,7 @@ struct SchedulerWorker {
     /// unless `SKIPPY_PIPELINE_DECODE_GROUPS` splits waves into groups.
     direct_group_batch_size: usize,
     /// The ceiling on how long a prefill waits for others to join its wave.
-    prefill_coalesce_max: Duration,
+    batch_policy: Box<dyn BatchPolicy>,
     max_direct_iteration_tokens: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
@@ -434,7 +438,13 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
-        let prefill_coalesce_max = prefill_coalesce_max(config.prefill_coalesce_max_ms);
+        let batch_platform = BatchPlatform::detect();
+        let batch_tuning = BatchTuning::resolve(
+            batch_platform,
+            &config.batch,
+            config.prefill_coalesce_max_ms,
+        );
+        let batch_policy = batch_policy(config.batch.policy.unwrap_or_default(), batch_tuning);
         let pipeline_decode_groups = resolve_pipeline_decode_groups(
             env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref(),
             planned_pipeline_decode_groups,
@@ -493,6 +503,26 @@ impl IterationScheduler {
                     json!(mixed_prefill_decode),
                 ),
                 (
+                    "skippy.scheduler.batch_policy".to_string(),
+                    json!(batch_policy.kind().as_str()),
+                ),
+                (
+                    "skippy.scheduler.batch_platform".to_string(),
+                    json!(batch_platform.as_str()),
+                ),
+                (
+                    "skippy.scheduler.batch_decode_window_us".to_string(),
+                    json!(batch_tuning.decode_window.as_micros()),
+                ),
+                (
+                    "skippy.scheduler.batch_prefill_window_per_token_us".to_string(),
+                    json!(batch_tuning.prefill_window_per_token.as_micros()),
+                ),
+                (
+                    "skippy.scheduler.batch_prefill_window_max_ms".to_string(),
+                    json!(batch_tuning.prefill_window_max.as_millis()),
+                ),
+                (
                     "skippy.scheduler.cache_policy".to_string(),
                     json!("weighted_lpm_aging_dfs_waiting_prefix"),
                 ),
@@ -525,7 +555,7 @@ impl IterationScheduler {
                         scheduler_lane_count.max(1),
                         pipeline_decode_groups,
                     ),
-                    prefill_coalesce_max,
+                    batch_policy,
                     max_direct_iteration_tokens,
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,

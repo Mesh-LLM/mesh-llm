@@ -161,6 +161,7 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     };
     let model = StageModel::open(&args.model, &config).context("failed to open full model")?;
     let tokens = model
@@ -279,6 +280,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
+        sample_threads: None,
     };
     let stage0 = StageModel::open(&stage0_resolution.path, &stage0_config)
         .context("failed to open stage 0")?;

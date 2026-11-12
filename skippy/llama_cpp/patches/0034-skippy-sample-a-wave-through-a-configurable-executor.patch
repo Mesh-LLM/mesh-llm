@@ -1,0 +1,590 @@
+From 24b6a305317dc5baaffd3885685e6d2cddb27f2a Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Thu, 12 Nov 2026 12:25:11 +1100
+Subject: [PATCH 34/34] skippy: sample a wave through a configurable executor
+
+Concurrent sampling started one thread per request for every decode step and
+joined them before returning: a thread create and join per token per request,
+with no bound on how many ran at once.
+
+How a wave is sampled is now a skippy_sample_executor, chosen by the new
+`sample_threads` runtime setting:
+
+  0  the calling thread plus helpers from a shared pool, as many as the wave
+     and the hardware allow (the default)
+  1  the calling thread alone
+  N  the pool, N threads at most
+
+The pool (skippy_task_pool) starts a helper the first time a run can use one,
+up to one per spare hardware thread, and reuses them for every step, so a wide
+machine serving many lanes gets as many samplers as it has requests and a small
+one starts none it cannot use. A task's exception reaches the caller. The
+wave's trace span names the executor.
+
+ABI 0.1.73: skippy_runtime_config gains sample_threads.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ include/skippy/common.h         |   2 +-
+ include/skippy/runtime.h        |   3 +
+ src/CMakeLists.txt              |   2 +
+ src/skippy/batch_sampling.cpp   |  30 +++---
+ src/skippy/sample_executor.cpp  |  17 ++++
+ src/skippy/sample_executor.h    |  50 ++++++++++
+ src/skippy/task_pool.cpp        |  97 ++++++++++++++++++
+ src/skippy/task_pool.h          |  59 +++++++++++
+ tests/CMakeLists.txt            |   1 +
+ tests/test-skippy-task-pool.cpp | 171 ++++++++++++++++++++++++++++++++
+ 10 files changed, 415 insertions(+), 17 deletions(-)
+ create mode 100644 src/skippy/sample_executor.cpp
+ create mode 100644 src/skippy/sample_executor.h
+ create mode 100644 src/skippy/task_pool.cpp
+ create mode 100644 src/skippy/task_pool.h
+ create mode 100644 tests/test-skippy-task-pool.cpp
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index b16229b1b..557ba5169 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 72
++#define SKIPPY_ABI_VERSION_PATCH 73
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 31ce347ea..58b157319 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -111,6 +111,9 @@ struct skippy_runtime_config {
+     /** @brief Whether attention reads a unified pool through per-owner row lists. AUTO and TRUE use row lists wherever the backend supports them; FALSE keeps ordinary attention over the whole pool, to measure one against the other. */
+     int32_t kv_row_attention;
+ 
++    /** @brief Threads that sample the requests of one decode wave. 0 uses the calling thread and as many pooled helpers as the wave and the hardware allow; 1 samples every request on the calling thread; any other value caps the calling thread plus helpers. */
++    uint32_t sample_threads;
++
+     // Model-load and context-creation controls resolved from `hardware`
+     // config.
+     /** @brief Whether the backend offloads host tensor operations to device (mirrors upstream `op_offload`). SKIPPY_TRISTATE_AUTO preserves llama.cpp's derived default (enabled); FALSE/TRUE force the value. */
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 7dad15759..3aa224023 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -84,6 +84,8 @@ add_library(llama
+             ../common/llguidance.cpp
+             skippy/sampling.cpp
+             skippy/batch_sampling.cpp
++            skippy/task_pool.cpp
++            skippy/sample_executor.cpp
+             skippy/sampling_config.cpp
+             skippy/chat_sampling.cpp
+             skippy/sampling_vocab.cpp
+diff --git a/src/skippy/batch_sampling.cpp b/src/skippy/batch_sampling.cpp
+index e59c89857..0b01db542 100644
+--- a/src/skippy/batch_sampling.cpp
++++ b/src/skippy/batch_sampling.cpp
+@@ -3,13 +3,12 @@
+ #include "llama-context.h"
+ #include "skippy/runtime_types.h"
+ #include "skippy/sampling_internal.h"
++#include "skippy/sample_executor.h"
+ #include "skippy/trace_scope.h"
+ 
+ #include <algorithm>
+ #include <iterator>
+ #include <numeric>
+-#include <system_error>
+-#include <thread>
+ 
+ namespace {
+ 
+@@ -25,8 +24,8 @@ llama_token sample(const skippy_sample_request & request) {
+     return skippy_sample_token_ith(request.session, request.sampling, request.logits_index);
+ }
+ 
+-// One helper thread per index after the first, which this thread samples.
+-// Each thread writes only its own slot of `tokens`.
++// Samples through the executor the stage's `sample_threads` selects. Each
++// task writes only its own slot of `tokens`.
+ void sample_concurrently(
+         const std::vector<skippy_sample_request> & requests,
+         std::vector<size_t>::const_iterator first,
+@@ -35,24 +34,23 @@ void sample_concurrently(
+         std::vector<llama_token> & tokens) {
+     skippy_trace::scope trace("skippy.sample_concurrent", "requests", std::distance(first, last));
+     const uint64_t parent = skippy_trace::current_parent();
+-    const auto sample_reading = [&requests, &tokens, &outputs](size_t index) {
++    const auto sample_reading = [&](size_t index) {
+         const llama_output_reader reader(outputs);
+         tokens[index] = sample(requests[index]);
+     };
+-    std::vector<std::thread> helpers;
+-    helpers.reserve(static_cast<size_t>(std::distance(first, last)));
+-    std::for_each(std::next(first), last, [&](size_t index) {
+-        try {
+-            helpers.emplace_back([&sample_reading, index, parent] {
+-                const skippy_trace::adopt joined(parent);
++    const uint32_t sample_threads = requests[*first].session->stage_model->config.sample_threads;
++    skippy_with_sample_executor(sample_threads, [&](const skippy_sample_executor & executor) {
++        trace.set_detail(executor.name());
++        executor.run(static_cast<size_t>(std::distance(first, last)), [&](size_t slot, bool on_helper) {
++            const size_t index = *std::next(first, static_cast<std::ptrdiff_t>(slot));
++            if (!on_helper) {
+                 sample_reading(index);
+-            });
+-        } catch (const std::system_error &) {
++                return;
++            }
++            const skippy_trace::adopt joined(parent);
+             sample_reading(index);
+-        }
++        });
+     });
+-    sample_reading(*first);
+-    std::for_each(helpers.begin(), helpers.end(), [](std::thread & helper) { helper.join(); });
+ }
+ 
+ bool share_context(
+diff --git a/src/skippy/sample_executor.cpp b/src/skippy/sample_executor.cpp
+new file mode 100644
+index 000000000..614074d52
+--- /dev/null
++++ b/src/skippy/sample_executor.cpp
+@@ -0,0 +1,17 @@
++#include "skippy/sample_executor.h"
++
++#include <algorithm>
++#include <limits>
++#include <numeric>
++#include <vector>
++
++void skippy_inline_sampling::run(size_t count, const skippy_task_pool::task_fn & task) const {
++    std::vector<size_t> indices(count);
++    std::iota(indices.begin(), indices.end(), size_t { 0 });
++    std::for_each(indices.begin(), indices.end(), [&](size_t index) { task(index, false); });
++}
++
++void skippy_pooled_sampling::run(size_t count, const skippy_task_pool::task_fn & task) const {
++    const size_t max_helpers = threads == 0 ? std::numeric_limits<size_t>::max() : threads - 1;
++    skippy_task_pool::shared().run(count, task, max_helpers);
++}
+diff --git a/src/skippy/sample_executor.h b/src/skippy/sample_executor.h
+new file mode 100644
+index 000000000..7eeb5937c
+--- /dev/null
++++ b/src/skippy/sample_executor.h
+@@ -0,0 +1,50 @@
++#pragma once
++
++// How the requests of a wave are sampled. `sample_threads` in
++// skippy_runtime_config picks the executor; a new strategy is a new
++// implementation and a new case in skippy_with_sample_executor.
++
++#include "skippy/task_pool.h"
++
++#include <cstddef>
++#include <cstdint>
++
++class skippy_sample_executor {
++  public:
++    virtual ~skippy_sample_executor() = default;
++
++    // names the executor on the wave's trace span
++    virtual const char * name() const = 0;
++    // Runs task for every index below count and returns once all have run.
++    virtual void run(size_t count, const skippy_task_pool::task_fn & task) const = 0;
++};
++
++// The calling thread samples every request in turn.
++class skippy_inline_sampling final : public skippy_sample_executor {
++  public:
++    const char * name() const override { return "inline"; }
++    void run(size_t count, const skippy_task_pool::task_fn & task) const override;
++};
++
++// The calling thread and helpers from the shared pool, `threads` at most; 0
++// is as many as the wave and the hardware allow.
++class skippy_pooled_sampling final : public skippy_sample_executor {
++  public:
++    explicit skippy_pooled_sampling(uint32_t threads) : threads(threads) {
++    }
++    const char * name() const override { return "pool"; }
++    void run(size_t count, const skippy_task_pool::task_fn & task) const override;
++
++  private:
++    uint32_t threads;
++};
++
++// Calls use(executor) with the executor `sample_threads` selects: 0 the pool
++// at its widest, 1 the calling thread alone, N the pool with N threads at most.
++template <typename Use>
++auto skippy_with_sample_executor(uint32_t sample_threads, Use && use) {
++    if (sample_threads == 1) {
++        return use(skippy_inline_sampling());
++    }
++    return use(skippy_pooled_sampling(sample_threads));
++}
+diff --git a/src/skippy/task_pool.cpp b/src/skippy/task_pool.cpp
+new file mode 100644
+index 000000000..88f8d3b59
+--- /dev/null
++++ b/src/skippy/task_pool.cpp
+@@ -0,0 +1,97 @@
++#include "skippy/task_pool.h"
++
++#include <algorithm>
++#include <iterator>
++#include <system_error>
++#include <utility>
++
++skippy_task_pool::skippy_task_pool(size_t ceiling) : limit(ceiling) {
++}
++
++skippy_task_pool::~skippy_task_pool() {
++    {
++        const std::lock_guard<std::mutex> lock(mutex);
++        stopping = true;
++    }
++    wake.notify_all();
++    std::for_each(threads.begin(), threads.end(), [](std::thread & thread) { thread.join(); });
++}
++
++skippy_task_pool & skippy_task_pool::shared() {
++    static skippy_task_pool pool(std::max(2u, std::thread::hardware_concurrency()) - 1);
++    return pool;
++}
++
++size_t skippy_task_pool::helpers() const {
++    const std::lock_guard<std::mutex> lock(mutex);
++    return threads.size();
++}
++
++void skippy_task_pool::run(size_t n, const task_fn & fn, size_t max_helpers) {
++    if (n == 0) {
++        return;
++    }
++    const std::lock_guard<std::mutex> one_run(turn);
++    const size_t wanted = std::min({ max_helpers, limit, n - 1 });
++    {
++        const std::lock_guard<std::mutex> lock(mutex);
++        try {
++            std::generate_n(std::back_inserter(threads), wanted - std::min(wanted, threads.size()), [this] {
++                return std::thread([this, ordinal = threads.size()] { serve(ordinal); });
++            });
++        } catch (const std::system_error &) {
++            // the helpers that did start, and the caller, still run every task
++        }
++        task    = &fn;
++        count   = n;
++        next    = 0;
++        pending = n;
++        allowed = wanted;
++        failure = nullptr;
++    }
++    wake.notify_all();
++    work(false);
++
++    std::unique_lock<std::mutex> lock(mutex);
++    idle.wait(lock, [this] { return pending == 0; });
++    task = nullptr;
++    if (failure) {
++        std::rethrow_exception(std::exchange(failure, nullptr));
++    }
++}
++
++// Takes indices until none are left.
++void skippy_task_pool::work(bool on_helper) {
++    std::unique_lock<std::mutex> lock(mutex);
++    while (task != nullptr && next < count) {
++        const size_t    index = next++;
++        const task_fn * fn    = task;
++        lock.unlock();
++        std::exception_ptr thrown;
++        try {
++            (*fn)(index, on_helper);
++        } catch (...) {
++            thrown = std::current_exception();
++        }
++        lock.lock();
++        if (thrown && !failure) {
++            failure = thrown;
++        }
++        if (--pending == 0) {
++            idle.notify_all();
++        }
++    }
++}
++
++void skippy_task_pool::serve(size_t ordinal) {
++    std::unique_lock<std::mutex> lock(mutex);
++    while (true) {
++        wake.wait(lock, [&] { return stopping || (task != nullptr && next < count && ordinal < allowed); });
++        if (stopping) {
++            return;
++        }
++        lock.unlock();
++        work(true);
++        lock.lock();
++    }
++}
+diff --git a/src/skippy/task_pool.h b/src/skippy/task_pool.h
+new file mode 100644
+index 000000000..e33523ea7
+--- /dev/null
++++ b/src/skippy/task_pool.h
+@@ -0,0 +1,59 @@
++#pragma once
++
++// Helper threads that outlive a call. A decode step samples one token for
++// every request of a wave; starting and joining a thread per request per step
++// costs more than the sampling it spreads, and has no bound.
++
++#include <condition_variable>
++#include <cstddef>
++#include <exception>
++#include <functional>
++#include <mutex>
++#include <thread>
++#include <vector>
++
++class skippy_task_pool {
++  public:
++    // on_helper: the task runs on a pool thread, not the thread that called run()
++    using task_fn = std::function<void(size_t index, bool on_helper)>;
++
++    // ceiling: the most helper threads the pool ever starts
++    explicit skippy_task_pool(size_t ceiling);
++    ~skippy_task_pool();
++
++    skippy_task_pool(const skippy_task_pool &)             = delete;
++    skippy_task_pool & operator=(const skippy_task_pool &) = delete;
++
++    // The pool every caller shares. Its ceiling is one helper per spare
++    // hardware thread, so it is as wide as the machine and no wider.
++    static skippy_task_pool & shared();
++
++    size_t ceiling() const { return limit; }
++    // helper threads started so far
++    size_t helpers() const;
++
++    // Runs task for every index below count and returns once all have run,
++    // on the calling thread and at most max_helpers helpers. Helpers start
++    // the first time a run can use them: a run of n tasks uses n - 1 at most.
++    // Rethrows the first exception a task threw. Calls from different threads
++    // take turns.
++    void run(size_t count, const task_fn & task, size_t max_helpers);
++
++  private:
++    void work(bool on_helper);
++    void serve(size_t ordinal);
++
++    const size_t            limit;
++    std::mutex              turn;
++    mutable std::mutex      mutex;
++    std::condition_variable wake;
++    std::condition_variable idle;
++    const task_fn *         task    = nullptr; // owned by the run() in progress
++    size_t                  count   = 0;
++    size_t                  next    = 0;
++    size_t                  pending = 0;
++    size_t                  allowed = 0; // helpers the run in progress may use
++    std::exception_ptr      failure;
++    bool                    stopping = false;
++    std::vector<std::thread> threads; // grown by run() under `turn`
++};
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 595a84a26..452c0dd8f 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -195,6 +195,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
+     llama_build_and_test(test-skippy-kv-rows-aligned.cpp)
+     llama_build_and_test(test-skippy-kv-place-together.cpp)
++    llama_build_and_test(test-skippy-task-pool.cpp)
+     llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
+diff --git a/tests/test-skippy-task-pool.cpp b/tests/test-skippy-task-pool.cpp
+new file mode 100644
+index 000000000..6bb6b040f
+--- /dev/null
++++ b/tests/test-skippy-task-pool.cpp
+@@ -0,0 +1,171 @@
++// skippy_task_pool and the sampling executors over it: every index runs once, on a bounded
++// set of threads that later runs reuse, and a task's exception reaches the caller.
++#include "../src/skippy/sample_executor.h"
++#include "../src/skippy/task_pool.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cstdio>
++#include <mutex>
++#include <numeric>
++#include <set>
++#include <stdexcept>
++#include <string>
++#include <thread>
++#include <vector>
++
++static int failures = 0;
++#define CHECK(cond) do { if (!(cond)) { ++failures; std::printf("FAIL line %d: %s\n", __LINE__, #cond); } } while (0)
++
++static void every_index_runs_once() {
++    skippy_task_pool pool(3);
++    std::vector<int> rounds(200);
++    std::for_each(rounds.begin(), rounds.end(), [&](int) {
++        std::vector<std::atomic<int>> hits(17);
++        pool.run(hits.size(), [&](size_t index, bool) { hits[index]++; }, 3);
++        CHECK(std::all_of(hits.begin(), hits.end(), [](const std::atomic<int> & hit) { return hit == 1; }));
++    });
++}
++
++static void threads_are_bounded_and_reused() {
++    skippy_task_pool pool(3);
++    std::mutex mutex;
++    std::set<std::thread::id> seen;
++    std::atomic<int> running { 0 };
++    std::atomic<int> most { 0 };
++    std::atomic<int> on_helpers { 0 };
++    std::vector<int> rounds(300);
++    std::for_each(rounds.begin(), rounds.end(), [&](int) {
++        pool.run(16, [&](size_t, bool on_helper) {
++            const int now = ++running;
++            int before = most.load();
++            while (now > before && !most.compare_exchange_weak(before, now)) {
++            }
++            on_helpers += on_helper ? 1 : 0;
++            {
++                const std::lock_guard<std::mutex> lock(mutex);
++                seen.insert(std::this_thread::get_id());
++            }
++            std::this_thread::yield();
++            --running;
++        }, 3);
++    });
++    CHECK(pool.helpers() == 3);
++    CHECK(seen.size() <= pool.helpers() + 1);
++    CHECK(most <= (int) pool.helpers() + 1);
++    CHECK(on_helpers > 0);
++    CHECK(seen.count(std::this_thread::get_id()) == 1);
++}
++
++static void a_pool_without_helpers_runs_on_the_caller() {
++    skippy_task_pool pool(0);
++    int sum = 0;
++    pool.run(10, [&](size_t index, bool on_helper) {
++        CHECK(!on_helper);
++        sum += (int) index;
++    }, 8);
++    CHECK(sum == 45);
++    CHECK(pool.helpers() == 0);
++    pool.run(0, [&](size_t, bool) { CHECK(false); }, 8);
++}
++
++static void an_exception_reaches_the_caller_and_the_pool_keeps_working() {
++    skippy_task_pool pool(2);
++    std::atomic<int> ran { 0 };
++    bool caught = false;
++    try {
++        pool.run(8, [&](size_t index, bool) {
++            ++ran;
++            if (index == 3) {
++                throw std::runtime_error("task 3");
++            }
++        }, 2);
++    } catch (const std::runtime_error &) {
++        caught = true;
++    }
++    CHECK(caught);
++    CHECK(ran == 8);
++    std::atomic<int> again { 0 };
++    pool.run(8, [&](size_t, bool) { ++again; }, 2);
++    CHECK(again == 8);
++}
++
++static void callers_on_different_threads_take_turns() {
++    skippy_task_pool pool(2);
++    std::atomic<int> total { 0 };
++    std::vector<std::thread> callers;
++    std::generate_n(std::back_inserter(callers), 4, [&] {
++        return std::thread([&] {
++            std::vector<int> rounds(100);
++            std::for_each(rounds.begin(), rounds.end(), [&](int) { pool.run(5, [&](size_t, bool) { ++total; }, 2); });
++        });
++    });
++    std::for_each(callers.begin(), callers.end(), [](std::thread & caller) { caller.join(); });
++    CHECK(total == 4 * 100 * 5);
++}
++
++// Helpers start when a run can use them, and a run never uses more than it asked for.
++static void the_pool_grows_to_demand_and_honours_each_runs_limit() {
++    skippy_task_pool pool(6);
++    CHECK(pool.helpers() == 0);
++    pool.run(1, [](size_t, bool) {}, 6);
++    CHECK(pool.helpers() == 0);
++    pool.run(3, [](size_t, bool) {}, 6);
++    CHECK(pool.helpers() == 2);
++    pool.run(64, [](size_t, bool) {}, 100);
++    CHECK(pool.helpers() == 6);
++
++    std::atomic<int> running { 0 };
++    std::atomic<int> most { 0 };
++    std::atomic<int> on_helpers { 0 };
++    std::vector<int> rounds(200);
++    std::for_each(rounds.begin(), rounds.end(), [&](int) {
++        pool.run(32, [&](size_t, bool on_helper) {
++            const int now = ++running;
++            int before = most.load();
++            while (now > before && !most.compare_exchange_weak(before, now)) {
++            }
++            on_helpers += on_helper ? 1 : 0;
++            std::this_thread::yield();
++            --running;
++        }, 1);
++    });
++    CHECK(most <= 2);
++    std::for_each(rounds.begin(), rounds.end(), [&](int) {
++        pool.run(32, [&](size_t, bool on_helper) { CHECK(!on_helper); }, 0);
++    });
++}
++
++static void sample_threads_select_the_executor() {
++    const auto name_of = [](uint32_t sample_threads) {
++        return std::string(skippy_with_sample_executor(sample_threads,
++                [](const skippy_sample_executor & executor) { return executor.name(); }));
++    };
++    CHECK(name_of(0) == "pool");
++    CHECK(name_of(1) == "inline");
++    CHECK(name_of(4) == "pool");
++
++    std::vector<std::atomic<int>> hits(9);
++    skippy_inline_sampling().run(hits.size(), [&](size_t index, bool on_helper) {
++        CHECK(!on_helper);
++        hits[index]++;
++    });
++    skippy_pooled_sampling(3).run(hits.size(), [&](size_t index, bool) { hits[index]++; });
++    skippy_pooled_sampling(0).run(hits.size(), [&](size_t index, bool) { hits[index]++; });
++    CHECK(std::all_of(hits.begin(), hits.end(), [](const std::atomic<int> & hit) { return hit == 3; }));
++}
++
++int main() {
++    every_index_runs_once();
++    threads_are_bounded_and_reused();
++    a_pool_without_helpers_runs_on_the_caller();
++    an_exception_reaches_the_caller_and_the_pool_keeps_working();
++    callers_on_different_threads_take_turns();
++    the_pool_grows_to_demand_and_honours_each_runs_limit();
++    sample_threads_select_the_executor();
++    CHECK(skippy_task_pool::shared().helpers() <= skippy_task_pool::shared().ceiling());
++    if (failures == 0) {
++        std::printf("ok\n");
++    }
++    return failures == 0 ? 0 : 1;
++}
+-- 
+2.43.0
+

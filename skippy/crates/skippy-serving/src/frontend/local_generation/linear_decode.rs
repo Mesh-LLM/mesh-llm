@@ -295,8 +295,8 @@ mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
     use super::*;
-    use crate::frontend::generation::LoadedModel;
     use crate::frontend::admission::GenerationTokenBudget;
+    use crate::frontend::generation::LoadedModel;
     use crate::frontend::generation::{
         GenerationConcurrencyController, InferenceBackendMode, InferenceCacheHints,
         InferenceGenerationIds,

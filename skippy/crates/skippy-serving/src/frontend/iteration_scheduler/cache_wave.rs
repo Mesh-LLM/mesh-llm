@@ -91,7 +91,7 @@ mod tests {
             kv_capacity_tokens: 8192,
             max_direct_batch_size: 4,
             direct_group_batch_size: 4,
-            prefill_coalesce_max: std::time::Duration::from_millis(8),
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: 32,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,

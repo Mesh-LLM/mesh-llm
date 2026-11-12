@@ -246,6 +246,10 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--continuous-batching` | `continuous_batching` | Allow the iteration scheduler to serve concurrent lanes |
 | `--pipeline-decode-groups` | `pipeline_decode_groups` | Number of decode dispatch groups |
 | `--prefill-coalesce-max-ms` | `prefill_coalesce_max_ms` | Longest a prompt waits for others to join its prefill wave, in milliseconds; zero never waits |
+| `--sample-threads` | `sample_threads` | Threads that sample one decode wave: 0 as many as the wave and the hardware allow, 1 the scheduler thread alone, N at most N |
+| `--batch-policy` | `batch_policy` | Algorithm that forms the scheduler's batches: arrival_order |
+| `--batch-decode-window-us` | `batch_decode_window_us` | How long generated tokens wait for the other active requests to join their batch, in microseconds |
+| `--batch-prefill-window-per-token-us` | `batch_prefill_window_per_token_us` | How long a prompt waits for others to join its prefill wave, per prompt token, in microseconds |
 | `--generation-signal-window` | `generation_signal_window` | Generation signal observation window in tokens |
 | `--generation-concurrency` | `generation_concurrency` | See `skippy serve --help` for values and defaults. |
 | `--adaptive-generation-concurrency` | `adaptive_generation_concurrency` | See `skippy serve --help` for values and defaults. |
