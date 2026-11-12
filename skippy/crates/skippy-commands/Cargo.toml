@@ -7,6 +7,9 @@ description = "Shared Skippy model commands and standalone command output"
 readme = "README.md"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 
+[features]
+dynamic-native-runtime = ["skippy-api/dynamic-native-runtime"]
+
 [dependencies]
 clap.workspace = true
 chrono = "0.4"
