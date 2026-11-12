@@ -63,10 +63,11 @@ export default [
     ]
   },
   {
-    title: "Plugins",
-    description: "Extend mesh-llm with managed plugin processes, MCP tools, and HTTP bindings.",
+    title: "Extending Mesh",
+    description: "Find released plugins, install integrations, or build your own managed plugin process.",
     links: [
-      ["Plugins overview", "/docs/pages/plugins/"],
+      ["Plugin directory", "/plugins/"],
+      ["Install and configure plugins", "/docs/pages/plugins/"],
       ["Share Ollama, vLLM or LM Studio", "/docs/pages/external-model-endpoints/"],
       ["Plugin architecture", "/docs/pages/plugin-architecture/"],
       ["Developing plugins", "/docs/pages/developing-plugins/"],
