@@ -448,7 +448,7 @@ async fn notify_added_members(
     let Ok(catalog) = fetch().await else {
         return;
     };
-    let added = members_added_since(offered, &set_members(&catalog, name));
+    let added = members_added_since(offered, &installable_members(options, &catalog, name));
     if added.is_empty() {
         return;
     }
@@ -467,13 +467,43 @@ pub(crate) fn record_offer(
     catalog: &PluginCatalog,
     set: &str,
 ) {
-    if let Err(error) = offers.record(&options.store_root, set, &set_members(catalog, set)) {
+    if let Err(error) = offers.record(
+        &options.store_root,
+        set,
+        &installable_members(options, catalog, set),
+    ) {
         let mut err = mesh_llm_events::console_err();
         let _ = writeln!(
             err,
             "⚠️  Could not record the {set} plugin set offer ({error:#}); a later update may offer it again."
         );
     }
+}
+
+/// The members of `set` this machine could install: pinned for its platform
+/// and compatible with its host. Only these count as offered, so a member
+/// with no archive here yet (a Windows build still to ship) stays un-offered
+/// and shows as a new member once it can install.
+fn installable_members(
+    options: &PluginInstallOptions,
+    catalog: &PluginCatalog,
+    set: &str,
+) -> Vec<String> {
+    mesh_llm_plugin_manager::resolve_set(
+        catalog,
+        set,
+        options.target.triple(),
+        &options.host_version,
+    )
+    .map(|resolution| {
+        resolution
+            .members
+            .into_iter()
+            .filter(|member| member.availability == MemberAvailability::Available)
+            .map(|member| member.name)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// The member names the catalog publishes for `set`; empty when it has none.
@@ -1033,6 +1063,39 @@ mod tests {
             fetches.get(),
             1,
             "the explicit set is not blocked by the marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_member_with_no_archive_for_this_machine_stays_un_offered() {
+        let temp = tempfile::tempdir().unwrap();
+        // `notes` has no archive for this platform (as capsules on Windows
+        // before its build ships); `capsules` does.
+        let entries = PHASE_ENTRIES.replace(
+            r#""name":"notes","description":"Notes","github_url":"https://github.com/Mesh-LLM/notes","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v1.0.0","sha256":{"x86_64-unknown-linux-gnu""#,
+            r#""name":"notes","description":"Notes","github_url":"https://github.com/Mesh-LLM/notes","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v1.0.0","sha256":{"x86_64-pc-windows-msvc""#,
+        );
+        assert_ne!(entries, PHASE_ENTRIES);
+        let sets =
+            r#"{"name":"recommended","description":"Recommended","plugins":["capsules","notes"]}"#;
+        let catalog = PluginCatalog::parse_jsonl(&entries)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(sets).unwrap())
+            .unwrap();
+        install_marker(temp.path(), "capsules");
+        let fetches = std::cell::Cell::new(0);
+        run_phase(&default_plan(), temp.path(), &catalog, &fetches, true).await;
+        assert_eq!(
+            offered(temp.path()),
+            Some(vec!["capsules".to_string()]),
+            "only the member this machine could install is recorded"
+        );
+        // Once the member can install here, an attended run shows it as new.
+        let shipped = phase_catalog(&["capsules", "notes"]);
+        run_phase(&offer_plan(), temp.path(), &shipped, &fetches, true).await;
+        assert_eq!(
+            offered(temp.path()),
+            Some(vec!["capsules".to_string(), "notes".to_string()])
         );
     }
 

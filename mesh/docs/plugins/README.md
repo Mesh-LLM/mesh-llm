@@ -572,6 +572,8 @@ machine that was never offered the set. The machine records that in
 never install or prompt for the set again, a member the operator removed is
 not reinstalled, and members the catalog adds later appear as an attended
 notice (`mesh-llm plugins sets install recommended` installs them).
+Only members this machine can install count as offered; one with no archive
+for its platform yet appears as a new member once it can install.
 A member the operator turned off or deleted under the retired bundled-default
 installer (its `default-off` marker in the plugin store) counts as that
 answer: the set is recorded as offered and nothing is reinstalled.
