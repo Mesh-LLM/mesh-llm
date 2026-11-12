@@ -99,7 +99,7 @@ impl Attempts {
             return Err("selected publication requires separate build identities".into());
         }
         match super::select_attempt(true, repair, verify)? {
-            super::decision::AttemptDecision::Green(candidate) => Ok(candidate),
+            super::decision::AttemptDecision::Green { candidate, .. } => Ok(candidate),
             _ => Err("selected publication requires two complete green passes".into()),
         }
     }

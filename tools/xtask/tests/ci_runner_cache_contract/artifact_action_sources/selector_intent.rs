@@ -169,7 +169,7 @@ fn shared_selector_exact_canary_cannot_bypass_repository_event_or_hosted_control
     selected(
         &[
             ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
-            ("FIXTURE_DATE", "2026-10-02"),
+            ("FIXTURE_DATE", "2027-10-02"),
         ],
         true,
         false,

@@ -39,7 +39,7 @@ version and pulls the matching CUDA build (e.g. `...-cuda-13.tar.gz`). RTX 50xx
 (Blackwell / sm_120) is detected and handled by the installer.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | sh
+curl -fsSL https://meshllm.cloud/install.sh | sh
 ```
 
 The binary lands at `~/.local/bin/mesh-llm` (not always on a non-interactive

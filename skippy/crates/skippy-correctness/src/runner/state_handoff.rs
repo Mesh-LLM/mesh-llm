@@ -18,9 +18,7 @@ use crate::{
         CacheGenGateReport, StageModelReport, StateHandoffReport, StatePayloadBlockDigestReport,
         StatePayloadDigestReport,
     },
-    support::{
-        ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
-    },
+    support::{activation_width, generate_run_id, spawn_stage_until_ready, temp_config_path_for},
 };
 
 use super::native_mtp::emit_report;
@@ -542,28 +540,32 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     )
     .with_context(|| format!("failed to write {}", restore_config_path.display()))?;
 
-    let mut source_command =
-        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
-    source_command.args([
-        "--stage-transport",
-        "binary",
-        "--worker-only",
-        "--config",
-        source_config_path
-            .to_str()
-            .context("source config path is not valid UTF-8")?,
-        "--max-inflight",
-        &args.max_inflight.to_string(),
-    ]);
-    configure_child_logs(&mut source_command, args.child_logs);
-    let mut source = ChildGuard::spawn(source_command)?;
-
-    let mut source_stream = connect_ready_child(
-        args.source_bind_addr,
-        args.startup_timeout_secs,
-        &mut source,
-    )
-    .context("source binary server did not become ready")?;
+    let source_config_arg = source_config_path
+        .to_str()
+        .context("source config path is not valid UTF-8")?
+        .to_string();
+    let restore_config_arg = restore_config_path
+        .to_str()
+        .context("restore config path is not valid UTF-8")?
+        .to_string();
+    let max_inflight = args.max_inflight.to_string();
+    let (source, mut source_stream) =
+        spawn_stage_until_ready(args.source_bind_addr, args.startup_timeout_secs, || {
+            let mut source_command =
+                crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
+            source_command.args([
+                "--stage-transport",
+                "binary",
+                "--worker-only",
+                "--config",
+                &source_config_arg,
+                "--max-inflight",
+                &max_inflight,
+            ]);
+            configure_child_logs(&mut source_command, args.child_logs);
+            source_command
+        })
+        .context("source binary server did not become ready")?;
     let source_prefill_started = Instant::now();
     send_prefill_for_state_handoff(
         &mut source_stream,
@@ -592,28 +594,23 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     drop(source_stream);
     drop(source);
 
-    let mut restore_command =
-        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
-    restore_command.args([
-        "--stage-transport",
-        "binary",
-        "--worker-only",
-        "--config",
-        restore_config_path
-            .to_str()
-            .context("restore config path is not valid UTF-8")?,
-        "--max-inflight",
-        &args.max_inflight.to_string(),
-    ]);
-    configure_child_logs(&mut restore_command, args.child_logs);
-    let mut restore = ChildGuard::spawn(restore_command)?;
-
-    let mut restore_stream = connect_ready_child(
-        args.restore_bind_addr,
-        args.startup_timeout_secs,
-        &mut restore,
-    )
-    .context("restore binary server did not become ready")?;
+    let (_restore, mut restore_stream) =
+        spawn_stage_until_ready(args.restore_bind_addr, args.startup_timeout_secs, || {
+            let mut restore_command =
+                crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
+            restore_command.args([
+                "--stage-transport",
+                "binary",
+                "--worker-only",
+                "--config",
+                &restore_config_arg,
+                "--max-inflight",
+                &max_inflight,
+            ]);
+            configure_child_logs(&mut restore_command, args.child_logs);
+            restore_command
+        })
+        .context("restore binary server did not become ready")?;
     let restore_import_started = Instant::now();
     import_state_over_binary(&mut restore_stream, &state_bytes, true)
         .context("import state into restore server")?;

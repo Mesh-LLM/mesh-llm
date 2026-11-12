@@ -130,17 +130,29 @@ fn select_attempt(changed: bool, repair: &Job, verification: &Job) -> DynResult<
     }
     let candidate = decision::Candidate::from_outputs(&repair.outputs)?;
     if !changed {
-        return Ok(AttemptDecision::Green(candidate));
+        return Ok(AttemptDecision::Green {
+            candidate,
+            retry_recovered: false,
+        });
     }
     // Reconciliation already admits the complete family roster for this exact
     // producer package; a successful retry does not require a second pass.
+    // The recovery marker must reach publication: the recovered repair package
+    // is admitted under the reconciliation evidence instead of an independent
+    // verify-* package, and the publication gate matches on this marker.
     if repair.outputs.retry_recovered == "true" && verification.result == JobResult::Skipped {
-        return Ok(AttemptDecision::Green(candidate));
+        return Ok(AttemptDecision::Green {
+            candidate,
+            retry_recovered: true,
+        });
     }
     if verification.outputs.green == "true" {
         let verified = decision::Candidate::from_outputs(&verification.outputs)?;
         return Ok(if candidate.head == verified.head {
-            AttemptDecision::Green(verified)
+            AttemptDecision::Green {
+                candidate: verified,
+                retry_recovered: false,
+            }
         } else {
             decision::identity_failure()
         });
@@ -200,13 +212,19 @@ fn select_final(
             return Err("selected MeshLLM revision certification failed".into());
         }
         return Ok(if publish_selected {
-            FinalDecision::Publish(candidate)
+            FinalDecision::Publish {
+                candidate,
+                retry_recovered: false,
+            }
         } else {
             FinalDecision::Certified
         });
     }
     Ok(if changed {
-        FinalDecision::Publish(candidate)
+        FinalDecision::Publish {
+            candidate,
+            retry_recovered: selected.outputs.retry_recovered == "true",
+        }
     } else {
         FinalDecision::Certified
     })

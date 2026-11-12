@@ -110,6 +110,9 @@ struct RouteModelState {
     attempts: usize,
     timeout_attempts: usize,
     refreshed: bool,
+    /// Prompt bytes of the request body, to learn the model's bytes per token
+    /// from the reply's `usage.prompt_tokens`.
+    prompt_bytes: Option<usize>,
 }
 
 enum RouteModelDisposition {
@@ -130,22 +133,13 @@ async fn cache_target_for_request(
     node: &mesh::Node,
     affinity: &AffinityRouter,
     model: &str,
-    prefix_hash: Option<u64>,
+    affinity_body: Option<&serde_json::Value>,
     candidates: &[election::InferenceTarget],
 ) -> Option<election::InferenceTarget> {
-    let prefix_hash = prefix_hash?;
-    if let Some(target) = affinity.lookup_cache_lease(model, prefix_hash, candidates) {
-        return Some(target);
-    }
-
-    let lease_epoch = affinity.cache_lease_epoch();
-    let selected = node
-        .select_cache_target(model, prefix_hash, candidates)
-        .await;
-    if let Some(target) = selected.as_ref() {
-        affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
-    }
-    selected
+    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body)?;
+    let request = crate::network::affinity::request_cost_input(affinity_body, affinity, model);
+    node.cache_target_with_lease(affinity, model, prefix_hash, candidates, request)
+        .await
 }
 
 async fn execution_candidates(
@@ -269,9 +263,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     route_observer.route_selected(Some(model));
 
     let affinity_body = super::super::workload_routing::affinity_body(request);
-    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
     let cache_target =
-        cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
+        cache_target_for_request(&node, affinity, model, affinity_body, &ordered_candidates).await;
     let Some(ReservedModelRoute {
         selection,
         ordered,
@@ -293,6 +286,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         timeout_attempts: 0,
         refreshed: false,
+        prompt_bytes: crate::network::affinity::prompt_bytes(affinity_body),
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
     // resolves the capsule client nonce once, before target selection), so every
@@ -309,7 +303,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         clear_peer_capsule(peer_capsule_id);
         reservation.transfer_to(&target);
         let attempt_started = Instant::now();
-        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
+        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets)
+            .with_caller_completion_cap(request.completion_tokens);
         match super::super::exchange_admission::admit_selected_candidate(
             &node,
             &mut tcp_stream,
@@ -529,10 +524,13 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableUnavailable => {
             handle_retryable_route_model_unavailable(node, target, state)
         }
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+        RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
+            // Committed, so terminal here; but the inference failed, so the
+            // request counts as failed, not as the success its 200 head says.
+            record_route_model_unavailable(node, model, state.attempts);
             RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
                 status_code,
-                reason: "upstream_stream_incomplete",
+                reason: cause.reason(),
             })
         }
         RouteAttemptResult::ClientDisconnected => {
@@ -564,6 +562,16 @@ fn handle_delivered_route_model_attempt(
     output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
 ) -> RouteModelDisposition {
     update_local_cache_evidence(&context, status_code, usage.as_ref(), cache_cost);
+    if (200..300).contains(&status_code)
+        && let Some((bytes, tokens)) = context
+            .state
+            .prompt_bytes
+            .zip(usage.as_ref().and_then(|usage| usage.prompt_tokens))
+    {
+        context
+            .affinity
+            .observe_prompt_size(context.model, bytes, tokens);
+    }
     context.node.record_routed_request(
         Some(context.model),
         context.state.attempts,
@@ -880,6 +888,11 @@ mod tests {
         assert_eq!(affinity.stats_snapshot().reservation_active, 0);
     }
 
+    /// A request whose shared scaffold covers the 512 cached tokens.
+    fn cached_request() -> mesh_llm_routing::request_cost::RequestCostInput {
+        mesh_llm_routing::request_cost::RequestCostInput::heuristic(1_024, 512)
+    }
+
     async fn cache_context(
         prefix_hash: u64,
         target: election::InferenceTarget,
@@ -905,6 +918,7 @@ mod tests {
             attempts: 1,
             timeout_attempts: 0,
             refreshed: false,
+            prompt_bytes: None,
         };
         (node, affinity, target, selection, state)
     }
@@ -915,6 +929,7 @@ mod tests {
         let (node, affinity, target, selection, state) =
             cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
             node: &node,
@@ -937,8 +952,13 @@ mod tests {
         );
 
         assert_eq!(
-            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
-                .await,
+            node.select_cache_target(
+                "qwen",
+                prefix_hash,
+                std::slice::from_ref(&target),
+                cached_request(),
+            )
+            .await,
             None
         );
         assert_eq!(
@@ -956,6 +976,7 @@ mod tests {
         let (node, affinity, target, selection, state) = cache_context(prefix_hash, remote).await;
         let local = election::InferenceTarget::Local(9337);
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
             node: &node,
@@ -982,8 +1003,13 @@ mod tests {
             None
         );
         assert_eq!(
-            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&local))
-                .await,
+            node.select_cache_target(
+                "qwen",
+                prefix_hash,
+                std::slice::from_ref(&local),
+                cached_request(),
+            )
+            .await,
             Some(local)
         );
     }
@@ -994,6 +1020,7 @@ mod tests {
         let (node, affinity, target, selection, state) =
             cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        node.observe_local_prefill_cost("qwen", Some(1_000));
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
             node: &node,
@@ -1016,8 +1043,13 @@ mod tests {
         );
 
         assert_eq!(
-            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
-                .await,
+            node.select_cache_target(
+                "qwen",
+                prefix_hash,
+                std::slice::from_ref(&target),
+                cached_request(),
+            )
+            .await,
             Some(target.clone())
         );
         assert_eq!(

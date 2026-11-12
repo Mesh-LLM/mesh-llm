@@ -192,8 +192,12 @@ source SHA, and uploads the reproducible failure log.
 Successful same-candidate infrastructure reconciliation emits
 `retry_recovered=true`. In that case `verify_1`, `verify_2`, and `verify_3`
 skip their native builds and complete family matrices; selection retains the
-certified package and can continue to publication. This retry exception also
-applies to explicit selected-source publication. Other candidates retain the
+certified package and can continue to publication. The `retry_recovered`
+marker flows through attempt selection, the `result` job outputs and the
+publication input; the handoff gate admits the recovered `repair-*` package
+only when that marker is present. Explicit selected-source publication
+still requires the unchanged independent `verify-1` package; the recovery
+marker is not propagated on that path. Other candidates retain the
 independent-pass requirements described below, and changed producer identities
 cannot reuse prior receipts.
 
@@ -748,7 +752,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `nightly-stability-run.yml` | `stability` | `public cpu`, the image `prepare-automation` verifies (also bakes the node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
-| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit; packaging also fetches the pinned default-plugin archives from their GitHub releases (curl, HTTPS only) and checks them against the pins |
+| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit |
 
 `public cpu` and `public web` are separate image builds (the latter adds
 `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
@@ -923,7 +927,10 @@ continue to compose normally. Seven call sites:
 Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
 directory is preserved; otherwise the action uses the job's runner temporary
-directory. Missing GHA endpoints retain the existing disk-only fallback.
+directory. Missing GHA endpoints, or a missing `ACTIONS_RUNTIME_TOKEN`, retain the
+existing disk-only fallback; shell steps on some runners (notably Depot PR jobs)
+receive the endpoints without the runtime token, so sccache cannot start its GHA
+backend there.
 The action eagerly starts sccache on a unique short Unix socket in both disk-only
 and remote-cache modes, before any parallel compiler clients, and exports that
 endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
@@ -1057,11 +1064,8 @@ Release host producers use `upload-automation` to publish one immutable xtask
 per OS/architecture and source SHA. Every release composer has its host producer
 in `needs` and uses `restore-automation` to verify checksums/source identity and
 export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap.
-Composition is not fully offline: on macOS and Linux, `package-release.sh`
-fetches each default plugin archive the host pins (`repository bundled-plugins`)
-from that plugin's GitHub release over HTTPS, checks it against the pinned
-SHA-256, places it under `plugins/`, and runs `repository bundled-plugins-check`
-with the composed host. The shared
+Composition is fully offline: `package-release.sh` places no plugins in any
+bundle. The shared
 artifact actions remain reusable; L2 bare-hosted callers use hosted-bare preparation.
 Windows release composers no longer use `prepare-automation`; the release workflow has
 no setup-python steps. Runtime-package verification embeds the GLIBC policy
