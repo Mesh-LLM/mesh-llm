@@ -10,6 +10,8 @@ use serde_json::{Map, Number, Value};
 
 pub mod bighead;
 pub mod bighead_serve;
+pub mod bighead_gguf;
+pub mod bighead_hidden;
 pub mod calibration;
 pub mod causal;
 mod diffusion;

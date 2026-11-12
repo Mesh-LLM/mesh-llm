@@ -93,6 +93,10 @@ pub struct BigHeadWeights {
     pub q: Vec<f32>,
     /// `[pointer_dim][hidden_size]`
     pub k: Vec<f32>,
+    /// Projection biases (`[pointer_dim]`), present for a torch-default
+    /// `nn.Linear` head, absent when the head was trained with `bias=False`.
+    pub q_bias: Option<Vec<f32>>,
+    pub k_bias: Option<Vec<f32>>,
 }
 
 impl BigHeadWeights {
@@ -108,6 +112,14 @@ impl BigHeadWeights {
             "q/k projections must be pointer_dim*hidden_size = {} elements",
             d * h
         );
+        for (name, bias) in [("q", &self.q_bias), ("k", &self.k_bias)] {
+            if let Some(bias) = bias {
+                anyhow::ensure!(
+                    bias.len() == d,
+                    "{name} bias must have pointer_dim {d} elements"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -135,6 +147,18 @@ fn matvec(linear: &[f32], rows: usize, cols: usize, x: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// `matvec` plus an optional torch-Linear bias.
+fn linear(linear: &[f32], bias: Option<&[f32]>, rows: usize, cols: usize, x: &[f32]) -> Vec<f32> {
+    let mut out = matvec(linear, rows, cols, x);
+    if let Some(bias) = bias {
+        debug_assert_eq!(bias.len(), rows);
+        for (value, b) in out.iter_mut().zip(bias) {
+            *value += b;
+        }
+    }
+    out
+}
+
 /// Pointer logits for one question: `h_answer` is the hidden state at the
 /// `<answer>` position; `h_options[k]` is the hidden state at the last token of
 /// option k's line. Returns one logit per option.
@@ -147,14 +171,14 @@ pub fn pointer_logits(
     let h = cfg.hidden_size;
     debug_assert_eq!(h_answer.len(), h);
     let a = layer_norm(h_answer, &w.norm_weight, &w.norm_bias);
-    let q = matvec(&w.q, cfg.pointer_dim, h, &a);
+    let q = linear(&w.q, w.q_bias.as_deref(), cfg.pointer_dim, h, &a);
     let scale = (cfg.pointer_dim as f32).powf(-0.5);
     h_options
         .iter()
         .map(|opt| {
             debug_assert_eq!(opt.len(), h);
             let o = layer_norm(opt, &w.norm_weight, &w.norm_bias);
-            let k = matvec(&w.k, cfg.pointer_dim, h, &o);
+            let k = linear(&w.k, w.k_bias.as_deref(), cfg.pointer_dim, h, &o);
             k.iter().zip(&q).map(|(kv, qv)| kv * qv).sum::<f32>() * scale
         })
         .collect()
@@ -205,6 +229,8 @@ mod tests {
             norm_bias: vec![0.0; h],
             q,
             k,
+            q_bias: None,
+            k_bias: None,
         }
     }
 
@@ -258,8 +284,30 @@ mod tests {
             norm_bias: vec![0.0; 4],
             q: vec![0.0; 8],
             k: vec![0.0; 8],
+            q_bias: None,
+            k_bias: None,
         };
         assert!(bad.validate(&c).is_err());
         assert!(identity_weights(4, 2).validate(&c).is_ok());
+        let mut biased = identity_weights(4, 2);
+        biased.q_bias = Some(vec![0.0; 2]);
+        biased.k_bias = Some(vec![0.0; 3]);
+        assert!(biased.validate(&c).is_err());
+    }
+
+    #[test]
+    fn projection_biases_shift_logits() {
+        // h=4, d=2, identity selectors: with k_bias = [1, 0], every option
+        // gains (q . e_1) * scale on top of its bias-free score.
+        let c = cfg(4, 2);
+        let mut w = identity_weights(4, 2);
+        let answer = &[1.0f32, 0.0, 0.0, 0.0];
+        let opt_a = &[1.0f32, 0.0, 0.0, 0.0];
+        let base = pointer_logits(&c, &w, answer, &[opt_a]);
+        w.k_bias = Some(vec![1.0, 0.0]);
+        let shifted = pointer_logits(&c, &w, answer, &[opt_a]);
+        // LayerNorm(one-hot)[0] = sqrt(3), so q . e_1 = sqrt(3), times 2^-0.5.
+        let delta = 3.0f32.sqrt() * 0.5f32.sqrt();
+        assert!((shifted[0] - base[0] - delta).abs() < 1e-3);
     }
 }

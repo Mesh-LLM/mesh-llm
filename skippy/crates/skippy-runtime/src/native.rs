@@ -1008,7 +1008,7 @@ fn token_is_eog(raw: *mut RawModel, token: i32) -> Result<bool> {
     Ok(is_eog)
 }
 
-fn tokenize(raw: *mut RawModel, text: &str, add_special: bool) -> Result<Vec<i32>> {
+pub(crate) fn tokenize(raw: *mut RawModel, text: &str, add_special: bool) -> Result<Vec<i32>> {
     tokenize_bounded(raw, text, add_special, usize::MAX)?
         .ok_or_else(|| anyhow!("tokenizer output exceeds the requested limit"))
 }

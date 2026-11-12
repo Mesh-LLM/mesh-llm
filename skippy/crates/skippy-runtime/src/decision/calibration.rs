@@ -161,16 +161,14 @@ mod tests {
     #[test]
     fn invalid_inputs_rejected() {
         assert!(
-            serde_json::from_str::<DecisionCalibration>(r#"{"kinds": {"noul": 0.0}}"#)
+            !serde_json::from_str::<DecisionCalibration>(r#"{"kinds": {"noul": 0.0}}"#)
                 .map(|c| c.validate().is_ok())
                 .unwrap_or(false)
-                == false
         );
         assert!(
-            serde_json::from_str::<DecisionCalibration>(r#"{"schema_version": "99", "kinds": {}}"#)
+            !serde_json::from_str::<DecisionCalibration>(r#"{"schema_version": "99", "kinds": {}}"#)
                 .map(|c| c.validate().is_ok())
                 .unwrap_or(false)
-                == false
         );
     }
 

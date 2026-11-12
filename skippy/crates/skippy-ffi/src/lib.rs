@@ -174,8 +174,8 @@ pub use dynamic::{
 #[cfg(not(feature = "dynamic-runtime"))]
 pub use static_bindings::{
     ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_get_vocab,
-    llama_model_quantize, llama_model_quantize_default_params, llama_set_embeddings,
-    llama_vocab_n_tokens, mtmd_bitmap_free, mtmd_bitmap_get_n_bytes, mtmd_context_params_default,
+    llama_model_n_embd, llama_model_quantize, llama_model_quantize_default_params,
+    llama_set_embeddings, llama_vocab_n_tokens, mtmd_bitmap_free, mtmd_bitmap_get_n_bytes, mtmd_context_params_default,
     mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free, mtmd_gen_audio_get_info,
     mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
     mtmd_helper_eval_chunk_single_with_callback, mtmd_helper_eval_chunks,

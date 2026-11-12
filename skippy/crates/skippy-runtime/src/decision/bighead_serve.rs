@@ -28,6 +28,10 @@ pub struct RenderedQuestion {
     pub option_positions: Vec<usize>,
     /// Question kind ("noul" | "choice" | "score").
     pub kind: String,
+    /// Option labels in request order, exactly as rendered on their lines.
+    /// The hidden-state provider tokenizes `- {label}\n` to locate each
+    /// option line's final token.
+    pub option_labels: Vec<String>,
     /// Number of offered options.
     pub n_options: usize,
 }
@@ -79,6 +83,7 @@ pub fn render(
             answer_pos: usize::MAX, // filled by the provider
             option_positions: (0..n).map(|_| usize::MAX).collect(),
             kind: kind.to_string(),
+            option_labels: options,
             n_options: n,
         });
     }
@@ -219,6 +224,8 @@ mod tests {
                 norm_bias: vec![0.0; h],
                 q,
                 k,
+                q_bias: None,
+                k_bias: None,
             },
         )
         .with_provider(Box::new(
@@ -292,6 +299,8 @@ mod tests {
                 norm_bias: vec![0.0; 4],
                 q: vec![0.0; 8],
                 k: vec![0.0; 8],
+                q_bias: None,
+                k_bias: None,
             },
         );
         assert!(bare.decide(&request).is_err());
