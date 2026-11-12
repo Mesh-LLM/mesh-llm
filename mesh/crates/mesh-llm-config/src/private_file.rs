@@ -86,13 +86,6 @@ pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<(
         let _ = fs::remove_file(&tmp);
         return Err(error);
     }
-    #[cfg(windows)]
-    if target.exists()
-        && let Err(error) = fs::remove_file(target)
-    {
-        let _ = fs::remove_file(&tmp);
-        return Err(error);
-    }
     if let Err(error) = fs::rename(&tmp, target) {
         let _ = fs::remove_file(&tmp);
         return Err(error);
@@ -779,6 +772,62 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|name| name.ends_with(".tmp"))
             .collect()
+    }
+
+    #[test]
+    fn replacing_a_private_file_never_leaves_it_missing_for_a_reader() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = Arc::new(temp.path().join("config.toml"));
+        write_private_file(&path, b"first").unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        // Set once the first replacement is done; only reads started after it
+        // count, so a counted read overlaps the replacements.
+        let replacing = Arc::new(AtomicBool::new(false));
+        let reads_during = Arc::new(AtomicU32::new(0));
+        let reader = {
+            let (path, done, replacing, reads_during) = (
+                Arc::clone(&path),
+                Arc::clone(&done),
+                Arc::clone(&replacing),
+                Arc::clone(&reads_during),
+            );
+            std::thread::spawn(move || {
+                let mut missing = 0u32;
+                while !done.load(Ordering::SeqCst) {
+                    let started_during = replacing.load(Ordering::SeqCst);
+                    if matches!(std::fs::read(&*path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        missing += 1;
+                    }
+                    if started_during {
+                        reads_during.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                missing
+            })
+        };
+        write_private_file(&path, b"replaced").unwrap();
+        replacing.store(true, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while reads_during.load(Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader never read during the replacements"
+            );
+            std::thread::yield_now();
+        }
+        for _ in 1..200 {
+            write_private_file(&path, b"replaced").unwrap();
+        }
+        done.store(true, Ordering::SeqCst);
+        assert_eq!(
+            reader.join().unwrap(),
+            0,
+            "a reader found no file mid-replace"
+        );
     }
 
     #[test]

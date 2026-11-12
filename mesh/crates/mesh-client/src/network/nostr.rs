@@ -33,6 +33,11 @@ pub struct MeshListing {
     pub region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_id: Option<String>,
+    /// Whether the node that published this listing (the invite token's
+    /// endpoint) serves a model itself. `None` for listings from nodes that
+    /// predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_serves: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -494,6 +499,30 @@ pub fn default_models_for_vram(vram_gb: f64) -> Vec<String> {
 }
 
 #[cfg(test)]
+mod listing_format_tests {
+    use super::*;
+
+    #[test]
+    fn a_listing_from_an_older_node_parses_with_publisher_serves_undeclared() {
+        let json = r#"{"invite_token":"t","serving":["Qwen"],"total_vram_bytes":1,"node_count":1}"#;
+        let listing: MeshListing = serde_json::from_str(json).unwrap();
+        assert_eq!(listing.publisher_serves, None);
+        // An undeclared listing is written back without the field, so older
+        // readers see exactly what they saw before.
+        assert!(
+            !serde_json::to_string(&listing)
+                .unwrap()
+                .contains("publisher_serves")
+        );
+        let declared: MeshListing = serde_json::from_str(
+            r#"{"invite_token":"t","serving":[],"total_vram_bytes":1,"node_count":1,"publisher_serves":false}"#,
+        )
+        .unwrap();
+        assert_eq!(declared.publisher_serves, Some(false));
+    }
+}
+
+#[cfg(test)]
 mod auto_pack_tests {
     use super::*;
 
@@ -609,6 +638,7 @@ mod scoring_tests {
                 name: name.map(|s| s.to_string()),
                 region: None,
                 mesh_id: mesh_id.map(|s| s.to_string()),
+                publisher_serves: None,
             },
             publisher_npub: format!("npub-{}", mesh_id.unwrap_or("test")),
             published_at: 1000,
@@ -751,6 +781,7 @@ mod filter_tests {
                 name: None,
                 region: region.map(|s| s.to_string()),
                 mesh_id: None,
+                publisher_serves: None,
             },
             publisher_npub: "npub-test".into(),
             published_at: 1000,
@@ -894,6 +925,7 @@ mod smart_auto_tests {
                 name: name.map(|s| s.to_string()),
                 region: None,
                 mesh_id: Some(mesh_id.to_string()),
+                publisher_serves: None,
             },
             publisher_npub: format!("npub-{mesh_id}"),
             published_at: 1000,

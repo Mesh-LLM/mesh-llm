@@ -210,6 +210,8 @@ mod tests {
         assert_eq!(offset_of!(LlamaContextParams, cb_eval), 88);
         assert_eq!(offset_of!(LlamaContextParams, type_k), 104);
         assert_eq!(offset_of!(LlamaContextParams, moe_cache_size), 112);
+        assert_eq!(offset_of!(LlamaContextParams, moe_cache_cpu_share), 120);
+        assert_eq!(offset_of!(LlamaContextParams, abort_callback), 128);
         assert_eq!(offset_of!(LlamaContextParams, embeddings), 144);
         assert_eq!(offset_of!(LlamaContextParams, samplers), 152);
         assert_eq!(offset_of!(LlamaContextParams, ctx_other), 168);

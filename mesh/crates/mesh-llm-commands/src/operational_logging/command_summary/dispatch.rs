@@ -1,4 +1,4 @@
-use mesh_llm_cli::Command;
+use mesh_llm_cli::{Command, DiscoverArgs, ModelPrepareArgs, SetupArgs, UninstallArgs};
 
 use super::{
     DEFAULT_AGENT_PORT, DEFAULT_LOCAL_PORT, ModelPrepareSummary, SummaryAssembly, administration,
@@ -55,14 +55,14 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
         Command::Gpus { json, command } => {
             administration::format_gpus(*json, command.as_ref(), assembly);
         }
-        Command::Setup {
+        Command::Setup(SetupArgs {
             yes,
             no_interactive,
             service,
             no_service,
             skip_runtime,
             verbose,
-        } => {
+        }) => {
             assembly.command.push_str(" setup");
             assembly.flag("yes", *yes);
             assembly.flag("no-interactive", *no_interactive);
@@ -71,7 +71,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             assembly.flag("skip-runtime", *skip_runtime);
             assembly.flag("verbose", *verbose);
         }
-        Command::Uninstall {
+        Command::Uninstall(UninstallArgs {
             dry_run,
             yes,
             keep_cache,
@@ -81,7 +81,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             binary_path,
             json,
             verbose,
-        } => {
+        }) => {
             assembly.command.push_str(" uninstall");
             assembly.flag("dry-run", *dry_run);
             assembly.flag("yes", *yes);
@@ -99,14 +99,14 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             assembly.command.push_str(" status");
             assembly.port(*port, DEFAULT_LOCAL_PORT);
         }
-        Command::Discover {
+        Command::Discover(DiscoverArgs {
             name,
             model,
             min_vram,
             region,
             auto,
             relay,
-        } => {
+        }) => {
             assembly.command.push_str(" discover");
             assembly.redact("--name", name.is_some());
             assembly.redact("--model", model.is_some());
@@ -124,7 +124,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
         }
         Command::Stop => assembly.command.push_str(" stop"),
         Command::ServiceHost => assembly.command.push_str(" service-host"),
-        Command::ModelPrepare {
+        Command::ModelPrepare(ModelPrepareArgs {
             source_repo,
             quant,
             target,
@@ -141,7 +141,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             cancel,
             list,
             update_script,
-        } => models::format_model_prepare(
+        }) => models::format_model_prepare(
             ModelPrepareSummary {
                 source_repo,
                 quant,

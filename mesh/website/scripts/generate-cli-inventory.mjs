@@ -119,6 +119,9 @@ function runCargo(args) {
     "--quiet",
     "-p",
     "mesh-llm-cli",
+    // Reflecting CLI metadata does not need a native inference runtime.
+    "--features",
+    "dynamic-native-runtime",
     "--bin",
     "mesh-llm-cli-inventory",
     "--",
