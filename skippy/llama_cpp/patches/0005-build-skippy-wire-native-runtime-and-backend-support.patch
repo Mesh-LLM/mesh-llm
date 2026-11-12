@@ -4258,6 +4258,21 @@ index 8a1d3aae1..80e8ac893 100644
  // one decoded sub-batch of embeddings, passed to mtmd_helper_post_decode_callback
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
+diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
+--- a/tools/mtmd/mtmd-subcontext.cpp
++++ b/tools/mtmd/mtmd-subcontext.cpp
+@@ -362,6 +362,10 @@
+         cur = ggml_add(ctx0,
+                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
+                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
++        if (config.power_floor > 0.0f) {
++            // clamp |X|^2 before sqrt so near-silent FFT bins keep the reference mel features
++            cur = ggml_clamp(ctx0, cur, config.power_floor, FLT_MAX);
++        }
+         if (config.use_magnitude) {
+             cur = ggml_sqrt(ctx0, cur);
+         }
+
 -- 
 2.54.0 (Apple Git-157)
 

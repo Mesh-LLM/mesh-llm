@@ -166,17 +166,12 @@ impl MediaProjector {
         // A projector that decodes images with non-causal attention must decode
         // each image in one batch and one microbatch; the decode helper rejects
         // a split image. Mirror llama-server's load-time cap and clamp the
-        // vision token budget to the stage context's batch sizes, resolved the
-        // same way native context creation resolves them. Embedding workloads
-        // grow the native microbatch to n_batch, so this estimate never exceeds
-        // the real one.
-        let decode_batch = config
-            .n_ubatch
-            .unwrap_or(crate::config::LLAMA_SERVER_DEFAULT_N_UBATCH)
-            .min(config.n_batch.unwrap_or_else(|| {
-                crate::config::default_n_batch_for_lane_count(config.lane_count)
-            }));
-        let decode_batch = i32::try_from(decode_batch).context("decode batch size exceeds i32")?;
+        // vision token budget to the stage context's decode microbatch,
+        // resolved the same way native context creation resolves it. Embedding
+        // workloads grow the native microbatch to n_batch, so this estimate
+        // never exceeds the real one.
+        let decode_batch = i32::try_from(config.projector_decode_batch())
+            .context("decode batch size exceeds i32")?;
         let budget = unsafe { skippy_ffi::mtmd_helper_get_decode_budget(path.as_ptr(), params) };
         if budget.use_non_causal && budget.image_max_tokens > decode_batch {
             crate::logging::write_native_log_note(format!(
