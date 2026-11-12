@@ -1,0 +1,488 @@
+From cb4788c49b0880370b68cba50abeb477b72b3367 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Thu, 12 Nov 2026 08:42:32 +1100
+Subject: [PATCH 33/33] llama: place each request's share of a batch together
+ in the KV pool
+
+The unified pool placed one token at a time: a sequence continued after its
+highest cell while that stayed inside a 64-cell chunk, and otherwise opened
+the next all-empty chunk.
+
+A request that resumes a cached prompt takes over cells that can sit above the
+ones it writes next. Its highest cell then never moves, the cell after it is
+taken, and every generated token opens a chunk of its own: 128 tokens became
+about 128 one-cell runs spread over 128 chunks, each padded to a 32-row block
+in the row lists the attention kernels read.
+
+Placement now works per sequence over the whole ubatch
+(llama_kv_cells::place_together): the share continues after the sequence's
+latest token, wherever that cell is, and the rest goes to the smallest free
+stretch that holds it, sized in whole chunks so the sequence can keep growing
+there. When no stretch is large enough the longest ones are filled first.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ src/llama-kv-cache.cpp                  |  81 ++--------
+ src/llama-kv-cells.h                    | 115 ++++++++++++--
+ tests/CMakeLists.txt                    |   1 +
+ tests/test-skippy-kv-place-together.cpp | 200 ++++++++++++++++++++++++
+ 4 files changed, 317 insertions(+), 80 deletions(-)
+ create mode 100644 tests/test-skippy-kv-place-together.cpp
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 7d099082c..9d9be0f94 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1261,79 +1261,18 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
+     return updated;
+ }
+ 
+-// Unified pool placement that keeps each sequence's cells together: a token
+-// goes to the cell after its sequence's highest one while that stays inside the
+-// same chunk and free, else to the first cell of a fresh all-empty chunk. Row
+-// lists then hold long runs instead of one cell per decode step, which is what
+-// the row-attention kernels read at dense speed. A pool too fragmented for a
+-// fresh chunk falls back to any empty cell.
++// Unified pool placement: each sequence's tokens of the ubatch land together (see
++// llama_kv_cells::place_together), so row lists hold long runs, which the
++// row-attention kernels read at dense speed.
+ std::vector<uint32_t> llama_kv_cache::find_chunked_cells(
+         const llama_ubatch & ubatch, const llama_kv_cells & cells, uint32_t head_cur) const {
+-    const uint32_t n_tokens = ubatch.n_tokens;
+-    const uint32_t n_cells  = cells.size();
+-    const uint32_t n_chunks = n_cells / kv_chunk_cells;
+-
+-    std::vector<uint32_t> idxs;
+-    idxs.reserve(n_tokens);
+-
+-    std::vector<uint8_t> taken(n_cells, 0);
+-    const auto free_cell = [&](uint32_t idx) { return cells.is_empty(idx) && !taken[idx]; };
+-    const auto take = [&](uint32_t idx) { taken[idx] = 1; idxs.push_back(idx); };
+-
+-    // next cell of each sequence's open chunk, resolved on first use
+-    std::array<int64_t, LLAMA_MAX_SEQ> next;
+-    next.fill(-2);
+-
+-    uint32_t chunk_cur = n_chunks ? (head_cur / kv_chunk_cells) % n_chunks : 0;
+-
+-    for (uint32_t i = 0; i < n_tokens; ++i) {
+-        const llama_seq_id seq_id = ubatch.n_seq_id[i] > 0 ? ubatch.seq_id[i][0] : 0;
+-
+-        if (next[seq_id] == -2) {
+-            const int64_t last = cells.seq_cell_max(seq_id);
+-            next[seq_id] = last >= 0 && (last + 1) % kv_chunk_cells != 0 ? last + 1 : -1;
+-        }
+-
+-        const int64_t cand = next[seq_id];
+-        if (cand >= 0 && cand < (int64_t) n_cells && free_cell((uint32_t) cand)) {
+-            take((uint32_t) cand);
+-            next[seq_id] = (cand + 1) % kv_chunk_cells != 0 ? cand + 1 : -1;
+-            continue;
+-        }
+-
+-        // a fresh chunk: every cell empty and unclaimed, searched from the head onward
+-        bool placed = false;
+-        for (uint32_t tested = 0; tested < n_chunks && !placed; ++tested) {
+-            const uint32_t start = chunk_cur * kv_chunk_cells;
+-            chunk_cur = (chunk_cur + 1) % n_chunks;
+-            bool empty = true;
+-            for (uint32_t c = start; c < start + kv_chunk_cells && empty; ++c) {
+-                empty = free_cell(c);
+-            }
+-            if (empty) {
+-                take(start);
+-                next[seq_id] = kv_chunk_cells > 1 ? start + 1 : -1;
+-                placed = true;
+-            }
+-        }
+-        if (placed) {
+-            continue;
+-        }
+-
+-        // the pool is fragmented: any empty cell keeps the batch going
+-        for (uint32_t tested = 0; tested < n_cells && !placed; ++tested) {
+-            const uint32_t idx = (head_cur + tested) % n_cells;
+-            if (free_cell(idx)) {
+-                take(idx);
+-                placed = true;
+-            }
+-        }
+-        if (!placed) {
+-            return { };
+-        }
+-    }
+-
+-    return idxs;
++    std::vector<llama_seq_id> token_seqs(ubatch.n_tokens);
++    std::vector<uint32_t> tokens(ubatch.n_tokens);
++    std::iota(tokens.begin(), tokens.end(), 0u);
++    std::transform(tokens.begin(), tokens.end(), token_seqs.begin(), [&](uint32_t i) {
++        return ubatch.n_seq_id[i] > 0 ? ubatch.seq_id[i][0] : 0;
++    });
++    return cells.place_together(token_seqs, head_cur, kv_chunk_cells);
+ }
+ 
+ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont) const {
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 1743c8fae..ac6ae063e 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -4,12 +4,14 @@
+ #include "llama-cparams.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <bitset>
+ #include <cassert>
+ #include <cstdint>
+ #include <cstring>
+ #include <iterator>
+ #include <limits>
++#include <numeric>
+ #include <set>
+ #include <vector>
+ 
+@@ -627,17 +629,112 @@ public:
+                positions.size() == static_cast<size_t>(pos_max) + 1;
+     }
+ 
+-    // The highest cell the sequence occupies, or -1.
+-    int64_t seq_cell_max(llama_seq_id seq_id) const {
+-        assert(seq_id >= 0 && seq_id < LLAMA_MAX_SEQ);
+-        const auto & bits = seq_bits[seq_id];
+-        const uint32_t n_words = std::min<uint32_t>((used_max_p1() + 63) / 64, bits.size());
+-        for (uint32_t w = n_words; w-- > 0;) {
+-            if (bits[w] != 0) {
+-                return 64 * w + fls64(bits[w]);
++    // Cells for the tokens of a batch, in token order, with each sequence's share kept
++    // together: first the free cells right after its latest token, then the smallest free
++    // stretch that holds the rest. A stretch starts on a `chunk` boundary, so the runs of a
++    // row list stay block aligned, and is sized in whole chunks, which leaves the sequence
++    // room to grow where it lands. When nothing holds the rest, the longest stretch is
++    // filled and what remains is placed the same way. Empty when the cells run out.
++    std::vector<uint32_t> place_together(const std::vector<llama_seq_id> & token_seqs, uint32_t head, uint32_t chunk) const {
++        const uint32_t n_cells = size();
++
++        std::vector<uint8_t> busy(n_cells);
++        std::transform(pos.begin(), pos.end(), busy.begin(), [](llama_pos p) { return p != -1; });
++
++        struct share {
++            llama_seq_id          seq;
++            uint32_t              want;
++            std::vector<uint32_t> cells;
++        };
++        std::vector<share> shares;
++        std::array<int32_t, LLAMA_MAX_SEQ> share_of;
++        share_of.fill(-1);
++        std::for_each(token_seqs.begin(), token_seqs.end(), [&](llama_seq_id seq) {
++            if (share_of[seq] < 0) {
++                share_of[seq] = (int32_t) shares.size();
++                shares.push_back({ seq, 0, { } });
++            }
++            shares[share_of[seq]].want++;
++        });
++
++        const auto claim = [&](share & sh, uint32_t first, uint32_t n) {
++            std::fill_n(busy.begin() + first, n, 1);
++            sh.cells.resize(sh.cells.size() + n);
++            std::iota(sh.cells.end() - n, sh.cells.end(), first);
++        };
++
++        struct stretch {
++            uint32_t first;
++            uint32_t len;
++        };
++        const auto stretches = [&](bool aligned) {
++            std::vector<stretch> out;
++            auto it = std::find(busy.begin(), busy.end(), 0);
++            while (it != busy.end()) {
++                const auto end  = std::find(it, busy.end(), 1);
++                const uint32_t last  = (uint32_t) (end - busy.begin());
++                const uint32_t first = (uint32_t) (it - busy.begin());
++                const uint32_t start = aligned ? (first + chunk - 1)/chunk*chunk : first;
++                if (start < last) {
++                    out.push_back({ start, last - start });
++                }
++                it = std::find(end, busy.end(), 0);
++            }
++            return out;
++        };
++
++        for (share & sh : shares) {
++            const int64_t last = seq_cell_tail(sh.seq);
++            if (last >= 0 && last + 1 < (int64_t) n_cells) {
++                const auto begin = busy.begin() + last + 1;
++                const auto end   = busy.begin() + std::min<int64_t>(n_cells, last + 1 + sh.want);
++                claim(sh, (uint32_t) (last + 1), (uint32_t) (std::find(begin, end, 1) - begin));
++            }
++            while (sh.cells.size() < sh.want) {
++                const uint32_t rest = sh.want - (uint32_t) sh.cells.size();
++                const uint32_t need = (rest + chunk - 1)/chunk*chunk;
++
++                std::vector<stretch> free = stretches(true);
++                if (free.empty()) {
++                    free = stretches(false);
++                }
++                if (free.empty()) {
++                    return { };
++                }
++
++                const auto ahead = [&](const stretch & s) { return (s.first + n_cells - head % n_cells) % n_cells; };
++                const auto best = std::min_element(free.begin(), free.end(), [&](const stretch & a, const stretch & b) {
++                    const bool fits_a = a.len >= need;
++                    const bool fits_b = b.len >= need;
++                    if (fits_a != fits_b) {
++                        return fits_a;
++                    }
++                    if (!fits_a && a.len != b.len) {
++                        return a.len > b.len;
++                    }
++                    if (fits_a && a.len != b.len) {
++                        return a.len < b.len;
++                    }
++                    return ahead(a) < ahead(b);
++                });
++                claim(sh, best->first, std::min(rest, best->len));
+             }
+         }
+-        return -1;
++
++        std::vector<uint32_t> idxs(token_seqs.size());
++        std::vector<uint32_t> used_of(shares.size(), 0);
++        std::transform(token_seqs.begin(), token_seqs.end(), idxs.begin(), [&](llama_seq_id seq) {
++            const int32_t s = share_of[seq];
++            return shares[s].cells[used_of[s]++];
++        });
++        return idxs;
++    }
++
++    // The cell holding the sequence's highest position, or -1. A sequence that took over
++    // another's cells keeps writing after its own latest token, wherever those cells sit.
++    int64_t seq_cell_tail(llama_seq_id seq_id) const {
++        assert(seq_id >= 0 && seq_id < LLAMA_MAX_SEQ);
++        return seq_pos[seq_id].empty() ? -1 : (int64_t) seq_pos[seq_id].rbegin()->second;
+     }
+ 
+     // note: call only if the cell is not empty
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index cc27837c5..595a84a26 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -194,6 +194,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-verify-checkpoint-retirement.cpp)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
+     llama_build_and_test(test-skippy-kv-rows-aligned.cpp)
++    llama_build_and_test(test-skippy-kv-place-together.cpp)
+     llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
+diff --git a/tests/test-skippy-kv-place-together.cpp b/tests/test-skippy-kv-place-together.cpp
+new file mode 100644
+index 000000000..b7c50f142
+--- /dev/null
++++ b/tests/test-skippy-kv-place-together.cpp
+@@ -0,0 +1,200 @@
++// Batch placement (llama_kv_cells::place_together): every token gets its own free cell, and
++// a sequence's share of a batch lands in as few runs as the free space allows.
++#include "../src/llama-kv-cells.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <numeric>
++#include <random>
++#include <set>
++#include <vector>
++
++static int failures = 0;
++#define CHECK(cond) do { if (!(cond)) { ++failures; std::printf("FAIL line %d: %s\n", __LINE__, #cond); } } while (0)
++
++static const uint32_t chunk = 64;
++
++static void commit(llama_kv_cells & cells, const std::vector<llama_seq_id> & seqs, const std::vector<uint32_t> & idxs,
++                   std::vector<llama_pos> & next_pos) {
++    std::vector<size_t> tokens(seqs.size());
++    std::iota(tokens.begin(), tokens.end(), size_t(0));
++    std::for_each(tokens.begin(), tokens.end(), [&](size_t i) {
++        cells.pos_set(idxs[i], next_pos[seqs[i]]++);
++        cells.seq_add(idxs[i], seqs[i]);
++    });
++}
++
++static size_t runs_of(const llama_kv_cells & cells, llama_seq_id seq) {
++    std::vector<uint32_t> own;
++    std::vector<uint32_t> all(cells.size());
++    std::iota(all.begin(), all.end(), 0u);
++    std::copy_if(all.begin(), all.end(), std::back_inserter(own), [&](uint32_t i) {
++        return !cells.is_empty(i) && cells.seq_has(i, seq);
++    });
++    if (own.empty()) {
++        return 0;
++    }
++    std::vector<uint32_t> gaps(own.size());
++    std::adjacent_difference(own.begin(), own.end(), gaps.begin());
++    return 1 + (size_t) std::count_if(gaps.begin() + 1, gaps.end(), [](uint32_t gap) { return gap != 1; });
++}
++
++static std::vector<llama_seq_id> batch_of(int n_seq, uint32_t per_seq) {
++    std::vector<llama_seq_id> seqs((size_t) n_seq*per_seq);
++    std::vector<size_t> tokens(seqs.size());
++    std::iota(tokens.begin(), tokens.end(), size_t(0));
++    std::transform(tokens.begin(), tokens.end(), seqs.begin(), [&](size_t i) { return (llama_seq_id) (i / per_seq); });
++    return seqs;
++}
++
++// four prompts in one batch, then their generation, then a follow-up prompt each
++static void concurrent_prompts() {
++    llama_kv_cells cells;
++    cells.resize(16384);
++    std::vector<llama_pos> next_pos(4, 0);
++
++    const auto prompt = batch_of(4, 512);
++    auto idxs = cells.place_together(prompt, 0, chunk);
++    CHECK(idxs.size() == prompt.size());
++    commit(cells, prompt, idxs, next_pos);
++    std::vector<llama_seq_id> each = { 0, 1, 2, 3 };
++    CHECK(std::all_of(each.begin(), each.end(), [&](llama_seq_id s) { return runs_of(cells, s) == 1; }));
++
++    std::vector<int> steps(128);
++    std::for_each(steps.begin(), steps.end(), [&](int) {
++        const auto placed = cells.place_together(each, 0, chunk);
++        CHECK(placed.size() == each.size());
++        commit(cells, each, placed, next_pos);
++    });
++    // a prompt run, then generation in chunks
++    CHECK(std::all_of(each.begin(), each.end(), [&](llama_seq_id s) { return runs_of(cells, s) <= 1 + 128/chunk + 1; }));
++
++    std::vector<size_t> before(each.size());
++    std::transform(each.begin(), each.end(), before.begin(), [&](llama_seq_id s) { return runs_of(cells, s); });
++    idxs = cells.place_together(prompt, 0, chunk);
++    CHECK(idxs.size() == prompt.size());
++    commit(cells, prompt, idxs, next_pos);
++    // a follow-up adds the rest of the open chunk and one stretch
++    CHECK(std::all_of(each.begin(), each.end(), [&](llama_seq_id s) { return runs_of(cells, s) <= before[s] + 1; }));
++}
++
++// a request that resumes from cells placed above its own keeps one run per chunk of
++// generation, not one per token
++static void resumed_from_higher_cells() {
++    llama_kv_cells cells;
++    cells.resize(16384);
++    std::vector<uint32_t> prefix(4096);
++    std::iota(prefix.begin(), prefix.end(), 8192u);
++    std::for_each(prefix.begin(), prefix.end(), [&](uint32_t i) {
++        cells.pos_set(i, (llama_pos) (i - 8192));
++        cells.seq_add(i, 0);
++        cells.seq_add(i, 1);
++    });
++    // the cell after the prefix belongs to someone else
++    cells.pos_set(8192 + 4096, 0);
++    cells.seq_add(8192 + 4096, 5);
++
++    std::vector<llama_pos> next_pos(8, 4096);
++    const std::vector<llama_seq_id> prompt(512, 1);
++    commit(cells, prompt, cells.place_together(prompt, 0, chunk), next_pos);
++    CHECK(runs_of(cells, 1) == 2);
++
++    std::vector<int> steps(128);
++    std::for_each(steps.begin(), steps.end(), [&](int) {
++        const std::vector<llama_seq_id> one = { 1 };
++        commit(cells, one, cells.place_together(one, 0, chunk), next_pos);
++    });
++    CHECK(runs_of(cells, 1) == 2);
++}
++
++// the smallest stretch that holds the share wins over a larger one
++static void best_fit() {
++    llama_kv_cells cells;
++    cells.resize(4096);
++    std::vector<uint32_t> all(cells.size());
++    std::iota(all.begin(), all.end(), 0u);
++    llama_pos pos = 0;
++    // free: [512, 1024) and [2048, 2560 + 1024)
++    std::for_each(all.begin(), all.end(), [&](uint32_t i) {
++        const bool hole = (i >= 512 && i < 1024) || (i >= 2048 && i < 3584);
++        if (!hole) {
++            cells.pos_set(i, pos++);
++            cells.seq_add(i, 7);
++        }
++    });
++    const std::vector<llama_seq_id> share(512, 1);
++    const auto idxs = cells.place_together(share, 2048, chunk);
++    CHECK(idxs.size() == 512);
++    CHECK(idxs.front() == 512 && idxs.back() == 1023);
++}
++
++// no stretch holds the share: the longest ones are filled first
++static void fragmented_pool() {
++    llama_kv_cells cells;
++    cells.resize(4096);
++    std::vector<uint32_t> all(cells.size());
++    std::iota(all.begin(), all.end(), 0u);
++    llama_pos pos = 0;
++    // every chunk keeps its first 16 cells busy, two chunks are fully free
++    std::for_each(all.begin(), all.end(), [&](uint32_t i) {
++        const bool free_chunk = i / chunk == 10 || i / chunk == 11;
++        if (!free_chunk && i % chunk < 16) {
++            cells.pos_set(i, pos++);
++            cells.seq_add(i, 7);
++        }
++    });
++    std::vector<llama_pos> next_pos(8, 0);
++    const std::vector<llama_seq_id> share(512, 1);
++    const auto idxs = cells.place_together(share, 0, chunk);
++    CHECK(idxs.size() == 512);
++    CHECK(idxs.front() == 10*chunk);
++    commit(cells, share, idxs, next_pos);
++    // 128 free cells together, then 48 at a time
++    CHECK(runs_of(cells, 1) == 1 + (512 - 128 + 47)/48);
++}
++
++static void random_pools() {
++    std::mt19937 rng(11);
++    for (int round = 0; round < 300; ++round) {
++        const uint32_t n_cells = chunk * (4 + rng() % 60);
++        llama_kv_cells cells;
++        cells.resize(n_cells);
++        const int n_seq = 1 + rng() % 4;
++        std::vector<llama_pos> next_pos(n_seq, 0);
++        const uint32_t fill = rng() % n_cells;
++        std::vector<uint32_t> tries(fill);
++        std::for_each(tries.begin(), tries.end(), [&](uint32_t) {
++            const uint32_t cell = rng() % n_cells;
++            if (cells.is_empty(cell)) {
++                const llama_seq_id seq = (llama_seq_id) (rng() % n_seq);
++                cells.pos_set(cell, next_pos[seq]++);
++                cells.seq_add(cell, seq);
++            }
++        });
++        const uint32_t n_free = n_cells - cells.get_used();
++
++        std::vector<llama_seq_id> seqs(1 + rng() % 600);
++        std::generate(seqs.begin(), seqs.end(), [&] { return (llama_seq_id) (rng() % n_seq); });
++        const auto idxs = cells.place_together(seqs, rng() % n_cells, chunk);
++
++        if (seqs.size() > n_free) {
++            CHECK(idxs.empty());
++            continue;
++        }
++        CHECK(idxs.size() == seqs.size());
++        CHECK(std::set<uint32_t>(idxs.begin(), idxs.end()).size() == idxs.size());
++        CHECK(std::all_of(idxs.begin(), idxs.end(), [&](uint32_t i) { return i < n_cells && cells.is_empty(i); }));
++    }
++}
++
++int main() {
++    concurrent_prompts();
++    resumed_from_higher_cells();
++    best_fit();
++    fragmented_pool();
++    random_pools();
++    if (failures == 0) {
++        std::printf("ok\n");
++    }
++    return failures == 0 ? 0 : 1;
++}
+-- 
+2.43.0
+

@@ -554,6 +554,7 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
     test-skippy-kv-cells-contiguous
     test-skippy-kv-page-export
     test-skippy-kv-rows-aligned
+    test-skippy-kv-place-together
     test-skippy-model-loader-accounting
     test-skippy-recurrent-state-roundtrip
     test-skippy-rerank-template
