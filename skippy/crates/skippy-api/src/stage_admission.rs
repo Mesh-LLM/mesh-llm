@@ -203,13 +203,17 @@ fn kv_graph_state<'a>(
         use skippy_ffi::StagePlanStateKind as Kind;
         let mut kv = false;
         let mut recurrent = false;
+        let mut derived = false;
         for effect in effects {
             match effect.kind {
                 Kind::KvKey | Kind::KvValue => kv = true,
                 Kind::RecurrentConv | Kind::RecurrentSsm => recurrent = true,
+                Kind::DerivedPersistent => derived = true,
             }
         }
-        if recurrent {
+        if derived {
+            "full-state"
+        } else if recurrent {
             "recurrent"
         } else if kv {
             "dense"

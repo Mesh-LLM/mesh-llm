@@ -9,19 +9,19 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index efc7d52ab294c68530707c025918a7928ebe3a6f..b1141c8cae8af6afdb56a5c269a208ebddfa2801 100644
+index 36fe7c82a18eb9e6a9405e127e3ed236e2bdd6f9..3d8aa7a7bae9063120d574e176466cc37f8d817e 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
-@@ -447,6 +447,8 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -492,6 +492,8 @@ llama_model_qwen4exp::graph::graph(const llm_graph_params & params) :
      ggml_build_forward_expand(gf, res_hc);
  
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(res_hc, il);
 +
-         res->t_layer_inp[il] = res_hc;
- 
-         if (hparams.is_ple(il)) {
-@@ -495,6 +497,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+         if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
+             res->t_layer_inp[il] = hc_stream_mean(ctx0, res_hc);
+             cb(res->t_layer_inp[il], "layer_inp", il);
+@@ -547,6 +549,7 @@ llama_model_qwen4exp::graph::graph(const llm_graph_params & params) :
  
          // "l_last" is the layer output name that build_cvec and imatrix look for
          cb(res_hc, "l_last", il);

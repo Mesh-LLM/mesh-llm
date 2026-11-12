@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/grovemoe.cpp b/src/models/grovemoe.cpp
-index b2648a13a81ce0a4ff9fa2e75e1834f5ca4e7d3b..99f00faeb60965da0f41af2d0704f643ee20c879 100644
+index c86ddbbf5b3f9c176e95f6fc3838de5205b1feb0..65f15736c15101164e2b286476c89d3cc796ae92 100644
 --- a/src/models/grovemoe.cpp
 +++ b/src/models/grovemoe.cpp
-@@ -85,6 +85,8 @@ llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -85,6 +85,8 @@ llama_model_grovemoe::graph::graph(const llm_graph_params & params) :
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index b2648a13a81ce0a4ff9fa2e75e1834f5ca4e7d3b..99f00faeb60965da0f41af2d0704f643
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -174,6 +176,7 @@ llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -172,6 +174,7 @@ llama_model_grovemoe::graph::graph(const llm_graph_params & params) :
  
          // input for next layer
          inpL = cur;

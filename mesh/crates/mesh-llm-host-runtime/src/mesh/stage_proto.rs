@@ -87,6 +87,7 @@ pub(super) fn stage_runtime_status_from_snapshot(
         shutdown_generation: status.shutdown_generation,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        compute_decode_tokens: status.compute_decode_tokens,
     }
 }
 
@@ -137,7 +138,10 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 
@@ -835,7 +839,10 @@ pub(super) fn stage_control_unavailable_response(
                 lease_until_unix_ms: 0,
                 compute_busy_nanos: 0,
                 compute_operations: 0,
+                compute_decode_tokens: 0,
                 dflash_target_layers: None,
+                dflash_context_window: None,
+                dflash_feature_encodings: Vec::new(),
             }
         }
         crate::inference::skippy::StageControlRequest::Status(_) => {
@@ -918,7 +925,10 @@ pub(crate) fn stage_status_from_load(
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 
@@ -1207,9 +1217,14 @@ pub(super) fn stage_status_to_proto(
         ) as i32,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
-        dflash_draft: status
-            .dflash_target_layers
-            .map(|target_layers| skippy_stage_proto::StageDFlashDraftStatus { target_layers }),
+        compute_decode_tokens: status.compute_decode_tokens,
+        dflash_draft: status.dflash_target_layers.map(|target_layers| {
+            skippy_stage_proto::StageDFlashDraftStatus {
+                target_layers,
+                context_window: status.dflash_context_window,
+                feature_encodings: status.dflash_feature_encodings.clone(),
+            }
+        }),
     }
 }
 
@@ -1289,6 +1304,16 @@ pub(super) fn stage_status_from_proto(
         lease_until_unix_ms: status.lease_until_unix_ms,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        compute_decode_tokens: status.compute_decode_tokens,
+        dflash_context_window: status
+            .dflash_draft
+            .as_ref()
+            .and_then(|draft| draft.context_window),
+        dflash_feature_encodings: status
+            .dflash_draft
+            .as_ref()
+            .map(|draft| draft.feature_encodings.clone())
+            .unwrap_or_default(),
         dflash_target_layers: status.dflash_draft.map(|draft| draft.target_layers),
     })
 }
@@ -1488,6 +1513,9 @@ fn stage_dflash_to_proto(
             .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
         draft_n_gpu_layers: plan.draft_n_gpu_layers,
         draft_device: plan.draft_device.clone(),
+        feature_encoding: plan
+            .feature_encoding
+            .map(|encoding| encoding.as_str().to_string()),
         draft_source: plan.draft_source.as_ref().map(|source| {
             skippy_stage_proto::StageDFlashDraftSource {
                 repo: source.repo.clone(),
@@ -1509,6 +1537,10 @@ fn stage_dflash_from_proto(
         max_draft_tokens: plan.max_draft_tokens.map(|tokens| tokens as usize),
         draft_n_gpu_layers: plan.draft_n_gpu_layers,
         draft_device: plan.draft_device,
+        feature_encoding: plan
+            .feature_encoding
+            .as_deref()
+            .and_then(skippy_runtime::DFlashFeatureEncoding::parse),
         draft_source: plan.draft_source.map(|source| {
             skippy_serving::split_dflash::SplitDFlashDraftSource {
                 repo: source.repo,

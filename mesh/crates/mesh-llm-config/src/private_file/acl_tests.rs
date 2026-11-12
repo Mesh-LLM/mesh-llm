@@ -58,7 +58,9 @@ mod linux {
         CString::new(bytes).unwrap()
     }
 
-    fn set_xattr(path: &Path, name: &str, value: &[u8]) {
+    /// Sets an ACL, or returns false where ACLs aren't supported (a filesystem
+    /// without them, or a sandbox that blocks xattrs, as Nix's does).
+    fn set_xattr(path: &Path, name: &str, value: &[u8]) -> bool {
         let (path, name) = (
             c_string(path.as_os_str().as_bytes()),
             c_string(name.as_bytes()),
@@ -73,12 +75,17 @@ mod linux {
                 0,
             )
         };
-        assert_eq!(
-            result,
-            0,
-            "setxattr {name:?}: {}",
-            io::Error::last_os_error()
-        );
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EOPNOTSUPP) {
+                eprintln!(
+                    "no ACLs here, checking the replace without them: setxattr {name:?}: {error}"
+                );
+                return false;
+            }
+            panic!("setxattr {name:?}: {error}");
+        }
+        true
     }
 
     fn get_xattr(path: &Path, name: &str) -> io::Result<Vec<u8>> {
@@ -107,10 +114,12 @@ mod linux {
     fn a_replaced_file_does_not_take_the_directory_default_acl_on_linux() {
         let temp = tempfile::TempDir::new().unwrap();
         let target = old_file(temp.path());
-        set_xattr(temp.path(), DEFAULT, &acl_with_reader());
+        let acls = set_xattr(temp.path(), DEFAULT, &acl_with_reader());
         replace_file_keeping_access(&target, b"new").unwrap();
-        let error = get_xattr(&target, ACCESS).unwrap_err();
-        assert_eq!(error.raw_os_error(), Some(libc::ENODATA), "{error}");
+        if acls {
+            let error = get_xattr(&target, ACCESS).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::ENODATA), "{error}");
+        }
         assert_eq!(mode(&target), 0o640);
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
     }
@@ -119,10 +128,13 @@ mod linux {
     fn a_replaced_file_keeps_its_acl_on_linux() {
         let temp = tempfile::TempDir::new().unwrap();
         let target = old_file(temp.path());
-        set_xattr(&target, ACCESS, &acl_with_reader());
-        let before = get_xattr(&target, ACCESS).unwrap();
+        let acls = set_xattr(&target, ACCESS, &acl_with_reader());
+        let before = acls.then(|| get_xattr(&target, ACCESS).unwrap());
         replace_file_keeping_access(&target, b"new").unwrap();
-        assert_eq!(get_xattr(&target, ACCESS).unwrap(), before);
+        if let Some(before) = before {
+            assert_eq!(get_xattr(&target, ACCESS).unwrap(), before);
+        }
+        assert_eq!(mode(&target), 0o640);
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
     }
 }

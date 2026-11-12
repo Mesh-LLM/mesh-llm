@@ -503,6 +503,10 @@ pub(super) enum ModelLoadSource {
     LayerPackage,
     /// A whisper.cpp model file, by path or repository reference.
     WhisperFile,
+    /// A Hugging Face layer package served as stage 0 of a split.
+    SplitLayerPackage,
+    /// Stage 0 of a split whose model came from anywhere but Hugging Face.
+    SplitLocalSource,
 }
 
 impl ModelLoadSource {
@@ -511,6 +515,8 @@ impl ModelLoadSource {
             Self::DirectGguf => "direct_gguf",
             Self::LayerPackage => "layer_package",
             Self::WhisperFile => "whisper_file",
+            Self::SplitLayerPackage => "split_layer_package",
+            Self::SplitLocalSource => "split_local_source",
         }
     }
 
@@ -526,9 +532,9 @@ impl ModelLoadSource {
     fn may_report_name(self) -> bool {
         match self {
             Self::DirectGguf => false,
-            Self::LayerPackage => true,
+            Self::LayerPackage | Self::SplitLayerPackage => true,
             // The name may come from a local path, so it is never reported.
-            Self::WhisperFile => false,
+            Self::WhisperFile | Self::SplitLocalSource => false,
         }
     }
 }
@@ -546,12 +552,36 @@ pub(super) fn report_model_loaded_analytics(
     metadata: Option<&models::gguf::GgufCompactMeta>,
 ) {
     let mut properties = mesh_llm_analytics::Properties::new()
-        .with("model", model_loaded_label(model, source))
+        .with(
+            "model",
+            model_loaded_label(
+                model,
+                source,
+                models::find_loaded_remote_catalog_model_exact(model).is_some(),
+            ),
+        )
         .with("source", source.as_str());
     if let Some(backend) = system_one_backend(metadata) {
         properties = properties.with("system_one_backend", backend);
     }
     mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
+}
+
+/// Report `model_loaded` for stage 0 of a split.
+///
+/// The name is reportable only when the package is a Hugging Face reference.
+/// A split can also run from a local `--gguf`, whose name may be a file stem
+/// or an alias matching one.
+pub(super) fn report_split_model_loaded_analytics(model: &str, package_ref: &str) {
+    report_model_loaded_analytics(model, split_model_load_source(package_ref), None);
+}
+
+fn split_model_load_source(package_ref: &str) -> ModelLoadSource {
+    if package_ref.starts_with("hf://") {
+        ModelLoadSource::SplitLayerPackage
+    } else {
+        ModelLoadSource::SplitLocalSource
+    }
 }
 
 /// Which System One (OpenJEV) backend a loaded model is, if any.
@@ -568,10 +598,22 @@ fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Optio
 
 /// The `model` value `report_model_loaded_analytics` puts on the wire.
 ///
+/// A name goes out only when its source may report one *and* it is an exact
+/// catalog entry. The serving name of a package load can be a configured
+/// alias (`server.alias`, `--model`), which is operator configuration, not a
+/// catalog name, and may name an unreleased finetune.
+///
 /// Separate from the capture so the privacy decision is testable without a
-/// reporter: the capture itself is a fire-and-forget into a global queue.
-fn model_loaded_label(model: &str, source: ModelLoadSource) -> mesh_llm_analytics::Label {
-    if source.may_report_name() {
+/// reporter or a loaded catalog: the capture itself is a fire-and-forget into
+/// a global queue.
+fn model_loaded_label(
+    model: &str,
+    source: ModelLoadSource,
+    catalog_name: bool,
+) -> mesh_llm_analytics::Label {
+    if source.may_report_name() && catalog_name {
+        // Lets `inference_request` and `inference_route` name it too.
+        crate::inference_analytics::allow_model_name(model);
         mesh_llm_analytics::Label::sanitize_or_redact(model)
     } else {
         mesh_llm_analytics::Label::redacted()
@@ -1611,7 +1653,7 @@ mod tests {
     use super::{
         LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
         model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
-        system_one_backend, unix_nanos_to_unix_ms,
+        split_model_load_source, system_one_backend, unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
     use crate::mesh;
@@ -1635,7 +1677,7 @@ mod tests {
             "and the grammar accepts it, which is exactly the hole"
         );
         assert_eq!(
-            model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
+            model_loaded_label(&name, ModelLoadSource::DirectGguf, true).as_str(),
             "redacted"
         );
     }
@@ -1656,16 +1698,57 @@ mod tests {
     }
 
     #[test]
+    fn a_split_from_a_local_file_never_reports_its_name() {
+        // `--gguf ./acme-merger-finetune.gguf --model acme-merger-finetune`
+        // splits under the alias, which is the file stem again.
+        let source = split_model_load_source;
+        assert_eq!(
+            model_loaded_label(
+                "acme-merger-finetune",
+                source("/home/you/acme-merger-finetune.gguf"),
+                true,
+            )
+            .as_str(),
+            "redacted"
+        );
+        assert_eq!(
+            model_loaded_label(
+                "Qwen3-8B-Q4_K_M",
+                source("hf://unsloth/Qwen3-8B-GGUF"),
+                true
+            )
+            .as_str(),
+            "Qwen3-8B-Q4_K_M"
+        );
+    }
+
+    #[test]
+    fn a_configured_alias_is_never_reported() {
+        // `server.alias = "acme-codename"` on a Hugging Face package: the
+        // serving name is operator configuration, so it redacts on both the
+        // split and whole-model package paths.
+        for source in [
+            ModelLoadSource::LayerPackage,
+            split_model_load_source("hf://unsloth/Qwen3-8B-GGUF"),
+        ] {
+            assert_eq!(
+                model_loaded_label("acme-codename", source, false).as_str(),
+                "redacted"
+            );
+        }
+    }
+
+    #[test]
     fn layer_package_still_reports_a_catalog_name() {
         // Redacting the direct-file case must not cost us the answer to
         // "which models actually get run" for catalog models.
         assert_eq!(
-            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage).as_str(),
+            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage, true).as_str(),
             "qwen3-8b"
         );
         // A catalog ref that fails the grammar still redacts, as before.
         assert_eq!(
-            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage).as_str(),
+            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage, true).as_str(),
             "redacted"
         );
     }

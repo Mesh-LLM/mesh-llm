@@ -442,6 +442,8 @@ pub struct StageRuntimeStatus {
     /// Cumulative runtime compute-busy time reported by the stage.
     pub compute_busy_nanos: u64,
     pub compute_operations: u64,
+    /// Serial decode steps run on this stage; see `skippy_serving::compute_meter`.
+    pub compute_decode_tokens: u64,
 }
 
 /// Classifies a stage status-refresh failure so that only a definitive

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mistral3.cpp b/src/models/mistral3.cpp
-index 484e1b698ac507e49eb756a9bf2218a655e2c238..43928e6b7045971f3d54becd76d50d32508a9655 100644
+index ab81218635da3634f90a389af023711af75b4d61..92acbc484ad94f6c1158c7e5444d9a19a6ef36d5 100644
 --- a/src/models/mistral3.cpp
 +++ b/src/models/mistral3.cpp
-@@ -117,6 +117,8 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -165,6 +165,8 @@ llama_model_mistral3::graph::graph(const llm_graph_params & params) : llm_graph_
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 484e1b698ac507e49eb756a9bf2218a655e2c238..43928e6b7045971f3d54becd76d50d32
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -215,6 +217,7 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -263,6 +265,7 @@ llama_model_mistral3::graph::graph(const llm_graph_params & params) : llm_graph_
  
          // input for next layer
          inpL = cur;

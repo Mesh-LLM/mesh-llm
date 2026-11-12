@@ -31,9 +31,9 @@ use crate::{
 };
 
 use super::feature_wire::{
-    DFlashFeatureEncoding, GGML_TYPE_BF16, decode_bf16, decode_q8_rows, dflash_feature_identity,
-    dflash_feature_layer, dflash_feature_part, encode_bf16, encode_q8_rows, f16_to_f32,
-    q8_feature_identity,
+    DFlashFeatureEncoding, GGML_TYPE_BF16, block_feature_identity, decode_bf16, decode_q4_rows,
+    decode_q8_rows, dflash_feature_identity, dflash_feature_layer, dflash_feature_part,
+    encode_bf16, encode_q4_rows, encode_q8_rows, f16_to_f32,
 };
 use super::lock_recovering;
 
@@ -246,6 +246,17 @@ impl DFlashFeatureRows {
 
     /// Reads every DFlash feature part of `frame`, in either encoding.
     pub fn from_frame(frame: &ActivationFrame) -> Result<Option<Self>> {
+        Self::from_frame_with_width(frame, None)
+    }
+
+    /// Reads every DFlash feature part of `frame` whose rows are
+    /// `expected_width` wide, refusing any other width before decoding it, so
+    /// a malformed part cannot make this stage allocate for rows it would
+    /// never use.
+    pub fn from_frame_with_width(
+        frame: &ActivationFrame,
+        expected_width: Option<usize>,
+    ) -> Result<Option<Self>> {
         let mut rows: Option<Self> = None;
         for part in frame.desc.parts()? {
             let Some((layer, encoding, width)) = dflash_feature_part(&part.identity) else {
@@ -257,12 +268,13 @@ impl DFlashFeatureRows {
                     GGML_TYPE_BF16,
                     usize::try_from(part.dimensions[0]).context("feature width")?,
                 ),
-                DFlashFeatureEncoding::Q8 => {
-                    let n_embd = width.context("Q8 feature part names no width")?;
+                DFlashFeatureEncoding::Q8 | DFlashFeatureEncoding::Q4 => {
+                    let n_embd = width
+                        .with_context(|| format!("{encoding:?} feature part names no width"))?;
                     let words = usize::try_from(part.dimensions[0]).context("feature words")?;
                     ensure!(
                         words * 4 == encoding.row_bytes(n_embd),
-                        "Q8 feature part for layer {layer} has {words} words a row, \
+                        "{encoding:?} feature part for layer {layer} has {words} words a row, \
                          not the {} bytes of {n_embd} values",
                         encoding.row_bytes(n_embd)
                     );
@@ -273,6 +285,12 @@ impl DFlashFeatureRows {
                 part.ggml_type == expected_type && part.rank == 2 && part.token_axis == 1,
                 "DFlash feature part for layer {layer} has an unexpected layout"
             );
+            if let Some(expected) = expected_width {
+                ensure!(
+                    n_embd == expected,
+                    "DFlash feature part for layer {layer} is {n_embd} wide, not the {expected} the draft reads"
+                );
+            }
             let start = usize::try_from(part.payload_offset).context("feature offset")?;
             let bytes = usize::try_from(part.payload_bytes).context("feature bytes")?;
             let payload = frame
@@ -288,6 +306,7 @@ impl DFlashFeatureRows {
             let values = match encoding {
                 DFlashFeatureEncoding::Bf16 => decode_bf16(payload),
                 DFlashFeatureEncoding::Q8 => decode_q8_rows(payload, n_embd),
+                DFlashFeatureEncoding::Q4 => decode_q4_rows(payload, n_embd),
             };
             rows.insert(layer, values)?;
         }
@@ -348,10 +367,14 @@ impl DFlashFeatureRows {
                         self.n_embd,
                     )
                 }
-                DFlashFeatureEncoding::Q8 => {
-                    encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                DFlashFeatureEncoding::Q8 | DFlashFeatureEncoding::Q4 => {
+                    if encoding == DFlashFeatureEncoding::Q8 {
+                        encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                    } else {
+                        encode_q4_rows(values, self.n_embd, &mut frame.payload);
+                    }
                     (
-                        q8_feature_identity(*layer, self.n_embd)?,
+                        block_feature_identity(encoding, *layer, self.n_embd)?,
                         crate::GGML_TYPE_I32,
                         4,
                         row_bytes / 4,
@@ -394,6 +417,8 @@ pub(crate) struct DFlashCapture {
     input_layer: Option<u32>,
     n_embd: usize,
     n_batch: usize,
+    /// How this stage encodes the rows it forwards.
+    encoding: DFlashFeatureEncoding,
 }
 
 // Only touched behind the owning Mutex, and Skippy serializes target-context
@@ -452,21 +477,29 @@ pub(crate) struct DFlashSplitSession {
     pub(crate) remote: Option<(DFlashFeatureRows, usize)>,
     /// Token rows whose captured features this stage could not forward.
     pub(crate) rows_dropped: u64,
+    /// The next message's rows lie before the draft's attention window: no
+    /// stage forwards their features and the draft does not ingest them.
+    pub(crate) unattended: bool,
+    /// How this stage encodes the rows it forwards: the plan's encoding,
+    /// unless `SKIPPY_DFLASH_FEATURE_ENCODING` names another, which wins.
+    encoding: DFlashFeatureEncoding,
 }
 
 impl DFlashSplitSession {
     pub(crate) fn capturing(capture: &SharedDFlashCapture) -> Self {
-        let (input_layer, captures_layers) = {
+        let (input_layer, captures_layers, encoding) = {
             let capture = lock_recovering(capture, |_| {});
             (
                 capture.input_layer.map(|layer| (layer, capture.n_embd)),
                 !capture.layers.is_empty(),
+                capture.encoding,
             )
         };
         Self {
             capture: Some(Arc::downgrade(capture)),
             input_layer,
             captures_layers,
+            encoding,
             ..Self::default()
         }
     }
@@ -501,6 +534,13 @@ impl DFlashSplitSession {
         }
     }
 
+    /// Forgets rows held for a message outside the draft window; the mark
+    /// itself stays until the frame leaves.
+    pub(crate) fn drop_unattended_rows(&mut self) {
+        self.captured = None;
+        self.remote = None;
+    }
+
     pub(crate) fn clear(&mut self) {
         self.captured = None;
         self.received_input = None;
@@ -509,6 +549,31 @@ impl DFlashSplitSession {
 }
 
 impl StageSession {
+    /// Marks the rows of this session's next message as outside the final
+    /// stage's DFlash draft window, or not. A draft whose every attention
+    /// layer slides over a window of `n` positions never attends a prompt row
+    /// `n` or more positions before the first token it drafts after, so stage
+    /// 0 marks the prefill chunks that hold only such rows. A capturing stage
+    /// then forwards no feature rows for them, and a drafting final stage
+    /// skips ingesting them and starts its context after them. The mark
+    /// lasts for one message; a no-op on a session outside split DFlash.
+    pub fn dflash_mark_unattended(&mut self, unattended: bool) {
+        if self.dflash.is_none() && self.dflash_split.is_none() {
+            return;
+        }
+        self.dflash_split
+            .get_or_insert_with(Default::default)
+            .unattended = unattended;
+    }
+
+    /// Whether this session's next message is marked as outside the draft
+    /// window.
+    pub(crate) fn dflash_unattended(&self) -> bool {
+        self.dflash_split
+            .as_ref()
+            .is_some_and(|split| split.unattended)
+    }
+
     /// Hands the draft the feature rows an earlier stage sent with the input
     /// of this session's next decode.
     pub fn dflash_set_remote_features(&mut self, rows: Option<DFlashFeatureRows>) {
@@ -538,9 +603,21 @@ impl StageSession {
     /// layer's rows. Malformed rows are dropped and reported; the draft then
     /// finds them missing.
     pub fn dflash_receive_input(&mut self, input: Option<&ActivationFrame>) -> Result<()> {
+        if self.dflash_unattended() {
+            // Nothing is read for rows outside the draft window.
+            if let Some(split) = self.dflash_split.as_mut() {
+                split.remote = None;
+                split.received_input = None;
+            }
+            return Ok(());
+        }
         if let Some(link) = self.dflash.as_ref() {
             let input_layer = link.input_layer;
-            let (rows, error) = match input.map(DFlashFeatureRows::from_frame).transpose() {
+            let feature_width = link.feature_width;
+            let (rows, error) = match input
+                .map(|frame| DFlashFeatureRows::from_frame_with_width(frame, feature_width))
+                .transpose()
+            {
                 Ok(rows) => (rows.flatten(), None),
                 Err(error) => (None, Some(error.context("read DFlash feature parts"))),
             };
@@ -589,6 +666,13 @@ impl StageSession {
         let Some(split) = self.dflash_split.as_mut() else {
             return Ok(());
         };
+        if std::mem::take(&mut split.unattended) {
+            // The draft never attends these rows; nothing was captured for
+            // them and nothing goes with the frame.
+            split.captured = None;
+            split.received_input = None;
+            return Ok(());
+        }
         let tokens = usize::try_from(frame.desc.token_count).context("frame tokens")?;
         let mut rows = split.captured.take();
         if let Some(rows) = rows.as_mut() {
@@ -617,7 +701,7 @@ impl StageSession {
             }
         }
         if let Some(rows) = rows {
-            rows.append_to_frame(frame)?;
+            rows.append_to_frame_as(frame, split.encoding)?;
         }
         input_error.map_or(Ok(()), Err)
     }
@@ -647,13 +731,15 @@ impl StageModel {
 
     /// Captures the inputs of the DFlash target layers this stage owns so its
     /// sessions can forward them to the final stage's draft, plus its input
-    /// activation when this stage starts on a target layer. Returns the
+    /// activation when this stage starts on a target layer, encoded as
+    /// `encoding` (see [`DFlashFeatureEncoding::for_plan`]). Returns the
     /// forwarded layers. Attach before creating serving sessions.
     pub fn attach_dflash_capture(
         &mut self,
         target_layers: &[u32],
         layer_start: u32,
         layer_end: u32,
+        encoding: DFlashFeatureEncoding,
     ) -> Result<Vec<u32>> {
         if self.dflash_draft().is_some() || self.dflash_capture().is_some() {
             bail!("a DFlash draft or capture is already attached");
@@ -695,6 +781,7 @@ impl StageModel {
             input_layer,
             n_embd,
             n_batch,
+            encoding,
         };
         if !layers.is_empty() {
             super::refresh_target_program(&probe)?;
@@ -702,8 +789,8 @@ impl StageModel {
         drop(probe);
         self.install_dflash_capture(Arc::new(Mutex::new(capture)))?;
         crate::write_native_log_note(format!(
-            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={:?}",
-            DFlashFeatureEncoding::configured()
+            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={}",
+            encoding.as_str()
         ));
         Ok(layers.into_iter().chain(input_layer).collect())
     }
@@ -864,6 +951,90 @@ mod tests {
     }
 
     #[test]
+    fn rows_outside_the_draft_window_leave_without_features() {
+        let mut rows = DFlashFeatureRows::new(1, 2);
+        rows.insert(2, vec![1.0, 2.0]).unwrap();
+        let mut session = session_with_captured(rows);
+        session.dflash_mark_unattended(true);
+        let mut chunk = frame(2);
+        let before = chunk.clone();
+
+        session.dflash_forward_captured(&mut chunk).unwrap();
+
+        assert_eq!(chunk.payload, before.payload);
+        assert_eq!(chunk.desc.part_count, 1);
+        // Skipped on purpose, so not counted as rows the draft lost.
+        assert_eq!(session.dflash_rows_dropped(), 0);
+        // The mark lasts one message: the next frame carries its rows again.
+        let mut later = DFlashFeatureRows::new(1, 1);
+        later.insert(2, vec![3.0]).unwrap();
+        session.dflash_split.as_mut().unwrap().captured = Some(later);
+        let mut next = frame(1);
+        session.dflash_forward_captured(&mut next).unwrap();
+        let forwarded = DFlashFeatureRows::from_frame(&next).unwrap().unwrap();
+        assert_close(forwarded.rows_of(2, 0, 1).unwrap(), &[3.0]);
+    }
+
+    #[test]
+    fn a_drafting_stage_reads_no_rows_for_an_unattended_message() {
+        let mut session = StageSession::detached_dflash_for_test();
+        let mut rows = DFlashFeatureRows::new(1, 2);
+        rows.insert(2, vec![1.0, 2.0]).unwrap();
+        let mut input = frame(2);
+        rows.append_to_frame_as(&mut input, DFlashFeatureEncoding::Bf16)
+            .unwrap();
+
+        session.dflash_mark_unattended(true);
+        session.dflash_receive_input(Some(&input)).unwrap();
+        assert_eq!(session.dflash_remote_features_for_test(), None);
+
+        session.dflash_mark_unattended(false);
+        session.dflash_receive_input(Some(&input)).unwrap();
+        assert_eq!(session.dflash_remote_features_for_test(), Some(&rows));
+    }
+
+    #[test]
+    fn a_new_request_on_the_lane_starts_unmarked() {
+        let mut session = session_with_captured(DFlashFeatureRows::new(1, 0));
+        session.dflash_mark_unattended(true);
+        session.dflash_reset_health();
+        assert!(!session.dflash_unattended());
+    }
+
+    #[test]
+    fn feature_rows_of_another_width_are_refused_before_decoding() {
+        let mut rows = DFlashFeatureRows::new(2, 1);
+        rows.insert(3, vec![1.0, 2.0]).unwrap();
+        let mut frame = frame(1);
+        rows.append_to_frame_as(&mut frame, DFlashFeatureEncoding::Q4)
+            .unwrap();
+        let error = DFlashFeatureRows::from_frame_with_width(&frame, Some(4)).unwrap_err();
+        assert!(
+            error.to_string().contains("is 2 wide, not the 4"),
+            "{error:#}"
+        );
+        assert!(
+            DFlashFeatureRows::from_frame_with_width(&frame, Some(2))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_session_outside_split_dflash_ignores_the_mark() {
+        let mut session = StageSession {
+            raw: std::ptr::null_mut(),
+            token_count: 0,
+            terminal_stage: false,
+            batched_activation_exports: true,
+            dflash: None,
+            dflash_split: None,
+        };
+        session.dflash_mark_unattended(true);
+        assert!(session.dflash_split.is_none());
+    }
+
+    #[test]
     fn later_rows_extend_each_shared_layer() {
         let mut rows = DFlashFeatureRows::new(1, 1);
         rows.insert(2, vec![1.0]).unwrap();
@@ -997,7 +1168,8 @@ mod tests {
 
         // A width that disagrees with the packed rows is refused.
         let mut wrong = frame.clone();
-        wrong.desc.parts[1].identity = q8_feature_identity(6, 64).unwrap();
+        wrong.desc.parts[1].identity =
+            block_feature_identity(DFlashFeatureEncoding::Q8, 6, 64).unwrap();
         assert!(DFlashFeatureRows::from_frame(&wrong).is_err());
     }
 

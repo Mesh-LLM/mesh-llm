@@ -24,10 +24,10 @@ test-support = ["host-io"]
 # Neutral Mesh identity/routing primitives — no Skippy, no host-runtime.
 # `host-io` (opt-in) exposes node-key/keystore/ownership helpers used by the
 # moved identity persistence module.
-mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.78.0", default-features = false }
-mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.78.0" }
-mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.78.0" }
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.78.0" }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.79.0", default-features = false }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.79.0" }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.79.0" }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.79.0" }
 
 iroh = { version = "1.4.1", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 

@@ -85,14 +85,17 @@ architecture, parameter count, quantization and native context capacity.
 list describes what at least one provider advertises, not every replica.
 
 Each provider retains its own optional `workload_class`, `capabilities`,
-`metadata`, `runtime`, `thinking` and `payment`, plus plugin/endpoint identifiers
+`metadata`, `runtime`, `thinking` and `requires`, plus plugin/endpoint identifiers
 where available. Missing facts mean unknown. In particular:
 
 - `runtime.context_length` is the provider's serving limit; native capacity is
   not a guarantee of that serving limit.
 - Thinking controls observed locally do not describe remote replicas.
-- Payment offers describe advertised prices and never authorize payment or
-  constitute binding quotes.
+- `requires` lists the plugin channels a gated provider requires, each with the
+  `terms` its plugin attached, republished verbatim (base64 with
+  `terms_encoding: "base64"` when they are not UTF-8). The node does not
+  interpret them: a price in the terms never authorizes payment or constitutes
+  a binding quote. Ungated providers omit the field.
 - An OCR provider and an LLM provider sharing an ID retain separate workload
   evidence. Their operations are not interchangeable.
 
@@ -121,7 +124,7 @@ Epoch timestamps explicitly represent unknown release dates. Anthropic supports
 can exist in Mesh discovery while returning `404` from compatibility lookup.
 
 Mesh-specific `metadata`, capability arrays/status fields, `thinking`,
-`virtual_model` and `payment` have moved out of compatibility responses. Read
+`virtual_model` and `requires` are not part of compatibility responses. Read
 them through this catalog. `display_name` is standard for Anthropic but is not
 part of the OpenAI projection. Internal plugin provider `/v1/models` probes
 retain their existing provider contract.

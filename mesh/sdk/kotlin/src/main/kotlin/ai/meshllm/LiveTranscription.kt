@@ -2,6 +2,7 @@ package ai.meshllm
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -30,12 +31,18 @@ data class LiveTranscriptionOptions(
     val sampleRate: UInt = 16000u,
     /** null ends turns only when commit() is called. */
     val turnDetection: LiveTurnDetection? = LiveTurnDetection(),
+    /** Audio between transcription passes, 200 to 5000 ms; null keeps the node's 1000 ms default. */
+    val stepMs: UInt? = null,
+    /** Report replaceable, unconfirmed text before confirmed deltas. Defaults to false. */
+    val tentative: Boolean = false,
 ) {
     internal fun json(): String = JsonObject(buildMap {
         model?.let { put("model", JsonPrimitive(it)) }
         language?.let { put("language", JsonPrimitive(it)) }
         prompt?.let { put("prompt", JsonPrimitive(it)) }
         put("sample_rate", JsonPrimitive(sampleRate.toLong()))
+        stepMs?.let { put("step_ms", JsonPrimitive(it.toLong())) }
+        put("tentative", JsonPrimitive(tentative))
         put("turn_detection", turnDetection?.let { detection -> JsonObject(mapOf(
             "threshold" to JsonPrimitive(detection.threshold),
             "prefix_padding_ms" to JsonPrimitive(detection.prefixPaddingMs.toLong()),
@@ -44,7 +51,11 @@ data class LiveTranscriptionOptions(
     }).toString()
 }
 
-/** Types: speech_started, speech_stopped, delta, committed, completed, error. */
+ /**
+ * Types: speech_started, speech_stopped, delta, tentative, committed, completed, error.
+ * Tentative text replaces the turn's previous unconfirmed text; empty text clears it.
+ * Completed supersedes tentative text. Delta text is confirmed and should be appended.
+ */
 data class LiveTranscriptionEvent(
     val type: String,
     val itemId: String?,
@@ -86,8 +97,12 @@ class LiveTranscription internal constructor(
         LiveTranscriptionEvent.decode(it.jsonObject)
     }
     suspend fun close(): Unit = withContext(Dispatchers.IO) { closeNative() }
+    /** Emits the session events until the session closes. */
     fun events(): Flow<LiveTranscriptionEvent> = callbackFlow {
-        val reader = launch(Dispatchers.IO) {
+        // A blocking native read cannot be cancelled until native close returns.
+        // Keep its lifetime outside the collector's structured cancellation join.
+        val nativeScope = CoroutineScope(Dispatchers.IO)
+        nativeScope.launch {
             try {
                 while (true) { send(nextEvent() ?: break) }
                 channel.close()
@@ -98,9 +113,12 @@ class LiveTranscription internal constructor(
             // same wait close() performs on Dispatchers.IO — and unblocks a
             // reader parked in a pending read. Run it on IO so cancellation
             // never blocks the collector's dispatcher.
-            CoroutineScope(Dispatchers.IO).launch {
-                closeNative()
-                reader.cancel()
+            nativeScope.launch {
+                try {
+                    closeNative()
+                } finally {
+                    nativeScope.cancel()
+                }
             }
         }
     }

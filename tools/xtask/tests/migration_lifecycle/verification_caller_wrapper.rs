@@ -165,7 +165,7 @@ impl Fixture {
         .map(|name| caller_function(&source, name))
         .join("\n");
         format!(
-            "set -euo pipefail\nHARNESS_MODE=verify\nMESH_LLM_AUTOMATION_BIN=$1\nTRUSTED_ROOT=$2\nBASE_HEAD=$3\nROOT=$4\nCANDIDATE_BASE_HEAD=$5\nCERTIFIED_SHA=$6\nVERIFICATION_TREE=$7\nRUNNER_TEMP=$8\nPATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\"\nexport PATH\n{selection}\n{helpers}\n{action}\n"
+            "set -euo pipefail\nHARNESS_MODE=verify\nMESH_LLM_AUTOMATION_BIN=$1\nTRUSTED_ROOT=$2\nBASE_HEAD=$3\nCANARY_CONTROLLER_SHA=$3\nROOT=$4\nCANDIDATE_BASE_HEAD=$5\nCANARY_MESH_SOURCE=$5\nCERTIFIED_SHA=$6\nVERIFICATION_TREE=$7\nRUNNER_TEMP=$8\nPATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\"\nexport PATH\n{selection}\n{helpers}\n{action}\n"
         )
     }
     fn logged_spec(&self, action: &str) -> ProcessSpec {
@@ -280,6 +280,52 @@ fn copied_real_verify_content_wrappers_admit_all_three_with_advanced_controller_
     assert_eq!(
         git(&f.work.join("candidate"), &["rev-parse", "HEAD"]),
         f.document["authority"]["candidate"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn native_build_bundle_admits_exact_candidate_parity_with_advanced_controller() {
+    let fixture = Fixture::content_new();
+    assert_ne!(
+        fixture.document["authority"]["controller"]["revision"],
+        fixture.document["authority"]["base"]
+    );
+    for mode in ["native-build", "verify-build"] {
+        let action = format!(
+            "HARNESS_MODE={mode}\nBASE_HEAD=$CANDIDATE_BASE_HEAD\nCANARY_INPUT_BUNDLE=fixture.bundle\n\
+             VERIFICATION_DEADLINE_AT=$(( $(date +%s) + 20 ))\n\
+             verification_source_inspection verification-parity-inventory"
+        );
+        let report = fixture.logged(&action);
+        assert!(
+            report.process.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
+        );
+        let result: Json = serde_json::from_slice(report.stdout.unwrap().as_bytes()).unwrap();
+        assert_eq!(result["status"], "parity_inventory_admitted");
+        fixture.no_transport_temps();
+    }
+    let denied = fixture.logged(
+        "HARNESS_MODE=native-build\nCANARY_INPUT_BUNDLE=\n\
+         verification_source_inspection verification-parity-inventory",
+    );
+    assert_eq!(denied.process.status.unwrap().code(), Some(1));
+    let wrong_source = fixture.logged(
+        "HARNESS_MODE=native-build\nCANARY_INPUT_BUNDLE=fixture.bundle\n\
+         CANARY_MESH_SOURCE=$BASE_HEAD\n\
+         verification_source_inspection verification-parity-inventory",
+    );
+    assert_eq!(wrong_source.process.status.unwrap().code(), Some(1));
+    let wrong_controller = fixture.logged(
+        "HARNESS_MODE=native-build\nBASE_HEAD=$CANDIDATE_BASE_HEAD\n\
+         CANARY_CONTROLLER_SHA=$BASE_HEAD\nCANARY_INPUT_BUNDLE=fixture.bundle\n\
+         verification_source_inspection verification-parity-inventory",
+    );
+    assert_eq!(wrong_controller.process.status.unwrap().code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(wrong_controller.stderr.unwrap().as_bytes())
+            .contains("verification controller moved from its frozen revision")
     );
 }
 

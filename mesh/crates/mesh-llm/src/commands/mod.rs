@@ -272,29 +272,16 @@ async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) ->
             let mut rows = resolved_plugin_list_rows(cli)?;
             rows.providers =
                 mesh_llm_commands::plugin::fetch_capability_providers(cli.node.console).await;
-            mesh_llm_commands::plugin::run_plugin_command(
-                command,
-                Some(&rows),
-                cli.config.as_deref(),
-            )
-            .await?;
+            mesh_llm_commands::plugin::run_plugin_command(command, Some(&rows)).await?;
         }
         mesh_llm_cli::PluginCommand::Info { .. } => {
-            if !mesh_llm_commands::plugin::run_plugin_command(command, None, cli.config.as_deref())
-                .await?
-            {
+            if !mesh_llm_commands::plugin::run_plugin_command(command, None).await? {
                 let rows = resolved_plugin_list_rows(cli)?;
-                mesh_llm_commands::plugin::run_plugin_command(
-                    command,
-                    Some(&rows),
-                    cli.config.as_deref(),
-                )
-                .await?;
+                mesh_llm_commands::plugin::run_plugin_command(command, Some(&rows)).await?;
             }
         }
         _ => {
-            mesh_llm_commands::plugin::run_plugin_command(command, None, cli.config.as_deref())
-                .await?;
+            mesh_llm_commands::plugin::run_plugin_command(command, None).await?;
         }
     }
     Ok(())

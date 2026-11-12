@@ -1,0 +1,134 @@
+name: Publish DFlash pairing index
+
+# Publishes the checked-in DFlash pairing index to meshllm/dflash-pairings when
+# it changes on main. Each release pins the index by the SHA-256 of its bytes
+# (DFLASH_PAIRING_INDEX_SHA256) and fetches index/<sha256>.json from main, so
+# that file is uploaded once and never overwritten or deleted. index.json and
+# README.md at the repo root are copies for people to read, refreshed only by
+# the run whose index is still the one on main.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**
+  workflow_dispatch:
+
+# One group per commit: a shared group would let GitHub replace a pending run,
+# and the index that commit pins would never be published.
+concurrency:
+  group: dflash-pairings-publish-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+  PAIRINGS_DIR: mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings
+  PAIRINGS_PIN_SOURCE: mesh/crates/mesh-llm-skippy-adapter/src/config/dflash_index.rs
+  PAIRINGS_REPO: meshllm/dflash-pairings
+
+jobs:
+  publish:
+    name: Publish DFlash pairing index
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' }}
+    # The HF token stays on a GitHub-hosted runner; the container only supplies
+    # the pinned hf CLI.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt runner environment
+        run: verify-runner-image public cpu
+      - name: Stage the pairing index
+        id: stage
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum "$PAIRINGS_DIR/index.json" | cut -d' ' -f1)"
+          if ! [[ "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::could not hash $PAIRINGS_DIR/index.json" >&2
+            exit 1
+          fi
+          # The unit tests hold the pin to the file; check again so CI never
+          # publishes an index no release pins.
+          if ! grep -Fq "\"$sha256\";" "$PAIRINGS_PIN_SOURCE"; then
+            echo "::error::DFLASH_PAIRING_INDEX_SHA256 is not $sha256" >&2
+            exit 1
+          fi
+          staging="$RUNNER_TEMP/dflash-pairings"
+          mkdir -p "$staging/index"
+          # Runs for different commits can overlap. Only the run whose pairings
+          # still match main refreshes the human-facing root copies, so an older
+          # run cannot overwrite a newer index.json or README.md.
+          git -c safe.directory="$GITHUB_WORKSPACE" fetch --quiet --depth=1 \
+            "https://github.com/$GITHUB_REPOSITORY.git" main
+          if git -c safe.directory="$GITHUB_WORKSPACE" diff --quiet HEAD FETCH_HEAD -- "$PAIRINGS_DIR"; then
+            cp "$PAIRINGS_DIR/index.json" "$PAIRINGS_DIR/README.md" "$staging/"
+          else
+            echo "main has newer pairings; leaving the root index.json and README.md to its run"
+          fi
+          published="$RUNNER_TEMP/published-index.json"
+          status="$(curl --silent --show-error --location --proto '=https' \
+            --output "$published" --write-out '%{http_code}' \
+            "https://huggingface.co/$PAIRINGS_REPO/resolve/main/index/$sha256.json")"
+          case "$status" in
+            200)
+              # Published files are immutable: never overwrite, only verify.
+              published_sha256="$(sha256sum "$published" | cut -d' ' -f1)"
+              if [[ "$published_sha256" != "$sha256" ]]; then
+                echo "::error::index/$sha256.json on $PAIRINGS_REPO hashes to $published_sha256" >&2
+                exit 1
+              fi
+              echo "index/$sha256.json is already published"
+              ;;
+            404)
+              cp "$PAIRINGS_DIR/index.json" "$staging/index/$sha256.json"
+              ;;
+            *)
+              echo "::error::fetching index/$sha256.json returned HTTP $status" >&2
+              exit 1
+              ;;
+          esac
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "staging=$staging" >> "$GITHUB_OUTPUT"
+      - name: Upload to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          INDEX_SHA256: ${{ steps.stage.outputs.sha256 }}
+          STAGING: ${{ steps.stage.outputs.staging }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$(find "$STAGING" -type f)" ]]; then
+            echo "index/$INDEX_SHA256.json is published and main has newer pairings; nothing to upload"
+            exit 0
+          fi
+          # Without --delete, nothing already in the repo is removed.
+          hf upload "$PAIRINGS_REPO" "$STAGING" . \
+            --repo-type model \
+            --commit-message "Publish DFlash pairing index $INDEX_SHA256 from mesh-llm $GITHUB_SHA"
+          echo "Published index/$INDEX_SHA256.json to $PAIRINGS_REPO" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify the published index
+        env:
+          INDEX_SHA256: ${{ steps.stage.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          fetched="$RUNNER_TEMP/fetched-index.json"
+          curl --silent --show-error --fail --location --proto '=https' --output "$fetched" \
+            "https://huggingface.co/$PAIRINGS_REPO/resolve/main/index/$INDEX_SHA256.json"
+          fetched_sha256="$(sha256sum "$fetched" | cut -d' ' -f1)"
+          if [[ "$fetched_sha256" != "$INDEX_SHA256" ]]; then
+            echo "::error::published index/$INDEX_SHA256.json hashes to $fetched_sha256" >&2
+            exit 1
+          fi

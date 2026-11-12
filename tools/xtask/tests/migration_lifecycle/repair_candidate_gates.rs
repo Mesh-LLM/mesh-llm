@@ -244,6 +244,66 @@ run_full_build() { observe build; }
 run_certification() { observe certification; }
 "#;
 #[test]
+fn native_candidate_build_inspects_candidate_parity_after_early_certification() {
+    let gates = declaration(&source(), "run_candidate_gates");
+    for (mode, bundle, expected) in [
+        ("native-build", "candidate.bundle", "candidate-parity"),
+        ("verify-build", "candidate.bundle", "candidate-parity"),
+        ("native-build", "", "selected-parity"),
+        ("pinned-build", "", "selected-parity"),
+        ("repair-build", "", "selected-parity"),
+    ] {
+        let fixture = Fixture::new();
+        let setup = format!(
+            "{GATE_SETUP}\nHARNESS_MODE={mode}\nCANARY_INPUT_BUNDLE={bundle}\nMESH_LLM_AUTOMATION_BIN=/usr/bin/true\n\
+             run_verification_logged() {{ observe plan-check; }}\n\
+             run_early_native_certification() {{ observe early; }}\n\
+             controller_parity_inventory() {{ observe selected-parity; }}\n\
+             verification_source_inspection() {{ [[ \"$1\" == verification-parity-inventory && \"$2\" == \"$CERTIFY_LOG\" ]] || return 98; observe candidate-parity; }}\n\
+             FAIL_AT=none"
+        );
+        let observed = fixture.run(&gates, &setup, "run_candidate_gates");
+        assert_eq!(observed.status, 0, "{mode}/{bundle}: {}", observed.stderr);
+        assert_eq!(
+            observed.stdout.lines().last(),
+            Some(expected),
+            "{mode}/{bundle}: {}",
+            observed.stdout
+        );
+        fixture.finish();
+    }
+}
+#[test]
+fn bundle_from_foreign_source_is_rejected_before_candidate_worktree_build() {
+    let wrapper = source();
+    let admission = wrapper
+        .split_once("\nload_candidate_bundle\ntrap cleanup_verification_worktree EXIT\n")
+        .unwrap()
+        .1
+        .split_once("\nmaterialize_verification_tree\n")
+        .unwrap()
+        .0;
+    for (mode, base, candidate, expected) in [
+        ("native-build", "selected", "candidate", 0),
+        ("verify-build", "parent", "selected", 0),
+        ("native-build", "parent", "candidate", 1),
+        ("verify-build", "parent", "candidate", 1),
+    ] {
+        let fixture = Fixture::new();
+        let setup = format!(
+            "HARNESS_MODE={mode}\nCANARY_MESH_SOURCE=selected\nBASE_HEAD=controller\n\
+             CANDIDATE_BASE_HEAD={base}\nCERTIFIED_SHA={candidate}"
+        );
+        let observed = fixture.run("", &setup, &format!("{admission}\nprintf 'admitted\\n'"));
+        assert_eq!(observed.status, expected, "{mode}/{base}/{candidate}");
+        assert_eq!(
+            observed.stdout,
+            if expected == 0 { "admitted\n" } else { "" }
+        );
+        fixture.finish();
+    }
+}
+#[test]
 fn candidate_gates_preserve_order_refresh_boundary_and_short_circuit_every_failure() {
     let source = declaration(&source(), "run_candidate_gates");
     for mode in ["verify", "refresh"] {

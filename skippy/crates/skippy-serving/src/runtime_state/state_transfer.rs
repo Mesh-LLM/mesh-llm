@@ -15,6 +15,7 @@ pub(super) fn record_restored_session_token_count(
 impl RuntimeState {
     /// Complete an exact-state restore with the tokens belonging to its prefix.
     pub fn restore_token_history(&mut self, session_id: &str, tokens: &[i32]) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         self.session(session_id)?.restore_token_history(tokens)
     }
 
@@ -28,6 +29,7 @@ impl RuntimeState {
     }
 
     pub fn import_state(&mut self, session_id: &str, bytes: &[u8]) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let layer_start = i32::try_from(self.model_layer_start())?;
         let layer_end = i32::try_from(self.model_layer_end())?;
         let session = self.session(session_id)?;
@@ -42,6 +44,7 @@ impl RuntimeState {
         bytes: &[u8],
         token_count: u64,
     ) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let layer_start = i32::try_from(self.model_layer_start())?;
         let layer_end = i32::try_from(self.model_layer_end())?;
         let session = self.session(session_id)?;
@@ -68,6 +71,7 @@ impl RuntimeState {
     }
 
     pub fn import_full_state(&mut self, session_id: &str, bytes: &[u8]) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let layer_start = i32::try_from(self.model_layer_start())?;
         let layer_end = i32::try_from(self.model_layer_end())?;
         let session = self.session(session_id)?;
@@ -82,6 +86,7 @@ impl RuntimeState {
         bytes: &[u8],
         token_count: u64,
     ) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let layer_start = i32::try_from(self.model_layer_start())?;
         let layer_end = i32::try_from(self.model_layer_end())?;
         let session = self.session(session_id)?;
@@ -124,6 +129,7 @@ impl RuntimeState {
         bytes: &[u8],
         token_count: u64,
     ) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let session = self.session(session_id)?;
         let import_result = session.import_recurrent_state_for_token_count(bytes, token_count);
         if import_result.is_ok() {

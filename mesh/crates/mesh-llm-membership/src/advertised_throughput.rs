@@ -37,6 +37,33 @@ pub struct ModelThroughputHint {
     /// be filtered through `is_fresh_at`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub measurement: Option<ThroughputMeasurement>,
+    /// The node's prompt-processing cost for this model, measured on its own
+    /// requests whether or not they hit a cache, so a router can cost the
+    /// node cold. `None` from a node that predates it or has not measured one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<PrefillMeasurement>,
+}
+
+/// A node's measured prefill cost for one model. Relays forward it unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct PrefillMeasurement {
+    pub micros_per_token: u64,
+    /// Wall-clock time of the newest sample behind the rate.
+    pub observed_at_unix_ms: u64,
+}
+
+impl PrefillMeasurement {
+    /// The rate when it is usable at `now_unix_ms`: measured, dated no later
+    /// than the allowed clock skew, and no older than
+    /// [`MAX_ADVERTISED_THROUGHPUT_WINDOW_MS`].
+    pub fn fresh_micros_per_token(&self, now_unix_ms: u64) -> Option<u64> {
+        (self.micros_per_token > 0
+            && self.observed_at_unix_ms
+                <= now_unix_ms.saturating_add(MAX_THROUGHPUT_FUTURE_SKEW_MS)
+            && now_unix_ms.saturating_sub(self.observed_at_unix_ms)
+                <= MAX_ADVERTISED_THROUGHPUT_WINDOW_MS)
+            .then_some(self.micros_per_token)
+    }
 }
 
 /// The measuring node's account of the samples behind a hint. Relays forward
@@ -179,6 +206,7 @@ mod tests {
             avg_tokens_per_second_milli: 40_000,
             throughput_samples: 3,
             measurement,
+            prefill: None,
         }
     }
 
@@ -321,5 +349,28 @@ mod tests {
             merged[0].measurement, relayed[0].measurement,
             "the freshness guard only protects a still-usable held hint"
         );
+    }
+
+    #[test]
+    fn a_prefill_rate_is_usable_only_while_fresh_and_measured() {
+        let now = 1_800_000_000_000;
+        let at = |observed_at_unix_ms, micros_per_token| PrefillMeasurement {
+            micros_per_token,
+            observed_at_unix_ms,
+        };
+        assert_eq!(at(now - 1_000, 250).fresh_micros_per_token(now), Some(250));
+        assert_eq!(
+            at(now - MAX_ADVERTISED_THROUGHPUT_WINDOW_MS, 250).fresh_micros_per_token(now),
+            Some(250)
+        );
+        assert_eq!(
+            at(now - MAX_ADVERTISED_THROUGHPUT_WINDOW_MS - 1, 250).fresh_micros_per_token(now),
+            None
+        );
+        assert_eq!(
+            at(now + MAX_THROUGHPUT_FUTURE_SKEW_MS + 1, 250).fresh_micros_per_token(now),
+            None
+        );
+        assert_eq!(at(now, 0).fresh_micros_per_token(now), None);
     }
 }

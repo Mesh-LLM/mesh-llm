@@ -4,7 +4,7 @@ Add the tagged Swift package to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.78.0"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.79.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [
@@ -85,7 +85,7 @@ workloads normalize unrecognized peer values to `unknown`; the original workload
 string is not preserved. Kinds are string-valued. Open-ended metadata uses
 `ModelJSONValue`. Filters combine with AND; preserve them when continuing a page.
 
-Runtime limits, capability evidence, thinking controls and payment offers apply
+Runtime limits, capability evidence, thinking controls and plugin requirements apply
 to their provider. A model's operation list means at least one provider offers
 each operation. `node.inference.listModels()` remains the LLM-only compatibility
 view. Full discovery does not make an OpenAI HTTP request.
@@ -149,3 +149,40 @@ apply to omitted fields and unknown keys are rejected. Full-config `mode`
 values are `client`, `serve_only` and `serve` (combined); its default is
 combined, matching Rust. The existing `Node(...)` convenience constructor keeps
 its client default and Swift argument names.
+
+## Live transcription
+
+```swift
+let session = try await node.startLiveTranscription(LiveTranscriptionOptions(
+    model: "speech-model", sampleRate: 16000, turnDetection: nil,
+    stepMs: 400, tentative: true))
+do {
+    try await session.sendAudio(pcm16Samples)
+    try await session.commit()
+    if let event = try await session.nextEvent() {
+        print(event)
+    }
+    let remainingEvents = try await session.stop()
+    print(remainingEvents)
+} catch {
+    await session.close()
+    throw error
+}
+```
+
+Supply signed 16-bit mono samples, or use `sendAudioF32` for float samples.
+`stepMs` accepts 200 to 5000 ms; `nil` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `itemId`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input. `stop()` finishes the turn and returns
+unread events; `close()` abandons the session.

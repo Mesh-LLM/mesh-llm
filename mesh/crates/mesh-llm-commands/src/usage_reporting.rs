@@ -182,7 +182,8 @@ pub fn report_hardware_profile() {
 
 /// Build hardware properties from a survey and the detected backends.
 ///
-/// Device names are slugged, counts and sizes are bucketed, and the available
+/// Device names are slugged, the GPU count is bucketed, memory is whole GiB,
+/// and the available
 /// backends become one boolean each so they stay queryable without needing an
 /// array property.
 ///
@@ -207,17 +208,16 @@ fn hardware_properties(
         .with("backend_rocm", flavors.contains(&Backend::Rocm))
         .with("backend_vulkan", flavors.contains(&Backend::Vulkan));
 
+    // Whole GiB rather than ranges. The ranges shared their edges, and the
+    // VRAM budget moves a little between runs, so one install could land in
+    // `8-16` on one start and `16-32` on the next and be counted in both.
+    // New property names, because PostHog fixes a property's type on first
+    // sight and the old ones are strings.
     if survey.vram_bytes > 0 {
-        properties = properties.with(
-            "vram_total",
-            mesh_llm_analytics::bucket_gigabytes(survey.vram_bytes),
-        );
+        properties = properties.with("vram_gb", mesh_llm_analytics::gigabytes(survey.vram_bytes));
     }
     if let Some(system_ram) = survey.system_ram_bytes.filter(|bytes| *bytes > 0) {
-        properties = properties.with(
-            "system_ram",
-            mesh_llm_analytics::bucket_gigabytes(system_ram),
-        );
+        properties = properties.with("system_ram_gb", mesh_llm_analytics::gigabytes(system_ram));
     }
     // Always set. Leaving the property absent when the probe returns no name
     // collapses every such install into one unlabelled bucket, which reads as
@@ -372,23 +372,24 @@ mod tests {
     }
 
     #[test]
-    fn hardware_properties_slug_the_device_and_bucket_its_memory() {
+    fn hardware_properties_slug_the_device_and_report_whole_gib() {
         const GB: u64 = 1024 * 1024 * 1024;
-        let rendered = format!(
-            "{:?}",
-            hardware_properties(
-                &survey(Some("Apple M1 Pro"), 1, 36 * GB, true),
-                &metal_only()
-            )
+        let properties = hardware_properties(
+            &survey(Some("Apple M1 Pro"), 1, 36 * GB + GB / 10, true),
+            &metal_only(),
         );
+        let rendered = format!("{properties:?}");
 
         assert!(rendered.contains("apple-m1-pro"), "{rendered}");
-        assert!(rendered.contains("32-64"), "vram not bucketed: {rendered}");
         assert!(rendered.contains("backend_metal"), "{rendered}");
-        // Exact VRAM is a fingerprint; only the bucket should survive.
+        assert_eq!(
+            properties.get("vram_gb"),
+            Some(&mesh_llm_analytics::Value::Int(36))
+        );
+        // The byte count itself never goes out, only the rounded GiB.
         assert!(
-            !rendered.contains("38654705664"),
-            "exact vram leaked: {rendered}"
+            !rendered.contains(&(36 * GB + GB / 10).to_string()),
+            "exact byte count leaked: {rendered}"
         );
     }
 
@@ -435,7 +436,7 @@ mod tests {
             rendered.contains("none"),
             "no explicit no-GPU value: {rendered}"
         );
-        assert!(!rendered.contains("vram_total"), "{rendered}");
+        assert!(!rendered.contains("vram_gb"), "{rendered}");
     }
 
     /// A GPU that exists but was not named is a probe gap, not an absence of

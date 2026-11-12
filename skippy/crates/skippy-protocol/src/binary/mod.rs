@@ -358,6 +358,17 @@ mod tests {
     }
 
     #[test]
+    fn split_dflash_unattended_rows_flag_round_trips() {
+        let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
+        assert!(!state.split_dflash_unattended_rows());
+        state.set_split_dflash_unattended_rows(true);
+        assert!(state.split_dflash_unattended_rows());
+        assert!(!state.split_dflash());
+        state.set_split_dflash_unattended_rows(false);
+        assert!(!state.split_dflash_unattended_rows());
+    }
+
+    #[test]
     fn prefill_compute_calibration_ignores_short_tail_overhead() {
         let mut stats = StageReplyStats::default();
         stats.observe_prefill_compute(1, 48_000, 128);
@@ -1490,7 +1501,13 @@ mod tests {
     #[test]
     fn budgeted_decode_rejects_oversized_state_import_before_payload() {
         let state = StageStateHeader::new(WireMessageKind::StateImport);
-        let bytes = stage_frame_prefix(WireMessageKind::StateImport, 9 * 1024 * 1024, 0, 0, state);
+        let bytes = stage_frame_prefix(
+            WireMessageKind::StateImport,
+            (crate::MAX_STAGE_FRAME_BYTES + 1) as i32,
+            0,
+            0,
+            state,
+        );
         let result = read_stage_message_for_codec_policy_with_frame_budget(
             Cursor::new(bytes),
             2048,
@@ -1512,7 +1529,7 @@ mod tests {
         push_i32(&mut bytes, 0);
         push_i32(&mut bytes, 0);
         push_state_header(&mut bytes, state);
-        push_i32(&mut bytes, 9 * 1024 * 1024); // declared activation wire bytes
+        push_i32(&mut bytes, (crate::MAX_STAGE_FRAME_BYTES + 1) as i32); // declared activation wire bytes
         push_u64(&mut bytes, 7);
         push_u64(&mut bytes, 11);
         let result = read_stage_message_for_codec_policy_with_frame_budget(
@@ -1528,7 +1545,7 @@ mod tests {
     #[test]
     fn budgeted_decode_rejects_oversized_sideband_counts_before_payload() {
         // 1M + 1M sideband values declare exactly 8 MiB of sideband bytes on top
-        // of the fixed header: past the 8 MiB frame budget, inside the count caps.
+        // of the fixed header: past an 8 MiB frame budget, inside the count caps.
         let state = StageStateHeader::new(WireMessageKind::VerifyWindow);
         let bytes = stage_frame_prefix(
             WireMessageKind::VerifyWindow,
@@ -1542,7 +1559,7 @@ mod tests {
             2048,
             crate::StageActivationCodec::RawF32V1,
             crate::StageActivationCodecPolicy::Fixed,
-            crate::MAX_STAGE_FRAME_BYTES,
+            8 * 1024 * 1024,
         );
         assert_invalid_data(result, "sideband value count exceeds frame budget");
     }
@@ -1552,7 +1569,7 @@ mod tests {
         let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
         state.flags |= super::state_flags::CHAT_SAMPLING_METADATA;
         let mut bytes = stage_frame_prefix(WireMessageKind::VerifyWindow, 0, 0, 0, state);
-        bytes.extend_from_slice(&(9 * 1024 * 1024u32).to_le_bytes());
+        bytes.extend_from_slice(&((crate::MAX_STAGE_FRAME_BYTES + 1) as u32).to_le_bytes());
         let result = read_stage_message_for_codec_policy_with_frame_budget(
             Cursor::new(bytes),
             2048,
@@ -1561,6 +1578,25 @@ mod tests {
             crate::MAX_STAGE_FRAME_BYTES,
         );
         assert_invalid_data(result, "chat sampling metadata length exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_round_trips_an_activation_frame_past_the_old_8_mib_budget() {
+        // 20 bytes a token: about 16 MiB of activation.
+        let frame = multipart_activation_frame(840_000);
+        let message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        assert!(bytes.len() > 16 * 1024 * 1024);
+        let decoded = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        )
+        .expect("a frame within the stage frame budget must decode");
+        assert_eq!(decoded.activation_frame().unwrap(), Some(frame));
     }
 
     #[test]

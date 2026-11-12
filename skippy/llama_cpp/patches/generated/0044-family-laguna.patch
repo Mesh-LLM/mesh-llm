@@ -9,19 +9,19 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index cbc7b26d7cec653e8b4e1a270f18936b32599817..365233611405670c344c62263a05751d75de55a2 100644
+index 0f4029bdbaeb1b2515462821b1e846dacbd9c220..e903e355436440a48797cc92f083b7b7954996cb 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
-@@ -173,6 +173,8 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -191,6 +191,8 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
      const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
  
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(inpL, il);
 +
-         const bool    is_swa_il   = hparams.is_swa(il);
          const int64_t n_head_il   = hparams.n_head(il);
          const int64_t n_head_kv_il = hparams.n_head_kv(il);
-@@ -319,6 +321,7 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+ 
+@@ -320,6 +322,7 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
          cb(cur, "l_out", il);
  
          inpL = cur;

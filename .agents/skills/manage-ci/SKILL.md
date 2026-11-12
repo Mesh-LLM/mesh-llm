@@ -64,8 +64,16 @@ measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
 Persistent canary jobs use the runner OS's `preinstalled-macos` or
-`preinstalled-linux` automation profile. The native producers request their OS
-and at least 128 GiB; preflight, family and infrastructure-retry jobs request
+`preinstalled-linux` automation profile. The resolver, attempt selectors,
+package combination, aggregation, and reconciliation use the protected 128 GiB
+managed pool; the initial resolver uses those literal closed labels before it
+can emit placement outputs. The credentialed publisher and scheduled alert use
+the same closed managed lab pool. No Llama Upgrade job uses a GitHub-hosted
+runner. Persistent control jobs use the typed `canary-controller` finalizer;
+failed uploads leave the local handoff intact for same-job diagnosis. A failed
+upload blocks the pass, and a rerun reconstructs the handoff from its uploaded
+producer inputs. The native producers
+request their OS and at least 128 GiB; preflight, family and infrastructure-retry jobs request
 the controller's memory tier without an OS or machine type. The worker restores
 the matching native payload from one candidate-bound combined package. Backend
 selection uses Metal on macOS and CUDA on Linux; the Linux image must carry a
@@ -541,7 +549,8 @@ checked-in expiry are the maintainer-controlled approval boundary.
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
 - Every `release.yml` job that can reach cargo — directly, or through
-  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  `scripts/release-version.sh`, `scripts/publish-crates.sh`, or
+  `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
   before its first compiler probe, because `.cargo/config.toml` makes sccache
   the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
@@ -665,10 +674,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   invoking Goose; valid candidate failures from a mixed pass are retained.
   Repeated infrastructure failure, or corrupt/foreign/contract evidence, stops
   without invoking Goose. There are at most three distributed repair attempts.
-  Every edited candidate must
+  Outside the recovered-retry exception below, every edited candidate must
   rebuild and rerun the complete candidate family pass, followed by a fresh
   independent build and complete family pass on the same commit. Agent test
-  results must never replace either trusted full pass. Coding turns are admitted
+  results must never replace trusted certification. Coding turns are admitted
   only within a bounded repair window. Each returned candidate receives a full,
   separately bounded verification pass; earlier repairs and failed gates must
   not shorten that pass. Outer workflow limits must cover each admitted repair
@@ -684,10 +693,22 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- When protected `main` requires pull requests and checks, prepare the complete
+  version update with `scripts/release-version.sh` in a reviewed PR before
+  dispatching a release. The workflow must reapply it idempotently. Do not
+  bypass branch rules to make its version-preparation push succeed.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+Successful same-candidate infrastructure retries reuse the original complete
+family results and the admitted retry receipts. Reconciliation marks this case
+`retry_recovered=true`; all three outer `verify_*` jobs skip it, and attempt
+selection may continue to publication without another native build or family
+matrix. This is the exception to the independent-pass requirements below.
+Unrecovered or invalid evidence still blocks publication. A new candidate or
+producer identity invalidates earlier receipts and requires fresh validation.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,
@@ -755,16 +776,12 @@ rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
 overrides both. Keep both generation and idempotence passes mandatory, and
 report deadline failures with readable retained diagnostics and cleanup status.
 
-Changed-pin repair uses Goose `stream-json` through the trusted controller's
-`automation canary-progress` projection. Keep assistant action/reason updates,
-tool lifecycle and errors visible without dumping successful tool responses.
-Expose commands and returned tool results in expandable GitHub log groups;
-neutralize workflow commands in all model/tool text. Retain original events in
-`agent.log` and complete per-command logs in the
-existing build evidence. Every minute, report active tool duration, last event
-age and bounded snapshots of run-owned command logs; silence is not a failure
-or proof of progress. Projection/logging errors must not admit a successful
-candidate. Keep the existing worker credential boundary.
+Changed-pin repair invokes Goose in its normal text mode and streams its output
+unchanged to the job console while saving it in `agent.log`. Keep the complete
+per-command logs in the existing build evidence. Do not add a JSON projection,
+activity snapshots, prefixes or duplicate tool output. Disable GitHub workflow
+command interpretation while Goose runs, and fail the turn if logging fails.
+Keep the existing worker credential boundary.
 
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a
@@ -774,8 +791,12 @@ Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
 
-The trusted-main canary releases both native build runners before scheduling
-one job per certified family. The combined handoff binds one source, plan and
+The trusted-main canary runs macOS and Linux native producers concurrently for
+the first unchanged selected-source certification pass. Both independently
+build the frozen commit, and combination requires matching source, plan and
+candidate receipts. Changed-pin repair and independent verification keep the
+Mac-to-Linux candidate dependency. Both native build runners are released before
+scheduling one job per certified family. The combined handoff binds one source, plan and
 manifest to separate macOS and Linux executable sets; each worker chooses its
 set after memory-only placement and never rebuilds.
 The immutable model cache remains offline and read-only. One workflow-level
@@ -833,9 +854,9 @@ restores the prior candidate as uncommitted changes on the frozen base and
 starts a new bounded session that must read the supplied evidence. Every edit
 invalidates all family results. A complete green candidate pass must be
 followed by a fresh independent build and complete per-family pass on the same
-commit. A hosted aggregate
+commit. A managed aggregate
 rejects missing, duplicate, failed, cancelled, or mismatched results. Only the
-final hosted publisher receives the repair credential, and a failed or
+final managed lab publisher receives the repair credential, and a failed or
 exhausted pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
@@ -884,7 +905,7 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-GitHub failed-job reruns retain attempt-labelled evidence. The hosted aggregate
+GitHub failed-job reruns retain attempt-labelled evidence. The managed aggregate
 classifies newest candidate failures separately from runner/workflow failures.
 It emits a digest-bound classification artifact for either a candidate repair
 or the one targeted infrastructure recheck. Reconciliation combines retained
@@ -919,6 +940,48 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Proving a lane change before merge
+
+PR entrypoints call the protected default-branch lanes
+(`ci-<platform>-lane.yml@main`), so a PR does **not** execute its own
+lane-workflow changes in its PR checks; the first real execution of a lane
+edit is the next `main` push after merge. Local-action changes are the
+exception: a lane that checks out `source_sha` and invokes a local action
+runs the action from the PR — for example the Windows product slice checks
+out `inputs.source_sha` and invokes its local `compose-product-input`, so a
+change to that action can run in the PR row. Do not describe a PR's green
+lanes as evidence for a change its row never executed.
+
+For CI-plumbing PRs, attach lane-dispatch evidence from the branch instead:
+generate a plan locally, project the lane exactly as
+`.github/actions/plan-ci` does, narrow its matrices to the rows under test,
+and run `gh workflow run ci-<platform>-lane.yml --ref <branch>` with
+`lane_plan_json`, `plan_digest`, `source_sha` (the branch head) and
+`original_event_name=workflow_dispatch`. The planner reads exactly one JSON
+request from stdin (`tools/ci-controller/src/plan/request.rs`): closed fields
+`profile`, `event_name`, 40-hex `source_sha`, 40-hex `base_sha`, and
+`changed_files` as a JSON array of repository-relative POSIX paths. Pipe the
+request into the command and compute `plan_digest` exactly as
+`.github/actions/plan-ci` does:
+
+```bash
+jq -cn \
+  --arg profile pr-ready \
+  --arg event_name pull_request \
+  --arg source_sha <40-hex branch head> \
+  --arg base_sha <40-hex merge base> \
+  --argjson changed_files '[".github/workflows/ci-<platform>-lane.yml"]' \
+  '{profile: $profile, event_name: $event_name, source_sha: $source_sha,
+    base_sha: $base_sha, changed_files: $changed_files}' \
+  | cargo xtool ci plan --manifest-root . > ci-plan.json
+plan_json=$(jq -c . ci-plan.json)
+plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')
+```
+
+(`sha256sum` is `shasum -a 256` on macOS.) Where the change is a new gate, run
+it twice — once on a branch without the fix it is meant to catch (expected
+red) and once with it (expected green) — and link both runs in the PR.
 
 ## Rolling previews
 

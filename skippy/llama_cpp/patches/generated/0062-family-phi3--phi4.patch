@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/phi3.cpp b/src/models/phi3.cpp
-index fc808484097d27a2220bc79ee2f52135f87714f7..75c4e8f15d143aa06d2d42190edb03831436c007 100644
+index 815ab0465b2a987daf01ad9383b568f4c0188b24..94e0061e505a3df3e4a68184aa126b22c7860807 100644
 --- a/src/models/phi3.cpp
 +++ b/src/models/phi3.cpp
-@@ -89,6 +89,8 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -89,6 +89,8 @@ llama_model_phi3::graph<iswa>::graph(const llm_graph_params & params) : llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index fc808484097d27a2220bc79ee2f52135f87714f7..75c4e8f15d143aa06d2d42190edb0383
          auto * residual = inpL;
  
          // self-attention
-@@ -170,6 +172,7 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -159,6 +161,7 @@ llama_model_phi3::graph<iswa>::graph(const llm_graph_params & params) : llm_grap
  
          // input for next layer
          inpL = cur;

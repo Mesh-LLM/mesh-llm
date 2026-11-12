@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mamba.cpp b/src/models/mamba.cpp
-index d47e8e5e12523c7171f5ea91f194a5badd5a6f70..c680565291d302c174ec394c60daa8eea9e4baaf 100644
+index 13a9de6b0aeae62c601e10cfa368b085eb9f690a..b7364ecbfd144764a1bfdc0c5f8864c1d0d85c83 100644
 --- a/src/models/mamba.cpp
 +++ b/src/models/mamba.cpp
-@@ -96,6 +96,8 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
+@@ -96,6 +96,8 @@ llama_model_mamba::graph::graph(const llm_graph_params & params) : llm_build_mam
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index d47e8e5e12523c7171f5ea91f194a5badd5a6f70..c680565291d302c174ec394c60daa8ee
          // norm
          cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
          cb(cur, "attn_norm", il);
-@@ -119,6 +121,7 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
+@@ -119,6 +121,7 @@ llama_model_mamba::graph::graph(const llm_graph_params & params) : llm_build_mam
  
          // input for next layer
          inpL = cur;

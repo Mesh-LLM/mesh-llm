@@ -23,6 +23,27 @@ fn preflight_evidence_is_retained_until_uploaded_and_other_outputs_survive() {
 }
 
 #[test]
+fn controller_cleanup_keeps_unuploaded_handoffs_and_other_job_outputs() {
+    let fixture = Fixture::new();
+    let input = fixture.temporary.join("canary-macos");
+    let handoff = fixture.temporary.join("canary-combined");
+    let unrelated = fixture.temporary.join("independent-evidence");
+    for path in [&input, &handoff, &unrelated] {
+        fixture.seed(path);
+    }
+    let retained = fixture.plan(Profile::CanaryController, false);
+    fixture.delete(&retained);
+    assert!(!input.exists());
+    assert!(handoff.exists());
+    assert!(unrelated.exists());
+    let uploaded = fixture.plan(Profile::CanaryController, true);
+    fixture.delete(&uploaded);
+    assert!(!handoff.exists());
+    assert!(unrelated.exists());
+    assert!(Options::parse("canary-controller", "true", None).is_ok());
+}
+
+#[test]
 fn roster_order_when_each_profile_is_selected() {
     let fixture = Fixture::new();
     let cases = [

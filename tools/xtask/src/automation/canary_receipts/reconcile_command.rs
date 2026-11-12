@@ -89,7 +89,7 @@ fn execute(args: &ParsedArgs) -> DynResult<CheckReport> {
     let state = report.state;
     let summary = report.summary();
     let mut outputs = match state {
-        ReconcileState::Green => format!("green=true\nstate=green\nrepairable=false\nfeedback_ready=false\ncandidate={}\nbranch={}\n", report.candidate, report.branch),
+        ReconcileState::Green => format!("green=true\nretry_recovered=true\nstate=green\nrepairable=false\nfeedback_ready=false\ncandidate={}\nbranch={}\n", report.candidate, report.branch),
         ReconcileState::CandidateRepairable => String::new(),
         ReconcileState::InfrastructureExhausted => "green=false\nstate=infrastructure_exhausted\nrepairable=false\nfeedback_ready=false\nfailure_class=infrastructure\nfailure_stage=infrastructure-recheck\n".into(),
         ReconcileState::TerminalContract => "green=false\nstate=terminal_contract\nrepairable=false\nfeedback_ready=false\nfailure_class=contract\nfailure_stage=infrastructure-recheck\n".into(),

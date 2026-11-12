@@ -1,6 +1,7 @@
 //! Terminal emission and outcome recording for normalized chat SSE.
 use super::{
-    CacheCostObservation, RouteAttemptResult, StreamedChatAssembly, normalized_stream_is_truncated,
+    CacheCostObservation, CommittedStreamFailureCause, RouteAttemptResult, StreamedChatAssembly,
+    normalized_stream_is_truncated,
 };
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
@@ -30,11 +31,9 @@ pub(super) async fn finish_normalized_chat_stream(
     let _ = tcp_stream.shutdown().await;
     if upstream_error_seen {
         route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::Delivered {
+        return Ok(RouteAttemptResult::CommittedStreamFailure {
             status_code: 200,
-            usage: None,
-            cache_cost: None,
-            output_digests: Default::default(),
+            cause: CommittedStreamFailureCause::BackendError,
         });
     }
     if !done_seen {
