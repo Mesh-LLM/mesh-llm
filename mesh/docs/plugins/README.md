@@ -21,6 +21,7 @@ Plugin-specific documentation:
 - [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
 - [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
+- [Example plugin](https://github.com/Mesh-LLM/example-plugin) - minimal external plugin template (Rust binary, `plugin.toml`, CI and cross-platform release workflows for Linux/macOS/Windows on x86-64 and ARM64); start here when authoring a new plugin
 
 The main goals are:
 
@@ -794,6 +795,8 @@ The manifest is the source of truth for host projections.
 ## Plugin Author Experience
 
 The primary design goal is very low boilerplate.
+
+For a working starting point, clone the [example plugin](https://github.com/Mesh-LLM/example-plugin): a minimal external plugin with the `plugin.toml` manifest, a `plugin!` declaration, a loopback HTTP surface with tests, and CI plus release workflows covering Linux, macOS and Windows on x86-64 and ARM64.
 
 The preferred DSL is surface-first:
 
