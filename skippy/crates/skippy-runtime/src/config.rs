@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::num::NonZeroU32;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
@@ -134,6 +135,20 @@ pub struct RuntimeConfig {
     /// Sliding-window-attention full (unshifted) cache window. `None`
     /// preserves llama.cpp's built-in default (full).
     pub swa_full: Option<bool>,
+    /// Cells in the unified KV pool, which the lanes share; at least
+    /// `ctx_size`. `None` reserves `ctx_size` for every lane.
+    pub kv_pool_tokens: Option<NonZeroU32>,
+    /// Zero KV cells as the pool's high-water mark advances rather than all
+    /// at load. `None` and `Some(true)` are lazy wherever the cache supports
+    /// it; `Some(false)` zeroes the whole pool at load and keeps every page.
+    pub kv_lazy_clear: Option<bool>,
+    /// Hand the pages of free KV cells back to the system. `None` and
+    /// `Some(true)` release wherever the pool's memory is host-visible.
+    pub kv_release_pages: Option<bool>,
+    /// Read a unified pool through per-owner row lists. `None` and
+    /// `Some(true)` use them wherever the backend supports it; `Some(false)`
+    /// keeps ordinary attention over the whole pool.
+    pub kv_row_attention: Option<bool>,
     /// Whether the backend offloads host tensor operations to device. `None`
     /// preserves llama.cpp's derived default (enabled).
     pub op_offload: Option<bool>,
@@ -396,6 +411,10 @@ impl RuntimeConfig {
                 kv_offload: tristate(self.kv_offload),
                 kv_unified: tristate(self.kv_unified),
                 swa_full: tristate(self.swa_full),
+                kv_pool_tokens: self.kv_pool_tokens.map_or(0, NonZeroU32::get),
+                kv_lazy_clear: tristate(self.kv_lazy_clear),
+                kv_release_pages: tristate(self.kv_release_pages),
+                kv_row_attention: tristate(self.kv_row_attention),
                 op_offload: tristate(self.op_offload),
                 no_host_buffer: self.no_host_buffer,
                 check_tensors: self.check_tensors,
@@ -537,6 +556,10 @@ impl Default for RuntimeConfig {
             kv_offload: None,
             kv_unified: None,
             swa_full: None,
+            kv_pool_tokens: None,
+            kv_lazy_clear: None,
+            kv_release_pages: None,
+            kv_row_attention: None,
             op_offload: None,
             no_host_buffer: false,
             check_tensors: false,
@@ -1082,6 +1105,31 @@ mod tests {
         assert_eq!(raw.kv_offload, skippy_ffi::TRISTATE_AUTO);
         assert_eq!(raw.kv_unified, skippy_ffi::TRISTATE_AUTO);
         assert_eq!(raw.swa_full, skippy_ffi::TRISTATE_AUTO);
+        assert_eq!(raw.kv_pool_tokens, 0);
+        assert_eq!(raw.kv_lazy_clear, skippy_ffi::TRISTATE_AUTO);
+        assert_eq!(raw.kv_release_pages, skippy_ffi::TRISTATE_AUTO);
+        assert_eq!(raw.kv_row_attention, skippy_ffi::TRISTATE_AUTO);
+        Ok(())
+    }
+
+    /// The pool and what it does with unused memory reach native as
+    /// configured: a shared pool by its cell count, each switch as a tristate.
+    #[test]
+    fn runtime_config_raw_carries_kv_memory_settings() -> anyhow::Result<()> {
+        let raw = RuntimeConfig {
+            kv_pool_tokens: NonZeroU32::new(32_768),
+            kv_lazy_clear: Some(false),
+            kv_release_pages: Some(false),
+            kv_row_attention: Some(true),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+
+        assert_eq!(raw.kv_pool_tokens, 32_768);
+        assert_eq!(raw.kv_lazy_clear, skippy_ffi::TRISTATE_FALSE);
+        assert_eq!(raw.kv_release_pages, skippy_ffi::TRISTATE_FALSE);
+        assert_eq!(raw.kv_row_attention, skippy_ffi::TRISTATE_TRUE);
         Ok(())
     }
 

@@ -1,0 +1,193 @@
+From 3c84df55abd0cd603cb6591a13904ba5b2d0f2c3 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sat, 7 Nov 2026 21:27:50 +1100
+Subject: [PATCH 23/32] llama: keep a sequence's unified-pool cells in chunks
+
+The unified pool placed a ubatch's tokens in consecutive cells, so at four
+concurrent requests each sequence's decode cells sat at stride four and its
+row list held one run per token. A token now goes to the cell after its
+sequence's highest one while that stays inside the same 64-cell chunk and
+free, else to the first cell of a fresh all-empty chunk; a pool too
+fragmented for a fresh chunk falls back to any empty cell. Row lists hold
+long runs the row-attention kernels read at dense speed.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ src/llama-kv-cache.cpp | 84 ++++++++++++++++++++++++++++++++++++++++++
+ src/llama-kv-cache.h   |  7 ++++
+ src/llama-kv-cells.h   | 24 ++++++++++++
+ 3 files changed, 115 insertions(+)
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index d00c1fe4a..a2d3418e9 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -9,6 +9,7 @@
+ #include "skippy.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <cassert>
+ #include <cmath>
+ #include <cstring>
+@@ -1045,6 +1046,81 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
+     return updated;
+ }
+ 
++// Unified pool placement that keeps each sequence's cells together: a token
++// goes to the cell after its sequence's highest one while that stays inside the
++// same chunk and free, else to the first cell of a fresh all-empty chunk. Row
++// lists then hold long runs instead of one cell per decode step, which is what
++// the row-attention kernels read at dense speed. A pool too fragmented for a
++// fresh chunk falls back to any empty cell.
++std::vector<uint32_t> llama_kv_cache::find_chunked_cells(
++        const llama_ubatch & ubatch, const llama_kv_cells & cells, uint32_t head_cur) const {
++    const uint32_t n_tokens = ubatch.n_tokens;
++    const uint32_t n_cells  = cells.size();
++    const uint32_t n_chunks = n_cells / kv_chunk_cells;
++
++    std::vector<uint32_t> idxs;
++    idxs.reserve(n_tokens);
++
++    std::vector<uint8_t> taken(n_cells, 0);
++    const auto free_cell = [&](uint32_t idx) { return cells.is_empty(idx) && !taken[idx]; };
++    const auto take = [&](uint32_t idx) { taken[idx] = 1; idxs.push_back(idx); };
++
++    // next cell of each sequence's open chunk, resolved on first use
++    std::array<int64_t, LLAMA_MAX_SEQ> next;
++    next.fill(-2);
++
++    uint32_t chunk_cur = n_chunks ? (head_cur / kv_chunk_cells) % n_chunks : 0;
++
++    for (uint32_t i = 0; i < n_tokens; ++i) {
++        const llama_seq_id seq_id = ubatch.n_seq_id[i] > 0 ? ubatch.seq_id[i][0] : 0;
++
++        if (next[seq_id] == -2) {
++            const int64_t last = cells.seq_cell_max(seq_id);
++            next[seq_id] = last >= 0 && (last + 1) % kv_chunk_cells != 0 ? last + 1 : -1;
++        }
++
++        const int64_t cand = next[seq_id];
++        if (cand >= 0 && cand < (int64_t) n_cells && free_cell((uint32_t) cand)) {
++            take((uint32_t) cand);
++            next[seq_id] = (cand + 1) % kv_chunk_cells != 0 ? cand + 1 : -1;
++            continue;
++        }
++
++        // a fresh chunk: every cell empty and unclaimed, searched from the head onward
++        bool placed = false;
++        for (uint32_t tested = 0; tested < n_chunks && !placed; ++tested) {
++            const uint32_t start = chunk_cur * kv_chunk_cells;
++            chunk_cur = (chunk_cur + 1) % n_chunks;
++            bool empty = true;
++            for (uint32_t c = start; c < start + kv_chunk_cells && empty; ++c) {
++                empty = free_cell(c);
++            }
++            if (empty) {
++                take(start);
++                next[seq_id] = kv_chunk_cells > 1 ? start + 1 : -1;
++                placed = true;
++            }
++        }
++        if (placed) {
++            continue;
++        }
++
++        // the pool is fragmented: any empty cell keeps the batch going
++        for (uint32_t tested = 0; tested < n_cells && !placed; ++tested) {
++            const uint32_t idx = (head_cur + tested) % n_cells;
++            if (free_cell(idx)) {
++                take(idx);
++                placed = true;
++            }
++        }
++        if (!placed) {
++            return { };
++        }
++    }
++
++    return idxs;
++}
++
+ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont) const {
+ 
+     if (debug > 0) {
+@@ -1194,6 +1270,14 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+             head_cur = 0;
+         }
+ 
++        if (n_stream == 1 && n_swa == 0) {
++            res.idxs[s] = find_chunked_cells(ubatch, cells, head_cur);
++            if (res.idxs[s].size() < n_tokens) {
++                return { };
++            }
++            continue;
++        }
++
+         uint32_t n_tested = 0;
+ 
+         // for continuous slots, we test that all tokens in the ubatch fit, starting from the current head
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 874c3739d..fd3054514 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -272,6 +272,13 @@ public:
+     // return empty slot_info on failure
+     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
+ 
++    // cells a sequence claims at a time in the unified pool; a multiple of the
++    // row-attention kernels' 32-row block
++    static constexpr uint32_t kv_chunk_cells = 64;
++
++    std::vector<uint32_t> find_chunked_cells(
++            const llama_ubatch & ubatch, const llama_kv_cells & cells, uint32_t head_cur) const;
++
+     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+ 
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 4b50afe71..9190ad55f 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -34,6 +34,17 @@ static inline int ctz64(uint64_t x) {
+ #endif
+ }
+ 
++// Index of the highest set bit; called for x != 0.
++static inline int fls64(uint64_t x) {
++#if defined(_MSC_VER)
++    unsigned long i;
++    _BitScanReverse64(&i, x);
++    return (int) i;
++#else
++    return 63 - __builtin_clzll(x);
++#endif
++}
++
+ struct llama_kv_cell_ext {
+     // 2D spatial positions, typically used for M-RoPE
+     llama_pos x = 0;
+@@ -514,6 +525,19 @@ public:
+                positions.size() == static_cast<size_t>(pos_max) + 1;
+     }
+ 
++    // The highest cell the sequence occupies, or -1.
++    int64_t seq_cell_max(llama_seq_id seq_id) const {
++        assert(seq_id >= 0 && seq_id < LLAMA_MAX_SEQ);
++        const auto & bits = seq_bits[seq_id];
++        const uint32_t n_words = std::min<uint32_t>((used_max_p1() + 63) / 64, bits.size());
++        for (uint32_t w = n_words; w-- > 0;) {
++            if (bits[w] != 0) {
++                return 64 * w + fls64(bits[w]);
++            }
++        }
++        return -1;
++    }
++
+     // note: call only if the cell is not empty
+     llama_pos pos_get(uint32_t i) const {
+         assert(i < pos.size());
+-- 
+2.43.0
+

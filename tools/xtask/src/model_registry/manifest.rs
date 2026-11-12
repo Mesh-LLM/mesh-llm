@@ -65,6 +65,24 @@ pub(super) fn resolve<'a>(
     })
 }
 
+/// The ids of every artifact the cadence admits, in manifest order; each is
+/// then shaped and pinned by `resolve`.
+pub(super) fn admitted_ids<'a>(manifest: &'a Json, cadence: &str) -> ModelResult<Vec<&'a str>> {
+    let artifacts = match manifest.get("artifacts").and_then(Json::as_array) {
+        Some(artifacts) if !artifacts.is_empty() => artifacts,
+        _ => return fail("manifest must contain artifacts"),
+    };
+    let rows = artifacts.iter().filter_map(Json::as_object);
+    Ok(rows
+        .filter(|row| {
+            get(row, "cadences")
+                .and_then(Json::as_array)
+                .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(cadence)))
+        })
+        .filter_map(|row| nonempty(get(row, "id")))
+        .collect())
+}
+
 fn select<'a>(artifacts: &'a [Json], wanted: Option<&str>) -> ModelResult<&'a [(String, Json)]> {
     let Some(wanted) = wanted else {
         return match artifacts {

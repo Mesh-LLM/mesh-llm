@@ -10,17 +10,23 @@ use std::{
     fs::OpenOptions,
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock, mpsc as std_mpsc},
+    sync::{Arc, OnceLock, atomic::Ordering, mpsc as std_mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
+use opentelemetry_proto::tonic::metrics::v1::Metric;
 use opentelemetry_proto::tonic::{
     collector::trace::v1::ExportTraceServiceRequest, trace::v1::Span,
 };
 use skippy_protocol::StageConfig;
 
-use super::{EXPORT_BATCH_MAX, resource_spans_by_component};
+use super::{
+    EXPORT_BATCH_MAX, TelemetryCounters,
+    otlp_encoding::{event_to_span, resource_spans_by_component},
+    sink::{OpenSpan, SpanRecord, SpanStart, TraceSink},
+    trace_context::{Frame, SpanEvent},
+};
 
 const PATH_ENV: &str = "SKIPPY_TELEMETRY_OTLP_FILE";
 const QUEUE_CAPACITY: usize = 8192;
@@ -108,6 +114,61 @@ impl Drop for OtlpFileSink {
     }
 }
 
+/// The process-wide file, written as one `Telemetry`'s sink.
+pub(super) struct OtlpFileTraceSink {
+    file: &'static OtlpFileSink,
+    config: Arc<StageConfig>,
+    stats: Arc<TelemetryCounters>,
+}
+
+impl OtlpFileTraceSink {
+    pub(super) fn configured(
+        config: Arc<StageConfig>,
+        stats: Arc<TelemetryCounters>,
+    ) -> Option<Self> {
+        configured().map(|file| Self {
+            file,
+            config,
+            stats,
+        })
+    }
+}
+
+impl TraceSink for OtlpFileTraceSink {
+    fn create_span_with(&self, _: &SpanStart) -> OpenSpan {
+        OpenSpan::NONE
+    }
+
+    fn end_span(&self, _: OpenSpan, span: &SpanRecord) {
+        self.record_span(span);
+    }
+
+    fn discard_span(&self, _: OpenSpan) {}
+
+    fn record_span(&self, span: &SpanRecord) {
+        if !self
+            .file
+            .try_send(&self.config, event_to_span(span, &self.stats))
+        {
+            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Events reach the file inside their span.
+    fn record_event(&self, _: &SpanEvent, _: &Frame) {}
+
+    /// Metrics have their own OTLP sink.
+    fn record_metrics(&self, _: &[Metric]) {}
+
+    fn folds_events_into_spans(&self) -> bool {
+        true
+    }
+
+    fn flush(&self, timeout: Duration) {
+        self.file.flush(timeout);
+    }
+}
+
 /// Write each drained batch as one flushed line, so a killed server leaves
 /// only whole requests behind.
 fn write_loop(rx: &std_mpsc::Receiver<FileItem>, mut out: impl Write) {
@@ -165,7 +226,9 @@ mod tests {
 
     use super::{FileItem, FileSpan, OtlpFileSink, path_from_value, write_loop};
     use crate::telemetry::{
-        TelemetryCounters, TelemetryEvent, event_to_span,
+        TelemetryCounters,
+        otlp_encoding::event_to_span,
+        sink::SpanRecord,
         trace_context::{Frame, SpanEvent},
     };
 
@@ -187,9 +250,9 @@ mod tests {
         )
     }
 
-    fn record(frame: &Frame) -> TelemetryEvent {
+    fn record(frame: &Frame) -> SpanRecord {
         let attributes = BTreeMap::from([("skippy.scheduler.step_ms".to_string(), json!(2.5))]);
-        TelemetryEvent::span(
+        SpanRecord::of_frame(
             frame,
             "stage.scheduler_iteration",
             attributes,
@@ -198,7 +261,7 @@ mod tests {
         )
     }
 
-    fn file_span(config: &Arc<StageConfig>, record: &TelemetryEvent) -> FileSpan {
+    fn file_span(config: &Arc<StageConfig>, record: &SpanRecord) -> FileSpan {
         FileSpan {
             config: config.clone(),
             span: event_to_span(record, &TelemetryCounters::default()),

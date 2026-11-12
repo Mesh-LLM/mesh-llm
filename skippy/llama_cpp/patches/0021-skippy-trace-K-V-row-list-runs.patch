@@ -1,0 +1,149 @@
+From d5bd4b0df8fd7fea4e7f57d2ae39595cce53eb6e Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sat, 7 Nov 2026 19:12:33 +1100
+Subject: [PATCH 21/32] skippy: trace K/V row-list runs
+
+Each ubatch that fills row lists reports a llama.kv_rows span: the most
+contiguous cell runs one list holds, with cells:runs per slice in its
+detail, so a trace shows how fragmented the unified pool is for each query
+slice. skippy_trace::active() lets that work run only while a span callback
+is installed.
+
+The row-list path is measured against ordinary attention over the unified
+pool with llama.cpp's own LLAMA_KV_ROWS_DISABLE.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ src/CMakeLists.txt           |  1 +
+ src/llama-kv-cache.cpp       |  2 ++
+ src/skippy/kv_rows_trace.cpp | 41 ++++++++++++++++++++++++++++++++++++
+ src/skippy/kv_rows_trace.h   |  7 ++++++
+ src/skippy/trace_scope.h     |  3 +++
+ src/skippy/tracing.cpp       |  4 ++++
+ 6 files changed, 58 insertions(+)
+ create mode 100644 src/skippy/kv_rows_trace.cpp
+ create mode 100644 src/skippy/kv_rows_trace.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 7eee0656e..7dad15759 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -65,6 +65,7 @@ add_library(llama
+             skippy/block_boundaries.cpp
+             skippy/devices.cpp
+             skippy/tracing.cpp
++            skippy/kv_rows_trace.cpp
+             skippy/glm_dsa.cpp
+             skippy/graph_dependencies.cpp
+             skippy/graph_identity.cpp
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index fe7101445..d00c1fe4a 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-kv-cache.h"
++#include "skippy/kv_rows_trace.h"
+ #include "skippy/trace_scope.h"
+ 
+ #include "llama-impl.h"
+@@ -3191,6 +3192,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const
+         int32_t * data = (int32_t *) attn_mask.rows->data;
+ 
+         cells.get_seq_cells(get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type), data, n_rows);
++        skippy_trace_kv_rows(data, n_rows, n_slices);
+     }
+ 
+     // the mask is left unallocated when the graph only stores K/V without attending
+diff --git a/src/skippy/kv_rows_trace.cpp b/src/skippy/kv_rows_trace.cpp
+new file mode 100644
+index 000000000..e5f06b614
+--- /dev/null
++++ b/src/skippy/kv_rows_trace.cpp
+@@ -0,0 +1,41 @@
++#include "skippy/kv_rows_trace.h"
++
++#include "skippy/trace_scope.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <string>
++
++// The span's value is the most contiguous cell runs one list holds, and its
++// detail gives cells:runs per slice, so a trace shows how fragmented the
++// unified pool is for each query slice. -1 entries are padding, between runs
++// and after the last.
++void skippy_trace_kv_rows(const int32_t * data, int64_t n_per_slice, int64_t n_slices) {
++    if (!skippy_trace::active()) {
++        return;
++    }
++    thread_local std::string detail;
++    detail.clear();
++    int64_t max_runs = 0;
++    for (int64_t s = 0; s < n_slices; ++s) {
++        const int32_t * begin = data + s * n_per_slice;
++        const int32_t * end   = begin + n_per_slice;
++        int64_t cells = 0;
++        int64_t runs  = 0;
++        int32_t previous = -2;
++        std::for_each(begin, end, [&](int32_t cell) {
++            if (cell < 0) {
++                return;
++            }
++            runs += cell != previous + 1;
++            ++cells;
++            previous = cell;
++        });
++        max_runs = std::max(max_runs, runs);
++        char item[48];
++        std::snprintf(item, sizeof(item), "%s%lld:%lld", s ? " " : "", (long long) cells, (long long) runs);
++        detail += item;
++    }
++    skippy_trace::scope trace("llama.kv_rows", "runs", max_runs);
++    trace.set_detail(detail.c_str());
++}
+diff --git a/src/skippy/kv_rows_trace.h b/src/skippy/kv_rows_trace.h
+new file mode 100644
+index 000000000..537a4f4cd
+--- /dev/null
++++ b/src/skippy/kv_rows_trace.h
+@@ -0,0 +1,7 @@
++#pragma once
++
++#include <cstdint>
++
++// Reports one llama.kv_rows span for the row lists a ubatch attends through:
++// `n_slices` lists of `n_per_slice` cell indices each, -1 where padded.
++void skippy_trace_kv_rows(const int32_t * data, int64_t n_per_slice, int64_t n_slices);
+diff --git a/src/skippy/trace_scope.h b/src/skippy/trace_scope.h
+index b64d9da37..6e6641571 100644
+--- a/src/skippy/trace_scope.h
++++ b/src/skippy/trace_scope.h
+@@ -44,6 +44,9 @@ class scope {
+ // trace tag; 0 when there is neither.
+ uint64_t current_parent() noexcept;
+ 
++// Whether a span callback is installed, for work done only to describe a span.
++bool active() noexcept;
++
+ // While it lives, spans this thread begins nest under `parent`, so work done
+ // on another thread's behalf joins that thread's trace.
+ class adopt {
+diff --git a/src/skippy/tracing.cpp b/src/skippy/tracing.cpp
+index 9aa48e08c..29e9047b1 100644
+--- a/src/skippy/tracing.cpp
++++ b/src/skippy/tracing.cpp
+@@ -199,6 +199,10 @@ uint64_t current_parent() noexcept {
+     return t_current != 0 ? t_current : t_tag;
+ }
+ 
++bool active() noexcept {
++    return g_span_callback.load(std::memory_order_relaxed) != nullptr;
++}
++
+ adopt::adopt(uint64_t parent) noexcept : previous_(t_current) {
+     if (parent != 0) {
+         t_current = parent;
+-- 
+2.43.0
+

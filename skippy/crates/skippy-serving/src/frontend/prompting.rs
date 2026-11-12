@@ -67,10 +67,7 @@ impl StageOpenAiBackend {
         request: &GenerationRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
-        let marker = {
-            let runtime = lock_runtime(&self.runtime);
-            runtime.media_marker()
-        };
+        let marker = self.model.media_marker.clone();
 
         // Native path: render with tools and use the template's own metadata.
         let native = self.render_chat_prompt(request, &options, &marker, None, true)?;
@@ -180,7 +177,7 @@ impl StageOpenAiBackend {
         // Short-lock reader pattern: clone the immutable reader and run the
         // template FFI on it, so template rendering never waits behind
         // decode's hold of the runtime mutex (and vice versa).
-        let reader = lock_runtime(&self.runtime).model.reader();
+        let reader = self.model_reader();
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -219,7 +216,7 @@ impl StageOpenAiBackend {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
-        let model = lock_runtime(&self.runtime).model.reader();
+        let model = self.model_reader();
         self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
     }
 
@@ -275,10 +272,16 @@ impl StageOpenAiBackend {
         // reader; the tokenizer FFI runs on the reader, so decode can hold
         // the runtime lock concurrently without serializing tokenization
         // behind it (see render_chat_prompt for the same pattern).
-        let reader = lock_runtime(&self.runtime).model.reader();
+        let reader = self.model_reader();
         reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)
+    }
+
+    /// The immutable model: no runtime lock, so a request renders its template
+    /// and tokenizes while a native batch runs.
+    pub(in crate::frontend) fn model_reader(&self) -> skippy_runtime::StageModelReader {
+        self.model.reader.clone()
     }
 
     pub(super) fn inject_hook_text_into_session(

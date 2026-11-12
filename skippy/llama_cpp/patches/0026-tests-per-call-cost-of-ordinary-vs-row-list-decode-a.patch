@@ -1,0 +1,336 @@
+From 2a0b0f5f7845449653c4251f1a2e72e794e4fded Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 11:52:39 +1100
+Subject: [PATCH 26/32] tests: per-call cost of ordinary vs row-list decode
+ attention
+
+test-flash-attn-rows-perf chains attention nodes the way a model's
+layers run them and reads the backend's command timing, so one number
+per call compares the ordinary kernel with row lists laid out as the
+unified pool lays them out: one run, 64-cell chunks, one run per row,
+and a padded tail. Small enough for the full Metal profiler.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ tests/CMakeLists.txt                |   2 +
+ tests/test-flash-attn-rows-perf.cpp | 294 ++++++++++++++++++++++++++++
+ 2 files changed, 296 insertions(+)
+ create mode 100644 tests/test-flash-attn-rows-perf.cpp
+
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 638e84e37..bcb407ae8 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -392,6 +392,8 @@ endif()
+ llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
+ 
+ llama_build_and_test(test-backend-tensor.cpp LINK ggml)
++# per-call cost of ordinary vs row-list decode attention; a tool, not a test
++llama_build(test-flash-attn-rows-perf.cpp LINK ggml)
+ 
+ llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
+ llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
+diff --git a/tests/test-flash-attn-rows-perf.cpp b/tests/test-flash-attn-rows-perf.cpp
+new file mode 100644
+index 000000000..dbffc27e4
+--- /dev/null
++++ b/tests/test-flash-attn-rows-perf.cpp
+@@ -0,0 +1,294 @@
++// Per-call cost of decode attention over the KV cache: the ordinary kernel
++// against ggml_flash_attn_ext_rows with the row-list shapes the unified pool
++// produces. One graph chains `depth` attention nodes (each query is the
++// previous output, so they run back to back like a model's layers) and the
++// backend's command timing gives the GPU time of the whole chain.
++//
++//   test-flash-attn-rows-perf [--backend NAME] [--iters N] [--depth N]
++//
++// GGML_METAL_CAPTURE_COMPUTE=N (with METAL_CAPTURE_ENABLED=1) captures one
++// chain for Xcode; a chain is small enough for the full Metal profiler.
++#include "ggml.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <cstring>
++#include <limits>
++#include <memory>
++#include <numeric>
++#include <random>
++#include <stdexcept>
++#include <string>
++#include <thread>
++#include <vector>
++
++namespace {
++
++// Qwen3-Coder-30B-A3B: 32 query heads over 4 K/V heads, 128-wide, F16 cache
++constexpr int64_t dk       = 128;
++constexpr int64_t dv       = 128;
++constexpr int64_t heads    = 32;
++constexpr int64_t kv_heads = 4;
++constexpr int64_t mask_queries = 64;
++constexpr int64_t slack    = 256;
++
++enum class layout { dense, identity, chunk64, stride, padded };
++
++const char * layout_name(layout value) {
++    switch (value) {
++        case layout::dense:    return "dense";
++        case layout::identity: return "rows:identity";
++        case layout::chunk64:  return "rows:chunk64";
++        case layout::stride:   return "rows:stride";
++        case layout::padded:   return "rows:padded";
++    }
++    return "?";
++}
++
++void require(bool condition, const char * message) {
++    if (!condition) {
++        throw std::runtime_error(message);
++    }
++}
++
++// the cell of list position `i` of slice `s`
++int32_t cell_of(layout value, int64_t rows, int64_t slices, int64_t s, int64_t i) {
++    switch (value) {
++        case layout::identity: return int32_t(s*rows + i);
++        case layout::padded:   return i < rows - 128 ? int32_t(s*rows + i) : -1;
++        case layout::stride:   return int32_t(i*slices + s);
++        case layout::chunk64:  return int32_t((i/64)*(64*slices) + s*64 + i%64);
++        case layout::dense:    break;
++    }
++    return -1;
++}
++
++struct timing_sink {
++    std::atomic<int64_t> gpu_ns{0};
++    std::atomic<int64_t> commands{0};
++
++    static void record(const ggml_backend_command_timing * timing, void * user_data) {
++        auto & sink = *static_cast<timing_sink *>(user_data);
++        if (timing->status == 0 && timing->execute_end_unix_ns > timing->execute_start_unix_ns) {
++            sink.gpu_ns += timing->execute_end_unix_ns - timing->execute_start_unix_ns;
++        }
++        ++sink.commands;
++    }
++
++    void reset() {
++        gpu_ns = 0;
++        commands = 0;
++    }
++};
++
++struct chain {
++    ggml_context * ctx = nullptr;
++    ggml_backend_buffer_t buffer = nullptr;
++    ggml_tensor * q = nullptr;
++    ggml_tensor * k = nullptr;
++    ggml_tensor * v = nullptr;
++    ggml_tensor * mask = nullptr;
++    ggml_tensor * rows = nullptr;
++    ggml_tensor * last = nullptr;
++    ggml_cgraph * graph = nullptr;
++
++    chain(ggml_backend_t backend, layout value, int64_t rows_per_slice, int64_t slices, int depth) {
++        const bool row_based = value != layout::dense;
++        ggml_init_params params{(size_t) (8 + 2*depth)*ggml_tensor_overhead() + ggml_graph_overhead_custom(2*depth + 8, false), nullptr, true};
++        ctx = ggml_init(params);
++        require(ctx != nullptr, "allocate graph context");
++
++        q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, dk, 1, heads, slices);
++        const int64_t pool = row_based ? rows_per_slice*slices + slack : rows_per_slice;
++        k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, dk, pool, kv_heads, row_based ? 1 : slices);
++        v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, dv, pool, kv_heads, row_based ? 1 : slices);
++        mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, rows_per_slice, mask_queries, 1, slices);
++        if (row_based) {
++            rows = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, rows_per_slice, slices);
++        }
++        ggml_set_input(q);
++        ggml_set_input(k);
++        ggml_set_input(v);
++        ggml_set_input(mask);
++        if (rows) {
++            ggml_set_input(rows);
++        }
++
++        ggml_tensor * cur = q;
++        for (int i = 0; i < depth; ++i) {
++            ggml_tensor * out = row_based
++                ? ggml_flash_attn_ext_rows(ctx, cur, k, v, mask, rows, 1.0f/std::sqrt(float(dk)), 0.0f, 0.0f)
++                : ggml_flash_attn_ext(ctx, cur, k, v, mask, 1.0f/std::sqrt(float(dk)), 0.0f, 0.0f);
++            ggml_prec_set_acc(out, GGML_PREC_F32);
++            require(ggml_backend_supports_op(backend, out), "backend does not support this attention shape");
++            last = out;
++            // [dv, heads, 1, slices] -> [dv, 1, heads, slices]: the next query, as a view
++            cur = ggml_permute(ctx, out, 0, 2, 1, 3);
++        }
++        ggml_set_output(last);
++        graph = ggml_new_graph_custom(ctx, 2*depth + 8, false);
++        ggml_build_forward_expand(graph, last);
++        buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
++        require(buffer != nullptr, "allocate backend tensors");
++    }
++
++    ~chain() {
++        ggml_backend_buffer_free(buffer);
++        ggml_free(ctx);
++    }
++    chain(const chain &) = delete;
++    chain & operator=(const chain &) = delete;
++
++    void fill(layout value, int64_t rows_per_slice, int64_t slices) {
++        std::mt19937 random(34791);
++        std::uniform_real_distribution<float> sample(-0.75f, 0.75f);
++
++        std::vector<float> qf(ggml_nelements(q));
++        std::generate(qf.begin(), qf.end(), [&] { return sample(random); });
++        ggml_backend_tensor_set(q, qf.data(), 0, ggml_nbytes(q));
++
++        std::vector<ggml_fp16_t> kv(ggml_nelements(k));
++        std::generate(kv.begin(), kv.end(), [&] { return ggml_fp32_to_fp16(sample(random)); });
++        ggml_backend_tensor_set(k, kv.data(), 0, ggml_nbytes(k));
++        std::generate(kv.begin(), kv.end(), [&] { return ggml_fp32_to_fp16(sample(random)); });
++        ggml_backend_tensor_set(v, kv.data(), 0, ggml_nbytes(v));
++
++        std::vector<int32_t> list;
++        if (rows) {
++            list.resize(rows_per_slice*slices);
++            for (int64_t s = 0; s < slices; ++s) {
++                for (int64_t i = 0; i < rows_per_slice; ++i) {
++                    list[s*rows_per_slice + i] = cell_of(value, rows_per_slice, slices, s, i);
++                }
++            }
++            ggml_backend_tensor_set(rows, list.data(), 0, ggml_nbytes(rows));
++        }
++
++        // visible rows score 0, padding -inf; the dense case has no padding
++        std::vector<ggml_fp16_t> m(ggml_nelements(mask));
++        const ggml_fp16_t zero = ggml_fp32_to_fp16(0.0f);
++        const ggml_fp16_t ninf = ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity());
++        for (int64_t s = 0; s < slices; ++s) {
++            for (int64_t query = 0; query < mask_queries; ++query) {
++                for (int64_t i = 0; i < rows_per_slice; ++i) {
++                    const bool visible = !rows || list[s*rows_per_slice + i] >= 0;
++                    m[(s*mask_queries + query)*rows_per_slice + i] = visible ? zero : ninf;
++                }
++            }
++        }
++        ggml_backend_tensor_set(mask, m.data(), 0, ggml_nbytes(mask));
++    }
++
++    float checksum() const {
++        std::vector<float> out(ggml_nelements(last));
++        ggml_backend_tensor_get(last, out.data(), 0, ggml_nbytes(last));
++        return std::accumulate(out.begin(), out.end(), 0.0f, [](float a, float b) { return a + std::fabs(b); });
++    }
++};
++
++ggml_backend_t open_backend(const char * name) {
++    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
++        ggml_backend_dev_t device = ggml_backend_dev_get(i);
++        if (std::strcmp(ggml_backend_dev_name(device), name) == 0) {
++            return ggml_backend_dev_init(device, nullptr);
++        }
++    }
++    return nullptr;
++}
++
++struct result {
++    layout value;
++    int64_t rows;
++    int64_t slices;
++    double gpu_us;   // per attention call, device time
++    double wall_us;  // per attention call, host wall time of the compute
++    double commands; // command buffers per chain
++    float checksum;
++};
++
++result measure(ggml_backend_t backend, timing_sink & sink, layout value, int64_t rows, int64_t slices, int depth, int iters) {
++    chain c(backend, value, rows, slices, depth);
++    c.fill(value, rows, slices);
++    for (int i = 0; i < 5; ++i) {
++        require(ggml_backend_graph_compute(backend, c.graph) == GGML_STATUS_SUCCESS, "warm-up compute");
++    }
++    ggml_backend_synchronize(backend);
++    std::this_thread::sleep_for(std::chrono::milliseconds(20));
++    sink.reset();
++    const auto t0 = std::chrono::steady_clock::now();
++    for (int i = 0; i < iters; ++i) {
++        require(ggml_backend_graph_compute(backend, c.graph) == GGML_STATUS_SUCCESS, "timed compute");
++    }
++    ggml_backend_synchronize(backend);
++    const auto t1 = std::chrono::steady_clock::now();
++    // the completion handlers run on a backend thread after the wait returns
++    std::this_thread::sleep_for(std::chrono::milliseconds(50));
++    const double calls = double(iters)*depth;
++    return {
++        value, rows, slices,
++        double(sink.gpu_ns.load())/1e3/calls,
++        std::chrono::duration<double, std::micro>(t1 - t0).count()/calls,
++        double(sink.commands.load())/iters,
++        c.checksum(),
++    };
++}
++
++} // namespace
++
++int main(int argc, char ** argv) {
++    try {
++        const char * backend_name = nullptr;
++        int iters = 50;
++        int depth = 48;
++        for (int i = 1; i < argc; ++i) {
++            if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
++                backend_name = argv[++i];
++            } else if (std::strcmp(argv[i], "--iters") == 0 && i + 1 < argc) {
++                iters = std::stoi(argv[++i]);
++            } else if (std::strcmp(argv[i], "--depth") == 0 && i + 1 < argc) {
++                depth = std::stoi(argv[++i]);
++            } else {
++                require(false, "usage: test-flash-attn-rows-perf [--backend NAME] [--iters N] [--depth N]");
++            }
++        }
++        ggml_backend_load_all();
++        using backend_ptr = std::unique_ptr<ggml_backend, decltype(&ggml_backend_free)>;
++        backend_ptr backend(backend_name ? open_backend(backend_name)
++                : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr), ggml_backend_free);
++        require(backend != nullptr, "backend unavailable");
++
++        timing_sink sink;
++        const auto reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
++        auto set_callback = (ggml_backend_set_command_timing_callback_t)
++            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_command_timing_callback");
++        require(set_callback != nullptr, "backend reports no command timing; GPU time needs the Metal timing patch");
++        set_callback(timing_sink::record, &sink);
++
++        std::printf("backend=%s dk=%lld dv=%lld heads=%lld kv_heads=%lld depth=%d iters=%d\n",
++                ggml_backend_name(backend.get()), (long long) dk, (long long) dv, (long long) heads,
++                (long long) kv_heads, depth, iters);
++        std::printf("%-14s %6s %6s %12s %12s %8s %12s\n", "layout", "rows", "slices", "gpu_us/call", "wall_us/call", "cmd/chain", "checksum");
++        for (int64_t slices : {1, 4}) {
++            for (int64_t rows : {768, 4864}) {
++                for (layout value : {layout::dense, layout::identity, layout::chunk64, layout::stride, layout::padded}) {
++                    if (slices == 1 && (value == layout::chunk64 || value == layout::stride)) {
++                        continue; // identical to identity with one slice
++                    }
++                    const result r = measure(backend.get(), sink, value, rows, slices, depth, iters);
++                    std::printf("%-14s %6lld %6lld %12.2f %12.2f %8.1f %12.4g\n", layout_name(r.value),
++                            (long long) r.rows, (long long) r.slices, r.gpu_us, r.wall_us, r.commands, r.checksum);
++                }
++            }
++        }
++        set_callback(nullptr, nullptr);
++        return 0;
++    } catch (const std::exception & error) {
++        std::fprintf(stderr, "test-flash-attn-rows-perf: %s\n", error.what());
++        return 1;
++    }
++}
+-- 
+2.43.0
+

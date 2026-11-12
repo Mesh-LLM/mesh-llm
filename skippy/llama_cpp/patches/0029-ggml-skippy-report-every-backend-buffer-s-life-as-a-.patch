@@ -1,0 +1,230 @@
+From cdbfb54e00727c01cbf03067036a3c9348dec0b2 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 19:48:49 +1100
+Subject: [PATCH 29/32] ggml, skippy: report every backend buffer's life as a
+ trace span
+
+ggml_backend_set_buffer_event_callback hears each buffer a backend creates,
+its usage once llama sets it, and its release; buffers alive at install are
+replayed. Skippy forwards them as instant native spans (ggml.buffer_alloc,
+ggml.buffer_usage, ggml.buffer_free) whose detail is '<type> <usage> <id>' and
+whose value is the size, so a trace can say what device memory is made of.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/include/ggml-backend.h | 29 ++++++++++++++++
+ ggml/src/ggml-backend.cpp   | 67 +++++++++++++++++++++++++++++++++++++
+ src/skippy/tracing.cpp      | 36 ++++++++++++++++++++
+ 3 files changed, 132 insertions(+)
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index f326769a3..4383bd3ff 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -373,6 +373,35 @@ extern "C" {
+             ggml_backend_trace_span_callback_t callback,
+             void * user_data);
+ 
++    // Buffer events: every buffer a backend creates, its usage once set, and
++    // its release, so a host can say what device memory is made of. Container
++    // buffers (multi, meta) are not reported; their parts are. On install the
++    // buffers alive at that moment are replayed as allocations, with their
++    // usage, from the installing thread.
++    enum ggml_backend_buffer_event_kind {
++        GGML_BACKEND_BUFFER_EVENT_ALLOC,
++        GGML_BACKEND_BUFFER_EVENT_USAGE,
++        GGML_BACKEND_BUFFER_EVENT_FREE,
++    };
++
++    struct ggml_backend_buffer_event {
++        enum ggml_backend_buffer_event_kind kind;
++        // identity only: on a free the buffer is gone once the callback returns
++        const struct ggml_backend_buffer * buffer;
++        // the buffer type's name, such as "Metal" or "Metal_Mapped"; static storage
++        const char * buft_name;
++        size_t size;
++        enum ggml_backend_buffer_usage usage;
++    };
++
++    typedef void (*ggml_backend_buffer_event_callback_t)(
++            const struct ggml_backend_buffer_event * event,
++            void * user_data);
++    // Process-wide; a null callback stops reporting.
++    GGML_API void ggml_backend_set_buffer_event_callback(
++            ggml_backend_buffer_event_callback_t callback,
++            void * user_data);
++
+     //
+     // Backend registry
+     //
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index 9c8980505..7cf2c6580 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -20,6 +20,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <algorithm>
++#include <mutex>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -233,6 +234,68 @@ ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft)
+ 
+ // backend buffer
+ 
++// buffer events (see ggml-backend.h): the callback, and the buffers alive so
++// a late install can be told what already exists
++namespace {
++
++struct buffer_events {
++    std::mutex mutex;
++    ggml_backend_buffer_event_callback_t callback = nullptr;
++    void * user_data = nullptr;
++    std::unordered_map<const ggml_backend_buffer *, enum ggml_backend_buffer_usage> live;
++};
++
++buffer_events & buffer_event_state() {
++    static buffer_events state;
++    return state;
++}
++
++// container buffers only wrap buffers that are reported on their own
++bool buffer_is_reported(ggml_backend_buffer_t buffer) {
++    return !ggml_backend_buffer_is_multi_buffer(buffer) && !ggml_backend_buffer_is_meta(buffer);
++}
++
++void report_buffer(buffer_events & state, enum ggml_backend_buffer_event_kind kind, ggml_backend_buffer_t buffer) {
++    if (state.callback == nullptr) {
++        return;
++    }
++    const ggml_backend_buffer_event event = {
++        /* .kind      = */ kind,
++        /* .buffer    = */ buffer,
++        /* .buft_name = */ ggml_backend_buft_name(buffer->buft),
++        /* .size      = */ buffer->size,
++        /* .usage     = */ buffer->usage,
++    };
++    state.callback(&event, state.user_data);
++}
++
++void buffer_event(enum ggml_backend_buffer_event_kind kind, ggml_backend_buffer_t buffer) {
++    if (!buffer_is_reported(buffer)) {
++        return;
++    }
++    buffer_events & state = buffer_event_state();
++    std::lock_guard<std::mutex> lock(state.mutex);
++    switch (kind) {
++        case GGML_BACKEND_BUFFER_EVENT_ALLOC: state.live[buffer] = buffer->usage; break;
++        case GGML_BACKEND_BUFFER_EVENT_USAGE: state.live[buffer] = buffer->usage; break;
++        case GGML_BACKEND_BUFFER_EVENT_FREE:  state.live.erase(buffer);          break;
++    }
++    report_buffer(state, kind, buffer);
++}
++
++} // namespace
++
++void ggml_backend_set_buffer_event_callback(ggml_backend_buffer_event_callback_t callback, void * user_data) {
++    buffer_events & state = buffer_event_state();
++    std::lock_guard<std::mutex> lock(state.mutex);
++    state.callback  = callback;
++    state.user_data = user_data;
++    std::for_each(state.live.begin(), state.live.end(), [&state](const auto & entry) {
++        // the buffer object is alive while it is in the table; its fields are what the event reports
++        report_buffer(state, GGML_BACKEND_BUFFER_EVENT_ALLOC, const_cast<ggml_backend_buffer_t>(entry.first));
++    });
++}
++
+ ggml_backend_buffer_t ggml_backend_buffer_init(
+                ggml_backend_buffer_type_t buft,
+         struct ggml_backend_buffer_i      iface,
+@@ -245,6 +308,7 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
+         /* .size      = */ size,
+         /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
+     };
++    buffer_event(GGML_BACKEND_BUFFER_EVENT_ALLOC, buffer);
+ 
+     return buffer;
+ }
+@@ -257,6 +321,7 @@ void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
+     if (buffer == NULL) {
+         return;
+     }
++    buffer_event(GGML_BACKEND_BUFFER_EVENT_FREE, buffer);
+ 
+     if (buffer->iface.free_buffer != NULL) {
+         buffer->iface.free_buffer(buffer);
+@@ -333,6 +398,8 @@ void ggml_backend_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backe
+         ggml_backend_multi_buffer_set_usage(buffer, usage);
+     } else if (ggml_backend_buffer_is_meta(buffer)) {
+         ggml_backend_meta_buffer_set_usage(buffer, usage);
++    } else {
++        buffer_event(GGML_BACKEND_BUFFER_EVENT_USAGE, buffer);
+     }
+ }
+ 
+diff --git a/src/skippy/tracing.cpp b/src/skippy/tracing.cpp
+index 29e9047b1..48d827d34 100644
+--- a/src/skippy/tracing.cpp
++++ b/src/skippy/tracing.cpp
+@@ -6,6 +6,7 @@
+ #include <array>
+ #include <atomic>
+ #include <chrono>
++#include <cstdio>
+ 
+ namespace {
+ 
+@@ -86,6 +87,39 @@ void forward_backend_span(const ggml_backend_trace_span * span, void *) {
+             span->start_unix_ns, span->end_unix_ns, nullptr, 0);
+ }
+ 
++const char * buffer_usage_name(enum ggml_backend_buffer_usage usage) {
++    switch (usage) {
++        case GGML_BACKEND_BUFFER_USAGE_WEIGHTS: return "weights";
++        case GGML_BACKEND_BUFFER_USAGE_COMPUTE: return "compute";
++        case GGML_BACKEND_BUFFER_USAGE_ANY:     return "any";
++    }
++    return "other";
++}
++
++const char * buffer_event_name(enum ggml_backend_buffer_event_kind kind) {
++    switch (kind) {
++        case GGML_BACKEND_BUFFER_EVENT_ALLOC: return "ggml.buffer_alloc";
++        case GGML_BACKEND_BUFFER_EVENT_USAGE: return "ggml.buffer_usage";
++        case GGML_BACKEND_BUFFER_EVENT_FREE:  return "ggml.buffer_free";
++    }
++    return "ggml.buffer";
++}
++
++// A buffer's life as instant spans, so a trace can say what device memory
++// is made of: detail is "<type> <usage> <id>", the value its size in bytes.
++void forward_buffer_event(const ggml_backend_buffer_event * event, void *) {
++    if (event == nullptr) {
++        return;
++    }
++    char detail[96];
++    std::snprintf(detail, sizeof(detail), "%s %s %p",
++            event->buft_name != nullptr ? event->buft_name : "?",
++            buffer_usage_name(event->usage), static_cast<const void *>(event->buffer));
++    const int64_t now = unix_now_ns();
++    deliver_span(next_span_id(), t_current != 0 ? t_current : t_tag, buffer_event_name(event->kind), detail,
++            now, now, "bytes", static_cast<int64_t>(event->size));
++}
++
+ // the names skippy/tracing.h documents for ggml_backend_op_class
+ const char * op_class_name(int32_t op_class) {
+     switch (op_class) {
+@@ -234,6 +268,8 @@ enum skippy_status skippy_set_native_span_callback(
+             set_callback(callback != nullptr ? forward_backend_span : nullptr, nullptr);
+         }
+     }
++    // Buffers alive now are replayed from this thread as allocations.
++    ggml_backend_set_buffer_event_callback(callback != nullptr ? forward_buffer_event : nullptr, nullptr);
+ 
+     // Skippy and llama report their own spans with or without a backend.
+     return SKIPPY_STATUS_OK;
+-- 
+2.43.0
+

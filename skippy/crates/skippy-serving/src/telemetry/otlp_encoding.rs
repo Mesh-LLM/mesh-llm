@@ -12,7 +12,7 @@ use skippy_metrics::metric;
 use skippy_protocol::StageConfig;
 
 use super::{
-    TelemetryCounters, TelemetryEvent, resource_attrs::resource_attrs, span_components::component,
+    TelemetryCounters, resource_attrs::resource_attrs, sink::SpanRecord, span_components::component,
 };
 
 /// One stage's spans, one resource per system component (see
@@ -56,7 +56,7 @@ fn resource_spans(config: &StageConfig, service: &str, spans: Vec<Span>) -> Reso
     }
 }
 
-pub(super) fn event_to_span(event: &TelemetryEvent, stats: &TelemetryCounters) -> Span {
+pub(super) fn event_to_span(event: &SpanRecord, stats: &TelemetryCounters) -> Span {
     let mut attributes = event.attributes.clone();
     attributes.insert(
         metric::OTEL_DROPPED_EVENTS.to_string(),

@@ -3,7 +3,8 @@
 
 use super::certification::{artifact, certification};
 use super::fields::{
-    ModelResult, exact_keys, fail, get, has, is_identifier, object, string, string_list,
+    ModelResult, escapes_root, exact_keys, fail, get, has, is_identifier, object, string,
+    string_list,
 };
 use crate::ci_plan::document::Json;
 
@@ -14,6 +15,7 @@ const TOP_KEYS: &[&str] = &[
     "family_policy",
     "artifacts",
     "unverified_consumers",
+    "derived_suites",
 ];
 const ROW_KEYS: &[&str] = &[
     "id",
@@ -64,6 +66,7 @@ pub(super) fn validate(raw: &Json) -> ModelResult<&[(String, Json)]> {
         )?;
     }
     unverified_consumers(registry)?;
+    derived_suites(registry, &declared)?;
     Ok(registry)
 }
 
@@ -148,6 +151,39 @@ fn validate_row<'a>(
     }
     if suites.contains(&FAMILY_SUITE) {
         certification(get(row, "certification"), field, declared.profiles)?;
+    }
+    Ok(())
+}
+
+/// `derived_suites`: each names a declared suite, a pinned evals model list
+/// under the checkout, the selectors to register it at and the id prefix.
+fn derived_suites(registry: &[(String, Json)], declared: &Declared<'_>) -> ModelResult<()> {
+    let items = match get(registry, "derived_suites") {
+        None => return Ok(()),
+        Some(value) => match value.as_array() {
+            Some(items) => items,
+            None => return fail("registry.derived_suites must be an array"),
+        },
+    };
+    for (index, item) in items.iter().enumerate() {
+        let field = format!("registry.derived_suites[{index}]");
+        let item = object(Some(item), &field)?;
+        exact_keys(item, &["suite", "from", "selectors", "id_prefix"], &field)?;
+        let suite = string(get(item, "suite"), &format!("{field}.suite"))?;
+        if suite == FAMILY_SUITE || !declared.suites.contains(&suite) {
+            return fail(format!("{field}.suite is not a declared non-family suite"));
+        }
+        let from = string(get(item, "from"), &format!("{field}.from"))?;
+        if escapes_root(from) || from.contains('\\') {
+            return fail(format!("{field}.from must stay inside the checkout"));
+        }
+        string_list(get(item, "selectors"), &format!("{field}.selectors"))?;
+        if !is_identifier(string(
+            get(item, "id_prefix"),
+            &format!("{field}.id_prefix"),
+        )?) {
+            return fail(format!("{field}.id_prefix has invalid characters"));
+        }
     }
     Ok(())
 }

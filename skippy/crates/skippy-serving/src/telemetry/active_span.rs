@@ -9,7 +9,9 @@ use std::{
 use serde_json::Value;
 
 use super::{
-    Telemetry, TelemetryLevel, now_unix_nanos,
+    OpenSpans, Telemetry, TelemetryLevel, now_unix_nanos,
+    resource_metrics::SpanWindow,
+    sink::SpanStart,
     trace_context::{self, Entered, Frame, SpanContext},
 };
 
@@ -33,6 +35,10 @@ pub(crate) struct ActiveSpan {
     /// `None` when not recorded: the frame then passes the parent through, so
     /// children never point at a span that is not exported.
     telemetry: Option<Telemetry>,
+    /// What the sinks kept at the start; taken back when the span ends.
+    open: Option<OpenSpans>,
+    /// The process's resource counters at the start, for `with_metrics`.
+    window: Option<SpanWindow>,
     frame: Frame,
     name: &'static str,
     start_unix_nanos: u64,
@@ -80,15 +86,37 @@ impl ActiveSpan {
         } else {
             parent.clone()
         };
+        let start_unix_nanos = u64::try_from(now_unix_nanos()).unwrap_or_default();
+        let open = telemetry.as_ref().map(|telemetry| {
+            telemetry.begin_span(&SpanStart {
+                name,
+                level,
+                context: frame.context(),
+                parent: frame.parent_span_id(),
+                start_time_unix_nanos: start_unix_nanos,
+            })
+        });
         Self {
             telemetry,
+            open,
+            window: None,
             frame,
             name,
-            start_unix_nanos: u64::try_from(now_unix_nanos()).unwrap_or_default(),
+            start_unix_nanos,
             started: Instant::now(),
             attributes: BTreeMap::new(),
             links: Vec::new(),
         }
+    }
+
+    /// Charge the span what the process used while it was open: CPU time,
+    /// GPU execution, footprint change and live KV cells, as `skippy.span.*`
+    /// attributes when it ends. Process-wide figures, not this thread's.
+    pub(crate) fn with_metrics(mut self) -> Self {
+        if self.telemetry.is_some() {
+            self.window = Some(SpanWindow::open());
+        }
+        self
     }
 
     /// Make this the active span on this thread (synchronous code).
@@ -124,15 +152,21 @@ impl ActiveSpan {
 
     /// Drop without exporting, for a section that turned out to do no work.
     pub(crate) fn discard(mut self) {
-        self.telemetry = None;
+        if let Some((telemetry, open)) = self.telemetry.take().zip(self.open.take()) {
+            telemetry.discard_span(open);
+        }
     }
 
     fn finish(&mut self) {
-        let Some(telemetry) = self.telemetry.take() else {
+        let Some((telemetry, open)) = self.telemetry.take().zip(self.open.take()) else {
             return;
         };
+        if let Some(window) = self.window.take() {
+            self.attributes.extend(window.close());
+        }
         let elapsed = u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        telemetry.emit_frame_span(
+        telemetry.end_span(
+            open,
             &self.frame,
             self.name,
             std::mem::take(&mut self.attributes),
@@ -214,6 +248,34 @@ mod tests {
             spans
                 .values()
                 .all(|(context, _)| context.trace_id == root.trace_id)
+        );
+    }
+
+    #[test]
+    fn a_span_with_metrics_carries_its_resource_window() {
+        let (telemetry, rx) = Telemetry::captured(config(), TelemetryLevel::Debug);
+        ActiveSpan::start(Some(&telemetry), "stage.measured", SpanLevel::Debug)
+            .with_metrics()
+            .end();
+        ActiveSpan::start(Some(&telemetry), "stage.plain", SpanLevel::Debug).end();
+        let events: Vec<_> = rx.try_iter().collect();
+        let measured = events.iter().find(|e| e.event == "stage.measured").unwrap();
+        assert!(
+            measured
+                .attributes
+                .contains_key("skippy.span.gpu_execute_ms")
+        );
+        assert!(
+            measured
+                .attributes
+                .contains_key("skippy.span.gpu_command_buffers")
+        );
+        let plain = events.iter().find(|e| e.event == "stage.plain").unwrap();
+        assert!(
+            !plain
+                .attributes
+                .keys()
+                .any(|key| key.starts_with("skippy.span."))
         );
     }
 

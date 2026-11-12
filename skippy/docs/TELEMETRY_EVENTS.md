@@ -95,10 +95,26 @@ which kernels run and how much KV they read, as resource attributes:
 `skippy.kv.swa_full`. The path attention actually took is the
 `skippy.attention.path` event and span attribute.
 
+Six more resource attributes let one collector compare runs across machines,
+backends and commits, the same keys on Skippy and on an instrumented
+llama-server:
+
+| Attribute | Value |
+|---|---|
+| `run.id` | the stage's run id, one per launch |
+| `backend.name` | the backend the runtime computes on, as GPU command spans name it (`MTL`, `CUDA`); set once the runtime has made a traced native call, so startup spans carry none |
+| `test.name` | the workload, set by the operator so the same test compares across runs |
+| `git.commit.sha` | the commit skippy-serving was built from (`SKIPPY_GIT_COMMIT` at build time overrides the repository's `HEAD`; `unknown` outside a repository) |
+| `machine.id` | the host name unless the operator sets it |
+| `run.phase` | `warmup` or `measured`; `measured` unless the operator sets it |
+
 `OTEL_RESOURCE_ATTRIBUTES` adds the operator's own resource attributes, as
 OpenTelemetry SDKs define it: comma-separated `key=value` pairs with
-percent-encoded values, such as `skippy.run.label=q8-fa`. The stage's own
-attributes win over a conflicting key.
+percent-encoded values, such as
+`skippy.run.label=q8-fa,test.name=benchy-pp512-tg128-d0_4096-c4,run.phase=warmup`.
+It sets `test.name`, `run.phase` and `machine.id`; the stage's own attributes,
+including `run.id`, `backend.name` and `git.commit.sha`, win over a
+conflicting key.
 
 The configurations worth comparing are operator settings: K and V precision
 (`--kv-cache-type-k`, `--kv-cache-type-v`: `f16`, `q8_0`, `q4_0`; quantized V

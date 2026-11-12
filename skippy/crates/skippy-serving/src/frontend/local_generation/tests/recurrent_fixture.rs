@@ -118,6 +118,8 @@ pub(super) fn recurrent_test_backend_with_lanes(
             min_tokens: 1,
             shared_prefix_stride_tokens: 1,
             shared_prefix_record_limit: 0,
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         }),
         native_mtp_enabled: false,
         load_mode: LoadMode::RuntimeSlice,
@@ -156,6 +158,7 @@ pub(super) fn recurrent_test_backend_with_lanes(
     let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
+        model: LoadedModel::from_runtime(&runtime),
         runtime_lane_admission,
         workload: Default::default(),
         config,

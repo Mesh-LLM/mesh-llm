@@ -551,6 +551,8 @@ mod tests {
             min_tokens: 8,
             shared_prefix_stride_tokens: 8,
             shared_prefix_record_limit: 2,
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         }));
 
         let handle = SkippyModelHandle::load(options).expect("load kv-disabled local model");

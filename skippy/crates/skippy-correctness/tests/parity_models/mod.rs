@@ -1640,6 +1640,10 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             kv_offload: None,
             kv_unified: None,
             swa_full: None,
+            kv_pool_tokens: None,
+            kv_lazy_clear: None,
+            kv_release_pages: None,
+            kv_row_attention: None,
         },
     )
     .with_context(|| {

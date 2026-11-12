@@ -395,6 +395,10 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         kv_offload: None,
         kv_unified: None,
         swa_full: None,
+        kv_pool_tokens: None,
+        kv_lazy_clear: None,
+        kv_release_pages: None,
+        kv_row_attention: None,
     };
     let stage0 = StageModel::open(&stage0_resolution.path, &stage0_config)
         .context("failed to open stage 0")?;

@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 81;
+pub const ABI_VERSION_PATCH: u32 = 83;
 
 // The facade constants are parsed without compiling; tie them to the generated
 // bindings' view of the native ABI version at compile time so a common.h bump
@@ -189,8 +189,8 @@ pub use dynamic::{
     skippy_laya_read, skippy_laya_tokenize, skippy_model_attach_mtp_draft_model_fn,
     skippy_model_free, skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
     skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
-    skippy_model_llama_model, skippy_model_memory_cache_capabilities, skippy_model_open,
-    skippy_model_open_from_parts, skippy_model_open_from_parts_with_events_fn,
+    skippy_model_kv_pool_cells, skippy_model_llama_model, skippy_model_memory_cache_capabilities,
+    skippy_model_open, skippy_model_open_from_parts, skippy_model_open_from_parts_with_events_fn,
     skippy_model_open_from_source, skippy_model_open_with_events_fn,
     skippy_model_output_activation_boundary, skippy_model_supports_causal_readout,
     skippy_model_workload_info_v1, skippy_ngram_cache_append, skippy_ngram_cache_create,
@@ -261,7 +261,7 @@ pub use static_bindings::{
     skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
     skippy_model_attach_mtp_draft_model, skippy_model_free, skippy_model_info_free,
     skippy_model_info_open, skippy_model_info_tensor_at, skippy_model_info_tensor_count,
-    skippy_model_input_activation_boundary, skippy_model_llama_model,
+    skippy_model_input_activation_boundary, skippy_model_kv_pool_cells, skippy_model_llama_model,
     skippy_model_memory_cache_capabilities, skippy_model_open, skippy_model_open_from_parts,
     skippy_model_open_from_source, skippy_model_output_activation_boundary,
     skippy_model_supports_causal_readout, skippy_model_workload_info_v1, skippy_ngram_cache_append,

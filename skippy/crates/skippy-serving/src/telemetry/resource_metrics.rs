@@ -36,7 +36,8 @@ mod otlp_metrics;
 
 use gpu_op_classes::{GraphShape, OpClassCounters};
 use kv_tiers::KvTiers;
-use otlp_metrics::{MetricSinks, gauge, point};
+pub(super) use otlp_metrics::OtlpMetricsSink;
+use otlp_metrics::{gauge, point};
 
 /// Where sampled metrics are appended, one OTLP/JSON request per line.
 pub(super) const METRICS_FILE_ENV: &str = "SKIPPY_TELEMETRY_OTLP_METRICS_FILE";
@@ -56,6 +57,7 @@ static SCHEDULER_RUNNING: AtomicU64 = AtomicU64::new(UNSET);
 static SCHEDULER_WAITING: AtomicU64 = AtomicU64::new(UNSET);
 static SCHEDULER_BATCH: AtomicU64 = AtomicU64::new(UNSET);
 static KV_USED_CELLS: AtomicU64 = AtomicU64::new(UNSET);
+static KV_POOL_CELLS: AtomicU64 = AtomicU64::new(UNSET);
 
 /// One GPU command buffer: how long the GPU ran it, and how long it waited
 /// between being committed and starting.
@@ -85,6 +87,11 @@ pub(crate) fn record_kv_used_cells(cells: u64) {
     KV_USED_CELLS.store(cells, Ordering::Relaxed);
 }
 
+/// The native KV pool, once the runtime has loaded it.
+pub(crate) fn record_kv_pool_cells(cells: u64) {
+    KV_POOL_CELLS.store(cells, Ordering::Relaxed);
+}
+
 fn nanos(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
@@ -92,6 +99,64 @@ fn nanos(duration: Duration) -> u64 {
 fn current(gauge: &AtomicU64) -> Option<u64> {
     let value = gauge.load(Ordering::Relaxed);
     (value != UNSET).then_some(value)
+}
+
+/// What a span's resource window starts from; see [`SpanWindow::close`].
+pub(crate) struct SpanWindow {
+    counters: Counters,
+    process: Option<ProcessUsage>,
+}
+
+impl SpanWindow {
+    pub(crate) fn open() -> Self {
+        Self {
+            counters: Counters::now(),
+            process: process_usage(),
+        }
+    }
+
+    /// What the whole process used while the window was open, as
+    /// `skippy.span.*` attributes: CPU seconds charged to the process, GPU
+    /// command execution that completed, the change in footprint, and the
+    /// live KV cells at the end. Process-wide, not this thread's alone.
+    pub(crate) fn close(self) -> BTreeMap<String, Value> {
+        let counters = Counters::now();
+        let ms = |nanos: u64| nanos as f64 / 1e6;
+        let mut attributes = BTreeMap::from([
+            (
+                "skippy.span.gpu_execute_ms".to_string(),
+                json!(ms(
+                    counters.gpu_execute_nanos - self.counters.gpu_execute_nanos
+                )),
+            ),
+            (
+                "skippy.span.gpu_command_buffers".to_string(),
+                json!(counters.gpu_commands - self.counters.gpu_commands),
+            ),
+            (
+                "skippy.span.runtime_busy_ms".to_string(),
+                json!(ms(
+                    counters.runtime_busy_nanos - self.counters.runtime_busy_nanos
+                )),
+            ),
+        ]);
+        if let Some((before, after)) = self.process.zip(process_usage()) {
+            let cpu =
+                after.user.saturating_sub(before.user) + after.system.saturating_sub(before.system);
+            attributes.insert(
+                "skippy.span.cpu_ms".to_string(),
+                json!(cpu.as_secs_f64() * 1_000.0),
+            );
+            attributes.insert(
+                "skippy.span.footprint_delta_bytes".to_string(),
+                json!(after.footprint_bytes as i64 - before.footprint_bytes as i64),
+            );
+        }
+        if let Some(cells) = current(&KV_USED_CELLS) {
+            attributes.insert("skippy.span.kv_used_cells".to_string(), json!(cells));
+        }
+        attributes
+    }
 }
 
 /// Monotonic counters at one instant.
@@ -508,10 +573,9 @@ fn runtime_gauges(
     ));
 }
 
-/// The running sampler: its sinks and the reading the next sample starts at.
+/// The running sampler and the reading the next sample starts at.
 struct Sampler {
     telemetry: Telemetry,
-    sinks: MetricSinks,
     last: Mutex<Reading>,
     stopped: AtomicBool,
 }
@@ -526,7 +590,7 @@ impl Sampler {
         *last = now;
         drop(last);
         if !metrics.is_empty() {
-            self.sinks.send(&self.telemetry.config, metrics);
+            self.telemetry.record_metrics(&metrics);
         }
     }
 }
@@ -541,18 +605,14 @@ fn interval_from_value(value: Option<&str>) -> Duration {
         })
 }
 
-/// Start sampling for the process, if there is anywhere to send it. The first
-/// debug handle with a destination serves the whole process.
-pub(super) fn start(telemetry: &Telemetry, endpoint: Option<&str>) {
-    let Some(sinks) = MetricSinks::open(
-        env::var_os(METRICS_FILE_ENV).filter(|path| !path.is_empty()),
-        endpoint,
-    ) else {
+/// Start sampling for the process, if some sink takes samples. The first
+/// debug handle with a sink serves the whole process.
+pub(super) fn start(telemetry: &Telemetry) {
+    if !telemetry.records_metrics() {
         return;
-    };
+    }
     let sampler = Sampler {
         telemetry: telemetry.clone(),
-        sinks,
         last: Mutex::new(Reading::take(None)),
         stopped: AtomicBool::new(false),
     };
@@ -576,13 +636,13 @@ pub(super) fn start(telemetry: &Telemetry, endpoint: Option<&str>) {
     }
 }
 
-/// Take a last sample and stop; called as the process span ends.
+/// Take a last sample and stop; called as the process span ends, whose
+/// flush then reaches every sink.
 pub(super) fn finish() {
     if let Some(sampler) = SAMPLER.get()
         && !sampler.stopped.swap(true, Ordering::AcqRel)
     {
         sampler.tick();
-        sampler.sinks.flush();
     }
 }
 
@@ -632,6 +692,7 @@ fn snapshot(point: &str) -> BTreeMap<String, Value> {
         ("scheduler.running", current(&SCHEDULER_RUNNING)),
         ("scheduler.waiting", current(&SCHEDULER_WAITING)),
         ("kv.used_cells", current(&KV_USED_CELLS)),
+        ("kv.pool_cells", current(&KV_POOL_CELLS)),
     ];
     for (name, value) in gauges {
         if let Some(value) = value {
@@ -672,6 +733,27 @@ impl Telemetry {
 mod tests {
     use super::*;
     use opentelemetry_proto::tonic::metrics::v1::{metric::Data, number_data_point};
+
+    #[test]
+    fn a_span_window_charges_what_the_process_used_while_it_was_open() {
+        let window = SpanWindow::open();
+        record_gpu_command(Duration::from_millis(8), Duration::from_millis(1));
+        record_gpu_command(Duration::from_millis(2), Duration::ZERO);
+        record_runtime_busy(Duration::from_millis(3));
+        // Burn some CPU so the charged time is visible on every platform.
+        let spin = Instant::now();
+        while spin.elapsed() < Duration::from_millis(5) {
+            std::hint::black_box(0);
+        }
+        let attributes = window.close();
+        assert_eq!(attributes["skippy.span.gpu_execute_ms"], json!(10.0));
+        assert_eq!(attributes["skippy.span.gpu_command_buffers"], json!(2));
+        assert_eq!(attributes["skippy.span.runtime_busy_ms"], json!(3.0));
+        if let Some(cpu) = attributes.get("skippy.span.cpu_ms") {
+            assert!(cpu.as_f64().unwrap() >= 0.0);
+            assert!(attributes.contains_key("skippy.span.footprint_delta_bytes"));
+        }
+    }
 
     fn reading(at: Instant, cpu_ms: u64, counters: Counters) -> Reading {
         Reading {

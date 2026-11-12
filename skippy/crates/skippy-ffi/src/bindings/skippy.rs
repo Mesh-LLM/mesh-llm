@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 81;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 83;
 pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
@@ -621,6 +621,14 @@ pub struct skippy_runtime_config {
     pub kv_unified: i32,
     #[doc = " @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`)."]
     pub swa_full: i32,
+    #[doc = " @brief Cells in the unified KV pool, which the lanes share. 0 reserves `ctx_size` for every lane (`ctx_size` x `lane_count`), so each lane can reach its window whatever the others hold. Any other value is the whole pool: it must hold at least one lane's `ctx_size`, and requires a unified cache."]
+    pub kv_pool_tokens: u32,
+    #[doc = " @brief Whether KV cells are zeroed as the pool's high-water mark advances rather than all at creation. AUTO and TRUE zero lazily wherever the cache layout and its buffers allow; FALSE zeroes the whole pool at creation and keeps every page, as upstream does."]
+    pub kv_lazy_clear: i32,
+    #[doc = " @brief Whether chunks of free KV cells hand their pages back to the kernel. AUTO and TRUE release wherever cells are zeroed lazily and the pool's memory is host-visible; FALSE keeps the pages."]
+    pub kv_release_pages: i32,
+    #[doc = " @brief Whether attention reads a unified pool through per-owner row lists. AUTO and TRUE use row lists wherever the backend supports them; FALSE keeps ordinary attention over the whole pool, to measure one against the other."]
+    pub kv_row_attention: i32,
     #[doc = " @brief Whether the backend offloads host tensor operations to device (mirrors upstream `op_offload`). SKIPPY_TRISTATE_AUTO preserves llama.cpp's derived default (enabled); FALSE/TRUE force the value."]
     pub op_offload: i32,
     #[doc = " @brief Whether model loading bypasses the host buffer, allowing extra buffers to be used (mirrors upstream `no_host`)."]
@@ -1442,6 +1450,10 @@ pub enum skippy_memory_cache_capability {
 unsafe extern "C" {
     #[doc = " @brief Returns complete cache representations admitted by the built graph and loaded memory.\n Graph state effects restrict the loaded memory adapters' complete export capabilities.\n Full-state serialization is admitted explicitly too. Zero means no complete\n cache representation is available; callers cannot supply capability labels."]
     pub fn skippy_model_memory_cache_capabilities(model: *const skippy_model) -> u32;
+}
+unsafe extern "C" {
+    #[doc = " @brief Cells in the model's KV pool, the capacity admission shares among its lanes; 0 before a context exists."]
+    pub fn skippy_model_kv_pool_cells(model: *const skippy_model) -> u32;
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]

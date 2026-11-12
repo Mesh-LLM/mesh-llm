@@ -15,8 +15,10 @@ use self::cache_runtime::{
 };
 use self::direct_batch::{
     PIPELINE_DECODE_GROUPS_ENV, direct_coalesce_target, effective_scheduler_lane_count,
-    pipeline_group_batch_size, resolve_pipeline_decode_groups, scheduler_safe_mode_from_value,
-    should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
+    pipeline_group_batch_size, prefill_coalesce_max, prefill_coalesce_window,
+    resolve_pipeline_decode_groups,
+    scheduler_safe_mode_from_value, should_serve_direct, take_direct_iteration_batch,
+    validate_direct_iteration,
 };
 use self::direct_reply::DirectReply;
 use self::step_telemetry::{StepTiming, sample_kv_used_cells};
@@ -395,6 +397,8 @@ struct SchedulerWorker {
     /// Decode batch cap per pipeline group; equals `max_direct_batch_size`
     /// unless `SKIPPY_PIPELINE_DECODE_GROUPS` splits waves into groups.
     direct_group_batch_size: usize,
+    /// The ceiling on how long a prefill waits for others to join its wave.
+    prefill_coalesce_max: Duration,
     max_direct_iteration_tokens: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
@@ -430,6 +434,7 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
+        let prefill_coalesce_max = prefill_coalesce_max(config.prefill_coalesce_max_ms);
         let pipeline_decode_groups = resolve_pipeline_decode_groups(
             env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref(),
             planned_pipeline_decode_groups,
@@ -520,6 +525,7 @@ impl IterationScheduler {
                         scheduler_lane_count.max(1),
                         pipeline_decode_groups,
                     ),
+                    prefill_coalesce_max,
                     max_direct_iteration_tokens,
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
@@ -1204,7 +1210,8 @@ impl SchedulerWorker {
             self.telemetry.as_ref(),
             "stage.scheduler_iteration",
             SpanLevel::Debug,
-        );
+        )
+        .with_metrics();
         let plan_span = ActiveSpan::start(
             self.telemetry.as_ref(),
             "stage.scheduler_plan",

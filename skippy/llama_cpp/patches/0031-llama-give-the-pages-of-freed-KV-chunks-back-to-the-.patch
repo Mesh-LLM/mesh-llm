@@ -1,0 +1,312 @@
+From 90f39c2bf6ed09ba619d9e2a47e48b85334529b7 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Mon, 9 Nov 2026 10:27:08 +1100
+Subject: [PATCH 31/32] llama: give the pages of freed KV chunks back to the
+ kernel
+
+With the pool zeroed lazily, resident memory follows the high-water mark:
+cells a finished request held stay resident after seq_rm frees them, so a
+long-running server's footprint climbs to the pool and stays there.
+
+Now a chunk whose cells are all free again hands its whole pages back to the
+kernel (MADV_FREE_REUSABLE on Apple, MADV_DONTNEED elsewhere), from seq_rm,
+seq_keep, seq_add and clear, run by run and tensor by tensor. Only
+host-visible buffers take part: the CPU buffer and Metal's shared buffer,
+which vm_allocates its memory. A released chunk comes back as a fresh one
+when a ubatch writes into it: announced to the kernel (MADV_FREE_REUSE) and
+zeroed from the CPU before the GPU writes, so cells below the mark still
+hold zeros or data.
+
+set_page_release(false) keeps the pages resident, as before. Spans
+llama.kv_release_cells and llama.kv_reclaim_cells carry the bytes moved.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ src/llama-kv-cache.cpp | 154 ++++++++++++++++++++++++++++++++++++++++-
+ src/llama-kv-cache.h   |  17 +++++
+ src/llama-kv-cells.h   |   7 ++
+ 3 files changed, 177 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index a36b29e5a..7d099082c 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -15,13 +15,66 @@
+ #include <cstring>
+ #include <limits>
+ #include <map>
++#include <numeric>
+ #include <stdexcept>
+ #include <unordered_map>
+ 
++#if !defined(_WIN32)
++#include <sys/mman.h>
++#include <unistd.h>
++#endif
++
+ static bool ggml_is_power_of_2(int n) {
+     return (n & (n - 1)) == 0;
+ }
+ 
++// Whether the kernel may take pages of this buffer back and hand them out
++// again on demand: the CPU buffer, and Metal's shared buffer, which holds
++// vm_allocate'd memory but does not report itself as host so the scheduler
++// keeps it on the GPU. Metal's private and mapped buffers do not qualify.
++static bool skippy_kv_buffer_pages_are_host(ggml_backend_buffer_t buf) {
++    if (buf == nullptr) {
++        return false;
++    }
++    if (ggml_backend_buffer_is_host(buf)) {
++        return true;
++    }
++    const char * name = ggml_backend_buffer_name(buf);
++    return strncmp(name, "MTL", 3) == 0 && strspn(name + 3, "0123456789") == strlen(name + 3);
++}
++
++// The advice that gives pages back, and the one that announces their reuse.
++#if defined(MADV_FREE_REUSABLE)
++static const int skippy_kv_release_advice = MADV_FREE_REUSABLE;
++static const int skippy_kv_reuse_advice   = MADV_FREE_REUSE;
++#elif defined(MADV_DONTNEED)
++static const int skippy_kv_release_advice = MADV_DONTNEED;
++static const int skippy_kv_reuse_advice   = -1;
++#else
++static const int skippy_kv_release_advice = -1;
++static const int skippy_kv_reuse_advice   = -1;
++#endif
++
++// Applies `advice` to the whole pages inside [data, data + size); returns
++// how many bytes that covered.
++static size_t skippy_kv_advise_pages(void * data, size_t size, int advice) {
++#if defined(_WIN32)
++    GGML_UNUSED(data); GGML_UNUSED(size); GGML_UNUSED(advice);
++    return 0;
++#else
++    if (advice < 0) {
++        return 0;
++    }
++    const uintptr_t page  = (uintptr_t) sysconf(_SC_PAGESIZE);
++    const uintptr_t begin = ((uintptr_t) data + page - 1) & ~(page - 1);
++    const uintptr_t end   = ((uintptr_t) data + size) & ~(page - 1);
++    if (end <= begin || madvise((void *) begin, end - begin, advice) != 0) {
++        return 0;
++    }
++    return end - begin;
++#endif
++}
++
+ // orthonormal Walsh-Hadamard rotation matrix
+ // note: res^2 == I
+ static void ggml_gen_hadamard(ggml_tensor * tensor) {
+@@ -337,6 +390,8 @@ llama_kv_cache::llama_kv_cache(
+         }
+     }
+ 
++    set_page_release(true);
++
+     {
+         const size_t memory_size_k     = size_k_bytes();
+         const size_t memory_size_v     = size_v_bytes();
+@@ -504,7 +559,9 @@ void llama_kv_cache::clear(bool data) {
+             ggml_backend_buffer_clear(buf.get(), 0);
+         }
+         cells_cleared = get_size();
++        std::fill(chunk_released.begin(), chunk_released.end(), false);
+     }
++    release_free_chunks();
+ }
+ 
+ void llama_kv_cache::clear_cells_through(uint32_t cell) {
+@@ -532,6 +589,88 @@ void llama_kv_cache::clear_eagerly() {
+         clear_cells_through(get_size() - 1);
+     }
+     clear_lazily = false;
++    set_page_release(false);
++}
++
++void llama_kv_cache::set_page_release(bool enabled) {
++    release_pages = enabled && clear_lazily && skippy_kv_release_advice >= 0;
++    chunk_released.assign(release_pages ? (size_t) n_stream*(get_size()/kv_chunk_cells) : 0, false);
++}
++
++void llama_kv_cache::for_each_chunk_range(uint32_t stream, uint32_t chunk0, uint32_t chunk1,
++        const std::function<void(ggml_tensor *, size_t, size_t)> & fn) const {
++    std::for_each(cell_tensors.begin(), cell_tensors.end(), [&](ggml_tensor * t) {
++        if (!skippy_kv_buffer_pages_are_host(t->buffer)) {
++            return;
++        }
++        // [row, cell, stream]: a cell range of one stream is contiguous
++        fn(t, (size_t) stream*t->nb[2] + (size_t) chunk0*kv_chunk_cells*t->nb[1], (size_t) (chunk1 - chunk0)*kv_chunk_cells*t->nb[1]);
++    });
++}
++
++void llama_kv_cache::release_free_chunks() {
++    std::vector<uint32_t> streams(n_stream);
++    std::iota(streams.begin(), streams.end(), 0);
++    std::for_each(streams.begin(), streams.end(), [this](uint32_t s) { release_free_chunks(s); });
++}
++
++void llama_kv_cache::release_free_chunks(uint32_t stream) {
++    if (!release_pages) {
++        return;
++    }
++    skippy_trace::scope trace("llama.kv_release_cells");
++    const auto & cells = v_cells[stream];
++    const size_t base  = (size_t) stream*(get_size()/kv_chunk_cells);
++    // only chunks below the mark were ever written; a released one stays released
++    std::vector<uint32_t> ids(cells_cleared/kv_chunk_cells);
++    std::iota(ids.begin(), ids.end(), 0);
++    std::vector<bool> freed(ids.size());
++    std::transform(ids.begin(), ids.end(), freed.begin(), [&](uint32_t chunk) {
++        return !chunk_released[base + chunk] && cells.is_empty_range(chunk*kv_chunk_cells, kv_chunk_cells);
++    });
++    size_t bytes = 0;
++    auto run = std::find(freed.begin(), freed.end(), true);
++    while (run != freed.end()) {
++        const auto run_end = std::find(run, freed.end(), false);
++        const uint32_t chunk0 = (uint32_t) (run - freed.begin());
++        const uint32_t chunk1 = (uint32_t) (run_end - freed.begin());
++        std::fill(chunk_released.begin() + base + chunk0, chunk_released.begin() + base + chunk1, true);
++        for_each_chunk_range(stream, chunk0, chunk1, [&](ggml_tensor * t, size_t offset, size_t size) {
++            bytes += skippy_kv_advise_pages((char *) t->data + offset, size, skippy_kv_release_advice);
++        });
++        run = std::find(run_end, freed.end(), true);
++    }
++    trace.set_value("bytes", (int64_t) bytes);
++}
++
++void llama_kv_cache::reclaim_chunks(uint32_t stream, const std::vector<uint32_t> & idxs) {
++    if (!release_pages) {
++        return;
++    }
++    const size_t base = (size_t) stream*(get_size()/kv_chunk_cells);
++    std::vector<uint32_t> chunks(idxs.size());
++    std::transform(idxs.begin(), idxs.end(), chunks.begin(), [](uint32_t idx) { return idx/kv_chunk_cells; });
++    std::sort(chunks.begin(), chunks.end());
++    chunks.erase(std::unique(chunks.begin(), chunks.end()), chunks.end());
++    chunks.erase(std::remove_if(chunks.begin(), chunks.end(), [&](uint32_t chunk) {
++        return chunk >= get_size()/kv_chunk_cells || !chunk_released[base + chunk];
++    }), chunks.end());
++    if (chunks.empty()) {
++        return;
++    }
++    // a released chunk comes back as a fresh one: announced to the kernel,
++    // then zeroed from the CPU so its pages exist before the GPU writes them
++    skippy_trace::scope trace("llama.kv_reclaim_cells");
++    size_t bytes = 0;
++    std::for_each(chunks.begin(), chunks.end(), [&](uint32_t chunk) {
++        chunk_released[base + chunk] = false;
++        for_each_chunk_range(stream, chunk, chunk + 1, [&](ggml_tensor * t, size_t offset, size_t size) {
++            skippy_kv_advise_pages((char *) t->data + offset, size, skippy_kv_reuse_advice);
++            ggml_backend_tensor_memset(t, 0, offset, size);
++            bytes += size;
++        });
++    });
++    trace.set_value("bytes", (int64_t) bytes);
+ }
+ 
+ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+@@ -634,6 +773,12 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+         }
+     }
+ 
++    if (seq_id >= 0) {
++        release_free_chunks(seq_to_stream[seq_id]);
++    } else {
++        release_free_chunks();
++    }
++
+     return true;
+ }
+ 
+@@ -756,6 +901,8 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+     if (new_head != cells.size() && new_head < head) {
+         head = new_head;
+     }
++
++    release_free_chunks(seq_to_stream[seq_id]);
+ }
+ 
+ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
+@@ -807,6 +954,8 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
+     // If we freed up a slot, set head to it so searching can start there.
+     // Otherwise we just start the next search from the beginning.
+     head = new_head != cells.size() ? new_head : 0;
++
++    release_free_chunks(seq_to_stream[seq_id]);
+ }
+ 
+ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+@@ -1443,11 +1592,14 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+     assert(ubatch.n_tokens == sinfo.n_stream()*sinfo.size());
+ 
+     // every cell this ubatch writes, and so every cell attention may read, lies below the mark
+-    for (const auto & idxs : sinfo.idxs) {
++    // and holds zeros or data: released chunks are zeroed again
++    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
++        const auto & idxs = sinfo.idxs[s];
+         const auto top = std::max_element(idxs.begin(), idxs.end());
+         if (top != idxs.end()) {
+             clear_cells_through(*top);
+         }
++        reclaim_chunks(sinfo.strm[s], idxs);
+     }
+ 
+     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 5e4dd63cb..24212edb2 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -5,6 +5,7 @@
+ #include "llama-kv-cells.h"
+ #include "llama-memory.h"
+ 
++#include <functional>
+ #include <unordered_map>
+ #include <string>
+ #include <vector>
+@@ -297,6 +298,22 @@ public:
+     // the K, V and K_idx tensors this cache allocated; a layer shared with another cache has none here
+     std::vector<ggml_tensor *> cell_tensors;
+ 
++    // A chunk whose cells are all free again hands its pages back to the
++    // kernel, so the pool's resident memory follows the cells in use rather
++    // than the high-water mark. A released chunk is zeroed again before a
++    // ubatch writes into it, as a chunk above the mark is. Indexed
++    // [stream][chunk]; only host-visible buffers take part.
++    bool release_pages = false;
++    std::vector<bool> chunk_released;
++    // on wherever the pool is zeroed lazily and the platform can take pages back
++    void set_page_release(bool enabled);
++    void release_free_chunks();
++    void release_free_chunks(uint32_t stream);
++    void reclaim_chunks(uint32_t stream, const std::vector<uint32_t> & idxs);
++    // the byte range of chunks [chunk0, chunk1) of `stream` in each cache tensor
++    void for_each_chunk_range(uint32_t stream, uint32_t chunk0, uint32_t chunk1,
++            const std::function<void(ggml_tensor *, size_t, size_t)> & fn) const;
++
+     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+ 
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 0e42a587a..1743c8fae 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -131,6 +131,13 @@ public:
+         return pos[i] == -1;
+     }
+ 
++    // whether no cell in [i, i + n) is used
++    bool is_empty_range(uint32_t i, uint32_t n) const {
++        assert(i + n <= pos.size());
++
++        return std::all_of(pos.begin() + i, pos.begin() + i + n, [](llama_pos p) { return p == -1; });
++    }
++
+     uint32_t get_used() const {
+         return used.size();
+     }
+-- 
+2.43.0
+

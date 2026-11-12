@@ -26,6 +26,8 @@ fn fixture(root: &Path) -> (KvStageIntegration, PrefillKvIdentity) {
             codec: Default::default(),
             shared_prefix_stride_tokens: 1,
             shared_prefix_record_limit: 0,
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         }),
         ..StageConfig::default()
     };

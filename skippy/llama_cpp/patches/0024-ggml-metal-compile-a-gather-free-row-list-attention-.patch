@@ -1,0 +1,162 @@
+From cfea699fd49ce5579cbdb5c226a66279e10f61ba Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 10:55:48 +1100
+Subject: [PATCH 24/32] ggml-metal: compile a gather-free row-list attention
+ variant
+
+When every block of every row list is consecutive or padding, the
+host picks a vec pipeline whose gather code is compiled out
+(FC_flash_attn_ext_vec_rows_dense): one uniform load per block gives
+the base row and the K/V loads are the dense path's. The lists are
+host-visible inputs, so the check is a scan of the block ends.
+
+Every Metal buffer type reports is_host false, so the host asks the
+buffer's own is_shared whether it may read the lists.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/src/ggml-metal/ggml-metal-device.cpp     |  5 +++-
+ ggml/src/ggml-metal/ggml-metal-device.h       |  1 +
+ ggml/src/ggml-metal/ggml-metal-ops.cpp        | 23 +++++++++++++++++--
+ .../ggml-metal/kernels/fa_vec_common.metal    | 16 +++++++++----
+ 4 files changed, 38 insertions(+), 7 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 0d18a5f01..17be454a5 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -2037,6 +2037,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+         bool    has_kvpad,
+         bool    has_sparse,
+         bool    has_rows,
++        bool    rows_dense,
+         int32_t nqpsg,
+         int32_t ne,
+         int32_t nsg,
+@@ -2066,7 +2067,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+             dv,
+             qne_suffix);
+ 
+-    snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_sparse=%d_rows=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
++    snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_sparse=%d_rows=%d_rowsd=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
+             base,
+             has_mask,
+             has_sinks,
+@@ -2075,6 +2076,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+             has_kvpad,
+             has_sparse,
+             has_rows,
++            rows_dense,
+             ns10,
+             ns20,
+             nsg, nwg);
+@@ -2090,6 +2092,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+         ggml_metal_cv_set_bool(cv, has_kvpad,  FC_FLASH_ATTN_EXT_VEC + 4);
+         ggml_metal_cv_set_bool(cv, has_sparse, FC_FLASH_ATTN_EXT_VEC + 5);
+         ggml_metal_cv_set_bool(cv, has_rows,   FC_FLASH_ATTN_EXT_VEC + 6);
++        ggml_metal_cv_set_bool(cv, rows_dense, FC_FLASH_ATTN_EXT_VEC + 7);
+ 
+         ggml_metal_cv_set_int32(cv, ns10, FC_FLASH_ATTN_EXT_VEC + 20);
+         ggml_metal_cv_set_int32(cv, ns20, FC_FLASH_ATTN_EXT_VEC + 21);
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 56b795790..7b66c9560 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -238,6 +238,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
+         bool    has_kvpad,
+         bool    has_sparse,
+         bool    has_rows,
++        bool    rows_dense,
+         int32_t nqpsg,
+         int32_t ne,
+         int32_t nsg,
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 3d317a0a6..4173d7b1b 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -3605,6 +3605,25 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+     GGML_ASSERT(!has_rows || ne11_attn % OP_FLASH_ATTN_EXT_NCPSG == 0);
+     GGML_ASSERT(!has_rows || ne11_attn % OP_FLASH_ATTN_EXT_VEC_NCPSG == 0);
+ 
++    // the vec kernel compiles without gather code when every block of every list is either
++    // consecutive or padding; the lists are strictly ascending per slice and readable from the
++    // host whenever their Metal buffer is shared or mapped (every buffer type but private)
++    const bool rows_dense = has_rows &&
++        ggml_metal_buffer_is_shared((ggml_metal_buffer_t) (kv_rows->view_src ? kv_rows->view_src->buffer : kv_rows->buffer)->context) &&
++        [&] {
++            constexpr int64_t C = OP_FLASH_ATTN_EXT_VEC_NCPSG;
++            const int32_t * lists = (const int32_t *) kv_rows->data;
++            const int64_t n_blocks = (ne11_attn/C)*kv_rows->ne[1];
++            for (int64_t b = 0; b < n_blocks; ++b) {
++                const int32_t first = lists[b*C];
++                const int32_t last  = lists[b*C + C - 1];
++                if (first >= 0 && last != first + C - 1) {
++                    return false;
++                }
++            }
++            return true;
++        }();
++
+     float scale;
+     float max_bias;
+     float logit_softcap;
+@@ -4202,7 +4221,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+ 
+         auto fa_vec_smem = [&](int64_t nsg, int32_t nqptg) -> size_t {
+             const size_t smem_half = (size_t) (dk_pad + 4*ncpsg + 2*dv_pad)*nqptg*nsg;
+-            return GGML_PAD(smem_half*sizeof(ggml_fp16_t) + ((use_sparse || has_rows) ? (size_t) nsg*ncpsg*sizeof(int) : 0), 16);
++            return GGML_PAD(smem_half*sizeof(ggml_fp16_t) + ((use_sparse || (has_rows && !rows_dense)) ? (size_t) nsg*ncpsg*sizeof(int) : 0), 16);
+         };
+ 
+         int64_t nsg = 1;
+@@ -4283,7 +4302,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+             /*.n_kv_max_padded =*/ n_kv_max_padded,
+         };
+ 
+-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, use_sparse, has_rows, nqptg, cfg.NE, nsg, nwg, use_kv_f16, ns10, ns20);
++        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, use_sparse, has_rows, rows_dense, nqptg, cfg.NE, nsg, nwg, use_kv_f16, ns10, ns20);
+ 
+         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+ 
+diff --git a/ggml/src/ggml-metal/kernels/fa_vec_common.metal b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+index 965216ae7..2dd6e4bef 100644
+--- a/ggml/src/ggml-metal/kernels/fa_vec_common.metal
++++ b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+@@ -14,6 +14,8 @@ constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EX
+ constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
+ constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
+ constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
++// every block of every row list is consecutive or padding: no gather code is compiled in
++constant bool    FC_flash_attn_ext_vec_rows_dense [[function_constant(FC_FLASH_ATTN_EXT_VEC + 7)]];
+ template<
+     typename q4_t,  // query types in shared memory
+     typename k4_t,  // key types in shared memory
+@@ -236,13 +238,19 @@ kernel void kernel_flash_attn_ext_vec(
+             // two uniform loads decide it, without staging the indices
+             int rows_base = -1;
+             if (FC_flash_attn_ext_vec_has_rows) {
+-                const int first = rows_list[ic];
+-                const int last  = rows_list[ic + C - 1];
++                if (FC_flash_attn_ext_vec_rows_dense) {
++                    // a padding block reads masked rows from the list position, like the dense path
++                    rows_base = rows_list[ic];
++                } else {
++                    const int first = rows_list[ic];
++                    const int last  = rows_list[ic + C - 1];
+ 
+-                rows_base = (first >= 0 && last == first + C - 1) ? first : -1;
++                    rows_base = (first >= 0 && last == first + C - 1) ? first : -1;
++                }
+             }
+ 
+-            const bool gather = FC_flash_attn_ext_vec_has_sparse || (FC_flash_attn_ext_vec_has_rows && rows_base < 0);
++            const bool gather = FC_flash_attn_ext_vec_has_sparse ||
++                (FC_flash_attn_ext_vec_has_rows && !FC_flash_attn_ext_vec_rows_dense && rows_base < 0);
+             const int  icr    = rows_base >= 0 ? rows_base : ic;
+ 
+             // load the KV row indices of a gathered block into shared memory
+-- 
+2.43.0
+

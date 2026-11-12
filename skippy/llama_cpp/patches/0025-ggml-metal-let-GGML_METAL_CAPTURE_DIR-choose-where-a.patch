@@ -1,0 +1,35 @@
+From 7097eea146967c70bcd88ba92487acd0294af3bb Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 11:03:23 +1100
+Subject: [PATCH 25/32] ggml-metal: let GGML_METAL_CAPTURE_DIR choose where a
+ capture is written
+
+A capture embeds every buffer the graph references, weights included,
+so a 30B model's trace is tens of GB; /tmp is not always the disk with
+that much room.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/src/ggml-metal/ggml-metal-context.m | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-context.m b/ggml/src/ggml-metal/ggml-metal-context.m
+index f89c8ebe6..063d458a8 100644
+--- a/ggml/src/ggml-metal/ggml-metal-context.m
++++ b/ggml/src/ggml-metal/ggml-metal-context.m
+@@ -642,7 +642,10 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+             }
+ 
+             if (!ctx->capture_started) {
+-                NSString * path = [NSString stringWithFormat:@"/tmp/perf-metal-%d.gputrace", getpid()];
++                // GGML_METAL_CAPTURE_DIR picks the directory: a capture embeds every buffer the
++                // graph touches, weights included, so it may need more space than /tmp offers
++                const char * dir = getenv("GGML_METAL_CAPTURE_DIR");
++                NSString * path = [NSString stringWithFormat:@"%s/perf-metal-%d.gputrace", dir && *dir ? dir : "/tmp", getpid()];
+ 
+                 GGML_LOG_WARN("%s: capturing graph in %s\n", __func__, [path UTF8String]);
+ 
+-- 
+2.43.0
+

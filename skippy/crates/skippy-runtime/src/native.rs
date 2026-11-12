@@ -186,6 +186,13 @@ impl StageModel {
         !self.inner.raw.is_null()
     }
 
+    /// Cells in the native KV pool, the capacity admission shares among the
+    /// lanes. The dummy model has no pool.
+    pub fn kv_pool_cells(&self) -> Option<u32> {
+        self.has_native_model()
+            .then(|| unsafe { skippy_ffi::skippy_model_kv_pool_cells(self.inner.raw) })
+    }
+
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
         let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
         let present = unsafe {

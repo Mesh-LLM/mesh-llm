@@ -214,6 +214,10 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--kv-cache-offload` | `kv_cache_offload` | Offload live KV memory to the backend |
 | `--swa-full` | `swa_full` | Use a full cache window for sliding-window attention |
 | `--cache-idle-slots` | `cache_idle_slots` | Maximum retained idle sessions; zero retains none |
+| `--kv-pool-tokens` | `kv_pool_tokens` | Cells in the KV pool the lanes share, at least ctx-size; unset reserves ctx-size for every lane |
+| `--kv-lazy-clear` | `kv_lazy_clear` | Zero KV cells as they are first used instead of all at load |
+| `--kv-release-pages` | `kv_release_pages` | Return the memory of freed KV cells to the system |
+| `--kv-row-attention` | `kv_row_attention` | Read the shared KV pool through per-request row lists where the backend supports them |
 | `--ctx-size` | `ctx_size` | See `skippy serve --help` for values and defaults. |
 
 ### [cache]
@@ -228,6 +232,8 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--prefix-cache-min-tokens` | `prefix_cache_min_tokens` | Minimum prefix length to record or reuse |
 | `--prefix-cache-stride-tokens` | `prefix_cache_stride_tokens` | Shared-prefix checkpoint spacing in tokens |
 | `--prefix-cache-record-limit` | `prefix_cache_record_limit` | Maximum shared-prefix checkpoints per recording |
+| `--prefix-cache-retention-tokens` | `prefix_cache_retention_tokens` | KV cells finished requests keep resident for reuse: a token count or unbounded |
+| `--prefill-admission` | `prefill_admission` | How a prompt's uncached suffix is prefilled: cooperative or serialized |
 | `--prefix-cache-exact-budget` | `prefix_cache_exact_budget` | Exact-state retention ceiling: auto, unbounded, or IEC size; one snapshot may exceed it |
 | `--kv-cache-disk` | `kv_cache_disk` | See `skippy serve --help` for values and defaults. |
 | `--kv-cache-disk-dir` | `kv_cache_disk_dir` | See `skippy serve --help` for values and defaults. |
@@ -239,6 +245,7 @@ with their runtime purpose; existing controls follow in the same sections.
 |---|---|---|
 | `--continuous-batching` | `continuous_batching` | Allow the iteration scheduler to serve concurrent lanes |
 | `--pipeline-decode-groups` | `pipeline_decode_groups` | Number of decode dispatch groups |
+| `--prefill-coalesce-max-ms` | `prefill_coalesce_max_ms` | Longest a prompt waits for others to join its prefill wave, in milliseconds; zero never waits |
 | `--generation-signal-window` | `generation_signal_window` | Generation signal observation window in tokens |
 | `--generation-concurrency` | `generation_concurrency` | See `skippy serve --help` for values and defaults. |
 | `--adaptive-generation-concurrency` | `adaptive_generation_concurrency` | See `skippy serve --help` for values and defaults. |

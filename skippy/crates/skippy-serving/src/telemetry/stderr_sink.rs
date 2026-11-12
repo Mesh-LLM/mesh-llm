@@ -5,12 +5,20 @@ use std::{
     collections::BTreeMap,
     env,
     io::{BufWriter, Write},
-    sync::{OnceLock, mpsc as std_mpsc},
+    sync::{Arc, OnceLock, atomic::Ordering, mpsc as std_mpsc},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
+use opentelemetry_proto::tonic::metrics::v1::Metric;
 use serde::Serialize;
 use serde_json::Value;
+
+use super::{
+    TelemetryCounters,
+    sink::{OpenSpan, SpanRecord, SpanStart, TraceSink},
+    trace_context::{Frame, SpanEvent},
+};
 
 static STDERR_SINK: OnceLock<bool> = OnceLock::new();
 /// Whether the stderr debug sink is enabled via `SKIPPY_TELEMETRY_STDERR`.
@@ -84,6 +92,78 @@ impl Drop for StderrTelemetrySink {
             let _ = worker.join();
         }
     }
+}
+
+/// The stderr writer as a trace sink: one line per span and per event.
+pub(super) struct StderrTraceSink {
+    sink: StderrTelemetrySink,
+    stats: Arc<TelemetryCounters>,
+}
+
+impl StderrTraceSink {
+    pub(super) fn enabled(capacity: usize, stats: Arc<TelemetryCounters>) -> Option<Self> {
+        stderr_sink_enabled()
+            .then(|| StderrTelemetrySink::new(capacity))
+            .flatten()
+            .map(|sink| Self { sink, stats })
+    }
+
+    fn line(
+        &self,
+        name: &str,
+        attributes: &BTreeMap<String, Value>,
+        start_time_unix_nanos: u64,
+        end_time_unix_nanos: u64,
+    ) {
+        if !self.sink.try_send(StderrTelemetryEvent {
+            event: name.to_string(),
+            attributes: attributes.clone(),
+            start_time_unix_nanos,
+            end_time_unix_nanos,
+        }) {
+            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl TraceSink for StderrTraceSink {
+    fn create_span_with(&self, _: &SpanStart) -> OpenSpan {
+        OpenSpan::NONE
+    }
+
+    fn end_span(&self, _: OpenSpan, span: &SpanRecord) {
+        self.record_span(span);
+    }
+
+    fn discard_span(&self, _: OpenSpan) {}
+
+    fn record_span(&self, span: &SpanRecord) {
+        self.line(
+            &span.name,
+            &span.attributes,
+            span.start_time_unix_nanos,
+            span.end_time_unix_nanos,
+        );
+    }
+
+    fn record_event(&self, event: &SpanEvent, _: &Frame) {
+        self.line(
+            &event.name,
+            &event.attributes,
+            event.time_unix_nanos,
+            event.time_unix_nanos + 1,
+        );
+    }
+
+    /// Samples are not lines.
+    fn record_metrics(&self, _: &[Metric]) {}
+
+    fn folds_events_into_spans(&self) -> bool {
+        false
+    }
+
+    /// Lines are best effort; shutdown never waited on them.
+    fn flush(&self, _: Duration) {}
 }
 
 fn stderr_telemetry_loop(rx: std_mpsc::Receiver<StderrTelemetryEvent>) {

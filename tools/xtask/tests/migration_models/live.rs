@@ -6,22 +6,34 @@ use crate::support::{Stage, TestResult, assert_streams, fixture_dir, repository_
 use serde_json::Value;
 use std::fs;
 
-const OUTPUTS: [&str; 14] = [
-    "ci/llama-canary/family-certified.json",
-    "ci/model-artifacts/manifests/product-smoke.json",
-    "ci/model-artifacts/manifests/scripted-binary-smoke.json",
-    "ci/model-artifacts/manifests/sdk-smoke.json",
-    "ci/model-artifacts/manifests/hf-download-smoke.json",
-    "ci/model-artifacts/manifests/openai-smoke.json",
-    "ci/model-artifacts/manifests/skippy-correctness.json",
-    "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
-    "ci/model-artifacts/manifests/skippy-ci-smoke.json",
-    "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
-    "ci/model-artifacts/manifests/skippy-parity.json",
-    "ci/model-artifacts/manifests/competitive-benchmark.json",
-    "ci/model-artifacts/manifests/radix-cache.json",
-    "ci/model-artifacts/manifests/skippy-cpp-api.json",
+const FAMILY_ROSTER: &str = "ci/llama-canary/family-certified.json";
+const MANIFESTS: &str = "ci/model-artifacts/manifests";
+/// Suite manifests with a frozen fixture under `fixtures/models/manifests`.
+const FROZEN: [&str; 11] = [
+    "product-smoke",
+    "scripted-binary-smoke",
+    "sdk-smoke",
+    "hf-download-smoke",
+    "openai-smoke",
+    "skippy-correctness",
+    "safetensors-runtime-smoke",
+    "skippy-ci-smoke",
+    "skippy-parity",
+    "competitive-benchmark",
+    "radix-cache",
 ];
+
+/// The family roster and every checked-in suite manifest, so a suite the
+/// registry declares is compared without listing it here.
+fn checked_in_outputs() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut manifests = fs::read_dir(repository_root().join(MANIFESTS))?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>, std::io::Error>>()?;
+    manifests.sort();
+    Ok(std::iter::once(FAMILY_ROSTER.to_owned())
+        .chain(manifests.iter().map(|name| format!("{MANIFESTS}/{name}")))
+        .collect())
+}
 
 #[test]
 fn migration_models_checked_in_projection_is_current() -> TestResult {
@@ -34,11 +46,10 @@ fn migration_models_checked_in_projection_is_current() -> TestResult {
 
 #[test]
 fn migration_models_regenerated_real_registry_is_byte_identical() -> TestResult {
-    // Given: a copy of the real registry and nothing else.
+    // Given: a copy of the real registry, its derived lists and nothing else.
     let root = repository_root();
     let stage = Stage::new("live")?;
-    let registry = "ci/model-artifacts/registry.json";
-    stage.write(registry, &fs::read(root.join(registry))?)?;
+    stage.real_registry(&root)?;
     // When: the generator writes a fresh projection.
     assert_streams(
         "regenerate",
@@ -48,10 +59,10 @@ fn migration_models_regenerated_real_registry_is_byte_identical() -> TestResult 
         "",
     );
     // Then: every output equals the checked-in bytes.
-    for path in OUTPUTS {
+    for path in checked_in_outputs()? {
         assert_eq!(
-            stage.read(path)?,
-            fs::read_to_string(root.join(path))?,
+            stage.read(&path)?,
+            fs::read_to_string(root.join(&path))?,
             "{path}"
         );
     }
@@ -62,16 +73,14 @@ fn migration_models_regenerated_real_registry_is_byte_identical() -> TestResult 
 fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
     // Given/When: the frozen resolver inputs and the checked-in manifests.
     let root = repository_root();
-    for path in &OUTPUTS[1..] {
-        let name = path.rsplit('/').next().ok_or("manifest name")?;
+    for suite in FROZEN {
+        let name = format!("{suite}.json");
         // Then: frozen artifact payloads remain unchanged apart from the
         // registry digest and Qwen's added System One membership.
-        if matches!(name, "skippy-system-one-smoke.json" | "skippy-cpp-api.json") {
-            continue;
-        }
         let mut frozen: Value =
-            serde_json::from_slice(&fs::read(fixture_dir().join("manifests").join(name))?)?;
-        let mut current: Value = serde_json::from_slice(&fs::read(root.join(path))?)?;
+            serde_json::from_slice(&fs::read(fixture_dir().join("manifests").join(&name))?)?;
+        let mut current: Value =
+            serde_json::from_slice(&fs::read(root.join(MANIFESTS).join(&name))?)?;
         if name == "product-smoke.json" {
             current["artifacts"]
                 .as_array_mut()

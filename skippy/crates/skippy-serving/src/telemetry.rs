@@ -1,52 +1,63 @@
 #[cfg(test)]
 use std::sync::mpsc as std_mpsc;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use opentelemetry_proto::tonic::collector::trace::v1::{
-    ExportTraceServiceRequest, trace_service_client::TraceServiceClient,
-};
+use opentelemetry_proto::tonic::metrics::v1::Metric;
 use serde::Serialize;
 use serde_json::{Value, json};
 use skippy_metrics::{attr, metric};
 use skippy_protocol::StageConfig;
-use tokio::{
-    sync::mpsc,
-    time::{sleep, timeout},
-};
 
 pub(crate) mod active_span;
 mod gpu_commands;
 pub(crate) mod log_events;
 mod native_calls;
 mod native_spans;
+mod otlp_collector;
 mod otlp_encoding;
 mod otlp_file;
 mod resource_attrs;
 pub(crate) mod resource_metrics;
 mod resource_usage;
+pub(crate) mod sink;
 mod span_components;
 mod stderr_sink;
 pub(crate) mod trace_context;
+#[cfg(feature = "tracy")]
+mod tracy_sink;
 
-use otlp_encoding::{event_to_span, resource_spans_by_component};
-use stderr_sink::{StderrTelemetryEvent, StderrTelemetrySink, stderr_sink_enabled};
+#[cfg(test)]
+pub(crate) use sink::CapturedEvent;
+use sink::{OpenSpan, SpanRecord, SpanStart, TraceSink};
 use trace_context::{Frame, SpanContext, SpanEvent};
 
 /// How long shutdown waits for queued spans to reach their sinks.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bound on delivering a span that ends after the process span.
 const LATE_SPAN_FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
+/// Spans per exported request, for the collector and the file alike.
+const EXPORT_BATCH_MAX: usize = 128;
 
-/// A local debug sink (stderr or OTLP file) acts as a floor on the configured
-/// level.
+/// The Tracy sink, when this build carries it and the environment asks.
+#[cfg(feature = "tracy")]
+fn tracy_sink() -> Option<Box<dyn TraceSink>> {
+    tracy_sink::TracySink::enabled().map(|sink| Box::new(sink) as Box<dyn TraceSink>)
+}
+
+#[cfg(not(feature = "tracy"))]
+fn tracy_sink() -> Option<Box<dyn TraceSink>> {
+    None
+}
+
+/// A local debug sink (stderr, OTLP file or Tracy) acts as a floor on the
+/// configured level.
 ///
 /// It never lowers an explicitly configured level, so a collector-backed
 /// `Summary` deployment is unaffected by the variable being set.
@@ -57,37 +68,16 @@ fn effective_level(configured: TelemetryLevel, local_sink: bool) -> TelemetryLev
         configured
     }
 }
-const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
-const EXPORT_BATCH_MAX: usize = 128;
-const RETRY_BUFFER_CAPACITY: usize = 8192;
-const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
+/// What happened in this stage, told to every sink as it happens. Spans
+/// begin and end here; what each sink makes of them is its own business
+/// (see [`sink::TraceSink`]).
 #[derive(Clone)]
 pub struct Telemetry {
-    tx: Option<mpsc::Sender<TelemetryEvent>>,
-    stderr: Option<Arc<StderrTelemetrySink>>,
-    otlp_file: Option<&'static otlp_file::OtlpFileSink>,
+    sinks: Arc<[Box<dyn TraceSink>]>,
     stats: Arc<TelemetryCounters>,
     config: Arc<StageConfig>,
     level: TelemetryLevel,
-    /// Test-only in-process capture channel; `None` in production. Sibling
-    /// tests receive events here instead of the private stderr sink, so
-    /// `StderrTelemetryEvent` and its fields stay module-private.
-    #[cfg(test)]
-    capture: Option<std_mpsc::SyncSender<CapturedEvent>>,
-}
-
-/// Test-only emission shape handed to sibling-module tests. Mirrors
-/// `StderrTelemetryEvent` without exposing the production struct or its
-/// fields beyond this module.
-#[cfg(test)]
-pub(crate) struct CapturedEvent {
-    pub event: String,
-    pub attributes: BTreeMap<String, Value>,
-    pub start_time_unix_nanos: u64,
-    pub end_time_unix_nanos: u64,
-    /// The exported span's identity and parent; `None` for a point event.
-    pub span: Option<(SpanContext, Option<[u8; 8]>)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,11 +88,11 @@ pub enum TelemetryLevel {
 }
 
 #[derive(Default)]
-struct TelemetryCounters {
-    queued: AtomicU64,
-    sent: AtomicU64,
-    dropped: AtomicU64,
-    export_errors: AtomicU64,
+pub(crate) struct TelemetryCounters {
+    pub(crate) queued: AtomicU64,
+    pub(crate) sent: AtomicU64,
+    pub(crate) dropped: AtomicU64,
+    pub(crate) export_errors: AtomicU64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -113,39 +103,8 @@ pub struct TelemetryStats {
     pub export_errors: u64,
 }
 
-/// One finished span, placed in the process trace.
-#[derive(Clone)]
-struct TelemetryEvent {
-    context: SpanContext,
-    parent: Option<[u8; 8]>,
-    name: String,
-    attributes: BTreeMap<String, Value>,
-    start_time_unix_nanos: u64,
-    end_time_unix_nanos: u64,
-    links: Vec<SpanContext>,
-    events: Vec<SpanEvent>,
-}
-
-impl TelemetryEvent {
-    fn span(
-        frame: &Frame,
-        name: &str,
-        attributes: BTreeMap<String, Value>,
-        start_time_unix_nanos: u64,
-        end_time_unix_nanos: u64,
-    ) -> Self {
-        Self {
-            context: frame.context(),
-            parent: frame.parent_span_id(),
-            name: name.to_string(),
-            attributes,
-            start_time_unix_nanos,
-            end_time_unix_nanos: end_time_unix_nanos.max(start_time_unix_nanos.saturating_add(1)),
-            links: Vec::new(),
-            events: Vec::new(),
-        }
-    }
-}
+/// What every sink keeps for one live span, in sink order.
+pub(crate) struct OpenSpans(Vec<OpenSpan>);
 
 impl Telemetry {
     pub fn new(
@@ -161,48 +120,138 @@ impl Telemetry {
         // single-process case it exists for. Honour it as a level floor, and
         // the existing level checks then work unchanged. The OTLP file sink
         // is the same kind of local opt-in.
-        let otlp_file = otlp_file::configured();
-        let level = effective_level(level, stderr_sink_enabled() || otlp_file.is_some());
         let stats = Arc::new(TelemetryCounters::default());
         let config = Arc::new(config);
+        let file = otlp_file::OtlpFileTraceSink::configured(config.clone(), stats.clone());
+        let tracy = tracy_sink();
+        let level = effective_level(
+            level,
+            stderr_sink::stderr_sink_enabled() || file.is_some() || tracy.is_some(),
+        );
         let metrics_endpoint = endpoint.clone();
-        let tx = (level != TelemetryLevel::Off)
+        let collector = (level != TelemetryLevel::Off)
             .then_some(endpoint)
             .flatten()
             .map(|endpoint| {
-                let (tx, rx) = mpsc::channel(capacity);
-                tokio::spawn(telemetry_export_loop(
+                otlp_collector::OtlpCollectorSink::start(
                     endpoint,
-                    rx,
+                    capacity,
                     stats.clone(),
                     config.clone(),
-                ));
-                tx
+                )
             });
-
-        let telemetry = Self {
-            tx,
-            stderr: stderr_sink_enabled()
-                .then(|| StderrTelemetrySink::new(capacity))
-                .flatten()
-                .map(Arc::new),
-            otlp_file,
-            stats,
-            config,
-            level,
-            #[cfg(test)]
-            capture: None,
-        };
+        let stderr = stderr_sink::StderrTraceSink::enabled(capacity, stats.clone());
+        // Samples are debug telemetry: they go to the metrics file and the
+        // collector's metrics service, and to any sink that plots them.
+        let metrics = (level == TelemetryLevel::Debug)
+            .then(|| {
+                resource_metrics::OtlpMetricsSink::configured(
+                    config.clone(),
+                    std::env::var_os(resource_metrics::METRICS_FILE_ENV)
+                        .filter(|path| !path.is_empty()),
+                    metrics_endpoint.as_deref(),
+                )
+            })
+            .flatten();
+        let sinks: Vec<Box<dyn TraceSink>> = [
+            collector.map(|sink| Box::new(sink) as Box<dyn TraceSink>),
+            stderr.map(|sink| Box::new(sink) as Box<dyn TraceSink>),
+            file.map(|sink| Box::new(sink) as Box<dyn TraceSink>),
+            metrics.map(|sink| Box::new(sink) as Box<dyn TraceSink>),
+            tracy,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let telemetry = Self::with_sinks(sinks, stats, config, level);
         log_events::start(&telemetry, metrics_endpoint.as_deref());
         if telemetry.is_debug_enabled() && telemetry.has_sink() {
             native_calls::install(&telemetry);
-            resource_metrics::start(&telemetry, metrics_endpoint.as_deref());
+            resource_metrics::start(&telemetry);
         }
         telemetry
     }
 
+    fn with_sinks(
+        sinks: Vec<Box<dyn TraceSink>>,
+        stats: Arc<TelemetryCounters>,
+        config: Arc<StageConfig>,
+        level: TelemetryLevel,
+    ) -> Self {
+        Self {
+            sinks: sinks.into(),
+            stats,
+            config,
+            level,
+        }
+    }
+
     fn has_sink(&self) -> bool {
-        self.tx.is_some() || self.stderr.is_some() || self.otlp_file.is_some()
+        !self.sinks.is_empty()
+    }
+
+    /// Whether some sink wants events inside their span's record.
+    fn has_trace_sink(&self) -> bool {
+        self.sinks.iter().any(|sink| sink.folds_events_into_spans())
+    }
+
+    /// Whether process samples are worth taking: debug telemetry with a sink.
+    pub(crate) fn records_metrics(&self) -> bool {
+        self.level == TelemetryLevel::Debug && self.has_sink()
+    }
+
+    /// One process sample, to every sink.
+    pub(crate) fn record_metrics(&self, metrics: &[Metric]) {
+        self.sinks
+            .iter()
+            .for_each(|sink| sink.record_metrics(metrics));
+    }
+
+    /// A live span begins now on this thread; `end_span` takes what comes back.
+    pub(crate) fn begin_span(&self, span: &SpanStart) -> OpenSpans {
+        OpenSpans(
+            self.sinks
+                .iter()
+                .map(|sink| sink.create_span_with(span))
+                .collect(),
+        )
+    }
+
+    /// The live span `begin_span` saw ends: export it with its frame's events.
+    pub(crate) fn end_span(
+        &self,
+        open: OpenSpans,
+        frame: &Frame,
+        name: &str,
+        mut attributes: BTreeMap<String, Value>,
+        start_time_unix_nanos: u64,
+        end_time_unix_nanos: u64,
+        links: Vec<SpanContext>,
+    ) {
+        let events = frame.take_events();
+        self.add_common_attributes(&mut attributes);
+        let mut record = SpanRecord::of_frame(
+            frame,
+            name,
+            attributes,
+            start_time_unix_nanos,
+            end_time_unix_nanos,
+        );
+        record.links = links;
+        record.events = events;
+        self.sinks
+            .iter()
+            .zip(open.0)
+            .for_each(|(sink, open)| sink.end_span(open, &record));
+        self.after_delivery();
+    }
+
+    /// The live span `begin_span` saw is not kept.
+    pub(crate) fn discard_span(&self, open: OpenSpans) {
+        self.sinks
+            .iter()
+            .zip(open.0)
+            .for_each(|(sink, open)| sink.discard_span(open));
     }
 
     /// A point event. Trace sinks record it as an event on the active span;
@@ -212,32 +261,40 @@ impl Telemetry {
             return;
         }
         self.add_common_attributes(&mut attributes);
-        let now = now_unix_nanos() as u64;
-        #[cfg(test)]
-        if self.capture(name, &attributes, now, now + 1, None) {
-            return;
-        }
-        self.send_stderr(name, &attributes, now, now + 1);
         let frame = trace_context::current_frame_or_root();
         log_events::record_point_event(&frame, name, &attributes);
+        self.record_event_on(
+            &frame,
+            SpanEvent {
+                name: name.to_string(),
+                time_unix_nanos: now_unix_nanos() as u64,
+                attributes,
+            },
+        );
+    }
+
+    /// Tell every sink about `event` as it happens, then fold it into
+    /// `frame`'s span for the sinks that read events there. When that span
+    /// already ended or is full, they get it as an instant span beneath it.
+    pub(crate) fn record_event_on(&self, frame: &Frame, event: SpanEvent) {
+        self.sinks
+            .iter()
+            .for_each(|sink| sink.record_event(&event, frame));
         if !self.has_trace_sink() {
             return;
         }
-        let event = SpanEvent {
-            name: name.to_string(),
-            time_unix_nanos: now,
-            attributes,
-        };
         if let Err(event) = frame.record_event(event) {
-            // The active span already ended or is full: keep the event as an
-            // instant span beneath it instead of losing it.
-            self.export(TelemetryEvent::span(
+            let record = SpanRecord::of_frame(
                 &Frame::child(),
                 &event.name,
                 event.attributes,
-                now,
-                now + 1,
-            ));
+                event.time_unix_nanos,
+                event.time_unix_nanos + 1,
+            );
+            self.sinks
+                .iter()
+                .filter(|sink| sink.folds_events_into_spans())
+                .for_each(|sink| sink.record_span(&record));
         }
     }
 
@@ -253,7 +310,7 @@ impl Telemetry {
             return;
         }
         self.add_common_attributes(&mut attributes);
-        self.deliver(TelemetryEvent::span(
+        self.deliver(SpanRecord::of_frame(
             &Frame::child(),
             name,
             attributes,
@@ -277,7 +334,7 @@ impl Telemetry {
             return;
         }
         self.add_common_attributes(&mut attributes);
-        let mut record = TelemetryEvent::span(
+        let mut record = SpanRecord::of_frame(
             frame,
             name,
             attributes,
@@ -337,22 +394,9 @@ impl Telemetry {
         self.flush(FLUSH_TIMEOUT);
     }
 
-    /// Wait, bounded by `timeout`, for queued spans to reach their sinks.
+    /// Wait, bounded by `timeout` per sink, for queued spans to leave.
     fn flush(&self, timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        if let Some(file) = self.otlp_file {
-            file.flush(timeout);
-        }
-        if self.tx.is_some() {
-            without_starving_runtime(|| {
-                while self.stats.sent.load(Ordering::Relaxed)
-                    < self.stats.queued.load(Ordering::Relaxed)
-                    && Instant::now() < deadline
-                {
-                    thread::sleep(Duration::from_millis(20));
-                }
-            });
-        }
+        self.sinks.iter().for_each(|sink| sink.flush(timeout));
     }
 
     fn add_common_attributes(&self, attributes: &mut BTreeMap<String, Value>) {
@@ -372,97 +416,18 @@ impl Telemetry {
         );
     }
 
-    fn deliver(&self, record: TelemetryEvent) {
-        #[cfg(test)]
-        if self.capture(
-            &record.name,
-            &record.attributes,
-            record.start_time_unix_nanos,
-            record.end_time_unix_nanos,
-            Some((record.context, record.parent)),
-        ) {
-            return;
-        }
-        self.send_stderr(
-            &record.name,
-            &record.attributes,
-            record.start_time_unix_nanos,
-            record.end_time_unix_nanos,
-        );
-        self.export(record);
-        // Components that stop after the process span (the scheduler worker,
-        // say) end their spans during exit; deliver each one immediately
-        // because the process will not wait for the exporters.
+    fn deliver(&self, record: SpanRecord) {
+        self.sinks.iter().for_each(|sink| sink.record_span(&record));
+        self.after_delivery();
+    }
+
+    /// Components that stop after the process span (the scheduler worker,
+    /// say) end their spans during exit; deliver each one immediately
+    /// because the process will not wait for the exporters.
+    fn after_delivery(&self) {
         if trace_context::process().is_finished() {
             self.flush(LATE_SPAN_FLUSH_TIMEOUT);
         }
-    }
-
-    fn has_trace_sink(&self) -> bool {
-        self.tx.is_some() || self.otlp_file.is_some()
-    }
-
-    fn send_stderr(
-        &self,
-        name: &str,
-        attributes: &BTreeMap<String, Value>,
-        start_time_unix_nanos: u64,
-        end_time_unix_nanos: u64,
-    ) {
-        let Some(stderr) = self.stderr.as_ref() else {
-            return;
-        };
-        if !stderr.try_send(StderrTelemetryEvent {
-            event: name.to_string(),
-            attributes: attributes.clone(),
-            start_time_unix_nanos,
-            end_time_unix_nanos,
-        }) {
-            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    fn export(&self, record: TelemetryEvent) {
-        if let Some(file) = self.otlp_file
-            && !file.try_send(&self.config, event_to_span(&record, &self.stats))
-        {
-            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-        let Some(tx) = self.tx.as_ref() else {
-            return;
-        };
-        match tx.try_send(record) {
-            Ok(()) => {
-                self.stats.queued.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(_) => {
-                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    /// Test-only capture takes precedence so sibling tests observe exact
-    /// emissions without a collector or the env-gated stderr sink.
-    #[cfg(test)]
-    fn capture(
-        &self,
-        name: &str,
-        attributes: &BTreeMap<String, Value>,
-        start_time_unix_nanos: u64,
-        end_time_unix_nanos: u64,
-        span: Option<(SpanContext, Option<[u8; 8]>)>,
-    ) -> bool {
-        let Some(capture) = self.capture.as_ref() else {
-            return false;
-        };
-        let _ = capture.try_send(CapturedEvent {
-            event: name.to_string(),
-            attributes: attributes.clone(),
-            start_time_unix_nanos,
-            end_time_unix_nanos,
-            span,
-        });
-        true
     }
 
     pub fn emit_debug(&self, name: &str, attributes: BTreeMap<String, Value>) {
@@ -496,7 +461,7 @@ impl Telemetry {
             return;
         }
         self.add_common_attributes(&mut attributes);
-        self.deliver(TelemetryEvent::span(
+        self.deliver(SpanRecord::of_frame(
             &Frame::under(parent),
             name,
             attributes,
@@ -535,18 +500,14 @@ impl Telemetry {
         config: StageConfig,
         level: TelemetryLevel,
     ) -> (Self, std_mpsc::Receiver<CapturedEvent>) {
-        let (tx, rx) = std_mpsc::sync_channel(256);
+        let (sink, rx) = sink::CaptureSink::channel();
         (
-            Self {
-                tx: None,
-                stderr: None,
-                otlp_file: None,
-                stats: Arc::new(TelemetryCounters::default()),
-                config: Arc::new(config),
+            Self::with_sinks(
+                vec![Box::new(sink)],
+                Arc::new(TelemetryCounters::default()),
+                Arc::new(config),
                 level,
-                #[cfg(test)]
-                capture: Some(tx),
-            },
+            ),
             rx,
         )
     }
@@ -610,20 +571,6 @@ mod capture_tests {
     }
 }
 
-/// Run a blocking `wait` for the gRPC exporter, a task on the caller's
-/// runtime. Blocking a runtime worker in place can starve that task: woken
-/// from this worker, it sits in the worker's LIFO slot, which other workers
-/// never steal. `block_in_place` hands the worker's queue to another thread
-/// first. A current-thread runtime cannot run the exporter while blocked, so
-/// waiting there would only stall.
-fn without_starving_runtime(wait: impl FnOnce()) {
-    match tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()) {
-        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(wait),
-        Ok(_) => {}
-        Err(_) => wait(),
-    }
-}
-
 pub fn lifecycle_attrs(config: &StageConfig) -> BTreeMap<String, Value> {
     BTreeMap::from([
         (attr::RUN_ID.to_string(), json!(config.run_id)),
@@ -647,192 +594,9 @@ pub fn now_unix_nanos() -> i64 {
         .as_nanos() as i64
 }
 
-async fn telemetry_export_loop(
-    endpoint: String,
-    mut rx: mpsc::Receiver<TelemetryEvent>,
-    stats: Arc<TelemetryCounters>,
-    config: Arc<StageConfig>,
-) {
-    let mut client = None;
-    let mut retry_buffer = VecDeque::new();
-
-    loop {
-        let Some(first_event) = next_export_event(&mut rx, &mut retry_buffer).await else {
-            break;
-        };
-        let mut batch = Vec::with_capacity(EXPORT_BATCH_MAX);
-        batch.push(first_event);
-        fill_export_batch(&mut rx, &mut retry_buffer, &mut batch);
-
-        let event_count = batch.len() as u64;
-        if export_batch(&endpoint, &mut client, &config, &stats, &batch).await {
-            stats.sent.fetch_add(event_count, Ordering::Relaxed);
-        } else {
-            stats
-                .export_errors
-                .fetch_add(event_count, Ordering::Relaxed);
-            let dropped = requeue_failed_batch(&mut retry_buffer, batch);
-            if dropped > 0 {
-                stats.dropped.fetch_add(dropped as u64, Ordering::Relaxed);
-            }
-            sleep(RETRY_BACKOFF).await;
-        }
-    }
-}
-
-async fn next_export_event(
-    rx: &mut mpsc::Receiver<TelemetryEvent>,
-    retry_buffer: &mut VecDeque<TelemetryEvent>,
-) -> Option<TelemetryEvent> {
-    match retry_buffer.pop_front() {
-        Some(event) => Some(event),
-        None => rx.recv().await,
-    }
-}
-
-fn fill_export_batch(
-    rx: &mut mpsc::Receiver<TelemetryEvent>,
-    retry_buffer: &mut VecDeque<TelemetryEvent>,
-    batch: &mut Vec<TelemetryEvent>,
-) {
-    while batch.len() < EXPORT_BATCH_MAX {
-        if let Some(event) = retry_buffer.pop_front() {
-            batch.push(event);
-            continue;
-        }
-        match rx.try_recv() {
-            Ok(event) => batch.push(event),
-            Err(_) => break,
-        }
-    }
-}
-
-async fn export_batch(
-    endpoint: &str,
-    client: &mut Option<TraceServiceClient<tonic::transport::Channel>>,
-    config: &StageConfig,
-    stats: &TelemetryCounters,
-    events: &[TelemetryEvent],
-) -> bool {
-    if client.is_none() {
-        match timeout(
-            EXPORT_TIMEOUT,
-            TraceServiceClient::connect(endpoint.to_string()),
-        )
-        .await
-        {
-            Ok(Ok(connected)) => {
-                *client = Some(connected);
-            }
-            Ok(Err(_)) | Err(_) => return false,
-        }
-    }
-
-    let request = ExportTraceServiceRequest {
-        resource_spans: resource_spans_by_component(
-            config,
-            events
-                .iter()
-                .map(|event| event_to_span(event, stats))
-                .collect(),
-        ),
-    };
-
-    let export = client
-        .as_mut()
-        .expect("client is connected above")
-        .export(request);
-    match timeout(EXPORT_TIMEOUT, export).await {
-        Ok(Ok(_)) => true,
-        Ok(Err(_)) | Err(_) => {
-            *client = None;
-            false
-        }
-    }
-}
-
-fn requeue_failed_batch(
-    retry_buffer: &mut VecDeque<TelemetryEvent>,
-    batch: Vec<TelemetryEvent>,
-) -> usize {
-    let overflow = retry_buffer
-        .len()
-        .saturating_add(batch.len())
-        .saturating_sub(RETRY_BUFFER_CAPACITY);
-    for _ in 0..overflow {
-        retry_buffer.pop_back();
-    }
-    for event in batch.into_iter().rev() {
-        retry_buffer.push_front(event);
-    }
-    overflow
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{TelemetryLevel, effective_level, without_starving_runtime};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{Duration, Instant};
-
-    /// Block on a one-worker runtime until a task spawned from that worker
-    /// runs, or `patience` passes; true when the task ran.
-    fn spawned_task_runs_while_waiting(
-        patience: Duration,
-        wait: fn(Box<dyn FnOnce() + '_>),
-    ) -> bool {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        runtime.block_on(async move {
-            tokio::spawn(async move {
-                let ran = Arc::new(AtomicBool::new(false));
-                let task_ran = Arc::clone(&ran);
-                tokio::spawn(async move { task_ran.store(true, Ordering::SeqCst) });
-                let deadline = Instant::now() + patience;
-                wait(Box::new(|| {
-                    while !ran.load(Ordering::SeqCst) && Instant::now() < deadline {
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                }));
-                ran.load(Ordering::SeqCst)
-            })
-            .await
-            .unwrap()
-        })
-    }
-
-    #[test]
-    fn waiting_on_a_runtime_worker_lets_the_workers_tasks_run() {
-        assert!(spawned_task_runs_while_waiting(
-            Duration::from_secs(5),
-            |wait| without_starving_runtime(wait)
-        ));
-    }
-
-    #[test]
-    fn waiting_in_place_on_a_runtime_worker_starves_its_tasks() {
-        // The failure the helper exists for; if this ever passes, tokio has
-        // made the LIFO slot stealable.
-        assert!(!spawned_task_runs_while_waiting(
-            Duration::from_millis(200),
-            |wait| wait()
-        ));
-    }
-
-    #[test]
-    fn a_current_thread_runtime_does_not_stall_waiting() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        let started = Instant::now();
-        runtime.block_on(async {
-            without_starving_runtime(|| std::thread::sleep(Duration::from_secs(5)));
-        });
-        assert!(started.elapsed() < Duration::from_secs(1));
-    }
-
+    use super::{TelemetryLevel, effective_level};
     /// `SKIPPY_TELEMETRY_STDERR` is the only way to see record/lookup
     /// decisions in a single-process embedded run, and the embedded runtime
     /// defaults to `Off`. If the variable does not raise the level, the sink

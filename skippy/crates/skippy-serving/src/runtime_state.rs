@@ -434,7 +434,10 @@ fn runtime_from_loaded_model(
     reject_unsupported_staged_workload(config, &model)?;
     let lane_count = effective_lane_count(config.lane_count, &model)?;
     let context_capacity =
-        ContextCapacity::for_loaded_model(config.ctx_size, lane_count, model.has_native_model())?;
+        ContextCapacity::for_loaded_model(config.ctx_size, model.kv_pool_cells())?;
+    crate::telemetry::resource_metrics::record_kv_pool_cells(u64::from(
+        context_capacity.pool_tokens(),
+    ));
     Ok(Arc::new(Mutex::new(RuntimeState {
         model,
         runtime_lane_admission: lane_admission::RuntimeLaneAdmission::new(lane_count),
@@ -612,6 +615,10 @@ pub(crate) fn runtime_config_from_stage_config(
         kv_offload: config.kv_offload,
         kv_unified: config.kv_unified,
         swa_full: config.swa_full,
+        kv_pool_tokens: config.kv_pool_tokens,
+        kv_lazy_clear: config.kv_lazy_clear,
+        kv_release_pages: config.kv_release_pages,
+        kv_row_attention: config.kv_row_attention,
         projector_path: config.projector_path.clone(),
         projector_use_gpu: config.projector_use_gpu,
         media_marker: config.media_marker.clone(),

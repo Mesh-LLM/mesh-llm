@@ -1,0 +1,433 @@
+From caee87540aeafa8cbb374efd57847e0e425dec01 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 12:17:27 +1100
+Subject: [PATCH 27/32] llama, ggml-metal: start every row-list run on an
+ attention block
+
+A slice's cell list now pads with -1 before a run that does not continue
+the previous cell, so each run starts on a multiple of the kernels' 32-row
+block; the list grows by the padding. The gather-free Metal variant then
+applies to any list the chunked pool produces: a block is one consecutive
+range (a run ending inside it reads on to the block's end under the mask,
+so the host checks the read stays inside the cache) or all padding, which
+the kernel skips. The perf tool gains the run-end and two-run layouts.
+
+The aligned lists are built beside llama.cpp's own: get_seq_cells_aligned
+walks the same per-slice cell sets, including a slice over several
+sequences. A pool so fragmented that an aligned list would be longer than
+the cache keeps the plain list, which the general kernel gathers, so the
+mask never grows past what llama.cpp already allows.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp        |  22 +++-
+ .../ggml-metal/kernels/fa_vec_common.metal    |   6 +-
+ src/llama-kv-cache.cpp                        |  23 +++-
+ src/llama-kv-cache.h                          |   3 +
+ src/llama-kv-cells.h                          |  95 ++++++++++++++++
+ tests/CMakeLists.txt                          |   1 +
+ tests/test-flash-attn-rows-perf.cpp           |  21 +++-
+ tests/test-skippy-kv-rows-aligned.cpp         | 106 ++++++++++++++++++
+ 8 files changed, 267 insertions(+), 10 deletions(-)
+ create mode 100644 tests/test-skippy-kv-rows-aligned.cpp
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 4173d7b1b..a18d41ad8 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -3605,19 +3605,29 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+     GGML_ASSERT(!has_rows || ne11_attn % OP_FLASH_ATTN_EXT_NCPSG == 0);
+     GGML_ASSERT(!has_rows || ne11_attn % OP_FLASH_ATTN_EXT_VEC_NCPSG == 0);
+ 
+-    // the vec kernel compiles without gather code when every block of every list is either
+-    // consecutive or padding; the lists are strictly ascending per slice and readable from the
+-    // host whenever their Metal buffer is shared or mapped (every buffer type but private)
++    // the vec kernel compiles without gather code when every block of every list is one
++    // consecutive range (possibly ending in padding) or all padding. a run ascends, so its ends
++    // decide; the lists are readable from the host whenever their Metal buffer is shared or
++    // mapped (every buffer type but private)
+     const bool rows_dense = has_rows &&
+         ggml_metal_buffer_is_shared((ggml_metal_buffer_t) (kv_rows->view_src ? kv_rows->view_src->buffer : kv_rows->buffer)->context) &&
+         [&] {
+             constexpr int64_t C = OP_FLASH_ATTN_EXT_VEC_NCPSG;
+             const int32_t * lists = (const int32_t *) kv_rows->data;
+             const int64_t n_blocks = (ne11_attn/C)*kv_rows->ne[1];
++            const int64_t n_cache_rows = op->src[1]->ne[1];
+             for (int64_t b = 0; b < n_blocks; ++b) {
+-                const int32_t first = lists[b*C];
+-                const int32_t last  = lists[b*C + C - 1];
+-                if (first >= 0 && last != first + C - 1) {
++                const int32_t * block = lists + b*C;
++                const int32_t first = block[0];
++                if (first < 0 || block[C - 1] == first + C - 1) {
++                    continue; // all padding (the kernel skips it), or one consecutive range
++                }
++                // a run ending inside the block: the kernel reads C rows from `first` and the mask
++                // drops the padded columns, so the read must stay inside the cache
++                const int32_t * tail = std::find(block, block + C, -1);
++                const int64_t live = tail - block;
++                if (tail == block + C || block[live - 1] != first + live - 1 || first + C > n_cache_rows ||
++                        std::any_of(tail, block + C, [](int32_t row) { return row >= 0; })) {
+                     return false;
+                 }
+             }
+diff --git a/ggml/src/ggml-metal/kernels/fa_vec_common.metal b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+index 2dd6e4bef..3876e9334 100644
+--- a/ggml/src/ggml-metal/kernels/fa_vec_common.metal
++++ b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+@@ -239,8 +239,12 @@ kernel void kernel_flash_attn_ext_vec(
+             int rows_base = -1;
+             if (FC_flash_attn_ext_vec_has_rows) {
+                 if (FC_flash_attn_ext_vec_rows_dense) {
+-                    // a padding block reads masked rows from the list position, like the dense path
++                    // a block is one consecutive range from its first entry, or all padding;
++                    // a range ending inside the block reads on to the block's end, masked
+                     rows_base = rows_list[ic];
++                    if (rows_base < 0) {
++                        continue;
++                    }
+                 } else {
+                     const int first = rows_list[ic];
+                     const int last  = rows_list[ic + C - 1];
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index a2d3418e9..1ab98ee59 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -2696,6 +2696,22 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
+ 
+     const auto slices = get_kv_rows_slices(ubatch, n_slices, n_swa, swa_type);
+ 
++    // lists whose runs start on the attention kernels' block are longer by the padding between
++    // the runs; a pool too fragmented for them to fit the cache keeps the plain lists below
++    {
++        int64_t n_max_aligned = 0;
++
++        for (uint32_t s = 0; s < n_slices; ++s) {
++            n_max_aligned = std::max(n_max_aligned, cells.seq_cells_aligned_len(slices[s], kv_rows_block));
++        }
++
++        const int64_t n_rows_aligned = std::max<int64_t>(n_pad_cur, GGML_PAD(n_max_aligned, (int64_t) n_pad_cur));
++
++        if (n_rows_aligned <= (int64_t) get_size()) {
++            return (uint32_t) n_rows_aligned;
++        }
++    }
++
+     for (uint32_t s = 0; s < n_slices; ++s) {
+         // a cell shared by several sequences of the slice is counted once per sequence, an upper bound is enough
+         uint32_t n = 0;
+@@ -3275,7 +3291,12 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const
+         const auto & cells = v_cells[0];
+         int32_t * data = (int32_t *) attn_mask.rows->data;
+ 
+-        cells.get_seq_cells(get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type), data, n_rows);
++        const auto slices = get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type);
++
++        // the runs start on the attention kernels' block whenever get_n_kv_rows made room for that
++        if (!cells.get_seq_cells_aligned(slices, data, n_rows, kv_rows_block)) {
++            cells.get_seq_cells(slices, data, n_rows);
++        }
+         skippy_trace_kv_rows(data, n_rows, n_slices);
+     }
+ 
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index fd3054514..2be616364 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -275,6 +275,9 @@ public:
+     // cells a sequence claims at a time in the unified pool; a multiple of the
+     // row-attention kernels' 32-row block
+     static constexpr uint32_t kv_chunk_cells = 64;
++    // the attention kernels walk a cell list in blocks of this many rows
++    // (OP_FLASH_ATTN_EXT_VEC_NCPSG); the runs of a list start on a block boundary
++    static constexpr uint32_t kv_rows_block = 32;
+ 
+     std::vector<uint32_t> find_chunked_cells(
+             const llama_ubatch & ubatch, const llama_kv_cells & cells, uint32_t head_cur) const;
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 9190ad55f..0e42a587a 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -482,6 +482,101 @@ public:
+         }
+     }
+ 
++    // the cells of a slice in ascending order: those that contain any of its sequences at a
++    // position >= slice.p_min
++    template <typename F>
++    void for_slice_cells(const llama_kv_rows_slice & slice, F && visit) const {
++        const uint32_t n_words = (used_max_p1() + 63)/64;
++
++        for (uint32_t w = 0; w < n_words; ++w) {
++            uint64_t word = 0;
++            for (const llama_seq_id seq_id : slice.seq_ids) {
++                const auto & bits = seq_bits[seq_id];
++                if (w < bits.size()) {
++                    word |= bits[w];
++                }
++            }
++
++            for (uint64_t b = word; b != 0; b &= b - 1) {
++                const int32_t i = 64*w + ctz64(b);
++                if (pos[i] >= slice.p_min) {
++                    visit(i);
++                }
++            }
++        }
++    }
++
++    // length of a slice's cell list once every run of consecutive cells after the first starts on
++    // a multiple of `block` list positions (see get_seq_cells_aligned)
++    int64_t seq_cells_aligned_len(const llama_kv_rows_slice & slice, uint32_t block) const {
++        int64_t n        = 0;
++        int32_t previous = -2;
++
++        for_slice_cells(slice, [&](int32_t i) {
++            if (i != previous + 1 && n%block != 0) {
++                n += block - n%block;
++            }
++            n++;
++            previous = i;
++        });
++
++        return n;
++    }
++
++    // same as get_seq_cells, with -1 before each run of consecutive cells that does not continue
++    // the previous cell, so that every run starts on a multiple of `block` list positions:
++    // a block of the list is then one consecutive range of cells, possibly ending in padding,
++    // or all padding
++    // returns false, with `data` left unspecified, if a list padded this way exceeds `n_per_seq`
++    bool get_seq_cells_aligned(const std::vector<llama_kv_rows_slice> & slices, int32_t * data, int64_t n_per_seq, uint32_t block) const {
++        assert(slices.size() >= 1);
++        assert(block >= 1);
++
++        const int64_t n_slices = (int64_t) slices.size();
++
++        for (int64_t s = 0; s < n_slices; ++s) {
++            int32_t * const begin = data + s*n_per_seq;
++            int32_t * const end   = begin + n_per_seq;
++
++            int32_t * dst      = begin;
++            int32_t   previous = -2;
++            bool      fits     = true;
++
++            for_slice_cells(slices[s], [&](int32_t i) {
++                if (!fits) {
++                    return;
++                }
++
++                const int64_t at = dst - begin;
++                if (i != previous + 1 && at%block != 0) {
++                    const int64_t at_aligned = at + (block - at%block);
++                    if (at_aligned >= n_per_seq) {
++                        fits = false;
++                        return;
++                    }
++                    std::fill(dst, begin + at_aligned, -1);
++                    dst = begin + at_aligned;
++                }
++
++                if (dst == end) {
++                    fits = false;
++                    return;
++                }
++
++                *dst++   = i;
++                previous = i;
++            });
++
++            if (!fits) {
++                return false;
++            }
++
++            std::fill(dst, end, -1);
++        }
++
++        return true;
++    }
++
+     // the minimum position of sequence seq_id currently present in any of the cells
+     // return -1 if the sequence is not present
+     llama_pos seq_pos_min(llama_seq_id seq_id) const {
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index bcb407ae8..cc27837c5 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -193,6 +193,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-kv-page-export.cpp)
+     llama_build_and_test(test-skippy-verify-checkpoint-retirement.cpp)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
++    llama_build_and_test(test-skippy-kv-rows-aligned.cpp)
+     llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
+diff --git a/tests/test-flash-attn-rows-perf.cpp b/tests/test-flash-attn-rows-perf.cpp
+index dbffc27e4..fd3179a06 100644
+--- a/tests/test-flash-attn-rows-perf.cpp
++++ b/tests/test-flash-attn-rows-perf.cpp
+@@ -37,7 +37,7 @@ constexpr int64_t kv_heads = 4;
+ constexpr int64_t mask_queries = 64;
+ constexpr int64_t slack    = 256;
+ 
+-enum class layout { dense, identity, chunk64, stride, padded };
++enum class layout { dense, identity, chunk64, stride, padded, tail, split };
+ 
+ const char * layout_name(layout value) {
+     switch (value) {
+@@ -46,6 +46,8 @@ const char * layout_name(layout value) {
+         case layout::chunk64:  return "rows:chunk64";
+         case layout::stride:   return "rows:stride";
+         case layout::padded:   return "rows:padded";
++        case layout::tail:     return "rows:tail";
++        case layout::split:    return "rows:split";
+     }
+     return "?";
+ }
+@@ -63,6 +65,21 @@ int32_t cell_of(layout value, int64_t rows, int64_t slices, int64_t s, int64_t i
+         case layout::padded:   return i < rows - 128 ? int32_t(s*rows + i) : -1;
+         case layout::stride:   return int32_t(i*slices + s);
+         case layout::chunk64:  return int32_t((i/64)*(64*slices) + s*64 + i%64);
++        // one run whose last block is partly padding
++        case layout::tail:     return i < rows - 17 ? int32_t(s*rows + i) : -1;
++        // two runs: the first ends inside a block, padding to the next block, the second 64 cells on
++        case layout::split: {
++            const int64_t first = rows/2 - 10;
++            const int64_t second = (first + 31)/32*32;
++            if (i < first) {
++                return int32_t(s*rows + i);
++            }
++            if (i < second) {
++                return -1;
++            }
++            const int64_t cell = s*rows + first + 64 + (i - second);
++            return cell < s*rows + rows + 64 ? int32_t(cell) : -1;
++        }
+         case layout::dense:    break;
+     }
+     return -1;
+@@ -275,7 +292,7 @@ int main(int argc, char ** argv) {
+         std::printf("%-14s %6s %6s %12s %12s %8s %12s\n", "layout", "rows", "slices", "gpu_us/call", "wall_us/call", "cmd/chain", "checksum");
+         for (int64_t slices : {1, 4}) {
+             for (int64_t rows : {768, 4864}) {
+-                for (layout value : {layout::dense, layout::identity, layout::chunk64, layout::stride, layout::padded}) {
++                for (layout value : {layout::dense, layout::identity, layout::chunk64, layout::stride, layout::padded, layout::tail, layout::split}) {
+                     if (slices == 1 && (value == layout::chunk64 || value == layout::stride)) {
+                         continue; // identical to identity with one slice
+                     }
+diff --git a/tests/test-skippy-kv-rows-aligned.cpp b/tests/test-skippy-kv-rows-aligned.cpp
+new file mode 100644
+index 000000000..5cc440ab3
+--- /dev/null
++++ b/tests/test-skippy-kv-rows-aligned.cpp
+@@ -0,0 +1,106 @@
++// Block-aligned row lists (llama_kv_cells::get_seq_cells_aligned) against llama.cpp's own lists:
++// the same cells, every run on a block boundary, every block one consecutive range or padding.
++#include "../src/llama-kv-cells.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <random>
++#include <vector>
++
++static int failures = 0;
++#define CHECK(cond) do { if (!(cond)) { ++failures; std::printf("FAIL line %d: %s\n", __LINE__, #cond); } } while (0)
++
++static std::vector<int32_t> live(const std::vector<int32_t> & list) {
++    std::vector<int32_t> out;
++    std::copy_if(list.begin(), list.end(), std::back_inserter(out), [](int32_t c) { return c >= 0; });
++    return out;
++}
++
++int main() {
++    std::mt19937 rng(7);
++    const uint32_t block = 32;
++    for (int round = 0; round < 400; ++round) {
++        const uint32_t n_cells = 256 * (1 + rng() % 8);
++        llama_kv_cells cells;
++        cells.resize(n_cells);
++        const int n_seq = 1 + rng() % 4;
++        std::vector<llama_pos> next_pos(n_seq, 0);
++        const uint32_t fill = rng() % n_cells;
++        const bool fragmented = rng() % 3 == 0;
++        for (uint32_t i = 0; i < fill; ++i) {
++            const uint32_t cell = fragmented ? rng() % n_cells : i;
++            if (!cells.is_empty(cell)) {
++                continue;
++            }
++            // runs of one sequence, unless fragmented
++            const llama_seq_id seq = fragmented ? (llama_seq_id) (rng() % n_seq) : (llama_seq_id) ((i / (16 + rng() % 3)) % n_seq);
++            cells.pos_set(cell, next_pos[seq]++);
++            cells.seq_add(cell, seq);
++            if (rng() % 50 == 0 && n_seq > 1) {
++                cells.seq_add(cell, (seq + 1) % n_seq);
++            }
++        }
++
++        std::vector<llama_kv_rows_slice> slices;
++        if (rng() % 4 == 0) {
++            llama_kv_rows_slice all;
++            for (int s = 0; s < n_seq; ++s) { all.seq_ids.push_back(s); }
++            slices.push_back(all);
++        } else {
++            for (int s = 0; s < n_seq; ++s) {
++                llama_kv_rows_slice one;
++                one.seq_ids = { s };
++                one.p_min   = rng() % 3 == 0 ? (llama_pos) (rng() % 40) : -1;
++                slices.push_back(one);
++            }
++        }
++
++        int64_t longest = 0;
++        for (const auto & slice : slices) {
++            longest = std::max(longest, cells.seq_cells_aligned_len(slice, block));
++        }
++        const int64_t n_plain = n_cells;
++        std::vector<int32_t> plain(slices.size() * n_plain);
++        cells.get_seq_cells(slices, plain.data(), n_plain);
++
++        // room for the aligned lists: same cells, runs on block boundaries, blocks consecutive or padding
++        const int64_t n_rows = std::max<int64_t>(256, (longest + 255) / 256 * 256);
++        std::vector<int32_t> aligned(slices.size() * n_rows, 12345);
++        CHECK(cells.get_seq_cells_aligned(slices, aligned.data(), n_rows, block));
++        for (size_t s = 0; s < slices.size(); ++s) {
++            const std::vector<int32_t> a(aligned.begin() + s * n_rows, aligned.begin() + (s + 1) * n_rows);
++            const std::vector<int32_t> p(plain.begin() + s * n_plain, plain.begin() + (s + 1) * n_plain);
++            CHECK(live(a) == live(p));
++            int64_t last_live = -1;
++            for (int64_t i = 0; i < n_rows; ++i) {
++                if (a[i] >= 0) { last_live = i; }
++                if (a[i] >= 0 && i % block != 0) {
++                    CHECK(a[i - 1] == a[i] - 1);
++                }
++            }
++            CHECK(last_live + 1 == cells.seq_cells_aligned_len(slices[s], block));
++            for (int64_t b = 0; b + block <= n_rows; b += block) {
++                const int32_t first = a[b];
++                const auto tail = std::find(a.begin() + b, a.begin() + b + block, -1);
++                const int64_t n_live = tail - (a.begin() + b);
++                CHECK(std::all_of(tail, a.begin() + b + block, [](int32_t c) { return c == -1; }));
++                CHECK(first < 0 ? n_live == 0 : a[b + n_live - 1] == first + n_live - 1);
++            }
++        }
++
++        // block 1 is the plain list
++        std::vector<int32_t> unit(slices.size() * n_plain, 12345);
++        CHECK(cells.get_seq_cells_aligned(slices, unit.data(), n_plain, 1));
++        CHECK(unit == plain);
++
++        // no room: reports it instead of writing past the list
++        if (longest > 1) {
++            std::vector<int32_t> tight(slices.size() * (longest - 1) + 1, 777);
++            const bool fits = cells.get_seq_cells_aligned(slices, tight.data(), longest - 1, block);
++            CHECK(!fits);
++            CHECK(tight.back() == 777);
++        }
++    }
++    std::printf("%s\n", failures ? "FAILED" : "aligned row lists: all checks passed");
++    return failures != 0;
++}
+-- 
+2.43.0
+

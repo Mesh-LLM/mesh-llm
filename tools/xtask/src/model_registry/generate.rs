@@ -33,7 +33,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> CheckReport {
     let registry = parsed
         .last("--registry")
         .map_or_else(|| root.join(REGISTRY), |path| Path::new(path).to_path_buf());
-    match expected(&registry) {
+    match expected(root, &registry) {
         Ok(files) if parsed.flag("--check") => check(root, &files),
         Ok(files) => write(root, &files),
         Err(error) => CheckReport {
@@ -48,12 +48,31 @@ fn io_error(error: &std::io::Error, path: &Path) -> ModelError {
     ModelError(os_error_text(error, &python_path_display(path)))
 }
 
-fn expected(registry: &Path) -> Result<Vec<Output>, ModelError> {
+fn expected(root: &Path, registry: &Path) -> Result<Vec<Output>, ModelError> {
     let bytes = std::fs::read(registry).map_err(|error| io_error(&error, registry))?;
     let text = String::from_utf8(bytes).map_err(|error| ModelError(error.to_string()))?;
     let raw = Json::parse(text.as_bytes()).map_err(|error| ModelError(error.to_string()))?;
     let digest = hex::encode(Sha256::digest(text.as_bytes()));
-    outputs(validate(&raw)?, &digest)
+    let entries = validate(&raw)?;
+    let missing = super::derived::missing(root, entries)?;
+    if !missing.is_empty() {
+        let listed = missing
+            .iter()
+            .map(|entry| {
+                format!(
+                    "  {} ({}) {} {}\n",
+                    entry.suites.join(","),
+                    entry.id,
+                    entry.repo,
+                    entry.file
+                )
+            })
+            .collect::<String>();
+        return Err(ModelError(format!(
+            "derived suites lack registered artifacts; run `cargo xtool models pin`:\n{listed}"
+        )));
+    }
+    outputs(entries, &digest)
 }
 
 fn check(root: &Path, files: &[Output]) -> CheckReport {

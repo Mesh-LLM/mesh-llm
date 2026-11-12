@@ -189,6 +189,12 @@ impl KvStageIntegration {
             cache_config.max_entries = cache_config.max_entries.min(RECURRENT_CACHE_MAX_ENTRIES);
         }
         let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
+        let prefill_admission = super::scheduling::resolve_prefill_admission(
+            std::env::var(super::scheduling::PREFILL_ADMISSION_ENV)
+                .ok()
+                .as_deref(),
+            cache_config.prefill_admission,
+        );
         let resident_checkpoint_max_bytes = resident_policy::checkpoint_budget(&cache_config);
         let activation_config = ResidentCacheConfig::from_stage(config, &cache_config);
         let mut resident_config = activation_config;
@@ -363,8 +369,10 @@ impl KvStageIntegration {
             correctness_mode: false,
             trust_local_writes: true,
             checkpoint_policy,
+            prefill_admission,
             inflight_records,
             resident_config,
+            retention: cache_config.retention,
             resident_capacity_reservations: Default::default(),
             resident_sequences: Arc::new(Mutex::new(ResidentSequencePool::new(
                 resident_config.reserved_seq_count,
@@ -992,6 +1000,8 @@ pub(super) fn effective_cache_config(config: &StageConfig) -> Option<StageKvCach
         min_tokens,
         shared_prefix_stride_tokens,
         shared_prefix_record_limit,
+        prefill_admission: Default::default(),
+        retention: Default::default(),
     })
 }
 
@@ -1657,6 +1667,8 @@ mod tests {
             min_tokens: 1,
             shared_prefix_stride_tokens: 1,
             shared_prefix_record_limit: 1,
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         });
         config
     }
@@ -1690,6 +1702,8 @@ mod reserved_admission_harness {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 0,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..StageConfig::default()
         }

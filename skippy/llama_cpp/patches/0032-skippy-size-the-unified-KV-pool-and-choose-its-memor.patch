@@ -1,0 +1,329 @@
+From f7f6ad386e582cc402594df8d82053ddd75e95c7 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Tue, 10 Nov 2026 17:05:21 +1100
+Subject: [PATCH 32/32] skippy: size the unified KV pool and choose its memory
+ behaviour from the runtime config
+
+A unified pool was always ctx_size x lane_count cells: every lane holds a
+full window at once. With Qwen3-Coder's 131072 window and four lanes that is
+524288 cells, 48 GiB of Metal allocation before a request arrives, where
+llama-server with -c 32768 -np 4 shares 32768 cells among its slots.
+
+skippy_runtime_config gains four KV controls:
+
+- kv_pool_tokens: the cells of a unified pool. 0 keeps ctx_size x
+  lane_count. Any other value is the whole pool, which the lanes share as
+  llama-server's slots do with --kv-unified; it must hold at least one
+  lane's ctx_size and needs a unified cache, since a split cache gives each
+  lane n_ctx / lanes. The MTP draft context takes the target's pool rather
+  than recomputing it.
+- kv_lazy_clear: FALSE zeroes the whole pool at creation, as llama.cpp does.
+- kv_release_pages: FALSE keeps the pages of free chunks.
+- kv_row_attention: FALSE keeps ordinary attention over the unified pool, to
+  measure the row path against it.
+
+AUTO and TRUE take what each cache supports, so only FALSE changes a cache's
+own choice; skippy_apply_kv_memory_config applies the two memory controls to
+every attention cache behind a context's memory.
+
+skippy_model_kv_pool_cells reports the pool so the host admits against what
+native allocated instead of mirroring the product.
+
+ABI inventory (backward compatibility with older runtimes is not kept; the
+Rust mirror changes in lockstep):
+- added: uint32_t skippy_model_kv_pool_cells(const struct skippy_model *),
+  include/skippy/state.h, src/skippy/state_memory.cpp
+- changed: struct skippy_runtime_config gains uint32_t kv_pool_tokens and
+  int32_t kv_lazy_clear, kv_release_pages, kv_row_attention after swa_full,
+  include/skippy/runtime.h
+- removed: none
+
+Bumps the Skippy ABI from 0.1.71 to 0.1.72 at this patch; the model-support
+lane's bumps follow from there.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ include/skippy/common.h         |  2 +-
+ include/skippy/runtime.h        | 10 +++++++++
+ include/skippy/state.h          |  3 +++
+ src/llama-context.cpp           |  4 +++-
+ src/llama-graph.h               |  3 +++
+ src/skippy/graph_build_inputs.h |  1 +
+ src/skippy/model_loading.cpp    | 31 +++++++++++++++++++++----
+ src/skippy/state_memory.cpp     | 40 +++++++++++++++++++++++++++++++++
+ src/skippy/state_memory.h       |  6 +++++
+ 9 files changed, 94 insertions(+), 6 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 0e7b4f8a2..b16229b1b 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 71
++#define SKIPPY_ABI_VERSION_PATCH 72
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 10ea60e7c..31ce347ea 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -101,6 +101,16 @@ struct skippy_runtime_config {
+     /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
+     int32_t swa_full;
+ 
++    // How the KV pool is sized and what it does with memory it is not using.
++    /** @brief Cells in the unified KV pool, which the lanes share. 0 reserves `ctx_size` for every lane (`ctx_size` x `lane_count`), so each lane can reach its window whatever the others hold. Any other value is the whole pool: it must hold at least one lane's `ctx_size`, and requires a unified cache. */
++    uint32_t kv_pool_tokens;
++    /** @brief Whether KV cells are zeroed as the pool's high-water mark advances rather than all at creation. AUTO and TRUE zero lazily wherever the cache layout and its buffers allow; FALSE zeroes the whole pool at creation and keeps every page, as upstream does. */
++    int32_t kv_lazy_clear;
++    /** @brief Whether chunks of free KV cells hand their pages back to the kernel. AUTO and TRUE release wherever cells are zeroed lazily and the pool's memory is host-visible; FALSE keeps the pages. */
++    int32_t kv_release_pages;
++    /** @brief Whether attention reads a unified pool through per-owner row lists. AUTO and TRUE use row lists wherever the backend supports them; FALSE keeps ordinary attention over the whole pool, to measure one against the other. */
++    int32_t kv_row_attention;
++
+     // Model-load and context-creation controls resolved from `hardware`
+     // config.
+     /** @brief Whether the backend offloads host tensor operations to device (mirrors upstream `op_offload`). SKIPPY_TRISTATE_AUTO preserves llama.cpp's derived default (enabled); FALSE/TRUE force the value. */
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 6d9028a18..fc5dcd389 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -30,6 +30,9 @@ enum skippy_memory_cache_capability {
+  */
+ LLAMA_API uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model * model);
+ 
++/** @brief Cells in the model's KV pool, the capacity admission shares among its lanes; 0 before a context exists. */
++LLAMA_API uint32_t skippy_model_kv_pool_cells(const struct skippy_model * model);
++
+ enum skippy_kv_page_flag {
+     SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+     SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index d9068d348..5ed43df0e 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -435,9 +435,11 @@ llama_context::llama_context(
+     {
+         cparams.fused_kv_rows = false;
+ 
++        // the caller may also keep ordinary attention over the unified pool, to measure
++        // the row path against it; nothing forces a row operation onto an unsupported backend
+         const char * LLAMA_KV_ROWS_DISABLE = getenv("LLAMA_KV_ROWS_DISABLE");
+         if (!LLAMA_KV_ROWS_DISABLE) {
+-            cparams.auto_fkvr = cparams.kv_unified;
++            cparams.auto_fkvr = cparams.kv_unified && this->graph_build_inputs.kv_rows;
+         } else {
+             LLAMA_LOG_INFO("%s: LLAMA_KV_ROWS_DISABLE set, disabling kv_rows\n", __func__);
+             cparams.auto_fkvr = false;
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 54fd815ef..b00c42eba 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -101,6 +101,9 @@ struct skippy_graph_build_inputs {
+     std::vector<std::string> activation_export_bindings;
+     std::vector<std::string> resident_tensor_names;
+     std::string execution_contract;
++    // whether a context may read a unified pool through per-owner row lists
++    // where its backend supports them; false keeps ordinary attention
++    bool kv_rows = true;
+ 
+     bool topology_equal(const skippy_graph_build_inputs & other) const;
+ };
+diff --git a/src/skippy/graph_build_inputs.h b/src/skippy/graph_build_inputs.h
+index c08f2d510..d5f13eaf2 100644
+--- a/src/skippy/graph_build_inputs.h
++++ b/src/skippy/graph_build_inputs.h
+@@ -15,6 +15,7 @@ inline skippy_graph_build_inputs skippy_graph_build_inputs_from_config(
+         const skippy_runtime_config * config,
+         int32_t glm_dsa_phase_hint = SKIPPY_GLM_DSA_PHASE_HINT_AUTO) {
+     skippy_graph_build_inputs inputs;
++    inputs.kv_rows = config == nullptr || config->kv_row_attention != SKIPPY_TRISTATE_FALSE;
+     const bool has_phase_hint = glm_dsa_phase_hint != SKIPPY_GLM_DSA_PHASE_HINT_AUTO;
+     if ((config != nullptr && (skippy_runtime_has_stage_plan(config) || config->glm_dsa_policy_profile != 0)) ||
+             has_phase_hint) {
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index a4bf2a475..5f100aa46 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -22,6 +22,7 @@
+ #include "llama-model-loader.h"
+ #include "model_load_config_internal.h"
+ #include "skippy/graph_identity.h"
++#include "skippy/state_memory.h"
+ #include "skippy/trace_scope.h"
+ #include "../vendor/nlohmann/json.hpp"
+ 
+@@ -589,6 +590,9 @@ struct skippy_runtime_config skippy_runtime_config_default(void) {
+     config.kv_offload = SKIPPY_TRISTATE_AUTO;
+     config.kv_unified = SKIPPY_TRISTATE_AUTO;
+     config.swa_full = SKIPPY_TRISTATE_AUTO;
++    config.kv_lazy_clear = SKIPPY_TRISTATE_AUTO;
++    config.kv_release_pages = SKIPPY_TRISTATE_AUTO;
++    config.kv_row_attention = SKIPPY_TRISTATE_AUTO;
+     config.op_offload = SKIPPY_TRISTATE_AUTO;
+     config.split_mode = SKIPPY_TRISTATE_AUTO;
+     config.recurrent_rollback_tokens = 2;
+@@ -750,9 +754,7 @@ enum skippy_status skippy_finish_model_open(
+         params.n_rs_seq = skippy_env_u32("SKIPPY_RS_SEQ", default_rs_seq, 0, 64);
+         params.kv_unified = true;
+     }
+-    // Multi-lane activation exports rely on the shared KV pool's batch order.
+-    if (activation_export_stage && stage_model->lane_count > 1 && !params.kv_unified) {
+-        const char * message = "an exporting stage with multiple lanes requires a unified KV cache";
++    const auto reject_configuration = [&](const char * message) {
+         if (event_scope != nullptr) {
+             event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
+         }
+@@ -760,6 +762,23 @@ enum skippy_status skippy_finish_model_open(
+         delete stage_model;
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
++    };
++    // A configured pool is the whole pool: the lanes share it instead of each
++    // holding a ctx_size window, as llama-server's slots do with --kv-unified.
++    // A split cache gives every lane n_ctx / lanes, so it cannot be shared.
++    const uint32_t kv_pool_tokens = config != nullptr ? config->kv_pool_tokens : 0;
++    if (kv_pool_tokens != 0) {
++        if (!params.kv_unified) {
++            return reject_configuration("kv_pool_tokens requires a unified KV cache");
++        }
++        if (kv_pool_tokens < context_size_per_lane) {
++            return reject_configuration("kv_pool_tokens must hold at least one lane's ctx_size");
++        }
++        params.n_ctx = kv_pool_tokens;
++    }
++    // Multi-lane activation exports rely on the shared KV pool's batch order.
++    if (activation_export_stage && stage_model->lane_count > 1 && !params.kv_unified) {
++        return reject_configuration("an exporting stage with multiple lanes requires a unified KV cache");
+     }
+ 
+     const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
+@@ -777,6 +796,7 @@ enum skippy_status skippy_finish_model_open(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, message);
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    skippy_apply_kv_memory_config(stage_model->ctx->get_memory(), config);
+ 
+     const auto fail_boundary_load = [&](const char * message) {
+         if (event_scope != nullptr) {
+@@ -880,6 +900,7 @@ enum skippy_status skippy_finish_model_open(
+         stage_model->mtp_ctx = llama_init_from_model_with_graph_inputs(model, mtp_params, graph_build_inputs);
+         mtp_trace.end();
+         if (stage_model->mtp_ctx != nullptr) {
++            skippy_apply_kv_memory_config(stage_model->mtp_ctx->get_memory(), config);
+             llama_set_embeddings_nextn(stage_model->ctx, true, false);
+             llama_set_embeddings_nextn(stage_model->mtp_ctx, true, false);
+         } else {
+@@ -1192,7 +1213,8 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+     llama_context_params ctx_params = llama_context_default_params();
+     ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+     ctx_params.ctx_other = target_model->ctx;
+-    ctx_params.n_ctx = context_size_total;
++    // the draft shares the target's cells, so it takes the target's pool
++    ctx_params.n_ctx = target_model->ctx->n_ctx();
+     ctx_params.n_batch = config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
+     ctx_params.n_ubatch = config != nullptr && config->n_ubatch > 0 ? static_cast<uint32_t>(config->n_ubatch) : 0u;
+     ctx_params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
+@@ -1216,6 +1238,7 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to create MTP draft context");
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    skippy_apply_kv_memory_config(target_model->mtp_ctx->get_memory(), config);
+ 
+     llama_set_embeddings_nextn(target_model->ctx, true, false);
+     target_model->mtp_model = draft_model;
+diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
+index 806e79d72..c62b1e629 100644
+--- a/src/skippy/state_memory.cpp
++++ b/src/skippy/state_memory.cpp
+@@ -1,5 +1,6 @@
+ #include "skippy/state_memory.h"
+ #include "skippy/state.h"
++#include "skippy/runtime.h"
+ #include "skippy/runtime_types.h"
+ #include "llama-kv-cache.h"
+ #include "llama-kv-cache-iswa.h"
+@@ -9,7 +10,9 @@
+ #include "llama-memory-recurrent.h"
+ #include "llama-graph.h"
+ #include "skippy/state_effects.h"
++#include <algorithm>
+ #include <typeinfo>
++#include <vector>
+ 
+ llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory) {
+     if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+@@ -24,6 +27,39 @@ llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory) {
+     return nullptr;
+ }
+ 
++// Every attention cache a memory owns, composite memories included.
++static std::vector<llama_kv_cache *> skippy_memory_attention_caches(llama_memory_t memory) {
++    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
++        return { dsa->get_mla(), dsa->get_lid() };
++    }
++    if (auto * iswa = skippy_memory_iswa_adapter(memory)) {
++        return { iswa->get_base(), iswa->get_swa() };
++    }
++    if (auto * kv = skippy_memory_kv_adapter(memory)) {
++        return { kv };
++    }
++    return {};
++}
++
++void skippy_apply_kv_memory_config(llama_memory_t memory, const skippy_runtime_config * config) {
++    if (memory == nullptr || config == nullptr) {
++        return;
++    }
++    // AUTO takes what a cache supports, so only FALSE changes its choice.
++    const bool lazy_clear    = config->kv_lazy_clear    != SKIPPY_TRISTATE_FALSE;
++    const bool release_pages = config->kv_release_pages != SKIPPY_TRISTATE_FALSE;
++    const std::vector<llama_kv_cache *> caches = skippy_memory_attention_caches(memory);
++    std::for_each(caches.begin(), caches.end(), [&](llama_kv_cache * cache) {
++        if (cache == nullptr) {
++            return;
++        }
++        if (!lazy_clear) {
++            cache->clear_eagerly();
++        }
++        cache->set_page_release(release_pages);
++    });
++}
++
+ llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory) {
+     if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
+         return iswa;
+@@ -107,6 +143,10 @@ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
+     return supported;
+ }
+ 
++extern "C" uint32_t skippy_model_kv_pool_cells(const skippy_model * model) {
++    return model && model->ctx ? model->ctx->n_ctx() : 0;
++}
++
+ extern "C" uint32_t skippy_model_memory_cache_capabilities(const skippy_model * model) {
+     uint32_t capabilities = model && model->ctx
+             ? model->ctx->admit_skippy_cache_capabilities(
+diff --git a/src/skippy/state_memory.h b/src/skippy/state_memory.h
+index 4875cf398..84e5d9c61 100644
+--- a/src/skippy/state_memory.h
++++ b/src/skippy/state_memory.h
+@@ -13,4 +13,10 @@ llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory);
+ llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory);
+ llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory);
+ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory);
++
++struct skippy_runtime_config;
++// Sets how every attention cache behind `memory` zeroes its cells and whether
++// it returns the pages of free ones, from the configuration's KV memory
++// controls. A null configuration keeps what each cache chose for itself.
++void skippy_apply_kv_memory_config(llama_memory_t memory, const skippy_runtime_config * config);
+ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result);
+-- 
+2.43.0
+

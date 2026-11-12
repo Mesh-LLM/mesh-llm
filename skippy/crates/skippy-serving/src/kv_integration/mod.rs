@@ -16,6 +16,7 @@ use skippy_cache::{
     SparseCheckpointPolicy, UnifiedRadixCache,
 };
 use skippy_metrics::attr as attr_key;
+use skippy_protocol::StageKvRetention;
 use skippy_runtime::{ActivationFrame, MemoryCacheCapabilities, ModelStateKind, RuntimeKvPageDesc};
 
 use crate::kv_proto::{
@@ -176,8 +177,11 @@ pub struct KvStageIntegration {
     pub(crate) correctness_mode: bool,
     pub(crate) trust_local_writes: bool,
     pub(crate) checkpoint_policy: SparseCheckpointPolicy,
+    pub(crate) prefill_admission: scheduling::CacheSchedulingPolicy,
     pub(crate) inflight_records: Arc<Mutex<BTreeSet<String>>>,
     pub(crate) resident_config: ResidentCacheConfig,
+    /// What finished requests may keep resident beyond the active sessions.
+    pub(crate) retention: StageKvRetention,
     pub(crate) resident_capacity_reservations: resident_prefix::ResidentCapacityReservations,
     pub(crate) resident_sequences: Arc<Mutex<ResidentSequencePool>>,
     pub(crate) activations: Arc<Mutex<ResidentActivationCache<ActivationFrame>>>,

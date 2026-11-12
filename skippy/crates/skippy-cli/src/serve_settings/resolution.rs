@@ -112,6 +112,8 @@ impl ServeSettings {
                     "use --prefix-cache off to disable caching"
                 );
                 bytes(value)?
+            } else if spec.name == "prefix-cache-retention-tokens" {
+                retention(value)?
             } else if spec.name == "prefix-cache" {
                 Value::String(
                     match value.as_str().context("prefix-cache must be a string")? {
@@ -492,6 +494,19 @@ fn bytes(value: &Value) -> Result<Value> {
         DiskCacheBudget::Fixed(value) => Ok(Value::from(value)),
         _ => bail!("expected a fixed IEC byte budget"),
     }
+}
+
+/// A token count, or `unbounded` for whatever the pool has room for, as
+/// `StageKvRetention` serializes.
+fn retention(value: &Value) -> Result<Value> {
+    if value.as_str() == Some("unbounded") {
+        return Ok(json!("unbounded"));
+    }
+    let tokens = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse::<u64>().ok()))
+        .context("prefix-cache-retention-tokens must be a token count or unbounded")?;
+    Ok(json!({ "tokens": tokens }))
 }
 
 pub(super) fn set(object: &mut Value, path: &str, value: Value) {

@@ -5,6 +5,7 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::InferenceBackendMode;
+use crate::frontend::generation::LoadedModel;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::runtime_state::RuntimeState;
@@ -340,6 +341,7 @@ pub(super) fn hooks_test_backend(
     let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     StageOpenAiBackend {
         runtime: runtime.clone(),
+        model: LoadedModel::from_runtime(&runtime),
         runtime_lane_admission,
         workload: Default::default(),
         config: config.clone(),

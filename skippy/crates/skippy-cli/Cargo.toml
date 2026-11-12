@@ -13,6 +13,8 @@ path = "src/main.rs"
 [features]
 default = []
 dynamic-native-runtime = ["skippy-serving/dynamic-native-runtime", "skippy-api/dynamic-native-runtime"]
+# Tracy as a telemetry sink; see skippy-serving/src/telemetry/tracy_sink.rs
+tracy = ["skippy-serving/tracy"]
 
 [dependencies]
 anyhow.workspace = true

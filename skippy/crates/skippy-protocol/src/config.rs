@@ -1,6 +1,7 @@
 //! Stage configuration, topology, and activation contracts.
 
 use serde::{Deserialize, Deserializer, Serialize, de};
+use std::num::NonZeroU32;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageIdentity {
     pub run_id: String,
@@ -432,8 +433,30 @@ pub struct StageConfig {
     pub kv_unified: Option<bool>,
     #[serde(default)]
     pub swa_full: Option<bool>,
+    /// Cells in the unified KV pool, which the lanes share; at least
+    /// `ctx_size`. None reserves `ctx_size` for every lane, so each can reach
+    /// its window whatever the others hold.
+    #[serde(default)]
+    pub kv_pool_tokens: Option<NonZeroU32>,
+    /// Zero KV cells as the pool's high-water mark advances rather than all at
+    /// load. None and true are lazy wherever the cache supports it.
+    #[serde(default)]
+    pub kv_lazy_clear: Option<bool>,
+    /// Hand the pages of free KV cells back to the system. None and true
+    /// release wherever the pool's memory is host-visible.
+    #[serde(default)]
+    pub kv_release_pages: Option<bool>,
+    /// Read a unified pool through per-owner row lists. None and true use
+    /// them wherever the backend supports it; false keeps ordinary attention
+    /// over the whole pool.
+    #[serde(default)]
+    pub kv_row_attention: Option<bool>,
     #[serde(default)]
     pub cache_idle_slots: Option<u32>,
+    /// The longest a prompt waits for others to join its prefill wave, in
+    /// milliseconds. None is the scheduler's own ceiling; zero never waits.
+    #[serde(default)]
+    pub prefill_coalesce_max_ms: Option<u32>,
     /// Exact native tensor names resolved locally from admitted package-v2
     /// tensor IDs. Empty is valid only for an unsplit full-model load.
     #[serde(
@@ -563,6 +586,50 @@ pub struct StageKvCacheConfig {
     pub shared_prefix_stride_tokens: u64,
     #[serde(default = "default_kv_cache_shared_record_limit")]
     pub shared_prefix_record_limit: u64,
+    /// How a prompt enters the runtime once its prefix has been looked up.
+    #[serde(default)]
+    pub prefill_admission: StagePrefillAdmission,
+    /// What finished requests may keep resident in the KV pool for reuse.
+    #[serde(default)]
+    pub retention: StageKvRetention,
+}
+
+/// How many KV pool cells finished requests may keep resident, beyond what
+/// active sessions hold, so a later prompt can reuse them. Retention fills
+/// whatever it is allowed, and the pool's resident memory follows it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageKvRetention {
+    /// At most this many cells; zero keeps nothing once a request ends.
+    Tokens(u64),
+    /// Whatever the pool has room for.
+    Unbounded,
+}
+
+impl StageKvRetention {
+    /// A few dozen typical prompts, or four 4k-token contexts.
+    pub const DEFAULT_TOKENS: u64 = 16_384;
+}
+
+impl Default for StageKvRetention {
+    fn default() -> Self {
+        Self::Tokens(Self::DEFAULT_TOKENS)
+    }
+}
+
+/// Prompt admission policy. Prefix lookup and restore always run as one cache
+/// operation under the runtime lock; the policy decides who prefills the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StagePrefillAdmission {
+    /// The cache operation prefills the whole prompt itself: one prompt at a
+    /// time, and every other request's decode waits for it.
+    Serialized,
+    /// The cache operation restores the prefix only; the suffix is prefilled
+    /// as iteration batches that coalesce with other requests' prompt chunks
+    /// and decode rows.
+    #[default]
+    Cooperative,
 }
 
 fn default_kv_cache_mode() -> StageKvCacheMode {

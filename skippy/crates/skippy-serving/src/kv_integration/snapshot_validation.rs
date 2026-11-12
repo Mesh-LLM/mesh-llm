@@ -68,6 +68,8 @@ mod tests {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 128,
                 shared_prefix_record_limit: 2,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..Default::default()
         };

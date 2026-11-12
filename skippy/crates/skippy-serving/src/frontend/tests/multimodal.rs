@@ -656,11 +656,13 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         telemetry.clone(),
     )?;
     let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
+    let model = LoadedModel::from_runtime(&runtime);
     let backend = StageOpenAiBackend {
         runtime_lane_admission,
         speculation_governor: None,
         runahead_governor: None,
         runtime,
+        model,
         workload: Default::default(),
         telemetry,
         config: stage0_config.clone(),

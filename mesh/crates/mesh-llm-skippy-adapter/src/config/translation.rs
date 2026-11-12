@@ -460,6 +460,8 @@ impl ResolvedSkippyConfig {
                 shared_prefix_record_limit: 0,
                 l2_max_bytes: 0,
                 codec: skippy_protocol::StageKvCacheCodec::Native,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ResolvedStageKvCache::Explicit(template) => {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
@@ -472,6 +474,8 @@ impl ResolvedSkippyConfig {
                     shared_prefix_record_limit: 2,
                     l2_max_bytes: 0,
                     codec: skippy_protocol::StageKvCacheCodec::Native,
+                    prefill_admission: Default::default(),
+                    retention: Default::default(),
                 });
                 cache.mode = template.mode.clone();
                 if let Some(value) = template.max_entries {

@@ -53,42 +53,43 @@ pub(super) fn download_until(
             _ => return Err("pinned projector output must be fresh".into()),
         }
     }
-    let mut url = super::url_policy::trusted(input)?;
-    let curl = crate::curl_https::Curl::discover_for(remaining_until(deadline)?, cancellation)?;
     let parent = output.parent().ok_or("projector output parent absent")?;
     std::fs::create_dir_all(parent)?;
+    with_private_state(parent, |directory| {
+        let body = complete_body(input, directory, cancellation, deadline, maximum)?;
+        publish_until(&body, output, maximum, deadline, cancellation, expected)
+    })
+}
+
+/// The body of a trusted URL, at most `maximum` bytes, from private state
+/// under the current directory: for small documents such as API replies.
+pub(super) fn fetch_until(
+    input: &str,
+    cancellation: &process::Cancellation,
+    deadline: Instant,
+    maximum: u64,
+) -> DynResult<Vec<u8>> {
+    if !(1..=64 * 1024 * 1024).contains(&maximum) {
+        return Err("invalid fetch byte cap".into());
+    }
+    let cwd = std::env::current_dir()?;
+    with_private_state(&cwd, |directory| {
+        let body = complete_body(input, directory, cancellation, deadline, maximum)?;
+        super::resolver::bounded_read(&body, maximum)
+    })
+}
+
+/// Runs `operation` with a private directory under `parent`, reporting a
+/// cleanup failure alongside the operation's own result.
+fn with_private_state<T>(
+    parent: &Path,
+    operation: impl FnOnce(&Path) -> DynResult<T>,
+) -> DynResult<T> {
     let directory = tempfile::tempdir_in(parent)?;
-    let result: DynResult<String> = (|| {
-        for hop in 0..=10 {
-            let host = url.host_str().ok_or("projector host absent")?;
-            let addresses =
-                super::resolver::resolve(host, remaining_until(deadline)?, cancellation)?;
-            let pin = super::url_policy::pins(host, &addresses)?;
-            match exchange(
-                &curl,
-                &url,
-                &pin,
-                directory.path(),
-                remaining_until(deadline)?,
-                cancellation,
-                maximum,
-            )? {
-                Reply::Redirect(location) => {
-                    if hop == 10 {
-                        return Err("projector redirect limit exceeded".into());
-                    }
-                    url = super::url_policy::trusted(url.join(&location)?.as_str())?;
-                }
-                Reply::Complete(body) => {
-                    return publish_until(&body, output, maximum, deadline, cancellation, expected);
-                }
-            }
-        }
-        Err("projector redirect limit exceeded".into())
-    })();
+    let result = operation(directory.path());
     let close = directory.close();
     match (result, close) {
-        (Ok(hash), Ok(())) => Ok(hash),
+        (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) => Err(error),
         (result, Err(error)) => Err(format!(
             "projector result {}; private-state cleanup failed: {error}",
@@ -99,6 +100,42 @@ pub(super) fn download_until(
         )
         .into()),
     }
+}
+
+/// Follows up to ten redirects within the trusted hosts and returns the path
+/// of the completed body inside `directory`.
+fn complete_body(
+    input: &str,
+    directory: &Path,
+    cancellation: &process::Cancellation,
+    deadline: Instant,
+    maximum: u64,
+) -> DynResult<std::path::PathBuf> {
+    let mut url = super::url_policy::trusted(input)?;
+    let curl = crate::curl_https::Curl::discover_for(remaining_until(deadline)?, cancellation)?;
+    for hop in 0..=10 {
+        let host = url.host_str().ok_or("projector host absent")?;
+        let addresses = super::resolver::resolve(host, remaining_until(deadline)?, cancellation)?;
+        let pin = super::url_policy::pins(host, &addresses)?;
+        match exchange(
+            &curl,
+            &url,
+            &pin,
+            directory,
+            remaining_until(deadline)?,
+            cancellation,
+            maximum,
+        )? {
+            Reply::Redirect(location) => {
+                if hop == 10 {
+                    return Err("projector redirect limit exceeded".into());
+                }
+                url = super::url_policy::trusted(url.join(&location)?.as_str())?;
+            }
+            Reply::Complete(body) => return Ok(body),
+        }
+    }
+    Err("projector redirect limit exceeded".into())
 }
 fn remaining_until(deadline: Instant) -> DynResult<Duration> {
     deadline

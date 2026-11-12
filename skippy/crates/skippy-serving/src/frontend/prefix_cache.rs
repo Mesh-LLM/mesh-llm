@@ -1295,6 +1295,8 @@ mod tests {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 1,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..Default::default()
         };
@@ -1383,6 +1385,8 @@ mod tests {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 1,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..Default::default()
         };

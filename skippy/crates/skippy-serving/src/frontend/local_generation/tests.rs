@@ -10,7 +10,7 @@ use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
     GenerationConcurrencyController, InferenceBackendMode, InferenceCacheHints,
-    InferenceGenerationIds, LocalGeneration, StageOpenAiBackend, TokenControl,
+    InferenceGenerationIds, LoadedModel, LocalGeneration, StageOpenAiBackend, TokenControl,
 };
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::local_generation::{
@@ -196,8 +196,10 @@ fn local_generation_signal_window_uses_configured_value() {
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())
             .unwrap();
     let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
+    let model = LoadedModel::from_runtime(&runtime);
     let backend = StageOpenAiBackend {
         runtime,
+        model,
         runtime_lane_admission,
         workload: Default::default(),
         config,
@@ -299,7 +301,6 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         LocalGeneration {
             prompt_token_ids: &first_prompt,
             recurrent_cache_prefix_token_ids: None,
-            shared_system_prefix_tokens: None,
             max_tokens: 2,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -361,7 +362,6 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         LocalGeneration {
             prompt_token_ids: &second_prompt,
             recurrent_cache_prefix_token_ids: None,
-            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -696,6 +696,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
+        model: LoadedModel::from_runtime(&runtime),
         runtime_lane_admission,
         workload: Default::default(),
         config,
@@ -739,7 +740,6 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             recurrent_cache_prefix_token_ids: None,
-            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -795,7 +795,6 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             recurrent_cache_prefix_token_ids: None,
-            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,

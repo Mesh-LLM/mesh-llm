@@ -1166,6 +1166,8 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
             min_tokens: 256,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: 2,
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         }),
         native_mtp_enabled: true,
         load_mode: LoadMode::RuntimeSlice,

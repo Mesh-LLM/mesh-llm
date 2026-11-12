@@ -1,0 +1,252 @@
+From ef158eb319a95c174fab6627065df0ff93563210 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 20:18:33 +1100
+Subject: [PATCH 30/32] llama: zero KV pool cells as the high-water mark
+ advances, not at creation
+
+Clearing the whole pool at creation makes every page resident before the
+first request: with four lanes at the default context that is 48 GiB charged
+to the process for cells that may never be used. Attention reads only the
+cells get_n_kv() covers, so clear_cells_through zeroes up to that padding
+boundary above the highest cell each ubatch writes, once, and a page below
+the mark holds zeros or data.
+
+The pool is still cleared at creation when a cell range is not one byte
+range of each tensor (a transposed V) or a buffer cannot zero a tensor range
+(ggml_backend_buffer_has_memset; ggml_backend_tensor_memset asserts
+otherwise). A cache that shares another's cells applies no ubatch itself, so
+it has no mark: it skips the creation clear only on Metal, whose fresh
+buffers read as zeros, and is cleared at creation everywhere else.
+clear_eagerly() restores llama.cpp's behaviour for a caller that wants it.
+
+llama_memory_bufs::emplace gains a clear flag so an owner can zero its
+buffers itself.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/include/ggml-backend.h |  2 +
+ ggml/src/ggml-backend.cpp   |  4 ++
+ src/llama-kv-cache.cpp      | 78 ++++++++++++++++++++++++++++++++++++-
+ src/llama-kv-cache.h        | 15 +++++++
+ src/llama-memory.cpp        |  6 ++-
+ src/llama-memory.h          |  3 +-
+ 6 files changed, 103 insertions(+), 5 deletions(-)
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index 4383bd3ff..fced5e821 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -64,6 +64,8 @@ extern "C" {
+     GGML_API size_t                         ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
+     GGML_API void                           ggml_backend_buffer_clear         (ggml_backend_buffer_t buffer, uint8_t value);
+     GGML_API bool                           ggml_backend_buffer_is_host       (ggml_backend_buffer_t buffer);
++    // whether ggml_backend_tensor_memset is implemented for tensors of this buffer
++    GGML_API bool                           ggml_backend_buffer_has_memset    (ggml_backend_buffer_t buffer);
+     GGML_API void                           ggml_backend_buffer_set_usage     (ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
+     GGML_API enum ggml_backend_buffer_usage ggml_backend_buffer_get_usage     (ggml_backend_buffer_t buffer);
+     GGML_API ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index 7cf2c6580..6988537ed 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -385,6 +385,10 @@ size_t ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, const st
+     return ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(buffer), tensor);
+ }
+ 
++bool ggml_backend_buffer_has_memset(ggml_backend_buffer_t buffer) {
++    return buffer != NULL && buffer->iface.memset_tensor != NULL;
++}
++
+ bool ggml_backend_buffer_is_host(ggml_backend_buffer_t buffer) {
+     return ggml_backend_buft_is_host(ggml_backend_buffer_get_type(buffer));
+ }
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 1ab98ee59..a36b29e5a 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -62,6 +62,14 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
+     }
+ }
+ 
++// Whether a buffer of this kind reads as zeros until something is written to it. Metal hands out
++// zero-filled buffers; host memory from an allocator may be recycled, and device memory elsewhere
++// starts undefined.
++static bool kv_buffer_starts_zeroed(ggml_backend_buffer_t buf) {
++    const char * name = ggml_backend_buffer_name(buf);
++    return strncmp(name, "MTL", 3) == 0 && name[3] != '\0' && strspn(name + 3, "0123456789") == strlen(name + 3);
++}
++
+ //
+ // llama_kv_cache
+ //
+@@ -266,6 +274,12 @@ llama_kv_cache::llama_kv_cache(
+         map_layer_ids[il] = layers.size();
+ 
+         layers.push_back({ il, k, v, k_idx, k_stream, v_stream, k_idx_stream });
++
++        for (ggml_tensor * t : { k, v, k_idx }) {
++            if (t) {
++                cell_tensors.push_back(t);
++            }
++        }
+     }
+ 
+     if (reuse) {
+@@ -292,13 +306,37 @@ llama_kv_cache::llama_kv_cache(
+         }
+     }
+ 
+-    // allocate the tensors and initialize the buffers to avoid NaNs in the padding
++    // allocate the tensors; how their padding is kept free of NaNs is decided below
+     for (auto & [buft, ctx] : ctx_map) {
+-        ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "kv cache");
++        ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "kv cache", /*clear =*/ false);
+ 
+         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+     }
+ 
++    // The cells are zeroed as they come into use instead of all at once here (see
++    // clear_cells_through). That needs a cell range to be one byte range of each tensor, which a
++    // transposed V is not, and buffers that can zero a range. One decision covers every buffer:
++    // a pool cleared lazily in part would leave the rest never zeroed.
++    // A cache that shares the cells of another one applies no ubatch of its own, so nothing would
++    // zero its tensors later; it skips the clear only where fresh memory already reads as zeros.
++    {
++        const bool by_range = !v_trans && !no_alloc &&
++            std::all_of(cell_tensors.begin(), cell_tensors.end(), [](const ggml_tensor * t) {
++                return ggml_backend_buffer_has_memset(t->buffer);
++            });
++        const bool starts_zeroed = std::all_of(ctxs_bufs.begin(), ctxs_bufs.end(), [](const auto & ctx_buf) {
++            return kv_buffer_starts_zeroed(ctx_buf.second.get());
++        });
++
++        clear_lazily = by_range && !other;
++
++        if (!clear_lazily && !(by_range && starts_zeroed)) {
++            for (auto & [_, buf] : ctxs_bufs) {
++                ggml_backend_buffer_clear(buf.get(), 0);
++            }
++        }
++    }
++
+     {
+         const size_t memory_size_k     = size_k_bytes();
+         const size_t memory_size_v     = size_v_bytes();
+@@ -465,9 +503,37 @@ void llama_kv_cache::clear(bool data) {
+         for (auto & [_, buf] : ctxs_bufs) {
+             ggml_backend_buffer_clear(buf.get(), 0);
+         }
++        cells_cleared = get_size();
+     }
+ }
+ 
++void llama_kv_cache::clear_cells_through(uint32_t cell) {
++    if (!clear_lazily || cell < cells_cleared) {
++        return;
++    }
++    // attention reads the cells below get_n_kv(), which pads the highest cell in use to a multiple of
++    // kv_clear_step, so the mark advances in the same steps
++    const uint32_t upto = std::min<uint32_t>(get_size(), GGML_PAD(cell + 1, kv_clear_step));
++    skippy_trace::scope trace("llama.kv_clear_cells", "cells", (int64_t) (upto - cells_cleared));
++    // [row, cell, stream]: a cell range of one stream is contiguous
++    for (ggml_tensor * t : cell_tensors) {
++        for (uint32_t s = 0; s < n_stream; ++s) {
++            ggml_backend_tensor_memset(t, 0, s*t->nb[2] + (size_t) cells_cleared*t->nb[1], (size_t) (upto - cells_cleared)*t->nb[1]);
++        }
++    }
++    cells_cleared = upto;
++}
++
++void llama_kv_cache::clear_eagerly() {
++    if (!clear_lazily) {
++        return;
++    }
++    if (get_size() > 0) {
++        clear_cells_through(get_size() - 1);
++    }
++    clear_lazily = false;
++}
++
+ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+     skippy_trace::scope trace("llama.kv_seq_rm", "seq", seq_id);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+@@ -1376,6 +1442,14 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+ 
+     assert(ubatch.n_tokens == sinfo.n_stream()*sinfo.size());
+ 
++    // every cell this ubatch writes, and so every cell attention may read, lies below the mark
++    for (const auto & idxs : sinfo.idxs) {
++        const auto top = std::max_element(idxs.begin(), idxs.end());
++        if (top != idxs.end()) {
++            clear_cells_through(*top);
++        }
++    }
++
+     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+         for (uint32_t ii = 0; ii < sinfo.size(); ++ii) {
+             const uint32_t i = s*sinfo.size() + ii;
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 2be616364..5e4dd63cb 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -282,6 +282,21 @@ public:
+     std::vector<uint32_t> find_chunked_cells(
+             const llama_ubatch & ubatch, const llama_kv_cells & cells, uint32_t head_cur) const;
+ 
++    // Cells are zeroed as the pool's high-water mark advances, not all at creation: attention
++    // reads nothing above the cells get_n_kv() covers, and a page never written costs no memory.
++    // Cells below `cells_cleared` in every stream hold zeros or data. A layout or a buffer that
++    // cannot zero a cell range clears at creation instead, and a cache sharing another's cells
++    // keeps no mark (see the constructor).
++    static constexpr uint32_t kv_clear_step = 256; // the padding of get_n_kv()
++    uint32_t cells_cleared = 0;
++    bool     clear_lazily  = false;
++    void clear_cells_through(uint32_t cell);
++    // zero every cell now, as llama.cpp does at creation, and stop zeroing them lazily
++    void clear_eagerly();
++
++    // the K, V and K_idx tensors this cache allocated; a layer shared with another cache has none here
++    std::vector<ggml_tensor *> cell_tensors;
++
+     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+ 
+diff --git a/src/llama-memory.cpp b/src/llama-memory.cpp
+index 042aab608..80dbd10c8 100644
+--- a/src/llama-memory.cpp
++++ b/src/llama-memory.cpp
+@@ -86,11 +86,13 @@ ggml_backend_buffer_ptr llama_memory_bufs::alloc_buf(ggml_context * ctx, ggml_ba
+     return buf;
+ }
+ 
+-ggml_backend_buffer_t llama_memory_bufs::emplace(ggml_context_ptr ctx, ggml_backend_buffer_type_t buft, const char * name) {
++ggml_backend_buffer_t llama_memory_bufs::emplace(ggml_context_ptr ctx, ggml_backend_buffer_type_t buft, const char * name, bool clear) {
+     ggml_backend_buffer_ptr buf = alloc_buf(ctx.get(), buft, no_alloc, name);
+ 
+     // initialize the buffer to avoid NaNs in the padding
+-    ggml_backend_buffer_clear(buf.get(), 0);
++    if (clear) {
++        ggml_backend_buffer_clear(buf.get(), 0);
++    }
+ 
+     bufs.emplace_back(std::move(ctx), std::move(buf));
+ 
+diff --git a/src/llama-memory.h b/src/llama-memory.h
+index 37d01ed11..b6b84c315 100644
+--- a/src/llama-memory.h
++++ b/src/llama-memory.h
+@@ -37,8 +37,9 @@ struct llama_memory_bufs {
+     explicit llama_memory_bufs(bool no_alloc) : no_alloc(no_alloc) {}
+ 
+     // allocate the tensors of ctx on buft, or attach a dummy buffer if no_alloc is set
++    // the buffer is zeroed, unless its owner does that itself (clear = false)
+     // returns the buffer, for logging
+-    ggml_backend_buffer_t emplace(ggml_context_ptr ctx, ggml_backend_buffer_type_t buft, const char * name);
++    ggml_backend_buffer_t emplace(ggml_context_ptr ctx, ggml_backend_buffer_type_t buft, const char * name, bool clear = true);
+ 
+     // the memory used by the tensors: the buffer sizes, or the simulated sizes if no_alloc is set
+     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
+-- 
+2.43.0
+

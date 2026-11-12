@@ -388,6 +388,10 @@ pub(in crate::frontend) fn draft_runtime_config(
         kv_offload: config.kv_offload,
         kv_unified: config.kv_unified,
         swa_full: config.swa_full,
+        kv_pool_tokens: config.kv_pool_tokens,
+        kv_lazy_clear: config.kv_lazy_clear,
+        kv_release_pages: config.kv_release_pages,
+        kv_row_attention: config.kv_row_attention,
     })
 }
 

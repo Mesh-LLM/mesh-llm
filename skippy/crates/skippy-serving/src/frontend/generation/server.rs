@@ -12,6 +12,7 @@ use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
+use crate::frontend::generation::LoadedModel;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::attach_dflash_draft;
 use crate::frontend::generation::attach_native_mtp_draft_model;
@@ -448,8 +449,10 @@ fn embedded_openai_backend_with_state_kind(
             args.telemetry.clone(),
         )?,
     };
+    let model = LoadedModel::from_runtime(&args.runtime);
     let stage_backend = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
+        model,
         runtime_lane_admission,
         workload: Default::default(),
         config: args.config.clone(),

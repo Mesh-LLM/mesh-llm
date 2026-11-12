@@ -90,6 +90,27 @@ budget merely because it is the last entry. Standalone
 budget. A zero/unset value selects the bounded 1 GiB native-cache default;
 disable prefix caching itself to retain no entries.
 
+## Admission
+
+Prefix lookup and restore run as one cache operation under the runtime lock.
+`kv_cache.prefill_admission` decides who prefills the rest of the prompt:
+
+- `cooperative` (default): the operation restores the prefix only. The suffix
+  is submitted as iteration batches, chunked at `n_ubatch`, which coalesce
+  with other requests' prompt chunks and with decode rows in the same native
+  step. Four prompts arriving together prefill as one wave, and running
+  requests keep decoding between chunks.
+- `serialized`: the operation prefills the whole prompt itself. One prompt
+  enters at a time and every other request's decode waits for it. This was
+  the implicit behaviour for attention models before the policy existed; keep
+  it for a runtime whose cache operation must capture state mid-prompt.
+
+`SKIPPY_PREFILL_ADMISSION=serialized|cooperative` overrides the configured
+policy for a benchmark or an incident without a replan. Whether a step mixed
+prompt chunks with decode rows is visible per native batch on the
+`stage.scheduler_feature_iteration` span (`skippy.scheduler.batch_size`,
+`skippy.scheduler.token_count`).
+
 ## Persistence boundary
 
 The resident path does not eagerly export complete KV state into a blob store

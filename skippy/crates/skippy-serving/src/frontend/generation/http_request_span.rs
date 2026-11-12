@@ -33,7 +33,8 @@ pub(in crate::frontend) async fn openai_http_telemetry(
         Some(&telemetry),
         "stage.openai_http_request",
         SpanLevel::Summary,
-    );
+    )
+    .with_metrics();
     telemetry.record_resources_on(span.frame(), "request_start");
     let method = request.method().to_string();
     let path = request.uri().path().to_string();

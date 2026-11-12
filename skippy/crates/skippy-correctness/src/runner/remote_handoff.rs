@@ -331,6 +331,10 @@ fn open_full_model(args: &RemoteHandoffArgs, lane_count: u32) -> Result<StageMod
         kv_offload: None,
         kv_unified: None,
         swa_full: None,
+        kv_pool_tokens: None,
+        kv_lazy_clear: None,
+        kv_release_pages: None,
+        kv_row_attention: None,
     };
     StageModel::open(&resolution.path, &runtime_config)
         .context("failed to open remote handoff model")

@@ -39,9 +39,9 @@ index beded64e4..0e619d785 100644
      # lfm2's fixture slides its attention window, so it checkpoints every window.
      add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
 +    add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
-     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
-     target_include_directories(skippy-sampling-history PRIVATE .)
-     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+     add_executable(skippy-backend-sample-capacity skippy/tests/backend_sample_capacity.cpp)
+     target_include_directories(skippy-backend-sample-capacity PRIVATE .)
+     target_compile_features(skippy-backend-sample-capacity PRIVATE cxx_std_17)
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
 index 5789b3013..901170bcb 100644
 --- a/src/models/glm5-next.cpp

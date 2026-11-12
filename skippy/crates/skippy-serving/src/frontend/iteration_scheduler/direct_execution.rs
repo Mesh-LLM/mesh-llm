@@ -35,7 +35,8 @@ impl SchedulerWorker {
             self.telemetry.as_ref(),
             "stage.scheduler_feature_iteration",
             SpanLevel::Debug,
-        );
+        )
+        .with_metrics();
         let entered = span.enter();
         let lock_started = Instant::now();
         let mut runtime = self.lock_runtime_traced();

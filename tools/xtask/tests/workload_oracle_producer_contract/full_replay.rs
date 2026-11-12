@@ -225,6 +225,7 @@ fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest(
     }
     for target in [
         "skippy-asr-decode-boundary",
+        "skippy-backend-sample-capacity",
         "skippy-diffusion-host-fallback",
         "skippy-graph-build-inputs",
         "skippy-selected-logits",
@@ -235,15 +236,18 @@ fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest(
         "skippy-sampling-history",
         "skippy-concurrent-sampling",
         "skippy-noalloc-graph-planning",
+        "skippy-recurrent-retention",
         "skippy-renamed-multishard-planning",
         "skippy-stage-slice-plan",
         "skippy-verify-rollback",
         "test-skippy-kv-cells-contiguous",
         "test-skippy-kv-page-export",
+        "test-skippy-kv-rows-aligned",
         "test-skippy-model-loader-accounting",
         "test-skippy-recurrent-state-roundtrip",
         "test-skippy-rerank-template",
         "test-skippy-sampling-suppress",
+        "test-skippy-tracing",
         "test-skippy-verify-checkpoint-retirement",
     ] {
         assert!(contains(build, target), "{target}");
@@ -289,10 +293,10 @@ fn replay_metal_selects_cachegen_gate_without_qualifying_device_execution() {
     let replay = Replay::new();
     replay.run(true, false, true, "metal");
     let calls = replay.calls();
-    assert!(contains(
-        first(&calls, "cmake", true),
-        "test-skippy-cachegen-metal"
-    ));
+    let build = first(&calls, "cmake", true);
+    for target in ["test-skippy-cachegen-metal", "test-skippy-tracing-metal"] {
+        assert!(contains(build, target), "{target}");
+    }
     replay.finish();
 }
 #[test]

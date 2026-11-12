@@ -114,6 +114,8 @@ mod tests {
                 min_tokens: 64,
                 shared_prefix_stride_tokens: 32,
                 shared_prefix_record_limit: 2,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             native_mtp_enabled: true,
             load_mode: LoadMode::RuntimeSlice,
@@ -173,6 +175,8 @@ mod checkpoint_matching_tests {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 128,
                 shared_prefix_record_limit: 2,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..StageConfig::default()
         };

@@ -46,9 +46,32 @@ pub(in crate::frontend) struct GenerationSessionLockEntry {
     pub(in crate::frontend) users: AtomicUsize,
 }
 
+/// The loaded model's immutable surface — template rendering, tokenization,
+/// the media marker — taken from the runtime once at startup so request
+/// preparation never waits on the runtime lock behind a native batch.
+#[derive(Clone)]
+pub(in crate::frontend) struct LoadedModel {
+    pub(in crate::frontend) reader: skippy_runtime::StageModelReader,
+    pub(in crate::frontend) media_marker: String,
+}
+
+impl LoadedModel {
+    pub(in crate::frontend) fn from_state(runtime: &RuntimeState) -> Self {
+        Self {
+            reader: runtime.model.reader(),
+            media_marker: runtime.media_marker(),
+        }
+    }
+
+    pub(in crate::frontend) fn from_runtime(runtime: &Arc<Mutex<RuntimeState>>) -> Self {
+        Self::from_state(&crate::runtime_state::panic_recovery::lock_runtime(runtime))
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) runtime: Arc<Mutex<RuntimeState>>,
+    pub(in crate::frontend) model: LoadedModel,
     pub(in crate::frontend) runtime_lane_admission:
         Arc<crate::runtime_state::lane_admission::RuntimeLaneAdmission>,
     pub(in crate::frontend) workload: Arc<super::workload::CachedModelWorkload>,

@@ -4,6 +4,7 @@ mod selection;
 use recording::resident_index_over_capacity;
 
 use anyhow::{Context, Result};
+use skippy_protocol::StageKvRetention;
 use skippy_scheduler::{
     CapacityDemand, ComponentCapacitySnapshot, EvictableCacheEntry, plan_component_capacity,
     rank_eviction_candidates,
@@ -238,9 +239,21 @@ impl KvStageIntegration {
         }
         .max(minimum_free)
         .min(capacity_tokens);
+        // Retention beyond the budget is evicted even when the pool has room:
+        // the budget bounds what finished requests keep, not what this one may
+        // use, so admission itself is still judged against the whole pool.
+        let eviction_capacity = match self.retention {
+            StageKvRetention::Unbounded => capacity_tokens,
+            StageKvRetention::Tokens(budget) => capacity_tokens.min(
+                active_tokens
+                    .saturating_add(request_tokens)
+                    .saturating_add(target_free)
+                    .saturating_add(budget),
+            ),
+        };
         let required_eviction_tokens = occupied_after_request
             .saturating_add(target_free)
-            .saturating_sub(capacity_tokens);
+            .saturating_sub(eviction_capacity);
         let mut ranked = candidates
             .iter()
             .filter(|candidate| Some(candidate.value.seq_id) != protected_seq_id)
@@ -272,7 +285,7 @@ impl KvStageIntegration {
             if used_tokens
                 .saturating_add(request_tokens)
                 .saturating_add(target_free)
-                <= capacity_tokens
+                <= eviction_capacity
             {
                 break;
             }
@@ -684,6 +697,8 @@ mod proactive_eviction_tests {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 1,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..StageConfig::default()
         };
@@ -738,6 +753,90 @@ mod proactive_eviction_tests {
                 evicted_entries: 1,
                 evicted_tokens: 8,
             }]
+        );
+    }
+
+    /// A pool with room still sheds retention over the budget; what it keeps
+    /// is the budget, and the request is admitted against the whole pool.
+    #[test]
+    fn retention_over_budget_is_evicted_while_the_pool_has_room() {
+        let config = StageConfig {
+            ctx_size: 1000,
+            lane_count: 1,
+            kv_cache: Some(StageKvCacheConfig {
+                exact_max_bytes: None,
+                mode: StageKvCacheMode::LookupRecord,
+                max_entries: 4,
+                max_bytes: 0,
+                l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
+                min_tokens: 1,
+                shared_prefix_stride_tokens: 1,
+                shared_prefix_record_limit: 1,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
+            }),
+            ..StageConfig::default()
+        };
+        let mut integration = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Dense),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident_attention: true,
+                resident_checkpoint: false,
+                resident: true,
+                kv_recurrent: true,
+                full_state: true,
+            }),
+            None,
+        )
+        .unwrap()
+        .expect("resident cache should be enabled");
+        integration.retention = StageKvRetention::Tokens(10);
+        let mut sequences = lock_resident_sequences(&integration.resident_sequences);
+        let mut radix = integration.radix.lock().unwrap();
+        for (index, tokens) in [8_u64, 8, 8].into_iter().enumerate() {
+            let seq_id = sequences.allocate().unwrap();
+            let ids = (0..tokens)
+                .map(|t| t as i32 + 100 * index as i32)
+                .collect::<Vec<_>>();
+            radix
+                .insert_resident(
+                    "stage",
+                    &ids,
+                    tokens,
+                    RadixResidentEntry {
+                        page_id: format!("page-{index}"),
+                        seq_id,
+                        token_count: tokens,
+                        recompute_cost: tokens,
+                    },
+                )
+                .unwrap();
+        }
+        drop(radix);
+        drop(sequences);
+
+        let mut runtime =
+            crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(1, 1000);
+        let decision = integration
+            .admit_resident_capacity(&mut runtime, "session", 5, 0, 0, None)
+            .unwrap();
+
+        assert!(decision.admitted, "the pool itself had room");
+        assert_eq!(
+            decision.evicted_entries, 2,
+            "24 retained over a budget of 10 sheds two"
+        );
+        assert_eq!(decision.evicted_tokens, 16);
+
+        integration.retention = StageKvRetention::Unbounded;
+        let decision = integration
+            .admit_resident_capacity(&mut runtime, "session", 5, 0, 0, None)
+            .unwrap();
+        assert_eq!(
+            decision.evicted_entries, 0,
+            "no budget means the pool is the bound"
         );
     }
 

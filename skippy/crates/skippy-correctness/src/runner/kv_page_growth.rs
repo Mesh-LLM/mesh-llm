@@ -162,6 +162,10 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         kv_offload: None,
         kv_unified: None,
         swa_full: None,
+        kv_pool_tokens: None,
+        kv_lazy_clear: None,
+        kv_release_pages: None,
+        kv_row_attention: None,
     };
     plan.apply_to(&mut config);
     let model = StageModel::open(&args.runtime.model, &config)

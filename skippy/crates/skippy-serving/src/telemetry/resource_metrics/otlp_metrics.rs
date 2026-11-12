@@ -6,7 +6,7 @@ use std::{
     ffi::OsString,
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -23,7 +23,12 @@ use opentelemetry_proto::tonic::{
 use skippy_protocol::StageConfig;
 use tokio::{sync::mpsc, time::timeout};
 
-use super::super::{otlp_encoding::key_values, resource_attrs::resource_attrs};
+use super::super::{
+    otlp_encoding::key_values,
+    resource_attrs::resource_attrs,
+    sink::{OpenSpan, SpanRecord, SpanStart, TraceSink},
+    trace_context::{Frame, SpanEvent},
+};
 
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Samples queued for the gRPC exporter before new ones are dropped.
@@ -141,6 +146,49 @@ impl MetricSinks {
         if let Some(file) = self.file.as_ref() {
             let _ = file.lock().unwrap_or_else(PoisonError::into_inner).flush();
         }
+    }
+}
+
+/// The metric destinations as one of `Telemetry`'s sinks: samples only, so
+/// spans and events pass it by.
+pub(in crate::telemetry) struct OtlpMetricsSink {
+    sinks: MetricSinks,
+    config: Arc<StageConfig>,
+}
+
+impl OtlpMetricsSink {
+    pub(in crate::telemetry) fn configured(
+        config: Arc<StageConfig>,
+        path: Option<OsString>,
+        endpoint: Option<&str>,
+    ) -> Option<Self> {
+        MetricSinks::open(path, endpoint).map(|sinks| Self { sinks, config })
+    }
+}
+
+impl TraceSink for OtlpMetricsSink {
+    fn create_span_with(&self, _: &SpanStart) -> OpenSpan {
+        OpenSpan::NONE
+    }
+
+    fn end_span(&self, _: OpenSpan, _: &SpanRecord) {}
+
+    fn discard_span(&self, _: OpenSpan) {}
+
+    fn record_span(&self, _: &SpanRecord) {}
+
+    fn record_event(&self, _: &SpanEvent, _: &Frame) {}
+
+    fn record_metrics(&self, metrics: &[Metric]) {
+        self.sinks.send(&self.config, metrics.to_vec());
+    }
+
+    fn folds_events_into_spans(&self) -> bool {
+        false
+    }
+
+    fn flush(&self, _: Duration) {
+        self.sinks.flush();
     }
 }
 

@@ -1,6 +1,6 @@
 //! Context limits admitted by the loaded native workload.
 
-use anyhow::{Context, Result};
+use anyhow::{Result, ensure};
 use skippy_runtime::{ModelWorkload, StageModel};
 
 use super::RuntimeState;
@@ -12,30 +12,34 @@ pub(super) struct ContextCapacity {
 }
 
 impl ContextCapacity {
-    /// Mirror `skippy_context_capacity`: native ctx_size is per execution lane.
-    /// This runs only after model open has admitted the corresponding config.
+    /// Native ctx_size is per execution lane; the pool is whatever native
+    /// allocated for all of them (`StageModel::kv_pool_cells`), which a pool
+    /// cap may hold below ctx_size × lanes. This runs only after model open
+    /// has admitted the corresponding config.
     pub(super) fn for_loaded_model(
         configured_tokens: u32,
-        effective_lanes: u32,
-        has_native_model: bool,
+        native_pool_cells: Option<u32>,
     ) -> Result<Self> {
-        if !has_native_model {
+        let Some(pool_tokens) = native_pool_cells else {
             return Ok(Self::modelless(configured_tokens));
-        }
+        };
         let per_lane_tokens = if configured_tokens == 0 {
             512
         } else {
             configured_tokens
         };
-        let pool_tokens = per_lane_tokens
-            .checked_mul(effective_lanes.max(1))
-            .context(
-                "ctx_size multiplied by admitted lane_count exceeds the native context range",
-            )?;
+        ensure!(
+            pool_tokens >= per_lane_tokens,
+            "native KV pool of {pool_tokens} cells cannot hold one lane of {per_lane_tokens}"
+        );
         Ok(Self {
             per_lane_tokens,
             pool_tokens,
         })
+    }
+
+    pub(super) const fn pool_tokens(self) -> u32 {
+        self.pool_tokens
     }
 
     /// Modelless fixtures supply an aggregate pool directly, without native
@@ -88,7 +92,7 @@ mod tests {
 
     #[test]
     fn native_pool_includes_every_lane_without_enlarging_request_history() {
-        let capacity = ContextCapacity::for_loaded_model(131_072, 4, true).unwrap();
+        let capacity = ContextCapacity::for_loaded_model(131_072, Some(524_288)).unwrap();
         let mut runtime = RuntimeState::new_modelless_for_test(4);
         runtime.context_capacity = capacity;
         assert_eq!(runtime.kv_pool_tokens(), 524_288);
@@ -124,6 +128,8 @@ mod tests {
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 1,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..Default::default()
         };
@@ -142,7 +148,8 @@ mod tests {
         .unwrap()
         .unwrap();
         let mut runtime = RuntimeState::new_modelless_for_test(4);
-        runtime.context_capacity = ContextCapacity::for_loaded_model(131_072, 4, true).unwrap();
+        runtime.context_capacity =
+            ContextCapacity::for_loaded_model(131_072, Some(524_288)).unwrap();
         let _reservations = (0..4)
             .map(|lane| {
                 cache
@@ -167,23 +174,30 @@ mod tests {
         assert_eq!(understated.admission_deficit_tokens, 244_928);
     }
 
+    /// The pool is native's answer, not ctx_size times lanes: a capped pool
+    /// stays below that product while every lane keeps its window.
     #[test]
-    fn native_pool_uses_effective_workload_lanes_and_native_defaults() {
-        let lanes = lane_count_for_workload(4, ModelWorkload::EncoderDecoder);
-        let capacity = ContextCapacity::for_loaded_model(2048, lanes, true).unwrap();
+    fn native_pool_is_taken_as_reported_and_lanes_keep_their_window() {
+        let capacity = ContextCapacity::for_loaded_model(2048, Some(2048)).unwrap();
         assert_eq!(capacity.pool_tokens, 2048);
         assert_eq!(capacity.per_lane_tokens, 2048);
-        let capacity = ContextCapacity::for_loaded_model(0, 0, true).unwrap();
-        assert_eq!(capacity.pool_tokens, 512);
+        let capacity = ContextCapacity::for_loaded_model(8192, Some(32_768)).unwrap();
+        assert_eq!(capacity.pool_tokens, 32_768);
+        assert_eq!(capacity.per_lane_tokens, 8192);
+        let capacity = ContextCapacity::for_loaded_model(0, Some(512)).unwrap();
+        assert_eq!(capacity.per_lane_tokens, 512);
+        assert_eq!(lane_count_for_workload(4, ModelWorkload::EncoderDecoder), 1);
         assert_eq!(
             lane_count_for_workload(0, ModelWorkload::CausalGeneration),
             1
         );
     }
 
+    /// A pool that cannot hold one lane's window is a configuration error,
+    /// not a capacity to admit against.
     #[test]
-    fn native_pool_rejects_overflow_instead_of_understating_capacity() {
-        assert!(ContextCapacity::for_loaded_model(u32::MAX, 2, true).is_err());
+    fn native_pool_smaller_than_a_lane_is_rejected() {
+        assert!(ContextCapacity::for_loaded_model(8192, Some(4096)).is_err());
     }
 
     #[test]
@@ -191,7 +205,7 @@ mod tests {
         for tokens in [0, 131_072] {
             let runtime = RuntimeState::new_modelless_with_capacity_for_test(4, tokens);
             assert_eq!(runtime.kv_pool_tokens(), tokens);
-            let capacity = ContextCapacity::for_loaded_model(tokens, 4, false).unwrap();
+            let capacity = ContextCapacity::for_loaded_model(tokens, None).unwrap();
             assert_eq!(capacity.pool_tokens, tokens);
         }
     }
