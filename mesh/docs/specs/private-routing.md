@@ -133,7 +133,9 @@ only what the circle serves.
   named), so a plugin running on a trusted owner's node cannot reach owners
   the entry node does not trust. A request transform runs before its request
   is scoped, at the node the client used, so its calls send only the private
-  header and get that node's circle, unless another private request the
+  header and get that node's circle. When the request it transforms is
+  itself a plugin's nested call with an owners header, the transform's own
+  calls keep that limit too, as they do when another private request the
   plugin handles at the same time names owners. The owners header can only
   narrow a private request, never widen it. This is per plugin, not
   per request: a public request the same plugin handles at the same moment

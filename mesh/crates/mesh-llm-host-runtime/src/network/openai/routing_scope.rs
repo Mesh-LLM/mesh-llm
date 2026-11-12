@@ -156,6 +156,12 @@ pub(crate) async fn resolve(
     Ok(Some(scope))
 }
 
+/// The owner limit a raw head carries, for request transforms that run
+/// before [`resolve`]. An unreadable header limits to no owners at all.
+pub(crate) fn head_owner_limit(raw: &[u8]) -> Option<OwnerScope> {
+    requested_owners(raw).unwrap_or_else(|_| Some(OwnerScope::of(Vec::new())))
+}
+
 /// The owners named in [`MESH_SCOPE_OWNERS_HEADER`], if the head has it.
 fn requested_owners(raw: &[u8]) -> Result<Option<OwnerScope>, ScopeRejection> {
     let values = header_values_from_parsed_raw(raw, MESH_SCOPE_OWNERS_HEADER).map_err(|()| {
@@ -332,5 +338,16 @@ mod tests {
         let many =
             "x-filler: 1\r\n".repeat(2 * crate::network::openai::request_parse::MAX_HEADERS + 1);
         assert!(requested_owners(head(&many).as_bytes()).is_err());
+        // Transforms that run before `resolve` see the same limit; an
+        // unreadable one admits nobody.
+        assert_eq!(head_owner_limit(head("").as_bytes()), None);
+        assert_eq!(
+            head_owner_limit(head("x-mesh-scope-owners: a,b\r\n").as_bytes()),
+            Some(owners)
+        );
+        assert_eq!(
+            head_owner_limit(head(&many).as_bytes()),
+            Some(OwnerScope::of(Vec::new()))
+        );
     }
 }

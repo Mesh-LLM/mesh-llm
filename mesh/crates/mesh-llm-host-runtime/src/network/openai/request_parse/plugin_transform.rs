@@ -43,7 +43,7 @@ pub(super) fn is_transformable_path(path: &str) -> bool {
 /// changed; an error rejects the request.
 pub(super) async fn apply_request_transforms(
     transformer: Option<&plugin::PluginManager>,
-    private_hint: bool,
+    (private_hint, owner_limit): (bool, Option<crate::mesh::OwnerScope>),
     request_path: &str,
     client_path: &str,
     body: &mut serde_json::Value,
@@ -56,13 +56,16 @@ pub(super) async fn apply_request_transforms(
             // Transforms run before the scope is resolved; a transform's own
             // inference for a private request must stay private regardless,
             // including a bare `@private` model that ingress rejects later.
+            // A nested call's owner limit applies to the transform's own
+            // calls too, so they keep to the circle of the request behind it.
             let private = private_hint
+                || owner_limit.is_some()
                 || body
                     .get("model")
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(crate::network::openai::routing_scope::has_private_model_suffix);
             plugin_manager
-                .transform_request(request_path, client_path, body, private)
+                .transform_request(request_path, client_path, body, private, owner_limit)
                 .await
         }
         _ => Ok(false),
