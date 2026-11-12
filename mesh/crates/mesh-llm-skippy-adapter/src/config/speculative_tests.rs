@@ -1151,11 +1151,8 @@ fn resolve_package_dflash(
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn a_known_target_defaults_to_its_dflash_draft() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let (_directory, model_path) = default_dflash_target();
     let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 32, 4096, 0));
     let speculative = &resolved.speculative;
@@ -1181,11 +1178,21 @@ fn a_known_target_defaults_to_its_dflash_draft() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
+fn a_known_target_gets_its_default_draft_only_where_the_build_allows_it() {
+    let (_directory, model_path) = default_dflash_target();
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 32, 4096, 0));
+    let speculative = &resolved.speculative;
+
+    // Without the test override this is the build's own default: off on Windows.
+    let allowed = super::dflash::DFLASH_DRAFT_CONTEXT_AVAILABLE;
+    assert_eq!(speculative.default_dflash.is_some(), allowed);
+    assert_eq!(speculative.decode.dflash.is_some(), allowed);
+    assert_eq!(speculative.decode.effective_strategy == "dflash", allowed);
+}
+
+#[test]
 fn a_configured_draft_cap_overrides_the_backend_default() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let (_directory, model_path) = default_dflash_target();
     let resolved = resolve_default_dflash(
         "[defaults.speculative]\ndraft_max_tokens = 10",
@@ -1261,11 +1268,8 @@ fn dropping_the_default_keeps_an_explicit_dflash_draft() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn a_default_dflash_draft_is_served_only_once_fetched() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let (_directory, model_path) = default_dflash_target();
     let mut resolved = resolve_default_dflash(
         "[defaults.speculative]\npairing_fault = \"fail_closed\"",
@@ -1328,11 +1332,8 @@ fn qwen38_27b_meta() -> skippy_model_artifact::gguf::GgufCompactMeta {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn a_known_pairing_replaces_automatic_native_mtp() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let (_directory, model_path) = native_mtp_target();
     let mut resolved = resolve_default_dflash("", &model_path, &qwen38_27b_meta());
     let speculative = &resolved.speculative;
@@ -1489,11 +1490,8 @@ fn default_repo(resolved: &ResolvedSkippyConfig) -> Option<String> {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn an_index_entry_is_the_default_for_a_plain_gguf() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
     let (_directory, model_path) = default_dflash_target();
     let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 64, 5120, 0));
@@ -1516,11 +1514,8 @@ fn an_index_entry_is_the_default_for_a_plain_gguf() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn a_package_declared_dflash_proposer_wins_over_the_index() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
     let (_directory, model_path) = default_dflash_target();
     let package = package_with_dflash(&[
@@ -1555,11 +1550,8 @@ fn a_package_declared_dflash_proposer_wins_over_the_index() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn naming_dflash_selects_a_package_strategy_named_dflash() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
     let (_directory, model_path) = default_dflash_target();
     let mut package = package_with_dflash(&[("meshllm/package", DFlashBackends::All)]);
@@ -1629,11 +1621,8 @@ fn explicit_configuration_wins_over_a_package_dflash_proposer() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn native_mtp_is_preferred_only_when_no_pairing_exists() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let (_directory, model_path) = native_mtp_target();
     let meta = target_meta("qwen35", 64, 5120, 0);
 
@@ -1657,11 +1646,8 @@ fn native_mtp_is_preferred_only_when_no_pairing_exists() {
 /// copy `DFLASH_PAIRING_INDEX_FIXTURE` names) resolves every default-on target
 /// on this backend to the plan the bootstrap table resolves.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a default DFlash draft is off on Windows (DFLASH_DRAFT_CONTEXT_AVAILABLE)"
-)]
 fn the_published_index_resolves_every_default_as_the_table_does() {
+    let _default_drafts = super::dflash::with_default_dflash_drafts();
     let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE").map_or_else(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("data/dflash-pairings/index.json"),
         std::path::PathBuf::from,

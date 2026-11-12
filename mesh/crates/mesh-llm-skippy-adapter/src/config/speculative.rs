@@ -14,8 +14,8 @@ use skippy_serving::{
 };
 
 use super::dflash::{
-    DFLASH_DRAFT_CONTEXT_AVAILABLE, DFlashDefaultSelection, DFlashSelection, choose_dflash_draft,
-    dflash_decode_config, dflash_max_draft_tokens,
+    DFlashDefaultSelection, DFlashSelection, choose_dflash_draft, dflash_decode_config,
+    dflash_max_draft_tokens, draft_context_available,
 };
 use super::support::{pick_owned, pick_string, pick_string_owned, resolve_bool_or_auto};
 use super::types::ResolvedSpeculativeConfig;
@@ -163,7 +163,7 @@ fn resolve_speculative(
         },
         &DFlashDefaultSelection {
             auto_defaults_enabled,
-            draft_context_available: DFLASH_DRAFT_CONTEXT_AVAILABLE,
+            draft_context_available: draft_context_available(),
             native_mtp_decides: native_mtp_enabled && !mtp_yields,
             has_ngram_settings: ngram_min > 0 || ngram_max > 0,
             package_generation,
