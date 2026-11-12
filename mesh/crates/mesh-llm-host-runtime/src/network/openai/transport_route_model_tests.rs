@@ -196,6 +196,11 @@ fn empty_refreshed_route_does_not_reserve() {
     assert_eq!(affinity.stats_snapshot().reservation_active, 0);
 }
 
+/// A request whose shared scaffold covers the 512 cached tokens.
+fn cached_request() -> mesh_llm_routing::request_cost::RequestCostInput {
+    mesh_llm_routing::request_cost::RequestCostInput::heuristic(1_024, 512)
+}
+
 async fn cache_context(
     prefix_hash: u64,
     target: election::InferenceTarget,
@@ -221,6 +226,7 @@ async fn cache_context(
         attempts: 1,
         timeout_attempts: 0,
         refreshed: false,
+        prompt_bytes: None,
     };
     (node, affinity, target, selection, state)
 }
@@ -231,6 +237,7 @@ async fn authoritative_local_miss_invalidates_inventory_and_lease() {
     let (node, affinity, target, selection, state) =
         cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
     node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+    node.observe_local_prefill_cost("qwen", Some(1_000));
     affinity.remember_cache_lease("qwen", prefix_hash, &target);
     let context = DeliveredRouteModelContext {
         node: &node,
@@ -253,8 +260,13 @@ async fn authoritative_local_miss_invalidates_inventory_and_lease() {
     );
 
     assert_eq!(
-        node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
-            .await,
+        node.select_cache_target(
+            "qwen",
+            prefix_hash,
+            std::slice::from_ref(&target),
+            cached_request(),
+        )
+        .await,
         None
     );
     assert_eq!(
@@ -272,6 +284,7 @@ async fn authoritative_remote_miss_invalidates_lease_but_not_local_inventory() {
     let (node, affinity, target, selection, state) = cache_context(prefix_hash, remote).await;
     let local = election::InferenceTarget::Local(9337);
     node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+    node.observe_local_prefill_cost("qwen", Some(1_000));
     affinity.remember_cache_lease("qwen", prefix_hash, &target);
     let context = DeliveredRouteModelContext {
         node: &node,
@@ -298,8 +311,13 @@ async fn authoritative_remote_miss_invalidates_lease_but_not_local_inventory() {
         None
     );
     assert_eq!(
-        node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&local))
-            .await,
+        node.select_cache_target(
+            "qwen",
+            prefix_hash,
+            std::slice::from_ref(&local),
+            cached_request(),
+        )
+        .await,
         Some(local)
     );
 }
@@ -310,6 +328,7 @@ async fn missing_cache_usage_does_not_refute_positive_evidence() {
     let (node, affinity, target, selection, state) =
         cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
     node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+    node.observe_local_prefill_cost("qwen", Some(1_000));
     affinity.remember_cache_lease("qwen", prefix_hash, &target);
     let context = DeliveredRouteModelContext {
         node: &node,
@@ -332,8 +351,13 @@ async fn missing_cache_usage_does_not_refute_positive_evidence() {
     );
 
     assert_eq!(
-        node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
-            .await,
+        node.select_cache_target(
+            "qwen",
+            prefix_hash,
+            std::slice::from_ref(&target),
+            cached_request(),
+        )
+        .await,
         Some(target.clone())
     );
     assert_eq!(

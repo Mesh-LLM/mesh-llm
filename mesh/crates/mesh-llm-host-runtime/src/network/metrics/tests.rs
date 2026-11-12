@@ -717,36 +717,42 @@ fn sanitize_model_throughput_hints_drops_invalid_and_clamps_values() {
             avg_tokens_per_second_milli: MAX_ADVERTISED_TPS_MILLI + 1,
             throughput_samples: MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1,
             measurement: None,
+            prefill: None,
         },
         ModelThroughputHint {
             model_name: "qwen".to_string(),
             avg_tokens_per_second_milli: 42_000,
             throughput_samples: 7,
             measurement: None,
+            prefill: None,
         },
         ModelThroughputHint {
             model_name: "".to_string(),
             avg_tokens_per_second_milli: 42_000,
             throughput_samples: 7,
             measurement: None,
+            prefill: None,
         },
         ModelThroughputHint {
             model_name: "x".repeat(MAX_ADVERTISED_MODEL_NAME_BYTES + 1),
             avg_tokens_per_second_milli: 42_000,
             throughput_samples: 7,
             measurement: None,
+            prefill: None,
         },
         ModelThroughputHint {
             model_name: "empty-speed".to_string(),
             avg_tokens_per_second_milli: 0,
             throughput_samples: 7,
             measurement: None,
+            prefill: None,
         },
         ModelThroughputHint {
             model_name: "empty-samples".to_string(),
             avg_tokens_per_second_milli: 42_000,
             throughput_samples: 0,
             measurement: None,
+            prefill: None,
         },
     ]);
 

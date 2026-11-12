@@ -190,6 +190,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
             window_ms: 900_000,
             kind: crate::network::metrics::ThroughputMeasurementKind::EndToEndAttempt,
         }),
+        prefill: None,
     }];
     let salt = [0xC3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES];
     let prefix_hash = 0xfeed_beef;
@@ -244,6 +245,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 avg_tokens_per_second_milli: 250_000,
                 throughput_samples: 99,
                 measurement: None,
+                prefill: None,
             },
         ],
         cache_affinity: Some(

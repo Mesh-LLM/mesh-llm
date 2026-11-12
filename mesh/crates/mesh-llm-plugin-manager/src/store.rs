@@ -665,6 +665,24 @@ mod tests {
     }
 
     #[test]
+    fn dot_names_do_not_reach_the_store_root_or_its_parent() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("plugins");
+        let store = PluginStore::new(&root);
+        store.save(&metadata("blackboard")).unwrap();
+        let sibling = temp.path().join("config.toml");
+        std::fs::write(&sibling, "keep").unwrap();
+
+        for name in [".", "..", "..."] {
+            assert!(store.delete(name).is_err(), "{name}");
+            assert!(store.save(&metadata(name)).is_err(), "{name}");
+            assert!(store.set_enabled(name, false).is_err(), "{name}");
+        }
+        assert!(sibling.exists());
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
     fn list_ignores_non_metadata_directories() {
         let temp = TempDir::new().unwrap();
         let store = PluginStore::new(temp.path());

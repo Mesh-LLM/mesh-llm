@@ -386,6 +386,11 @@ message AdvertisedModelThroughput {
   optional uint32 window_ms = 5;
   // What the average measures.
   optional ThroughputMeasurementKind kind = 6;
+  // The node's prompt-processing cost for this model in microseconds per
+  // token, measured on its own requests with or without a cache hit, and the
+  // wall-clock time of its newest sample. Both or neither.
+  optional uint64 prefill_micros_per_token = 7;
+  optional uint64 prefill_observed_at_unix_ms = 8;
 }
 
 enum ThroughputMeasurementKind {
