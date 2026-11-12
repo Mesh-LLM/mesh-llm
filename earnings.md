@@ -13,20 +13,31 @@ supported rail. Stablecoin support is in development—coming soon.
 
 ## 1. Install payments plugins
 
-Choose one preset. Each installs the `pay-lightning` payment engine plugin first, then its wallet plugin:
+Install the Lightning payment engine (`pay-lightning`) with one wallet plugin
+on each node that buys or serves paid inference.
 
-- `payments-lexe`: provisions a mainnet Lexe wallet for a fresh profile.
-- `payments-nwc`: connects to an existing mainnet wallet using a private NWC URI file.
-- `payments-ldk-server`: connects to LDK Server; wallet-plugin release pending.
+**Lexe** provisions a mainnet wallet when Mesh starts with a fresh profile.
 
 ```sh
-mesh-llm plugins sets install payments-lexe
+mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/lexe-wallet-plugin
 ```
 
 Lexe's default recovery seed location is
 `<data_dir>/wallets/lexe-wallet/seedphrase.txt`, using `data_dir` from
 `payment.json` (default `~/.mesh-llm/payments`). Back up this file securely and
 keep it private.
+
+**Nostr Wallet Connect (NWC)** connects to an existing mainnet wallet.
+
+```sh
+mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/nwc-wallet-plugin
+```
+
+Before starting Mesh, save the connection URI in a private file and set
+`--uri-file` to its absolute path in the `nwc-wallet` plugin entry in
+`~/.mesh-llm/config.toml`. See the [NWC configuration example](https://github.com/Mesh-LLM/nwc-wallet-plugin/blob/v0.1.0/README.md#configure).
+
+If Mesh is already running, restart it to load the plugins.
 
 ## 2. Serve and earn
 
