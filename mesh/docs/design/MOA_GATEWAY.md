@@ -319,7 +319,9 @@ With the plugin registered:
    plugin with a snapshot of the callable candidate models. Requests that set
    `x-mesh-target` / `x-mesh-exclude` are rejected with 409.
 2. The plugin overrides only eligible non-streaming text chat. Streaming and
-   media requests keep core routing.
+   media requests keep core routing: `automatic::content_mode` returns
+   `SingleModel` for them, so ingress resolves a concrete model and never
+   hands them to the plugin.
 3. With one eligible model, or when every eligible model is under 10B
    parameters or of unknown size, the plugin answers from one model and sets
    no `x-moa-*` headers.
