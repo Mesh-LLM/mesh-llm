@@ -663,11 +663,9 @@ fn test_collect_bundle_files_rejects_product_v2_without_manifest() {
 }
 
 #[test]
-fn test_collect_bundle_files_tolerates_a_legacy_bundled_plugins_directory() {
-    // Releases up to v0.79.x shipped default plugin archives beside the host
-    // in `plugins/`. Those bundles must stay installable for an explicit
-    // `mesh-llm update --version`, but the directory is never staged: this
-    // host installs plugins from catalog sets only.
+fn test_collect_bundle_files_preserves_plugins_for_the_older_host() {
+    // An explicit downgrade must retain the archives the selected host needs.
+    // This only stages its bundle; it does not install a plugin into the store.
     let dir = temp_dir("self-update-legacy-plugins-dir");
     std::fs::create_dir_all(dir.join("native-runtimes").join("runtime")).unwrap();
     std::fs::create_dir_all(dir.join("plugins")).unwrap();
@@ -681,9 +679,10 @@ fn test_collect_bundle_files_tolerates_a_legacy_bundled_plugins_directory() {
 
     let staged = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap();
     assert!(
-        !staged.iter().any(|name| name == "plugins"),
-        "the legacy plugins directory is recognized, not installed: {staged:?}"
+        staged.iter().any(|name| name == "plugins"),
+        "the selected older host needs its bundled archives: {staged:?}"
     );
+    assert_eq!(staged.first(), Some(&mesh_binary_name()));
     let _ = std::fs::remove_dir_all(dir);
 }
 

@@ -20,12 +20,9 @@ const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
 
-/// The directory pre-0.80 release bundles carried bundled default plugin
-/// archives in. Recognized so those bundles still install, never staged:
-/// this host installs plugins from catalog sets only.
+/// Older hosts need their bundled plugin archives when explicitly downgrading.
+/// Staging these files does not install any plugin into the user's store.
 const LEGACY_BUNDLED_PLUGINS_DIR_NAME: &str = "plugins";
-/// The default plugins a release bundles beside the host, which a node
-/// installs from when it starts (`mesh_llm_plugin_manager::bundled`).
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
@@ -702,11 +699,10 @@ fn collect_bundle_files(
         }
     }
 
-    // Releases v0.79.x and earlier bundled default plugin archives beside the
-    // host in `plugins/`. Those bundles stay installable (an explicit
-    // `mesh-llm update --version` reaches for them), but the directory is
-    // not staged: this host installs plugins from catalog sets, never from a
-    // directory beside the binary.
+    // The selected older host, not this updater, consumes its bundled archives.
+    let has_legacy_plugins = dirs
+        .iter()
+        .any(|name| name == LEGACY_BUNDLED_PLUGINS_DIR_NAME);
     dirs.retain(|name| name != LEGACY_BUNDLED_PLUGINS_DIR_NAME);
 
     anyhow::ensure!(!files.is_empty(), "Downloaded bundle was empty");
@@ -735,6 +731,9 @@ fn collect_bundle_files(
     let mut staged = files;
     if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
         staged.push(NATIVE_RUNTIMES_DIR_NAME.to_string());
+    }
+    if has_legacy_plugins {
+        staged.push(LEGACY_BUNDLED_PLUGINS_DIR_NAME.to_string());
     }
     // The mesh binary must install first so a mid-install failure can never
     // leave the new runtime tree beside an old host.

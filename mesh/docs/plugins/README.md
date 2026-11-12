@@ -21,6 +21,7 @@ Plugin-specific documentation:
 - [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
 - [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
+- [Example plugin](https://github.com/Mesh-LLM/example-plugin) - minimal external plugin template (Rust binary, `plugin.toml`, CI and cross-platform release workflows for Linux/macOS/Windows on x86-64 and ARM64); start here when authoring a new plugin
 
 The main goals are:
 
@@ -591,9 +592,10 @@ empty success.
 
 ### Installed-plugin upgrade checks
 
-Every host upgrade path — `mesh-llm update`, auto-update, and the
-installation/upgrade entrypoints — checks **every installed plugin** against
-the target host version, whatever its set membership or origin:
+`mesh-llm update` checks **every installed plugin** against the target host
+version, whatever its set membership or origin. Auto-update and bootstrap
+installation do not yet run this repair flow; use the explicit update command
+when installed plugins need to be checked before replacing the host:
 
 | Installed plugin state | Attended upgrade | Unattended upgrade |
 |---|---|---|
@@ -676,7 +678,7 @@ searchable, but `mesh-llm plugins install <name>` refuses it:
 | ----------------- | ---------------------------------------------------------------------------------------------------------- |
 | `version`         | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                   |
 | `sha256`          | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.       |
-| `compatibility` | Optional `{"min": "0.81.0", "max": "0.90.0"}` bounds (either may be absent) declaring which MeshLLM host versions the pinned release works with. Installs refuse a release that excludes the running host; upgrades retain the value with the installed record as `host_compatibility`. Absent means unknown, never incompatible. |
+| `compatibility` | Optional **inclusive** `{"min": "0.81.0", "max": "0.90.0"}` bounds (either may be absent) declaring which MeshLLM host versions the pinned release works with. `max: "0.90.0"` includes `0.90.0`, but excludes `0.90.1`. Installs refuse a release that excludes the target host; upgrades retain the value with the installed record as `host_compatibility`. Absent means unknown, never incompatible. |
 
 ```json
 {
@@ -690,7 +692,8 @@ searchable, but `mesh-llm plugins install <name>` refuses it:
     "aarch64-apple-darwin": "<64 hex>",
     "x86_64-unknown-linux-gnu": "<64 hex>",
     "aarch64-unknown-linux-gnu": "<64 hex>"
-  }
+  },
+  "compatibility": { "min": "0.81.0", "max": "0.90.0" }
 }
 ```
 
@@ -885,6 +888,8 @@ The manifest is the source of truth for host projections.
 ## Plugin Author Experience
 
 The primary design goal is very low boilerplate.
+
+For a working starting point, clone the [example plugin](https://github.com/Mesh-LLM/example-plugin): a minimal external plugin with the `plugin.toml` manifest, a `plugin!` declaration, a loopback HTTP surface with tests, and CI plus release workflows covering Linux, macOS and Windows on x86-64 and ARM64.
 
 The preferred DSL is surface-first:
 

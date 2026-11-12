@@ -7,6 +7,7 @@ pub mod github;
 pub mod install;
 pub mod legacy_defaults;
 mod package_identity;
+mod placement;
 pub mod plugin_toml;
 mod sets;
 pub mod skills;

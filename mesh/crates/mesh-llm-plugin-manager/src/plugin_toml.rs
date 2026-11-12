@@ -18,12 +18,12 @@ pub struct PluginToml {
     #[serde(default)]
     pub version: Option<String>,
     /// Oldest MeshLLM host version this package works with, when it declares
-    /// one. Retained with the installed record so later host upgrades can
+    /// one (inclusive). Retained with the installed record so later host upgrades can
     /// judge the installed release without re-deriving it from the catalog.
     #[serde(default)]
     pub min_host_version: Option<String>,
     /// Newest MeshLLM host version this package works with, when it declares
-    /// one.
+    /// one (inclusive).
     #[serde(default)]
     pub max_host_version: Option<String>,
 }

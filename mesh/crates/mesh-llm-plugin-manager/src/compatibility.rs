@@ -21,8 +21,8 @@ pub struct HostCompatibility {
     /// Oldest host version this release works with, such as `0.81.0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<String>,
-    /// Newest host version this release works with, such as `0.81.x` written
-    /// as `0.82.0` when `0.82.0` is the first release that drops it.
+    /// Newest supported host version, inclusive: `0.81.0` includes that
+    /// release, but excludes `0.81.1` and later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<String>,
 }
@@ -162,6 +162,19 @@ mod tests {
             verdict(Some("0.80.0"), Some("0.82.0"), "0.81.0"),
             Verdict::Compatible
         );
+    }
+
+    #[test]
+    fn both_bounds_are_inclusive_at_equality() {
+        assert_eq!(verdict(None, Some("0.81.0"), "0.81.0"), Verdict::Compatible);
+        assert_eq!(
+            verdict(Some("0.81.0"), Some("0.81.0"), "0.81.0"),
+            Verdict::Compatible
+        );
+        assert!(matches!(
+            verdict(None, Some("0.81.0"), "0.81.1"),
+            Verdict::Incompatible(_)
+        ));
     }
 
     #[test]

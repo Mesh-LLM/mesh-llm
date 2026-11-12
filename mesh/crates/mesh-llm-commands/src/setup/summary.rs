@@ -60,6 +60,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
             "- GitHub star: {}",
             super::github::github_summary(plan, &actions.github_outcome)
         );
+        let _ = writeln!(err, "- Next: {}", next_step(actions));
         return;
     }
 
@@ -72,6 +73,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
     if let Some(github) = github_brief(actions) {
         let _ = writeln!(err, "  GitHub star  {github}");
     }
+    let _ = writeln!(err, "  Next     {}", next_step(actions));
 }
 
 /// One line for the optional plugin phase in the concise summary; `None`
@@ -119,6 +121,55 @@ fn plugin_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
         None => "none (no prompt available and no set selected)".to_string(),
     }
 }
+
+/// What to run after setup. An installed service runs `serve` on the default
+/// ports, now or once started, so another `serve` there would fail: point at
+/// starting the service and loading a model into its node instead.
+fn next_step(actions: &CliSetupActions<'_>) -> String {
+    let SetupServiceOutcome::Installed(report) = &actions.service_outcome else {
+        return format!(
+            "start a node with `mesh-llm serve --model <model>`. Quickstart: {QUICKSTART_URL}"
+        );
+    };
+    let load = "load a model into it with `mesh-llm load <model>`";
+    match report.status {
+        // A started service is not yet a ready node: it can still fail to
+        // bind, so say where to look if the console never answers.
+        ServiceInstallStatus::Started => format!(
+            "the service is starting a node: once http://localhost:3131 answers, {load}{}. \
+             Quickstart: {QUICKSTART_SERVICE_URL}",
+            report_line(report, "Logs: ")
+                .map(|logs| format!("; if it never does, see {logs}"))
+                .unwrap_or_default()
+        ),
+        ServiceInstallStatus::StartsAtLogon => format!(
+            "the service starts a node at your next logon, or now from a desktop session with \
+             `schtasks -Run -TN mesh-llm`; then {load}. Quickstart: {QUICKSTART_SERVICE_URL}"
+        ),
+        ServiceInstallStatus::NeedsManualStart => format!(
+            "start the service{}, then {load}. Quickstart: {QUICKSTART_SERVICE_URL}",
+            report_line(report, "Start it with: ")
+                .map(|command| format!(" with `{command}`"))
+                .unwrap_or_default()
+        ),
+    }
+}
+
+/// The rest of the service report line that starts with `prefix`.
+fn report_line<'a>(
+    report: &'a crate::setup::service::ServiceInstallReport,
+    prefix: &str,
+) -> Option<&'a str> {
+    report
+        .messages
+        .iter()
+        .find_map(|message| message.strip_prefix(prefix))
+}
+
+const QUICKSTART_URL: &str = "https://meshllm.cloud/docs/pages/quickstart/";
+/// The quickstart step that covers a node the service already runs.
+const QUICKSTART_SERVICE_URL: &str =
+    "https://meshllm.cloud/docs/pages/quickstart/#3-start-one-private-node";
 
 fn runtime_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
     match plan.runtime {
@@ -295,6 +346,62 @@ mod tests {
             github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
             Some("skipped; gh unavailable".to_string())
         );
+    }
+
+    fn installed_service(status: ServiceInstallStatus, messages: &[&str]) -> SetupServiceOutcome {
+        SetupServiceOutcome::Installed(crate::setup::service::ServiceInstallReport {
+            status,
+            summary: String::new(),
+            messages: messages.iter().map(|message| message.to_string()).collect(),
+            service_file: std::path::PathBuf::new(),
+            env_file: None,
+            runner_file: None,
+        })
+    }
+
+    fn next_step_for(outcome: SetupServiceOutcome) -> String {
+        let mut actions = actions_with_github_outcome(SetupGitHubOutcome::NotAuthenticated);
+        actions.service_outcome = outcome;
+        next_step(&actions)
+    }
+
+    #[test]
+    fn an_installed_service_never_gets_a_second_serve() {
+        // Started now, at the next logon, or by hand: the service will hold
+        // the default ports, so the next step loads into its node.
+        for status in [
+            ServiceInstallStatus::Started,
+            ServiceInstallStatus::StartsAtLogon,
+            ServiceInstallStatus::NeedsManualStart,
+        ] {
+            let next = next_step_for(installed_service(status, &[]));
+            assert!(!next.contains("mesh-llm serve"), "{status:?}: {next}");
+            assert!(next.contains("mesh-llm load"), "{status:?}: {next}");
+        }
+    }
+
+    #[test]
+    fn without_a_service_the_next_step_starts_a_node() {
+        for outcome in [
+            SetupServiceOutcome::NotRequested,
+            SetupServiceOutcome::PrintedGuidance,
+        ] {
+            assert!(next_step_for(outcome).contains("mesh-llm serve"));
+        }
+    }
+
+    #[test]
+    fn the_service_report_supplies_the_start_command_and_the_logs() {
+        let manual = next_step_for(installed_service(
+            ServiceInstallStatus::NeedsManualStart,
+            &["Start it with: systemctl --user enable --now mesh-llm"],
+        ));
+        assert!(manual.contains("systemctl --user enable --now mesh-llm"));
+        let started = next_step_for(installed_service(
+            ServiceInstallStatus::Started,
+            &["Logs: journalctl --user -u mesh-llm -f"],
+        ));
+        assert!(started.contains("journalctl --user -u mesh-llm -f"));
     }
 
     #[test]

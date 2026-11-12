@@ -12,9 +12,10 @@
 //! repaired, what may be updated, and what could not be established, and the
 //! caller renders it for its audience.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use crate::catalog::PluginCatalog;
+use crate::catalog::{CatalogEntry, PluginCatalog};
+use crate::catalog_pin::CatalogPin;
 use crate::compatibility::{self as compat, Verdict};
 use crate::install::{InstallOutcome, PluginInstallOptions, PluginProgressReporter};
 use crate::store::{InstalledPluginMetadata, PluginStore};
@@ -71,9 +72,22 @@ pub struct PluginUpgradePlan {
     /// plans proves nothing: compatibility must then be established locally,
     /// or the upgrade stays unapplied.
     pub catalog_available: bool,
+    /// The exact release identities, pins and digests used by the plan.
+    catalog: Option<PluginCatalog>,
 }
 
 impl PluginUpgradePlan {
+    fn repair_entry(&self, name: &str, version: &str, target: &str) -> Result<&CatalogEntry> {
+        let entry = self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.find_exact(name))
+            .with_context(|| format!("'{name}' has no catalog entry in the repair plan"))?;
+        // Refuse an inconsistent plan before downloading or replacing anything.
+        CatalogPin::for_entry(entry, target)?.ensure_release_is_pinned(version)?;
+        Ok(entry)
+    }
+
     pub fn required_repairs(&self) -> Vec<&PluginUpgradeCheck> {
         self.checks
             .iter()
@@ -136,6 +150,7 @@ pub fn plan_plugin_upgrades(
     Ok(PluginUpgradePlan {
         checks,
         catalog_available: catalog.is_some(),
+        catalog: catalog.cloned(),
     })
 }
 
@@ -169,6 +184,16 @@ fn check_plugin(
             plugin_protocol_version
         ))),
         (false, verdict) => Some(verdict),
+    };
+
+    let base = match &retained_verdict {
+        Some(Verdict::Unknown(reason)) => PluginUpgradeCheck {
+            verdict: PluginUpgradeVerdict::Unknown {
+                reason: reason.clone(),
+            },
+            ..base
+        },
+        _ => base,
     };
 
     let Some(catalog) = catalog else {
@@ -308,7 +333,7 @@ fn check_plugin(
         _ => {
             let installed_newer_or_equal =
                 !crate::source_ref::version_string_newer(&pin_version, &metadata.installed_version);
-            if installed_newer_or_equal {
+            if installed_newer_or_equal || !pin_compatible_with_target {
                 base
             } else {
                 PluginUpgradeCheck {
@@ -366,26 +391,38 @@ pub async fn repair_incompatible_plugins(
                 continue;
             }
         };
-        match crate::install::update_plugin_from_catalog(
+        if current.installed_version != check.installed_version {
+            outcome.failed.push((
+                check.name.clone(),
+                "installed release changed after planning; retry the upgrade".to_string(),
+            ));
+            continue;
+        }
+        let entry = match plan.repair_entry(&check.name, to, options.target.triple()) {
+            Ok(entry) => entry,
+            Err(error) => {
+                outcome
+                    .failed
+                    .push((check.name.clone(), format!("{error:#}")));
+                continue;
+            }
+        };
+        match crate::install::install_pinned_entry(
             &current,
+            entry,
             target_host_version,
             options,
             progress,
         )
         .await
         {
-            Ok(installed) if installed.metadata.installed_version == *to => {
+            Ok(installed) if installed.changed => {
                 outcome.repaired.push((check.name.clone(), installed));
             }
-            Ok(installed) => {
-                // The installer lands exactly the pin it verified; anything
-                // else is a bug we refuse to paper over.
+            Ok(_) => {
                 outcome.failed.push((
                     check.name.clone(),
-                    format!(
-                        "repaired to {} but planned {to}",
-                        installed.metadata.installed_version
-                    ),
+                    format!("release {to} is unchanged; no compatible replacement was installed"),
                 ));
             }
             Err(error) => {
@@ -822,6 +859,112 @@ mod tests {
             !plan.has_unestablished_compatibility(),
             "with the catalog read, unknown compatibility is reported, not blocking"
         );
+    }
+
+    #[test]
+    fn repairs_retain_the_planned_catalog_pin_even_if_the_catalog_moves() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut plugin = installed(&store, "capsules", "v1.0.0");
+        with_compatibility(&mut plugin, None, Some("0.80.0"));
+        store.save(&plugin).unwrap();
+        let mut live = catalog(&entry(
+            "capsules",
+            "v2.0.0",
+            r#", "compatibility":{"min":"0.81.0"}"#,
+        ));
+        let plan = plan_plugin_upgrades(&store, Some(&live), TARGET, "0.81.0", PROTOCOL).unwrap();
+        live = catalog(
+            &entry(
+                "capsules",
+                "v3.0.0",
+                r#", "compatibility":{"min":"0.81.0"}"#,
+            )
+            .replace(&"ab".repeat(32), &"cd".repeat(32)),
+        );
+
+        let planned = plan.repair_entry("capsules", "v2.0.0", TARGET).unwrap();
+        let pin = CatalogPin::for_entry(planned, TARGET).unwrap();
+        assert_eq!(pin.version().as_str(), "v2.0.0");
+        assert_eq!(pin.sha256(), "ab".repeat(32));
+        assert_eq!(
+            live.find_exact("capsules").unwrap().version.as_deref(),
+            Some("v3.0.0")
+        );
+        assert!(plan.repair_entry("capsules", "v3.0.0", TARGET).is_err());
+    }
+
+    #[tokio::test]
+    async fn inconsistent_repair_plans_fail_before_network_or_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut plugin = installed(&store, "capsules", "v1.0.0");
+        with_compatibility(&mut plugin, None, Some("0.80.0"));
+        store.save(&plugin).unwrap();
+        let catalog = catalog(&entry(
+            "capsules",
+            "v2.0.0",
+            r#", "compatibility":{"min":"0.81.0"}"#,
+        ));
+        let mut plan =
+            plan_plugin_upgrades(&store, Some(&catalog), TARGET, "0.81.0", PROTOCOL).unwrap();
+        plan.checks[0].verdict = PluginUpgradeVerdict::Repair {
+            to: "v3.0.0".into(),
+            reason: "inconsistent".into(),
+        };
+        let options = PluginInstallOptions {
+            store_root: temp.path().into(),
+            install_root: temp.path().join("installed"),
+            catalog_url: "must not be fetched".into(),
+            target: crate::PluginTarget::from_os_arch("linux", "x86_64").unwrap(),
+            host_version: "0.80.0".into(),
+        };
+        let outcome = repair_incompatible_plugins(&plan, "0.81.0", &options, &mut |_| {})
+            .await
+            .unwrap();
+        assert!(outcome.repaired.is_empty());
+        assert_eq!(outcome.failed.len(), 1);
+        assert!(
+            outcome.failed[0].1.contains("catalog-pinned v2.0.0"),
+            "{outcome:?}"
+        );
+        assert_eq!(store.load("capsules").unwrap(), plugin);
+        assert!(!options.install_root.exists());
+    }
+
+    #[test]
+    fn a_newer_pin_that_excludes_the_target_is_not_an_update_notice() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        store
+            .save(&installed(&store, "capsules", "v1.0.0"))
+            .unwrap();
+        let catalog = catalog(&entry(
+            "capsules",
+            "v2.0.0",
+            r#", "compatibility":{"min":"0.95.0"}"#,
+        ));
+        let plan =
+            plan_plugin_upgrades(&store, Some(&catalog), TARGET, "0.90.0", PROTOCOL).unwrap();
+        assert!(plan.update_notices().is_empty());
+        assert_eq!(plan.checks[0].verdict, PluginUpgradeVerdict::KeepCurrent);
+    }
+
+    #[test]
+    fn an_uncatalogued_legacy_plugin_remains_unknown_not_compatible() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut plugin = installed(&store, "legacy", "v1.0.0");
+        plugin.host_compatibility = None;
+        plugin.last_protocol_version = None;
+        store.save(&plugin).unwrap();
+        let plan =
+            plan_plugin_upgrades(&store, Some(&catalog("")), TARGET, "0.90.0", PROTOCOL).unwrap();
+        assert!(matches!(
+            plan.checks[0].verdict,
+            PluginUpgradeVerdict::Unknown { .. }
+        ));
+        assert!(!plan.has_unestablished_compatibility());
     }
 
     #[test]

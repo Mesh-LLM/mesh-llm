@@ -258,6 +258,22 @@ pub enum OptionalPluginResult {
     Incomplete(usize),
 }
 
+/// Windows finishes the host install after this process exits, so it cannot
+/// reach the normal optional phase. Never silently discard a selected set.
+pub fn handoff_optional_plugin_lines(plan: &OptionalPluginPlan) -> Vec<String> {
+    let (name, action) = match plan {
+        OptionalPluginPlan::InstallSet(name) => (name, "was not installed"),
+        OptionalPluginPlan::Offer(name) => (name, "was not offered"),
+        OptionalPluginPlan::Skip(_) => return Vec::new(),
+    };
+    vec![
+        format!(
+            "⚠️  Optional plugin set '{name}' {action}; the Windows host installer must finish first."
+        ),
+        format!("After the installer finishes: mesh-llm plugins sets install {name}"),
+    ]
+}
+
 /// Run the optional-plugin phase of setup/update after the core work
 /// succeeded. Optional failure never fails the host result: it warns, gives
 /// retry guidance, and reports the installation as incomplete. `prompt`
@@ -265,6 +281,7 @@ pub enum OptionalPluginResult {
 /// `--plugin-set` selection never asks it.
 pub async fn run_optional_plugin_phase(
     plan: &OptionalPluginPlan,
+    host_version: &str,
     prompt: &mut dyn FnMut(&str) -> bool,
 ) -> Result<OptionalPluginResult> {
     let mut err = mesh_llm_events::console_err();
@@ -278,7 +295,7 @@ pub async fn run_optional_plugin_phase(
             Ok(OptionalPluginResult::Skipped)
         }
         OptionalPluginPlan::InstallSet(name) | OptionalPluginPlan::Offer(name) => {
-            let options = match PluginInstallOptions::from_env() {
+            let mut options = match PluginInstallOptions::from_env() {
                 Ok(options) => options,
                 Err(error) => {
                     // No usable plugin store on this machine (for example an
@@ -293,6 +310,9 @@ pub async fn run_optional_plugin_phase(
                     return Ok(OptionalPluginResult::Incomplete(0));
                 }
             };
+            // An update may already have replaced the executable on disk; this
+            // process still contains the old release's build information.
+            options.host_version = host_version.to_string();
             let catalog = match fetch_catalog(&options).await {
                 Ok(catalog) => catalog,
                 Err(error) => {
@@ -492,6 +512,21 @@ mod tests {
             )
             .unwrap();
         assert!(offer_lines(&catalog, "empty").is_none());
+    }
+
+    #[test]
+    fn windows_handoff_reports_selected_sets_and_the_post_installer_command() {
+        let explicit =
+            handoff_optional_plugin_lines(&OptionalPluginPlan::InstallSet("extra".into()));
+        assert!(explicit[0].contains("'extra' was not installed"));
+        assert_eq!(
+            explicit[1],
+            "After the installer finishes: mesh-llm plugins sets install extra"
+        );
+        let offer = handoff_optional_plugin_lines(&OptionalPluginPlan::Offer("recommended".into()));
+        assert!(offer[0].contains("was not offered"));
+        assert!(offer[1].ends_with("mesh-llm plugins sets install recommended"));
+        assert!(handoff_optional_plugin_lines(&OptionalPluginPlan::Skip(None)).is_empty());
     }
 
     #[test]

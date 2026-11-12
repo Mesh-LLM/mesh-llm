@@ -246,7 +246,17 @@ pub(super) fn installed_plugin_metadata_for_name(
     name: &str,
 ) -> Result<Option<InstalledPluginMetadata>> {
     let root = default_store_root().context("Cannot determine plugin install root")?;
-    PluginStore::new(root).load_optional(name)
+    let mut metadata = PluginStore::new(root).load_optional(name)?;
+    // Configured specs resolve before persistent migration, which can also fail.
+    if let Some(metadata) = metadata.as_mut()
+        && metadata.default_managed
+        && metadata.allowed_surfaces.is_none()
+    {
+        metadata.allowed_surfaces = Some(mesh_llm_plugin_manager::migrated_allows_keys(
+            &metadata.name,
+        ));
+    }
+    Ok(metadata)
 }
 
 /// Grants an installed package carries. `plugins install` printed what the

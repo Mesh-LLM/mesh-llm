@@ -459,8 +459,9 @@ impl PluginStore {
             }
             let mut migrated_metadata = metadata.clone();
             migrated_metadata.default_managed = false;
-            migrated_metadata.allowed_surfaces =
-                Some(crate::legacy_defaults::migrated_allows_keys(&metadata.name));
+            migrated_metadata.allowed_surfaces.get_or_insert_with(|| {
+                crate::legacy_defaults::migrated_allows_keys(&metadata.name)
+            });
             self.save(&migrated_metadata)?;
             migrated.push(metadata.name);
         }
@@ -694,6 +695,30 @@ mod tests {
     }
 
     #[test]
+    fn legacy_migration_preserves_explicit_grants_and_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+        for allowed in [None, Some(Vec::new()), Some(vec!["web_ui".to_string()])] {
+            let mut old = metadata("capsules");
+            old.default_managed = true;
+            old.enabled = false;
+            old.allowed_surfaces = allowed.clone();
+            store.save(&old).unwrap();
+
+            assert_eq!(store.migrate_legacy_defaults().unwrap(), ["capsules"]);
+            let migrated = store.load("capsules").unwrap();
+            assert!(!migrated.default_managed);
+            assert!(!migrated.enabled);
+            assert_eq!(
+                migrated.allowed_surfaces,
+                allowed.or_else(|| Some(crate::legacy_defaults::migrated_allows_keys("capsules")))
+            );
+            assert_eq!(migrated.last_protocol_version, old.last_protocol_version);
+            assert!(store.migrate_legacy_defaults().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn updates_enabled_state() {
         let temp = TempDir::new().unwrap();
         let store = PluginStore::new(temp.path());
@@ -732,6 +757,24 @@ mod tests {
         store.delete("blackboard").unwrap();
         assert!(store.list().unwrap().is_empty());
         assert!(!install_path.exists());
+    }
+
+    #[test]
+    fn dot_names_do_not_reach_the_store_root_or_its_parent() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("plugins");
+        let store = PluginStore::new(&root);
+        store.save(&metadata("blackboard")).unwrap();
+        let sibling = temp.path().join("config.toml");
+        std::fs::write(&sibling, "keep").unwrap();
+
+        for name in [".", "..", "..."] {
+            assert!(store.delete(name).is_err(), "{name}");
+            assert!(store.save(&metadata(name)).is_err(), "{name}");
+            assert!(store.set_enabled(name, false).is_err(), "{name}");
+        }
+        assert!(sibling.exists());
+        assert_eq!(store.list().unwrap().len(), 1);
     }
 
     #[test]

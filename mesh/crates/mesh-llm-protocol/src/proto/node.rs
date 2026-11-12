@@ -578,6 +578,13 @@ pub struct AdvertisedModelThroughput {
     /// What the average measures.
     #[prost(enumeration = "ThroughputMeasurementKind", optional, tag = "6")]
     pub kind: ::core::option::Option<i32>,
+    /// The node's prompt-processing cost for this model in microseconds per
+    /// token, measured on its own requests with or without a cache hit, and the
+    /// wall-clock time of its newest sample. Both or neither.
+    #[prost(uint64, optional, tag = "7")]
+    pub prefill_micros_per_token: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "8")]
+    pub prefill_observed_at_unix_ms: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CacheAffinityAdvertisement {

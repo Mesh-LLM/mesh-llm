@@ -5,8 +5,14 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use sha2::Digest;
 
+mod package;
+
+use package::{
+    build_installed_metadata, compatibility_from_package, extract_for_install, retained_surfaces,
+    unchanged_install,
+};
+
 use crate::{
-    archive::{ExtractedPluginArchive, stage_plugin_archive},
     catalog::{CatalogEntry, PluginCatalog},
     catalog_pin::CatalogPin,
     compatibility::{self as compat, HostCompatibility},
@@ -134,7 +140,7 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    install_resolved_plugin(resolved, &options.host_version, options, progress, None).await
 }
 
 pub fn install_plugin_archive(
@@ -167,7 +173,14 @@ pub fn install_plugin_archive(
     });
     let store = PluginStore::new(&options.store_root);
     let current = store.load_optional(name)?;
-    let extracted = extract_for_install(&archive_path, archive_ext, name, options)?;
+    let extracted = extract_for_install(
+        &archive_path,
+        archive_ext,
+        name,
+        options,
+        None,
+        &options.host_version,
+    )?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("local:{}", archive_path.display()),
@@ -178,10 +191,10 @@ pub fn install_plugin_archive(
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
         default_managed: false,
         host_compatibility: compatibility_from_package(&extracted.plugin_toml, None),
-        allowed_surfaces: None,
+        allowed_surfaces: retained_surfaces(current.as_ref()),
         manifest: extracted.manifest,
-        last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
-        last_status: current.as_ref().and_then(|item| item.last_status.clone()),
+        last_protocol_version: None,
+        last_status: None,
         last_error: None,
         verified_sha256: None,
     };
@@ -193,25 +206,6 @@ pub fn install_plugin_archive(
         metadata,
         changed: true,
     })
-}
-
-/// Every install path extracts through here, so the executable it checks is
-/// named for `options.target`, as `InstalledPluginMetadata::executable_path`
-/// names the one the host launches.
-pub(crate) fn extract_for_install(
-    archive_path: &std::path::Path,
-    archive_ext: ArchiveExt,
-    name: &str,
-    options: &PluginInstallOptions,
-) -> Result<ExtractedPluginArchive> {
-    let staged = stage_plugin_archive(
-        archive_path,
-        archive_ext,
-        options.target.executable_suffix(),
-        name,
-        &options.install_root,
-    )?;
-    staged.commit()
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -241,7 +235,7 @@ pub async fn update_plugin(
     // incompatible one rather than installing it. A plugin outside the
     // catalog updates from its GitHub releases as before, with the digest
     // GitHub reports as the only cross-check.
-    match catalog_entry_for(name, options).await {
+    match catalog_update_entry(&current, options).await {
         Ok(Some(entry)) => {
             return install_pinned_entry(
                 &current,
@@ -270,7 +264,14 @@ pub async fn update_plugin(
         pin: None,
         compatibility: None,
     };
-    install_resolved_plugin(resolved, options, progress, Some(current)).await
+    install_resolved_plugin(
+        resolved,
+        &options.host_version,
+        options,
+        progress,
+        Some(current),
+    )
+    .await
 }
 
 /// Update (or repair) `current` to the release its catalog entry pins, when
@@ -295,16 +296,19 @@ pub async fn update_plugin_from_catalog(
     install_pinned_entry(current, entry, host_version, options, progress).await
 }
 
-/// The catalog entry for `name`, when the catalog names one. `Ok(None)` means
-/// the catalog was fetched and the plugin is not in it; `Err` means the
-/// catalog itself could not be read, which is not the same as absence.
-async fn catalog_entry_for(
-    name: &str,
+/// A verified update source for this installed package, not just its name.
+/// A missing or different-source entry leaves explicit updates on their own
+/// repository; an unavailable catalog is reported separately.
+async fn catalog_update_entry(
+    current: &InstalledPluginMetadata,
     options: &PluginInstallOptions,
 ) -> Result<Option<CatalogEntry>> {
     let client = catalog_client()?;
     let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
-    Ok(catalog.find_exact(name).cloned())
+    Ok(catalog
+        .find_exact(&current.name)
+        .filter(|entry| source_matches(entry, current))
+        .cloned())
 }
 
 /// Whether the package `entry` names is the package `installed` came from.
@@ -354,7 +358,14 @@ pub(crate) async fn install_pinned_entry(
         );
     }
     let resolved = pinned_entry_source(entry, host_version, options)?;
-    install_resolved_plugin(resolved, options, progress, Some(current.clone())).await
+    install_resolved_plugin(
+        resolved,
+        host_version,
+        options,
+        progress,
+        Some(current.clone()),
+    )
+    .await
 }
 
 /// Install a plugin not yet installed, from its catalog entry's pinned
@@ -366,7 +377,7 @@ pub async fn install_catalog_entry(
     progress: &mut impl PluginProgressReporter,
 ) -> Result<InstallOutcome> {
     let resolved = pinned_entry_source(entry, host_version, options)?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    install_resolved_plugin(resolved, host_version, options, progress, None).await
 }
 
 /// The resolved catalog-pinned source for `entry`, refusing when the platform
@@ -465,6 +476,7 @@ async fn resolve_install_source(
 
 async fn install_resolved_plugin(
     resolved: ResolvedInstallSource,
+    host_version: &str,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
     current: Option<InstalledPluginMetadata>,
@@ -480,17 +492,12 @@ async fn install_resolved_plugin(
     if let Some(pin) = resolved.pin.as_ref() {
         pin.ensure_release_is_pinned(&release.tag_name)?;
     }
-    if let Some(current) = &current
-        && current.installed_version == release.tag_name
-    {
+    if let Some(outcome) = unchanged_install(current.as_ref(), &release.tag_name, host_version)? {
         progress.report(PluginProgressEvent::AlreadyCurrent {
-            name: current.name.clone(),
-            version: current.installed_version.clone(),
+            name: outcome.metadata.name.clone(),
+            version: outcome.metadata.installed_version.clone(),
         });
-        return Ok(InstallOutcome {
-            metadata: current.clone(),
-            changed: false,
-        });
+        return Ok(outcome);
     }
 
     progress.report(PluginProgressEvent::SelectingAsset {
@@ -543,8 +550,11 @@ async fn install_resolved_plugin(
         options.target.archive_ext(),
         &resolved.plugin_name,
         options,
-    )?;
+        resolved.compatibility.as_ref(),
+        host_version,
+    );
     let _ = fs::remove_file(&archive_path);
+    let extracted = extracted?;
 
     let metadata = build_installed_metadata(
         &resolved,
@@ -573,66 +583,6 @@ async fn install_resolved_plugin(
         metadata,
         changed: true,
     })
-}
-
-fn build_installed_metadata(
-    resolved: &ResolvedInstallSource,
-    release_tag: &str,
-    asset: &GitHubReleaseAsset,
-    target: &PluginTarget,
-    extracted: ExtractedPluginArchive,
-    current: Option<&InstalledPluginMetadata>,
-    verified_sha256: Option<String>,
-) -> InstalledPluginMetadata {
-    let compatibility =
-        compatibility_from_package(&extracted.plugin_toml, resolved.compatibility.as_ref());
-    InstalledPluginMetadata {
-        name: resolved.plugin_name.clone(),
-        source_repository: resolved.source.url(),
-        installed_version: release_tag.to_string(),
-        target_triple: target.triple().to_string(),
-        downloaded_asset_name: asset.name.clone(),
-        install_path: extracted.install_path,
-        enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
-        default_managed: false,
-        host_compatibility: compatibility,
-        // A replaced release keeps the surface grants the operator had: a
-        // migrated legacy default must not widen what it may use just
-        // because it was updated or repaired. An unmigrated legacy record
-        // takes its retained legacy grants now, so a direct update can never
-        // clear them.
-        allowed_surfaces: current.and_then(|metadata| match &metadata.allowed_surfaces {
-            Some(allowed) => Some(allowed.clone()),
-            // An unmigrated legacy default takes its retained legacy grants
-            // now: a direct update can never clear them.
-            None if metadata.default_managed => {
-                Some(crate::legacy_defaults::migrated_allows_keys(&metadata.name))
-            }
-            None => None,
-        }),
-        manifest: extracted.manifest,
-        last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
-        last_status: current.and_then(|metadata| metadata.last_status.clone()),
-        last_error: None,
-        verified_sha256,
-    }
-}
-
-/// The compatibility an install retains: what the archive's own
-/// `plugin.toml` declares, and otherwise what its catalog entry declared for
-/// the pinned release. `None` when neither declares anything, which means
-/// unknown rather than excluded.
-fn compatibility_from_package(
-    plugin_toml: &crate::plugin_toml::PluginToml,
-    catalog: Option<&HostCompatibility>,
-) -> Option<HostCompatibility> {
-    if plugin_toml.min_host_version.is_some() || plugin_toml.max_host_version.is_some() {
-        return Some(HostCompatibility {
-            min: plugin_toml.min_host_version.clone(),
-            max: plugin_toml.max_host_version.clone(),
-        });
-    }
-    catalog.cloned()
 }
 
 /// Download the asset and verify it against the catalog pin when there is one,
@@ -747,7 +697,7 @@ mod source_matches_tests {
         .clone()
     }
 
-    fn installed_from(source: &str) -> InstalledPluginMetadata {
+    pub(super) fn installed_from(source: &str) -> InstalledPluginMetadata {
         let store = PluginStore::new(std::env::temp_dir().join("source-matches-test"));
         InstalledPluginMetadata {
             name: "capsules".into(),
@@ -1409,6 +1359,27 @@ mod tests {
             .recv_timeout(Duration::from_secs(30))
             .expect("catalog resolution returned")
             .map_err(|error| format!("{error:#}"))
+    }
+
+    #[tokio::test]
+    async fn explicit_updates_select_a_catalog_pin_only_for_the_installed_repository() {
+        let root = TempDir::new().unwrap();
+        for (source, catalog_selected) in [
+            ("https://github.com/acme/demo", false),
+            ("local:/tmp/demo.tar.gz", false),
+            ("https://github.com/MESH-LLM/DEMO", true),
+        ] {
+            let mut current = super::source_matches_tests::installed_from(source);
+            current.name = "demo".into();
+            let mut options = options_for(root.path(), "macos", "aarch64");
+            options.catalog_url = serve_catalog(PINNED_CATALOG_LINE);
+            let entry = catalog_update_entry(&current, &options).await.unwrap();
+            assert_eq!(entry.is_some(), catalog_selected, "{source}");
+            assert_eq!(
+                current.source_repository, source,
+                "the operator's source is retained"
+            );
+        }
     }
 
     #[test]

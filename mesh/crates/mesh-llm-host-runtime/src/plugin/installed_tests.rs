@@ -193,6 +193,35 @@ fn settings_only_entry_runs_the_enabled_store_copy() {
 
 #[test]
 #[serial_test::serial]
+fn configured_legacy_grants_apply_before_persistent_migration() {
+    let root = tempfile::TempDir::new().unwrap();
+    for allowed in [None, Some(Vec::new()), Some(vec!["web_ui".to_string()])] {
+        let mut old = installed_capsules(root.path(), true);
+        old.default_managed = true;
+        old.allowed_surfaces = allowed.clone();
+        let store = PluginStore::new(root.path());
+        store.save(&old).unwrap();
+
+        let resolved = with_plugin_dir(root.path(), || {
+            configured_external_plugin_spec(&capsules_entry(None))
+        })
+        .unwrap();
+        let ConfiguredExternalPlugin::Active(spec) = resolved else {
+            panic!("the installed plugin must resolve");
+        };
+        assert_eq!(
+            spec.installed_metadata.unwrap().allowed_surfaces,
+            allowed.or_else(|| Some(mesh_llm_plugin_manager::migrated_allows_keys("capsules")))
+        );
+        assert!(
+            store.load("capsules").unwrap().default_managed,
+            "the first configured spec must not depend on a persistent migration"
+        );
+    }
+}
+
+#[test]
+#[serial_test::serial]
 fn explicit_installed_command_keeps_its_packaged_web_ui() {
     use mesh_llm_plugin_manager::store::{
         InstalledPluginWebUiMetadata, InstalledPluginWebUiValidation,

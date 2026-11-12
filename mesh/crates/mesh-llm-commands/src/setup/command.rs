@@ -293,26 +293,34 @@ impl SetupActions for CliSetupActions<'_> {
             };
             let result = if matches!(plan, SetupPluginPlan::Skip(_)) {
                 // A skip prints its line; nothing here can fail.
-                crate::plugin_sets::run_optional_plugin_phase(&optional, &mut |_| false)
-                    .await
-                    .unwrap_or(crate::plugin_sets::OptionalPluginResult::Skipped)
+                crate::plugin_sets::run_optional_plugin_phase(
+                    &optional,
+                    mesh_llm_build_info::RELEASE_VERSION,
+                    &mut |_| false,
+                )
+                .await
+                .unwrap_or(crate::plugin_sets::OptionalPluginResult::Skipped)
             } else {
                 // The only reader of the terminal: the offer prints its lines
                 // first, then the prompter answers with a No default, so an
                 // unattended or EOF answer declines.
-                let mut prompt = |set: &str| {
+                let mut prompt = |_set: &str| {
                     let reply = prompter.confirm(super::SetupConfirmPrompt {
                         kind: super::SetupPromptKind::InstallPlugins,
                         message: PLUGIN_SET_PROMPT,
                         default: super::SetupPromptDefault::No,
                     });
-                    let _ = set;
                     super::SetupPromptDefault::No.resolve(reply)
                 };
                 // Only a usage error (an unknown explicitly selected set, or
                 // no usable plugin store) propagates; a failed download is
                 // reported as an incomplete optional install.
-                crate::plugin_sets::run_optional_plugin_phase(&optional, &mut prompt).await?
+                crate::plugin_sets::run_optional_plugin_phase(
+                    &optional,
+                    mesh_llm_build_info::RELEASE_VERSION,
+                    &mut prompt,
+                )
+                .await?
             };
             self.plugin_outcome = match result {
                 crate::plugin_sets::OptionalPluginResult::Skipped => SetupPluginOutcome::Skipped,

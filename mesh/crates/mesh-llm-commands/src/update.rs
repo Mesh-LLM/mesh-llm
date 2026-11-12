@@ -23,10 +23,6 @@ use crate::plugin_sets::{
     attended, fetch_catalog, optional_plugin_plan, render_update_notices, run_optional_plugin_phase,
 };
 
-/// The plugin protocol version the host speaks; passed to the plugin check
-/// so a known protocol mismatch is treated as incompatibility.
-const PLUGIN_PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
-
 pub async fn run_update(cli: &Cli) -> Result<()> {
     let (requested_version, flavor, detect_flavor, plugin_set, skip_plugin_install, no_interactive) =
         match &cli.command {
@@ -67,16 +63,10 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
     let target_version = prepared
         .as_ref()
         .map(|prepared| prepared.release_version().to_string())
-        .unwrap_or_else(|| mesh_llm_build_info::BUILD_VERSION.to_string());
+        .unwrap_or_else(|| mesh_llm_build_info::RELEASE_VERSION.to_string());
 
     run_plugin_upgrade_checks(&target_version).await?;
 
-    if let Some(prepared) = prepared.as_ref() {
-        autoupdate::apply_prepared_update(prepared, mesh_llm_build_info::BUILD_VERSION).await?;
-    }
-
-    // The host upgrade landed. Optional plugin installation never fails it:
-    // warn, guide a retry, and report the installation as incomplete.
     let is_attended = attended(no_interactive);
     let plan = optional_plugin_plan(
         plugin_set,
@@ -84,7 +74,27 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         default_plugins_opted_out(),
         is_attended,
     );
-    match run_optional_plugin_phase(&plan, &mut |set| {
+    // Windows exits during installer handoff, so report notices and any
+    // unfinished optional work before handing control to the installer.
+    if is_attended && let Some(notices) = update_notices(&target_version).await {
+        let mut err = mesh_llm_events::console_err();
+        for line in notices {
+            let _ = writeln!(err, "{line}");
+        }
+    }
+    if cfg!(windows) && prepared.is_some() {
+        let mut err = mesh_llm_events::console_err();
+        for line in crate::plugin_sets::handoff_optional_plugin_lines(&plan) {
+            let _ = writeln!(err, "{line}");
+        }
+    }
+    if let Some(prepared) = prepared.as_ref() {
+        autoupdate::apply_prepared_update(prepared, mesh_llm_build_info::BUILD_VERSION).await?;
+    }
+
+    // The host upgrade landed. Optional plugin installation never fails it:
+    // warn, guide a retry, and report the installation as incomplete.
+    match run_optional_plugin_phase(&plan, &target_version, &mut |set| {
         crate::plugin_sets::prompt_install_set(set)
     })
     .await
@@ -96,12 +106,6 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         Err(error) => {
             let mut err = mesh_llm_events::console_err();
             let _ = writeln!(err, "⚠️  {error:#}");
-        }
-    }
-    if is_attended && let Some(notices) = update_notices(&target_version).await {
-        let mut err = mesh_llm_events::console_err();
-        for line in notices {
-            let _ = writeln!(err, "{line}");
         }
     }
     Ok(())
@@ -151,7 +155,7 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
         catalog.as_ref(),
         options.target.triple(),
         target_version,
-        PLUGIN_PROTOCOL_VERSION,
+        mesh_llm_plugin::PROTOCOL_VERSION,
     )?;
 
     if !plan.catalog_available {
@@ -159,6 +163,15 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
             err,
             "⚠️  Plugin catalog unavailable; checking installed plugins locally."
         );
+    }
+    for check in &plan.checks {
+        if let PluginUpgradeVerdict::Unknown { reason } = &check.verdict {
+            let _ = writeln!(
+                err,
+                "⚠️  {} {}: compatibility with MeshLLM {target_version} is unknown ({reason}).",
+                check.name, check.installed_version
+            );
+        }
     }
     let repairs = plan.required_repairs();
     if repairs.is_empty() {
@@ -172,15 +185,6 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
             "ℹ️  Checking installed plugins: {compatible} compatible; 0 require updates."
         );
         if plan.has_unestablished_compatibility() {
-            for check in &plan.checks {
-                if let PluginUpgradeVerdict::Unknown { reason } = &check.verdict {
-                    let _ = writeln!(
-                        err,
-                        "⚠️  {} {}: compatibility with MeshLLM {target_version} is unknown ({reason}).",
-                        check.name, check.installed_version
-                    );
-                }
-            }
             bail!(
                 "Upgrade not applied: compatibility with MeshLLM {target_version} could not be \
                  established for every installed plugin and no required repair is possible. \
@@ -250,8 +254,9 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
         }
         let _ = writeln!(
             err,
-            "ℹ️  Upgrade not applied. MeshLLM stays at {}; plugins that repaired successfully \
-             keep their compatible updates, and nothing incompatible is launched.",
+            "ℹ️  Upgrade not applied. MeshLLM stays at {}. Completed plugin updates remain \
+             installed and may require the target host; restore their previous releases before \
+             running the old host.",
             mesh_llm_build_info::BUILD_VERSION
         );
         let _ = writeln!(err, "Retry: mesh-llm update");
@@ -262,8 +267,8 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Update notices for the attended report, resolved from a fresh catalog
-/// snapshot after the upgrade.
+/// Update notices for the attended report, resolved after required repairs
+/// and before a Windows installer handoff can exit this process.
 async fn update_notices(target_version: &str) -> Option<Vec<String>> {
     let options = PluginInstallOptions::from_env().ok()?;
     let catalog = fetch_catalog(&options).await.ok()?;
@@ -273,7 +278,7 @@ async fn update_notices(target_version: &str) -> Option<Vec<String>> {
         Some(&catalog),
         options.target.triple(),
         target_version,
-        PLUGIN_PROTOCOL_VERSION,
+        mesh_llm_plugin::PROTOCOL_VERSION,
     )
     .ok()?;
     let lines = render_update_notices(&plan);
@@ -305,15 +310,5 @@ impl PluginProgressReporter for UpdatePluginProgress {
             }
             other => self.inner.report(other),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_plugin_protocol_constant_matches_the_host_protocol() {
-        assert_eq!(PLUGIN_PROTOCOL_VERSION, mesh_llm_plugin::PROTOCOL_VERSION);
     }
 }
