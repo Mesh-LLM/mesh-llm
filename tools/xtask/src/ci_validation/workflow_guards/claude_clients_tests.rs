@@ -92,6 +92,16 @@ fn batch_must_keep_the_host_branch_and_every_planned_crate() {
     }
 }
 #[test]
+fn batch_must_keep_errexit_enabled() {
+    for disable in ["set +e", "set +o errexit"] {
+        let run = batch_script(CLIENT_TEST).replace(
+            "set -euo pipefail\n",
+            &format!("set -euo pipefail\n{disable}\n"),
+        );
+        assert!(check(&with_batch(&run)).is_err(), "accepted {disable}");
+    }
+}
+#[test]
 fn batch_gate_requires_planned_crates_and_failure_propagation() {
     for (key, value) in [("if", "${{ false }}"), ("continue-on-error", "true")] {
         let mut workflows = actual();

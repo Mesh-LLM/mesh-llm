@@ -101,6 +101,12 @@ fn required(workflow: &Node) -> DynResult<()> {
     }
     h::binding(h::member(gate, "env")?, "TEST_CRATES", BATCH_CRATES)?;
     let source = normalized(field(gate, "run").ok_or("missing Rust test batch script")?);
+    if source
+        .lines()
+        .any(|line| line.contains("set +e") || line.contains("set +o errexit"))
+    {
+        return Err("Rust test batch must keep errexit enabled for its Cargo tests".into());
+    }
     if !source.lines().any(|line| line.trim() == BATCH_LOOP) {
         return Err("Rust test batch must iterate over every planned crate".into());
     }
