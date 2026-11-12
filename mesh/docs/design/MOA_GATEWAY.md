@@ -393,13 +393,25 @@ number.
 
 ### Local smoke test
 
+Enable the plugin first, or every request below uses core single-model
+routing and never exercises MoA. Add to `~/.mesh-llm/config.toml`:
+
+```toml
+[[plugin]]
+name = "mesh-moa"
+```
+
 Start mesh with at least one model + discover mesh peers:
 
 ```bash
 mesh-llm serve --model "unsloth/GLM-4.7-Flash-GGUF:Q4_K_M" --auto
 ```
 
-Wait for ≥2 models in `curl -s http://localhost:9337/v1/models`.
+Wait for ≥2 models in `curl -s http://localhost:9337/v1/models`, at least one
+of them verified 10B or larger; an all-small or unknown-size pool is answered
+by one model. Add `-i` to the non-streaming requests and check the response
+carries `x-moa-workers` (≥2) and the other `x-moa-*` headers; without them the
+request was not answered by the committee.
 
 **Factual accuracy:**
 ```bash
@@ -417,7 +429,8 @@ curl -s http://localhost:9337/v1/chat/completions \
 ```
 Expected: `tool_calls` with `read_file({"path":"README.md"})`.
 
-**Streaming:**
+**Streaming** (uses core single-model routing even with the plugin on; no
+`x-moa-*` headers expected):
 ```bash
 curl -s http://localhost:9337/v1/chat/completions \
   -H "Content-Type: application/json" \
