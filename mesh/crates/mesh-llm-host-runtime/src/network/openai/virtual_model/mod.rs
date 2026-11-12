@@ -340,18 +340,18 @@ fn invoke_in_scope<'a>(
 ) -> impl std::future::Future<Output = anyhow::Result<mesh_llm_plugin::VirtualModelResponse>> + 'a {
     let private_turn = mesh::current_owner_scope()
         .map(|scope| plugins.begin_private_invocation(&route.plugin_name, Some(scope)));
-    async move {
-        let response = plugins
-            .invoke_virtual_model(route, input_json, Some(std::time::Duration::from_secs(300)))
-            .await;
-        // Lingers unless the plugin replied: a timed-out turn may still run.
-        if response.is_ok()
-            && let Some(turn) = private_turn
-        {
-            turn.finish();
-        }
-        response
-    }
+    let (plugins, route, input_json) = (plugins.clone(), route.clone(), input_json.to_string());
+    // A private turn runs to the plugin's reply even if the client leaves,
+    // and lingers unless the plugin replied: a timed-out turn may still run.
+    crate::plugin::private_invocations::run_to_reply(private_turn, async move {
+        plugins
+            .invoke_virtual_model(
+                &route,
+                &input_json,
+                Some(std::time::Duration::from_secs(300)),
+            )
+            .await
+    })
 }
 
 #[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]

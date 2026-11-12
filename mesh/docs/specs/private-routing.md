@@ -133,9 +133,12 @@ only what the circle serves.
   only narrow a private request, never widen it. This is per plugin, not
   per request: a public request the same plugin handles at the same moment
   is narrowed too, and private requests from different circles at once
-  leave only their common owners. If the host stops waiting
-  before the plugin replies (the client left, or the deadline passed), the
-  plugin stays private for five more minutes, since it may still be working.
+  leave only their common owners. The plugin stays private until it
+  replies, even if the client leaves first. If the call's deadline passes
+  without a reply, the plugin stays private for five more minutes, since it
+  may still be working. A virtual-model turn or request transform that
+  times out also restarts the plugin, which ends that work. An exchange hook
+  that runs more than five minutes past its deadline is not covered.
   What a plugin does on its own, outside these calls, is up to the plugin:
   install only plugins you trust.
 - A trailing `@private` or `@incognito` is reserved. A model name that is

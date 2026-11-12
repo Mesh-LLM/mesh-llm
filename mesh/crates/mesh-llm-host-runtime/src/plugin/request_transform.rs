@@ -106,38 +106,40 @@ impl PluginManager {
             );
         }
         // Transforms run before the request is scoped: nested calls keep to
-        // this node's trust circle, the one the request will get. The plugin
-        // is done once it replies, whatever the reply says; only a call that
-        // ends without one leaves the plugin private for a while.
+        // this node's trust circle, the one the request will get.
         let private_call = || private.then(|| self.begin_private_invocation(plugin_name, None));
-        let replied = |call: Option<super::private_invocations::PrivateInvocationGuard>| {
-            if let Some(call) = call {
-                call.finish();
-            }
-        };
         if self.is_test_bridge_enabled(plugin_name) {
             let call = private_call();
             let output = self
                 .mcp_request(plugin_name, "request_transform/invoke", input)
                 .await;
-            replied(call);
+            if let Some(call) = call {
+                call.finish();
+            }
             return output;
         }
-        let plugin = self
-            .inner
-            .plugins
-            .get(plugin_name)
-            .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
-        let call = private_call();
-        let response = plugin
-            .invoke_service(
-                proto::ServiceKind::RequestTransform,
-                SERVICE_NAME,
-                &input_json,
-                Some(TRANSFORM_TIMEOUT),
-            )
-            .await?;
-        replied(call);
+        if !self.inner.plugins.contains_key(plugin_name) {
+            bail!("Unknown plugin '{plugin_name}'");
+        }
+        // The plugin is done once it replies, whatever the reply says; the
+        // call runs to that reply even if the client leaves.
+        let (manager, name) = (self.clone(), plugin_name.to_string());
+        let response = super::private_invocations::run_to_reply(private_call(), async move {
+            let plugin = manager
+                .inner
+                .plugins
+                .get(&name)
+                .with_context(|| format!("Unknown plugin '{name}'"))?;
+            plugin
+                .invoke_service(
+                    proto::ServiceKind::RequestTransform,
+                    SERVICE_NAME,
+                    &input_json,
+                    Some(TRANSFORM_TIMEOUT),
+                )
+                .await
+        })
+        .await?;
         if response.is_error {
             bail!(
                 "request transform plugin '{plugin_name}' failed: {}",

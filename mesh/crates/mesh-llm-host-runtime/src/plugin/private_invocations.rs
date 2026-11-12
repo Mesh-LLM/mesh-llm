@@ -14,10 +14,14 @@
 //! to its own trust circle, which for a request forwarded from another
 //! owner's node is not the circle that request was given.
 //!
-//! A plugin can keep working after the host stops waiting for it: the client
-//! went away, or the host's deadline passed. The host sends no cancel, so an
-//! invocation that ends without the plugin's reply keeps the plugin private,
-//! with the same limit, for [`ABANDONED_LINGER`] after it.
+//! A plugin keeps working on a call the host sends no cancel for. So a
+//! private call runs to the plugin's reply on its own task
+//! ([`run_to_reply`]): a client that goes away does not end the binding.
+//! A call that ends without a reply (the host's deadline passed) keeps the
+//! plugin private, with the same limit, for [`ABANDONED_LINGER`] after it. A
+//! virtual-model turn or request transform that times out also restarts an
+//! external plugin, which ends its work; an exchange hook past its deadline
+//! is not restarted.
 // shortcut: per plugin, not per request. A per-request token would need the
 // plugin protocol to echo it back on nested calls.
 
@@ -141,6 +145,32 @@ impl PrivateInvocations {
     }
 }
 
+/// Run `call`, a plugin invocation, holding `guard` until the plugin replies
+/// (`Ok`) or the call ends without a reply (`Err`, which lingers). With a
+/// guard, the call runs on its own task to completion, so a caller that
+/// stops waiting does not cut the binding short while the plugin works on.
+pub(crate) async fn run_to_reply<T, F>(
+    guard: Option<PrivateInvocationGuard>,
+    call: F,
+) -> anyhow::Result<T>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = anyhow::Result<T>> + Send + 'static,
+{
+    let Some(guard) = guard else {
+        return call.await;
+    };
+    tokio::spawn(async move {
+        let reply = call.await;
+        if reply.is_ok() {
+            guard.finish();
+        }
+        reply
+    })
+    .await
+    .unwrap_or_else(|error| Err(anyhow::anyhow!("private plugin call failed: {error}")))
+}
+
 impl PrivateInvocationGuard {
     /// The plugin replied: this invocation no longer needs to linger.
     pub(crate) fn finish(mut self) {
@@ -238,5 +268,40 @@ mod tests {
         };
         drop(short.begin("moa", None));
         assert_eq!(short.nested_scope("moa"), None);
+    }
+
+    #[tokio::test]
+    async fn a_caller_that_stops_waiting_does_not_end_the_binding() {
+        // No linger: only the running call keeps the plugin private.
+        let invocations = PrivateInvocations {
+            linger: Duration::ZERO,
+            ..PrivateInvocations::default()
+        };
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let call = async move {
+            reply_rx.await.ok();
+            let _ = done_tx.send(());
+            Ok(())
+        };
+        let waiting = tokio::spawn(run_to_reply(Some(invocations.begin("moa", None)), call));
+        tokio::task::yield_now().await;
+        // The client went away: the host stops waiting.
+        waiting.abort();
+        let _ = waiting.await;
+        assert_eq!(
+            invocations.nested_scope("moa"),
+            Some(NestedScope::NodeCircle)
+        );
+        // The plugin replies later; only then is it public again.
+        reply_tx.send(()).unwrap();
+        done_rx.await.unwrap();
+        for _ in 0..100 {
+            if invocations.nested_scope("moa").is_none() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("the plugin stayed private after it replied");
     }
 }

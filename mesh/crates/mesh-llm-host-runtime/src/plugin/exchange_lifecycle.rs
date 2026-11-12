@@ -512,14 +512,30 @@ async fn invoke_phase(
         event["body_stream_kind"] = json!(kind);
     }
     let input = serde_json::to_string(&event).map_err(|_| HookFailure::Internal)?;
-    let reply = plugin
-        .invoke_exchange_service(declaration, &input, deadline)
-        .await;
-    if reply.is_ok()
-        && let Some(call) = private_call
-    {
-        call.finish();
-    }
+    let reply = match private_call {
+        // Waits for the plugin's reply until the deadline even if this
+        // exchange is dropped; see `private_invocations::run_to_reply`.
+        Some(call) => {
+            let (manager, name, declaration) =
+                (manager.clone(), name.to_string(), declaration.clone());
+            super::private_invocations::run_to_reply(Some(call), async move {
+                let plugin = manager
+                    .inner
+                    .plugins
+                    .get(&name)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown plugin '{name}'"))?;
+                plugin
+                    .invoke_exchange_service(&declaration, &input, deadline)
+                    .await
+            })
+            .await
+        }
+        None => {
+            plugin
+                .invoke_exchange_service(declaration, &input, deadline)
+                .await
+        }
+    };
     let reply = reply.map_err(|_| HookFailure::Internal)?;
     if reply.is_error || reply.output_json.len() > 32 * 1024 {
         return Err(HookFailure::Internal);

@@ -222,3 +222,53 @@ async fn a_forwarded_private_request_keeps_to_this_and_the_requesters_owner() {
     assert!(hosts.contains(&mine));
     assert!(!hosts.contains(&theirs) && !hosts.contains(&forged));
 }
+
+/// Entry node A ("them") trusts this node B ("me"); B trusts C ("friend"),
+/// A does not. B's plugin handles A's forwarded private request, and its
+/// nested call must not reach C.
+#[tokio::test]
+async fn a_plugins_nested_call_does_not_reach_owners_the_entry_node_does_not_trust() {
+    use crate::network::openai::{request_parse, routing_scope};
+    use crate::plugin::private_invocations::NestedScope;
+    use tokio::io::AsyncWriteExt;
+
+    let (node, mine, theirs, _) = node_with_mine_and_theirs().await;
+    let friend = owned_host(64, "friend", OwnershipStatus::Verified);
+    let friend_id = friend.id;
+    node.insert_test_peer_without_liveness(friend).await;
+    sign_as_me(&node).await;
+    node.trust_store
+        .lock()
+        .await
+        .add_trusted_owner("friend".to_string(), None);
+
+    let plugins = crate::plugin::PluginManager::for_test_summaries(Vec::new());
+    let forwarded = node.forwarded_private_scope(theirs).await;
+    let _turn = plugins.begin_private_invocation("moa", Some(forwarded));
+    let Some(NestedScope::Owners(owners)) = plugins.private_nested_scope("moa") else {
+        panic!("the turn's owners must travel with its nested calls");
+    };
+
+    // The nested call, as the bridge sends it to this node's own API.
+    let wire = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+         {}: {}\r\n{}: {}\r\nContent-Length: 2\r\n\r\n{{}}",
+        routing_scope::MESH_SCOPE_HEADER,
+        routing_scope::PRIVATE_SCOPE,
+        routing_scope::MESH_SCOPE_OWNERS_HEADER,
+        owners.owner_ids().join(","),
+    );
+    let (mut reader, mut writer) = tokio::io::duplex(wire.len() + 1);
+    writer.write_all(wire.as_bytes()).await.unwrap();
+    let mut request = request_parse::read_http_request(&mut reader).await.unwrap();
+    let scope = routing_scope::resolve(&node, &mut request)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let hosts = with_owner_scope(Some(scope), node.hosts_for_model(MODEL)).await;
+    assert!(hosts.contains(&mine));
+    assert!(!hosts.contains(&friend_id), "C is outside A's circle");
+    // Narrowing only: B does not trust A, so A's other nodes stay out too.
+    assert!(!hosts.contains(&theirs));
+}
