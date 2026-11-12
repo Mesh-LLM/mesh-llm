@@ -6,7 +6,8 @@ and return one coherent OpenAI-compatible response.
 
 **Crate:** `mesh/crates/mesh-mixture-of-agents/`
 **Automatic directive:** `model: "mesh"` (`auto` is a deprecated alias; advertised when a model is available)
-**Status:** Integrated into mesh proxy, live-tested with mesh peers
+**Plugin:** `mesh/crates/mesh-llm-moa-plugin/`, off by default; enable with `[[plugin]] name = "mesh-moa"` (see [Integration](#integration))
+**Status:** Opt-in virtual-model plugin, live-tested with mesh peers
 
 ---
 
@@ -44,9 +45,9 @@ for the experimental framing.
               │  { model: "mesh", messages, tools, stream }
               ▼
     ┌──────────────────────────────────────────────────────┐
-    │  Mesh proxy (ingress.rs)                             │
-    │  - intercepts model == "mesh"                        │
-    │  - build_moa_config(callable models in mesh)         │
+    │  Mesh proxy (ingress.rs) → mesh-moa plugin           │
+    │  - mesh is a plugin virtual model (opt-in)           │
+    │  - GatewayConfig from candidate snapshot             │
     └──────────────────────┬───────────────────────────────┘
                            │ handle_turn(config, body)
                            ▼
@@ -98,8 +99,8 @@ callable in the mesh.
 
 | Callable models | Workers fanned out | Roles assigned |
 |---:|:---:|:---|
-| 0 | — | degrades to ordinary model selection; 503 if none exists |
-| 1 | 1 | one-worker Mesh gateway |
+| 0 | — | 503 |
+| 1 | — | answered directly by that model, no committee |
 | 2 | 2 | fast + strong |
 | 3 | 3 | fast + specialist + strong |
 | 4 | 4 | fast + specialist + specialist + strong |
@@ -127,8 +128,8 @@ Pool shaping, in order (all measured; see
 - **All-small pools do not convene a committee.** Measured through the
   shipped path, an 8B-class pool with an 8B reducer never beat its best
   member and lost about a third of decided trials (2×8B 0W/37L; 6×8B
-  5W/23L, p=0.0009). Such a pool collapses to its strongest member and
-  runs as a one-worker Mesh gateway. This is a statement about a weak
+  5W/23L, p=0.0009). Such a pool is answered directly by its strongest
+  member, with no committee. This is a statement about a weak
   reducer synthesizing weak drafts; a capable pool is the opposite
   (71W/8T/1L, p<0.0001). As soon as a mesh gains a big-tier model, the
   pool is no longer all-small and MoA engages.
@@ -297,19 +298,38 @@ stripped throughout the pipeline.
 
 ## Integration
 
-The MoA intercept lives in `ingress.rs` (~line 234). When `model == "mesh"`:
+MoA is the built-in `mesh-moa` virtual-model plugin
+(`crates/mesh-llm-moa-plugin`). It ships in the `mesh-llm` binary but is
+**off by default**. Turn it on in `~/.mesh-llm/config.toml` (or the file passed
+with `--config`):
 
-1. `build_moa_config()` collects all models from `ModelTargets` + `callable`
-   list, deduplicates aliases, wraps each in `LocalModelBackend` or
-   `RemoteModelBackend`
-2. `handle_turn()` runs the stateless MoA pipeline
-3. Response is sent as SSE (streaming clients) or plain JSON
+```toml
+[[plugin]]
+name = "mesh-moa"
+```
 
-Activation: `model=mesh` enters the Mesh gateway whenever at least one worker
-is admitted. With two or more eligible workers it can form a committee; with one,
-the gateway runs that worker without rewriting the virtual model. Only a
-zero-worker request degrades to ordinary real-model selection (and returns 503
-if no model is available).
+Without that entry, `model=mesh` (and the deprecated alias `auto`) is core
+single-model routing: the host picks one capability-compatible model and no
+committee runs.
+
+With the plugin registered:
+
+1. Ingress (`try_handle_virtual_model_intercept` in `ingress.rs`) sees that
+   `mesh` is a plugin-declared virtual model and hands the request to the
+   plugin with a snapshot of the callable candidate models. Requests that set
+   `x-mesh-target` / `x-mesh-exclude` are rejected with 409.
+2. The plugin overrides only eligible non-streaming text chat. Streaming and
+   media requests keep core routing.
+3. With one eligible model, or when every eligible model is under 10B
+   parameters or of unknown size, the plugin answers from one model and sets
+   no `x-moa-*` headers.
+4. Otherwise it builds a `GatewayConfig` from the candidates and
+   `handle_turn()` runs the stateless MoA pipeline; the response carries
+   `x-moa-*` headers.
+5. An empty candidate set returns 503.
+
+See [plugins/virtual-models.md](../plugins/virtual-models.md) for the
+virtual-model plugin contract.
 
 ### Buzz terminal-reply rescue
 
@@ -329,10 +349,9 @@ through unchanged.
 
 | System | What it does | Relationship to MoA |
 |--------|-------------|---------------------|
-| `auto` / `mesh` | Same automatic directive | Committee-capable chat uses MoA; streaming, media, non-chat, or unavailable workers use ordinary routing |
+| `auto` / `mesh` | Same automatic directive | Core single-model routing by default; with `mesh-moa` enabled, eligible non-streaming text chat uses MoA |
 | Hooks (`virtual_llm.rs`) | Reactive during inference (entropy/drift/image) | MoA is proactive before inference |
 | Consult (`consult.rs`) | Single peer consultation over QUIC | MoA does parallel multi-peer |
-| Pipeline (`pipeline.rs`) | 2-model plan→execute for code tasks | Complementary, used at ingress line 279 |
 
 Hooks and MoA are independent. Hooks fire reactively during inference.
 MoA fires proactively before inference. The two are intentionally kept
@@ -417,6 +436,7 @@ Expected: Correct "No" with valid syllogistic reasoning.
 ### Agent integration test
 
 ```bash
+# Requires [[plugin]] name = "mesh-moa"; streaming requests use core routing
 # Goose
 GOOSE_PROVIDER=mesh GOOSE_MODEL=mesh goose run
 
@@ -436,8 +456,8 @@ client, no recursive hook loops.
 | Remote peer timeout (60s worker / 60s reducer) | Grace ships what arrived at the 10s window; a dead peer costs 10s, not 60s |
 | First reducer candidate slow / cold KV | Hedges to second candidate after 5s, races for first OK |
 | First reducer candidate broken (502s) | Fast-fails to next candidate immediately, no hedge wait |
-| Only 1 model available | Runs that worker inside the Mesh gateway |
-| No workers admitted | Degrades to ordinary real-model selection; 503 if none exists |
+| Only 1 eligible model, or all under 10B / unknown size | Plugin answers from one model, no `x-moa-*` headers |
+| No candidate models | 503 |
 | All workers fail | Returns error response |
 
 ### What to watch for
