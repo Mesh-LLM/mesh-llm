@@ -835,6 +835,14 @@ pub(super) fn message_content_to_generation_text(
                     }
                     continue;
                 }
+                // Nothing here can read a file part, so dropping it would let
+                // the model answer without the attachment. A request transform
+                // (such as a PDF plugin) must turn it into text before this.
+                if matches!(part.content_type.as_str(), "input_file" | "file") {
+                    return Err(InferenceError::unsupported(
+                        "file content parts must be converted to text by a request transform plugin before reaching skippy",
+                    ));
+                }
                 if is_media_part(part) && media.len() >= MAX_MEDIA_PARTS_PER_REQUEST {
                     return Err(InferenceError::invalid_request(format!(
                         "a request may include at most {MAX_MEDIA_PARTS_PER_REQUEST} media parts"

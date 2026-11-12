@@ -773,6 +773,33 @@ fn message_content_to_generation_text_rejects_remote_media_urls() {
 }
 
 #[test]
+fn message_content_to_generation_text_rejects_untransformed_file_parts() {
+    // Without a request transform, a document must fail rather than be
+    // silently dropped while the accompanying text is answered.
+    for part in [
+        json!({"type": "input_file", "input_file": {
+            "file_data": "data:application/pdf;base64,JVBERi0=",
+            "mime_type": "application/pdf"
+        }}),
+        json!({"type": "file", "file": {"file_id": "file-1"}}),
+    ] {
+        let content: MessageContent =
+            serde_json::from_value(json!([{"type": "text", "text": "summarize"}, part])).unwrap();
+        let mut media = Vec::new();
+
+        let error =
+            message_content_to_generation_text(&content, "<__media__>", &mut media).unwrap_err();
+
+        assert_eq!(error.status().as_u16(), 400, "{part}");
+        assert_eq!(
+            error.body().error.code.as_deref(),
+            Some("unsupported_model_feature")
+        );
+        assert!(media.is_empty());
+    }
+}
+
+#[test]
 fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
     let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
