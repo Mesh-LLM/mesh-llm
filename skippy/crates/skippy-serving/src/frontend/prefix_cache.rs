@@ -1207,6 +1207,12 @@ impl StageOpenAiBackend {
         {
             let _ = recv_reply(&mut *downstream);
         }
+        // The stop closed the final stage's return stream for these ids; the
+        // request goes on under the same ids, and the end of that stream
+        // must not read as the end of the next attempt's.
+        if let Some(prediction_return) = request.prediction_return.as_ref() {
+            prediction_return.restart();
+        }
     }
 }
 
