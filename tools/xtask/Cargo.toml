@@ -7,6 +7,7 @@ default-run = "xtask"
 
 [dependencies]
 authority-automation = { path = "../authority-automation" }
+runner-cleanup = { path = "../runner-cleanup" }
 ci-controller = { path = "../ci-controller" }
 process-supervision = { path = "../process-supervision" }
 trajectory-reader = { path = "../trajectory-reader", default-features = false }

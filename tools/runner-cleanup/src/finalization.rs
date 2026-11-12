@@ -1,5 +1,5 @@
 use super::{Error, error::Failure};
-use crate::command_interrupt::Reason;
+use process_supervision::interrupt::Reason;
 
 pub(super) fn finalize<T>(
     preceding: Result<T, Error>,

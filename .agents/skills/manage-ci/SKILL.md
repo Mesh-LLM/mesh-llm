@@ -58,6 +58,18 @@ this executable and stage it under the unchanged `xtask` artifact member, so
 consumers restore and verify the same layout. A command joins it only when every
 consumer of those artifacts needs it and it fits that boundary.
 
+`tools/runner-cleanup` owns `ci-ops runner-cleanup`, the bounded deletion of a
+persistent job's own outputs, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, process
+supervision, and thiserror; it never links HTTP, async runtime, archive, or
+product crates. Full xtask keeps the command and delegates it to the library,
+so stdout, stderr, and exit codes match. A job whose only automation is that
+cleanup prepares this executable through `just runner-cleanup-bootstrap`
+instead of full xtask: today only the trusted runner-image job. Its private
+copy keeps the `xtask` name and the `ci-ops runner-cleanup` argv, so the
+cleanup and finalization guards are unchanged. Jobs that run any other xtask
+command keep `just automation-bootstrap`.
+
 `tools/process-supervision` owns bounded child-process supervision
 (`supervise*`, `retained`) and the command interruption scope (`interrupt`).
 Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
@@ -589,8 +601,8 @@ checked-in expiry are the maintainer-controlled approval boundary.
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
   executable, whose key also hashes `tools/authority-automation/**`,
-  `tools/ci-controller/**`, and `tools/process-supervision/**` because xtask
-  compiles those libraries. A
+  `tools/ci-controller/**`, `tools/process-supervision/**`, and
+  `tools/runner-cleanup/**` because xtask compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence

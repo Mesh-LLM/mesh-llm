@@ -677,6 +677,9 @@ setup reserve). The three hardware-backed Linux Laya jobs have a 100-minute
 floor while preserving a larger caller input; their 20-minute controller
 preparation precedes the 70-minute artifact/fixture/read composite and
 five-minute cleanup. Startup and each of eight reads remain 300 seconds.
+The trusted runner-image job builds only the narrow `runner-cleanup` executable
+(`just runner-cleanup-bootstrap`); the Laya jobs keep full xtask
+(`just automation-bootstrap`) because they run other xtask commands.
 Each persistent phase copies the source-built controller to an owned private
 `RUNNER_TEMP` directory, records its SHA-256 and selected source, and admits
 both before managed work and cleanup. Cleanup invokes that controller without
@@ -2000,11 +2003,13 @@ workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
 `.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
-`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/trajectory-reader/**`,
+`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/runner-cleanup/**`,
+`tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/authority-automation/**`, `tools/ci-controller/**`, and
-`tools/process-supervision/**` because xtask compiles those libraries. Only the
+`tools/authority-automation/**`, `tools/ci-controller/**`,
+`tools/process-supervision/**`, and `tools/runner-cleanup/**` because xtask
+compiles those libraries. Only the
 default `tool: xtask` restores or saves that entry. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
