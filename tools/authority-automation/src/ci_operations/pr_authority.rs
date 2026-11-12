@@ -1,6 +1,6 @@
 //! PR runner authority checks performed before untrusted source is admitted.
 use super::authority_audit::audit_docker_sources;
-use crate::repository::check_report::CheckReport;
+use ci_controller::repository::check_report::CheckReport;
 use std::path::PathBuf;
 
 const FORBIDDEN: &[&str] = &[
@@ -164,7 +164,7 @@ fn check(get: &impl Fn(&str) -> Option<String>) -> Result<(), String> {
         .map_err(|reason| format!("DOCKER_AUTH_CONFIG/config.json: {reason}"))
 }
 
-pub(super) fn run(args: &[String]) -> CheckReport {
+pub fn run(args: &[String]) -> CheckReport {
     if args == ["--help"] {
         return CheckReport::success("usage: cargo xtool ci-ops pr-authority-audit\nValidates INPUT_DEPOT_SELECTED, INPUT_ALLOW_NATIVE_GITHUB_CACHE, INPUT_ALLOW_DEPOT_REMOTE_CACHE, original event, Actions endpoints, and Docker authentication. Success is silent.\n".into());
     }

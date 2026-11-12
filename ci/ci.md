@@ -995,7 +995,7 @@ closed.
 The Rust CI planner is the sole production Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
 workspace crate exactly once, except the `CONTRACT_TESTED_CRATES`
-(`ci-controller`, `process-supervision`, and `xtask`). `just
+(`authority-automation`, `ci-controller`, `process-supervision`, and `xtask`). `just
 ci-automation-contracts` runs their tests in the Quality slice, so each runs
 exactly once.
 
@@ -2272,7 +2272,12 @@ and Windows X64. After checking out the protected default branch, it verifies
 the requested commit is an ancestor before selecting and compiling that source.
 Topic-scoped immutable artifacts retain for one day; unscoped release artifacts
 retain their existing name and 90-day policy. The upload action initializes the
-macOS automation environment for protected-clean producers. Native artifact IDs,
+macOS automation environment for protected-clean producers. Protected-clean
+producers build only the narrow `authority-automation` executable
+(`prepare-automation` `tool: authority-automation`, or `just
+authority-automation-bootstrap` on the Linux image fallback) and stage it as the
+unchanged `xtask` member with `source.txt` and `SHA256SUMS`; `product-clean` and
+`release-prepared` keep building full xtask. Native artifact IDs,
 source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
@@ -2342,12 +2347,13 @@ Windows unit platform-check jobs, Linux SDK and product smoke consumers (they re
 workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, `tools/trajectory-reader/**`,
+`.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
+`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/ci-controller/**` and `tools/process-supervision/**` because xtask
-compiles both libraries. The image
+`tools/authority-automation/**`, `tools/ci-controller/**`, and
+`tools/process-supervision/**` because xtask compiles those libraries. Only the
+default `tool: xtask` restores or saves that entry. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes

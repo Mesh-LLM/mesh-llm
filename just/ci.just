@@ -48,6 +48,12 @@ ci-controller-bootstrap:
     just with-lld cargo build --locked -p ci-controller --bin ci-controller
     just with-lld cargo run --locked -p ci-controller --bin ci-controller -- automation bootstrap
 
+# Build only the narrow authority automation executable the protected authority
+# producers publish, then prove only the controller library was compiled in.
+authority-automation-bootstrap:
+    just with-lld cargo build --locked -p authority-automation --bin authority-automation
+    just with-lld cargo run --locked -p authority-automation --bin authority-automation -- automation bootstrap
+
 [private]
 [unix]
 [positional-arguments]
@@ -228,9 +234,10 @@ ci-automation-contracts:
     just with-lld cargo build --locked -p trajectory-reader --features corpus-input --bin trajectory-reader
     just with-lld cargo test --locked -p trajectory-reader --features corpus-input --lib -- --test-threads=1
     MESH_LLM_TEST_XTASK_BIN="$binary" just with-lld cargo test --locked -p trajectory-reader --features corpus-input --test prompt_command native_prompt_command_ -- --test-threads=1
-    # The narrow controller and supervision crates are contract-tested here, not
-    # in the Rust test matrix. Supervision tests keep xtask's single-threaded harness.
+    # The narrow controller, authority, and supervision crates are contract-tested here,
+    # not in the Rust test matrix. Supervision tests keep xtask's single-threaded harness.
     just with-lld cargo test --locked -p ci-controller
+    just with-lld cargo test --locked -p authority-automation
     just with-lld cargo test --locked -p process-supervision -- --test-threads=1
     fixture_suffix=""
     case "$binary" in *.exe) fixture_suffix=".exe" ;; esac

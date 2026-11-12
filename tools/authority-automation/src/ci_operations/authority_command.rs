@@ -1,10 +1,10 @@
 use super::authority_audit::{attest_endpoint, audit_docker_sources};
-use crate::repository::check_report::CheckReport;
+use ci_controller::repository::check_report::CheckReport;
 use std::path::Path;
 
 const USAGE: &str = "usage: ci-ops authority-audit endpoint ENV_NAME | docker CONFIG_PATH --depot-selected {true|false}\n";
 
-pub(super) fn run(args: &[String]) -> CheckReport {
+pub fn run(args: &[String]) -> CheckReport {
     let result = match args {
         [help] if help == "--help" => return CheckReport::success(USAGE.into()),
         [mode, name] if mode == "endpoint" && valid_name(name) => match std::env::var(name) {

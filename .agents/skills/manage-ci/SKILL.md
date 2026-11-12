@@ -46,6 +46,18 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/authority-automation` owns the commands that consumers of the protected
+authority artifacts run: `models resolve`, `models restore-inputs`,
+`ci-ops authority-audit`, `ci-ops pr-authority-audit`, and
+`artifact file-projection`, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, serde_json,
+sha2, hex, and libc on Unix; it never links process supervision, HTTP, async
+runtime, archive, or product crates. Full xtask keeps every command and
+delegates these to the library. The protected authority producers compile only
+this executable and stage it under the unchanged `xtask` artifact member, so
+consumers restore and verify the same layout. A command joins it only when every
+consumer of those artifacts needs it and it fits that boundary.
+
 `tools/process-supervision` owns bounded child-process supervision
 (`supervise*`, `retained`) and the command interruption scope (`interrupt`).
 Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
@@ -110,7 +122,10 @@ such as authority audits, canary summaries, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
-always compiled in-run.
+always compiled in-run. `prepare-automation` takes a closed `tool` input
+(`xtask` by default, or `authority-automation`); `upload-automation` selects
+`authority-automation` exactly for the `protected-clean` source profile, and
+only full xtask may use the hosted executable cache.
 
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
@@ -573,8 +588,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` and
-  `tools/process-supervision/**` because xtask compiles both libraries. A
+  executable, whose key also hashes `tools/authority-automation/**`,
+  `tools/ci-controller/**`, and `tools/process-supervision/**` because xtask
+  compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence

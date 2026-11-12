@@ -1,8 +1,8 @@
-use crate::repository::check_report::CheckReport;
+use ci_controller::repository::check_report::CheckReport;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
-pub(super) fn run(args: &[String]) -> CheckReport {
+pub fn run(args: &[String]) -> CheckReport {
     if args == ["--help"] {
         return CheckReport::success(
             "usage: artifact file-projection {sha256 PATH|-|canonical-path PATH}\n".to_owned(),
@@ -14,7 +14,7 @@ pub(super) fn run(args: &[String]) -> CheckReport {
     )
 }
 
-fn project(args: &[String]) -> crate::command::DynResult<String> {
+fn project(args: &[String]) -> ci_controller::DynResult<String> {
     match args {
         [operation, path] if operation == "canonical-path" => {
             Ok(std::fs::canonicalize(path)?.to_string_lossy().into_owned())

@@ -29,6 +29,7 @@ fn assert_preinstalled_profile(profile: &str, expected_os: &str, tools: &[&str])
             check,
             &[
                 ("AUTOMATION_PROFILE", profile),
+                ("AUTOMATION_TOOL", "xtask"),
                 ("RUNNER_OS", expected_os),
                 ("RUNNER_ENVIRONMENT", "self-hosted"),
                 ("GITHUB_ENV", f.root.join("github.env").to_str().unwrap()),
@@ -58,6 +59,7 @@ fn assert_preinstalled_profile(profile: &str, expected_os: &str, tools: &[&str])
                 check,
                 &[
                     ("AUTOMATION_PROFILE", profile),
+                    ("AUTOMATION_TOOL", "xtask"),
                     ("RUNNER_OS", os),
                     ("RUNNER_ENVIRONMENT", environment),
                 ]
