@@ -981,19 +981,39 @@ impl PluginManager {
         input_json: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<mesh_llm_plugin::VirtualModelResponse> {
+        let response = self
+            .invoke_virtual_model_service(route, input_json, timeout)
+            .await?;
+        Self::virtual_model_response(route, response)
+    }
+
+    /// Send a virtual-model turn and wait for the plugin's reply, whatever
+    /// it says; [`Self::virtual_model_response`] reads it.
+    pub(crate) async fn invoke_virtual_model_service(
+        &self,
+        route: &VirtualModelRoute,
+        input_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<proto::InvokeServiceResponse> {
         let plugin = self
             .inner
             .plugins
             .get(&route.plugin_name)
             .with_context(|| format!("Unknown plugin '{}'", route.plugin_name))?;
-        let response = plugin
+        plugin
             .invoke_service(
                 proto::ServiceKind::VirtualModel,
                 &route.handler,
                 input_json,
                 timeout,
             )
-            .await?;
+            .await
+    }
+
+    pub(crate) fn virtual_model_response(
+        route: &VirtualModelRoute,
+        response: proto::InvokeServiceResponse,
+    ) -> Result<mesh_llm_plugin::VirtualModelResponse> {
         if response.is_error {
             bail!(
                 "Virtual model '{}' failed: {}",

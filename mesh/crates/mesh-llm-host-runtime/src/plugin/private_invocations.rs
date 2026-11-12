@@ -301,13 +301,16 @@ mod tests {
         };
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<()>();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
         let call = async move {
+            let _ = started_tx.send(());
             reply_rx.await.ok();
             let _ = done_tx.send(());
             Ok(())
         };
         let waiting = tokio::spawn(run_to_reply(Some(invocations.begin("moa", None)), call));
-        tokio::task::yield_now().await;
+        // The plugin call is running before the host stops waiting.
+        started_rx.await.unwrap();
         // The client went away: the host stops waiting.
         waiting.abort();
         let _ = waiting.await;
