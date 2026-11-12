@@ -360,13 +360,13 @@ pub(super) async fn eligible_targets(
             let descriptors = match target {
                 InferenceTarget::Local(_) => local.as_slice(),
                 InferenceTarget::Remote(peer_id) => {
-                    let peer = peers.get(peer_id);
-                    if peer.is_some_and(|peer| {
-                        mesh::model_requires_unsupported_channel(peer, model, &supported)
-                    }) {
+                    let Some(peer) = peers.get(peer_id) else {
+                        return false;
+                    };
+                    if mesh::model_requires_unsupported_channel(peer, model, &supported) {
                         return false;
                     }
-                    peer.map_or(&[][..], |peer| peer.served_model_descriptors.as_slice())
+                    peer.served_model_descriptors.as_slice()
                 }
                 InferenceTarget::None => return false,
             };

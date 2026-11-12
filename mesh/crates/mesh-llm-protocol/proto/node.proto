@@ -85,8 +85,9 @@ message NodeRecord {
   repeated MeshSubprotocol subprotocols = 19;
   InferenceAdmissionState admission_state = 20;
   repeated AdvertisedModelThroughput throughput = 21;
-  // Read-only compatibility with pre-plugin model gates; never used for billing.
-  repeated LegacyModelGate legacy_lightning_offers = 22;
+  // Original pre-plugin gate messages, retained opaquely for old readers.
+  // Message and bytes fields have the same length-delimited wire encoding.
+  repeated bytes legacy_lightning_offers = 22;
   optional SignedNodeOwnership owner_attestation = 23;
   optional SignedMeshGenesisPolicy genesis_policy = 24;
   optional ReleaseBuildAttestation release_attestation = 25;
@@ -171,9 +172,9 @@ message PeerAnnouncement {
   // Never verified by mesh-llm itself — carried opaquely so a receiver MAY
   // verify independently.
   optional ClaimedLogHead claimed_log_head = 51;
-  // Retain the model identity from old LightningOffer messages. Dropping this
-  // field would make an unsupported legacy gate look like a free model.
-  repeated LegacyModelGate legacy_lightning_offers = 52;
+  // Original pre-plugin gate messages. Read only the LegacyModelGate projection
+  // for admission; relay every other byte unchanged so old readers keep the gate.
+  repeated bytes legacy_lightning_offers = 52;
   // Public keys plugins on this node sign with, each bound to this node's key;
   // see `PluginKey`. At most 16, one per plugin.
   repeated PluginKey plugin_keys = 53;

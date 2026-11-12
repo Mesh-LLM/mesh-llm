@@ -954,8 +954,7 @@ pub(crate) fn local_ann_to_proto_ann(
         serialized_addr,
         hosted_models: ann.hosted_models.clone().unwrap_or_default(),
         hosted_models_known: Some(ann.hosted_models.is_some()),
-        // Compatibility gates have already become generic descriptor requirements.
-        legacy_lightning_offers: Vec::new(),
+        legacy_lightning_offers: served_descriptors::relay_legacy_model_gates(&ann),
         served_model_identities,
         served_model_descriptors,
         served_model_runtime,

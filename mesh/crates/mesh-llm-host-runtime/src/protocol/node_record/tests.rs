@@ -62,7 +62,7 @@ fn decoded_host_announcement(seed: u8) -> PeerAnnouncement {
     proto_ann_to_local(&wire_ann).expect("valid announcement").1
 }
 
-/// Independent old tag-22 bytes, including financial fields the reader discards.
+/// Independent old tag-22 bytes, including fields the reader carries opaquely.
 #[derive(Clone, PartialEq, prost::Message)]
 struct LegacyRecordGates {
     #[prost(message, repeated, tag = "22")]
@@ -75,6 +75,8 @@ struct LegacyOffer {
     model: String,
     #[prost(uint64, tag = "2")]
     input_msat_per_million: u64,
+    #[prost(uint64, tag = "3")]
+    output_msat_per_million: u64,
     #[prost(uint32, tag = "6")]
     payment_protocol: u32,
 }
@@ -101,6 +103,7 @@ fn signed_legacy_record_preserves_model_gates_without_reencoding_signed_bytes() 
             offers: vec![LegacyOffer {
                 model: "Qwen3-8B".into(),
                 input_msat_per_million: 50_000_000,
+                output_msat_per_million: 50_000_000,
                 payment_protocol: 3,
             }],
         }
@@ -111,18 +114,30 @@ fn signed_legacy_record_preserves_model_gates_without_reencoding_signed_bytes() 
     let verified =
         VerifiedRecord::verify(NODE_RECORD, signed.signed_bytes(), signed.signature()).unwrap();
     let decoded = wire::NodeRecord::decode(verified.body()).unwrap();
-    assert_eq!(decoded.legacy_lightning_offers[0].model, "Qwen3-8B");
+    assert_eq!(
+        LegacyOffer::decode(decoded.legacy_lightning_offers[0].as_slice())
+            .unwrap()
+            .model,
+        "Qwen3-8B"
+    );
     let (_, local) = node_record_to_local(verified.endpoint_id(), &decoded, None).unwrap();
     let requirements = &local.served_model_descriptors[0].requires;
     assert_eq!(requirements.len(), 1);
     assert_eq!(requirements[0].channel, "mesh-llm.legacy-lightning");
-    assert!(requirements[0].terms.is_empty());
+    assert_eq!(requirements[0].terms, decoded.legacy_lightning_offers[0]);
     assert!(local.served_model_descriptors[1].requires.is_empty());
     assert_eq!(verified.body(), body);
     assert_eq!(verified.signed_bytes(), signed.signed_bytes());
 
     let modern = node_record_from_wire_ann(&local_ann_to_proto_ann(&local), &local.addr);
-    assert!(modern.legacy_lightning_offers.is_empty());
+    assert_eq!(
+        modern.legacy_lightning_offers,
+        decoded.legacy_lightning_offers
+    );
+    assert_eq!(
+        LegacyRecordGates::decode(modern.encode_to_vec().as_slice()).unwrap(),
+        LegacyRecordGates::decode(body.as_slice()).unwrap()
+    );
     let (_, relayed) = node_record_to_local(local.addr.id, &modern, None).unwrap();
     assert_eq!(
         relayed.served_model_descriptors,

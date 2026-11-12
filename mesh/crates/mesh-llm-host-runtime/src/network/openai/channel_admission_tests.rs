@@ -145,6 +145,45 @@ async fn a_free_replica_does_not_authorize_a_channel_gated_target() {
 }
 
 #[tokio::test]
+async fn stale_remote_targets_cannot_bypass_peer_admission() {
+    let node = Node::new_for_tests(NodeRole::Client).await.unwrap();
+    let departed = insert_provider(&node, &[("shared", false)]).await;
+    let quarantined = insert_provider(&node, &[("shared", false)]).await;
+    let legacy = insert_provider(&node, &[("shared", false)]).await;
+    {
+        let mut state = node.state.lock().await;
+        state.peers.remove(&departed);
+        state.peers.get_mut(&quarantined).unwrap().admitted = false;
+        state
+            .peers
+            .get_mut(&legacy)
+            .unwrap()
+            .served_model_descriptors
+            .clear();
+    }
+    let eligible = workload_routing::eligible_targets(
+        &node,
+        "shared",
+        "/v1/chat/completions",
+        &[departed, quarantined, legacy].map(InferenceTarget::Remote),
+    )
+    .await;
+    assert_eq!(eligible, vec![InferenceTarget::Remote(legacy)]);
+
+    let mut targets = ModelTargets::default();
+    targets
+        .targets
+        .insert("shared".into(), vec![InferenceTarget::Remote(departed)]);
+    assert_eq!(
+        workload_routing::ingress_candidates(&node, "shared", "/v1/chat/completions", &targets)
+            .await,
+        vec![InferenceTarget::Remote(legacy)],
+        "a stale elected target must not shadow an admitted legacy replica"
+    );
+    node.endpoint.close().await;
+}
+
+#[tokio::test]
 async fn a_channel_gated_remote_does_not_hide_local_native_or_plugin_execution() {
     let node = Node::new_for_tests(NodeRole::Client).await.unwrap();
     let peer = insert_provider(&node, &[("shared", true)]).await;

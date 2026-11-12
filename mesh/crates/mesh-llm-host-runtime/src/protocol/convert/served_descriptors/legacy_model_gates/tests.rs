@@ -7,9 +7,12 @@ fn source() -> node::PeerAnnouncement {
         endpoint_id: vec![1; 32],
         serving_models: vec!["gated".into(), "free".into()],
         hosted_models: vec!["gated".into(), "free".into()],
-        legacy_lightning_offers: vec![LegacyModelGate {
-            model: "gated".into(),
-        }],
+        legacy_lightning_offers: vec![
+            LegacyModelGate {
+                model: "gated".into(),
+            }
+            .encode_to_vec(),
+        ],
         ..Default::default()
     }
 }
@@ -39,7 +42,7 @@ fn gates_cover_both_name_only_and_identity_only_legacy_announcements() {
             .find(|descriptor| descriptor.identity.model_name == "free")
             .unwrap();
         assert_eq!(gated.requires[0].channel, LEGACY_LIGHTNING_CHANNEL);
-        assert!(gated.requires[0].terms.is_empty());
+        assert_eq!(gated.requires[0].terms, source.legacy_lightning_offers[0]);
         assert!(free.requires.is_empty());
     }
 }
@@ -60,7 +63,10 @@ fn gates_match_public_ids_and_preserve_modern_requirements() {
         }],
         ..Default::default()
     }];
-    source.legacy_lightning_offers[0].model = "acme/public-model".into();
+    source.legacy_lightning_offers[0] = LegacyModelGate {
+        model: "acme/public-model".into(),
+    }
+    .encode_to_vec();
     let (_, mut local) = proto_ann_to_local(&source).unwrap();
     assert_eq!(local.served_model_descriptors[0].requires.len(), 2);
     assert_eq!(
@@ -77,12 +83,34 @@ fn gates_match_public_ids_and_preserve_modern_requirements() {
         2,
         "translation is idempotent"
     );
+    source.legacy_lightning_offers.push(
+        LegacyModelGate {
+            model: "gated".into(),
+        }
+        .encode_to_vec(),
+    );
+    restore(&source.legacy_lightning_offers, &mut local).unwrap();
+    assert_eq!(local.served_model_descriptors[0].requires.len(), 3);
+    let relayed = relay(&local);
+    assert_eq!(
+        relayed.len(),
+        2,
+        "preserve both runtime-name and public-ID gates"
+    );
+    assert!(
+        source
+            .legacy_lightning_offers
+            .iter()
+            .all(|gate| relayed.contains(gate))
+    );
 }
 
 #[test]
 fn malformed_gate_lists_reject_the_announcement_instead_of_appearing_free() {
-    let gate = |model: String| LegacyModelGate { model };
+    let gate = |model: String| LegacyModelGate { model }.encode_to_vec();
     for gates in [
+        vec![vec![0xff]],
+        vec![vec![0; 4097]],
         vec![gate(String::new())],
         vec![gate("x".repeat(1025))],
         vec![gate("gated".into()), gate("gated".into())],
