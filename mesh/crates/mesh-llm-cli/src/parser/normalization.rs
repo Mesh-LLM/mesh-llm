@@ -243,7 +243,7 @@ fn shell_display(arg: &OsString) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{Cli, Command, MeshDiscoveryMode};
+    use crate::parser::{Cli, Command, DiscoverArgs, MeshDiscoveryMode};
     use clap::Parser;
     use mesh_llm_events::LogFormat;
     use std::ffi::OsString;
@@ -1073,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_global_mesh_discovery_mode_before_serve() {
+    fn cli_accepts_mesh_discovery_mode_before_serve() {
         let normalized = normalize_runtime_surface_args([
             "mesh-llm",
             "--mesh-discovery-mode",
@@ -1103,6 +1103,33 @@ mod tests {
 
         assert!(cli.node.client);
         assert_eq!(cli.joining.mesh_discovery_mode, MeshDiscoveryMode::Mdns);
+    }
+
+    #[test]
+    fn discover_taught_join_hint_invocation_still_parses() {
+        // Mirrors the hint printed by the discover command itself:
+        //   mesh-llm serve --join <token> discover --mesh-discovery-mode mdns --auto
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "serve",
+            "--join",
+            "invite-token",
+            "discover",
+            "--mesh-discovery-mode",
+            "mdns",
+            "--auto",
+        ]);
+        let cli = Cli::parse_from(normalized.normalized);
+
+        let Command::Discover(DiscoverArgs {
+            auto,
+            mesh_discovery_mode: Some(MeshDiscoveryMode::Mdns),
+            ..
+        }) = cli.command.expect("discover subcommand")
+        else {
+            panic!("expected the discover subcommand");
+        };
+        assert!(auto);
     }
 }
 

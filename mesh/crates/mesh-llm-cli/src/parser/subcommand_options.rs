@@ -9,6 +9,8 @@
 
 use clap::Args;
 
+use super::commands::MeshDiscoveryMode;
+
 #[derive(Args, Debug)]
 pub struct ModelPrepareArgs {
     /// Source HuggingFace model ref (e.g. unsloth/Qwen3-235B-A22B-GGUF:UD-Q4_K_XL).
@@ -148,4 +150,7 @@ pub struct DiscoverArgs {
     /// Nostr relay URLs (default: see DEFAULT_RELAYS)
     #[arg(long)]
     pub relay: Vec<String>,
+    /// Discovery provider for this command (overrides a top-level --mesh-discovery-mode).
+    #[arg(long, value_enum)]
+    pub mesh_discovery_mode: Option<MeshDiscoveryMode>,
 }

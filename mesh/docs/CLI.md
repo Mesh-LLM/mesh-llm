@@ -734,8 +734,9 @@ All four owner lifecycle commands share these properties:
 ### `discover`
 
 Use this to discover meshes through the selected discovery provider and
-optionally select one automatically. The default provider is Nostr; pass the
-global `--mesh-discovery-mode mdns` before the command for LAN mDNS discovery.
+optionally select one automatically. The default provider is Nostr; pass
+`--mesh-discovery-mode mdns` (before the command, or after `discover`) for LAN
+mDNS discovery.
 
 Switches:
 
@@ -746,6 +747,10 @@ Switches:
 - `--auto`: print best invite token (useful for piping).
 - `--relay <RELAY>`: custom Nostr relay URL(s). Only valid with
   `--mesh-discovery-mode nostr`.
+- `--mesh-discovery-mode <nostr|mdns>` (default: `nostr`): discovery provider
+  for this command; overrides a top-level `--mesh-discovery-mode`. Joining an
+  mDNS-discovered mesh still needs an invite token — pass top-level
+  `--join <token>` before `discover`.
 
 ### `goose`
 
