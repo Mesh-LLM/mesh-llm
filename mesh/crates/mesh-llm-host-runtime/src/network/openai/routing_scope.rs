@@ -69,6 +69,16 @@ pub(crate) struct ScopeRejection {
     pub(crate) message: String,
 }
 
+/// Whether a raw request head carries a private scope header. A malformed
+/// or repeated header counts as private: callers use this to fail closed
+/// before the request is fully resolved.
+pub(crate) fn head_requests_private_scope(raw: &[u8]) -> bool {
+    match header_values_from_raw(raw, MESH_SCOPE_HEADER) {
+        Ok(values) => values.len() > 1 || values.iter().any(|value| is_private_scope_value(value)),
+        Err(()) => true,
+    }
+}
+
 /// Whether the client asked for private scope. A malformed header is an
 /// error rather than silently routing the request publicly.
 fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeRejection> {
@@ -90,6 +100,14 @@ fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeR
         }
         _ => return Err(bad(format!("multiple {MESH_SCOPE_HEADER} headers"))),
     };
+    if let Some(model) = request.model_name.as_deref()
+        && has_private_model_suffix(model)
+        && private_model_base(Some(model)).is_none()
+    {
+        return Err(bad(format!(
+            "model '{model}' names no model before its private suffix"
+        )));
+    }
     Ok(header || private_model_base(request.model_name.as_deref()).is_some())
 }
 
@@ -152,6 +170,11 @@ pub(crate) async fn resolve_at_ingress(
         Err(rejection) => {
             // shortcut: written before the request lifecycle is claimed, so
             // this rejection is not in the request log.
+            super::request_normalize::release_request_objects(
+                node,
+                &request.request_object_request_ids,
+            )
+            .await;
             let _ = super::response::send_error(stream, rejection.status, &rejection.message).await;
             None
         }
@@ -235,5 +258,24 @@ mod tests {
         assert!(has_private_model_suffix("x@private"));
         assert!(has_private_model_suffix("x@incognito"));
         assert!(!has_private_model_suffix("org/repo@main"));
+    }
+
+    #[test]
+    fn a_head_with_any_private_or_unreadable_scope_header_counts_as_private() {
+        let head = |headers: &str| format!("POST /v1/chat/completions HTTP/1.1\r\n{headers}\r\n");
+        assert!(!head_requests_private_scope(head("").as_bytes()));
+        assert!(!head_requests_private_scope(
+            head("x-mesh-scope: public\r\n").as_bytes()
+        ));
+        for headers in [
+            "x-mesh-scope: private\r\n",
+            "X-Mesh-Scope: Incognito\r\n",
+            "x-mesh-scope: public\r\nx-mesh-scope: public\r\n",
+        ] {
+            assert!(
+                head_requests_private_scope(head(headers).as_bytes()),
+                "{headers}"
+            );
+        }
     }
 }

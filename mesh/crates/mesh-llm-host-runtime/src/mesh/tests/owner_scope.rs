@@ -67,7 +67,7 @@ async fn a_private_request_cannot_open_a_tunnel_to_a_stranger() {
         assert!(
             error
                 .to_string()
-                .contains("not owned by this request's owner"),
+                .contains("not in this private request's trust circle"),
             "{error}"
         );
     }

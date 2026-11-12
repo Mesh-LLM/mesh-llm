@@ -68,7 +68,12 @@ pub(super) async fn relay(
     requested_by: Option<iroh::EndpointId>,
 ) {
     let _inflight = node.begin_inflight_request();
-    if let Err(message) = admit(node, ingress_type).await {
+    // A session from one of this owner's own nodes is admitted as local, as
+    // buffered requests are.
+    let admitted_as = node
+        .owner_admission_ingress(ingress_type, requested_by)
+        .await;
+    if let Err(message) = admit(node, admitted_as).await {
         let _ = crate::network::openai::send_503(client, &message).await;
         return;
     }

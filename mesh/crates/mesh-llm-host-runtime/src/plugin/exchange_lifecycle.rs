@@ -508,10 +508,19 @@ async fn invoke_phase(
         event["body_stream_kind"] = json!(kind);
     }
     let input = serde_json::to_string(&event).map_err(|_| HookFailure::Internal)?;
+    // A hook's own inference for a private request stays private.
+    let private_call = crate::mesh::current_owner_scope()
+        .is_some()
+        .then(|| manager.begin_private_invocation(name));
     let reply = plugin
         .invoke_exchange_service(declaration, &input, deadline)
-        .await
-        .map_err(|_| HookFailure::Internal)?;
+        .await;
+    if reply.is_ok()
+        && let Some(call) = private_call
+    {
+        call.finish();
+    }
+    let reply = reply.map_err(|_| HookFailure::Internal)?;
     if reply.is_error || reply.output_json.len() > 32 * 1024 {
         return Err(HookFailure::Internal);
     }

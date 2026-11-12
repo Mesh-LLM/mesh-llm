@@ -85,9 +85,12 @@ your owner id too.
 Send the request to one of your own nodes, in any of these ways:
 
 ```bash
-curl localhost:9337/v1/chat/completions -d '{"model":"qwen3-32b@private", ...}'
-curl localhost:9337/v1/chat/completions -H 'x-mesh-scope: private' -d '{"model":"qwen3-32b", ...}'
-curl localhost:9337/private/v1/chat/completions -d '{"model":"qwen3-32b", ...}'
+curl localhost:9337/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3-32b@private","messages":[{"role":"user","content":"hi"}]}'
+curl localhost:9337/v1/chat/completions -H 'Content-Type: application/json' -H 'x-mesh-scope: private' \
+  -d '{"model":"qwen3-32b","messages":[{"role":"user","content":"hi"}]}'
+curl localhost:9337/private/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3-32b","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 `/private/v1` is for clients that only let you set a base URL.
@@ -120,11 +123,18 @@ only what the circle serves.
 - Your own nodes come first: a request from a node of the same owner is
   admitted as local, so a node that pauses remote inference still serves you.
   This priority is for your own owner key only, not for trusted owners.
-- Virtual (MoA) models: while a private turn runs, every nested request that
-  plugin makes is sent with `x-mesh-scope: private`, so the committee only
-  reaches the circle. This is per plugin, not per turn: a public turn that
-  overlaps a private one is narrowed to the circle too.
-- A trailing `@private` or `@incognito` is reserved. Peer-advertised names
+- Plugins: while a plugin handles a private request (a virtual-model turn
+  such as the MoA committee, an OpenAI exchange hook, or a request
+  transform), every inference request that plugin makes back to the host is
+  sent with `x-mesh-scope: private`, so it only reaches the circle. This is
+  per plugin, not per request: a public request the same plugin handles at
+  the same moment is narrowed to the circle too. If the host stops waiting
+  before the plugin replies (the client left, or the deadline passed), the
+  plugin stays private for five more minutes, since it may still be working.
+  What a plugin does on its own, outside these calls, is up to the plugin:
+  install only plugins you trust.
+- A trailing `@private` or `@incognito` is reserved. A model name that is
+  only the suffix (`"@private"`) is rejected with 400. Peer-advertised names
   ending in either are not listed, and a peer naming a model `x@private`
   cannot attract a private request. A Hugging Face revision with either name
   must be referenced by commit.
@@ -132,6 +142,15 @@ only what the circle serves.
 Private routing controls where a request is computed. It does not hide the
 request from the nodes in your circle, and it does not encrypt anything
 beyond what the mesh's QUIC transport already does.
+
+## Mixed versions
+
+Only the entry node needs this release for the guarantees above, with one
+exception. A node of yours running an older release ignores the
+`x-mesh-scope: private` marker on a request forwarded to it. If that node
+serves the model through a split whose stages include nodes outside your
+circle, the request's activations reach those nodes. Upgrade every node in
+your circle before relying on private routing with splits.
 
 ## Not yet
 

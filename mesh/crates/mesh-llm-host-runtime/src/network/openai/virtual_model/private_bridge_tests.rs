@@ -11,15 +11,20 @@ async fn nested_request(
 ) -> String {
     let server = tokio::spawn(async move {
         let (mut stream, _) = port_listener.accept().await.unwrap();
-        let mut buf = vec![0u8; 8192];
-        let read = stream.read(&mut buf).await.unwrap();
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while !buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut chunk).await.unwrap();
+            assert!(read > 0, "connection closed before the headers ended");
+            buf.extend_from_slice(&chunk[..read]);
+        }
         let body = r#"{"choices":[]}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         stream.write_all(response.as_bytes()).await.unwrap();
-        String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase()
+        String::from_utf8_lossy(&buf).to_ascii_lowercase()
     });
     let params = r#"{"model_id":"qwen","request":{"messages":[]}}"#;
     bridge
@@ -51,7 +56,7 @@ async fn nested_calls_are_private_only_while_a_private_turn_runs() {
     let sent = nested_request(&bridge, "other", listener).await;
     assert!(!sent.contains("x-mesh-scope"), "{sent}");
 
-    drop(turn);
+    turn.finish();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();

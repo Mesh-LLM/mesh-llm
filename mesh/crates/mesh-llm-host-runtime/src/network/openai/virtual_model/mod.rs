@@ -336,10 +336,16 @@ fn invoke_in_scope<'a>(
         .is_some()
         .then(|| plugins.begin_private_invocation(&route.plugin_name));
     async move {
-        let _private_turn = private_turn;
-        plugins
+        let response = plugins
             .invoke_virtual_model(route, input_json, Some(std::time::Duration::from_secs(300)))
-            .await
+            .await;
+        // Lingers unless the plugin replied: a timed-out turn may still run.
+        if response.is_ok()
+            && let Some(turn) = private_turn
+        {
+            turn.finish();
+        }
+        response
     }
 }
 

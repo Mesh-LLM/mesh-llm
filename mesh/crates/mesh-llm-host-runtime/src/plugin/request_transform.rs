@@ -62,6 +62,7 @@ impl PluginManager {
         path: &str,
         client_path: &str,
         body: &mut Value,
+        private: bool,
     ) -> Result<bool> {
         let plugins = self.request_transform_plugins().await?;
         let mut changed = false;
@@ -74,7 +75,14 @@ impl PluginManager {
                 client_path: client_path.to_string(),
                 body: body.clone(),
             };
-            let output = self.invoke_request_transform(&plugin_name, &input).await?;
+            let private_call = private.then(|| self.begin_private_invocation(&plugin_name));
+            let output = self.invoke_request_transform(&plugin_name, &input).await;
+            if output.is_ok()
+                && let Some(call) = private_call
+            {
+                call.finish();
+            }
+            let output = output?;
             let Some(replacement) = output.body else {
                 continue;
             };
@@ -239,7 +247,7 @@ mod tests {
         let manager = manager(&["b-append", "c-noop", "a-append"]).await;
         let mut body = request();
         let changed = manager
-            .transform_request("/v1/chat/completions", "/v1/messages", &mut body)
+            .transform_request("/v1/chat/completions", "/v1/messages", &mut body, false)
             .await
             .unwrap();
         assert!(changed);
@@ -252,7 +260,12 @@ mod tests {
         let mut body = request();
         assert!(
             !manager
-                .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+                .transform_request(
+                    "/v1/chat/completions",
+                    "/v1/chat/completions",
+                    &mut body,
+                    false
+                )
                 .await
                 .unwrap()
         );
@@ -279,6 +292,7 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
             )
             .await
             .unwrap_err();
@@ -291,7 +305,12 @@ mod tests {
         let mut body = request();
         assert!(
             !manager
-                .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+                .transform_request(
+                    "/v1/chat/completions",
+                    "/v1/chat/completions",
+                    &mut body,
+                    false
+                )
                 .await
                 .unwrap()
         );
@@ -306,6 +325,7 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
             )
             .await
             .unwrap_err();
@@ -323,6 +343,7 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
             )
             .await
             .unwrap_err();
@@ -340,6 +361,7 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
             )
             .await
             .unwrap_err();
@@ -355,7 +377,12 @@ mod tests {
         body["messages"][0]["content"] = json!("x".repeat(MAX_INPUT_BYTES));
         let error = manager(&["c-noop"])
             .await
-            .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+            .transform_request(
+                "/v1/chat/completions",
+                "/v1/chat/completions",
+                &mut body,
+                false,
+            )
             .await
             .unwrap_err();
         assert!(error.to_string().contains("request too large"), "{error}");

@@ -78,6 +78,11 @@ async fn a_malformed_scope_header_is_rejected_not_ignored() {
         let response = roundtrip(&node, headers, "qwen").await;
         assert!(response.starts_with("HTTP/1.1 400"), "{response}");
     }
+    // A bare suffix is a selector with no model, not a model name.
+    for model in ["@private", "@incognito"] {
+        let response = roundtrip(&node, "", model).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    }
     node.endpoint.close().await;
 }
 

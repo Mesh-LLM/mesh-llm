@@ -119,6 +119,20 @@ impl super::Node {
             .is_some_and(|info| scope.admits(&info.owner_summary, now_unix_ms()))
     }
 
+    pub(crate) async fn ensure_peer_in_current_owner_scope(
+        &self,
+        peer: EndpointId,
+    ) -> anyhow::Result<()> {
+        if self.peer_in_current_owner_scope(peer).await {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "peer {} is not in this private request's trust circle",
+                peer.fmt_short()
+            )
+        }
+    }
+
     /// Drop targets outside `scope` from an election snapshot: remote hosts
     /// not owned by the scope's owner, and a local split whose stages run on
     /// any such node (its activations and KV would leave the scope).

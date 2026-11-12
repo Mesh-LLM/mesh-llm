@@ -43,6 +43,7 @@ pub(super) fn is_transformable_path(path: &str) -> bool {
 /// changed; an error rejects the request.
 pub(super) async fn apply_request_transforms(
     transformer: Option<&plugin::PluginManager>,
+    private_hint: bool,
     request_path: &str,
     client_path: &str,
     body: &mut serde_json::Value,
@@ -52,8 +53,15 @@ pub(super) async fn apply_request_transforms(
             if request_path.split('?').next() == Some("/v1/chat/completions")
                 && is_transformable_path(client_path) =>
         {
+            // Transforms run before the scope is resolved; a transform's own
+            // inference for a private request must stay private regardless.
+            let private = private_hint
+                || crate::network::openai::routing_scope::private_model_base(
+                    body.get("model").and_then(serde_json::Value::as_str),
+                )
+                .is_some();
             plugin_manager
-                .transform_request(request_path, client_path, body)
+                .transform_request(request_path, client_path, body, private)
                 .await
         }
         _ => Ok(false),
