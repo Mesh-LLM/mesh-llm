@@ -1098,7 +1098,14 @@ statistics are retained in the job log. The nightly KV workflow no longer
 clears the repository Rust wrapper. Every managed Windows compile job uses
 sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
 asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
-boundary.
+boundary. Every Windows `mozilla-actions/sccache-action` install, in the managed
+jobs and in `prepare-automation`, pins `version: v0.16.0`; the
+`windows_build_paths` guard rejects any other version. sccache 0.17 and later
+expand Cargo's rustc argfile past the Windows command-line limit under Rust
+1.100's build-dir layout (os error 206, mozilla/sccache#2787). 0.16.0 passes an
+argfile call to rustc uncached, so the largest crates recompile on every Windows
+run. Lift the pin once an upstream fix is released and a Windows lane passes
+with it.
 
 - `restore-release-ui` / `prepared-input ui-distribution`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
