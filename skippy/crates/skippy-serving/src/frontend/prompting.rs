@@ -73,10 +73,12 @@ impl StageOpenAiBackend {
         // templates close every assistant turn, so the model would see a
         // finished answer and stop. Render the history before it with the
         // generation prompt and append its text, as llama.cpp's server does.
-        // A generation prompt that leaves a reasoning block open would put the
-        // text inside it, and a grammar or schema would not account for the
-        // text already written, so those cases keep the ordinary rendering,
-        // as does a prefill with no history before it.
+        // The text is appended only where the template itself puts message
+        // content: the whole conversation, rendered with the prefill as an
+        // ordinary turn, must read as the generation prompt followed by that
+        // text. Templates that add a channel or header first (Harmony), or
+        // open a reasoning block, keep the ordinary rendering, as do the cases
+        // `continued_prefill` excludes.
         if let Some(continued) = continued_prefill(request, &options) {
             let mut history = request.clone();
             history.messages.pop();
@@ -86,7 +88,16 @@ impl StageOpenAiBackend {
                 ..options.clone()
             };
             let mut prepared = self.prepare_chat_prompt(&history, continuation_options)?;
-            if !generation_prompt_opens_reasoning(prepared.chat_parse_metadata.as_deref()) {
+            let mut whole = request.clone();
+            whole.extra.remove("prefill_assistant");
+            let whole_options = ChatTemplateOptions {
+                add_assistant: false,
+                ..options.clone()
+            };
+            let whole = self.prepare_chat_prompt(&whole, whole_options)?;
+            if prefill_at_content_boundary(&prepared.text, &whole.text, &continued)
+                && !generation_prompt_opens_reasoning(prepared.chat_parse_metadata.as_deref())
+            {
                 prepared.text.push_str(&continued);
                 return Ok(prepared);
             }
@@ -466,13 +477,27 @@ fn assistant_continuation(request: &GenerationRequest) -> Option<String> {
 }
 
 /// The prefill to continue, or `None` to keep the ordinary rendering: also
-/// when a grammar or schema constrains the output (it would not account for
-/// the text already written) or nothing comes before the prefill.
+/// when a grammar or schema constrains the output or tools are requested
+/// (neither the grammar nor the tool-call parser would see the text already
+/// written), or nothing comes before the prefill.
 fn continued_prefill(request: &GenerationRequest, options: &ChatTemplateOptions) -> Option<String> {
-    if options.grammar.is_some() || options.json_schema.is_some() || request.messages.len() < 2 {
+    if options.grammar.is_some()
+        || options.json_schema.is_some()
+        || tool_calls_requested(request)
+        || request.messages.len() < 2
+    {
         return None;
     }
     assistant_continuation(request)
+}
+
+/// Whether the template puts the prefill text right after the generation
+/// prompt: the whole conversation, rendered with the prefill as an ordinary
+/// turn, must start with the history's generation prompt and then that text.
+fn prefill_at_content_boundary(with_generation_prompt: &str, whole: &str, continued: &str) -> bool {
+    whole
+        .strip_prefix(with_generation_prompt)
+        .is_some_and(|rest| rest.starts_with(continued))
 }
 
 /// Whether the rendered generation prompt ends inside a reasoning block: it
@@ -589,6 +614,49 @@ mod continuation_tests {
         }
         let alone = request(vec![("assistant", "1\n")], true);
         assert_eq!(continued_prefill(&alone, &plain), None);
+    }
+
+    #[test]
+    fn a_request_with_tools_is_left_to_the_template() {
+        let mut with_tools = request(vec![("user", "Run it."), ("assistant", "TOOL_CALL ")], true);
+        with_tools.tools = Some(serde_json::json!([
+            {"type": "function", "function": {"name": "run", "parameters": {}}}
+        ]));
+        assert_eq!(
+            continued_prefill(&with_tools, &ChatTemplateOptions::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn the_prefill_is_appended_only_where_the_template_puts_content() {
+        // ChatML (Qwen): content follows the generation prompt directly.
+        let chatml = "<|im_start|>user\nCount.<|im_end|>\n<|im_start|>assistant\n";
+        assert!(prefill_at_content_boundary(
+            chatml,
+            &format!("{chatml}1\n2\n<|im_end|>\n"),
+            "1\n2\n"
+        ));
+        // Harmony (GPT-OSS): the generation prompt stops inside the header,
+        // and the template writes a channel and a message tag before content.
+        let harmony = "<|start|>user<|message|>Hi<|end|><|start|>assistant";
+        assert!(!prefill_at_content_boundary(
+            harmony,
+            &format!("{harmony}<|channel|>final<|message|>Hello<|end|>"),
+            "Hello"
+        ));
+        // A template that writes anything else before the content.
+        assert!(!prefill_at_content_boundary(
+            chatml,
+            &format!("{chatml}<think>\n\n</think>\n\n1\n2\n<|im_end|>\n"),
+            "1\n2\n"
+        ));
+        // History rendered differently once the prefill is a turn.
+        assert!(!prefill_at_content_boundary(
+            chatml,
+            "<|im_start|>user\nCount!<|im_end|>\n<|im_start|>assistant\n1\n2\n",
+            "1\n2\n"
+        ));
     }
 
     #[test]
