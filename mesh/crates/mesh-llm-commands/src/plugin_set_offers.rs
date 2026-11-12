@@ -50,22 +50,36 @@ impl SetOffers {
         self.sets.get(set).map(Vec::as_slice)
     }
 
-    /// Record `members` as offered for `set`, keeping any members recorded
-    /// earlier, and write the file.
+    /// Record `members` as offered for `set` and write the file. The write
+    /// holds a cross-process lock, reloads what other commands recorded since
+    /// this record was loaded, and merges it in, so an overlapping setup can
+    /// never erase a recorded refusal.
     pub fn record(&mut self, store_root: &Path, set: &str, members: &[String]) -> Result<()> {
+        std::fs::create_dir_all(store_root)
+            .with_context(|| format!("create {}", store_root.display()))?;
+        let _lock = RecordLock::acquire(store_root)?;
+        // A damaged file under the lock is replaced: callers that must not
+        // reinstall already declined to get here (see `load`).
+        let latest = Self::load(store_root).unwrap_or_default();
+        for (name, offered) in latest.sets {
+            let entry = self.sets.entry(name).or_default();
+            for member in offered {
+                if !entry.contains(&member) {
+                    entry.push(member);
+                }
+            }
+        }
         let entry = self.sets.entry(set.to_string()).or_default();
         for member in members {
             if !entry.contains(member) {
                 entry.push(member.clone());
             }
         }
-        std::fs::create_dir_all(store_root)
-            .with_context(|| format!("create {}", store_root.display()))?;
         let path = record_path(store_root);
         let bytes = serde_json::to_vec_pretty(&self.sets).context("serialize set offers")?;
         // Write beside the record and rename over it, so an interrupted write
         // never leaves a torn file that would block later offers.
-        let temp = path.with_extension("json.tmp");
+        let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&temp, bytes).with_context(|| format!("write {}", temp.display()))?;
         std::fs::rename(&temp, &path).with_context(|| format!("replace {}", path.display()))
     }
@@ -78,6 +92,33 @@ impl SetOffers {
 
 fn record_path(store_root: &Path) -> PathBuf {
     store_root.join(RECORD_FILE)
+}
+
+/// An exclusive advisory lock on `set-offers.lock`, released on drop. The
+/// lock file is a file in the store root, so the store listing ignores it.
+struct RecordLock {
+    file: std::fs::File,
+}
+
+impl RecordLock {
+    fn acquire(store_root: &Path) -> Result<Self> {
+        let path = store_root.join("set-offers.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("open {}", path.display()))?;
+        fs2::FileExt::lock_exclusive(&file).with_context(|| format!("lock {}", path.display()))?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
 }
 
 /// Members of `current` the record has not offered yet, in catalog order.
@@ -136,6 +177,27 @@ mod tests {
             offers.offered("recommended"),
             Some(&names(&["capsules", "notes"])[..])
         );
+    }
+
+    #[test]
+    fn a_stale_record_merges_instead_of_erasing_a_recorded_refusal() {
+        let temp = tempfile::tempdir().unwrap();
+        // Two commands load the record before either writes.
+        let mut first = SetOffers::load(temp.path()).unwrap();
+        let mut second = SetOffers::load(temp.path()).unwrap();
+        second
+            .record(temp.path(), "recommended", &names(&["capsules"]))
+            .unwrap();
+        first
+            .record(temp.path(), "extra", &names(&["notes"]))
+            .unwrap();
+        let reloaded = SetOffers::load(temp.path()).unwrap();
+        assert_eq!(
+            reloaded.offered("recommended"),
+            Some(&names(&["capsules"])[..]),
+            "the older writer must not drop the later refusal"
+        );
+        assert_eq!(reloaded.offered("extra"), Some(&names(&["notes"])[..]));
     }
 
     #[test]

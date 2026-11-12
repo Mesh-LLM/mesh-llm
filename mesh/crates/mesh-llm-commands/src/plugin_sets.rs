@@ -11,7 +11,7 @@ use std::io::{IsTerminal, Write};
 use anyhow::Result;
 use mesh_llm_plugin_manager::{
     MemberAvailability, PluginCatalog, PluginInstallOptions, PluginProgressEvent,
-    PluginProgressReporter, SetInstallResult,
+    PluginProgressReporter, PluginStore, SetInstallResult,
 };
 
 use crate::plugin::CliPluginProgress;
@@ -387,6 +387,18 @@ async fn run_phase_with(
             return Ok(OptionalPluginResult::Incomplete(0));
         }
     };
+    if defaulted && let Some(member) = legacy_refused_member(options, &catalog, name) {
+        // The old bundled-default installer recorded the operator's refusal as
+        // a `default-off` marker. Honor it as this machine's answer, and
+        // migrate it into the record so it needs no marker lookup again.
+        let _ = writeln!(
+            err,
+            "ℹ️  Plugin set '{name}' skipped: {member} was turned off or removed under the \
+             previous installer. `mesh-llm plugins sets install {name}` installs it anyway."
+        );
+        record_offer(&mut offers, options, &catalog, name);
+        return Ok(OptionalPluginResult::Skipped);
+    }
     let result = match offer_gate(plan, &catalog, name, options, prompt) {
         OfferGate::Absent => return Ok(OptionalPluginResult::Skipped),
         OfferGate::Declined => {
@@ -402,6 +414,19 @@ async fn run_phase_with(
         record_offer(&mut offers, options, &catalog, name);
     }
     Ok(result)
+}
+
+/// A member of `set` the operator turned off or removed under the retired
+/// bundled-default installer (its `default-off` marker in the plugin store).
+fn legacy_refused_member(
+    options: &PluginInstallOptions,
+    catalog: &PluginCatalog,
+    set: &str,
+) -> Option<String> {
+    let store = PluginStore::new(&options.store_root);
+    set_members(catalog, set)
+        .into_iter()
+        .find(|member| store.default_turned_off(member))
 }
 
 /// Whether a finished install settles the offer: complete or nothing left to
@@ -617,7 +642,6 @@ pub fn render_update_notices(plan: &mesh_llm_plugin_manager::PluginUpgradePlan) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_plugin_manager::PluginStore;
 
     const ENTRIES: &str = r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
 "#;
@@ -970,6 +994,46 @@ mod tests {
         let catalog = phase_catalog(&["capsules"]);
         run_phase(&default_plan(), temp.path(), &catalog, &fetches, true).await;
         assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_default_off_marker_is_a_refusal_for_default_and_offer_runs() {
+        for plan in [default_plan(), offer_plan()] {
+            let temp = tempfile::tempdir().unwrap();
+            PluginStore::new(temp.path())
+                .set_default_turned_off("capsules", true)
+                .unwrap();
+            let fetches = std::cell::Cell::new(0);
+            let catalog = phase_catalog(&["capsules"]);
+            let result = run_phase(&plan, temp.path(), &catalog, &fetches, true).await;
+            assert_eq!(result, OptionalPluginResult::Skipped);
+            assert!(
+                PluginStore::new(temp.path())
+                    .load_optional("capsules")
+                    .unwrap()
+                    .is_none(),
+                "an operator who deleted capsules under the old installer is not reinstalled"
+            );
+            assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_explicit_set_installs_despite_a_legacy_default_off_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        install_marker(temp.path(), "capsules");
+        PluginStore::new(temp.path())
+            .set_default_turned_off("capsules", true)
+            .unwrap();
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        let plan = OptionalPluginPlan::InstallSet("recommended".into());
+        run_phase(&plan, temp.path(), &catalog, &fetches, true).await;
+        assert_eq!(
+            fetches.get(),
+            1,
+            "the explicit set is not blocked by the marker"
+        );
     }
 
     #[tokio::test]
