@@ -40,6 +40,13 @@ pub struct OpenAiCacheReuseArgs {
     pub max_tokens: u32,
     #[arg(long, default_value_t = 120)]
     pub request_timeout_secs: u64,
+    /// Requests sent at once after the sequential checks. Above one, the
+    /// grown chat is repeated as a wave of this many copies, then branched
+    /// into this many different follow-ups that are answered together and
+    /// again one at a time: every copy must match the sequential answer, and
+    /// every branch must give the same answer in a batch as alone.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..=64))]
+    pub wave: u16,
 }
 
 #[derive(Args)]

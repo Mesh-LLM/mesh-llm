@@ -53,6 +53,19 @@ impl Peer {
 
     fn with_telemetry(cached: [Option<Value>; 4], content: [&str; 4]) -> Self {
         let content = content.map(str::to_owned);
+        Self::answering(move |index, _| {
+            (
+                content.get(index).cloned().unwrap_or_default(),
+                cached.get(index).cloned().flatten(),
+            )
+        })
+    }
+
+    /// A peer that answers request `index` with `respond(index, request)`:
+    /// the content and the cached-token count it reports, if any.
+    fn answering(
+        respond: impl Fn(usize, &Value) -> (String, Option<Value>) + Send + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -74,15 +87,15 @@ impl Peer {
                             .unwrap();
                         let request = request_body(&mut stream);
                         let index = requests.len();
+                        let (content, cached) = respond(index, &request);
                         requests.push(request);
                         let mut response = json!({
-                            "choices": [{"message": {"content": content.get(index).cloned().unwrap_or_default()}}],
+                            "choices": [{"message": {"content": content}}],
                             "usage": {"prompt_tokens": 100,
                                 "prompt_tokens_details": {}}
                         });
-                        if let Some(Some(value)) = cached.get(index) {
-                            response["usage"]["prompt_tokens_details"]["cached_tokens"] =
-                                value.clone();
+                        if let Some(value) = cached {
+                            response["usage"]["prompt_tokens_details"]["cached_tokens"] = value;
                         }
                         let response = response.to_string();
                         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
@@ -158,7 +171,114 @@ fn args(peer: &Peer, prompt: &Prompt) -> OpenAiCacheReuseArgs {
         prompt_file: prompt.0.clone(),
         max_tokens: 8,
         request_timeout_secs: 1,
+        wave: 1,
     }
+}
+
+/// A peer that answers every request from its last message alone, as a
+/// deterministic server does whichever way a request reaches it. Only the
+/// first request is cold.
+fn consistent_peer() -> Peer {
+    Peer::answering(|index, request| {
+        let last = request["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .and_then(|message| message["content"].as_str())
+            .unwrap_or_default();
+        (
+            format!("re: {last}"),
+            Some(json!(if index == 0 { 0 } else { 60 })),
+        )
+    })
+}
+
+fn last_user_message(request: &Value) -> &str {
+    request["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .and_then(|message| message["content"].as_str())
+        .unwrap()
+}
+
+#[test]
+fn a_wave_repeats_the_grown_chat_then_answers_each_branch_together_and_alone() {
+    let prompt = Prompt::new();
+    let peer = consistent_peer();
+    run(OpenAiCacheReuseArgs {
+        wave: 3,
+        ..args(&peer, &prompt)
+    })
+    .unwrap();
+    let requests = peer.finish();
+    // four sequential, three copies, three branches together, three alone
+    assert_eq!(requests.len(), 4 + 3 + 3 + 3);
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(requests[2], requests[3]);
+    for copy in &requests[4..7] {
+        assert_eq!(copy, &requests[2], "a wave copy is the grown chat again");
+    }
+    let mut together: Vec<&str> = requests[7..10].iter().map(last_user_message).collect();
+    together.sort_unstable();
+    assert_eq!(
+        together,
+        [
+            "Reply with the number 0 and nothing else.",
+            "Reply with the number 1 and nothing else.",
+            "Reply with the number 2 and nothing else."
+        ]
+    );
+    for request in &requests[7..] {
+        assert_eq!(request["messages"].as_array().unwrap().len(), 5);
+    }
+    let alone: Vec<&str> = requests[10..].iter().map(last_user_message).collect();
+    assert_eq!(alone, {
+        let mut sorted = alone.clone();
+        sorted.sort_unstable();
+        sorted
+    });
+}
+
+#[test]
+fn a_branch_that_answers_differently_alone_fails_by_name() {
+    let prompt = Prompt::new();
+    // the last request is branch 1 on its own
+    let peer = Peer::answering(|index, request| {
+        let last = last_user_message(request).to_owned();
+        let content = if index == 4 + 2 + 2 + 1 {
+            "something else".to_owned()
+        } else {
+            format!("re: {last}")
+        };
+        (content, Some(json!(if index == 0 { 0 } else { 60 })))
+    });
+    let error = run(OpenAiCacheReuseArgs {
+        wave: 2,
+        ..args(&peer, &prompt)
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("wave branch 1 alone generated-content mismatch"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_wave_copy_that_misses_the_cache_fails() {
+    let prompt = Prompt::new();
+    let peer = Peer::answering(|index, request| {
+        let last = last_user_message(request).to_owned();
+        let cached = if index == 0 || index >= 4 { 0 } else { 60 };
+        (format!("re: {last}"), Some(json!(cached)))
+    });
+    let error = run(OpenAiCacheReuseArgs {
+        wave: 2,
+        ..args(&peer, &prompt)
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("wave copy"), "{error}");
+    assert!(error.contains("did not reuse a prompt prefix"), "{error}");
 }
 
 fn assert_sequence(requests: &[Value]) {

@@ -1,6 +1,6 @@
-use std::{fs, time::Duration};
+use std::{fs, thread, time::Duration};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
@@ -45,11 +45,27 @@ pub fn run(args: OpenAiCacheReuseArgs) -> Result<()> {
     let grown_repeat = complete(&client, &url, &args.model, &growing_turn, args.max_tokens)?;
     require_hit("growing chat repeat", &grown_repeat)?;
     require_content("growing chat repeat", &grown_seed, &grown_repeat)?;
+    let wave_branches = if args.wave > 1 {
+        Some(check_wave(
+            &client,
+            &url,
+            &args,
+            &growing_turn,
+            &grown_seed,
+        )?)
+    } else {
+        None
+    };
     println!(
         "{}",
         serde_json::to_string(&json!({
             "status": "pass",
             "content_parity": "exact",
+            "wave": wave_branches.map(|branches| json!({
+                "requests": args.wave,
+                "copies": "exact",
+                "branches": branches
+            })),
             "cold_content": seed.content,
             "repeat": {
                 "cached_tokens": repeat.cached_tokens,
@@ -69,6 +85,77 @@ pub fn run(args: OpenAiCacheReuseArgs) -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+/// The concurrent half of the check: the requests of a wave share one batch,
+/// one KV pool and one sampling pass, and each must come out as it does alone.
+///
+/// Returns each branch's content.
+fn check_wave(
+    client: &Client,
+    url: &str,
+    args: &OpenAiCacheReuseArgs,
+    growing_turn: &[Value],
+    grown_seed: &Completion,
+) -> Result<Vec<String>> {
+    let wave = usize::from(args.wave);
+    let copies = vec![growing_turn.to_vec(); wave];
+    let together = complete_wave(client, url, &args.model, &copies, args.max_tokens)?;
+    for (index, copy) in together.iter().enumerate() {
+        let label = format!("wave copy {index}");
+        require_hit(&label, copy)?;
+        require_content(&label, grown_seed, copy)?;
+    }
+
+    let branches: Vec<Vec<Value>> = (0..wave)
+        .map(|index| {
+            let mut turn = growing_turn.to_vec();
+            turn.push(json!({"role": "assistant", "content": grown_seed.content.clone()}));
+            turn.push(json!({
+                "role": "user",
+                "content": format!("Reply with the number {index} and nothing else.")
+            }));
+            turn
+        })
+        .collect();
+    let batched = complete_wave(client, url, &args.model, &branches, args.max_tokens)?;
+    for (index, (turn, batched)) in branches.iter().zip(&batched).enumerate() {
+        let label = format!("wave branch {index}");
+        require_hit(&label, batched)?;
+        ensure!(
+            !batched.content.is_empty(),
+            "{label} returned empty content"
+        );
+        let alone = complete(client, url, &args.model, turn, args.max_tokens)?;
+        let label = format!("wave branch {index} alone");
+        require_hit(&label, &alone)?;
+        require_content(&label, batched, &alone)?;
+    }
+    Ok(batched.into_iter().map(|branch| branch.content).collect())
+}
+
+/// Sends every turn at once and returns the completions in turn order.
+fn complete_wave(
+    client: &Client,
+    url: &str,
+    model: &str,
+    turns: &[Vec<Value>],
+    max_tokens: u32,
+) -> Result<Vec<Completion>> {
+    thread::scope(|scope| {
+        let requests: Vec<_> = turns
+            .iter()
+            .map(|messages| scope.spawn(move || complete(client, url, model, messages, max_tokens)))
+            .collect();
+        requests
+            .into_iter()
+            .map(|request| {
+                request
+                    .join()
+                    .map_err(|_| anyhow!("a wave request panicked"))?
+            })
+            .collect()
+    })
 }
 
 fn complete(
