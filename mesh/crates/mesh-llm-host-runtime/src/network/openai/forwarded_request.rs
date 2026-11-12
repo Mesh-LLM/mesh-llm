@@ -210,14 +210,28 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         // The pairing is the client's and the routing node's business: a peer
         // never learns that its answer is one half of a comparison.
         super::request_parse::MESH_TWIN_BRACKET_HEADER,
-        // The routing node consumed the scope; the peer just executes.
+        // A client's scope header never passes through as is; see below.
         super::routing_scope::MESH_SCOPE_HEADER,
     ];
     let omitted = INGRESS_CREDENTIAL_HEADERS
         .iter()
         .copied()
         .chain(OMITTED_ON_PEER_FORWARD.iter().copied());
-    finalize_forwarded_request(raw, false, None, None, &omitted.collect::<Vec<_>>())
+    let mut forwarded =
+        finalize_forwarded_request(raw, false, None, None, &omitted.collect::<Vec<_>>())?;
+    // A private request only reaches nodes of the same owner. Tell that node
+    // it is private, so it serves it only from what stays in scope (not from
+    // a split whose stages run on a stranger's node). The receiving node
+    // honours the marker only from a peer its own owner signed.
+    if crate::mesh::current_owner_scope().is_some() {
+        let request_line_end = forwarded
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+            .map_or(0, |at| at + 2);
+        let marker = super::routing_scope::private_scope_header_line();
+        forwarded.splice(request_line_end..request_line_end, marker.into_bytes());
+    }
+    Ok(forwarded)
 }
 
 #[cfg(test)]
@@ -277,6 +291,23 @@ mod tests {
         let forwarded = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
         assert!(!forwarded.contains(header), "{forwarded}");
         assert!(forwarded.ends_with("\r\n\r\n{}"), "{forwarded}");
+    }
+
+    #[tokio::test]
+    async fn a_private_request_tells_the_owned_peer_it_is_private() {
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-scope: bogus\r\nContent-Length: 2\r\n\r\n{}";
+        let scope = Some(crate::mesh::OwnerScope::new("me"));
+        let forwarded =
+            crate::mesh::with_owner_scope(scope, async { prepare_peer_forwarded_request(raw) })
+                .await
+                .unwrap();
+        let text = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
+        assert_eq!(text.matches("x-mesh-scope").count(), 1, "{text}");
+        assert!(
+            text.starts_with("post /v1/chat/completions http/1.1\r\nx-mesh-scope: private\r\n"),
+            "{text}"
+        );
+        assert!(text.ends_with("\r\n\r\n{}"), "{text}");
     }
 
     /// Regression (CodeRabbit / erlich, PR #1671 round 2): routing headers

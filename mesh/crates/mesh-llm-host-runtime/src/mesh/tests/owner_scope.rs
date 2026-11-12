@@ -94,3 +94,69 @@ async fn election_targets_keep_local_and_owned_hosts_only() {
         vec![InferenceTarget::Local(9000), InferenceTarget::Remote(mine)]
     );
 }
+
+#[tokio::test]
+async fn a_local_split_with_a_stranger_stage_is_not_private() {
+    let (node, mine, theirs, _forged) = node_with_mine_and_theirs().await;
+    let split = |model: &str, stage_node: EndpointId| crate::mesh::StageTopologyInstance {
+        topology_id: format!("topology-{model}"),
+        run_id: "run".to_string(),
+        model_id: model.to_string(),
+        package_ref: "gguf:///model.gguf".to_string(),
+        manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+        admissions: Default::default(),
+        stages: vec![crate::mesh::StageAssignment {
+            stage_id: "stage-1".to_string(),
+            stage_index: 1,
+            node_id: stage_node,
+            layer_start: 12,
+            layer_end: 24,
+            endpoint: crate::mesh::StageEndpoint {
+                bind_addr: "127.0.0.1:0".to_string(),
+            },
+        }],
+    };
+    {
+        let mut topologies = node.stage_topologies.lock().await;
+        topologies.record_topology(split("leaky", theirs));
+        topologies.record_topology(split("owned", mine));
+    }
+    let mut targets = ModelTargets::default();
+    for model in ["leaky", "owned"] {
+        targets
+            .targets
+            .insert(model.to_string(), vec![InferenceTarget::Local(9000)]);
+    }
+    let scope = OwnerScope::new("me");
+    let scoped = node.targets_in_owner_scope(&scope, &targets).await;
+    assert!(scoped.targets["leaky"].is_empty());
+    assert_eq!(scoped.targets["owned"], vec![InferenceTarget::Local(9000)]);
+}
+
+#[tokio::test]
+async fn my_own_nodes_are_admitted_as_me_when_remote_is_paused() {
+    use crate::runtime::IngressType;
+    let (node, mine, theirs, forged) = node_with_mine_and_theirs().await;
+    let remote = IngressType::RemoteQuicHttp;
+
+    // Unsigned entry node: nobody is "me".
+    assert_eq!(
+        node.owner_admission_ingress(remote, Some(mine)).await,
+        remote
+    );
+
+    *node.owner_summary.lock().await = OwnershipSummary {
+        owner_id: Some("me".to_string()),
+        verified: true,
+        status: OwnershipStatus::Verified,
+        expires_at_unix_ms: Some(u64::MAX),
+        ..OwnershipSummary::default()
+    };
+    assert_eq!(
+        node.owner_admission_ingress(remote, Some(mine)).await,
+        IngressType::LocalOpenAi
+    );
+    for stranger in [Some(theirs), Some(forged), None] {
+        assert_eq!(node.owner_admission_ingress(remote, stranger).await, remote);
+    }
+}

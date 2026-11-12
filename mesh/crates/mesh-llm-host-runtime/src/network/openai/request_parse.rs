@@ -114,6 +114,8 @@ struct ParsedHeaders {
     /// are kept for the relay. Every other request drops them.
     is_realtime_upgrade: bool,
     correlation_id: Option<String>,
+    /// The client used the `/private/v1` base URL; `path` has it removed.
+    private_base: bool,
 }
 
 /// The bounded metadata available after HTTP headers parse, even if consuming
@@ -533,6 +535,7 @@ where
         Some(&rewrite.request_path),
         rewrite.rewritten_body.as_deref(),
         parsed.request_id,
+        parsed.private_base,
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     // Context budgets follow what reaches the model: a transform may replace
@@ -800,6 +803,7 @@ fn finalize_forwarded_request(
     rewritten_path: Option<&str>,
     rewritten_body: Option<&[u8]>,
     request_id: RequestId,
+    private_base: bool,
 ) -> Result<Vec<u8>> {
     let original_body = raw.split_off(header_end);
     // Re-parse with httparse so we iterate over validated header structs.
@@ -846,6 +850,10 @@ fn finalize_forwarded_request(
         if strip_expect && name.eq_ignore_ascii_case("expect") {
             continue;
         }
+        // The `/private/v1` base URL is the scope: it replaces any header.
+        if private_base && name.eq_ignore_ascii_case(super::routing_scope::MESH_SCOPE_HEADER) {
+            continue;
+        }
         if rewritten_body.is_some()
             && (name.eq_ignore_ascii_case("content-length")
                 || name.eq_ignore_ascii_case("transfer-encoding"))
@@ -859,6 +867,9 @@ fn finalize_forwarded_request(
         rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
     rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
+    if private_base {
+        rebuilt.push_str(&super::routing_scope::private_scope_header_line());
+    }
     rebuilt.push_str(&format!(
         "{}: {}\r\n",
         skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str(),
@@ -897,7 +908,8 @@ where
         match req.parse(buf) {
             Ok(httparse::Status::Complete(header_end)) => {
                 let method = req.method.unwrap_or("GET").to_string();
-                let path = req.path.unwrap_or("/").to_string();
+                let (path, private_base) =
+                    super::routing_scope::split_private_base(req.path.unwrap_or("/"));
 
                 let mut content_length = None;
                 let mut is_chunked = false;
@@ -972,6 +984,7 @@ where
                     expects_continue,
                     is_realtime_upgrade,
                     correlation_id,
+                    private_base,
                 });
             }
             Ok(httparse::Status::Partial) => {

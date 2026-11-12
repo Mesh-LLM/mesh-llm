@@ -5,6 +5,10 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn roundtrip(node: &mesh::Node, extra_headers: &str, model: &str) -> String {
+    roundtrip_path(node, "/v1/chat/completions", extra_headers, model).await
+}
+
+async fn roundtrip_path(node: &mesh::Node, path: &str, extra_headers: &str, model: &str) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let ingress = {
@@ -25,7 +29,7 @@ async fn roundtrip(node: &mesh::Node, extra_headers: &str, model: &str) -> Strin
     let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
     let body = format!(r#"{{"model":"{model}","messages":[]}}"#);
     let request = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{extra_headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\n{extra_headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     client.write_all(request.as_bytes()).await.unwrap();
@@ -70,5 +74,15 @@ async fn a_malformed_scope_header_is_rejected_not_ignored() {
         let response = roundtrip(&node, headers, "qwen").await;
         assert!(response.starts_with("HTTP/1.1 400"), "{response}");
     }
+    node.endpoint.close().await;
+}
+
+#[tokio::test]
+async fn the_private_base_url_is_refused_on_an_unsigned_node() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    let response = roundtrip_path(&node, "/private/v1/chat/completions", "", "qwen").await;
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
     node.endpoint.close().await;
 }

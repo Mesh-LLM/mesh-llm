@@ -17,7 +17,9 @@
 //! labels and hostnames are never consulted: they are peer-supplied hints.
 
 use crate::crypto::{OwnershipStatus, OwnershipSummary};
+use crate::runtime::IngressType;
 use iroh::EndpointId;
+use std::collections::HashSet;
 
 tokio::task_local! {
     static OWNER_SCOPE: OwnerScope;
@@ -85,31 +87,83 @@ impl super::Node {
             .is_some_and(|info| scope.admits(&info.owner_summary, now_unix_ms()))
     }
 
-    /// Drop remote targets outside `scope` from an election snapshot. Local
-    /// targets stay: a private request only enters at a node its owner signed.
+    /// Drop targets outside `scope` from an election snapshot: remote hosts
+    /// not owned by the scope's owner, and a local split whose stages run on
+    /// any such node (its activations and KV would leave the scope).
     pub(crate) async fn targets_in_owner_scope(
         &self,
         scope: &OwnerScope,
         targets: &crate::inference::election::ModelTargets,
     ) -> crate::inference::election::ModelTargets {
         use crate::inference::election::InferenceTarget;
-        let now = now_unix_ms();
-        let in_scope: std::collections::HashSet<EndpointId> = {
-            let state = self.state.lock().await;
-            state
-                .peers
+        let in_scope = self.peers_in_scope(scope).await;
+        let me = self.endpoint.id();
+        let leaky_splits: HashSet<String> = {
+            let topologies = self.stage_topologies.lock().await;
+            topologies
+                .topologies
                 .values()
-                .filter(|peer| scope.admits(&peer.owner_summary, now))
-                .map(|peer| peer.id)
+                .filter(|topology| {
+                    topology
+                        .stages
+                        .iter()
+                        .any(|stage| stage.node_id != me && !in_scope.contains(&stage.node_id))
+                })
+                .map(|topology| topology.model_id.clone())
                 .collect()
         };
         let mut scoped = targets.clone();
-        for hosts in scoped.targets.values_mut() {
-            hosts.retain(|target| {
-                !matches!(target, InferenceTarget::Remote(peer) if !in_scope.contains(peer))
+        for (model, hosts) in &mut scoped.targets {
+            let local_leaks = leaky_splits.contains(model);
+            hosts.retain(|target| match target {
+                InferenceTarget::Remote(peer) => in_scope.contains(peer),
+                InferenceTarget::Local(_) => !local_leaks,
+                InferenceTarget::None => true,
             });
         }
         scoped
+    }
+
+    async fn peers_in_scope(&self, scope: &OwnerScope) -> HashSet<EndpointId> {
+        let now = now_unix_ms();
+        let state = self.state.lock().await;
+        state
+            .peers
+            .values()
+            .filter(|peer| scope.admits(&peer.owner_summary, now))
+            .map(|peer| peer.id)
+            .collect()
+    }
+
+    /// Whether `peer` is verified as owned by the same owner as this node.
+    pub(crate) async fn peer_shares_my_owner(&self, peer: EndpointId) -> bool {
+        let Some(scope) = self.private_owner_scope().await else {
+            return false;
+        };
+        let state = self.state.lock().await;
+        state
+            .peers
+            .get(&peer)
+            .is_some_and(|info| scope.admits(&info.owner_summary, now_unix_ms()))
+    }
+
+    /// The ingress class activity policy admits a request as. A request from
+    /// one of this owner's own nodes is the owner's request, so a node that
+    /// pauses remote inference while its owner is busy still serves it.
+    pub(crate) async fn owner_admission_ingress(
+        &self,
+        ingress_type: IngressType,
+        requester: Option<EndpointId>,
+    ) -> IngressType {
+        match requester {
+            Some(peer)
+                if ingress_type == IngressType::RemoteQuicHttp
+                    && self.peer_shares_my_owner(peer).await =>
+            {
+                IngressType::LocalOpenAi
+            }
+            _ => ingress_type,
+        }
     }
 
     /// The owner scope for a private request entering at this node: its own

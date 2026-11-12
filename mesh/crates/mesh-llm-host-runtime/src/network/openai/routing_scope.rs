@@ -21,6 +21,26 @@ pub(crate) const MESH_SCOPE_HEADER: &str = "x-mesh-scope";
 pub(crate) const PRIVATE_SCOPE: &str = "private";
 pub(crate) const PRIVATE_MODEL_SUFFIX: &str = "@private";
 
+/// Base URL that selects private scope for every request under it, so an
+/// OpenAI client only needs `base_url = http://node:9337/private/v1`.
+pub(crate) const PRIVATE_BASE_PREFIX: &str = "/private";
+
+/// Split a `/private/v1/...` request target into its ordinary `/v1/...` path
+/// and whether the private base was used. Other paths are returned as is.
+pub(crate) fn split_private_base(target: &str) -> (String, bool) {
+    match target.strip_prefix(PRIVATE_BASE_PREFIX) {
+        Some(rest) if rest == "/v1" || rest.starts_with("/v1/") || rest.starts_with("/v1?") => {
+            (rest.to_string(), true)
+        }
+        _ => (target.to_string(), false),
+    }
+}
+
+/// The scope header a `/private/v1` request is rebuilt with.
+pub(crate) fn private_scope_header_line() -> String {
+    format!("{MESH_SCOPE_HEADER}: {PRIVATE_SCOPE}\r\n")
+}
+
 /// Why a private request cannot be served at this node.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ScopeRejection {
@@ -85,18 +105,24 @@ pub(crate) async fn resolve(
     Ok(Some(scope))
 }
 
-/// [`resolve`] for a request entering this node's API ingress. A request
-/// from a peer is already assigned here and runs locally, so it is never
-/// scoped (its selector was stripped before it was forwarded). Returns `None`
-/// once a rejection has been written.
+/// [`resolve`] for a request entering this node's API ingress. Returns
+/// `None` once a rejection has been written.
+///
+/// A request from a peer is already assigned here and runs locally. It is
+/// private only when the peer that forwarded it marked it so and is signed by
+/// this node's own owner: then this node serves it only from what stays in
+/// that owner's scope. A stranger's marker is ignored; it cannot widen
+/// anything, and a peer request never routes onward.
 pub(crate) async fn resolve_at_ingress(
     node: &mesh::Node,
     stream: ClientStream,
     mut request: BufferedHttpRequest,
     ingress_type: IngressType,
+    requested_by: Option<iroh::EndpointId>,
 ) -> Option<(ClientStream, BufferedHttpRequest, Option<OwnerScope>)> {
     if ingress_type == IngressType::RemoteQuicHttp {
-        return Some((stream, request, None));
+        let scope = peer_private_scope(node, &request, requested_by).await;
+        return Some((stream, request, scope));
     }
     match resolve(node, &mut request).await {
         Ok(scope) => Some((stream, request, scope)),
@@ -109,9 +135,44 @@ pub(crate) async fn resolve_at_ingress(
     }
 }
 
+async fn peer_private_scope(
+    node: &mesh::Node,
+    request: &BufferedHttpRequest,
+    requested_by: Option<iroh::EndpointId>,
+) -> Option<OwnerScope> {
+    let marked = matches!(
+        header_values_from_raw(&request.raw, MESH_SCOPE_HEADER).as_deref(),
+        Ok([value]) if value.trim().eq_ignore_ascii_case(PRIVATE_SCOPE)
+    );
+    if !marked || !node.peer_shares_my_owner(requested_by?).await {
+        return None;
+    }
+    node.private_owner_scope().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_private_base_url_maps_onto_v1() {
+        for (target, path) in [
+            ("/private/v1/chat/completions", "/v1/chat/completions"),
+            ("/private/v1/models", "/v1/models"),
+            ("/private/v1", "/v1"),
+            ("/private/v1?x=1", "/v1?x=1"),
+        ] {
+            assert_eq!(split_private_base(target), (path.to_string(), true));
+        }
+        for target in [
+            "/v1/models",
+            "/private",
+            "/private/v10/models",
+            "/privatev1/models",
+        ] {
+            assert_eq!(split_private_base(target), (target.to_string(), false));
+        }
+    }
 
     #[test]
     fn the_suffix_is_reserved_and_stripped_once() {

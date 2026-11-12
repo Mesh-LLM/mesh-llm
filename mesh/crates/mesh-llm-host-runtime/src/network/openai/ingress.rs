@@ -1410,10 +1410,20 @@ async fn admit_buffered_api_request(
     ingress_type: crate::runtime::IngressType,
     lifecycle: &OpenAiLifecycleAttachment,
 ) -> Result<ClientStream, proxy::RouteDispatchOutcome> {
+    let requester = ctx
+        .route
+        .requested_by_node_id
+        .as_deref()
+        .and_then(parse_endpoint_id_hex);
+    let admitted_as = ctx
+        .route
+        .node
+        .owner_admission_ingress(ingress_type, requester)
+        .await;
     check_activity_admission(
         tcp_stream,
         &ctx.route.node.activity_policy_guard,
-        ingress_type,
+        admitted_as,
         lifecycle.route_observer(),
     )
     .await
@@ -1577,8 +1587,14 @@ async fn handle_api_proxy_connection_inner(
             return;
         }
     };
-    let Some((tcp_stream, request, scope)) =
-        super::routing_scope::resolve_at_ingress(&node, tcp_stream, request, ingress_type).await
+    let Some((tcp_stream, request, scope)) = super::routing_scope::resolve_at_ingress(
+        &node,
+        tcp_stream,
+        request,
+        ingress_type,
+        requested_by,
+    )
+    .await
     else {
         return;
     };

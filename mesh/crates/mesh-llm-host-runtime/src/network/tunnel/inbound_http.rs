@@ -21,10 +21,10 @@ pub(super) async fn handle_inbound_http_stream(
 ) -> Result<()> {
     let _inflight = node.begin_inflight_request();
 
-    match node
-        .activity_policy_guard
-        .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
-    {
+    let admitted_as = node
+        .owner_admission_ingress(crate::runtime::IngressType::RemoteQuicHttp, Some(remote))
+        .await;
+    match node.activity_policy_guard.check_admission(admitted_as) {
         crate::runtime::AdmissionResult::Allowed => {}
         crate::runtime::AdmissionResult::Paused { reason, .. } => {
             tracing::debug!(reason, "Inbound HTTP tunnel rejected by activity policy");
