@@ -1457,22 +1457,6 @@ async fn try_handle_virtual_model_intercept(
     if !is_virtual {
         return VirtualModelInterceptResult::NotVirtual(tcp_stream);
     }
-    if mesh::current_owner_scope().is_some() {
-        // A virtual model's plugin issues its own inference requests, which
-        // would not carry this request's owner scope. Refuse rather than let
-        // a private request fan out to public nodes.
-        let outcome = response_outcome(
-            409,
-            proxy::send_error_observed(
-                tcp_stream,
-                409,
-                "private routing is not supported for virtual models yet",
-                route_observer,
-            )
-            .await,
-        );
-        return VirtualModelInterceptResult::Handled(outcome);
-    }
     if mesh_routing_headers_requested(request) {
         let outcome = response_outcome(
             409,

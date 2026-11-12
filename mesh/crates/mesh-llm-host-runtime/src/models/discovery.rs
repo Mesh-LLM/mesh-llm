@@ -180,11 +180,10 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
                     | crate::proto::node::InferenceAdmissionState::AllPaused
             )
         );
-        // `@private` is a reserved request selector, never a model a peer can
-        // advertise: listing one would let a stranger's model pose as private.
-        names.retain(|name| {
-            !name.ends_with(crate::network::openai::routing_scope::PRIVATE_MODEL_SUFFIX)
-        });
+        // `@private`/`@incognito` are reserved request selectors, never a model
+        // a peer can advertise: listing one would let a stranger's model pose
+        // as private.
+        names.retain(|name| !crate::network::openai::routing_scope::has_private_model_suffix(name));
         for name in names {
             let available = live
                 && !paused

@@ -26,6 +26,11 @@ curl localhost:9337/private/v1/chat/completions -d '{"model":"qwen3-32b", ...}'
 
 `/private/v1` is for clients that only let you set a base URL.
 
+`incognito` is an alias everywhere: `qwen3-32b@incognito`,
+`x-mesh-scope: incognito`. The suffix works on the automatic directive too:
+`auto@private` or `mesh@private` picks a model, or convenes a committee, from
+your nodes only.
+
 `GET /v1/models` with `x-mesh-scope: private` lists only what your nodes serve.
 
 ## Meaning
@@ -49,16 +54,18 @@ their certificate on heartbeat while the owner key is available.
   private target: its activations and KV would leave your nodes.
 - Your own nodes come first: a request from a node of the same owner is
   admitted as local, so a node that pauses remote inference still serves you.
-- A trailing `@private` is reserved. Peer-advertised names ending in it are
-  not listed, and a peer naming a model `x@private` cannot attract a private
-  request: trust comes only from the certificate, never from names, labels or
-  hostnames. A Hugging Face revision named `private` must be referenced by
-  commit.
+- Virtual (MoA) models: while a private turn runs, every nested request
+  that plugin makes is sent with `x-mesh-scope: private`, so the committee
+  only reaches your nodes. This is per plugin, not per turn: a public turn
+  that overlaps a private one is narrowed to your nodes too.
+- A trailing `@private` or `@incognito` is reserved. Peer-advertised names
+  ending in either are not listed, and a peer naming a model `x@private`
+  cannot attract a private request: trust comes only from the certificate,
+  never from names, labels or hostnames. A Hugging Face revision with either
+  name must be referenced by commit.
 
 ## Not yet
 
-- Virtual (MoA) models refuse private requests (409): their nested requests
-  would not carry the scope.
 - The startup (bootstrap) proxy refuses private requests (503) until the node
   is ready.
 - A separate prompt-cache namespace, console and launcher (`--private`)

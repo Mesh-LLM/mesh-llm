@@ -54,6 +54,10 @@ async fn an_unsigned_node_refuses_private_requests() {
         ("", "qwen@private"),
         ("x-mesh-scope: private\r\n", "qwen"),
         ("X-Mesh-Scope: PRIVATE\r\n", "qwen"),
+        ("", "qwen@incognito"),
+        ("x-mesh-scope: incognito\r\n", "qwen"),
+        ("", "auto@private"),
+        ("", "mesh@incognito"),
     ] {
         let response = roundtrip(&node, headers, model).await;
         assert!(response.starts_with("HTTP/1.1 403"), "{response}");

@@ -30,9 +30,9 @@ async fn nested_single_model_directive_bypasses_installed_override() {
     assert!(ordinary.contains("plugin-worker"), "{ordinary}");
     let bridge = InferenceRpcBridge::new(address.port(), manager);
     let legacy = json!({"model_id":"mesh", "request":{"messages":[]}});
-    assert!(bridge.infer(&legacy.to_string()).await.is_err());
+    assert!(bridge.infer("test", &legacy.to_string()).await.is_err());
     let result = bridge
-        .infer(&json!({
+        .infer("test", &json!({
             "model_id":"mesh",
             "single_model_only":true,
             "request":{"messages":[{"role":"user","content":"hello"}]},
@@ -84,6 +84,7 @@ async fn nested_single_model_directive_skips_override_on_bootstrap_proxy() {
     let bridge = InferenceRpcBridge::new(port, manager);
     let result = bridge
         .infer(
+            "test",
             &json!({
                 "model_id":"mesh",
                 "single_model_only":true,

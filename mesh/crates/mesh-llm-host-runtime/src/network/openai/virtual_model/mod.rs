@@ -13,6 +13,8 @@ mod progress;
 mod stream_adapters;
 
 #[cfg(test)]
+mod private_bridge_tests;
+#[cfg(test)]
 mod workload_admission_tests;
 
 #[derive(Clone)]
@@ -31,7 +33,11 @@ impl InferenceRpcBridge {
         }
     }
 
-    pub(crate) async fn infer(&self, params_json: &str) -> Result<RpcResult, proto::ErrorResponse> {
+    pub(crate) async fn infer(
+        &self,
+        plugin_name: &str,
+        params_json: &str,
+    ) -> Result<RpcResult, proto::ErrorResponse> {
         let mut request: HostInferenceRequest = serde_json::from_str(params_json)
             .map_err(|error| invalid_params(format!("invalid inference request: {error}")))?;
         let model_id = request.model_id.trim().to_string();
@@ -78,6 +84,12 @@ impl InferenceRpcBridge {
                 capability.request_id().as_uuid().to_string(),
             );
         }
+        if self.plugins.private_invocation_active(plugin_name) {
+            request_builder = request_builder.header(
+                super::routing_scope::MESH_SCOPE_HEADER,
+                super::routing_scope::PRIVATE_SCOPE,
+            );
+        }
         if let Some(target_node_id) = request.target_node_id {
             request_builder =
                 request_builder.header(super::request_parse::MESH_TARGET_HEADER, target_node_id);
@@ -104,14 +116,14 @@ impl InferenceRpcBridge {
 impl PluginRpcBridge for InferenceRpcBridge {
     fn handle_request(
         &self,
-        _plugin_name: String,
+        plugin_name: String,
         method: String,
         params_json: String,
     ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
         let this = self.clone();
         Box::pin(async move {
             match method.as_str() {
-                "inference/chat_completions" => this.infer(&params_json).await,
+                "inference/chat_completions" => this.infer(&plugin_name, &params_json).await,
                 _ => Err(proto::ErrorResponse {
                     code: -32601,
                     message: format!("Unsupported host RPC method '{method}'"),
@@ -311,6 +323,26 @@ fn validate_virtual_request(
     None
 }
 
+/// Invoke the plugin's turn. A private turn keeps the plugin's own inference
+/// calls private for as long as the turn runs, including after progress has
+/// been committed. The scope is read here, on the request's task, not when
+/// the returned future is first polled.
+fn invoke_in_scope<'a>(
+    plugins: &'a PluginManager,
+    route: &'a crate::plugin::VirtualModelRoute,
+    input_json: &'a str,
+) -> impl std::future::Future<Output = anyhow::Result<mesh_llm_plugin::VirtualModelResponse>> + 'a {
+    let private_turn = mesh::current_owner_scope()
+        .is_some()
+        .then(|| plugins.begin_private_invocation(&route.plugin_name));
+    async move {
+        let _private_turn = private_turn;
+        plugins
+            .invoke_virtual_model(route, input_json, Some(std::time::Duration::from_secs(300)))
+            .await
+    }
+}
+
 #[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 pub(crate) async fn try_handle_virtual_model(
     plugins: &PluginManager,
@@ -390,11 +422,7 @@ pub(crate) async fn try_handle_virtual_model(
         Ok(stream) => stream,
         Err(outcome) => return VirtualModelDispatchResult::Responded(*outcome),
     };
-    let invocation = plugins.invoke_virtual_model(
-        &route,
-        &input_json,
-        Some(std::time::Duration::from_secs(300)),
-    );
+    let invocation = invoke_in_scope(plugins, &route, &input_json);
     // A virtual model answers once, so a streaming caller would otherwise wait
     // out the whole turn with nothing on the wire. When the route declares
     // progress lines the host commits the head and drips them while the turn

@@ -1,5 +1,6 @@
 //! Client selectors for private routing: `x-mesh-scope: private` or a
-//! `@private` model suffix.
+//! `@private` model suffix. `incognito` is an alias for `private` in both.
+//! They work on the automatic directive too: `auto@private`, `mesh@private`.
 //!
 //! Both mean the same thing: serve this request only on nodes signed by the
 //! owner of the node the client is talking to. The selector is consumed here,
@@ -9,8 +10,9 @@
 //! is forwarded. Whether a peer is "yours" is decided by its verified owner
 //! certificate (`mesh::owner_scope`), never by a name.
 //!
-//! A trailing `@private` is reserved: it always means scope. A Hugging Face
-//! revision literally named `private` must be referenced by commit instead.
+//! A trailing `@private` or `@incognito` is reserved: it always means scope.
+//! A Hugging Face revision with either name must be referenced by commit
+//! instead.
 
 use super::client_stream::ClientStream;
 use super::request_parse::{BufferedHttpRequest, header_values_from_raw, rewrite_model_field};
@@ -19,7 +21,25 @@ use crate::runtime::IngressType;
 
 pub(crate) const MESH_SCOPE_HEADER: &str = "x-mesh-scope";
 pub(crate) const PRIVATE_SCOPE: &str = "private";
-pub(crate) const PRIVATE_MODEL_SUFFIX: &str = "@private";
+/// Header values that select private scope; the first is canonical.
+const PRIVATE_SCOPE_ALIASES: [&str; 2] = [PRIVATE_SCOPE, "incognito"];
+/// Reserved model-name suffixes that select private scope.
+pub(crate) const PRIVATE_MODEL_SUFFIXES: [&str; 2] = ["@private", "@incognito"];
+
+fn is_private_scope_value(value: &str) -> bool {
+    let value = value.trim();
+    PRIVATE_SCOPE_ALIASES
+        .iter()
+        .any(|alias| value.eq_ignore_ascii_case(alias))
+}
+
+/// Whether `name` ends in a reserved private suffix, so it can never be a
+/// model a peer advertises.
+pub(crate) fn has_private_model_suffix(name: &str) -> bool {
+    PRIVATE_MODEL_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
 
 /// Base URL that selects private scope for every request under it, so an
 /// OpenAI client only needs `base_url = http://node:9337/private/v1`.
@@ -60,7 +80,7 @@ fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeR
         .as_slice()
     {
         [] => false,
-        [value] if value.trim().eq_ignore_ascii_case(PRIVATE_SCOPE) => true,
+        [value] if is_private_scope_value(value) => true,
         [value] => {
             return Err(bad(format!(
                 "unsupported {MESH_SCOPE_HEADER} value '{}': the only scope is '{PRIVATE_SCOPE}'",
@@ -72,10 +92,12 @@ fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeR
     Ok(header || private_model_base(request.model_name.as_deref()).is_some())
 }
 
-/// `model` without its reserved `@private` suffix, when it has one.
+/// `model` without its reserved private suffix, when it has one.
 pub(crate) fn private_model_base(model: Option<&str>) -> Option<&str> {
-    model?
-        .strip_suffix(PRIVATE_MODEL_SUFFIX)
+    let model = model?;
+    PRIVATE_MODEL_SUFFIXES
+        .iter()
+        .find_map(|suffix| model.strip_suffix(suffix))
         .filter(|base| !base.is_empty())
 }
 
@@ -142,7 +164,7 @@ async fn peer_private_scope(
 ) -> Option<OwnerScope> {
     let marked = matches!(
         header_values_from_raw(&request.raw, MESH_SCOPE_HEADER).as_deref(),
-        Ok([value]) if value.trim().eq_ignore_ascii_case(PRIVATE_SCOPE)
+        Ok([value]) if is_private_scope_value(value)
     );
     if !marked || !node.peer_shares_my_owner(requested_by?).await {
         return None;
@@ -189,8 +211,28 @@ mod tests {
             Some("x@private")
         );
         assert_eq!(private_model_base(Some("@private")), None);
+        assert_eq!(private_model_base(Some("@incognito")), None);
+        assert_eq!(
+            private_model_base(Some("qwen3-32b@incognito")),
+            Some("qwen3-32b")
+        );
+        assert_eq!(private_model_base(Some("auto@private")), Some("auto"));
+        assert_eq!(private_model_base(Some("mesh@incognito")), Some("mesh"));
         assert_eq!(private_model_base(Some("qwen3-32b")), None);
         assert_eq!(private_model_base(Some("org/repo@main")), None);
         assert_eq!(private_model_base(None), None);
+    }
+
+    #[test]
+    fn incognito_is_an_alias_and_names_with_either_suffix_are_reserved() {
+        for value in ["private", "incognito", " Incognito "] {
+            assert!(is_private_scope_value(value));
+        }
+        for value in ["public", "", "incog"] {
+            assert!(!is_private_scope_value(value));
+        }
+        assert!(has_private_model_suffix("x@private"));
+        assert!(has_private_model_suffix("x@incognito"));
+        assert!(!has_private_model_suffix("org/repo@main"));
     }
 }

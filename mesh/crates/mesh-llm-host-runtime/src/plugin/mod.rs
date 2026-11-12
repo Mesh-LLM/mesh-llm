@@ -34,6 +34,7 @@ pub(crate) mod mcp;
 pub mod openai_exchange;
 mod operation_bindings;
 pub(crate) mod operations;
+pub(crate) mod private_invocations;
 mod request_transform;
 mod runtime;
 mod schema_validation;
@@ -149,6 +150,7 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) runtime_data: RuntimeDataCollector,
     pub(in crate::plugin) rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     pub(in crate::plugin) shutting_down: AtomicBool,
+    pub(in crate::plugin) private_invocations: private_invocations::PrivateInvocations,
     #[cfg(test)]
     pub(in crate::plugin) bridged_plugins: BTreeSet<String>,
     #[cfg(test)]
@@ -247,6 +249,7 @@ impl PluginManager {
                 runtime_data,
                 rpc_bridge,
                 shutting_down: AtomicBool::new(false),
+                private_invocations: Default::default(),
                 #[cfg(test)]
                 bridged_plugins: BTreeSet::new(),
                 #[cfg(test)]
@@ -475,6 +478,7 @@ impl PluginManager {
                 runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
                 shutting_down: AtomicBool::new(false),
+                private_invocations: Default::default(),
                 bridged_plugins: plugin_names
                     .iter()
                     .map(|name| (*name).to_string())
@@ -506,6 +510,7 @@ impl PluginManager {
                 runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(None)),
                 shutting_down: AtomicBool::new(false),
+                private_invocations: Default::default(),
                 bridged_plugins: BTreeSet::new(),
                 test_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
@@ -949,6 +954,20 @@ impl PluginManager {
     ) -> Result<ToolCallResult> {
         self.call_tool_without_timeout(plugin_name, operation_name, input_json)
             .await
+    }
+
+    /// Mark `plugin_name` as running a private virtual-model turn until the
+    /// guard drops; see [`private_invocations`].
+    pub(crate) fn begin_private_invocation(
+        &self,
+        plugin_name: &str,
+    ) -> private_invocations::PrivateInvocationGuard {
+        self.inner.private_invocations.begin(plugin_name)
+    }
+
+    /// Whether nested inference from `plugin_name` must stay private.
+    pub(crate) fn private_invocation_active(&self, plugin_name: &str) -> bool {
+        self.inner.private_invocations.is_active(plugin_name)
     }
 
     pub async fn invoke_virtual_model(
