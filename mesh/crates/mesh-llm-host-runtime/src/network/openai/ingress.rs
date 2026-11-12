@@ -25,6 +25,9 @@ mod lifecycle_prepared_dispatch_live_tests;
 #[path = "ingress/typed_frontend_live_tests.rs"]
 mod lifecycle_typed_frontend_live_tests;
 mod missing_model;
+#[cfg(test)]
+#[path = "ingress/private_scope_tests.rs"]
+mod private_scope_tests;
 mod realtime_relay;
 mod rejection_telemetry;
 use buffered_exchange::handle_buffered_api_request;
@@ -1444,6 +1447,22 @@ async fn try_handle_virtual_model_intercept(
     if !is_virtual {
         return VirtualModelInterceptResult::NotVirtual(tcp_stream);
     }
+    if mesh::current_owner_scope().is_some() {
+        // A virtual model's plugin issues its own inference requests, which
+        // would not carry this request's owner scope. Refuse rather than let
+        // a private request fan out to public nodes.
+        let outcome = response_outcome(
+            409,
+            proxy::send_error_observed(
+                tcp_stream,
+                409,
+                "private routing is not supported for virtual models yet",
+                route_observer,
+            )
+            .await,
+        );
+        return VirtualModelInterceptResult::Handled(outcome);
+    }
     if mesh_routing_headers_requested(request) {
         let outcome = response_outcome(
             409,
@@ -1545,14 +1564,32 @@ async fn handle_api_proxy_connection_inner(
     } else {
         super::request_parse::RequestTransforms::Apply
     };
-    match proxy::read_http_request_with_plugin_manager_with_context(
+    let request = match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
         transforms,
     )
     .await
     {
-        Ok(request) if realtime_relay::is_realtime_upgrade(&request) => {
+        Ok(request) => request,
+        Err(error) => {
+            let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
+            return;
+        }
+    };
+    let Some((tcp_stream, request, scope)) =
+        super::routing_scope::resolve_at_ingress(&node, tcp_stream, request, ingress_type).await
+    else {
+        return;
+    };
+    let targets = match &scope {
+        Some(scope) => node.targets_in_owner_scope(scope, &targets).await,
+        None => targets,
+    };
+    // Boxed: the dispatch future is large, and the scope wrapper would
+    // otherwise move it across another stack frame.
+    let dispatch = Box::pin(async move {
+        if realtime_relay::is_realtime_upgrade(&request) {
             realtime_relay::relay(
                 &node,
                 tcp_stream,
@@ -1562,31 +1599,28 @@ async fn handle_api_proxy_connection_inner(
                 requested_by,
             )
             .await;
+            return;
         }
-        Ok(request) => {
-            let route = IngressRouteContext {
-                node: &node,
-                targets: &targets,
-                affinity: &affinity,
-                plugin_manager: plugin_manager.as_ref(),
-                requested_by_node_id: requested_by.map(|id| hex::encode(id.as_bytes())),
-                automatic_retry: None,
-                #[cfg(test)]
-                exchange_channel: None,
-            };
-            handle_buffered_api_request(
-                tcp_stream,
-                request,
-                ProxyConnectionContext { route },
-                source_addr,
-                ingress_type,
-            )
-            .await;
-        }
-        Err(error) => {
-            let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
-        }
-    }
+        let route = IngressRouteContext {
+            node: &node,
+            targets: &targets,
+            affinity: &affinity,
+            plugin_manager: plugin_manager.as_ref(),
+            requested_by_node_id: requested_by.map(|id| hex::encode(id.as_bytes())),
+            automatic_retry: None,
+            #[cfg(test)]
+            exchange_channel: None,
+        };
+        handle_buffered_api_request(
+            tcp_stream,
+            request,
+            ProxyConnectionContext { route },
+            source_addr,
+            ingress_type,
+        )
+        .await;
+    });
+    mesh::with_owner_scope(scope, dispatch).await;
 }
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's

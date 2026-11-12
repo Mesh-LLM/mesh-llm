@@ -426,6 +426,26 @@ pub async fn handle_mesh_request(
             return;
         }
     };
+    // Private routing is decided by the full ingress; this bootstrap path
+    // never scopes, so it refuses a private request instead of routing it to
+    // whichever host it finds.
+    match super::routing_scope::resolve(&node, &mut request).await {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            let _ = super::response::send_error(
+                tcp_stream,
+                503,
+                "private routing is not available until this node finishes starting",
+            )
+            .await;
+            return;
+        }
+        Err(rejection) => {
+            let _ =
+                super::response::send_error(tcp_stream, rejection.status, &rejection.message).await;
+            return;
+        }
+    }
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
     let mut lifecycle = attach_request_logging(&mut request, source_addr);

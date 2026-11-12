@@ -97,6 +97,7 @@ mod operational_logging;
 mod owner_control;
 mod owner_control_response;
 mod owner_lifecycle_cache;
+mod owner_scope;
 mod peer_state;
 mod plugin_config;
 pub(crate) mod plugin_keys;
@@ -118,6 +119,9 @@ pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use mesh_llm_membership::connection_reservation::*;
 use mesh_llm_membership::state::MembershipState;
 use model_identity::*;
+pub(crate) use owner_scope::{
+    OwnerScope, current_owner_scope, now_unix_ms as owner_scope_now_unix_ms, with_owner_scope,
+};
 // Main's openai::model_names calls this through the mesh:: path; keep the
 // pub(crate) surface stable across the model_identity move.
 pub(crate) use model_identity::public_model_id_from_identity;

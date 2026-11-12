@@ -41,3 +41,4 @@ mod split_coverage {
 }
 
 mod model_requirements;
+mod owner_scope;

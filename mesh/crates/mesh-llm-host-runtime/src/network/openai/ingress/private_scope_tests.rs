@@ -1,0 +1,74 @@
+//! Private routing at the API ingress fails closed: a node with no verified
+//! owner refuses a private request instead of serving it publicly.
+
+use super::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+async fn roundtrip(node: &mesh::Node, extra_headers: &str, model: &str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let ingress = {
+        let node = node.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_api_proxy_connection(
+                node,
+                stream.into(),
+                election::ModelTargets::default(),
+                affinity::AffinityRouter::new(),
+                crate::runtime::IngressType::LocalOpenAi,
+                None,
+            )
+            .await;
+        })
+    };
+    let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+    let body = format!(r#"{{"model":"{model}","messages":[]}}"#);
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{extra_headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    client.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.read_to_string(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    ingress.await.unwrap();
+    response
+}
+
+#[tokio::test]
+async fn an_unsigned_node_refuses_private_requests() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    for (headers, model) in [
+        ("", "qwen@private"),
+        ("x-mesh-scope: private\r\n", "qwen"),
+        ("X-Mesh-Scope: PRIVATE\r\n", "qwen"),
+    ] {
+        let response = roundtrip(&node, headers, model).await;
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(response.contains("--owner-key"), "{response}");
+    }
+    node.endpoint.close().await;
+}
+
+#[tokio::test]
+async fn a_malformed_scope_header_is_rejected_not_ignored() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    for headers in [
+        "x-mesh-scope: public\r\n",
+        "x-mesh-scope: private\r\nx-mesh-scope: private\r\n",
+    ] {
+        let response = roundtrip(&node, headers, "qwen").await;
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    }
+    node.endpoint.close().await;
+}

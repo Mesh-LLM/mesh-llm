@@ -210,6 +210,8 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         // The pairing is the client's and the routing node's business: a peer
         // never learns that its answer is one half of a comparison.
         super::request_parse::MESH_TWIN_BRACKET_HEADER,
+        // The routing node consumed the scope; the peer just executes.
+        super::routing_scope::MESH_SCOPE_HEADER,
     ];
     let omitted = INGRESS_CREDENTIAL_HEADERS
         .iter()
@@ -260,6 +262,20 @@ mod tests {
             forwarded.contains("post /v1/chat/completions http/1.1"),
             "{forwarded}"
         );
+        assert!(forwarded.ends_with("\r\n\r\n{}"), "{forwarded}");
+    }
+
+    /// The routing node consumes a private-routing selector; a peer only
+    /// executes, so the header never reaches it.
+    #[test]
+    fn the_scope_header_is_stripped_before_forwarding() {
+        let header = crate::network::openai::routing_scope::MESH_SCOPE_HEADER;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{header}: private\r\nContent-Length: 2\r\n\r\n{{}}"
+        );
+        let forwarded = prepare_peer_forwarded_request(raw.as_bytes()).unwrap();
+        let forwarded = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
+        assert!(!forwarded.contains(header), "{forwarded}");
         assert!(forwarded.ends_with("\r\n\r\n{}"), "{forwarded}");
     }
 

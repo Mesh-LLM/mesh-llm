@@ -618,6 +618,14 @@ impl Node {
         &self,
         peer_id: EndpointId,
     ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        // A private request may only leave this node for a node its owner
+        // signed, whichever routing path chose the peer.
+        if !self.peer_in_current_owner_scope(peer_id).await {
+            anyhow::bail!(
+                "peer {} is not owned by this request's owner",
+                peer_id.fmt_short()
+            );
+        }
         let conn = self.connection_to_peer(peer_id).await?;
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let (mut send, recv) = conn.open_bi().await?;
