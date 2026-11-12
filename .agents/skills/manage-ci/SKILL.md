@@ -64,8 +64,16 @@ measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
 Persistent canary jobs use the runner OS's `preinstalled-macos` or
-`preinstalled-linux` automation profile. The native producers request their OS
-and at least 128 GiB; preflight, family and infrastructure-retry jobs request
+`preinstalled-linux` automation profile. The resolver, attempt selectors,
+package combination, aggregation, and reconciliation use the protected 128 GiB
+managed pool; the initial resolver uses those literal closed labels before it
+can emit placement outputs. The credentialed publisher and scheduled alert use
+the same closed managed lab pool. No Llama Upgrade job uses a GitHub-hosted
+runner. Persistent control jobs use the typed `canary-controller` finalizer;
+failed uploads leave the local handoff intact for same-job diagnosis. A failed
+upload blocks the pass, and a rerun reconstructs the handoff from its uploaded
+producer inputs. The native producers
+request their OS and at least 128 GiB; preflight, family and infrastructure-retry jobs request
 the controller's memory tier without an OS or machine type. The worker restores
 the matching native payload from one candidate-bound combined package. Backend
 selection uses Metal on macOS and CUDA on Linux; the Linux image must carry a
@@ -128,7 +136,7 @@ tooling requires an explicit maintainer decision to change that policy. Do not c
 Python-free or remove legacy validation before its Rust replacement passes.
 
 Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
 using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
 an immutable default source commit. These interfaces do not authorize new
 repository Python implementations. The canary Jinja environment belongs to its
@@ -541,7 +549,8 @@ checked-in expiry are the maintainer-controlled approval boundary.
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
 - Every `release.yml` job that can reach cargo — directly, or through
-  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  `scripts/release-version.sh`, `scripts/publish-crates.sh`, or
+  `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
   before its first compiler probe, because `.cargo/config.toml` makes sccache
   the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
@@ -661,10 +670,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   invoking Goose; valid candidate failures from a mixed pass are retained.
   Repeated infrastructure failure, or corrupt/foreign/contract evidence, stops
   without invoking Goose. There are at most three distributed repair attempts.
-  Every edited candidate must
+  Outside the recovered-retry exception below, every edited candidate must
   rebuild and rerun the complete candidate family pass, followed by a fresh
   independent build and complete family pass on the same commit. Agent test
-  results must never replace either trusted full pass. Coding turns are admitted
+  results must never replace trusted certification. Coding turns are admitted
   only within a bounded repair window. Each returned candidate receives a full,
   separately bounded verification pass; earlier repairs and failed gates must
   not shorten that pass. Outer workflow limits must cover each admitted repair
@@ -680,10 +689,43 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- When protected `main` requires pull requests and checks, prepare the complete
+  version update with `scripts/release-version.sh` in a reviewed PR before
+  dispatching a release. The workflow must reapply it idempotently. Do not
+  bypass branch rules to make its version-preparation push succeed.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+Successful same-candidate infrastructure retries reuse the original complete
+family results and the admitted retry receipts. Reconciliation marks this case
+`retry_recovered=true`; all three outer `verify_*` jobs skip it, and attempt
+selection may continue to publication without another native build or family
+matrix. This is the exception to the independent-pass requirements below.
+Unrecovered or invalid evidence still blocks publication. A new candidate or
+producer identity invalidates earlier receipts and requires fresh validation.
+
+Repair iterations use `automation canary-receipts repair-check --phase fast`.
+The same typed command owns local and CI environments, static native/Rust builds,
+binary identity checks and focused GPU split/state smokes. Agents inherit the
+controller's locked native-test Python environment and must not install system
+packages or repeat the full native suite. The trusted `full` phase repeats the
+focused checks before generation/idempotence and the unfiltered native suite;
+complete family certification and fresh independent verification remain required.
+Only an isolated Metal fixture SIGBUS may receive one diagnostic retry, followed
+by an unfiltered native rerun; ordinary candidate failures never receive retries.
+Repair checks remove GitHub workflow-control paths from candidate processes and
+bind smoke tests to the compiled Mesh and llama.cpp source state. The local owner
+uses a private home and disables Git credential helpers.
+A downloaded job log alone does not establish that a process is stuck. Correlate
+runner/process state or an observed deadline; if unavailable, report liveness as
+unconfirmed.
+Bounded, explicitly unverified source checkpoints are retained after every coding
+turn and after supervised termination. Upload recovery before verbose evidence;
+never include the restored Python environment in the diagnostic upload.
+If the recorded native base is unavailable, capture its complete tracked tree
+against an empty tree so committed repairs remain in the unverified checkpoint.
 
 The System One contract fixture must exercise both single-token causal
 readouts and multi-token likelihoods as supported execution paths, retaining
@@ -730,6 +772,13 @@ rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
 overrides both. Keep both generation and idempotence passes mandatory, and
 report deadline failures with readable retained diagnostics and cleanup status.
 
+Changed-pin repair invokes Goose in its normal text mode and streams its output
+unchanged to the job console while saving it in `agent.log`. Keep the complete
+per-command logs in the existing build evidence. Do not add a JSON projection,
+activity snapshots, prefixes or duplicate tool output. Disable GitHub workflow
+command interpretation while Goose runs, and fail the turn if logging fails.
+Keep the existing worker credential boundary.
+
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a
 substitute for the retained failure output.
@@ -738,8 +787,12 @@ Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
 
-The trusted-main canary releases both native build runners before scheduling
-one job per certified family. The combined handoff binds one source, plan and
+The trusted-main canary runs macOS and Linux native producers concurrently for
+the first unchanged selected-source certification pass. Both independently
+build the frozen commit, and combination requires matching source, plan and
+candidate receipts. Changed-pin repair and independent verification keep the
+Mac-to-Linux candidate dependency. Both native build runners are released before
+scheduling one job per certified family. The combined handoff binds one source, plan and
 manifest to separate macOS and Linux executable sets; each worker chooses its
 set after memory-only placement and never rebuilds.
 The immutable model cache remains offline and read-only. One workflow-level
@@ -797,9 +850,9 @@ restores the prior candidate as uncommitted changes on the frozen base and
 starts a new bounded session that must read the supplied evidence. Every edit
 invalidates all family results. A complete green candidate pass must be
 followed by a fresh independent build and complete per-family pass on the same
-commit. A hosted aggregate
+commit. A managed aggregate
 rejects missing, duplicate, failed, cancelled, or mismatched results. Only the
-final hosted publisher receives the repair credential, and a failed or
+final managed lab publisher receives the repair credential, and a failed or
 exhausted pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
@@ -848,7 +901,7 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-GitHub failed-job reruns retain attempt-labelled evidence. The hosted aggregate
+GitHub failed-job reruns retain attempt-labelled evidence. The managed aggregate
 classifies newest candidate failures separately from runner/workflow failures.
 It emits a digest-bound classification artifact for either a candidate repair
 or the one targeted infrastructure recheck. Reconciliation combines retained

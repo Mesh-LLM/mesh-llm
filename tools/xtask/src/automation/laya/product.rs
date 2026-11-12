@@ -199,7 +199,7 @@ impl Coordinator for Owner {
 const DISCOVERY_PAGE_CAP: usize = 20;
 
 /// Follow bounded discovery pages for a model with an available System One
-/// provider, mirroring `/systemone` capability admission instead of a class.
+/// provider, mirroring `/v1/systemone` capability admission instead of a class.
 fn discover_system_one_model(base_url: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Page {

@@ -653,14 +653,17 @@ fn apply_gpu_probe_outcome_to_survey<E>(
     // Decided from the probe itself, not from the requested metrics: a
     // VramBytes-only query must still route unified memory through the
     // reserved-bytes path instead of crediting system RAM as offload.
-    let unified_memory = gpus.iter().any(|gpu| gpu.unified_memory);
+    // An iGPU beside a discrete GPU neither makes the host unified nor adds
+    // to its device memory: see `memory_bearing_gpus`.
+    let unified_memory = memory_bearing_gpus(&gpus).any(|gpu| gpu.unified_memory);
     if metrics.contains(&Metric::IsSoc) {
         survey.is_soc = unified_memory;
     }
     if metrics.contains(&Metric::VramBytes) {
+        // Index-aligned with the facts, so every GPU keeps its entry.
         survey.gpu_vram = gpus.iter().map(|gpu| gpu.vram_bytes).collect();
         survey.gpu_reserved = gpus.iter().map(|gpu| gpu.reserved_bytes).collect();
-        let vram: u64 = survey.gpu_vram.iter().sum();
+        let vram: u64 = memory_bearing_gpus(&gpus).map(|gpu| gpu.vram_bytes).sum();
         // The RAM reading is recorded on every host as an informational
         // item; only the discrete branch turns it into an offload credit.
         let system_ram = system_ram();
@@ -1324,6 +1327,16 @@ fn gpu_pinnable_ids(gpu: &GpuFacts) -> Vec<String> {
     ids
 }
 
+/// The GPUs whose memory a model can be loaded into. llama loads on
+/// integrated GPUs only when no discrete GPU is present, so beside one an
+/// iGPU's memory (system RAM it shares) is not device memory. The iGPU stays in
+/// the facts, with its index and backend name, so it can still be pinned.
+pub fn memory_bearing_gpus(gpus: &[GpuFacts]) -> impl Iterator<Item = &GpuFacts> {
+    let has_discrete = gpus.iter().any(|gpu| !gpu.unified_memory);
+    gpus.iter()
+        .filter(move |gpu| !has_discrete || !gpu.unified_memory)
+}
+
 pub fn pinnable_gpu_stable_ids(gpus: &[GpuFacts]) -> Vec<String> {
     gpus.iter().flat_map(gpu_pinnable_ids).collect()
 }
@@ -1565,7 +1578,9 @@ fn ram_offload_bytes(survey: &HardwareSurvey) -> u64 {
     let device_vram: u64 = if survey.gpus.is_empty() {
         survey.gpu_vram.iter().sum()
     } else {
-        survey.gpus.iter().map(|gpu| gpu.vram_bytes).sum()
+        memory_bearing_gpus(&survey.gpus)
+            .map(|gpu| gpu.vram_bytes)
+            .sum()
     };
     survey.vram_bytes.saturating_sub(device_vram)
 }

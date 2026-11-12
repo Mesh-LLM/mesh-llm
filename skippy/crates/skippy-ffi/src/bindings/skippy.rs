@@ -6,7 +6,12 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 78;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 79;
+pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
+pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
+pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
+pub const SKIPPY_ACTIVATION_MAX_DIMS: u32 = 4;
+pub const SKIPPY_ACTIVATION_MAX_PARTS: u32 = 16;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -29,11 +34,6 @@ pub const SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_MAX_DIMS: u32 = 4;
-pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
-pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
-pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
-pub const SKIPPY_ACTIVATION_MAX_DIMS: u32 = 4;
-pub const SKIPPY_ACTIVATION_MAX_PARTS: u32 = 16;
 pub const SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS: u32 = 8;
 pub const SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_TOP_LOGPROBS: u32 = 20;
@@ -136,6 +136,45 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " @brief Releases an error returned through an `out_error` parameter."]
     pub fn skippy_error_free(error: *mut skippy_error);
+}
+#[doc = " @brief One typed tensor in a stage-frontier frame."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_activation_part_desc {
+    pub identity: [u8; 32usize],
+    pub ggml_type: u32,
+    pub rank: u32,
+    pub token_axis: i32,
+    pub flags: u32,
+    pub dimensions: [i64; 4usize],
+    pub byte_strides: [u64; 4usize],
+    pub payload_offset: u64,
+    pub payload_bytes: u64,
+}
+#[doc = " @brief Stable, graph-observed multipart contract at one stage edge."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_activation_boundary_desc {
+    pub version: u32,
+    pub part_count: u32,
+    pub frontier_identity: [u8; 32usize],
+    pub parts: [skippy_activation_part_desc; 16usize],
+}
+#[doc = " @brief Metadata for an activation payload passed between staged runtimes."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_activation_desc {
+    pub version: u32,
+    pub producer_stage_index: i32,
+    pub layer_start: i32,
+    pub layer_end: i32,
+    pub token_count: u32,
+    pub sequence_count: u32,
+    pub part_count: u32,
+    pub reserved: u32,
+    pub payload_bytes: u64,
+    pub frontier_identity: [u8; 32usize],
+    pub parts: [skippy_activation_part_desc; 16usize],
 }
 pub type skippy_runtime_event_category = u32;
 pub const SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN: _bindgen_ty_1 = 1;
@@ -791,6 +830,8 @@ pub enum skippy_stage_plan_state_kind {
     KvValue = 1,
     RecurrentConv = 2,
     RecurrentSsm = 3,
+    #[doc = " State a graph derives and keeps across steps outside a KV or recurrent\n cache (DeepSeek-V4's compressor and indexer state, say); a stage that\n holds it snapshots its full state."]
+    DerivedPersistent = 4,
 }
 #[repr(u32)]
 #[doc = " @brief Access performed against persistent state."]
@@ -957,45 +998,6 @@ unsafe extern "C" {
         plan_count: usize,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
-}
-#[doc = " @brief One typed tensor in a stage-frontier frame."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_activation_part_desc {
-    pub identity: [u8; 32usize],
-    pub ggml_type: u32,
-    pub rank: u32,
-    pub token_axis: i32,
-    pub flags: u32,
-    pub dimensions: [i64; 4usize],
-    pub byte_strides: [u64; 4usize],
-    pub payload_offset: u64,
-    pub payload_bytes: u64,
-}
-#[doc = " @brief Stable, graph-observed multipart contract at one stage edge."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_activation_boundary_desc {
-    pub version: u32,
-    pub part_count: u32,
-    pub frontier_identity: [u8; 32usize],
-    pub parts: [skippy_activation_part_desc; 16usize],
-}
-#[doc = " @brief Metadata for an activation payload passed between staged runtimes."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_activation_desc {
-    pub version: u32,
-    pub producer_stage_index: i32,
-    pub layer_start: i32,
-    pub layer_end: i32,
-    pub token_count: u32,
-    pub sequence_count: u32,
-    pub part_count: u32,
-    pub reserved: u32,
-    pub payload_bytes: u64,
-    pub frontier_identity: [u8; 32usize],
-    pub parts: [skippy_activation_part_desc; 16usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

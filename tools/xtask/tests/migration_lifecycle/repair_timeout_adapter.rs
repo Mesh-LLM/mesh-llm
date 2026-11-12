@@ -1,13 +1,7 @@
 use crate::process::{
     self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
 };
-use std::{
-    collections::BTreeMap,
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
 struct Fixture {
     _temporary: tempfile::TempDir,
     root: PathBuf,
@@ -17,11 +11,7 @@ impl Fixture {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
         fs::create_dir(root.join("tmp")).unwrap();
-        let source = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../scripts/llama-canary-agent-repair.sh"),
-        )
-        .unwrap();
+        let source = crate::canary_full_gates::fixture::source();
         let selection = source
             .split("# Legacy workload automation selection begins.\n")
             .nth(1)
@@ -33,12 +23,12 @@ impl Fixture {
             .split("run_for() {\n")
             .nth(1)
             .unwrap()
-            .split("\nrecord_failure_class()")
+            .split("\n}\n")
             .next()
             .unwrap();
         fs::write(
             root.join("adapter.sh"),
-            format!("set -euo pipefail\n{selection}\nrun_for() {{\n{function}"),
+            format!("set -euo pipefail\n{selection}\nrun_for() {{\n{function}\n}}\n"),
         )
         .unwrap();
         fs::copy(env!("CARGO_BIN_EXE_xtask"), root.join("controller")).unwrap();

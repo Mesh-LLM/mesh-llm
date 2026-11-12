@@ -306,6 +306,10 @@ pub(super) async fn run_runtime_cli(
         });
     }
 
+    // Before any topology branches off, so `--local-model-only` reports
+    // `inference_request` too.
+    crate::inference_analytics::install();
+
     // These topologies are intentionally selected before plugin startup,
     // release lookup, config-driven mesh discovery, and `mesh::Node::start`.
     // Load config only to configure their optional audit sink; failures stay
@@ -1152,6 +1156,7 @@ pub(super) async fn build_run_auto_node_setup(
     );
     node.start_heartbeat();
     node.start_rtt_refresh();
+    crate::inference_analytics::spawn_mesh_links_reporter(node.clone());
     // iroh owns NAT traversal and relay-to-direct migration; modern nodes do
     // not start the legacy application-level reverse-dial sender.
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
@@ -1749,9 +1754,6 @@ async fn run_auto_inner(
     // legacy/profile-unaware request cannot bypass local-required policy in
     // that window. False entries deliberately clear stale in-process policy.
     register_pre_accept_local_source_policies(&config, &startup_specs);
-    // The default plugins come from this release's bundled copy, never a
-    // download, and are installed before plugins are resolved.
-    super::default_plugins::provision_bundled_defaults_at_start(&config, &options);
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(

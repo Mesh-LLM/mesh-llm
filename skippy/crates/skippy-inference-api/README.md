@@ -79,7 +79,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `POST /v1/responses` | Supported | Adapts OpenAI responses requests onto chat/completion backend calls and preserves response metadata where possible. |
 | `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared generation backend and returns Anthropic JSON or SSE. |
 | `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
-| `POST /systemone` | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
+| `POST /v1/systemone` (canonical; legacy alias `POST /systemone`) | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
 | `POST /v1/embeddings` | Supported | String and token inputs, float or base64 vectors, usage accounting. Runtime support is model-gated. |
 | `POST /v1/rerank` | Supported | Cross-encoder query/document scoring with optional document return. Runtime support is model-gated. |
 | `POST /v1/audio/speech` | Supported | Binary response with format-specific content type. The native backend currently produces WAV or PCM and accepts only `voice: "default"`; speaker selection fails with a structured unsupported error. |

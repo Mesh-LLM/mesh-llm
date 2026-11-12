@@ -1,5 +1,8 @@
 use super::chat_stream::relay_translated_messages_stream;
-use super::common::{ResponseRetryPolicy, RouteAttemptResult, is_client_disconnect_error};
+use super::common::{
+    CommittedStreamFailureCause, ResponseRetryPolicy, RouteAttemptResult,
+    is_client_disconnect_error,
+};
 use super::json_adaptation::{
     relay_normalized_chat_completion_json, relay_translated_messages_json,
     relay_translated_responses_json,
@@ -217,7 +220,10 @@ pub(in crate::network::openai::response) async fn relay_attempted_response<R: As
             }
             tracing::debug!("{}: {err}", context.commit_message);
             if is_streaming_response_adapter(response_adapter) {
-                return RouteAttemptResult::CommittedStreamFailure { status_code: 200 };
+                return RouteAttemptResult::CommittedStreamFailure {
+                    status_code: 200,
+                    cause: CommittedStreamFailureCause::Truncated,
+                };
             }
             RouteAttemptResult::Delivered {
                 status_code,

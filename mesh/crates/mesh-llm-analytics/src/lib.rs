@@ -39,9 +39,7 @@ pub use consent::{
     ConfigPreference, ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS,
     ENV_DO_NOT_TRACK, ENV_POSTHOG_HOST, ENV_POSTHOG_KEY, ingestion_host, project_key,
 };
-pub use event::{
-    Event, Label, Properties, Value, bucket_count, bucket_duration_secs, bucket_gigabytes,
-};
+pub use event::{Event, Label, Properties, Value, bucket_count, bucket_duration_secs, gigabytes};
 pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
 pub use notice::{NOTICE, NOTICE_MARKER_FILE};
 pub use properties::{BuildChannel, LIB_NAME, base_properties, exec_env};

@@ -63,6 +63,7 @@ fn actual_aggregate_cli_exports_candidate_feedback_without_claiming_green() {
     assert!(outputs.contains("feedback_ready=true\n"));
     assert!(outputs.contains("repairable=true\n"));
     assert!(!outputs.contains("green=true"));
+    assert!(!outputs.contains("retry_recovered=true"));
     assert!(outputs.contains("retry_matrix={\"include\":[]}\n"));
 }
 
@@ -208,6 +209,10 @@ fn actual_reconcile_cli_emits_green_only_after_successful_retry_graph() {
         );
         let outputs = fs::read_to_string(fixture.0.join("reconcile-outputs")).unwrap();
         assert_eq!(outputs.contains("green=true\n"), graph == "success");
+        assert_eq!(
+            outputs.contains("retry_recovered=true\n"),
+            graph == "success"
+        );
         assert!(!fixture.0.join("reconciled-feedback").exists());
         assert!(outputs.contains("feedback_ready=false\n"));
     }

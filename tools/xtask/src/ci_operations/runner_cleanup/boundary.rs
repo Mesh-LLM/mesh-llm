@@ -14,6 +14,7 @@ pub(crate) enum Profile {
     Smoke,
     RunnerContract,
     CanaryPreflight,
+    CanaryController,
 }
 
 impl Profile {
@@ -26,6 +27,7 @@ impl Profile {
             "smoke" => Ok(Self::Smoke),
             "runner-contract" => Ok(Self::RunnerContract),
             "canary-preflight" => Ok(Self::CanaryPreflight),
+            "canary-controller" => Ok(Self::CanaryController),
             _ => Err(Error::Input("unknown cleanup profile")),
         }
     }
@@ -162,5 +164,9 @@ pub(crate) fn from_environment(
         } else {
             Vec::new()
         })),
+        Profile::CanaryController => Ok(super::plan::canary_controller(
+            &roots,
+            options.evidence_uploaded,
+        )),
     }
 }

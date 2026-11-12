@@ -31,6 +31,10 @@ pub(super) fn wrapper(
         environment.insert(key.into(), Value::Public(value.into()));
     }
     environment.insert(
+        "CANARY_RECOVERY_DIR".into(),
+        Value::Public(input.evidence.join("recovery").into()),
+    );
+    environment.insert(
         "CANARY_SOURCE_ROOT".into(),
         Value::Public(input.source_root.clone().into()),
     );
@@ -85,9 +89,18 @@ fn inherited(values: impl IntoIterator<Item = (OsString, OsString)>) -> BTreeMap
     values
         .into_iter()
         .filter(|(key, _)| {
-            !["GH_TOKEN", "GITHUB_TOKEN", "CANARY_REPAIR_TOKEN"]
-                .iter()
-                .any(|name| key == name)
+            ![
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "CANARY_REPAIR_TOKEN",
+                "GITHUB_ENV",
+                "GITHUB_STEP_SUMMARY",
+                "GITHUB_PATH",
+                "GITHUB_STATE",
+            ]
+            .iter()
+            .any(|name| key == name)
         })
         .map(|(key, value)| {
             let name = key.to_string_lossy();
@@ -117,11 +130,23 @@ mod tests {
             ("GH_TOKEN".into(), "github-secret".into()),
             ("CANARY_REPAIR_TOKEN".into(), "publisher-secret".into()),
             ("GITHUB_TOKEN".into(), "github-secret".into()),
+            ("GH_ENTERPRISE_TOKEN".into(), "github-secret".into()),
+            ("GITHUB_ENV".into(), "/runner/env".into()),
+            ("GITHUB_PATH".into(), "/runner/path".into()),
+            ("GITHUB_STATE".into(), "/runner/state".into()),
             ("ZAI_API_KEY".into(), "agent-secret".into()),
             ("OPTIONAL_API_KEY".into(), "".into()),
             ("HF_CACHE".into(), "/read-only-cache".into()),
         ]);
-        for key in ["GH_TOKEN", "GITHUB_TOKEN", "CANARY_REPAIR_TOKEN"] {
+        for key in [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "CANARY_REPAIR_TOKEN",
+            "GITHUB_ENV",
+            "GITHUB_PATH",
+            "GITHUB_STATE",
+        ] {
             assert!(!environment.contains_key(std::ffi::OsStr::new(key)));
         }
         assert!(matches!(

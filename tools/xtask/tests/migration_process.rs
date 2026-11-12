@@ -1,7 +1,4 @@
 #![cfg(feature = "automation-contracts")]
-#[cfg(unix)]
-#[path = "migration_process/canary_heartbeat.rs"]
-mod canary_heartbeat;
 #[path = "migration_process/driver_expectations.rs"]
 mod driver_expectations;
 #[path = "migration_process/driver_tests.rs"]

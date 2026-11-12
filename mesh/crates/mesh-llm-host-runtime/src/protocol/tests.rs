@@ -201,6 +201,3 @@ mod control_frames;
 mod frame_reading;
 mod mesh_timestamps;
 mod owner_control;
-
-pub(crate) use announcements::assert_mixed_version_peer_ignores_missing_release_attestation;
-pub(crate) use config::mesh_requirements_survive_owner_control_config_round_trip;

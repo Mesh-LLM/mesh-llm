@@ -341,6 +341,13 @@ fn exchange_outcome(outcome: proxy::RouteDispatchOutcome) -> &'static str {
         } => "timed_out",
         proxy::RouteDispatchOutcome::Dropped(_) => "client_cancelled",
         proxy::RouteDispatchOutcome::Failed("timeout") => "timed_out",
+        // A stream whose backend sent an error frame after the 200 head
+        // (`CommittedStreamFailureCause::BackendError`): the backend failed,
+        // the transport did not.
+        proxy::RouteDispatchOutcome::FailedWithStatus {
+            reason: "upstream_stream_error",
+            ..
+        } => "backend_error",
         proxy::RouteDispatchOutcome::Failed(_)
         | proxy::RouteDispatchOutcome::FailedWithStatus { .. } => "transport_error",
         _ => "backend_error",
@@ -434,6 +441,22 @@ mod tests {
                 reason: "timeout"
             }),
             "timed_out"
+        );
+        // A committed stream is never "completed" once it failed, whatever
+        // its 200 head said; an explicit backend error keeps its own label.
+        assert_eq!(
+            exchange_outcome(proxy::RouteDispatchOutcome::FailedWithStatus {
+                status_code: 200,
+                reason: "upstream_stream_error"
+            }),
+            "backend_error"
+        );
+        assert_eq!(
+            exchange_outcome(proxy::RouteDispatchOutcome::FailedWithStatus {
+                status_code: 200,
+                reason: "upstream_stream_incomplete"
+            }),
+            "transport_error"
         );
     }
 }

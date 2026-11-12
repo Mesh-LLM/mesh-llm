@@ -7,6 +7,7 @@ pub mod binary_transport;
 pub mod compute_meter;
 pub mod embedded;
 pub mod frontend;
+pub mod generation_stats;
 mod grammar_bounds;
 pub mod kv_integration;
 pub mod kv_proto;

@@ -14,8 +14,8 @@ use mesh_llm_membership::advertised_throughput::MAX_ADVERTISED_MODEL_NAME_BYTES;
 
 pub(crate) use mesh_llm_membership::advertised_throughput::{
     MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS, MAX_ADVERTISED_THROUGHPUT_SAMPLES,
-    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, THROUGHPUT_SCALE_MILLI, ThroughputMeasurement,
-    ThroughputMeasurementKind, sanitize_model_throughput_hints,
+    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, PrefillMeasurement, THROUGHPUT_SCALE_MILLI,
+    ThroughputMeasurement, ThroughputMeasurementKind, sanitize_model_throughput_hints,
 };
 
 #[path = "metrics/throughput_window.rs"]
@@ -551,13 +551,16 @@ impl RoutingMetrics {
                 .and_then(|(newest, oldest)| {
                     let remaining = throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE
                         .saturating_sub(newest.saturating_duration_since(oldest));
-                    if remaining.is_zero() {
+                    // Less than a whole millisecond left counts as nothing
+                    // left: rounding it up to 1 ms would outlive the sample.
+                    let window_ms = duration_millis(remaining);
+                    if window_ms == 0 {
                         return None;
                     }
                     Some(ThroughputMeasurement {
                         observed_at_unix_ms: now_unix_ms
                             .saturating_sub(duration_millis(now.saturating_duration_since(newest))),
-                        window_ms: duration_millis(remaining).max(1),
+                        window_ms,
                         kind: ThroughputMeasurementKind::EndToEndAttempt,
                     })
                 });
@@ -567,6 +570,7 @@ impl RoutingMetrics {
                     .min(MAX_ADVERTISED_TPS_MILLI),
                 throughput_samples: recent.samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
                 measurement,
+                prefill: None,
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -605,6 +609,7 @@ impl RoutingMetrics {
             throughput_samples: recent.samples,
             // Local observation, read straight from the window: no wire age.
             measurement: None,
+            prefill: None,
         })
     }
 

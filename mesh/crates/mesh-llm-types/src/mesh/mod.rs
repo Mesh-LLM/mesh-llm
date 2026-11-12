@@ -1,5 +1,6 @@
 use crate::models::{ModelCapabilities, ModelTopology};
 use serde::{Deserialize, Serialize};
+pub use skippy_model_artifact::parse_hf_resolve_url_parts;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -87,7 +88,7 @@ pub enum ModelWorkloadClass {
     Rerank,
     EncoderDecoder,
     SpeechSynthesis,
-    /// Typed System One decisions (`POST /systemone`) with no text generation,
+    /// Typed System One decisions (`POST /v1/systemone`) with no text generation,
     /// such as a Laya encoder + decision head.
     Decision,
     /// Speech-to-text (`/v1/audio/transcriptions` and `/translations`) with no
@@ -321,6 +322,8 @@ fn identity_from_model_source(source: &str) -> Option<ServedModelIdentity> {
     }
 
     if let Some((repo_id, revision, file)) = parse_hf_resolve_url_parts(trimmed) {
+        let (repo_id, file) = (repo_id.to_string(), file.to_string());
+        let revision = revision.map(str::to_string);
         let canonical_ref = format_hf_canonical_ref(&repo_id, revision.as_deref(), &file);
         return Some(ServedModelIdentity {
             model_name: String::new(),
@@ -495,16 +498,6 @@ fn parse_hf_ref_parts(input: &str) -> Option<(String, Option<String>, String)> {
         revision,
         parts[2].to_string(),
     ))
-}
-
-fn parse_hf_resolve_url_parts(url: &str) -> Option<(String, Option<String>, String)> {
-    let path = url
-        .strip_prefix("https://huggingface.co/")
-        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
-    let (repo, rest) = path.split_once("/resolve/")?;
-    let (revision, file) = rest.split_once('/')?;
-    let canonical = format!("{repo}@{revision}/{file}");
-    parse_hf_ref_parts(&canonical)
 }
 
 fn format_hf_canonical_ref(repo: &str, revision: Option<&str>, file: &str) -> String {

@@ -94,6 +94,46 @@ pub(crate) fn block_draft_capacity(block_size: usize, requested: usize) -> usize
     requested.min(block_size.saturating_sub(1))
 }
 
+/// How a draft lays out a noise block and where its draft tokens are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockLayout {
+    /// `[anchor, <mask> * n]`: position 0 holds the anchor, and positions
+    /// `1..=n` predict the draft tokens. DFlash, DFlash2, and DSpark drafts
+    /// exported with a bonus anchor (`dflash.sample_from_anchor = false`).
+    BonusAnchor,
+    /// `[anchor, <mask> * (n - 1)]`: every position, the anchor's included,
+    /// predicts the token after it. DSpark drafts sampled from the anchor
+    /// (`dflash.sample_from_anchor`, true when absent, as upstream reads it).
+    AnchorFirst,
+}
+
+impl BlockLayout {
+    /// Most draft tokens a trained block of `block_size` yields for a
+    /// requested maximum.
+    pub(crate) fn capacity(self, block_size: usize, requested: usize) -> usize {
+        match self {
+            Self::BonusAnchor => block_draft_capacity(block_size, requested),
+            Self::AnchorFirst => requested.min(block_size),
+        }
+    }
+
+    /// Tokens decoded for a block that drafts `draft_tokens`.
+    pub(crate) fn block_tokens(self, draft_tokens: usize) -> usize {
+        match self {
+            Self::BonusAnchor => draft_tokens + 1,
+            Self::AnchorFirst => draft_tokens,
+        }
+    }
+
+    /// The block row whose logits predict the first draft token.
+    pub(crate) fn first_draft_row(self) -> usize {
+        match self {
+            Self::BonusAnchor => 1,
+            Self::AnchorFirst => 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +164,25 @@ mod tests {
         assert_eq!(block_draft_capacity(16, 4), 4);
         assert_eq!(block_draft_capacity(1, 4), 0);
         assert_eq!(block_draft_capacity(0, 4), 0);
+    }
+
+    #[test]
+    fn a_bonus_anchor_block_reads_its_mask_positions() {
+        let layout = BlockLayout::BonusAnchor;
+        assert_eq!(layout.capacity(8, 32), 7);
+        assert_eq!(layout.block_tokens(7), 8);
+        assert_eq!(layout.first_draft_row(), 1);
+    }
+
+    #[test]
+    fn an_anchor_first_block_drafts_from_the_anchor_row() {
+        let layout = BlockLayout::AnchorFirst;
+        // Every position of a trained block predicts a draft token, and the
+        // block never grows past it: the Markov head is skipped beyond it.
+        assert_eq!(layout.capacity(8, 32), 8);
+        assert_eq!(layout.capacity(8, 3), 3);
+        assert_eq!(layout.block_tokens(8), 8);
+        assert_eq!(layout.first_draft_row(), 0);
     }
 
     fn lattice_row(candidates: &[f32], scores: &[[f32; 2]; 2]) -> Vec<f32> {

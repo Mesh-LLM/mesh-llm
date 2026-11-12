@@ -38,13 +38,13 @@ and [split serving](skippy/docs/SKIPPY_SPLITS.md).
 Install the latest release executable:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 On Windows, use PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 
 Install the Apple Silicon Homebrew formula with
@@ -286,7 +286,7 @@ Native Windows CUDA works, including on CUDA 13.x drivers: GPU detection (`mesh-
 The stable release works natively: the installer puts the product bundle and its CPU runtime in place, then add the CUDA runtime for your release and serve. No prerelease is needed, and no manual `PATH` edit for the runtime's DLLs:
 
 ```powershell
-irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 mesh-llm runtime install cuda
 mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
 ```
@@ -414,9 +414,5 @@ include the command you ran, platform/backend flavor, `/api/status` output if
 available, and whether the node was private, published, or joined with `--auto`.
 
 ## Support
-
-<a href="https://spiral.xyz">
-  <img alt="Spiral" src="https://spiral.xyz/images/spiral-logo.svg" width="128">
-</a>
 
 The Mesh LLM project thanks [spiral.xyz](https://spiral.xyz) for their support.

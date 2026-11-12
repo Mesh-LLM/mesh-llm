@@ -136,8 +136,7 @@ impl Fixture {
 }
 #[test]
 fn retained_canary_main_failures_stop_before_snapshot_or_publication() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let tail = &source[source
         .rfind("if [[ \"$HARNESS_MODE\" == repair* ]]; then")
         .unwrap()..];
@@ -156,7 +155,7 @@ verify_repair_pin() {{ mark verify-pin; }}
 repair_candidate_until_green() {{ mark repair; return 37; }}
 snapshot_candidate_tree() {{ mark snapshot; }}
 write_candidate_bundle() {{ mark bundle; }}
-load_candidate_bundle() {{ mark load; }}
+load_candidate_bundle() {{ mark load; CANDIDATE_BASE_HEAD=fixture; CERTIFIED_SHA=fixture; }}
 materialize_verification_tree() {{ mark materialize; }}
 cleanup_verification_worktree() {{ mark cleanup; }}
 run_candidate_gates() {{ mark gates; return 41; }}
@@ -165,6 +164,7 @@ check_split_certification_roster() {{ mark roster; }}
 export_family_inputs() {{ mark export; }}
 finalize_certified_tree() {{ mark finalize; }}
 VERIFICATION_TIMEOUT_SECONDS=60
+BASE_HEAD=fixture
 {tail}
 "#
         );
@@ -204,8 +204,7 @@ VERIFICATION_TIMEOUT_SECONDS=60
 }
 #[test]
 fn selected_upgrade_imports_real_candidate_into_controller_before_independent_worktree() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let start = source
         .find("if [[ -n \"${CANARY_MESH_SOURCE:-}\" ]]")
         .unwrap();
@@ -270,8 +269,7 @@ materialize_verification_tree
 
 #[test]
 fn retained_candidate_import_uses_original_branch_and_restores_commit_tree() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     for mode in ["valid", "selected", "wrong-head", "bad-branch", "bad-sha"] {
         let fixture = Fixture::new();
         executable(
@@ -379,8 +377,7 @@ printf '%s %s %s\n' "$BRANCH" "$CERTIFIED_SHA" "$VERIFICATION_TREE"
 }
 #[test]
 fn retained_finalizer_refuses_dirty_or_changed_tree_before_bundle_outputs() {
-    let source =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     snapshot_identity(&source);
     for mode in [
         "valid",

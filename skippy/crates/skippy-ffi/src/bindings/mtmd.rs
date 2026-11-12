@@ -42,7 +42,8 @@ pub enum ggml_type {
     Nvfp4 = 40,
     Q1_0 = 41,
     Q2_0 = 42,
-    Count = 43,
+    F8E4M3 = 43,
+    Count = 44,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -138,17 +139,18 @@ pub enum ggml_op {
     DSV4HcComb = 88,
     DSV4HcPre = 89,
     DSV4HcPost = 90,
-    Unary = 91,
-    MapCUSTOM1 = 92,
-    MapCUSTOM2 = 93,
-    MapCUSTOM3 = 94,
-    Custom = 95,
-    CrossEntropyLoss = 96,
-    CrossEntropyLossBack = 97,
-    OptStepAdamw = 98,
-    OptStepSgd = 99,
-    Glu = 100,
-    Count = 101,
+    TopKMask = 91,
+    Unary = 92,
+    MapCUSTOM1 = 93,
+    MapCUSTOM2 = 94,
+    MapCUSTOM3 = 95,
+    Custom = 96,
+    CrossEntropyLoss = 97,
+    CrossEntropyLossBack = 98,
+    OptStepAdamw = 99,
+    OptStepSgd = 100,
+    Glu = 101,
+    Count = 102,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -218,6 +220,12 @@ pub enum llama_flash_attn_type {
     Disabled = 0,
     Enabled = 1,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_logit_bias {
+    pub token: llama_token,
+    pub bias: f32,
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum mtmd_input_chunk_type {
@@ -225,6 +233,14 @@ pub enum mtmd_input_chunk_type {
     Image = 1,
     Audio = 2,
     Count = 3,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum mtmd_video_template {
+    Default = 0,
+    LFM3 = 1,
+    LFM3Omni = 2,
+    QWEN3VL = 3,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -254,6 +270,11 @@ pub struct mtmd_input_chunks {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mtmd_batch {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct mtmd_gen_state {
     _unused: [u8; 0],
 }
 #[repr(C)]
@@ -326,6 +347,24 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn mtmd_get_audio_sample_rate(ctx: *const mtmd_context) -> ::std::os::raw::c_int;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct mtmd_video_config {
+    pub tmpl: mtmd_video_template,
+    pub fps: f32,
+    pub n_frames: i32,
+    pub frame_width: i32,
+    pub frame_height: i32,
+}
+unsafe extern "C" {
+    pub fn mtmd_get_video_config(
+        ctx: *const mtmd_context,
+        src_width: i32,
+        src_height: i32,
+        src_n_frames: i32,
+        src_fps: f32,
+    ) -> mtmd_video_config;
+}
 unsafe extern "C" {
     pub fn mtmd_get_marker(ctx: *const mtmd_context) -> *const ::std::os::raw::c_char;
 }
@@ -355,6 +394,9 @@ unsafe extern "C" {
     pub fn mtmd_bitmap_is_audio(bitmap: *const mtmd_bitmap) -> bool;
 }
 unsafe extern "C" {
+    pub fn mtmd_bitmap_is_voice(bitmap: *const mtmd_bitmap) -> bool;
+}
+unsafe extern "C" {
     pub fn mtmd_bitmap_free(bitmap: *mut mtmd_bitmap);
 }
 unsafe extern "C" {
@@ -365,6 +407,9 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn mtmd_bitmap_set_mergeable(bitmap: *mut mtmd_bitmap, mergeable: bool);
+}
+unsafe extern "C" {
+    pub fn mtmd_bitmap_set_is_video(bitmap: *mut mtmd_bitmap, is_video: bool);
 }
 pub type mtmd_bitmap_lazy_callback = ::std::option::Option<
     unsafe extern "C" fn(
@@ -531,9 +576,62 @@ unsafe extern "C" {
 pub struct mtmd_caps {
     pub inp_vision: bool,
     pub inp_audio: bool,
+    pub gen_audio: bool,
 }
 unsafe extern "C" {
     pub fn mtmd_get_cap_from_file(mmproj_fname: *const ::std::os::raw::c_char) -> mtmd_caps;
+}
+unsafe extern "C" {
+    pub fn mtmd_support_audio_stream(ctx: *const mtmd_context) -> bool;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct mtmd_audio_stream {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct mtmd_audio_stream_params {
+    pub step_ms: i32,
+    pub prompt: *const llama_token,
+    pub n_prompt: usize,
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_params_default() -> mtmd_audio_stream_params;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_init(
+        ctx: *mut mtmd_context,
+        params: mtmd_audio_stream_params,
+    ) -> *mut mtmd_audio_stream;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_free(stream: *mut mtmd_audio_stream);
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_push(
+        stream: *mut mtmd_audio_stream,
+        samples: *const f32,
+        n_samples: usize,
+    ) -> i32;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_flush(stream: *mut mtmd_audio_stream, end: bool) -> i32;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_step(stream: *mut mtmd_audio_stream, last_token: llama_token) -> i32;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_get_output_embd(stream: *const mtmd_audio_stream) -> *const f32;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_is_seq_start(stream: *const mtmd_audio_stream) -> bool;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_get_n_rows(stream: *const mtmd_audio_stream) -> i64;
+}
+unsafe extern "C" {
+    pub fn mtmd_audio_stream_get_n_rows_flushed(stream: *const mtmd_audio_stream) -> i64;
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -541,6 +639,10 @@ pub enum mtmd_gen_audio_type {
     None = 0,
     Qwen3Tts = 1,
     PocketTts = 2,
+    Soprano = 3,
+    LFM3A = 4,
+    Chatterbox = 5,
+    DRAMA3 = 6,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -548,9 +650,30 @@ pub struct mtmd_gen_audio_info {
     pub type_: mtmd_gen_audio_type,
     pub sample_rate: i32,
     pub model_variant: *const ::std::os::raw::c_char,
+    pub n_voices: i32,
 }
 unsafe extern "C" {
     pub fn mtmd_gen_audio_get_info(ctx: *const mtmd_context) -> mtmd_gen_audio_info;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_audio_read_tensor(
+        ctx: *mut mtmd_context,
+        name: *const ::std::os::raw::c_char,
+        out: *mut f32,
+        n_max: usize,
+    ) -> usize;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_audio_voice_name(
+        ctx: *const mtmd_context,
+        idx: i32,
+    ) -> *const ::std::os::raw::c_char;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_audio_get_voice(
+        ctx: *const mtmd_context,
+        name: *const ::std::os::raw::c_char,
+    ) -> *mut mtmd_bitmap;
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -566,14 +689,13 @@ pub struct mtmd_gen_inp {
     pub embd: *mut f32,
     pub top_k: i32,
     pub top_p: f32,
-    pub seed: u32,
     pub temp: f32,
+    pub penalty_repeat: f32,
+    pub penalty_last_n: i32,
     pub codes: *mut i32,
     pub n_codes: usize,
     pub feats: *const f32,
     pub n_feats: usize,
-    pub state_data: *const ::std::os::raw::c_char,
-    pub state_size: usize,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -586,8 +708,29 @@ pub struct mtmd_gen_out {
     pub is_eos: bool,
     pub audio: *const f32,
     pub n_samples: usize,
-    pub state_data: *const ::std::os::raw::c_char,
-    pub state_size: usize,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct mtmd_gen_state_params {
+    pub seed: u32,
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_state_params_default() -> mtmd_gen_state_params;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_state_init(
+        ctx: *mut mtmd_context,
+        params: mtmd_gen_state_params,
+    ) -> *mut mtmd_gen_state;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_state_free(state: *mut mtmd_gen_state);
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_state_reset(state: *mut mtmd_gen_state);
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_state_set_ref(ctx: *mut mtmd_context, state: *mut mtmd_gen_state) -> i32;
 }
 unsafe extern "C" {
     pub fn mtmd_gen_inp_default(ctx: *const mtmd_context) -> mtmd_gen_inp;
@@ -595,6 +738,7 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn mtmd_gen_audio_process(
         ctx: *mut mtmd_context,
+        state: *mut mtmd_gen_state,
         inp: *const mtmd_gen_inp,
         out: *mut mtmd_gen_out,
     ) -> i32;
@@ -613,6 +757,7 @@ pub struct mtmd_helper_video_init_params {
     pub fps_target: f32,
     pub ffmpeg_bin_dir: *const ::std::os::raw::c_char,
     pub timestamp_interval_ms: i64,
+    pub no_soundtrack: bool,
 }
 unsafe extern "C" {
     pub fn mtmd_helper_video_init_params_default() -> mtmd_helper_video_init_params;
@@ -630,9 +775,6 @@ unsafe extern "C" {
         log_callback: ggml_log_callback,
         user_data: *mut ::std::os::raw::c_void,
     );
-}
-unsafe extern "C" {
-    pub fn mtmd_helper_support_video(ctx: *const mtmd_context) -> bool;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -778,11 +920,32 @@ unsafe extern "C" {
         out_text: *mut *mut ::std::os::raw::c_char,
     ) -> i32;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct mtmd_helper_cap {
+    pub chat: bool,
+    pub vision: bool,
+    pub audio: bool,
+    pub video: bool,
+    pub audio_stream: bool,
+    pub text_gen: bool,
+    pub audio_gen: bool,
+    pub audio_gen_spk_ref: bool,
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_get_capabilities(
+        model: *const llama_model,
+        mctx: *const mtmd_context,
+    ) -> mtmd_helper_cap;
+}
 unsafe extern "C" {
     pub fn mtmd_helper_model_can_chat(
         lctx: *const llama_context,
         mctx: *const mtmd_context,
     ) -> bool;
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_support_video(ctx: *const mtmd_context) -> bool;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -795,18 +958,32 @@ pub enum mtmd_helper_gen_audio_outtype {
     Pcm = 0,
     Wav = 1,
 }
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum mtmd_helper_gen_audio_out_mode {
+    Auto = 0,
+    Text = 1,
+    Audio = 2,
+    Mixed = 3,
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct mtmd_helper_gen_audio_inp {
+    pub stream: bool,
     pub seq_id: llama_seq_id,
     pub prompt: *const ::std::os::raw::c_char,
     pub prompt_len: usize,
+    pub n_past: i32,
+    pub out_mode: mtmd_helper_gen_audio_out_mode,
     pub speaker_ref: *mut mtmd_bitmap,
     pub lang: *const ::std::os::raw::c_char,
     pub top_k: i32,
     pub top_p: f32,
     pub seed: u32,
     pub out_type: mtmd_helper_gen_audio_outtype,
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_gen_audio_inp_default() -> mtmd_helper_gen_audio_inp;
 }
 unsafe extern "C" {
     pub fn mtmd_helper_gen_audio_init(
@@ -839,6 +1016,23 @@ unsafe extern "C" {
     ) -> i32;
 }
 unsafe extern "C" {
+    pub fn mtmd_helper_gen_audio_next_is_text(ctx: *mut mtmd_helper_gen_audio) -> bool;
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_gen_audio_get_logit_bias(
+        ctx: *mut mtmd_helper_gen_audio,
+        n_bias: *mut usize,
+    ) -> *const llama_logit_bias;
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_audio_stream_get_logit_bias(
+        mctx: *const mtmd_context,
+        model: *const llama_model,
+        out: *mut llama_logit_bias,
+        n_max: i32,
+    ) -> i32;
+}
+unsafe extern "C" {
     pub fn mtmd_helper_gen_audio_get_output(
         ctx: *mut mtmd_helper_gen_audio,
         out_sample_rate: *mut i32,
@@ -846,6 +1040,9 @@ unsafe extern "C" {
         out_data_len: *mut usize,
         out_n_samples: *mut i64,
     ) -> i32;
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_gen_audio_flush(ctx: *mut mtmd_helper_gen_audio) -> i32;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]

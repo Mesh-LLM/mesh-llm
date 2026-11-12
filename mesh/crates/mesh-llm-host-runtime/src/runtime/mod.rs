@@ -6,7 +6,6 @@ mod context_planning;
 mod control_loop;
 mod daemon_startup;
 mod dashboard;
-mod default_plugins;
 mod discovery;
 mod embedded_readiness;
 mod failed_node_start;
@@ -115,8 +114,6 @@ pub(crate) use self::model_reconciliation::{
 };
 pub use self::options::{MeshGuardrailMode, RuntimeOptions, RuntimeSurface};
 use self::proxy::{api_proxy, bootstrap_proxy};
-#[cfg(test)]
-pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use mesh_llm_events::{ConsoleSessionMode, sort_dashboard_endpoint_rows};
 pub(crate) use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 
@@ -147,19 +144,3 @@ use self::startup_handles::*;
 pub(crate) use self::startup_models::StartupPinnedGpuTarget;
 use self::startup_models::*;
 use self::tracing_writer::*;
-
-#[cfg(test)]
-pub(crate) use self::serving_surface::{
-    assert_active_serve_path_spawn_gate_behavior,
-    assert_interactive_handler_spawns_once_across_startup_callbacks,
-    assert_passive_path_immediate_spawn_behavior,
-    assert_quitting_during_startup_cancels_without_late_ready_render,
-    assert_startup_launch_plan_describes_planned_runtime_before_process_start,
-};
-#[cfg(test)]
-pub(crate) use self::startup_models::{
-    assert_mesh_requirements_cli_accepts_each_bound_independently,
-    assert_mesh_requirements_cli_overrides_config_per_field_before_genesis,
-    assert_mesh_requirements_config_rejects_min_greater_than_max_after_merge,
-    assert_mesh_requirements_rejects_local_policy_mutation_on_existing_mesh,
-};

@@ -5,18 +5,21 @@
 //! the current turn as more arrives, and confirms a word only once two
 //! consecutive passes agree on it. Confirmed words never change, so they can be
 //! sent as append-only deltas. Once the buffer grows long it is cut at the end
-//! of the last fully confirmed segment, with the confirmed text carried forward
-//! as the prompt, so each pass stays inside Whisper's 30 s window.
+//! of a fully confirmed segment before the newest one, with the removed text
+//! carried forward as the prompt. Recent audio remains as acoustic context,
+//! and a hard buffer bound keeps each pass inside Whisper's 30 s window.
 //!
 //! Turns come from an energy voice-activity detector, or from the caller when
 //! turn detection is off.
 
+mod confirmation;
 mod resample;
 
 use std::collections::VecDeque;
 
 use anyhow::Result;
 
+use confirmation::ConfirmedPrefix;
 pub use resample::PcmResampler;
 
 use crate::logging::write_native_log_note;
@@ -38,6 +41,9 @@ const PROMPT_TAIL_CHARS: usize = 200;
 /// Whisper may miss or mishear the first word in two passes alike, and a word
 /// confirmed wrongly stays wrong; a pass a second becomes the default's two.
 const MIN_CONFIRM_MS: u64 = 2_000;
+/// The transcriber's hard window: a single pass must never hear more
+/// than 30 seconds of audio.
+const WHISPER_WINDOW_MS: u64 = 30_000;
 
 /// Server-side turn detection, in the shape of OpenAI's `server_vad`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,6 +57,7 @@ pub struct TurnDetection {
 }
 
 impl Default for TurnDetection {
+    /// Defaults to a 0.5 threshold, 300 ms prefix padding, and 500 ms silence.
     fn default() -> Self {
         Self {
             threshold: 0.5,
@@ -89,6 +96,7 @@ pub struct SpeechStreamConfig {
 }
 
 impl Default for SpeechStreamConfig {
+    /// Defaults to one-second steps with voice-activity turn detection.
     fn default() -> Self {
         Self {
             turn_detection: Some(TurnDetection::default()),
@@ -162,6 +170,8 @@ pub struct SpeechStream {
     confirmed: Vec<String>,
     /// How many of `confirmed` lie in `buffer`, rather than trimmed audio.
     confirmed_in_buffer: usize,
+    /// Current-window alignment ownership, independent of immutable output.
+    confirmed_prefix: ConfirmedPrefix,
     /// The previous pass's words after the confirmed ones.
     pending: Vec<String>,
     /// Words the passes agreed on that the confirmation delay still holds
@@ -174,6 +184,7 @@ pub struct SpeechStream {
 }
 
 impl SpeechStream {
+    /// Creates a stream with the configured cadence and turn detection.
     pub fn new(config: SpeechStreamConfig) -> Self {
         Self {
             config,
@@ -190,6 +201,7 @@ impl SpeechStream {
             speech_started_at: None,
             confirmed: Vec::new(),
             confirmed_in_buffer: 0,
+            confirmed_prefix: ConfirmedPrefix::default(),
             pending: Vec::new(),
             held: Vec::new(),
             reported_tentative: String::new(),
@@ -237,6 +249,9 @@ impl SpeechStream {
 
     /// Adds 16 kHz mono audio, ending turns on silence and running a pass
     /// once `step_ms` of new audio has arrived.
+    ///
+    /// If transcription fails, discard this stream. Audio and confirmation
+    /// state may already have advanced without returning their events.
     pub fn push(
         &mut self,
         samples: &[f32],
@@ -249,17 +264,22 @@ impl SpeechStream {
         for frame in frames.chunks(FRAME_SAMPLES) {
             self.received += frame.len() as u64;
             self.push_frame(frame, transcribe, &mut events)?;
-        }
-        if self.in_turn
-            && self.received - self.last_pass_at >= u64::from(self.config.step_ms) * SAMPLES_PER_MS
-        {
-            self.run_pass(transcribe, &mut events)?;
+            if self.in_turn && self.received - self.last_pass_at >= self.step_samples() {
+                self.run_pass(transcribe, &mut events)?;
+            }
         }
         Ok(events)
     }
 
+    /// New audio between passes. A step beyond the transcriber's window would
+    /// let audio leave the window before any pass heard it.
+    fn step_samples(&self) -> u64 {
+        u64::from(self.config.step_ms).min(WHISPER_WINDOW_MS) * SAMPLES_PER_MS
+    }
+
     /// Ends the current turn now, confirming everything the final pass hears.
     /// Returns no events when no audio is pending.
+    /// Discard this stream after a transcription error, as with [`Self::push`].
     pub fn commit(&mut self, transcribe: &mut Transcribe<'_>) -> Result<Vec<SpeechStreamEvent>> {
         let mut events = Vec::new();
         if !self.partial_frame.is_empty() {
@@ -370,6 +390,7 @@ impl SpeechStream {
         self.last_pass_at = self.buffer_start;
     }
 
+    /// Runs one recognition pass over the newest audio window.
     fn run_pass(
         &mut self,
         transcribe: &mut Transcribe<'_>,
@@ -386,26 +407,34 @@ impl SpeechStream {
             }
             return Ok(());
         }
-        let segments = self.transcribe_buffer(transcribe)?;
-        let words = segments.iter().flatten().cloned().collect::<Vec<_>>();
-        if words.len() < self.confirmed_in_buffer {
-            // Whisper now hears fewer words than were confirmed from this
-            // audio (merged words, or a segment dropped as silence). The
-            // confirmed words stand; realign so the next words can still be
-            // confirmed rather than waiting for the count to catch up.
-            write_native_log_note(format!(
-                "speech stream desync: pass heard {} words, {} already confirmed; realigning",
-                words.len(),
-                self.confirmed_in_buffer
-            ));
-            self.confirmed_in_buffer = self
-                .confirmed
-                .last()
-                .and_then(|last| words.iter().rposition(|word| same_word(word, last)))
-                .map_or(words.len(), |position| position + 1);
-            self.pending.clear();
+        // The step cadence may let the buffer outgrow the transcriber's
+        // window. Drop the oldest audio first: it was already heard by a
+        // pass within `step_ms`, so nothing unheard is lost.
+        let window_capped = self.buffer.len() as u64 > WHISPER_WINDOW_MS * SAMPLES_PER_MS;
+        if window_capped {
+            let excess = self.buffer.len() as u64 - WHISPER_WINDOW_MS * SAMPLES_PER_MS;
+            self.buffer_start += excess;
+            self.buffer.drain(0..excess as usize);
         }
-        let tail = &words[self.confirmed_in_buffer..];
+        let segments = self.transcribe_window(&self.buffer, transcribe)?;
+        let words = segments.iter().flatten().cloned().collect::<Vec<_>>();
+        let canonical = &self.confirmed[self.confirmed.len() - self.confirmed_in_buffer..];
+        let aligned = self
+            .confirmed_prefix
+            .align_with_pending(&words, &self.pending, canonical);
+        let boundary = aligned.unwrap_or_else(|| {
+            self.confirmed_prefix
+                .unsupported_boundary(&words, &self.pending)
+        });
+        if boundary != self.confirmed_in_buffer {
+            // A revised hypothesis can omit already confirmed words. Keep
+            // their canonical count: they may return on the next pass.
+            write_native_log_note(format!(
+                "speech stream alignment: {} confirmed words end at hypothesis word {boundary}",
+                self.confirmed_in_buffer,
+            ));
+        }
+        let tail = &words[boundary..];
         // Only a turn's start is held back; later words have the earlier ones
         // as context. The delay counts speech heard in this window, so
         // leading silence cannot satisfy it.
@@ -436,24 +465,57 @@ impl SpeechStream {
         self.confirm(newly_confirmed.to_vec(), events);
 
         let buffer_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
-        if buffer_ms > u64::from(self.config.max_buffer_ms) {
-            // No confirmed boundary arrived in time: confirm what is heard
-            // and start a fresh window.
+        // A bound configured above the window must still settle the
+        // buffer inside it: the cap above already discarded audio, so the
+        // words it heard are confirmed here rather than left to accumulate.
+        if window_capped || buffer_ms > u64::from(self.config.max_buffer_ms).min(WHISPER_WINDOW_MS)
+        {
+            // No confirmed boundary arrived in time: confirm what is heard,
+            // then start the next window from the newest audio. Confirmed
+            // words whose audio is retained keep their ownership, so a later
+            // pass cannot confirm them a second time.
             let pending = std::mem::take(&mut self.pending);
             self.confirm(pending, events);
             self.held.clear();
-            self.buffer_start += self.buffer.len() as u64;
-            self.buffer.clear();
-            self.buffer_has_speech = false;
-            self.confirmed_in_buffer = 0;
+            let retain_ms = u64::from(self.config.max_buffer_ms)
+                .min(WHISPER_WINDOW_MS.saturating_sub(u64::from(self.config.step_ms)));
+            let retain = (retain_ms * SAMPLES_PER_MS).min(self.buffer.len() as u64);
+            let drop = self.buffer.len() as u64 - retain;
+            self.buffer_start += drop;
+            self.buffer.drain(0..drop as usize);
+            self.release_dropped_ownership(&segments, drop / SAMPLES_PER_MS, aligned.is_some());
             self.speech_started_at = None;
-        } else if buffer_ms > u64::from(self.config.trim_after_ms) {
-            self.trim_confirmed(&segments);
+        } else if buffer_ms > u64::from(self.config.trim_after_ms) && aligned.is_some() {
+            self.trim_confirmed(&segments, boundary + agreed);
         }
         self.report_tentative(events);
         Ok(())
     }
 
+    /// Releases ownership of confirmed words whose audio an overflow dropped.
+    /// A segment that reaches into the retained audio keeps its words owned.
+    /// Without a supported alignment no word can be placed in the audio, so
+    /// every owner is released.
+    fn release_dropped_ownership(
+        &mut self,
+        segments: &[SegmentWords],
+        drop_ms: u64,
+        aligned: bool,
+    ) {
+        if !aligned {
+            self.confirmed_in_buffer = 0;
+            self.confirmed_prefix.clear();
+            return;
+        }
+        let dropped_words = segments
+            .iter()
+            .take_while(|segment| segment.end_ms <= drop_ms as i64)
+            .map(|segment| segment.words.len())
+            .sum();
+        self.confirmed_in_buffer -= self.confirmed_prefix.trim(dropped_words);
+    }
+
+    /// Reports the unconfirmed words a pass has heard, when enabled.
     fn report_tentative(&mut self, events: &mut Vec<SpeechStreamEvent>) {
         if !self.config.tentative {
             return;
@@ -472,38 +534,54 @@ impl SpeechStream {
         }
     }
 
-    /// Cuts the buffer at the end of the last segment whose words are all
-    /// confirmed.
-    fn trim_confirmed(&mut self, segments: &[SegmentWords]) {
+    /// Cuts confirmed audio before the newest segment, retaining recent
+    /// acoustic context even when all of its words are already confirmed.
+    fn trim_confirmed(&mut self, segments: &[SegmentWords], confirmed_end: usize) {
         let mut words_before = 0;
+        let mut previous_end_ms = 0;
+        let buffer_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
         let mut cut = None;
-        for segment in segments {
+        for segment in segments.iter().take(segments.len().saturating_sub(1)) {
             words_before += segment.words.len();
-            if words_before > self.confirmed_in_buffer {
+            if words_before > confirmed_end {
+                break;
+            }
+            // Whisper can timestamp an incomplete segment beyond the audio
+            // it received. Clamping that end would discard ownership while
+            // the same words' remaining audio is still arriving. Keep the
+            // last valid cut, without crossing a future or reversed boundary.
+            // A later textual segment can itself lie wholly in the future;
+            // require actual samples after the cut, not just that segment.
+            if segment.end_ms <= previous_end_ms || segment.end_ms as u64 >= buffer_ms {
                 break;
             }
             cut = Some((segment.end_ms, words_before));
+            previous_end_ms = segment.end_ms;
         }
-        let Some((end_ms, words)) = cut else {
+        let Some((end_ms, cut_words)) = cut else {
             return;
         };
-        let samples = ((end_ms.max(0) as u64) * SAMPLES_PER_MS).min(self.buffer.len() as u64);
-        if samples == 0 {
-            return;
-        }
+        let samples = end_ms as u64 * SAMPLES_PER_MS;
         self.buffer.drain(..samples as usize);
         self.buffer_start += samples;
-        self.confirmed_in_buffer -= words;
+        self.confirmed_in_buffer -= self.confirmed_prefix.trim(cut_words);
     }
 
+    /// Finalizes the turn with one pass over the newest window.
     fn finish_turn(
         &mut self,
         transcribe: &mut Transcribe<'_>,
         events: &mut Vec<SpeechStreamEvent>,
     ) -> Result<()> {
         if self.buffer_has_speech {
+            // The final pass hears the newest window only: the audio
+            // older than the transcriber's window is already confirmed.
+            let tail = self
+                .buffer
+                .len()
+                .saturating_sub((WHISPER_WINDOW_MS * SAMPLES_PER_MS) as usize);
             let words = self
-                .transcribe_buffer(transcribe)?
+                .transcribe_window(&self.buffer[tail..], transcribe)?
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
@@ -516,7 +594,15 @@ impl SpeechStream {
                 let held = std::mem::take(&mut self.held);
                 self.confirm(held, events);
             } else {
-                let rest = words[self.confirmed_in_buffer.min(words.len())..].to_vec();
+                let canonical = &self.confirmed[self.confirmed.len() - self.confirmed_in_buffer..];
+                let boundary = self
+                    .confirmed_prefix
+                    .align_with_pending(&words, &self.pending, canonical)
+                    .unwrap_or_else(|| {
+                        self.confirmed_prefix
+                            .unsupported_boundary(&words, &self.pending)
+                    });
+                let rest = words[boundary..].to_vec();
                 self.confirm(rest, events);
             }
         }
@@ -529,12 +615,14 @@ impl SpeechStream {
         Ok(())
     }
 
+    /// Clears the turn's audio, ownership, and reporting state.
     fn reset_turn(&mut self) {
         self.in_turn = false;
         self.buffer.clear();
         self.buffer_has_speech = false;
         self.confirmed.clear();
         self.confirmed_in_buffer = 0;
+        self.confirmed_prefix.clear();
         self.pending.clear();
         self.held.clear();
         self.reported_tentative.clear();
@@ -543,6 +631,7 @@ impl SpeechStream {
         self.speech_started_at = None;
     }
 
+    /// Confirms new words and reports them as deltas.
     fn confirm(&mut self, words: Vec<String>, events: &mut Vec<SpeechStreamEvent>) {
         if words.is_empty() {
             return;
@@ -552,6 +641,7 @@ impl SpeechStream {
             text.insert(0, ' ');
         }
         self.confirmed_in_buffer += words.len();
+        self.confirmed_prefix.append(&words);
         self.confirmed.extend(words);
         events.push(SpeechStreamEvent::Delta {
             turn: self.turn,
@@ -559,13 +649,18 @@ impl SpeechStream {
         });
     }
 
-    fn transcribe_buffer(&self, transcribe: &mut Transcribe<'_>) -> Result<Vec<SegmentWords>> {
+    /// Transcribes a sample window and keeps its non-silent segments.
+    fn transcribe_window(
+        &self,
+        samples: &[f32],
+        transcribe: &mut Transcribe<'_>,
+    ) -> Result<Vec<SegmentWords>> {
         let options = TranscriptionOptions {
             language: self.config.language.clone(),
             prompt: self.prompt(),
             ..Default::default()
         };
-        let transcription = transcribe(&self.buffer, &options)?;
+        let transcription = transcribe(samples, &options)?;
         Ok(transcription
             .segments
             .into_iter()

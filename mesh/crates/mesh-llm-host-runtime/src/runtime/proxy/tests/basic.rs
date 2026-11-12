@@ -221,6 +221,46 @@ async fn test_api_proxy_routes_to_registered_inference_endpoint() {
 }
 
 #[tokio::test]
+async fn test_api_proxy_forwards_ocr_accept_to_document_ocr_endpoint() {
+    for accept in ["text/plain", "text/markdown"] {
+        let (upstream_port, upstream_rx, upstream_handle) =
+            spawn_capturing_upstream("ocr output").await;
+        let manager = plugin::PluginManager::for_test_summaries(Vec::new());
+        manager
+            .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
+                plugin_name: "ocr".into(),
+                endpoint_id: "ocr".into(),
+                protocol: Some("document_ocr_v1".into()),
+                address: format!("http://127.0.0.1:{upstream_port}"),
+                models: vec!["ocr-model".into()],
+            }])
+            .await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), manager).await;
+
+        let body = "--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nocr-model\r\n--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.png\"\r\nContent-Type: image/png\r\n\r\nimage\r\n--ocr--\r\n";
+        let request = format!(
+            "POST /mesh/v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nAccept: {accept}\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+
+        let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+        assert!(raw.starts_with("POST /mesh/v1/documents/ocr HTTP/1.1"), "{raw}");
+        let forwarded = raw.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value.trim() == accept
+            })
+        });
+        assert!(forwarded, "provider did not receive Accept: {accept}: {raw}");
+
+        proxy_handle.abort();
+        let _ = upstream_handle.await;
+    }
+}
+
+#[tokio::test]
 async fn test_api_proxy_lists_registered_inference_models() {
     let plugin_manager = start_inference_endpoint_plugin_manager(
         "http://127.0.0.1:8000/api/v1".into(),

@@ -31,9 +31,12 @@ MESH_EMBEDDED_TEST_GGUF=/absolute/path/stories15M-q4_0.gguf \
 
 The download fixture holds an actual HTTP transfer open until cancellation;
 the join fixture observes an actual QUIC dial before stopping. Successful stop
-must release listeners and permit restart on the same ports. The inference
-scenario cancels the download, restarts serving in the same process, and checks
-nonempty generated output through the OpenAI endpoint. Child deadlines turn
+must release listeners and permit restart on the same ports. A separate
+caller-pool regression holds the caller's blocking worker after the runtime
+join and checks that the QUIC port is already free, so deferred socket cleanup
+cannot make `stop()` report success early. The inference scenario cancels the
+download, restarts serving in the same process, and checks nonempty generated
+output through the OpenAI endpoint. Child deadlines turn
 leaked runtime threads into failures rather than hanging the test runner.
 These tests cover SDK lifecycle and native inference, not the Buzz UI or a
 multi-machine community mesh.

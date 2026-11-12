@@ -73,6 +73,13 @@ pub struct EmbeddedServerStatus {
     /// On a split final stage that attached a DFlash draft, the target layers
     /// it reads; `None` when this stage drafts nothing.
     pub split_dflash_target_layers: Option<Vec<u32>>,
+    /// With those layers: how many positions back the draft attends, when
+    /// every draft attention layer slides over a window. `None` when any
+    /// layer attends the whole context, or this stage drafts nothing.
+    pub split_dflash_context_window: Option<u32>,
+    /// With those layers: the feature-row encodings the stage reads, by
+    /// name. Empty from a stage that drafts nothing.
+    pub split_dflash_feature_encodings: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -365,6 +372,8 @@ struct ServerHandleState {
     input_activation_boundary: Option<ActivationBoundaryDesc>,
     output_activation_boundary: Option<ActivationBoundaryDesc>,
     split_dflash_target_layers: Option<Vec<u32>>,
+    split_dflash_context_window: Option<u32>,
+    split_dflash_feature_encodings: Vec<String>,
 }
 
 impl EmbeddedServerHandle {
@@ -380,6 +389,8 @@ impl EmbeddedServerHandle {
             input_activation_boundary: status.input_activation_boundary,
             output_activation_boundary: status.output_activation_boundary,
             split_dflash_target_layers: status.split_dflash_target_layers.clone(),
+            split_dflash_context_window: status.split_dflash_context_window,
+            split_dflash_feature_encodings: status.split_dflash_feature_encodings.clone(),
         }
     }
 
@@ -446,6 +457,8 @@ fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServer
         input_activation_boundary: None,
         output_activation_boundary: None,
         split_dflash_target_layers: None,
+        split_dflash_context_window: None,
+        split_dflash_feature_encodings: Vec::new(),
     }));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_status = status.clone();
@@ -531,6 +544,8 @@ pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
         input_activation_boundary: None,
         output_activation_boundary: None,
         split_dflash_target_layers: None,
+        split_dflash_context_window: None,
+        split_dflash_feature_encodings: Vec::new(),
     }));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_status = status.clone();
@@ -543,12 +558,12 @@ pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
                 async move {
                     let _ = shutdown_rx.await;
                 },
-                move |input, output, split_dflash_target_layers| {
+                move |input, output, split_dflash_attached| {
                     publish_binary_stage_boundaries(
                         &boundary_status,
                         input,
                         output,
-                        split_dflash_target_layers,
+                        split_dflash_attached,
                     );
                 },
             ),
@@ -567,12 +582,26 @@ fn publish_binary_stage_boundaries(
     status: &Arc<Mutex<ServerHandleState>>,
     input: Option<ActivationBoundaryDesc>,
     output: Option<ActivationBoundaryDesc>,
-    split_dflash_target_layers: Option<Vec<u32>>,
+    split_dflash_attached: Option<crate::split_dflash::SplitDFlashAttached>,
 ) {
     let mut status = status.lock().expect("server status lock poisoned");
     status.input_activation_boundary = input;
     status.output_activation_boundary = output;
-    status.split_dflash_target_layers = split_dflash_target_layers;
+    status.split_dflash_context_window = split_dflash_attached
+        .as_ref()
+        .and_then(|attached| attached.context_window);
+    status.split_dflash_feature_encodings = split_dflash_attached
+        .as_ref()
+        .map(|attached| {
+            attached
+                .feature_encodings
+                .iter()
+                .map(|encoding| encoding.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    status.split_dflash_target_layers =
+        split_dflash_attached.map(|attached| attached.target_layers);
     status.state = EmbeddedState::Ready;
 }
 
@@ -595,6 +624,8 @@ where
         input_activation_boundary: None,
         output_activation_boundary: None,
         split_dflash_target_layers: None,
+        split_dflash_context_window: None,
+        split_dflash_feature_encodings: Vec::new(),
     }));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_status = status.clone();
@@ -696,6 +727,8 @@ mod tests {
             input_activation_boundary: None,
             output_activation_boundary: None,
             split_dflash_target_layers: None,
+            split_dflash_context_window: None,
+            split_dflash_feature_encodings: Vec::new(),
         }));
         let boundary = crate::test_activation::boundary_f32(1024);
 
@@ -710,7 +743,11 @@ mod tests {
             &status,
             Some(boundary),
             Some(boundary),
-            Some(vec![2, 17, 32]),
+            Some(crate::split_dflash::SplitDFlashAttached {
+                target_layers: vec![2, 17, 32],
+                context_window: Some(2048),
+                feature_encodings: vec![skippy_runtime::DFlashFeatureEncoding::Q4],
+            }),
         );
 
         let status = status.lock().expect("server status lock poisoned");
@@ -718,6 +755,11 @@ mod tests {
         assert_eq!(status.input_activation_boundary, Some(boundary));
         assert_eq!(status.output_activation_boundary, Some(boundary));
         assert_eq!(status.split_dflash_target_layers, Some(vec![2, 17, 32]));
+        assert_eq!(status.split_dflash_context_window, Some(2048));
+        assert_eq!(
+            status.split_dflash_feature_encodings,
+            vec!["q4".to_string()]
+        );
     }
 
     /// A ready handle over a modelless runtime.

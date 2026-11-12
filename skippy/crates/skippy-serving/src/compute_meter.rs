@@ -28,7 +28,8 @@ pub struct StageComputeSnapshot {
     pub operations: u64,
     /// Single-token decode steps run on this stage. Every generated token
     /// takes one decode step on every stage, so on stage 0 this is the
-    /// split's decode throughput counter.
+    /// split's decode throughput counter. Tokens committed by a speculative
+    /// verify window take no serial step and are not counted, on any stage.
     pub decode_tokens: u64,
 }
 

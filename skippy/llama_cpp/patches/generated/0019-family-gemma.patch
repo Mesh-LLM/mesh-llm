@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma.cpp b/src/models/gemma.cpp
-index 1da4ad81503316459f615b050b7e1f26186e6785..af94b6bb396fedd6e24b8472f60ed33d024950e1 100644
+index 1d42acd0127cbe5c4a62771301eb1aa521fee243..30a45b1f8d089ac72e84a25842152adc46380b06 100644
 --- a/src/models/gemma.cpp
 +++ b/src/models/gemma.cpp
-@@ -57,6 +57,8 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
+@@ -57,6 +57,8 @@ llama_model_gemma::graph::graph(const llm_graph_params & params) : llm_graph_con
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 1da4ad81503316459f615b050b7e1f26186e6785..af94b6bb396fedd6e24b8472f60ed33d
          // norm
          cur = build_norm(inpL,
                  model.layers[il].attn_norm, NULL,
-@@ -119,6 +121,7 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
+@@ -112,6 +114,7 @@ llama_model_gemma::graph::graph(const llm_graph_params & params) : llm_graph_con
  
          // input for next layer
          inpL = cur;

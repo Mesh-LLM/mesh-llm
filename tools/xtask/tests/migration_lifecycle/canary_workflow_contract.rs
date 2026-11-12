@@ -1,4 +1,9 @@
 //! Parsed current canary graph and authority contracts; no hosted execution proof.
+#[path = "canary_workflow_contract/attempts.rs"]
+mod attempts;
+#[path = "canary_workflow_contract/backend_selection.rs"]
+mod backend_selection;
+
 use crate::workflow_yaml::{self, Node};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 fn root() -> PathBuf {
@@ -286,100 +291,6 @@ fn resolver_tokens_remain_read_only_and_scoped_to_selection_steps() {
     ));
     assert!(security(&escalated, &worker).is_err());
 }
-fn current_attempt_inputs(jobs: &Node, index: u8) {
-    let repair_name = format!("repair_{index}");
-    let verify_name = format!("verify_{index}");
-    let repair = jobs.get(&repair_name).unwrap();
-    let verify = jobs.get(&verify_name).unwrap();
-    for job in [repair, verify] {
-        assert_eq!(
-            field(job, "uses"),
-            "./.github/workflows/llama-canary-family-pass.yml"
-        );
-        let with = job.get("with").unwrap();
-        for key in ["source", "upstream"] {
-            assert_eq!(
-                field(with, key),
-                format!("${{{{ needs.resolve.outputs.{key} }}}}")
-            );
-        }
-    }
-    assert_eq!(
-        needs(verify),
-        BTreeSet::from(["resolve", repair_name.as_str()])
-    );
-    let with = verify.get("with").unwrap();
-    assert_eq!(
-        field(with, "mode"),
-        if index == 1 {
-            "${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}"
-        } else {
-            "verify-build"
-        }
-    );
-    for key in ["package", "identity", "head"] {
-        assert_eq!(
-            field(with, &format!("previous_{key}")),
-            format!("${{{{ needs.{repair_name}.outputs.{key} }}}}")
-        );
-    }
-    if index == 1 {
-        assert_eq!(needs(repair), BTreeSet::from(["resolve", "preflight"]));
-        assert_eq!(
-            field(repair, "if"),
-            "${{ !cancelled() && needs.preflight.result == 'success' }}"
-        );
-        assert_eq!(
-            field(verify, "if"),
-            "${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' }}"
-        );
-    } else {
-        let previous = format!("attempt_{}", index - 1);
-        assert_eq!(
-            needs(repair),
-            BTreeSet::from(["resolve", previous.as_str()])
-        );
-        assert_eq!(
-            field(repair, "if"),
-            format!(
-                "${{{{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.{previous}.outputs.state == 'repairable' }}}}"
-            )
-        );
-        assert_eq!(
-            field(verify, "if"),
-            format!("${{{{ !cancelled() && needs.{repair_name}.outputs.green == 'true' }}}}")
-        );
-        let with = repair.get("with").unwrap();
-        assert_eq!(field(with, "mode"), "repair-build");
-        for key in ["package", "identity", "head", "feedback"] {
-            assert_eq!(
-                field(with, &format!("previous_{key}")),
-                format!("${{{{ needs.{previous}.outputs.resume_{key} }}}}")
-            );
-        }
-    }
-    current_selector_inputs(jobs, index, &repair_name, &verify_name);
-}
-fn current_selector_inputs(jobs: &Node, index: u8, repair_name: &str, verify_name: &str) {
-    let selector = jobs.get(&format!("attempt_{index}")).unwrap();
-    let mut dependencies = BTreeSet::from(["resolve", repair_name, verify_name]);
-    let previous = format!("attempt_{}", index - 1);
-    if index > 1 {
-        dependencies.insert(previous.as_str());
-    }
-    assert_eq!(needs(selector), dependencies);
-    let (_, select) = named(selector, "id", "select");
-    let env = select.get("env").unwrap();
-    assert_eq!(
-        field(env, "REPAIR_JSON"),
-        format!("${{{{ toJSON(needs.{repair_name}) }}}}")
-    );
-    assert_eq!(
-        field(env, "VERIFY_JSON"),
-        format!("${{{{ toJSON(needs.{verify_name}) }}}}")
-    );
-    assert!(field(select, "run").contains("automation canary-receipts select-attempt --changed \"$CHANGED\" --repair-json \"$REPAIR_JSON\" --verification-json \"$VERIFY_JSON\""));
-}
 #[test]
 fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_publish_decision() {
     let controller = document(".github/workflows/llama-upstream-canary.yml");
@@ -389,7 +300,7 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         BTreeSet::from(["resolve"])
     );
     for index in 1..=3 {
-        current_attempt_inputs(jobs, index);
+        attempts::current_attempt_inputs(jobs, index);
     }
     assert_eq!(
         jobs.entries()
@@ -428,7 +339,16 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         field(publish, "if"),
         "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}"
     );
-    assert_eq!(field(publish, "runs-on"), "ubuntu-24.04");
+    assert_eq!(
+        publish.get("runs-on").unwrap().list(),
+        vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus"
+        ]
+    );
     let (_, action) = named(publish, "id", "publish");
     assert_eq!(field(action, "run"), "scripts/llama-canary-publish.sh");
     assert_eq!(
@@ -445,8 +365,19 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
     assert!(field(env, "CANARY_AGENT_PROVIDER").contains("vars.LLAMA_CANARY_GOOSE_PROVIDER"));
     assert!(field(env, "CANARY_AGENT_MODEL").contains("glm-5.3-flash"));
     let (_, evidence) = named(build, "id", "upload_evidence");
+    let (recovery_index, recovery) = named(build, "name", "Upload unverified repair recovery");
+    let (evidence_index, _) = named(build, "id", "upload_evidence");
+    assert!(recovery_index < evidence_index);
+    assert!(field(recovery, "if").contains("success() || failure() || cancelled()"));
+    assert!(field(recovery.get("with").unwrap(), "path").ends_with("/recovery/"));
     assert_eq!(field(evidence.get("with").unwrap(), "retention-days"), "14");
     let evidence = evidence.get("with").unwrap();
+    assert!(
+        !field(evidence, "path")
+            .lines()
+            .any(|line| line.contains("llama-canary-state-")
+                && line.trim().ends_with("${{ inputs.pass_id }}/"))
+    );
     assert_eq!(field(evidence, "include-hidden-files"), "true");
     assert!(
         field(evidence, "path").contains("${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-")
@@ -652,6 +583,12 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let (backend, _) = named(build, "uses", "./.github/actions/select-canary-backend");
     let (consume, _) = named(build, "id", "build");
     assert!(setup < backend && backend < consume);
+    for job in [build, family, jobs.get("retry_family").unwrap()] {
+        let (setup, _) = named(job, "uses", "./.github/actions/setup-canary-runner");
+        let (backend, _) = named(job, "uses", "./.github/actions/select-canary-backend");
+        let (prepare, _) = named(job, "uses", "./.github/actions/prepare-automation");
+        assert!(setup < backend && backend < prepare);
+    }
     let build_env = build.get("env").unwrap();
     assert!(
         build_env.get("LLAMA_STAGE_BACKEND").is_none(),
@@ -667,34 +604,6 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
             && certification.contains("\"--plan\".into()")
             && certification.contains("\"--shard-index\".into()")
     );
-}
-#[test]
-fn canary_backend_selection_requires_a_supported_platform_and_linux_architectures() {
-    let action = document(".github/actions/select-canary-backend/action.yml");
-    let (_, step) = named(action.get("runs").unwrap(), "name", "Detect stage backend");
-    for (os, architectures, backend) in [
-        ("Darwin", "", Some("metal")),
-        ("Linux", "90", Some("cuda")),
-        ("Linux", "", None),
-        ("Windows", "90", None),
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path().canonicalize().unwrap();
-        let setup = format!(
-            "export GITHUB_ENV=\"$PWD/action.env\"\nexport SKIPPY_CUDA_ARCHITECTURES='{architectures}'\nuname() {{ printf '%s\\n' '{os}'; }}"
-        );
-        let (status, _, stderr) = action_shell(&directory, &setup, field(step, "run"));
-        if let Some(backend) = backend {
-            assert_eq!(status, 0, "{}", String::from_utf8_lossy(&stderr));
-            assert_eq!(
-                fs::read_to_string(directory.join("action.env")).unwrap(),
-                format!("LLAMA_STAGE_BACKEND={backend}\n")
-            );
-        } else {
-            assert_eq!(status, 1, "{os}");
-            assert!(!directory.join("action.env").exists());
-        }
-    }
 }
 fn setup_observers() -> &'static str {
     r#"
@@ -818,16 +727,33 @@ fn actual_scheduled_alert_reconciles_first_failure_repeated_failure_and_recovery
         needs(alert),
         BTreeSet::from(["resolve", "result", "publish-certified-canary"])
     );
-    assert_eq!(field(alert, "runs-on"), "ubuntu-24.04");
-    assert_eq!(field(alert, "timeout-minutes"), "5");
+    assert_eq!(
+        alert.get("runs-on").unwrap().list(),
+        vec![
+            "self-hosted",
+            "ARM64",
+            "jy-managed",
+            "family-certify",
+            "accelerator-memory-128plus"
+        ]
+    );
+    assert_eq!(field(alert, "timeout-minutes"), "15");
     let permissions = alert.get("permissions").unwrap();
     assert_eq!(field(permissions, "actions"), "read");
     assert_eq!(field(permissions, "issues"), "write");
-    assert!(steps(alert).iter().all(|s| {
-        s.get("uses")
-            .and_then(Node::text)
-            .is_none_or(|s| !s.starts_with("actions/checkout@"))
-    }));
+    let (_, checkout) = named(
+        alert,
+        "uses",
+        "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+    );
+    assert_eq!(
+        field(checkout.get("with").unwrap(), "ref"),
+        "${{ github.sha }}"
+    );
+    assert_eq!(
+        field(checkout.get("with").unwrap(), "persist-credentials"),
+        "false"
+    );
     let (_, step) = named(alert, "name", "Reconcile consecutive-failure alert");
     assert_eq!(field(step, "continue-on-error"), "true");
     let script = field(step.get("with").unwrap(), "script");

@@ -73,6 +73,7 @@ fn print_agent_install_summary(agent: SkillAgent, report: &SkillInstallReport) {
     if json_mode_enabled() {
         return;
     }
+    print_skipped_skills(&mut mesh_llm_events::console_err(), report);
     let changed = report
         .actions
         .iter()
@@ -108,6 +109,7 @@ fn print_install_report(report: &SkillInstallReport, dry_run: bool) -> Result<()
         "🧠 Installing mesh plugin skills"
     };
     writeln!(err, "{heading}")?;
+    print_skipped_skills(&mut err, report);
 
     if report.available_skills == 0 {
         writeln!(err, "🔎 No plugin skills found in installed plugins.")?;
@@ -195,6 +197,17 @@ fn print_install_summary(report: &SkillInstallReport, dry_run: bool) {
     }
     let mut err = mesh_llm_events::console_err();
     let _ = writeln!(err, "✅ Skill install {verb}: {}", parts.join(", "));
+}
+
+/// Name each skill a plugin offers that was left out, and why.
+fn print_skipped_skills(err: &mut impl Write, report: &SkillInstallReport) {
+    for skipped in &report.skipped {
+        let _ = writeln!(
+            err,
+            "⚠️  Skipped {}/{}: {}",
+            skipped.provider_name, skipped.skill_name, skipped.reason
+        );
+    }
 }
 
 fn action_status_label(status: &SkillInstallStatus, dry_run: bool) -> Option<&'static str> {

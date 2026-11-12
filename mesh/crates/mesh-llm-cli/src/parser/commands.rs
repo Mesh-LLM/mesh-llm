@@ -544,12 +544,6 @@ pub struct Cli {
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub nostr_discovery: bool,
-
-    /// Don't install the default plugins when this node starts.
-    /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1. Hidden; kept so existing
-    /// `serve` and `client` invocations still parse.
-    #[arg(long, hide = true)]
-    pub no_default_plugins: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -582,11 +576,6 @@ pub enum Command {
         /// Re-detect the best host backend flavor before selecting the release bundle.
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
-        /// Turn off the default plugins this build lists: the updated node
-        /// does not install them from its release until `mesh-llm plugins
-        /// enable NAME`. Same as `mesh-llm plugins install-defaults --off`.
-        #[arg(long)]
-        no_default_plugins: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
@@ -988,12 +977,6 @@ pub enum ConfigCommand {
 pub enum PluginCommand {
     /// Install the default plugins from this release's bundled copy (no download).
     /// A node also does this when it starts.
-    InstallDefaults {
-        /// Turn every default plugin off instead: none is installed, and an
-        /// installed one is disabled, until `mesh-llm plugins enable NAME`.
-        #[arg(long)]
-        off: bool,
-    },
     /// Install native plugins in order, or install one local release archive.
     Install {
         /// Plugin catalog names, GitHub owner/repo references, or GitHub URLs.

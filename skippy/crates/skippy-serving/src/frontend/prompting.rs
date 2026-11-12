@@ -220,18 +220,6 @@ impl StageOpenAiBackend {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
-        if serde_json::from_str::<Value>(metadata)
-            .ok()
-            .and_then(|value| value.get("skip_chat_parsing").and_then(Value::as_bool))
-            .unwrap_or(false)
-        {
-            return Ok(Some(ParsedChatMessage {
-                content: Some(text.to_string()),
-                reasoning_content: None,
-                tool_calls: None,
-            }));
-        }
-
         let model = lock_runtime(&self.runtime).model.reader();
         self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
     }
@@ -244,6 +232,18 @@ impl StageOpenAiBackend {
         metadata: &str,
         is_partial: bool,
     ) -> InferenceResult<Option<ParsedChatMessage>> {
+        if serde_json::from_str::<Value>(metadata)
+            .ok()
+            .and_then(|value| value.get("skip_chat_parsing").and_then(Value::as_bool))
+            .unwrap_or(false)
+        {
+            return Ok(Some(ParsedChatMessage {
+                content: Some(text.to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+            }));
+        }
+
         // Emulation path: when tools were requested but the prompt was rendered
         // without native tool support, the model emitted TOOL_CALL text lines.
         // Parse those into OpenAI tool_calls instead of using the native parser.

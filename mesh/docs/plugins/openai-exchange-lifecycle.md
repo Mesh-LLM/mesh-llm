@@ -58,6 +58,17 @@ selected phase names the backend in `target` and, for a remote peer, carries
 serving node's `request_received` and terminal events use for
 `requested_by_node_id`. It is absent for a local or URL backend.
 
+When a mesh route has several candidates, a `deny` at the selected phase rules
+out that candidate only: the host asks about the next one, with the next
+`attempt` number, and the client gets the denial only if no candidate is
+admitted. A required-hook failure still ends the request, even when another
+plugin denies the candidate; a best-effort hook failure only marks evidence
+incomplete and neither stops routing nor prevents skipping a denied candidate. A skipped candidate's response headers and annotations are not
+attached to the exchange. The client sees a denial only when every candidate
+denied; if a later candidate was admitted but then failed, the client sees that
+failure, and the terminal event has `admission_denied: false`. `attempt_history`
+lists every attempt, marking each denied one with `admission_denied: true`.
+
 Both sides explicitly list allowed endpoints, phases, and headers. Independent
 booleans control `request_body`, `effective_request_body`, `response_body`,
 `admission`, `metadata`, `read_identity_bundle`, and `delegate_signing_key`.

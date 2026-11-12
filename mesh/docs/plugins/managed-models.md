@@ -1,20 +1,24 @@
 # Managed provider models
 
-Select a plugin under `[[models]]` to configure its models alongside built-in
-models. Mesh sends each plugin only the selections naming that provider, skips
-those entries during native Skippy startup, and supplies an asset service that
-uses the host's Hugging Face credentials and shared cache.
+Select a plugin that implements managed models under `[[models]]` to configure
+its models alongside built-in models. Mesh sends each plugin only the selections
+naming that provider, skips those entries during native Skippy startup, and
+supplies an asset service that uses the host's Hugging Face credentials and
+shared cache.
 
-For example, the ONNX provider accepts this pinned Indra configuration:
+This schema example is for provider implementers. `example-ocr` represents a
+provider that implements managed models and defines the options shown below;
+it is not an ONNX installation recipe. Use the model IDs, variants and options
+documented by the provider you install.
 
 ```toml
 [[plugin]]
-name = "onnx"
-command = "/absolute/path/to/mesh-onnx"
+name = "example-ocr"
+command = "/absolute/path/to/example-ocr"
 
 [[models]]
-model = "datalab-to/indra-ocr@v1.1.0"
-provider = "onnx"
+model = "example-org/document-ocr@v1"
+provider = "example-ocr"
 variant = "fp32"
 
 [models.options]
@@ -61,7 +65,7 @@ An operator can instead provide a complete local bundle:
 
 ```toml
 [models.source]
-local_dir = "models/indra"
+local_dir = "models/ocr"
 ```
 
 Relative paths resolve beside the Mesh configuration file. Local bundles must
@@ -76,11 +80,14 @@ Mesh passes the typed lifecycle policy to the provider. The provider implements
 session loading, request leases and idle eviction; the host supplies configuration,
 assets and routing, rather than holding the inference engine itself.
 
-The ONNX provider interprets `load = "startup"` as eager loading and
-`load = "on_demand"` as loading on the first request. `prefetch = true` prepares
-assets ahead of an on-demand load. An `idle_timeout_secs` of zero disables idle
-eviction; a positive timeout releases an idle engine while retaining its cached
-assets. Queued and active requests hold leases that prevent eviction.
+For a provider implementing this policy, `load = "startup"` requests eager
+loading and `load = "on_demand"` requests loading on the first request.
+`prefetch = true` requests asset preparation ahead of an on-demand load. An
+`idle_timeout_secs` of zero disables idle eviction; a positive timeout releases
+an idle engine while retaining its cached assets. The provider must keep queued
+and active requests leased to prevent eviction. These behaviors require a
+provider implementation; passing the settings does not create session management
+inside a plugin.
 
 The provider's `GET /v1/models` inventory includes `workload_class` and
 `availability` per model. `loadable`, `ready` and `busy` entries remain eligible
@@ -91,3 +98,24 @@ listing and excludes these task-only entries.
 See [the task contracts](document-ocr.md) for protocol labels and HTTP paths.
 Register a separate endpoint binding for each supported protocol; matching a
 model ID alone never grants another task's capabilities.
+
+## ONNX OCR configuration
+
+The [ONNX OCR provider](https://github.com/Mesh-LLM/onnx-plugin) currently accepts
+a local Indra model directory through `--model-dir` and loads its sessions at
+startup. It does not consume `[[models]]`, use Mesh's asset service or implement
+the managed lifecycle above. For a locally built, host-compatible executable,
+configure its inputs directly:
+
+```toml
+[[plugin]]
+name = "onnx-ocr"
+command = "/absolute/path/to/mesh-onnx-ocr"
+args = ["--model-dir", "/absolute/path/to/indra-ocr-v1.1.0"]
+```
+
+The provider's README specifies the Indra files and native runtime dependencies.
+Image input needs no Pdfium; PDF input also requires a matching platform library
+passed with `--pdfium-library`. Verify that the provider revision implements the
+[current OCR HTTP contract](document-ocr.md) before using it with Mesh. This
+configuration does not imply a published binary is available.

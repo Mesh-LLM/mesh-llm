@@ -30,7 +30,7 @@ pub(crate) async fn serve_binary_stage_with_shutdown_and_boundary_observer(
     boundary_observer: impl FnOnce(
         Option<ActivationBoundaryDesc>,
         Option<ActivationBoundaryDesc>,
-        Option<Vec<u32>>,
+        Option<crate::split_dflash::SplitDFlashAttached>,
     ) + Send
     + 'static,
 ) -> Result<()> {

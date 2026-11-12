@@ -474,9 +474,7 @@ struct RepairCaller {
 }
 impl RepairCaller {
     fn new(fixture: &Fixture) -> Self {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let source =
-            fs::read_to_string(repository.join("scripts/llama-canary-agent-repair.sh")).unwrap();
+        let source = crate::canary_full_gates::fixture::source();
         let selector = source
             .split("# Legacy workload automation selection begins.")
             .nth(1)
