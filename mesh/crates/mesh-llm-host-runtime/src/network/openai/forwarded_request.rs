@@ -219,10 +219,10 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         .chain(OMITTED_ON_PEER_FORWARD.iter().copied());
     let mut forwarded =
         finalize_forwarded_request(raw, false, None, None, &omitted.collect::<Vec<_>>())?;
-    // A private request only reaches nodes of the same owner. Tell that node
+    // A private request only reaches nodes in this node's trust circle. Tell that node
     // it is private, so it serves it only from what stays in scope (not from
     // a split whose stages run on a stranger's node). The receiving node
-    // honours the marker only from a peer its own owner signed.
+    // narrows the request to its own and this node's owner's nodes.
     if crate::mesh::current_owner_scope().is_some() {
         let request_line_end = forwarded
             .windows(2)

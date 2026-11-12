@@ -160,3 +160,65 @@ async fn my_own_nodes_are_admitted_as_me_when_remote_is_paused() {
         assert_eq!(node.owner_admission_ingress(remote, stranger).await, remote);
     }
 }
+
+async fn sign_as_me(node: &Node) {
+    *node.owner_summary.lock().await = OwnershipSummary {
+        owner_id: Some("me".to_string()),
+        verified: true,
+        status: OwnershipStatus::Verified,
+        expires_at_unix_ms: Some(u64::MAX),
+        ..OwnershipSummary::default()
+    };
+}
+
+#[tokio::test]
+async fn trusted_owners_join_the_private_scope_but_not_owner_priority() {
+    use crate::runtime::IngressType;
+    let (node, mine, theirs, forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
+    node.trust_store
+        .lock()
+        .await
+        .add_trusted_owner("them".to_string(), Some("friend".to_string()));
+
+    let scope = node.private_owner_scope().await.unwrap();
+    let hosts = with_owner_scope(Some(scope), node.hosts_for_model(MODEL)).await;
+    assert!(hosts.contains(&mine) && hosts.contains(&theirs));
+    assert!(!hosts.contains(&forged));
+
+    // A trusted owner's node is in the circle, but is not "me".
+    let remote = IngressType::RemoteQuicHttp;
+    assert_eq!(
+        node.owner_admission_ingress(remote, Some(mine)).await,
+        IngressType::LocalOpenAi
+    );
+    assert_eq!(
+        node.owner_admission_ingress(remote, Some(theirs)).await,
+        remote
+    );
+}
+
+#[tokio::test]
+async fn a_forwarded_private_request_keeps_to_this_and_the_requesters_owner() {
+    let (node, mine, theirs, forged) = node_with_mine_and_theirs().await;
+    let friend = owned_host(64, "friend", OwnershipStatus::Verified);
+    let friend_id = friend.id;
+    node.insert_test_peer_without_liveness(friend).await;
+    sign_as_me(&node).await;
+    // This node trusts "friend"; the entry node ("them") might not.
+    node.trust_store
+        .lock()
+        .await
+        .add_trusted_owner("friend".to_string(), None);
+
+    let scope = node.forwarded_private_scope(theirs).await;
+    let hosts = with_owner_scope(Some(scope), node.hosts_for_model(MODEL)).await;
+    assert!(hosts.contains(&mine) && hosts.contains(&theirs));
+    assert!(!hosts.contains(&friend_id) && !hosts.contains(&forged));
+
+    // An unverified requester adds nobody.
+    let scope = node.forwarded_private_scope(forged).await;
+    let hosts = with_owner_scope(Some(scope), node.hosts_for_model(MODEL)).await;
+    assert!(hosts.contains(&mine));
+    assert!(!hosts.contains(&theirs) && !hosts.contains(&forged));
+}

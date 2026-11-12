@@ -2,8 +2,9 @@
 //! `@private` model suffix. `incognito` is an alias for `private` in both.
 //! They work on the automatic directive too: `auto@private`, `mesh@private`.
 //!
-//! Both mean the same thing: serve this request only on nodes signed by the
-//! owner of the node the client is talking to. The selector is consumed here,
+//! Both mean the same thing: serve this request only inside the trust circle
+//! of the node the client is talking to: nodes signed by its owner or by an
+//! owner in its trust store. The selector is consumed here,
 //! at the entry node: the suffix is removed from the model name before any
 //! model lookup, so a peer advertising a model literally named `x@private`
 //! can never be selected by it, and the header is stripped before a request
@@ -131,10 +132,10 @@ pub(crate) async fn resolve(
 /// `None` once a rejection has been written.
 ///
 /// A request from a peer is already assigned here and runs locally. It is
-/// private only when the peer that forwarded it marked it so and is signed by
-/// this node's own owner: then this node serves it only from what stays in
-/// that owner's scope. A stranger's marker is ignored; it cannot widen
-/// anything, and a peer request never routes onward.
+/// private when the peer that forwarded it marked it so: then this node
+/// serves it only from what stays on its own owner's and that peer's owner's
+/// nodes (see [`mesh::Node::forwarded_private_scope`]). The marker can only
+/// narrow, and a peer request never routes onward.
 pub(crate) async fn resolve_at_ingress(
     node: &mesh::Node,
     stream: ClientStream,
@@ -166,10 +167,10 @@ async fn peer_private_scope(
         header_values_from_raw(&request.raw, MESH_SCOPE_HEADER).as_deref(),
         Ok([value]) if is_private_scope_value(value)
     );
-    if !marked || !node.peer_shares_my_owner(requested_by?).await {
+    if !marked {
         return None;
     }
-    node.private_owner_scope().await
+    Some(node.forwarded_private_scope(requested_by?).await)
 }
 
 #[cfg(test)]

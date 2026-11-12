@@ -408,6 +408,10 @@ mesh-llm auth trust list
 mesh-llm auth trust remove <owner-id>
 ```
 
+The same owner key and trusted-owner list decide which nodes may answer a
+private (`@private` / `@incognito`) request, even in a public mesh. See
+[specs/private-routing.md](specs/private-routing.md).
+
 ## Serve one model into several meshes
 
 An embedded node can be a member of further meshes while it serves, without
