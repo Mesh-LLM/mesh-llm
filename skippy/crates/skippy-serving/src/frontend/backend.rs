@@ -1,6 +1,7 @@
 mod completion_exchange;
 mod exchange_hooks;
 mod inference;
+mod phase_spans;
 mod prepared_exchange;
 #[cfg(test)]
 mod prepared_exchange_tests;
@@ -1033,34 +1034,6 @@ impl StageOpenAiBackend {
         );
     }
 
-    pub(super) fn emit_openai_phase(
-        &self,
-        name: &str,
-        timer: PhaseTimer,
-        mut attrs: BTreeMap<String, Value>,
-    ) -> f64 {
-        let elapsed_ms = timer.elapsed_ms();
-        attrs.insert("llama_stage.elapsed_ms".to_string(), json!(elapsed_ms));
-        let end = now_unix_nanos() as u64;
-        self.telemetry
-            .emit_debug_span(name, attrs, timer.start_unix_nanos, end);
-        elapsed_ms
-    }
-
-    pub(super) fn emit_openai_summary(
-        &self,
-        name: &str,
-        timer: PhaseTimer,
-        mut attrs: BTreeMap<String, Value>,
-    ) -> f64 {
-        let elapsed_ms = timer.elapsed_ms();
-        attrs.insert("llama_stage.elapsed_ms".to_string(), json!(elapsed_ms));
-        let end = now_unix_nanos() as u64;
-        self.telemetry
-            .emit_span(name, attrs, timer.start_unix_nanos, end);
-        elapsed_ms
-    }
-
     pub(super) fn ensure_model(&self, requested: &str) -> InferenceResult<()> {
         ensure_requested_model(&self.model_id, requested)
     }
@@ -1250,7 +1223,7 @@ impl StageOpenAiBackend {
             } else {
                 None
             };
-        task::spawn_blocking(move || {
+        task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             let _session_permit = session_permit;
             let _permit = permit;
             let result = backend.generate_text(
@@ -1322,7 +1295,7 @@ impl StageOpenAiBackend {
                     let _ = sender.send_terminal(Err(error));
                 }
             }
-        });
+        }));
         Ok(Box::pin(stream::unfold(rx, |mut rx| async {
             rx.recv().await.map(|item| (item, rx))
         })))

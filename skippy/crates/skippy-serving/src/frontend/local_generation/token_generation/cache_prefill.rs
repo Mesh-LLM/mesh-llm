@@ -19,22 +19,63 @@ fn deferred_suffix_split(
     (suffix_start, checkpoint)
 }
 
-/// Pick the deferred-prefill checkpoint boundary. A valid EXPLICIT chat
-/// boundary wins: it is the reusable message-history prefix a follow-up
-/// request shares token-for-token, so it is the checkpoint most likely to be
-/// on a future request's path. The shared-grid checkpoint is the fallback for
-/// absent, invalid, or already-restored chat boundaries.
-fn select_deferred_checkpoint_boundary(
-    shared_checkpoint: Option<usize>,
-    chat_checkpoint: Option<usize>,
+/// The boundaries a deferred prefill checkpoints, in prompt order.
+///
+/// Recurrent state resumes only at a checkpoint that is a whole prefix of the
+/// request, so each kind serves requests the others cannot: the chat boundary
+/// the next turn of the same conversation, the system boundary any request
+/// with the same system messages, and the shared grid a request sharing an
+/// earlier part without message boundaries. Every distinct one is kept. A
+/// boundary the cache would not record, being shorter than `min_tokens`, is not
+/// worth splitting the prefill for. Candidates earlier in the list name a
+/// boundary they share.
+fn deferred_checkpoint_boundaries(
+    candidates: [(Option<usize>, DeferredCheckpointKind); 3],
     restored_prefill_tokens: usize,
     prompt_token_count: usize,
-) -> Option<usize> {
-    let valid =
-        |boundary: &usize| *boundary > restored_prefill_tokens && *boundary < prompt_token_count;
-    chat_checkpoint
-        .filter(valid)
-        .or_else(|| shared_checkpoint.filter(valid))
+    min_tokens: u64,
+) -> Vec<(usize, DeferredCheckpointKind)> {
+    let valid = |boundary: &usize| {
+        *boundary > restored_prefill_tokens
+            && *boundary < prompt_token_count
+            && u64::try_from(*boundary).unwrap_or(u64::MAX) >= min_tokens
+    };
+    let mut boundaries: Vec<_> = candidates
+        .into_iter()
+        .filter_map(|(boundary, kind)| boundary.filter(valid).map(|boundary| (boundary, kind)))
+        .collect();
+    boundaries.sort_by_key(|&(boundary, _)| boundary);
+    boundaries.dedup_by_key(|&mut (boundary, _)| boundary);
+    boundaries
+}
+
+/// The boundary a deferred prefill exports its recurrent state at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeferredCheckpointKind {
+    /// The message history before the assistant turn.
+    ChatPrefix,
+    /// The system messages, up to where the first user's text begins.
+    SystemPrefix,
+    /// The stride grid's boundary before the prompt's tail.
+    SharedGrid,
+}
+
+impl DeferredCheckpointKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ChatPrefix => "chat_prefix",
+            Self::SystemPrefix => "system_prefix",
+            Self::SharedGrid => "shared_grid",
+        }
+    }
+
+    fn decision_prefix(self) -> &'static str {
+        match self {
+            Self::ChatPrefix => "chat_prefix_checkpoint",
+            Self::SystemPrefix => "system_prefix_checkpoint",
+            Self::SharedGrid => "shared_prefill_checkpoint",
+        }
+    }
 }
 
 impl StageOpenAiBackend {
@@ -45,6 +86,7 @@ impl StageOpenAiBackend {
         cache_stats: &mut GenerationCacheStats,
     ) -> InferenceResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
+        let prefilling = self.enter_openai_phase(&prefill_timer);
         let prefill_tokens =
             Arc::<[i32]>::from(&request.prompt_token_ids[..request.prompt_token_ids.len() - 1]);
         let recurrent_cache_prefix_token_ids = request
@@ -157,24 +199,32 @@ impl StageOpenAiBackend {
                 .kv
                 .as_ref()
                 .is_some_and(|kv| kv.retains_recurrent_checkpoints());
-            let checkpoint = exact_state
-                .then(|| {
-                    self.deferred_exact_checkpoint_identity(
-                        request,
-                        session_id,
-                        &prefill_tokens,
-                        restored_prefill_tokens,
-                    )
-                })
-                .flatten();
-            let (mut suffix_start, checkpoint_boundary) = deferred_suffix_split(
+            let checkpoints = if exact_state {
+                self.deferred_exact_checkpoints(
+                    request,
+                    session_id,
+                    &prefill_tokens,
+                    restored_prefill_tokens,
+                )
+            } else {
+                Vec::new()
+            };
+            let (mut suffix_start, _) = deferred_suffix_split(
                 restored_prefill_tokens,
                 request.prompt_token_ids.len(),
-                checkpoint
-                    .as_ref()
-                    .and_then(|identity| usize::try_from(identity.identity.token_count).ok()),
+                None,
             );
-            if exact_state && let Some(boundary) = checkpoint_boundary {
+            let mut checkpoint_chunks = 0usize;
+            for (checkpoint, kind) in checkpoints {
+                let Some(boundary) = deferred_suffix_split(
+                    suffix_start,
+                    request.prompt_token_ids.len(),
+                    usize::try_from(checkpoint.identity.token_count).ok(),
+                )
+                .1
+                else {
+                    continue;
+                };
                 let checkpoint_prefill = self.prefill_suffix(
                     session_id,
                     &request.prompt_token_ids[suffix_start..boundary],
@@ -183,9 +233,8 @@ impl StageOpenAiBackend {
                     cache_operation_deadline,
                     request.cancellation,
                 )?;
-                prefill_chunk_count = prefill_chunk_count
-                    .saturating_add(checkpoint_prefill.chunk_count)
-                    .saturating_sub(1);
+                checkpoint_chunks =
+                    checkpoint_chunks.saturating_add(checkpoint_prefill.chunk_count);
                 scheduler_batch_size_max =
                     scheduler_batch_size_max.max(checkpoint_prefill.max_batch_size);
                 runtime_lock_wait_ms += checkpoint_prefill.runtime_lock_wait_ms;
@@ -197,7 +246,7 @@ impl StageOpenAiBackend {
                     session_id,
                     request.ids,
                     request.prompt_token_ids[..boundary].to_vec(),
-                    "shared_prefill_checkpoint",
+                    kind.decision_prefix(),
                     true,
                 ) {
                     record.resident_enqueued_checkpoints =
@@ -221,11 +270,7 @@ impl StageOpenAiBackend {
             } else {
                 None
             };
-            prefill_chunk_count = if prefill_chunk_count == 1 {
-                suffix_outcome.chunk_count
-            } else {
-                prefill_chunk_count.saturating_add(suffix_outcome.chunk_count)
-            };
+            prefill_chunk_count = checkpoint_chunks.saturating_add(suffix_outcome.chunk_count);
             scheduler_batch_size_max = scheduler_batch_size_max.max(suffix_outcome.max_batch_size);
             runtime_lock_wait_ms += suffix_outcome.runtime_lock_wait_ms;
             runtime_lock_hold_ms += suffix_outcome.runtime_lock_hold_ms;
@@ -363,6 +408,7 @@ impl StageOpenAiBackend {
                     .as_ref()
                     .expect("debug session snapshot collected"),
             );
+            drop(prefilling);
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, attrs);
         }
         self.telemetry.emit(
@@ -388,21 +434,25 @@ impl StageOpenAiBackend {
         Ok(prompt_prefill_sample)
     }
 
-    fn deferred_exact_checkpoint_identity(
+    /// The recurrent checkpoints a deferred prefill exports, in prompt order.
+    fn deferred_exact_checkpoints(
         &self,
         request: &LocalGeneration<'_>,
         session_id: &str,
         prefill_tokens: &[i32],
         restored_prefill_tokens: usize,
-    ) -> Option<PrefillKvIdentity> {
-        let kv = self
+    ) -> Vec<(PrefillKvIdentity, DeferredCheckpointKind)> {
+        let Some(kv) = self
             .kv
             .as_ref()
-            .filter(|kv| kv.retains_recurrent_checkpoints())?;
+            .filter(|kv| kv.retains_recurrent_checkpoints())
+        else {
+            return Vec::new();
+        };
         let base = self.local_kv_message_base(session_id, request.ids);
-        let shared_checkpoint =
+        let mut shared_checkpoint =
             kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
-        let chat_checkpoint = request
+        let mut chat_checkpoint = request
             .recurrent_cache_prefix_token_ids
             .filter(|checkpoint_tokens| {
                 !checkpoint_tokens.is_empty()
@@ -412,23 +462,70 @@ impl StageOpenAiBackend {
             .map(|checkpoint_tokens| {
                 kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens)
             });
-        let shared_boundary = shared_checkpoint
-            .as_ref()
-            .and_then(|identity| usize::try_from(identity.identity.token_count).ok());
-        let chat_boundary = chat_checkpoint
-            .as_ref()
-            .and_then(|identity| usize::try_from(identity.identity.token_count).ok());
-        let selected_boundary = select_deferred_checkpoint_boundary(
-            shared_boundary,
-            chat_boundary,
+        let mut system_checkpoint = request
+            .shared_system_prefix_tokens
+            .and_then(|tokens| prefill_tokens.get(..tokens))
+            .map(|checkpoint_tokens| {
+                kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens)
+            });
+        let boundary_of = |checkpoint: &Option<PrefillKvIdentity>| {
+            checkpoint
+                .as_ref()
+                .and_then(|identity| usize::try_from(identity.identity.token_count).ok())
+        };
+        let shared_boundary = boundary_of(&shared_checkpoint);
+        let chat_boundary = boundary_of(&chat_checkpoint);
+        let system_boundary = boundary_of(&system_checkpoint);
+        let prompt_tokens = prefill_tokens.len().saturating_add(1);
+        let boundaries = deferred_checkpoint_boundaries(
+            [
+                (chat_boundary, DeferredCheckpointKind::ChatPrefix),
+                (system_boundary, DeferredCheckpointKind::SystemPrefix),
+                (shared_boundary, DeferredCheckpointKind::SharedGrid),
+            ],
             restored_prefill_tokens,
-            prefill_tokens.len().saturating_add(1),
+            prompt_tokens,
+            kv.checkpoint_policy.min_tokens,
         );
-        if selected_boundary == shared_boundary {
-            shared_checkpoint
-        } else {
-            chat_checkpoint
+        if self.telemetry.is_debug_enabled() {
+            let mut attrs = self.openai_attrs(request.ids);
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("checkpoint_boundary"),
+            );
+            attrs.insert("skippy.kv.prompt_tokens".to_string(), json!(prompt_tokens));
+            attrs.insert(
+                "skippy.kv.restored_prefill_tokens".to_string(),
+                json!(restored_prefill_tokens),
+            );
+            attrs.insert(
+                "skippy.kv.chat_checkpoint_tokens".to_string(),
+                json!(chat_boundary),
+            );
+            attrs.insert(
+                "skippy.kv.shared_checkpoint_tokens".to_string(),
+                json!(shared_boundary),
+            );
+            attrs.insert(
+                "skippy.kv.system_checkpoint_tokens".to_string(),
+                json!(system_boundary),
+            );
+            let kinds: Vec<_> = boundaries.iter().map(|&(_, kind)| kind.as_str()).collect();
+            attrs.insert("skippy.kv.checkpoint_kinds".to_string(), json!(kinds));
+            self.telemetry
+                .emit_debug("stage.openai_kv_record_decision", attrs);
         }
+        boundaries
+            .into_iter()
+            .filter_map(|(_, kind)| {
+                match kind {
+                    DeferredCheckpointKind::ChatPrefix => chat_checkpoint.take(),
+                    DeferredCheckpointKind::SystemPrefix => system_checkpoint.take(),
+                    DeferredCheckpointKind::SharedGrid => shared_checkpoint.take(),
+                }
+                .map(|identity| (identity, kind))
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -692,47 +789,78 @@ fn deferred_suffix_split_respects_restore_and_prompt_boundaries() {
 
 #[cfg(test)]
 #[test]
-fn deferred_checkpoint_prefers_chat_boundary_with_shared_grid_fallback() {
+fn deferred_checkpoints_keep_every_distinct_boundary_in_prompt_order() {
+    use DeferredCheckpointKind::{ChatPrefix, SharedGrid, SystemPrefix};
     let prompt = 10;
-    // Both valid: the explicit chat boundary wins over the shared grid.
+    for (chat, system, shared, restored, expected) in [
+        // The next turn needs the chat boundary, a new conversation with the
+        // same system messages the system boundary, and others the grid.
+        (
+            Some(8),
+            Some(3),
+            Some(4),
+            0,
+            vec![(3, SystemPrefix), (4, SharedGrid), (8, ChatPrefix)],
+        ),
+        (
+            Some(6),
+            None,
+            Some(8),
+            0,
+            vec![(6, ChatPrefix), (8, SharedGrid)],
+        ),
+        // A shared boundary is exported once, named by the earlier candidate.
+        (Some(6), None, Some(6), 0, vec![(6, ChatPrefix)]),
+        (
+            Some(8),
+            Some(4),
+            Some(4),
+            0,
+            vec![(4, SystemPrefix), (8, ChatPrefix)],
+        ),
+        (None, None, Some(8), 0, vec![(8, SharedGrid)]),
+        (Some(6), None, None, 0, vec![(6, ChatPrefix)]),
+        // Restored, at the prompt end, or beyond it: not exported.
+        (Some(4), Some(3), Some(8), 4, vec![(8, SharedGrid)]),
+        (Some(6), None, Some(4), 4, vec![(6, ChatPrefix)]),
+        (Some(10), None, Some(8), 0, vec![(8, SharedGrid)]),
+        (Some(99), None, Some(8), 0, vec![(8, SharedGrid)]),
+        (Some(10), None, Some(4), 4, vec![]),
+        (None, None, None, 0, vec![]),
+    ] {
+        assert_eq!(
+            deferred_checkpoint_boundaries(
+                [
+                    (chat, ChatPrefix),
+                    (system, SystemPrefix),
+                    (shared, SharedGrid)
+                ],
+                restored,
+                prompt,
+                0,
+            ),
+            expected,
+            "chat {chat:?} system {system:?} shared {shared:?} restored {restored}"
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn deferred_checkpoints_skip_boundaries_the_cache_would_not_record() {
+    use DeferredCheckpointKind::{ChatPrefix, SharedGrid, SystemPrefix};
     assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(6), 0, prompt),
-        Some(6)
-    );
-    // Chat absent or None: shared grid is the fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), None, 0, prompt),
-        Some(8)
-    );
-    // Chat already restored (equal to the restored prefix): shared fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(4), 4, prompt),
-        Some(8)
-    );
-    // Chat at the prompt end: invalid, shared fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(10), 0, prompt),
-        Some(8)
-    );
-    // Chat beyond the prompt: invalid, shared fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(99), 0, prompt),
-        Some(8)
-    );
-    // Shared already restored but chat valid: chat wins.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(4), Some(6), 4, prompt),
-        Some(6)
-    );
-    // Both invalid: nothing selected.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(4), Some(10), 4, prompt),
-        None
-    );
-    // Neither candidate exists: nothing selected.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(None, None, 0, prompt),
-        None
+        deferred_checkpoint_boundaries(
+            [
+                (Some(300), ChatPrefix),
+                (Some(40), SystemPrefix),
+                (Some(256), SharedGrid)
+            ],
+            0,
+            400,
+            256,
+        ),
+        vec![(256, SharedGrid), (300, ChatPrefix)]
     );
 }
 
