@@ -937,6 +937,48 @@ Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
 
+## Proving a lane change before merge
+
+PR entrypoints call the protected default-branch lanes
+(`ci-<platform>-lane.yml@main`), so a PR does **not** execute its own
+lane-workflow changes in its PR checks; the first real execution of a lane
+edit is the next `main` push after merge. Local-action changes are the
+exception: a lane that checks out `source_sha` and invokes a local action
+runs the action from the PR — for example the Windows product slice checks
+out `inputs.source_sha` and invokes its local `compose-product-input`, so a
+change to that action can run in the PR row. Do not describe a PR's green
+lanes as evidence for a change its row never executed.
+
+For CI-plumbing PRs, attach lane-dispatch evidence from the branch instead:
+generate a plan locally, project the lane exactly as
+`.github/actions/plan-ci` does, narrow its matrices to the rows under test,
+and run `gh workflow run ci-<platform>-lane.yml --ref <branch>` with
+`lane_plan_json`, `plan_digest`, `source_sha` (the branch head) and
+`original_event_name=workflow_dispatch`. The planner reads exactly one JSON
+request from stdin (`tools/ci-controller/src/plan/request.rs`): closed fields
+`profile`, `event_name`, 40-hex `source_sha`, 40-hex `base_sha`, and
+`changed_files` as a JSON array of repository-relative POSIX paths. Pipe the
+request into the command and compute `plan_digest` exactly as
+`.github/actions/plan-ci` does:
+
+```bash
+jq -cn \
+  --arg profile pr-ready \
+  --arg event_name pull_request \
+  --arg source_sha <40-hex branch head> \
+  --arg base_sha <40-hex merge base> \
+  --argjson changed_files '[".github/workflows/ci-<platform>-lane.yml"]' \
+  '{profile: $profile, event_name: $event_name, source_sha: $source_sha,
+    base_sha: $base_sha, changed_files: $changed_files}' \
+  | cargo xtool ci plan --manifest-root . > ci-plan.json
+plan_json=$(jq -c . ci-plan.json)
+plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')
+```
+
+(`sha256sum` is `shasum -a 256` on macOS.) Where the change is a new gate, run
+it twice — once on a branch without the fix it is meant to catch (expected
+red) and once with it (expected green) — and link both runs in the PR.
+
 ## Rolling previews
 
 The main-only rolling-preview dispatcher reuses the canonical release pipeline,
