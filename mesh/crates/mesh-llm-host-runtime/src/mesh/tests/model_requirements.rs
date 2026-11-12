@@ -148,7 +148,11 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     );
     // Listing follows routing: the chat-compatible list drops the gated
     // model, while the catalog keeps it as unavailable with its `requires`.
-    assert_eq!(listed_llms(&buyer).await, vec!["free".to_string()]);
+    // The automatic directive is listed because `free` can serve it.
+    assert_eq!(
+        listed_llms(&buyer).await,
+        vec!["free".to_string(), "mesh".to_string()]
+    );
     let (availability, requires) = catalog_entry(&buyer, "gated").await;
     assert_eq!(availability, MeshModelAvailability::Unavailable);
     assert_eq!(requires[0]["channel"], "fixture.v1");
@@ -191,7 +195,8 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
         vec![
             "free".to_string(),
             "gated".to_string(),
-            "gated#alternate".to_string()
+            "gated#alternate".to_string(),
+            "mesh".to_string()
         ],
         "declaring the channel restores the suffixed alias as well"
     );
