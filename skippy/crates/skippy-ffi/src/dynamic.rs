@@ -170,6 +170,7 @@ macro_rules! dynamic_symbols {
 
 dynamic_symbols! {
     llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;
+    llama_model_n_embd(model: *const Opaque) -> i32;
     llama_set_embeddings(ctx: *mut Opaque, embeddings: bool);
     llama_model_get_vocab(model: *const Opaque) -> *const Opaque;
     llama_vocab_n_tokens(vocab: *const Opaque) -> i32;
