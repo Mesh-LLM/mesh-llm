@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import plugins from "../src/_data/plugins.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const websiteDir = path.resolve(scriptDir, "..");
@@ -45,4 +46,45 @@ for (const line of meshStarLines) {
   );
 }
 
-console.log("Website data sources render live values (nav + Exo comparison checked).");
+// Discovery and installation share one release list, including the cases where
+// a repository slug is not the installed plugin identifier.
+const releasedPlugins = plugins.groups.flatMap((group) => group.plugins);
+assert.equal(plugins.count, releasedPlugins.length);
+assert.ok(plugins.count > 0, "the released plugin directory must not be empty");
+assert.match(plugins.checkedOn, /^\d{4}-\d{2}-\d{2}$/);
+assert.match(plugins.hostVersion, /^\d+\.\d+\.\d+$/);
+for (const field of ["name", "repository"]) {
+  assert.equal(new Set(releasedPlugins.map((plugin) => plugin[field])).size, plugins.count, `plugin ${field} values must be unique`);
+}
+assert.equal(new Set(plugins.groups.map((group) => group.id)).size, plugins.groups.length);
+for (const group of plugins.groups) {
+  assert.match(group.id, /^[a-z][a-z-]*$/);
+  assert.ok(group.plugins.length > 0, `${group.id} must contain published plugins`);
+}
+for (const plugin of releasedPlugins) {
+  assert.match(plugin.name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+  assert.match(plugin.repository, /^[a-z0-9]+(?:-[a-z0-9]+)*-plugin$/);
+  assert.match(plugin.version, /^v\d+\.\d+\.\d+$/);
+  for (const field of ["title", "summary", "platforms"]) {
+    assert.ok(plugin[field]?.trim(), `${plugin.name} needs ${field}`);
+  }
+}
+assert.equal(releasedPlugins.find((plugin) => plugin.repository === "ln-payments-plugin")?.name, "pay-lightning");
+assert.equal(releasedPlugins.find((plugin) => plugin.repository === "model-price-plugin")?.name, "model-prices");
+
+const directory = readSource("src/plugins/index.njk");
+const pluginGuide = readSource("src/docs/pages/plugins.md");
+for (const source of [directory, pluginGuide]) {
+  assert.ok(source.includes("plugins.groups"), "directory and guide must consume the shared plugin release data");
+  assert.ok(source.includes("plugins.count"), "plugin totals must not be hard-coded");
+  assert.ok(source.includes("{{ plugin.repository }}"), "repository links must use the canonical release data");
+}
+assert.ok(pluginGuide.includes("### Install a downloaded archive"), "archive-install links need a destination");
+const hero = readSource("src/_includes/sections/hero.njk");
+assert.match(hero, /id="hero-plugins-title">Extend Mesh<\/h2>/);
+assert.match(hero, /href="\/plugins\/">Browse plugins/);
+assert.ok(hero.includes("{{ plugins.count }} published plugins"));
+assert.ok(hero.includes('href="/docs/pages/sdk/"'), "the Embed entry point must remain available");
+assert.ok(readSource("src/_data/docs.js").includes('["Plugin directory", "/plugins/"]'));
+
+console.log("Website data sources checked: GitHub stars, plugin releases, installation guide and Extend entry point.");
