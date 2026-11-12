@@ -326,13 +326,16 @@ pub(super) async fn run_runtime_cli(
         return run_plugin_until_shutdown(name, options.plugin_args.clone()).await;
     }
 
-    let checked_updates = autoupdate::maybe_auto_update(autoupdate::AutoUpdateOptions {
-        auto_update: options.auto_update,
-        plugin_requested: options.plugin.is_some(),
-        command_is_update: options.command_is_update,
-        llama_flavor: options.llama_flavor,
-        current_version: crate::BUILD_VERSION,
-    })
+    let checked_updates = autoupdate::maybe_auto_update(
+        autoupdate::AutoUpdateOptions {
+            auto_update: options.auto_update,
+            plugin_requested: options.plugin.is_some(),
+            command_is_update: options.command_is_update,
+            llama_flavor: options.llama_flavor,
+            current_version: crate::BUILD_VERSION,
+        },
+        super::startup_update_check::auto_update_plugin_gate,
+    )
     .await?;
 
     let mut config = plugin::load_config(options.config.as_deref())?;

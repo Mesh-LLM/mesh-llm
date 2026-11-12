@@ -15,6 +15,7 @@ pub mod source_ref;
 pub mod store;
 pub mod target;
 mod upgrade;
+pub mod upgrade_gate;
 
 pub use asset::{AssetMatchKind, PluginAsset, infer_plugin_asset, select_plugin_asset};
 pub use catalog::{CatalogEntry, CatalogSet, PinnedRelease, PluginCatalog, sets_url_for};

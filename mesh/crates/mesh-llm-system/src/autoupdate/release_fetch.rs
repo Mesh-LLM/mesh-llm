@@ -51,6 +51,24 @@ pub(super) struct ReleaseInfo {
     assets: Vec<ReleaseAsset>,
 }
 
+#[cfg(test)]
+impl ReleaseInfo {
+    /// A release publishing exactly the named assets, for update-flow tests.
+    pub(super) fn with_assets(tag: &str, version: &str, asset_names: &[String]) -> Self {
+        Self {
+            tag: tag.to_string(),
+            version: version.to_string(),
+            assets: asset_names
+                .iter()
+                .map(|name| ReleaseAsset {
+                    name: name.clone(),
+                    sha256: "a".repeat(64),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum ReleaseAssetPreference {
     StableFirst,

@@ -46,6 +46,31 @@ where
     if skip { None } else { check().await }
 }
 
+/// The plugin compatibility check and repairs `mesh-llm update` runs before
+/// it replaces the host, run here before an automatic update does. A refusal
+/// keeps the running host, so the node starts on the version it has.
+pub(super) async fn auto_update_plugin_gate(target_version: &str) -> anyhow::Result<()> {
+    mesh_llm_plugin_manager::upgrade_gate::check_and_repair_installed_plugins(
+        target_version,
+        mesh_llm_plugin::PROTOCOL_VERSION,
+        &mut |line| {
+            let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::AutoUpdate {
+                message: line.to_string(),
+                version: None,
+            });
+        },
+        &mut |event: mesh_llm_plugin_manager::PluginProgressEvent| {
+            if let mesh_llm_plugin_manager::PluginProgressEvent::Warning { message } = event {
+                let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::AutoUpdate {
+                    message: format!("⚠️  {message}"),
+                    version: None,
+                });
+            }
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

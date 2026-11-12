@@ -13,8 +13,8 @@ use anyhow::{Result, bail};
 use mesh_llm_cli::{BinaryFlavor, Cli, Command};
 use mesh_llm_plugin_manager::{
     PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
-    PluginUpgradeVerdict, default_plugins_opted_out, plan_plugin_upgrades,
-    repair_incompatible_plugins,
+    default_plugins_opted_out, plan_plugin_upgrades,
+    upgrade_gate::check_and_repair_installed_plugins,
 };
 use mesh_llm_system::{autoupdate, backend};
 use std::io::Write;
@@ -66,8 +66,6 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         .map(|prepared| prepared.release_version().to_string())
         .unwrap_or_else(|| mesh_llm_build_info::RELEASE_VERSION.to_string());
 
-    run_plugin_upgrade_checks(&target_version).await?;
-
     let is_attended = attended(no_interactive);
     let plan = optional_plugin_plan(
         plugin_set,
@@ -75,23 +73,27 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         default_plugins_opted_out(),
         is_attended,
     );
-    // Windows exits during installer handoff, so report notices and any
-    // unfinished optional work before handing control to the installer.
-    if is_attended && let Some(notices) = update_notices(&target_version).await {
-        let mut err = mesh_llm_events::console_err();
-        for line in notices {
-            let _ = writeln!(err, "{line}");
+    apply_host_after_plugin_gate(&target_version, run_plugin_upgrade_checks, async || {
+        // Windows exits during installer handoff, so report notices and any
+        // unfinished optional work before handing control to the installer.
+        if is_attended && let Some(notices) = update_notices(&target_version).await {
+            let mut err = mesh_llm_events::console_err();
+            for line in notices {
+                let _ = writeln!(err, "{line}");
+            }
         }
-    }
-    if cfg!(windows) && prepared.is_some() {
-        let mut err = mesh_llm_events::console_err();
-        for line in crate::plugin_sets::handoff_optional_plugin_lines(&plan) {
-            let _ = writeln!(err, "{line}");
+        if cfg!(windows) && prepared.is_some() {
+            let mut err = mesh_llm_events::console_err();
+            for line in crate::plugin_sets::handoff_optional_plugin_lines(&plan) {
+                let _ = writeln!(err, "{line}");
+            }
         }
-    }
-    if let Some(prepared) = prepared.as_ref() {
-        autoupdate::apply_prepared_update(prepared, mesh_llm_build_info::BUILD_VERSION).await?;
-    }
+        if let Some(prepared) = prepared.as_ref() {
+            autoupdate::apply_prepared_update(prepared, mesh_llm_build_info::BUILD_VERSION).await?;
+        }
+        Ok(())
+    })
+    .await?;
 
     // The host upgrade landed. Optional plugin installation never fails it:
     // warn, guide a retry, and report the installation as incomplete.
@@ -110,147 +112,29 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// Check every installed plugin against the target host version and stage
-/// required repairs, before the new host is activated.
-///
-/// - The catalog is fetched once and every decision reads that snapshot.
-/// - With no catalog, compatibility must be established locally or the
-///   upgrade stays unapplied with an explanation.
-/// - A plugin that needs repair and has a verified compatible catalog
-///   release is updated now (settings, data, and enabled state preserved);
-///   a failed repair stops the upgrade before the host is replaced.
-async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
-    let options = match PluginInstallOptions::from_env() {
-        Ok(options) => options,
-        Err(error) => {
-            // No plugin store on this machine (or an unsupported platform):
-            // nothing is installed, so nothing can block the upgrade.
-            let mut err = mesh_llm_events::console_err();
-            let _ = writeln!(
-                err,
-                "ℹ️  Installed plugin check skipped: no plugin store ({error:#})."
-            );
-            return Ok(());
-        }
-    };
-    let store = PluginStore::new(&options.store_root);
-    if let Err(error) = store.migrate_legacy_defaults() {
-        let mut err = mesh_llm_events::console_err();
-        let _ = writeln!(
-            err,
-            "⚠️  Legacy default plugin records were not migrated: {error:#}"
-        );
-    }
-    let installed = store.list()?;
-    let mut err = mesh_llm_events::console_err();
-    if installed.is_empty() {
-        let _ = writeln!(err, "ℹ️  No installed plugins to check.");
-        return Ok(());
-    }
-
-    let catalog = fetch_catalog(&options).await.ok();
-    let plan = plan_plugin_upgrades(
-        &store,
-        catalog.as_ref(),
-        options.target.triple(),
+/// Run the shared plugin gate, rendering to the console: the check and
+/// repairs every host upgrade owes installed plugins (see
+/// [`mesh_llm_plugin_manager::upgrade_gate`]). `mesh-llm update` and
+/// `mesh-llm setup` (the bootstrap scripts' upgrade path) both call it.
+pub(crate) async fn check_installed_plugins_for_host(target_version: &str) -> Result<()> {
+    let mut progress = UpdatePluginProgress::default();
+    check_and_repair_installed_plugins(
         target_version,
         mesh_llm_plugin::PROTOCOL_VERSION,
-    )?;
+        &mut |line| {
+            let mut err = mesh_llm_events::console_err();
+            let _ = writeln!(err, "{line}");
+        },
+        &mut progress,
+    )
+    .await
+}
 
-    if !plan.catalog_available {
-        let _ = writeln!(
-            err,
-            "⚠️  Plugin catalog unavailable; checking installed plugins locally."
-        );
-    }
-    for check in &plan.checks {
-        if let PluginUpgradeVerdict::Unknown { reason } = &check.verdict {
-            let _ = writeln!(
-                err,
-                "⚠️  {} {}: compatibility with MeshLLM {target_version} is unknown ({reason}).",
-                check.name, check.installed_version
-            );
-        }
-    }
-    let repairs = plan.required_repairs();
-    if repairs.is_empty() {
-        let compatible = plan
-            .checks
-            .iter()
-            .filter(|check| !matches!(check.verdict, PluginUpgradeVerdict::Unknown { .. }))
-            .count();
-        let _ = writeln!(
-            err,
-            "ℹ️  Checking installed plugins: {compatible} compatible; 0 require updates."
-        );
-        if plan.has_unestablished_compatibility() {
-            bail!(
-                "Upgrade not applied: compatibility with MeshLLM {target_version} could not be \
-                 established for every installed plugin and no required repair is possible. \
-                 Retry when the plugin catalog is reachable."
-            );
-        }
-        return Ok(());
-    }
-
-    let mut blocking: Vec<String> = Vec::new();
-    // Report every plugin's state before repairing anything: each required
-    // update and each blocker is named, whatever happens next.
-    for check in &repairs {
-        match &check.verdict {
-            PluginUpgradeVerdict::Repair { to, reason } => {
-                let _ = writeln!(
-                    err,
-                    "⚠️  {} {} is incompatible with MeshLLM {target_version} ({reason}).",
-                    check.name, check.installed_version
-                );
-                let _ = writeln!(
-                    err,
-                    "ℹ️  Required plugin update: {} {} -> {to}.",
-                    check.name, check.installed_version
-                );
-            }
-            PluginUpgradeVerdict::RepairBlocked { reason } => {
-                let _ = writeln!(
-                    err,
-                    "⚠️  {} {} is incompatible with MeshLLM {target_version} ({reason}).",
-                    check.name, check.installed_version
-                );
-                blocking.push(format!("{}: {reason}", check.name));
-            }
-            _ => {}
-        }
-    }
-    // Attempt every repair once — but only when nothing already blocks the
-    // upgrade: a repair is chosen for the target host and can exclude the
-    // host that keeps running, so landing repairs the upgrade will not
-    // activate leaves those plugins stopped for no gain.
-    if blocking.is_empty() {
-        let repair_progress = &mut UpdatePluginProgress::default();
-        let repairs_outcome =
-            repair_incompatible_plugins(&plan, target_version, &options, repair_progress).await?;
+/// The gate before the new host is activated: a refusal leaves the running
+/// host in place.
+async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
+    if let Err(error) = check_installed_plugins_for_host(target_version).await {
         let mut err = mesh_llm_events::console_err();
-        for (name, outcome) in &repairs_outcome.repaired {
-            let state = if outcome.metadata.enabled {
-                "settings and data preserved"
-            } else {
-                "remains disabled"
-            };
-            let _ = writeln!(
-                err,
-                "✅ Updated {name} to {}; {state}.",
-                outcome.metadata.installed_version
-            );
-        }
-        for (name, reason) in &repairs_outcome.failed {
-            blocking.push(format!("{name}: {reason}"));
-        }
-    }
-    if !blocking.is_empty() {
-        let mut err = mesh_llm_events::console_err();
-        for blocker in &blocking {
-            let _ = writeln!(err, "❌ Required plugin repair failed: {blocker}");
-        }
         let _ = writeln!(
             err,
             "ℹ️  Upgrade not applied. MeshLLM stays at {}. Completed plugin updates remain \
@@ -259,11 +143,21 @@ async fn run_plugin_upgrade_checks(target_version: &str) -> Result<()> {
             mesh_llm_build_info::BUILD_VERSION
         );
         let _ = writeln!(err, "Retry: mesh-llm update");
-        bail!(
-            "one or more installed plugins are incompatible with MeshLLM {target_version} and could not be repaired"
-        );
+        bail!("Upgrade not applied: {error:#}");
     }
     Ok(())
+}
+
+/// Replace the host only after the plugin gate passes. The one place the
+/// order is decided, so the gate cannot be skipped by a caller reordering
+/// steps in [`run_update`].
+async fn apply_host_after_plugin_gate(
+    target_version: &str,
+    gate: impl AsyncFnOnce(&str) -> Result<()>,
+    apply: impl AsyncFnOnce() -> Result<()>,
+) -> Result<()> {
+    gate(target_version).await?;
+    apply().await
 }
 
 /// Update notices for the attended report, resolved after required repairs
@@ -328,7 +222,7 @@ impl PluginProgressReporter for UpdatePluginProgress {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_plugin_set_handoff;
+    use super::{apply_host_after_plugin_gate, validate_plugin_set_handoff};
 
     #[test]
     fn an_explicit_set_cannot_be_discarded_by_windows_installer_handoff() {
@@ -345,5 +239,41 @@ mod tests {
         );
         assert!(validate_plugin_set_handoff(None, true).is_ok());
         assert!(validate_plugin_set_handoff(Some("extra"), false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_host_is_replaced_only_after_the_plugin_gate_passes() {
+        let log = std::cell::RefCell::new(Vec::<String>::new());
+        apply_host_after_plugin_gate(
+            "0.81.0",
+            async |version| {
+                log.borrow_mut().push(format!("gate {version}"));
+                Ok(())
+            },
+            async || {
+                log.borrow_mut().push("apply".to_string());
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*log.borrow(), ["gate 0.81.0", "apply"]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_plugin_gate_leaves_the_host_unreplaced() {
+        let applied = std::cell::Cell::new(false);
+        let error = apply_host_after_plugin_gate(
+            "0.81.0",
+            async |_| anyhow::bail!("plugin lexe could not be repaired"),
+            async || {
+                applied.set(true);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("could not be repaired"));
+        assert!(!applied.get(), "host replaced despite a refused gate");
     }
 }

@@ -597,10 +597,18 @@ showing a retry command.
 
 ### Installed-plugin upgrade checks
 
-`mesh-llm update` checks **every installed plugin** against the target host
-version, whatever its set membership or origin. Auto-update and bootstrap
-installation do not yet run this repair flow; use the explicit update command
-when installed plugins need to be checked before replacing the host:
+Every path that replaces the host runs the same check and repairs on **every
+installed plugin**, against the target host version, whatever its set
+membership or origin (`mesh_llm_plugin_manager::upgrade_gate`):
+
+- `mesh-llm update` checks before replacing the host.
+- The automatic update at node start (`--auto-update`) checks after its other
+  preflights and before replacing the host. A refusal keeps the running host,
+  prints why, and the node starts on the version it has.
+- The bootstrap scripts replace the host and then run `mesh-llm setup`, which
+  checks against the host now installed, before the optional plugin phase. The
+  host is already replaced, so a refusal is reported with the retry command
+  (`mesh-llm update`) and setup continues.
 
 | Installed plugin state | Attended upgrade | Unattended upgrade |
 |---|---|---|

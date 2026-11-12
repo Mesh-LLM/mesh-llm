@@ -44,6 +44,10 @@ where
         actions.run_step(step).await.map_err(Into::into)?;
     }
     actions
+        .check_installed_plugins()
+        .await
+        .map_err(Into::into)?;
+    actions
         .handle_plugin_install(plan.plugins.clone(), prompter)
         .await
         .map_err(Into::into)?;
@@ -266,6 +270,24 @@ impl SetupActions for CliSetupActions<'_> {
                     Ok(())
                 }
             }
+        })
+    }
+
+    fn check_installed_plugins(&mut self) -> Self::PluginInstallFuture<'_> {
+        Box::pin(async move {
+            // The host is already replaced, so a failure is reported with the
+            // retry command rather than failing setup.
+            let host_version = mesh_llm_build_info::RELEASE_VERSION;
+            if let Err(error) = crate::update::check_installed_plugins_for_host(host_version).await
+            {
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(
+                    err,
+                    "⚠️  Installed plugins are not all compatible with MeshLLM {host_version}: \
+                     {error:#}. Setup continued; run `mesh-llm update` to retry."
+                );
+            }
+            Ok(())
         })
     }
 
