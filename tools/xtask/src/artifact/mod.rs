@@ -6,7 +6,6 @@
 
 mod argv;
 mod checksum;
-mod file_projection;
 pub(crate) mod tar_extract;
 mod tar_header;
 mod tar_read;
@@ -52,6 +51,6 @@ pub(crate) fn check(
         ArtifactCommand::VerifyChecksum => checksum::run(args),
         ArtifactCommand::ExtractTar => tar_extract::run(args),
         ArtifactCommand::ExtractZip => zip_extract::run(args),
-        ArtifactCommand::FileProjection => file_projection::run(args),
+        ArtifactCommand::FileProjection => authority_automation::file_projection::run(args),
     }
 }

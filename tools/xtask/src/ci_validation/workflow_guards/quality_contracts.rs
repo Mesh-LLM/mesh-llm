@@ -220,8 +220,9 @@ fn reader_component(commands: &[&str], build: usize, fixture: usize, test: usize
 /// The narrow crates are contract-tested here, unfiltered, rather than in the
 /// Rust test matrix (`CONTRACT_TESTED_CRATES`). Supervision tests keep the
 /// single-threaded harness they had inside xtask.
-const COMPONENT_TESTS: [&str; 2] = [
+const COMPONENT_TESTS: [&str; 3] = [
     "just with-lld cargo test --locked -p ci-controller",
+    "just with-lld cargo test --locked -p authority-automation",
     "just with-lld cargo test --locked -p process-supervision -- --test-threads=1",
 ];
 

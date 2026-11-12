@@ -28,6 +28,8 @@ const UNVERIFIED: &[&str] = &[
     // rename map stops listing it as a `skippy-server` successor.
     "skippy-cli",
     "xtask",
+    // Model verification moved from xtask keeps its Unix nonblocking open; Windows runtime proof is pending.
+    "authority-automation",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
 ];

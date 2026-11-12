@@ -1,21 +1,21 @@
 //! Stable order-preserving registry bytes consumed by generated-file checks.
 //! Layout, ASCII escaping, and decimal spelling are output contracts.
 
-use crate::ci_plan::document::Json;
+use ci_controller::plan::document::Json;
 use serde_json::Number;
 use std::fmt::Write;
 
 /// Layout and escaping for a consumed JSON document.
 #[derive(Clone, Copy)]
-pub(crate) struct Style {
-    pub(crate) indent: Option<usize>,
-    pub(crate) item_separator: &'static str,
-    pub(crate) key_separator: &'static str,
-    pub(crate) ensure_ascii: bool,
+pub struct Style {
+    pub indent: Option<usize>,
+    pub item_separator: &'static str,
+    pub key_separator: &'static str,
+    pub ensure_ascii: bool,
 }
 
 /// Two-space indentation with literal Unicode.
-pub(super) const PRETTY: Style = Style {
+pub const PRETTY: Style = Style {
     indent: Some(2),
     item_separator: ",",
     key_separator: ": ",
@@ -23,7 +23,7 @@ pub(super) const PRETTY: Style = Style {
 };
 
 /// Single-line JSON with spaced separators and literal Unicode.
-pub(crate) const INLINE: Style = Style {
+pub const INLINE: Style = Style {
     indent: None,
     item_separator: ", ",
     key_separator: ": ",
@@ -31,19 +31,19 @@ pub(crate) const INLINE: Style = Style {
 };
 
 /// Single-line JSON with ASCII escaping.
-pub(crate) const ASCII: Style = Style {
+pub const ASCII: Style = Style {
     ensure_ascii: true,
     ..INLINE
 };
 
 /// Compact ASCII-escaped step-output JSON.
-pub(super) const ASCII_COMPACT: Style = Style {
+pub const ASCII_COMPACT: Style = Style {
     item_separator: ",",
     key_separator: ":",
     ..ASCII
 };
 
-pub(crate) fn dumps(value: &Json, style: Style) -> String {
+pub fn dumps(value: &Json, style: Style) -> String {
     let mut out = String::new();
     write_value(&mut out, value, style, 0);
     out
