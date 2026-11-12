@@ -37,8 +37,8 @@ Subject: [PATCH 02/16] feat(skippy): realize admitted stages from live graphs
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  335 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  499 ++++++++++
- src/skippy/execution-single.cpp         |  642 ++++++++++++
+ src/skippy/execution-batch.cpp          |  506 ++++++++++
+ src/skippy/execution-single.cpp         |  661 +++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -58,12 +58,12 @@ Subject: [PATCH 02/16] feat(skippy): realize admitted stages from live graphs
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
  src/skippy/runtime_support.h            |   47 +
- src/skippy/runtime_types.h              |  183 ++++
- src/skippy/sampling.cpp                 |  602 ++++++++++++
+ src/skippy/runtime_types.h              |  187 ++++
+ src/skippy/sampling.cpp                 |  625 ++++++++++++
  src/skippy/sampling_config.cpp          |  178 ++++
- src/skippy/sampling_internal.h          |   67 ++
+ src/skippy/sampling_internal.h          |   75 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
- src/skippy/session.cpp                  |  521 ++++++++++
+ src/skippy/session.cpp                  |  524 ++++++++++
  src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   78 ++
@@ -83,7 +83,7 @@ Subject: [PATCH 02/16] feat(skippy): realize admitted stages from live graphs
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
  tests/test-batch-alloc.cpp              |   21 +
- 79 files changed, 16496 insertions(+), 407 deletions(-)
+ 79 files changed, 16560 insertions(+), 407 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -4067,10 +4067,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..2b9593e0c
+index 000000000..eead78a07
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,506 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -4434,6 +4434,13 @@ index 000000000..2b9593e0c
 +            requests, request_count, offsets, graph_inputs, frontier_storage, out_error);
 +    if (status != SKIPPY_STATUS_OK) return status;
 +
++    // A sampled row must come from the sampler that will read it.
++    for (size_t index = 0; index < request_count; ++index) {
++        if (request_logits && requests[index].sample_last) {
++            skippy_detach_kept_backend_sampling_for(requests[index].session, requests[index].sampling);
++        }
++    }
++
 +    const size_t total_tokens = offsets.back();
 +    std::vector<llama_token> tokens(total_tokens);
 +    std::vector<llama_pos> positions(total_tokens*static_cast<size_t>(n_pos_per_embd));
@@ -4572,10 +4579,10 @@ index 000000000..2b9593e0c
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..4ce3d4ba9
+index 000000000..646150f24
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,661 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -4685,6 +4692,12 @@ index 000000000..4ce3d4ba9
 +        *out_output_activation_bytes = 0;
 +    }
 +
++    if (out_predicted_token != nullptr) {
++        skippy_detach_kept_backend_sampling_for(session, sampling);
++    } else {
++        // The caller samples this row later, with sampling not known here.
++        skippy_detach_kept_backend_sampling(session);
++    }
 +    enum skippy_status status = skippy_decode_tokens(
 +            session,
 +            &token_id,
@@ -4793,6 +4806,7 @@ index 000000000..4ce3d4ba9
 +        batch.n_seq_id[i] = 1;
 +        batch.seq_id[i][0] = session->seq_id;
 +        batch.logits[i] = 1;
++        skippy_detach_kept_backend_sampling_for(session, sampling != nullptr ? sampling[i] : nullptr);
 +    }
 +
 +    const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(
@@ -4933,6 +4947,12 @@ index 000000000..4ce3d4ba9
 +        return status;
 +    }
 +
++    if (request_logits && out_predicted_token != nullptr) {
++        skippy_detach_kept_backend_sampling_for(session, sampling);
++    } else if (request_logits) {
++        // The caller samples this row later, with sampling not known here.
++        skippy_detach_kept_backend_sampling(session);
++    }
 +    const bool activation_input = skippy_is_filtered(session) && session->stage_model->config.layer_start > 0;
 +    if (activation_input) {
 +        status = skippy_decode_activation_frame(
@@ -5133,6 +5153,12 @@ index 000000000..4ce3d4ba9
 +        return status;
 +    }
 +
++    if (out_predicted_token != nullptr) {
++        skippy_detach_kept_backend_sampling_for(session, sampling);
++    } else {
++        // The caller samples this row later, with sampling not known here.
++        skippy_detach_kept_backend_sampling(session);
++    }
 +    if (skippy_is_filtered(session) && session->stage_model->config.layer_start > 0) {
 +        status = skippy_decode_activation_frame(
 +                session,
@@ -10670,10 +10696,10 @@ index 000000000..d7e991307
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..f19a25b76
+index 000000000..056382b39
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,187 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -10829,6 +10855,10 @@ index 000000000..f19a25b76
 +    bool sampling_backend_row_invalid = false;
 +    bool grammar_lazy = false;
 +    bool sampling_backend_enabled = false;
++    // Set when reset keeps the chain for the lane's next request, and cleared
++    // once a request configures sampling. Until then the chain still holds
++    // the previous request's configuration.
++    bool sampling_kept_across_reset = false;
 +    // A sampler chain may be backend-initialized at most once
 +    // (llama_sampler_chain_backend_init asserts on reuse). Once a chain is
 +    // detached -- e.g. so a sampled verify window can output every row --
@@ -10859,10 +10889,10 @@ index 000000000..f19a25b76
 +};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..6fd1240e3
+index 000000000..75197f648
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,602 @@
+@@ -0,0 +1,625 @@
 +#include "skippy/sampling.h"
 +#include "skippy/chat_sampling.h"
 +#include "skippy/errors.h"
@@ -11176,6 +11206,7 @@ index 000000000..6fd1240e3
 +    if (session == nullptr) {
 +        return;
 +    }
++    session->sampling_kept_across_reset = false;
 +    if (session->ctx != nullptr) {
 +        session->sampling_backend_row_invalid |= session->sampling_backend_enabled;
 +        llama_synchronize(session->ctx);
@@ -11315,6 +11346,7 @@ index 000000000..6fd1240e3
 +static void skippy_store_sampling_config(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling) {
++    session->sampling_kept_across_reset = false;
 +    session->sampling_config = sampling != nullptr ?
 +            *sampling : skippy_sampling_config{};
 +    session->sampling_config_valid = true;
@@ -11373,10 +11405,31 @@ index 000000000..6fd1240e3
 +    session->chat_sampling_metadata.clear();
 +    session->grammar_generated_start = 0;
 +    session->sampling_accepted_token_count = 0;
++    session->sampling_kept_across_reset = true;
 +    skippy_refresh_backend_sampling(session, &session->sampling_config);
 +    ++session->sampling_reuse_hit_count;
 +    skippy_log_sampling_cache_metrics(session, "reset-reuse");
 +    return true;
++}
++
++// A request without chat metadata builds its sampler at its first sample,
++// after the decode that produced the row. If reset kept the previous
++// request's chain on the backend, that decode runs it on the row; when the
++// request then replaces the chain, the processed row cannot be read and no
++// raw logits were copied, so sampling fails. Detach before that decode.
++void skippy_detach_kept_backend_sampling(skippy_session * session) {
++    if (session != nullptr && session->sampling_kept_across_reset &&
++            session->sampling_backend_enabled) {
++        skippy_clear_chat_sampling(session);
++    }
++}
++
++void skippy_detach_kept_backend_sampling_for(
++        skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    if (session != nullptr && !skippy_sampling_chain_is_reusable_for(session, sampling)) {
++        skippy_detach_kept_backend_sampling(session);
++    }
 +}
 +
 +static bool skippy_ensure_plain_sampling_chain(
@@ -11651,10 +11704,10 @@ index 000000000..6be5559e2
 +}
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
 new file mode 100644
-index 000000000..7bbf16016
+index 000000000..a2663a957
 --- /dev/null
 +++ b/src/skippy/sampling_internal.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,75 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -11712,6 +11765,14 @@ index 000000000..7bbf16016
 +        const char * metadata_json,
 +        uint64_t prompt_token_count);
 +bool skippy_reset_reusable_sampling(skippy_session * session);
++// Call before a decode whose output row will be sampled. Detaches a backend
++// sampler that reset kept from the lane's previous request, before this
++// request configures its own: unconditionally when the request's sampling is
++// unknown, otherwise only when it cannot reuse the kept chain.
++void skippy_detach_kept_backend_sampling(skippy_session * session);
++void skippy_detach_kept_backend_sampling_for(
++        skippy_session * session,
++        const skippy_sampling_config * sampling);
 +bool skippy_initialize_chat_sampler(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
@@ -11804,10 +11865,10 @@ index 000000000..baf83db44
 +}
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..f1de95cc5
+index 000000000..9dc0538a0
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,524 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -12012,6 +12073,9 @@ index 000000000..f1de95cc5
 +
 +    g_skippy_external_decode_session = session;
 +
++    // The caller decodes rows that this session may sample with a
++    // configuration the runtime has not seen yet.
++    skippy_detach_kept_backend_sampling(session);
 +    return skippy_success(out_error);
 +}
 +
