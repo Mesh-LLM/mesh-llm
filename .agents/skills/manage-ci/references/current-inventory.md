@@ -2011,10 +2011,27 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 ## External Python SDK source preparation
 
 The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+commit `0357f19f02cc3c2769ab46b0299af027e07049c1`; update all three together.
+That commit is the head of the SDK repository's open effort-metadata pull
+request: one commit ahead of and five behind its `main`, so it is not a released
+checkpoint. A force-push there fails admission, and the pin stays put until that
+pull request merges.
 Laya product readiness and Decisions smoke discovery query
 `/mesh/v1/models?workload_class=decision&available=true`, since compatibility
 model lists contain only LLMs. The golden and response checks remain required.
+
+The pin cannot advance to a checkpoint from SDK `main` until that checkpoint's
+bindings are regenerated against a Mesh revision whose `ModelNative` record
+matches the one this tree exports. `ModelNative` gained `thinking_efforts`
+after Mesh `efd30516fd2cd92ac132dfd7b8341d24d412ee9c`, so a checkpoint whose
+bindings were generated from that source decodes `inference_list_models()`
+short and leaves unread bytes in the bridge at runtime — model lists fail even
+though the SDK's mock-FFI tests and this repository's HTTP compatibility
+smokes stay green. Moving the pin therefore needs a single SDK commit that both
+carries the live transcription wrapper and regenerates its bindings against a
+current Mesh native revision. Until one exists, the Python
+live-transcription guide stays marked draft and the SDK's own tests do not
+qualify the bridge.
 
 The current checkpoint includes typed Mesh model discovery, OCR uploads,
 membership/live-session controls, full node configuration and native-runtime
