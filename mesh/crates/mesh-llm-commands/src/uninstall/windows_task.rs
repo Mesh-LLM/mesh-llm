@@ -144,6 +144,91 @@ fn stop_recorded_service_host(record: &Path, binary_name: &str, outcome: &mut Un
     );
 }
 
+/// What `mesh-llm stop` did about the Windows background service.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BackgroundServiceStop {
+    /// No service host is recorded, or the recorded one no longer runs.
+    NotRunning,
+    /// The service host ended, and its node with it.
+    Ended,
+    /// The service host still runs; what ending it reported.
+    StillRunning(Vec<String>),
+}
+
+/// For `mesh-llm stop` on Windows. The service host starts `mesh-llm serve`
+/// again after any failed exit, and `stop` can only force-end a node that has
+/// no console window, so ending the node alone does not stop the service.
+/// End the scheduled task instead, then the host itself if it outlived its
+/// task, as uninstall does; the host's job takes the node down with it. The
+/// task stays registered and starts again at the next logon.
+pub fn end_background_service() -> BackgroundServiceStop {
+    // Only Windows installs this service; `stop` calls this on every platform.
+    if !cfg!(windows) {
+        return BackgroundServiceStop::NotRunning;
+    }
+    let Some(local_data_root) = dirs::data_local_dir() else {
+        return BackgroundServiceStop::NotRunning;
+    };
+    let record = windows_service_log_dir(&local_data_root).join(WINDOWS_SERVICE_HOST_RECORD);
+    let binary_name = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| SERVICE_NAME.to_string());
+    end_recorded_service(&record, &binary_name, || {
+        let _ = Command::new("schtasks")
+            .args(["/End", "/TN", SERVICE_NAME])
+            .output();
+    })
+}
+
+fn end_recorded_service(
+    record: &Path,
+    binary_name: &str,
+    end_task: impl FnOnce(),
+) -> BackgroundServiceStop {
+    let Some((pid, started_at_unix)) = fs::read_to_string(record)
+        .ok()
+        .and_then(|record| parse_service_host_record(&record))
+    else {
+        return BackgroundServiceStop::NotRunning;
+    };
+    if !mesh_llm_system::process::validate_pid_matches(pid, binary_name, started_at_unix) {
+        return BackgroundServiceStop::NotRunning;
+    }
+    end_task();
+    if ends_within_five_seconds(pid) {
+        return BackgroundServiceStop::Ended;
+    }
+    let mut outcome = UninstallOutcome {
+        dry_run: false,
+        removed: Vec::new(),
+        scheduled_removal: Vec::new(),
+        already_absent: Vec::new(),
+        warnings: Vec::new(),
+    };
+    stop_recorded_service_host(record, binary_name, &mut outcome);
+    if ends_within_five_seconds(pid) {
+        BackgroundServiceStop::Ended
+    } else {
+        BackgroundServiceStop::StillRunning(outcome.warnings)
+    }
+}
+
+fn ends_within_five_seconds(pid: u32) -> bool {
+    for _ in 0..20 {
+        if mesh_llm_system::process::process_liveness(pid)
+            == mesh_llm_system::process::Liveness::Dead
+        {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +387,62 @@ mod tests {
 
         stop_recorded_service_host(&record, "PING", &mut outcome);
 
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "a reused id must not be killed"
+        );
+        child.kill().expect("kill ping");
+        let _ = child.wait();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_ends_a_running_service_host_through_its_task_then_directly() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let record = temp.path().join("service-host.pid");
+        let (mut child, started_at_unix) = long_running_child();
+        fs::write(
+            &record,
+            crate::setup::service_host::render_service_host_record(child.id(), started_at_unix),
+        )
+        .expect("write record");
+        let mut task_ended = 0;
+
+        // The test never touches a real task: ending it does nothing here, so
+        // the host outlives it and has to be ended directly.
+        let stop = end_recorded_service(&record, "PING", || task_ended += 1);
+
+        assert_eq!(stop, BackgroundServiceStop::Ended);
+        assert_eq!(task_ended, 1);
+        let status = child.wait().expect("wait for ping");
+        assert!(!status.success(), "ping was killed, not finished: {status}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_leaves_the_task_alone_without_a_running_recorded_host() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let record = temp.path().join("service-host.pid");
+        let mut task_ended = 0;
+        assert_eq!(
+            end_recorded_service(&record, "PING", || task_ended += 1),
+            BackgroundServiceStop::NotRunning
+        );
+
+        let (mut child, started_at_unix) = long_running_child();
+        fs::write(
+            &record,
+            crate::setup::service_host::render_service_host_record(
+                child.id(),
+                started_at_unix - 3600,
+            ),
+        )
+        .expect("write record");
+        assert_eq!(
+            end_recorded_service(&record, "PING", || task_ended += 1),
+            BackgroundServiceStop::NotRunning
+        );
+        assert_eq!(task_ended, 0);
         assert!(
             child.try_wait().expect("try_wait").is_none(),
             "a reused id must not be killed"
