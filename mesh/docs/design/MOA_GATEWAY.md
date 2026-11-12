@@ -318,14 +318,18 @@ With the plugin registered:
    `mesh` is a plugin-declared virtual model and hands the request to the
    plugin with a snapshot of the callable candidate models. Requests that set
    `x-mesh-target` / `x-mesh-exclude` are rejected with 409.
-2. The plugin overrides only eligible non-streaming text chat. Streaming and
-   media requests keep core routing.
+2. Image and audio requests are answered by one capable model; only text chat
+   can convene a committee. Streaming does not bypass the plugin: for a
+   `stream: true` request the host commits the response head up front, drips
+   the plugin's progress lines into the reasoning channel while the committee
+   works, then streams the answer (`virtual_model/progress.rs`).
 3. With one eligible model, or when every eligible model is under 10B
    parameters or of unknown size, the plugin answers from one model and sets
    no `x-moa-*` headers.
 4. Otherwise it builds a `GatewayConfig` from the candidates and
-   `handle_turn()` runs the stateless MoA pipeline; the response carries
-   `x-moa-*` headers.
+   `handle_turn()` runs the stateless MoA pipeline. A non-streaming response
+   carries `x-moa-*` headers; a streaming one cannot, because its headers are
+   sent before the committee finishes.
 5. An empty candidate set returns 503.
 
 See [plugins/virtual-models.md](../plugins/virtual-models.md) for the
@@ -349,7 +353,7 @@ through unchanged.
 
 | System | What it does | Relationship to MoA |
 |--------|-------------|---------------------|
-| `auto` / `mesh` | Same automatic directive | Core single-model routing by default; with `mesh-moa` enabled, eligible non-streaming text chat uses MoA |
+| `auto` / `mesh` | Same automatic directive | Core single-model routing by default; with `mesh-moa` enabled, eligible text chat (streaming or not) uses MoA |
 | Hooks (`virtual_llm.rs`) | Reactive during inference (entropy/drift/image) | MoA is proactive before inference |
 | Consult (`consult.rs`) | Single peer consultation over QUIC | MoA does parallel multi-peer |
 
@@ -432,14 +436,15 @@ Expected: `tool_calls` with `read_file({"path":"README.md"})`. A request with
 `tools` keeps only tool-capable candidates when any advertise tool support, so
 this test needs ≥2 tool-capable models (one ≥10B) to convene a committee.
 
-**Streaming** (uses core single-model routing even with the plugin on; no
-`x-moa-*` headers expected):
+**Streaming** (with the plugin on and an eligible pool this convenes the
+committee too; `x-moa-*` headers only reach non-streaming callers):
 ```bash
 curl -s http://localhost:9337/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"mesh","messages":[{"role":"user","content":"What is 7*8?"}],"max_tokens":16,"stream":true}'
 ```
-Expected: SSE chunks with `data: {...}` lines, final `data: [DONE]`.
+Expected: SSE chunks starting with progress lines in the reasoning channel
+while the committee works, then the answer, then `data: [DONE]`.
 
 **Reasoning:**
 ```bash
@@ -452,7 +457,7 @@ Expected: Correct "No" with valid syllogistic reasoning.
 ### Agent integration test
 
 ```bash
-# Requires [[plugin]] name = "mesh-moa"; streaming requests use core routing
+# Requires [[plugin]] name = "mesh-moa"; streaming requests also use the committee
 # Goose
 GOOSE_PROVIDER=mesh GOOSE_MODEL=mesh goose run
 
