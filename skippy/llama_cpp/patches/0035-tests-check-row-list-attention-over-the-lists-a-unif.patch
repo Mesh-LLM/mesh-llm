@@ -1,4 +1,4 @@
-From c146911d8fb5b122da53d74ec46b295ae70c7e79 Mon Sep 17 00:00:00 2001
+From d21f04c41831e417d9d2e805ae225500882892d7 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Thu, 12 Nov 2026 15:55:33 +1100
 Subject: [PATCH 35/35] tests: check row-list attention over the lists a
@@ -31,10 +31,10 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  2 files changed, 113 insertions(+), 5 deletions(-)
 
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 452c0dd8f..b1a34f1d2 100644
+index 97e08f3ec..133ba2bf3 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -393,6 +393,11 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
+@@ -394,6 +394,11 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
  endif()
  
  llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)

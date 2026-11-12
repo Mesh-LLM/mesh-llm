@@ -1,7 +1,7 @@
-From 24b6a305317dc5baaffd3885685e6d2cddb27f2a Mon Sep 17 00:00:00 2001
+From 15f509711adba0dc9db0af0d098fd05cf5ce3914 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Thu, 12 Nov 2026 12:25:11 +1100
-Subject: [PATCH 34/34] skippy: sample a wave through a configurable executor
+Subject: [PATCH 34/35] skippy: sample a wave through a configurable executor
 
 Concurrent sampling started one thread per request for every decode step and
 joined them before returning: a thread create and join per token per request,
@@ -34,9 +34,9 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  src/skippy/sample_executor.h    |  50 ++++++++++
  src/skippy/task_pool.cpp        |  97 ++++++++++++++++++
  src/skippy/task_pool.h          |  59 +++++++++++
- tests/CMakeLists.txt            |   1 +
+ tests/CMakeLists.txt            |   2 +
  tests/test-skippy-task-pool.cpp | 171 ++++++++++++++++++++++++++++++++
- 10 files changed, 415 insertions(+), 17 deletions(-)
+ 10 files changed, 416 insertions(+), 17 deletions(-)
  create mode 100644 src/skippy/sample_executor.cpp
  create mode 100644 src/skippy/sample_executor.h
  create mode 100644 src/skippy/task_pool.cpp
@@ -397,27 +397,28 @@ index 000000000..e33523ea7
 +    std::vector<std::thread> threads; // grown by run() under `turn`
 +};
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 595a84a26..452c0dd8f 100644
+index 595a84a26..97e08f3ec 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -195,6 +195,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -195,6 +195,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
      llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
      llama_build_and_test(test-skippy-kv-rows-aligned.cpp)
      llama_build_and_test(test-skippy-kv-place-together.cpp)
 +    llama_build_and_test(test-skippy-task-pool.cpp)
++    target_include_directories(test-skippy-task-pool PRIVATE ${PROJECT_SOURCE_DIR}/src)
      llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
 diff --git a/tests/test-skippy-task-pool.cpp b/tests/test-skippy-task-pool.cpp
 new file mode 100644
-index 000000000..6bb6b040f
+index 000000000..e9b9284e0
 --- /dev/null
 +++ b/tests/test-skippy-task-pool.cpp
 @@ -0,0 +1,171 @@
 +// skippy_task_pool and the sampling executors over it: every index runs once, on a bounded
 +// set of threads that later runs reuse, and a task's exception reaches the caller.
-+#include "../src/skippy/sample_executor.h"
-+#include "../src/skippy/task_pool.h"
++#include "skippy/sample_executor.h"
++#include "skippy/task_pool.h"
 +
 +#include <algorithm>
 +#include <atomic>
