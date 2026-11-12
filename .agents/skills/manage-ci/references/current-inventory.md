@@ -180,11 +180,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`nightly-stability.yml` calls the fixed GitHub-hosted
+`nightly-stability.yml` is manual-only while daily execution is paused pending
+setup qualification. It calls the fixed GitHub-hosted
 `nightly-stability-run.yml`; the reusable run executes both the general
 stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
 both evidence sets, and fails after both have had a chance to run.
-`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted schedule
+`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted manual workflow
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
@@ -1663,9 +1664,6 @@ native `trajectory-reader` library and its `prompt_command` integration target. 
 `scripts/` ownership pattern; deployment assets live under `mesh/deploy/`.
 Protected catalogs and required checks are unchanged.
 
-The dormant `docker-precheck.yml` reusable validates the relocated product
-crate/script COPY roots and Mesh entrypoint path. It remains unreferenced;
-this repair does not add a workflow caller or change required checks.
 versioned local dependencies, and resolves each versioned sidecar from the same
 source layout, so a relocated-only checkout can propagate a version without a
 root `website/`, `sdk/` or `docs/` tree. The website recipes consume the
@@ -1926,7 +1924,12 @@ and Windows X64. After checking out the protected default branch, it verifies
 the requested commit is an ancestor before selecting and compiling that source.
 Topic-scoped immutable artifacts retain for one day; unscoped release artifacts
 retain their existing name and 90-day policy. The upload action initializes the
-macOS automation environment for protected-clean producers. Native artifact IDs,
+macOS automation environment for protected-clean producers. Protected-clean
+producers build only the narrow `authority-automation` executable
+(`prepare-automation` `tool: authority-automation`, or `just
+authority-automation-bootstrap` on the Linux image fallback) and stage it as the
+unchanged `xtask` member with `source.txt` and `SHA256SUMS`; `product-clean` and
+`release-prepared` keep building full xtask. Native artifact IDs,
 source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
@@ -1996,12 +1999,13 @@ Windows unit platform-check jobs, Linux SDK and product smoke consumers (they re
 workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, `tools/trajectory-reader/**`,
+`.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
+`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/ci-controller/**` and `tools/process-supervision/**` because xtask
-compiles both libraries. The image
+`tools/authority-automation/**`, `tools/ci-controller/**`, and
+`tools/process-supervision/**` because xtask compiles those libraries. Only the
+default `tool: xtask` restores or saves that entry. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes
@@ -2011,10 +2015,27 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 ## External Python SDK source preparation
 
 The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+commit `0357f19f02cc3c2769ab46b0299af027e07049c1`; update all three together.
+That commit is the head of the SDK repository's open effort-metadata pull
+request: one commit ahead of and five behind its `main`, so it is not a released
+checkpoint. A force-push there fails admission, and the pin stays put until that
+pull request merges.
 Laya product readiness and Decisions smoke discovery query
 `/mesh/v1/models?workload_class=decision&available=true`, since compatibility
 model lists contain only LLMs. The golden and response checks remain required.
+
+The pin cannot advance to a checkpoint from SDK `main` until that checkpoint's
+bindings are regenerated against a Mesh revision whose `ModelNative` record
+matches the one this tree exports. `ModelNative` gained `thinking_efforts`
+after Mesh `efd30516fd2cd92ac132dfd7b8341d24d412ee9c`, so a checkpoint whose
+bindings were generated from that source decodes `inference_list_models()`
+short and leaves unread bytes in the bridge at runtime — model lists fail even
+though the SDK's mock-FFI tests and this repository's HTTP compatibility
+smokes stay green. Moving the pin therefore needs a single SDK commit that both
+carries the live transcription wrapper and regenerates its bindings against a
+current Mesh native revision. Until one exists, the Python
+live-transcription guide stays marked draft and the SDK's own tests do not
+qualify the bridge.
 
 The current checkpoint includes typed Mesh model discovery, OCR uploads,
 membership/live-session controls, full node configuration and native-runtime

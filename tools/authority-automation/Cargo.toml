@@ -1,0 +1,19 @@
+[package]
+name = "authority-automation"
+version.workspace = true
+edition = "2024"
+publish = false
+description = "Narrow automation executable published by the protected authority producers: test-model resolution, authority audits, and file digests"
+
+[dependencies]
+ci-controller = { path = "../ci-controller" }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+sha2 = "0.11"
+hex = "0.4"
+url = "=2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

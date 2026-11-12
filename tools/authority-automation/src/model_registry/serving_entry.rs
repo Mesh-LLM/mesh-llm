@@ -1,6 +1,6 @@
 //! Filename policy shared by registry selection and the family battery artifact owner.
 //! This classifies serving entry names; it does not inspect model bytes or caches.
-pub(crate) fn rank(name: &str) -> Option<u8> {
+pub fn rank(name: &str) -> Option<u8> {
     if name.contains(['\n', '\r', '\0']) {
         return None;
     }

@@ -835,6 +835,14 @@ pub(super) fn message_content_to_generation_text(
                     }
                     continue;
                 }
+                // A document form that only a request transform can use. It
+                // was rejected before transforms existed; dropping it here
+                // would answer without the attachment.
+                if part.requires_transform() {
+                    return Err(InferenceError::unsupported(
+                        "document attachments need a request transform plugin to convert them to text",
+                    ));
+                }
                 if is_media_part(part) && media.len() >= MAX_MEDIA_PARTS_PER_REQUEST {
                     return Err(InferenceError::invalid_request(format!(
                         "a request may include at most {MAX_MEDIA_PARTS_PER_REQUEST} media parts"

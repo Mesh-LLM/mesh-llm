@@ -116,7 +116,7 @@ mesh-llm serve --auto --headless
 | Run a big model with splits | `mesh-llm serve --model hf://meshllm/<repo>@<rev> --split` | [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) |
 | Run DeepSeek V4 and other ds4 models with DwarfStar | `mesh-llm plugins install Mesh-LLM/ds4-plugin` | [Setup and configuration](mesh/docs/plugins/dwarfstar.md) |
 | Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
-| Fan out one prompt to every model in the mesh | `curl ... -d '{"model":"mesh", ...}'` | [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md) |
+| Automatically select a compatible model | `curl ... -d '{"model":"mesh", ...}'` | [docs/plugins/virtual-models.md](mesh/docs/plugins/virtual-models.md) |
 | Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](mesh/docs/AGENTS.md) |
 | Build or contribute | `just build` | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
@@ -181,31 +181,16 @@ must not be symlinks. If you downloaded a model through
 Hugging Face, resolve the cache symlink before passing the path:
 `realpath <path-from-hf-cache>`.
 
-## Mixture-of-Agents (`model: "mesh"`) — experimental
+## Automatic model selection (`model: "mesh"`)
 
-> ⚠️ **Experimental.** The MoA gateway is new in this release. Behavior,
-> routing heuristics, error shapes, and tuning knobs may change between
-> versions while we tune it. Treat `model: "mesh"` as a preview feature
-> rather than a stable production path; use a specific model id when you
-> need stable semantics.
-
-Send a request with `"model": "mesh"` and the proxy fans it out to every
-model available in the mesh in parallel, arbitrates their responses with
-deterministic logic, and returns one OpenAI-compatible reply. The arbiter
-runs in code (not as another model call) and only escalates to a reducer
-LLM on genuine conflict. Tool calls flow through the full pipeline.
-
-```bash
-curl http://localhost:9337/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"mesh","messages":[{"role":"user","content":"What is the capital of Japan?"}]}'
-```
-
-Requires at least two distinct models in the mesh. See
-[docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md) for the
-architecture, arbitration rules, and tuning knobs.
-
-
+Send `model: "mesh"` (or the compatibility alias `auto`) to select one
+capability-compatible model. Streaming and non-streaming requests both use
+core single-model routing by default. The Mixture-of-Agents committee
+(`crates/mesh-llm-moa-plugin`) ships in the binary but is **off by default**;
+enable it with a `[[plugin]]` entry named `mesh-moa` in `~/.mesh-llm/config.toml`, and
+non-streaming text chat to `mesh` is then answered by the committee instead
+(see [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md)). Any
+installed virtual-model plugin can override `mesh` the same way.
 
 ## Supported model families
 

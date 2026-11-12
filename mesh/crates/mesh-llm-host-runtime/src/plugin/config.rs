@@ -3,7 +3,7 @@ use super::installed::{
     configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
-use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary};
+use super::{BLOBSTORE_PLUGIN_ID, MOA_PLUGIN_ID, PluginStartupOptions, PluginSummary};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -346,6 +346,7 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
+    let mut moa_enabled = false;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
@@ -354,6 +355,19 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         if entry.name == BLOBSTORE_PLUGIN_ID {
             ensure_builtin_entry_only_toggles_enabled(entry)?;
             blobstore_enabled = enabled;
+            continue;
+        }
+        if entry.name == MOA_PLUGIN_ID {
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
+            // The committee runs with the host's own grants; bindings here
+            // would be dropped without effect, so refuse them.
+            if !entry.operation_bindings.is_empty() {
+                bail!(
+                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
+                    entry.name
+                );
+            }
+            moa_enabled = enabled;
             continue;
         }
         if !enabled {
@@ -372,6 +386,14 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
 
     if blobstore_enabled {
         externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID, &[])?);
+    }
+    if moa_enabled {
+        // The Mixture-of-Agents committee is compiled in but off by default:
+        // `model: "mesh"` stays a single-model directive unless the operator
+        // lists this entry. The runtime attaches the in-process runner.
+        let mut spec = in_process_builtin_spec(MOA_PLUGIN_ID);
+        spec.startup.optional = false;
+        externals.push(spec);
     }
     for spec in &mut externals {
         let models = config

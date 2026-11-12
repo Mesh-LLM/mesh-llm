@@ -1106,6 +1106,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             compute_busy_nanos: 0,
             compute_operations: 0,
             compute_decode_tokens: 0,
+            compute_verify_tokens: 0,
             dflash_target_layers: None,
             dflash_context_window: None,
             dflash_feature_encodings: Vec::new(),

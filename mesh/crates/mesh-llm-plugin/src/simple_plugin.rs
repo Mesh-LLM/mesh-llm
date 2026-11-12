@@ -36,6 +36,7 @@ pub struct SimplePlugin {
     metadata: PluginMetadata,
     operation_router: Option<ToolRouter>,
     openai_exchange_handler: Option<crate::openai_exchange::OpenAiExchangeHandler>,
+    request_transform_handler: Option<crate::request_transform::RequestTransformHandler>,
     virtual_model_router: Option<VirtualModelRouter>,
     prompt_router: Option<PromptRouter>,
     resource_router: Option<ResourceRouter>,
@@ -62,6 +63,7 @@ impl SimplePlugin {
             metadata,
             operation_router: None,
             openai_exchange_handler: None,
+            request_transform_handler: None,
             virtual_model_router: None,
             prompt_router: None,
             resource_router: None,
@@ -110,6 +112,22 @@ impl SimplePlugin {
             + 'static,
     {
         self.openai_exchange_handler = Some(Arc::new(handler));
+        self
+    }
+
+    /// Rewrite inference requests at ingress. The manifest must also declare
+    /// [`crate::request_transform::request_transform`].
+    pub fn with_request_transform<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(
+                crate::request_transform::RequestTransformInput,
+                &'a mut PluginContext<'ctx>,
+            ) -> crate::request_transform::RequestTransformFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.request_transform_handler = Some(Arc::new(handler));
         self
     }
 
@@ -419,6 +437,17 @@ impl Plugin for SimplePlugin {
                 .map_err(|e| PluginError::invalid_request(e.to_string()))?,
             is_error: false,
         }))
+    }
+
+    async fn transform_request(
+        &mut self,
+        input: crate::request_transform::RequestTransformInput,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<crate::request_transform::RequestTransformOutput>> {
+        match &self.request_transform_handler {
+            Some(handler) => Ok(Some(handler(input, context).await?)),
+            None => Ok(None),
+        }
     }
 
     async fn invoke_virtual_model(

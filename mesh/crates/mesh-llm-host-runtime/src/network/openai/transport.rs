@@ -26,9 +26,8 @@ pub use super::request_parse::{
     rewrite_model_field, rewrite_public_model_alias,
 };
 pub(crate) use super::response::{
-    PeerCapsuleIdSink, PipelineCapsuleNonce, PipelineProxyResult, ServedByNodeIdSink,
-    append_safe_header, is_valid_header_name, pipeline_proxy_local, send_400_observed,
-    send_409_observed, send_503_observed, send_error_observed,
+    PeerCapsuleIdSink, ServedByNodeIdSink, append_safe_header, is_valid_header_name,
+    send_400_observed, send_409_observed, send_503_observed, send_error_observed,
     send_json_with_status_and_headers_observed, send_model_not_ready_observed,
 };
 pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
@@ -44,6 +43,7 @@ use super::routing_rank::order_remote_hosts_by_context;
 use super::routing_rank::{
     cached_auto_model_satisfies_media_requirements, move_target_first, rank_remote_hosts_by_context,
 };
+use crate::network::router::PlacementWeight;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 
@@ -302,6 +302,10 @@ struct MeshRequestPlan {
     /// Leading run of `target_hosts` whose throughput rank ties with the best
     /// one; reservation spreading is confined to this run.
     equivalent_hosts: usize,
+    /// Capacity and RTT per host for the two-choice pick of new sessions.
+    placements: std::collections::HashMap<iroh::EndpointId, PlacementWeight>,
+    /// Hosts that accept work only as spillover capacity.
+    deprioritized: std::collections::HashSet<iroh::EndpointId>,
     affinity_applied: bool,
 }
 
@@ -412,6 +416,7 @@ pub async fn handle_mesh_request(
     let mut request = match read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
+        super::request_parse::RequestTransforms::Apply,
     )
     .await
     {
@@ -444,15 +449,21 @@ pub async fn handle_mesh_request(
     };
 
     // Manifest-declared virtual models run through their owning plugin.
-    // Tokenization remains a direct capability RPC.
-    let tcp_stream = match super::virtual_model::route_virtual_model_or_passthrough(
-        &node,
-        tcp_stream,
-        &mut request,
-        lifecycle.route_observer(),
-    )
-    .await
-    {
+    // Tokenization remains a direct capability RPC. A plugin's own nested
+    // single-model call (one-use capability) must not re-enter the plugin;
+    // the bootstrap proxy serves the same port before the full API proxy.
+    let tcp_stream = if super::nested_inference::consume(request.request_id) {
+        Ok(tcp_stream)
+    } else {
+        super::virtual_model::route_virtual_model_or_passthrough(
+            &node,
+            tcp_stream,
+            &mut request,
+            lifecycle.route_observer(),
+        )
+        .await
+    };
+    let tcp_stream = match tcp_stream {
         Ok(stream) => stream,
         Err(outcome) => {
             // A virtual-model plugin handled the request and consumed the
@@ -569,6 +580,7 @@ async fn build_mesh_request_plan(
     }
     rewrite_effective_model(request, effective_model.as_deref());
     if is_auto_request {
+        request.automatic_route = true;
         inject_skippy_hooks_flag(&mut request.raw, true);
     }
     if track_demand && let Some(name) = effective_model.as_deref() {
@@ -609,7 +621,7 @@ async fn build_mesh_request_plan(
         affinity,
         effective_model.as_deref().unwrap_or_default(),
     );
-    let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
+    let (target_hosts, equivalent_hosts, placements) = order_mesh_target_hosts(
         node,
         effective_model.as_deref(),
         required_tokens,
@@ -623,6 +635,8 @@ async fn build_mesh_request_plan(
         auto_session_key,
         target_hosts,
         equivalent_hosts,
+        placements,
+        deprioritized: node.deprioritized_peer_ids().await,
         affinity_applied: prepared.affinity_applied,
     })
 }
@@ -672,7 +686,11 @@ async fn order_mesh_target_hosts(
     prepared: &mut PreparedTargets,
     affinity: &AffinityRouter,
     request_cost: mesh_llm_routing::request_cost::RequestCostInput,
-) -> (Vec<iroh::EndpointId>, usize) {
+) -> (
+    Vec<iroh::EndpointId>,
+    usize,
+    std::collections::HashMap<iroh::EndpointId, PlacementWeight>,
+) {
     let target_hosts: Vec<iroh::EndpointId> = prepared
         .ordered
         .iter()
@@ -683,10 +701,11 @@ async fn order_mesh_target_hosts(
         .collect();
     let Some(name) = effective_model else {
         let hosts_len = target_hosts.len();
-        return (target_hosts, hosts_len);
+        return (target_hosts, hosts_len, Default::default());
     };
     let ranked = rank_remote_hosts_by_context(node, name, required_tokens, &target_hosts).await;
     let equivalent_hosts = ranked.equivalent_prefix;
+    let placements = ranked.placements;
     let mut ordered = ranked.ordered;
     if affinity.prefix_enabled()
         && let Some(prefix_hash) = prepared.prefix_hash
@@ -709,7 +728,7 @@ async fn order_mesh_target_hosts(
             move_target_first(&mut ordered, cache_host);
         }
     }
-    (ordered, equivalent_hosts)
+    (ordered, equivalent_hosts, placements)
 }
 
 async fn handle_mesh_request_failure(
@@ -882,14 +901,32 @@ fn reserve_mesh_request_target(
             .copied()
             .map(election::InferenceTarget::Remote)
             .collect::<Vec<_>>();
-        let preferred = candidates.first()?;
-        let (selected, reservation) = affinity.reserve_route(
-            model,
-            &candidates,
-            plan.equivalent_hosts,
-            preferred,
-            plan.affinity_applied,
-        )?;
+        // Affinity pins its host; so does the two-choice draw, which already
+        // weighed load per unit of capacity and reserves its own pick. Neither
+        // is re-spread by the reservation's raw in-flight scan.
+        let (selected, reservation) = if plan.affinity_applied {
+            let preferred = candidates.first()?.clone();
+            affinity.reserve_route(model, &candidates, plan.equivalent_hosts, &preferred, true)?
+        } else {
+            // New session: two-choice draw weighted by capacity × locality,
+            // fewer local in-flight wins; see
+            // `RoutingReservations::reserve_two_choice`.
+            affinity.reserve_two_choice_target(
+                model,
+                &candidates,
+                |target| {
+                    matches!(target, election::InferenceTarget::Remote(host) if plan.deprioritized.contains(host))
+                },
+                |target| match target {
+                    election::InferenceTarget::Remote(host) => plan
+                        .placements
+                        .get(host)
+                        .copied()
+                        .unwrap_or_else(PlacementWeight::unmeasured),
+                    _ => PlacementWeight::unmeasured(),
+                },
+            )?
+        };
         if let election::InferenceTarget::Remote(selected_host) = selected {
             move_target_first(&mut target_hosts, &selected_host);
         }
@@ -957,8 +994,10 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
             (!(200..400).contains(status_code)).then_some("upstream_status"),
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
-        RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => (None, Some("unavailable")),
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code, cause } => {
@@ -1038,12 +1077,16 @@ fn handle_mesh_attempt_result(
             })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
+        RouteAttemptResult::RetryableShedding { .. } => MeshAttemptDisposition::Continue,
         RouteAttemptResult::RetryableGateUnsatisfied => handle_retryable_gate_unsatisfied(context),
         RouteAttemptResult::RetryableResponseQuality(failure) => {
             handle_retryable_mesh_response_quality(context, failure)
         }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
-        RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
+            handle_retryable_mesh_unavailable(context)
+        }
         RouteAttemptResult::CommittedStreamFailure { .. } => {
             // Terminal once committed, and a failed request, not a success.
             context.node.record_routed_request(
@@ -1116,10 +1159,12 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
-        | RouteAttemptResult::RetryableUnavailable => {
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             crate::logging::TerminalOutcome::Failed("mesh_route_unavailable".into())
         }
     }
@@ -1305,7 +1350,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let body_json = request.body_json.as_ref().unwrap_or(&empty_body);
     let media = workload_routing::request_media(&request.client_path, request.body_json.as_ref());
     let with_caps =
-        workload_routing::routing_candidates(node, served, &request.client_path, descriptors);
+        workload_routing::routing_candidates(node, served, &request.client_path, descriptors).await;
     if with_caps.is_empty()
         && (workload_routing::request_workload_class(&request.client_path).is_some()
             || workload_routing::is_system_one_path(&request.client_path))
@@ -1347,9 +1392,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let picked = router::pick_model_classified(&cl, &available).map(str::to_string);
     if let Some(name) = picked.as_deref() {
         tracing::info!(
-            "router: {:?}/{:?} tools={} media={} → {name}",
-            cl.category,
-            cl.complexity,
+            "router: tools={} media={} → {name}",
             cl.needs_tools,
             cl.has_media_inputs
         );
@@ -1716,9 +1759,11 @@ pub async fn route_to_target(
             response_outcome(504, result)
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
-        | RouteAttemptResult::RetryableUnavailable => {
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             node.record_routed_request(
                 model,
                 1,
@@ -1839,9 +1884,11 @@ pub async fn route_http_endpoint_request(
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
-        | RouteAttemptResult::RetryableUnavailable => {
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             node.record_routed_request(
                 model,
                 1,

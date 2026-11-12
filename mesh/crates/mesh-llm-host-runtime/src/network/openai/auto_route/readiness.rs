@@ -20,6 +20,9 @@ pub(crate) async fn ready_models<'a>(
     let mut ready = Vec::new();
     for candidate in available {
         let model = candidate.name;
+        if node.model_unavailable_due_to_channels(model).await {
+            continue;
+        }
         let candidates = match targets {
             Some(targets) => {
                 workload_routing::ingress_candidates(node, model, &request.client_path, targets)

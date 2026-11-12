@@ -129,6 +129,7 @@
     ],
     "just/ci.just": [
       "agentic-trajectory-reader-contracts",
+      "authority-automation-bootstrap",
       "automation-bootstrap",
       "automation-run",
       "ci-automation-contracts",

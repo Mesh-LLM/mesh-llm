@@ -73,6 +73,7 @@ async fn missing_local_model_response_with_targets(
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
     let ctx = IngressRouteContext {
         node,
@@ -80,6 +81,7 @@ async fn missing_local_model_response_with_targets(
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: None,
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -160,6 +162,7 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: None,
     };
     // Untargeted, and with `x-mesh-target` naming this node. The backend

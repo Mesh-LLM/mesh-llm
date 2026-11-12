@@ -1,15 +1,11 @@
 //! argparse-compatible diagnostics for the two legacy entry points: the
 //! `<prog>: error:` prefix and the quoted value of an ignored flag argument.
 
-use crate::repository::check_args::{Grammar, ParsedArgs};
-use crate::repository::check_report::CheckReport;
-use crate::repository::text::repr;
+use ci_controller::repository::check_args::{Grammar, ParsedArgs};
+use ci_controller::repository::check_report::CheckReport;
+use ci_controller::repository::text::repr;
 
-pub(super) fn parse(
-    grammar: &Grammar,
-    program: &str,
-    args: &[String],
-) -> Result<ParsedArgs, CheckReport> {
+pub fn parse(grammar: &Grammar, program: &str, args: &[String]) -> Result<ParsedArgs, CheckReport> {
     let flag_value = args.iter().find_map(|arg| {
         let (name, value) = arg.split_once('=')?;
         grammar.flags.contains(&name).then_some((name, value))
@@ -23,7 +19,7 @@ pub(super) fn parse(
         .map_err(|report| with_program(report, program))
 }
 
-pub(super) fn usage(grammar: &Grammar, program: &str, message: &str) -> CheckReport {
+pub fn usage(grammar: &Grammar, program: &str, message: &str) -> CheckReport {
     with_program(grammar.error(message), program)
 }
 

@@ -231,7 +231,6 @@ pub(super) fn reusable(workflows: &BTreeMap<String, Node>) -> Result<(), String>
             if (name.starts_with("ci-")
                 || name.starts_with("main_")
                 || name.starts_with("pr_")
-                || name == "docker-precheck.yml"
                 || name == "static-abi-artifact.yml")
                 && let Some(Node::Seq(steps)) = job.get("steps")
             {

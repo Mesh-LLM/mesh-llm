@@ -1,6 +1,7 @@
 mod action_pins;
 mod authority_delivery_body;
 mod authority_sources;
+mod automation_tool;
 mod build_acceleration;
 mod cache_authority;
 mod cache_boundaries;
@@ -46,6 +47,7 @@ use std::path::Path;
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
     build_acceleration::check(root)?;
+    automation_tool::check(root)?;
     windows_build_paths::check(root)?;
     windows_skippy_probes::check(root)?;
     compute_changes_budget::check(root)?;
