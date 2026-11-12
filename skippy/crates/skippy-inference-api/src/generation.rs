@@ -9,8 +9,8 @@ pub mod response;
 pub(crate) mod validation;
 
 pub use content::{
-    GenerationMessage, MessageContent, MessageContentPart, ensure_tool_call_ids,
-    message_content_to_text, messages_to_plain_prompt,
+    GenerationMessage, MessageContent, MessageContentPart, REQUIRES_TRANSFORM_KEY,
+    ensure_tool_call_ids, message_content_to_text, messages_to_plain_prompt,
 };
 pub use request::GenerationRequest;
 pub use response::{

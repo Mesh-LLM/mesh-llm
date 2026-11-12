@@ -83,8 +83,8 @@ impl ChatCompletionRequest {
 }
 
 pub use crate::generation::content::{
-    GenerationMessage as ChatMessage, MessageContent, MessageContentPart, ensure_tool_call_ids,
-    message_content_to_text, messages_to_plain_prompt,
+    GenerationMessage as ChatMessage, MessageContent, MessageContentPart, REQUIRES_TRANSFORM_KEY,
+    ensure_tool_call_ids, message_content_to_text, messages_to_plain_prompt,
 };
 
 /// `#[non_exhaustive]`: a downstream crate that builds this via struct
