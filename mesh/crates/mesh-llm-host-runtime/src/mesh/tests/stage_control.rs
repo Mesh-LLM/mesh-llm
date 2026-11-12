@@ -45,6 +45,7 @@ fn test_stage_status(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
     }
 }
 
@@ -280,6 +281,34 @@ fn status_conversions_preserve_activation_codec_policy() {
         None,
     );
     assert_eq!(snapshot.activation_codec_policy, load.activation_codec_policy);
+}
+
+#[test]
+fn status_conversions_preserve_the_compute_meter() {
+    let node_id = make_test_endpoint_id(0x92);
+    let load = test_stage_load_request();
+    let mut status =
+        stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Ready);
+    status.compute_busy_nanos = 9_000;
+    status.compute_operations = 3;
+    status.compute_decode_tokens = 40;
+    status.compute_verify_tokens = 12;
+    let runtime = stage_runtime_status_from_snapshot(Some(node_id), status);
+    // a stage's last status, kept once it has stopped, keeps the count it reached
+    let snapshot = stage_snapshot_from_runtime_status(
+        &runtime,
+        crate::inference::skippy::StageRuntimeState::Stopped,
+        None,
+    );
+    assert_eq!(
+        (
+            snapshot.compute_busy_nanos,
+            snapshot.compute_operations,
+            snapshot.compute_decode_tokens,
+            snapshot.compute_verify_tokens,
+        ),
+        (9_000, 3, 40, 12)
+    );
 }
 
 #[test]

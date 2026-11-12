@@ -473,6 +473,51 @@ async fn management_health_reports_cached_plugin_models_for_serving_host() {
     );
 }
 
+#[test]
+fn only_this_nodes_own_stage_0_reports_the_local_runtime_meter() {
+    use skippy_serving::compute_meter::StageComputeSnapshot;
+    let endpoint = |seed: u8| {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        iroh::EndpointId::from(iroh::SecretKey::from_bytes(&bytes).public())
+    };
+    let (local, peer) = (endpoint(0x41), endpoint(0x42));
+    let runtime = StageComputeSnapshot {
+        busy_nanos: 1_000,
+        operations: 2,
+        decode_tokens: 30,
+        verify_tokens: 4,
+    };
+    let lookup = move |run_id: &str| (run_id == "health-run").then_some(runtime);
+    let ready = crate::inference::skippy::StageRuntimeState::Ready;
+    let stage = |node_id, stage_index, decode_tokens| {
+        let mut status = health_test_stage_status(Some(node_id), "split-model", ready);
+        status.stage_index = stage_index;
+        status.compute_decode_tokens = decode_tokens;
+        status
+    };
+
+    assert_eq!(
+        crate::api::reported_stage_meter(&stage(local, 0, 0), local, lookup),
+        runtime
+    );
+    // a peer's stage 0 whose run id matches a local one keeps its own figures
+    assert_eq!(
+        crate::api::reported_stage_meter(&stage(peer, 0, 7), local, lookup).decode_tokens,
+        7
+    );
+    // this node's later stages report their own status
+    assert_eq!(
+        crate::api::reported_stage_meter(&stage(local, 1, 9), local, lookup).decode_tokens,
+        9
+    );
+    // with its runtime's meter gone, this node's stage 0 reports its status
+    assert_eq!(
+        crate::api::reported_stage_meter(&stage(local, 0, 5), local, |_| None).decode_tokens,
+        5
+    );
+}
+
 fn health_test_stage_status(
     node_id: Option<iroh::EndpointId>,
     model_id: &str,
@@ -515,6 +560,7 @@ fn health_test_stage_status(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
     }
 }
 
