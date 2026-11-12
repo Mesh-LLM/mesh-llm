@@ -69,6 +69,8 @@ fn missing_echoed_nested_or_ignored_only_batch_execution_rejects() {
         "cargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress -- --ignored",
         "if false; then\ncargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress\nfi",
         "cargo test --locked -p skippy-inference-api --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress",
+        "echo \"::group::Claude Code\"; exit 0\ncargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress",
+        "echo ready && exit 0\ncargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress",
     ] {
         assert!(
             check(&with_batch(&batch_script(client))).is_err(),
@@ -81,7 +83,11 @@ fn batch_must_keep_the_host_branch_and_every_planned_crate() {
     let without_branch = batch_script(CLIENT_TEST).replace("mesh-llm-host-runtime", "mesh-llm");
     let without_crates =
         batch_script(CLIENT_TEST).replace("  cargo test --locked -p \"$crate\"\n", "");
-    for run in [without_branch, without_crates] {
+    let zero_iterations = batch_script(CLIENT_TEST).replace(
+        "for crate in ${crates[@]+\"${crates[@]}\"}; do",
+        "for crate in \"${crates[@]:0:0}\"; do",
+    );
+    for run in [without_branch, without_crates, zero_iterations] {
         assert!(check(&with_batch(&run)).is_err(), "accepted {run}");
     }
 }

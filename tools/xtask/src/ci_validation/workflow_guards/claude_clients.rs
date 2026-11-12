@@ -8,8 +8,13 @@ const HOST: &str = "mesh-llm-host-runtime";
 const BATCH_CRATES: &str = "${{ steps.resolve_batch_crates.outputs.crates }}";
 const BATCH_AFFECTED: &str =
     "${{ contains(steps.resolve_batch_crates.outputs.crates, 'mesh-llm-host-runtime') }}";
+const BATCH_LOOP: &str = r#"for crate in ${crates[@]+"${crates[@]}"}; do"#;
 const BATCH_TEST: &str = r#"cargo test --locked -p "$crate""#;
 const HOST_BRANCH: &str = r#"if [[ "$crate" == "mesh-llm-host-runtime" ]]; then"#;
+const GROUP_MARKERS: [&str; 2] = [
+    r#"echo "::group::Claude Code 2.1.273 real-client integration""#,
+    r#"echo "::endgroup::""#,
+];
 const PR_TEST: &str = "claude_cli_executes_read_tool_through_host_ingress";
 const LIVE_TEST: &str = "claude_cli_round_trips_through_host_ingress_and_live_claude_model";
 
@@ -96,6 +101,9 @@ fn required(workflow: &Node) -> DynResult<()> {
     }
     h::binding(h::member(gate, "env")?, "TEST_CRATES", BATCH_CRATES)?;
     let source = normalized(field(gate, "run").ok_or("missing Rust test batch script")?);
+    if !source.lines().any(|line| line.trim() == BATCH_LOOP) {
+        return Err("Rust test batch must iterate over every planned crate".into());
+    }
     if !source.lines().any(|line| line.trim() == BATCH_TEST) {
         return Err("Rust test batch must run every planned crate's tests".into());
     }
@@ -103,7 +111,8 @@ fn required(workflow: &Node) -> DynResult<()> {
 }
 
 // The branch condition pins `$crate` to the host runtime, so its body names that
-// package. Group markers are inert; any other command or nested branch rejects.
+// package. Only the exact group markers are inert; any other command, including
+// one chained after an echo, or a nested branch rejects.
 fn host_branch(source: &str) -> DynResult<String> {
     let mut lines = source.lines().map(str::trim);
     lines
@@ -118,7 +127,7 @@ fn host_branch(source: &str) -> DynResult<String> {
         if line.starts_with("if ") {
             return Err("Claude client test must not be nested in another condition".into());
         }
-        if !line.starts_with("echo ") {
+        if !GROUP_MARKERS.contains(&line) {
             body.push(line.replace(r#""$crate""#, HOST));
         }
     }
