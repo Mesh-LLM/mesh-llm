@@ -7,25 +7,10 @@ use skippy_ffi::{
     SamplingConfig as RawSamplingConfig, Session as RawSession, TokenSignal as RawTokenSignal,
 };
 
+use crate::chat_sampling_metadata::chat_sampling_metadata_for_native;
 use crate::dflash::DecodedRows;
 use crate::error::ensure_ok;
 use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenLogprobs, TokenSignal};
-
-const EMPTY_CHAT_GRAMMAR_METADATA: &str = r#"{"grammar":""}"#;
-
-fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
-    // Template metadata can contain a large serialized PEG response parser,
-    // but native sampling only consults grammar fields. The renderer emits
-    // compact JSON, so an empty top-level grammar can use the minimal
-    // equivalent payload and avoid reparsing the unrelated PEG graph before
-    // first-token decode. Escaped JSON nested inside `chat_parser` cannot
-    // contain this unescaped byte sequence.
-    if metadata_json.contains(r#""grammar":"""#) {
-        EMPTY_CHAT_GRAMMAR_METADATA
-    } else {
-        metadata_json
-    }
-}
 
 /// Graph reuse counters read from the native context.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -242,9 +227,13 @@ impl StageSession {
         prompt_token_count: u64,
         sampling: Option<&SamplingConfig>,
     ) -> Result<()> {
-        let metadata_json = CString::new(chat_sampling_metadata_for_native(metadata_json))
-            .context("chat sampling metadata contains an interior NUL byte")?;
         let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
+        let budget_tokens = raw_sampling
+            .as_ref()
+            .map(|sampling| sampling.reasoning_budget_tokens);
+        let metadata_json = chat_sampling_metadata_for_native(metadata_json, budget_tokens);
+        let metadata_json = CString::new(metadata_json.as_ref())
+            .context("chat sampling metadata contains an interior NUL byte")?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -651,10 +640,7 @@ impl Drop for StageSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        EMPTY_CHAT_GRAMMAR_METADATA, chat_sampling_metadata_for_native, native_position_to_u64,
-        validate_native_sequence_id,
-    };
+    use super::{native_position_to_u64, validate_native_sequence_id};
 
     #[test]
     fn native_position_conversion_accepts_non_negative_positions() {
@@ -674,17 +660,6 @@ mod tests {
         assert_eq!(validate_native_sequence_id(i32::MAX).unwrap(), i32::MAX);
         assert!(validate_native_sequence_id(-1).is_err());
         assert!(validate_native_sequence_id(i32::MIN).is_err());
-    }
-
-    #[test]
-    fn empty_chat_grammar_uses_minimal_native_metadata() {
-        let metadata = r#"{"chat_parser":"large","grammar":"","grammar_triggers":[]}"#;
-        assert_eq!(
-            chat_sampling_metadata_for_native(metadata),
-            EMPTY_CHAT_GRAMMAR_METADATA
-        );
-        let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
-        assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
     }
 }
 
