@@ -114,10 +114,13 @@ only what the circle serves.
   as a backstop.
 - The selector is consumed at the entry node: `@private` is stripped before
   model lookup and a client's `x-mesh-scope` is not forwarded. A private
-  request forwarded to a peer carries `x-mesh-scope: private`. The peer then
-  keeps that request to its own owner's and the entry node's owner's nodes,
-  the only owners it knows are in the entry node's circle. It does not use
-  its own trust store for it. The marker only ever narrows what the peer does.
+  request forwarded to a peer carries `x-mesh-scope: private` and
+  `x-mesh-scope-owners` naming the entry node's circle. The peer then keeps
+  that request to its own owner's and the entry node's owner's nodes, the
+  only owners it knows are in the entry node's circle, and within the owners
+  named. It does not use its own trust store for it. Both headers only ever
+  narrow what the peer does; a marker from an unknown requester adds no
+  owner but the peer's own.
 - A split whose stages include a node outside the circle is not a private
   target: its activations and KV would leave the circle.
 - Your own nodes come first: a request from a node of the same owner is
@@ -145,10 +148,16 @@ only what the circle serves.
   without a reply, the plugin stays private for five more minutes, since it
   may still be working. A virtual-model turn or request transform that
   times out also restarts the plugin, which ends that work. An exchange hook
-  is not restarted, so it stays private past its deadline until it replies
-  or its connection ends.
+  is not restarted at its deadline: it stays private until it replies or its
+  connection ends, and is restarted if it has done neither five minutes
+  after the deadline.
+- A plugin inference endpoint on the entry node can still serve a private
+  request for a model no node in the circle serves. Such an endpoint may send
+  the request to an outside service; install only plugins you trust.
   What a plugin does on its own, outside these calls, is up to the plugin:
   install only plugins you trust.
+- Private routing is for OpenAI-compatible HTTP requests (`/v1`, `/private/v1`).
+  Other ways into a node, such as the native SDK, have no private option yet.
 - A trailing `@private` or `@incognito` is reserved. A model name that is
   only the suffix (`"@private"`) is rejected with 400. Peer-advertised names
   ending in either are not listed, and a peer naming a model `x@private`
@@ -165,8 +174,10 @@ Only the entry node needs this release for the guarantees above, with one
 exception. A node of yours running an older release ignores the
 `x-mesh-scope: private` marker on a request forwarded to it. If that node
 serves the model through a split whose stages include nodes outside your
-circle, the request's activations reach those nodes. Upgrade every node in
-your circle before relying on private routing with splits.
+circle, the request's activations reach those nodes. When the entry node
+itself takes part in that split, it knows its stages and does not send the
+request there; otherwise it cannot tell. Upgrade every node in your circle
+before relying on private routing with splits.
 
 ## Not yet
 

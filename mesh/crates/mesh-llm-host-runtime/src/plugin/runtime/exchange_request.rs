@@ -1,4 +1,5 @@
 //! Single-send lifecycle calls: observer deadlines never restart the process.
+//! Only a private hook call held past its limit does.
 
 use super::lifecycle_readiness::{LifecycleOperation, lifecycle_stream_kind};
 use super::{ExternalPlugin, PROTOCOL_VERSION, PendingResponses, proto};
@@ -33,21 +34,30 @@ impl ExternalPlugin {
         input_json: &str,
         deadline: Instant,
     ) -> Result<proto::InvokeServiceResponse> {
-        tokio::time::timeout_at(
-            deadline,
-            self.invoke_exchange_service_until_reply(declaration, input_json),
-        )
-        .await
-        .context("Plugin exchange hook deadline expired")?
+        tokio::time::timeout_at(deadline, self.exchange_call(declaration, input_json, None))
+            .await
+            .context("Plugin exchange hook deadline expired")?
     }
 
-    /// [`Self::invoke_exchange_service`] without a deadline: waits until the
-    /// plugin replies or its connection ends. A private hook's binding is
-    /// held this long, past the deadline the exchange itself waits for.
-    pub(crate) async fn invoke_exchange_service_until_reply(
+    /// A private hook call: waits past the exchange's deadline, until the
+    /// plugin replies, its connection ends or `hold_until`. A hook still
+    /// working then is restarted, which ends its work, so a hung hook cannot
+    /// hold a private binding (and narrow the plugin's nested calls) forever.
+    pub(crate) async fn invoke_private_exchange_service(
         &self,
         declaration: &proto::OpenAiExchangeHookManifest,
         input_json: &str,
+        hold_until: Instant,
+    ) -> Result<proto::InvokeServiceResponse> {
+        self.exchange_call(declaration, input_json, Some(hold_until))
+            .await
+    }
+
+    async fn exchange_call(
+        &self,
+        declaration: &proto::OpenAiExchangeHookManifest,
+        input_json: &str,
+        hold_until: Option<Instant>,
     ) -> Result<proto::InvokeServiceResponse> {
         let response = self
             .request_lifecycle_once(
@@ -58,6 +68,7 @@ impl ExternalPlugin {
                     input_json: input_json.to_owned(),
                 }),
                 LifecycleOperation::Callback(declaration),
+                hold_until,
             )
             .await?;
         match response.payload {
@@ -99,6 +110,7 @@ impl ExternalPlugin {
             self.request_lifecycle_once(
                 proto::envelope::Payload::OpenStreamRequest(request),
                 LifecycleOperation::Body(&kind, declaration),
+                None,
             ),
         )
         .await
@@ -120,10 +132,11 @@ impl ExternalPlugin {
         &self,
         payload: proto::envelope::Payload,
         operation: LifecycleOperation<'_>,
+        restart_at: Option<Instant>,
     ) -> Result<proto::Envelope> {
         // Preflight already requires a live manifest. Do not start or retry a
         // process here: the exchange grant's deadline belongs to this call.
-        let (outbound, pending) = self.lifecycle_runtime_handles(operation).await?;
+        let (generation, outbound, pending) = self.lifecycle_runtime_handles(operation).await?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         pending.lock().await.insert(request_id, tx);
@@ -140,7 +153,24 @@ impl ExternalPlugin {
             })
             .await
             .context("Plugin exchange request channel closed")?;
-        rx.await
-            .context("Plugin exchange response channel closed")?
+        let reply = async {
+            rx.await
+                .context("Plugin exchange response channel closed")?
+        };
+        let Some(restart_at) = restart_at else {
+            return reply.await;
+        };
+        match tokio::time::timeout_at(restart_at, reply).await {
+            Ok(reply) => reply,
+            Err(_) => {
+                let reason = format!(
+                    "Plugin '{}' exchange hook held a private request too long",
+                    self.spec.name
+                );
+                self.handle_runtime_failure(Some(generation), reason.clone())
+                    .await;
+                bail!(reason)
+            }
+        }
     }
 }

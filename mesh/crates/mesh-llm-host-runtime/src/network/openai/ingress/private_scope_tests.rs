@@ -95,3 +95,54 @@ async fn the_private_base_url_is_refused_on_an_unsigned_node() {
     assert!(response.starts_with("HTTP/1.1 403"), "{response}");
     node.endpoint.close().await;
 }
+
+fn owned_peer(seed: u32, model: &str, owner: &str) -> mesh::PeerInfo {
+    let mut peer = super::tests::test_remote_peer(seed, model);
+    peer.owner_summary = crate::crypto::OwnershipSummary {
+        owner_id: Some(owner.to_string()),
+        verified: true,
+        status: crate::crypto::OwnershipStatus::Verified,
+        expires_at_unix_ms: Some(u64::MAX),
+        ..Default::default()
+    };
+    peer
+}
+
+/// A signed node with one owned peer and one stranger: through the whole
+/// ingress, a private request never selects the stranger.
+#[tokio::test]
+async fn a_signed_node_keeps_private_requests_off_a_strangers_node() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    *node.owner_summary.lock().await = crate::crypto::OwnershipSummary {
+        owner_id: Some("me".to_string()),
+        verified: true,
+        status: crate::crypto::OwnershipStatus::Verified,
+        expires_at_unix_ms: Some(u64::MAX),
+        ..Default::default()
+    };
+    node.insert_test_peer(owned_peer(71, "owned-model", "me"))
+        .await;
+    node.insert_test_peer(owned_peer(72, "stranger-model", "them"))
+        .await;
+
+    // Both peers are routable for an ordinary request.
+    assert!(!node.hosts_for_model("stranger-model").await.is_empty());
+    assert!(!node.hosts_for_model("owned-model").await.is_empty());
+
+    // The owned peer is selected (the test peer cannot be reached, so the
+    // attempt fails, but not with "no host").
+    let owned = roundtrip(&node, "", "owned-model@private").await;
+    assert!(!owned.starts_with("HTTP/1.1 404"), "{owned}");
+    assert!(!owned.starts_with("HTTP/1.1 403"), "{owned}");
+
+    for (headers, model) in [
+        ("", "stranger-model@private"),
+        ("x-mesh-scope: incognito\r\n", "stranger-model"),
+    ] {
+        let response = roundtrip(&node, headers, model).await;
+        assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    }
+    node.endpoint.close().await;
+}

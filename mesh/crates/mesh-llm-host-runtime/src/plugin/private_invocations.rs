@@ -21,7 +21,8 @@
 //! limit, for [`ABANDONED_LINGER`] after it. A virtual-model turn or request
 //! transform that times out restarts an external plugin, which ends its
 //! work. An exchange hook is not restarted at its deadline; its binding is
-//! held until the plugin replies or disconnects instead.
+//! held until the plugin replies or disconnects instead, and the hook is
+//! restarted if it has done neither [`ABANDONED_LINGER`] past the deadline.
 // shortcut: per plugin, not per request. A per-request token would need the
 // plugin protocol to echo it back on nested calls.
 

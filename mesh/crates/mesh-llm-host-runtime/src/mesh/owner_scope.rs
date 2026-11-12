@@ -163,14 +163,19 @@ impl super::Node {
         // A narrowed scope (a plugin's nested call) may leave out this
         // node's own owner; then this node is out of scope too.
         let me_in_scope = self
-            .local_verified_owner_id()
+            .local_scope_owner_id()
             .await
             .is_some_and(|owner| scope.owner_ids.contains(&owner));
-        let leaky_splits: HashSet<String> = {
+        // Splits with a stage out of scope, by model and the node that runs
+        // stage 0 (the one a target names). A split this node only takes part
+        // in, coordinated elsewhere, leaves this node's own target alone. A
+        // known split behind an owned peer's target drops that target too,
+        // which guards against an owned peer too old to honour the marker.
+        let leaky_splits: HashSet<(String, EndpointId)> = {
             let topologies = self.stage_topologies.lock().await;
             topologies
-                .topologies
-                .values()
+                .visible_topologies()
+                .into_iter()
                 .filter(|topology| {
                     topology.stages.iter().any(|stage| {
                         if stage.node_id == me {
@@ -180,15 +185,23 @@ impl super::Node {
                         }
                     })
                 })
-                .map(|topology| topology.model_id.clone())
+                .filter_map(|topology| {
+                    let coordinator = topology
+                        .stages
+                        .iter()
+                        .find(|stage| stage.stage_index == 0)?
+                        .node_id;
+                    Some((topology.model_id, coordinator))
+                })
                 .collect()
         };
+        let leaks =
+            |model: &str, node: EndpointId| leaky_splits.contains(&(model.to_string(), node));
         let mut scoped = targets.clone();
         for (model, hosts) in &mut scoped.targets {
-            let local_leaks = leaky_splits.contains(model);
             hosts.retain(|target| match target {
-                InferenceTarget::Remote(peer) => in_scope.contains(peer),
-                InferenceTarget::Local(_) => me_in_scope && !local_leaks,
+                InferenceTarget::Remote(peer) => in_scope.contains(peer) && !leaks(model, *peer),
+                InferenceTarget::Local(_) => me_in_scope && !leaks(model, me),
                 InferenceTarget::None => true,
             });
         }
@@ -206,10 +219,21 @@ impl super::Node {
             .collect()
     }
 
+    /// This node's owner, if its own certificate verifies and has not
+    /// expired: the same test [`OwnerScope::admits`] puts a peer to.
+    pub(crate) async fn local_scope_owner_id(&self) -> Option<String> {
+        let summary = self.owner_summary.lock().await.clone();
+        let live = summary.status == OwnershipStatus::Verified
+            && summary
+                .expires_at_unix_ms
+                .is_some_and(|expires| expires > now_unix_ms());
+        live.then_some(summary.owner_id).flatten()
+    }
+
     /// Whether `peer` is verified as owned by the same owner as this node.
     /// Trusted owners do not count: this decides admission priority.
     pub(crate) async fn peer_shares_my_owner(&self, peer: EndpointId) -> bool {
-        let Some(scope) = self.local_verified_owner_id().await.map(OwnerScope::new) else {
+        let Some(scope) = self.local_scope_owner_id().await.map(OwnerScope::new) else {
             return false;
         };
         self.peer_admitted_by(&scope, peer).await
@@ -249,7 +273,7 @@ impl super::Node {
                 .flatten()
             });
         OwnerScope::of(
-            self.local_verified_owner_id()
+            self.local_scope_owner_id()
                 .await
                 .into_iter()
                 .chain(requester_owner),
@@ -280,7 +304,7 @@ impl super::Node {
     /// owners. `None` when this node is not signed by an owner key, in which
     /// case "private" has no meaning here and the caller must refuse.
     pub(crate) async fn private_owner_scope(&self) -> Option<OwnerScope> {
-        let owner = self.local_verified_owner_id().await?;
+        let owner = self.local_scope_owner_id().await?;
         let trust_store = self.trust_store.lock().await;
         Some(OwnerScope::with_trusted(
             owner,

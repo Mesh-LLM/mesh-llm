@@ -114,7 +114,16 @@ fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeR
             "model '{model}' names no model before its private suffix"
         )));
     }
-    Ok(header || private_model_base(request.model_name.as_deref()).is_some())
+    // An owner limit alone also selects private, as it does for transforms:
+    // it can only narrow a private request, never mean a public one.
+    let owner_limit = !header_values_from_parsed_raw(&request.raw, MESH_SCOPE_OWNERS_HEADER)
+        .map_err(|()| {
+            bad(format!(
+                "could not read the {MESH_SCOPE_OWNERS_HEADER} header"
+            ))
+        })?
+        .is_empty();
+    Ok(header || owner_limit || private_model_base(request.model_name.as_deref()).is_some())
 }
 
 /// `model` without its reserved private suffix, when it has one.
@@ -217,21 +226,34 @@ pub(crate) async fn resolve_at_ingress(
     }
 }
 
-async fn peer_private_scope(
+pub(crate) async fn peer_private_scope(
     node: &mesh::Node,
     request: &BufferedHttpRequest,
     requested_by: Option<iroh::EndpointId>,
 ) -> Option<OwnerScope> {
-    // An unreadable head counts as marked: narrowing is the safe side.
-    let marked = match header_values_from_parsed_raw(&request.raw, MESH_SCOPE_HEADER).as_deref() {
-        Ok([value]) => is_private_scope_value(value),
-        Ok(_) => false,
-        Err(()) => true,
-    };
-    if !marked {
+    // An unreadable or repeated header counts as marked, and an unknown
+    // requester adds no owner: narrowing is the safe side.
+    if !head_requests_private_scope(&request.raw) {
         return None;
     }
-    Some(node.forwarded_private_scope(requested_by?).await)
+    let scope = match requested_by {
+        Some(requester) => node.forwarded_private_scope(requester).await,
+        None => OwnerScope::of(node.local_scope_owner_id().await),
+    };
+    // The entry node's circle, as it forwarded it: narrows, never widens.
+    Some(match head_owner_limit(&request.raw) {
+        Some(owners) => scope.intersect(&owners),
+        None => scope,
+    })
+}
+
+/// The owner limit a forwarded private request carries: the circle it was
+/// scoped to at its entry node.
+pub(crate) fn owner_limit_header_line(scope: &OwnerScope) -> String {
+    format!(
+        "{MESH_SCOPE_OWNERS_HEADER}: {}\r\n",
+        scope.owner_ids().join(",")
+    )
 }
 
 #[cfg(test)]

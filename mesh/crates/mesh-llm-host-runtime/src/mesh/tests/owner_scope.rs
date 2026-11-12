@@ -102,35 +102,58 @@ async fn election_targets_keep_local_and_owned_hosts_only() {
     assert_eq!(scoped.targets[MODEL], vec![InferenceTarget::Remote(theirs)]);
 }
 
-#[tokio::test]
-async fn a_local_split_with_a_stranger_stage_is_not_private() {
-    let (node, mine, theirs, _forged) = node_with_mine_and_theirs().await;
-    sign_as_me(&node).await;
-    let split = |model: &str, stage_node: EndpointId| crate::mesh::StageTopologyInstance {
-        topology_id: format!("topology-{model}"),
+fn stage(index: u32, node: EndpointId) -> crate::mesh::StageAssignment {
+    crate::mesh::StageAssignment {
+        stage_id: format!("stage-{index}"),
+        stage_index: index,
+        node_id: node,
+        layer_start: index * 12,
+        layer_end: (index + 1) * 12,
+        endpoint: crate::mesh::StageEndpoint {
+            bind_addr: "127.0.0.1:0".to_string(),
+        },
+    }
+}
+
+fn split(
+    id: &str,
+    model: &str,
+    stages: Vec<crate::mesh::StageAssignment>,
+) -> crate::mesh::StageTopologyInstance {
+    crate::mesh::StageTopologyInstance {
+        topology_id: format!("topology-{id}"),
         run_id: "run".to_string(),
         model_id: model.to_string(),
         package_ref: "gguf:///model.gguf".to_string(),
         manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
         admissions: Default::default(),
-        stages: vec![crate::mesh::StageAssignment {
-            stage_id: "stage-1".to_string(),
-            stage_index: 1,
-            node_id: stage_node,
-            layer_start: 12,
-            layer_end: 24,
-            endpoint: crate::mesh::StageEndpoint {
-                bind_addr: "127.0.0.1:0".to_string(),
-            },
-        }],
-    };
+        stages,
+    }
+}
+
+#[tokio::test]
+async fn a_local_split_with_a_stranger_stage_is_not_private() {
+    let (node, mine, theirs, _forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
+    let me = node.endpoint.id();
     {
         let mut topologies = node.stage_topologies.lock().await;
-        topologies.record_topology(split("leaky", theirs));
-        topologies.record_topology(split("owned", mine));
+        topologies.record_topology(split(
+            "leaky",
+            "leaky",
+            vec![stage(0, me), stage(1, theirs)],
+        ));
+        topologies.record_topology(split("owned", "owned", vec![stage(0, me), stage(1, mine)]));
+        // This node is only a stage in a stranger's split of a model it
+        // also serves in full: its own target stays.
+        topologies.record_topology(split(
+            "theirs",
+            "full",
+            vec![stage(0, theirs), stage(1, me)],
+        ));
     }
     let mut targets = ModelTargets::default();
-    for model in ["leaky", "owned"] {
+    for model in ["leaky", "owned", "full"] {
         targets
             .targets
             .insert(model.to_string(), vec![InferenceTarget::Local(9000)]);
@@ -139,6 +162,53 @@ async fn a_local_split_with_a_stranger_stage_is_not_private() {
     let scoped = node.targets_in_owner_scope(&scope, &targets).await;
     assert!(scoped.targets["leaky"].is_empty());
     assert_eq!(scoped.targets["owned"], vec![InferenceTarget::Local(9000)]);
+    assert_eq!(scoped.targets["full"], vec![InferenceTarget::Local(9000)]);
+}
+
+/// An owned peer too old to honour the private marker could serve a
+/// forwarded request from a split with a stranger's stage. A split this
+/// node knows of drops that peer's target.
+#[tokio::test]
+async fn an_owned_peers_known_leaky_split_is_not_private() {
+    let (node, mine, theirs, _forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
+    let me = node.endpoint.id();
+    node.stage_topologies.lock().await.record_topology(split(
+        "peer",
+        MODEL,
+        vec![stage(0, mine), stage(1, me), stage(2, theirs)],
+    ));
+    let mut targets = ModelTargets::default();
+    targets.targets.insert(
+        MODEL.to_string(),
+        vec![InferenceTarget::Local(9000), InferenceTarget::Remote(mine)],
+    );
+    let scoped = node
+        .targets_in_owner_scope(&OwnerScope::new("me"), &targets)
+        .await;
+    assert_eq!(scoped.targets[MODEL], vec![InferenceTarget::Local(9000)]);
+}
+
+#[tokio::test]
+async fn this_nodes_expired_certificate_leaves_it_out_of_scope() {
+    let (node, _mine, _theirs, _forged) = node_with_mine_and_theirs().await;
+    *node.owner_summary.lock().await = OwnershipSummary {
+        owner_id: Some("me".to_string()),
+        verified: true,
+        status: OwnershipStatus::Verified,
+        expires_at_unix_ms: Some(1),
+        ..OwnershipSummary::default()
+    };
+    assert_eq!(node.local_scope_owner_id().await, None);
+    assert_eq!(node.private_owner_scope().await, None);
+    let mut targets = ModelTargets::default();
+    targets
+        .targets
+        .insert(MODEL.to_string(), vec![InferenceTarget::Local(9000)]);
+    let scoped = node
+        .targets_in_owner_scope(&OwnerScope::new("me"), &targets)
+        .await;
+    assert!(scoped.targets[MODEL].is_empty());
 }
 
 #[tokio::test]
@@ -279,4 +349,65 @@ async fn a_plugins_nested_call_does_not_reach_owners_the_entry_node_does_not_tru
     assert!(!hosts.contains(&friend_id), "C is outside A's circle");
     // Narrowing only: B does not trust A, so A's other nodes stay out too.
     assert!(!hosts.contains(&theirs));
+}
+
+async fn parsed(headers: &str) -> crate::network::openai::request_parse::BufferedHttpRequest {
+    use tokio::io::AsyncWriteExt;
+    let wire = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+         {headers}Content-Length: 2\r\n\r\n{{}}"
+    );
+    let (mut reader, mut writer) = tokio::io::duplex(wire.len() + 1);
+    writer.write_all(wire.as_bytes()).await.unwrap();
+    crate::network::openai::request_parse::read_http_request(&mut reader)
+        .await
+        .unwrap()
+}
+
+/// A peer's private marker fails closed: repeated headers count as marked,
+/// an unknown requester adds no owner, and the entry node's circle narrows.
+#[tokio::test]
+async fn a_forwarded_private_marker_fails_closed_and_only_narrows() {
+    use crate::network::openai::routing_scope::peer_private_scope;
+    let (node, _mine, theirs, _forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
+
+    let unmarked = parsed("").await;
+    assert_eq!(
+        peer_private_scope(&node, &unmarked, Some(theirs)).await,
+        None
+    );
+
+    let repeated = parsed("x-mesh-scope: public\r\nx-mesh-scope: public\r\n").await;
+    assert_eq!(
+        peer_private_scope(&node, &repeated, Some(theirs)).await,
+        Some(OwnerScope::of(["me".to_string(), "them".to_string()]))
+    );
+
+    let marked = parsed("x-mesh-scope: private\r\n").await;
+    assert_eq!(
+        peer_private_scope(&node, &marked, None).await,
+        Some(OwnerScope::new("me"))
+    );
+
+    // The entry node ("them") scoped the request to its own nodes only.
+    let narrowed = parsed("x-mesh-scope: private\r\nx-mesh-scope-owners: them,other\r\n").await;
+    assert_eq!(
+        peer_private_scope(&node, &narrowed, Some(theirs)).await,
+        Some(OwnerScope::new("them"))
+    );
+}
+
+#[tokio::test]
+async fn an_owner_limit_alone_selects_private_routing() {
+    use crate::network::openai::routing_scope;
+    let (node, _mine, _theirs, _forged) = node_with_mine_and_theirs().await;
+    sign_as_me(&node).await;
+    let mut request = parsed("x-mesh-scope-owners: me\r\n").await;
+    assert_eq!(
+        routing_scope::resolve(&node, &mut request).await,
+        Ok(Some(OwnerScope::new("me")))
+    );
+    let mut request = parsed("").await;
+    assert_eq!(routing_scope::resolve(&node, &mut request).await, Ok(None));
 }

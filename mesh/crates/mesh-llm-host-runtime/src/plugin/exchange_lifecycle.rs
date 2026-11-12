@@ -516,10 +516,12 @@ async fn invoke_phase(
         // The exchange waits until its deadline. The private binding is
         // held on its own task until the plugin replies or disconnects,
         // even past that deadline or if this exchange is dropped: the hook
-        // may still be working and calling back.
+        // may still be working and calling back. A hook still working
+        // `ABANDONED_LINGER` past the deadline is restarted.
         Some(call) => {
             let (manager, name, declaration) =
                 (manager.clone(), name.to_string(), declaration.clone());
+            let hold_until = deadline + super::private_invocations::ABANDONED_LINGER;
             let held = super::private_invocations::run_to_reply(Some(call), async move {
                 let plugin = manager
                     .inner
@@ -527,7 +529,7 @@ async fn invoke_phase(
                     .get(&name)
                     .ok_or_else(|| anyhow::anyhow!("Unknown plugin '{name}'"))?;
                 plugin
-                    .invoke_exchange_service_until_reply(&declaration, &input)
+                    .invoke_private_exchange_service(&declaration, &input, hold_until)
                     .await
             });
             tokio::time::timeout_at(deadline, held)
