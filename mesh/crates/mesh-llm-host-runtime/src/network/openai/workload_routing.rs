@@ -348,16 +348,26 @@ pub(super) async fn eligible_targets(
     // Local inference targets are native serving ports. Plugin descriptors are
     // advertised separately for peer discovery and dispatched by the plugin path.
     let local = node.served_model_descriptors().await;
-    let state = node.state.lock().await;
+    let peers = node.peers().await;
+    let supported = node.supported_model_channels(&peers).await;
+    let peers = peers
+        .into_iter()
+        .map(|peer| (peer.id, peer))
+        .collect::<std::collections::HashMap<_, _>>();
     candidates
         .iter()
         .filter(|target| {
             let descriptors = match target {
                 InferenceTarget::Local(_) => local.as_slice(),
-                InferenceTarget::Remote(peer_id) => state
-                    .peers
-                    .get(peer_id)
-                    .map_or(&[][..], |peer| peer.served_model_descriptors.as_slice()),
+                InferenceTarget::Remote(peer_id) => {
+                    let peer = peers.get(peer_id);
+                    if peer.is_some_and(|peer| {
+                        mesh::model_requires_unsupported_channel(peer, model, &supported)
+                    }) {
+                        return false;
+                    }
+                    peer.map_or(&[][..], |peer| peer.served_model_descriptors.as_slice())
+                }
                 InferenceTarget::None => return false,
             };
             model_satisfies_request(model, path, descriptors)

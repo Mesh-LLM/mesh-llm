@@ -520,7 +520,7 @@ pub(crate) async fn try_handle_virtual_model(
 
 /// The concrete models a virtual model may route to, with the capability and
 /// sizing facts a plugin needs to choose between them.
-async fn virtual_model_candidates(
+pub(super) async fn virtual_model_candidates(
     node: &mesh::Node,
     candidate_models: Vec<String>,
     virtual_ids: &std::collections::BTreeSet<String>,
@@ -558,6 +558,9 @@ async fn virtual_model_candidates(
     let plugin_descriptors = node.plugin_inference_descriptors().await;
     let mut candidates = Vec::new();
     for model_id in model_ids {
+        if node.model_unavailable_due_to_channels(&model_id).await {
+            continue;
+        }
         if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
             continue;
         }
