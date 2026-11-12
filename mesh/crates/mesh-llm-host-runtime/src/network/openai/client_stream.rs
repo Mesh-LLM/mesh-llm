@@ -8,9 +8,13 @@ use tokio::net::TcpStream;
 
 #[path = "response_metadata.rs"]
 mod response_metadata;
+#[path = "response_safety.rs"]
+mod response_safety;
 #[path = "response_wire_bytes.rs"]
 mod response_wire_bytes;
 use response_metadata::ResponseMetadata;
+pub(crate) use response_safety::{ImageResponseSafetyPlan, ResponseSafetyBuffer};
+use response_safety::{ResponseSafetyState, unavailable_stream};
 use response_wire_bytes::HttpResponseByteTap;
 use skippy_inference_api::wire_bytes::{WireBytesIncomplete, WireBytesObserver};
 
@@ -44,6 +48,9 @@ async fn wait_for_tcp_disconnect(stream: &TcpStream) -> TcpDisconnectWatch {
 /// authenticated QUIC bi-stream, which enters the same request path without
 /// opening a second plaintext loopback connection.
 pub(crate) enum ClientStream {
+    Safety {
+        state: Arc<ResponseSafetyState>,
+    },
     Metadata {
         stream: Box<ClientStream>,
         metadata: Box<ResponseMetadata>,
@@ -78,12 +85,37 @@ impl From<TcpStream> for ClientStream {
 }
 
 impl ClientStream {
+    /// Arm the ingress-owned quarantine before dispatching an image-capable
+    /// target. No backend response bytes can reach observers or the socket
+    /// until the owning ingress scope releases the verified response.
+    pub(crate) fn require_image_safety(
+        &mut self,
+        plan: ImageResponseSafetyPlan,
+    ) -> std::io::Result<()> {
+        match self {
+            Self::Safety { state } => state.require(plan),
+            Self::Metadata { stream, .. } | Self::Observed { stream, .. } => {
+                stream.require_image_safety(plan)
+            }
+            _ => Err(std::io::Error::other("image safety ingress is unavailable")),
+        }
+    }
+
     pub(crate) fn add_response_metadata(
         &mut self,
         headers: Vec<(String, String)>,
     ) -> std::io::Result<()> {
         if headers.is_empty() {
             return Ok(());
+        }
+        if let Self::Safety { state } = self {
+            return state
+                .stream
+                .lock()
+                .unwrap()
+                .as_mut()
+                .ok_or_else(|| std::io::Error::other("image safety stream is unavailable"))?
+                .add_response_metadata(headers);
         }
         if let Self::Metadata { metadata, .. } = self {
             return metadata.add(headers);
@@ -96,6 +128,14 @@ impl ClientStream {
         if headers.is_empty() {
             return self;
         }
+        if let Self::Safety { state } = &self {
+            let mut stream = state.stream.lock().unwrap();
+            if let Some(original) = stream.take() {
+                *stream = Some(original.with_response_metadata(headers));
+            }
+            drop(stream);
+            return self;
+        }
         Self::Metadata {
             stream: Box::new(self),
             metadata: Box::new(ResponseMetadata::new(headers)),
@@ -103,6 +143,14 @@ impl ClientStream {
     }
     /// Observe only bytes actually accepted by the final downstream writer.
     pub(crate) fn with_wire_bytes_observer(self, observer: Arc<dyn WireBytesObserver>) -> Self {
+        if let Self::Safety { state } = &self {
+            let mut stream = state.stream.lock().unwrap();
+            if let Some(original) = stream.take() {
+                *stream = Some(original.with_wire_bytes_observer(observer));
+            }
+            drop(stream);
+            return self;
+        }
         Self::Observed {
             stream: Box::new(self),
             tap: Box::new(HttpResponseByteTap::new(observer)),
@@ -112,6 +160,14 @@ impl ClientStream {
     /// Mark upstream timeout/cancellation explicitly before transport shutdown.
     pub(crate) fn finish_wire_bytes(&mut self, incomplete: WireBytesIncomplete) {
         match self {
+            // The real observer must see only the response eventually released
+            // by ingress, including its final transport outcome.
+            Self::Safety { state } if state.is_armed() => {}
+            Self::Safety { state } => {
+                if let Some(stream) = state.stream.lock().unwrap().as_mut() {
+                    stream.finish_wire_bytes(incomplete);
+                }
+            }
             Self::Observed { tap, .. } => tap.finish(Some(incomplete)),
             Self::Metadata { stream, .. } => stream.finish_wire_bytes(incomplete),
             _ => {}
@@ -119,6 +175,12 @@ impl ClientStream {
     }
     pub(crate) fn record_exchange_outcome(&self, outcome: &str) {
         match self {
+            Self::Safety { state } if state.is_armed() => {}
+            Self::Safety { state } => {
+                if let Some(stream) = state.stream.lock().unwrap().as_ref() {
+                    stream.record_exchange_outcome(outcome);
+                }
+            }
             Self::Observed { tap, .. } => tap.execution_outcome(outcome),
             Self::Metadata { stream, .. } => stream.record_exchange_outcome(outcome),
             _ => {}
@@ -131,6 +193,11 @@ impl ClientStream {
             Some("/v1/messages" | "/v1/messages/count_tokens")
         );
         match self {
+            Self::Safety { state } => {
+                if let Some(stream) = state.stream.lock().unwrap().as_mut() {
+                    stream.set_client_path(path);
+                }
+            }
             Self::Metadata { stream, .. } => stream.set_client_path(path),
             Self::Observed { stream, .. } => stream.set_client_path(path),
             Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic = messages,
@@ -142,6 +209,12 @@ impl ClientStream {
 
     pub(crate) fn is_anthropic(&self) -> bool {
         match self {
+            Self::Safety { state } => state
+                .stream
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(Self::is_anthropic),
             Self::Metadata { stream, .. } => stream.is_anthropic(),
             Self::Observed { stream, .. } => stream.is_anthropic(),
             Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic,
@@ -153,6 +226,12 @@ impl ClientStream {
     /// tunnel, rather than a local client over TCP.
     pub(crate) fn is_mesh_peer(&self) -> bool {
         match self {
+            Self::Safety { state } => state
+                .stream
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(Self::is_mesh_peer),
             Self::Metadata { stream, .. } => stream.is_mesh_peer(),
             Self::Observed { stream, .. } => stream.is_mesh_peer(),
             Self::Quic { .. } => true,
@@ -184,6 +263,13 @@ impl ClientStream {
 
     pub(crate) fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
         match self {
+            Self::Safety { state } => state
+                .stream
+                .lock()
+                .unwrap()
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("image safety stream is unavailable"))?
+                .set_nodelay(nodelay),
             Self::Metadata { stream, .. } => stream.set_nodelay(nodelay),
             Self::Observed { stream, .. } => stream.set_nodelay(nodelay),
             Self::Tcp { stream, .. } => stream.set_nodelay(nodelay),
@@ -200,6 +286,14 @@ impl ClientStream {
     /// a locally finished response is not a disconnect signal.
     pub(crate) async fn wait_for_response_disconnect(&self) -> bool {
         match self {
+            Self::Safety { state } => {
+                let lease = state.lease_stream();
+                if let Some(stream) = lease.as_ref().and_then(|lease| lease.stream.as_ref()) {
+                    Box::pin(stream.wait_for_response_disconnect()).await
+                } else {
+                    std::future::pending::<bool>().await
+                }
+            }
             Self::Metadata { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
             Self::Observed { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
             Self::Tcp { stream, .. } => match wait_for_tcp_disconnect(stream).await {
@@ -219,6 +313,13 @@ impl ClientStream {
 
     pub(crate) fn peer_addr(&self) -> std::io::Result<SocketAddr> {
         match self {
+            Self::Safety { state } => state
+                .stream
+                .lock()
+                .unwrap()
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("image safety stream is unavailable"))?
+                .peer_addr(),
             Self::Metadata { stream, .. } => stream.peer_addr(),
             Self::Observed { stream, .. } => stream.peer_addr(),
             Self::Tcp { stream, .. } => stream.peer_addr(),
@@ -241,6 +342,10 @@ impl AsyncRead for ClientStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
+            Self::Safety { state } => match state.stream.lock().unwrap().as_mut() {
+                Some(stream) => Pin::new(stream).poll_read(cx, buf),
+                None => unavailable_stream(),
+            },
             Self::Metadata { stream, .. } => Pin::new(stream.as_mut()).poll_read(cx, buf),
             Self::Observed { stream, .. } => Pin::new(stream.as_mut()).poll_read(cx, buf),
             Self::Tcp { stream, .. } => Pin::new(stream).poll_read(cx, buf),
@@ -271,6 +376,17 @@ impl AsyncWrite for ClientStream {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
+            Self::Safety { state } if state.is_armed() => state.poll_buffer_write(buf),
+            Self::Safety { state } => match state.stream.lock().unwrap().as_mut() {
+                Some(stream) => {
+                    let result = Pin::new(stream).poll_write(cx, buf);
+                    if matches!(result, Poll::Ready(Ok(count)) if count > 0) {
+                        state.mark_started();
+                    }
+                    result
+                }
+                None => unavailable_stream(),
+            },
             Self::Metadata { stream, metadata } => metadata.poll_write(stream.as_mut(), cx, buf),
             Self::Observed { stream, tap } => {
                 let result = Pin::new(stream.as_mut()).poll_write(cx, buf);
@@ -291,6 +407,11 @@ impl AsyncWrite for ClientStream {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
+            Self::Safety { state } if state.is_armed() => Poll::Ready(Ok(())),
+            Self::Safety { state } => match state.stream.lock().unwrap().as_mut() {
+                Some(stream) => Pin::new(stream).poll_flush(cx),
+                None => unavailable_stream(),
+            },
             Self::Metadata { stream, metadata } => {
                 std::task::ready!(metadata.poll_emit_prefix(stream, cx))?;
                 Pin::new(stream.as_mut()).poll_flush(cx)
@@ -310,6 +431,14 @@ impl AsyncWrite for ClientStream {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
+            Self::Safety { state } if state.is_armed() => {
+                state.shutdown_buffer();
+                Poll::Ready(Ok(()))
+            }
+            Self::Safety { state } => match state.stream.lock().unwrap().as_mut() {
+                Some(stream) => Pin::new(stream).poll_shutdown(cx),
+                None => unavailable_stream(),
+            },
             Self::Metadata { stream, metadata } => metadata.poll_shutdown(stream, cx),
             Self::Observed { stream, tap } => {
                 let result = Pin::new(stream.as_mut()).poll_shutdown(cx);

@@ -7,6 +7,7 @@ mod context;
 mod dsl;
 mod error;
 mod helpers;
+pub mod image_safety;
 pub mod inference_observation;
 mod internal_rpc;
 mod io;

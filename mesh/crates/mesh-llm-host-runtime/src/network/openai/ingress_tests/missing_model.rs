@@ -153,7 +153,7 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
         .await;
     let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     let ctx = IngressRouteContext {
         node: &node,
         targets: &targets,

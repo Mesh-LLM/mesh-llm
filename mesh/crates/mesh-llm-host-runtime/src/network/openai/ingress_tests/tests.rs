@@ -1972,8 +1972,12 @@ fn plugin_only_request_for(model: &str, path: &str) -> proxy::BufferedHttpReques
     request
 }
 
-pub(super) fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
-    crate::plugin::PluginManager::for_test_summaries(Vec::new())
+pub(super) async fn empty_test_plugin_manager(node: &mesh::Node) -> crate::plugin::PluginManager {
+    let manager = crate::plugin::PluginManager::for_test_summaries(Vec::new());
+    // Production ingress and mandatory admission consult the same registry.
+    // Keep the isolated fixture's context and node attached to that one source.
+    node.set_plugin_manager(manager.clone()).await;
+    manager
 }
 
 /// Regression (ndizazzo P2a, PR #1671 round 2): an explicit `x-mesh-target`
@@ -2004,7 +2008,7 @@ async fn route_self_targeted_model_attempts_a_registered_plugin_instead_of_faili
     let refusing_addr = reserved.local_addr().expect("addr");
     drop(reserved);
 
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "acme".to_string(),
@@ -2085,7 +2089,7 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
     let affinity = affinity::AffinityRouter::new();
     let model = "acme/plugin-model:Q4_K_M";
 
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "acme".to_string(),
@@ -2806,7 +2810,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
     let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
 
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![
             crate::plugin::InferenceEndpointRoute {
@@ -2871,7 +2875,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
     let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
 
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "ocr-plugin".to_string(),
@@ -3017,7 +3021,7 @@ async fn local_plugin_serves_a_shared_model_name_no_mesh_candidate_admits() {
     );
 
     let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "chat-plugin".to_string(),
@@ -3090,7 +3094,7 @@ async fn mesh_candidate_that_admits_the_request_still_wins_over_the_plugin() {
     );
 
     let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "chat-plugin".to_string(),
@@ -3169,7 +3173,7 @@ async fn local_plugin_serves_a_name_whose_only_peer_candidate_is_ocr_only() {
     let targets = election::ModelTargets::default();
 
     let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "chat-plugin".to_string(),
@@ -3277,7 +3281,7 @@ async fn peer_ingress_ignores_a_remote_candidate_it_cannot_forward() {
     );
 
     let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "chat-plugin".to_string(),
@@ -3364,7 +3368,7 @@ async fn excluded_peer_does_not_suppress_the_local_plugin() {
     );
 
     let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-    let plugin_manager = empty_test_plugin_manager();
+    let plugin_manager = empty_test_plugin_manager(&node).await;
     plugin_manager
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "chat-plugin".to_string(),
@@ -3447,7 +3451,7 @@ async fn native_cold_plugin_fallback_works_for_local_peer_and_failed_loads() {
             .insert(model.to_string(), vec![election::InferenceTarget::None]);
 
         let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-        let plugin_manager = empty_test_plugin_manager();
+        let plugin_manager = empty_test_plugin_manager(&node).await;
         plugin_manager
             .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
                 plugin_name: "chat-plugin".to_string(),

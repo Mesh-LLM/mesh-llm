@@ -61,6 +61,55 @@ They do not imply a split projector or distributed audio-generation graph.
 
 Do not collapse everything into `vision`.
 
+### Generated output
+
+Input capabilities and output modalities are independent. A vision model that
+accepts images does not necessarily generate images. Keep the existing
+`vision`, `audio`, and `multimodal` capability semantics unchanged.
+
+Serving endpoints can declare `output_modalities` for each model in their
+`GET /v1/models` response:
+
+```json
+{"data":[{"id":"example-model","output_modalities":["text","image"]}]}
+```
+
+Mesh carries this declaration in `ServedModelMetadata.output_modalities` through
+gossip. Clients can inspect `providers[].metadata.output_modalities` in
+`GET /mesh/v1/models` before making an inference request. Provider observations
+remain separate: one provider's image support does not imply that every provider
+of the same model supports it. This is descriptive provider metadata, not a new
+routing constraint or a runtime certification. Selecting a model ID does not
+pin a provider or enforce its output declaration when replicas differ;
+automatic output-modality routing is outside this change.
+
+An absent or empty list means **unknown**, including advertisements from older
+peers. It must not be interpreted as text-only. New peers preserve unfamiliar
+modality names; old peers ignore the additive field. No model family names or
+prompt keywords are used to infer output support.
+
+An endpoint declaration accepts at most eight names, each at most 32 ASCII
+characters, beginning with a lowercase letter and containing lowercase letters,
+digits, `_`, or `-`. Invalid declarations and conflicting entries for the same
+model ID are treated as unknown. Repeated names are deduplicated.
+
+The console's initial generated-output contract is text containing Markdown
+images with inline base64 PNG, JPEG, or WebP URLs, for example
+`![Generated image](data:image/png;base64,...)`. Existing chat/Responses text
+transport carries this content unchanged; model hosting and the decision to
+produce text or an image belong to the serving backend. Structured image output
+items, audio/video rendering, and new image input behavior are outside this
+slice.
+
+The console restricts inline rendering to those raster MIME types and bounds
+each data URL to 4 MiB of encoded characters. The canonical image form displays
+a label while its data URL is incomplete, including interrupted streams.
+Stored history has a separate aggregate budget; images exceeding it are replaced
+with omission labels rather than partially saved base64. Follow-up assistant
+history replaces inline image
+data with text labels so text-input backends do not receive generated image
+bytes. The normal link sanitizer still applies to links, including data URLs.
+
 Recommended model capabilities:
 
 - `multimodal: bool`

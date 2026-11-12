@@ -1,10 +1,11 @@
+#[cfg(test)]
+use super::endpoint_models::model_matches_protocol;
 use super::{
     InferenceEndpointRoute, PluginCapabilityProvider, PluginEndpointSummary, PluginManager,
     PluginSummary, endpoint_kind_name, endpoint_transport_kind_name, plugin_manifest_overview,
     proto,
 };
 use anyhow::Result;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -19,6 +20,7 @@ pub(super) struct EndpointHealthRecord {
     pub(super) available: bool,
     pub(super) detail: Option<String>,
     pub(super) models: Vec<String>,
+    pub(super) model_output_modalities: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -26,6 +28,22 @@ pub(super) struct EndpointHealthState {
     record: EndpointHealthRecord,
     first_checked_at: Instant,
     consecutive_failures: u32,
+}
+
+#[cfg(test)]
+impl EndpointHealthState {
+    pub(super) fn legacy_test_endpoint(models: Vec<String>) -> Self {
+        Self {
+            record: EndpointHealthRecord {
+                state: "healthy".into(),
+                available: true,
+                models,
+                ..Default::default()
+            },
+            first_checked_at: Instant::now(),
+            consecutive_failures: 0,
+        }
+    }
 }
 
 impl PluginManager {
@@ -147,6 +165,33 @@ impl PluginManager {
             .clear_plugin_reports(plugin_name);
     }
 
+    /// Output declarations from the same accepted health snapshot as the endpoint's models.
+    pub(crate) async fn endpoint_output_modalities(
+        &self,
+        plugin_name: &str,
+        endpoint_id: &str,
+    ) -> BTreeMap<String, Vec<String>> {
+        self.endpoint_output_modalities_snapshot(plugin_name, endpoint_id)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Distinguish an accepted legacy text-only declaration from a health
+    /// snapshot that disappeared after this endpoint was selected.
+    pub(crate) async fn endpoint_output_modalities_snapshot(
+        &self,
+        plugin_name: &str,
+        endpoint_id: &str,
+    ) -> Option<BTreeMap<String, Vec<String>>> {
+        self.inner
+            .endpoint_health
+            .lock()
+            .await
+            .get(&endpoint_key(plugin_name, endpoint_id))
+            .filter(|state| state.record.available)
+            .map(|state| state.record.model_output_modalities.clone())
+    }
+
     pub async fn inference_endpoints(&self) -> Result<Vec<InferenceEndpointRoute>> {
         #[cfg(test)]
         {
@@ -188,6 +233,7 @@ pub(super) fn endpoint_record_from_plugin_status(summary: &PluginSummary) -> End
             available: false,
             detail: summary.error.clone(),
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         };
     }
 
@@ -197,24 +243,28 @@ pub(super) fn endpoint_record_from_plugin_status(summary: &PluginSummary) -> End
             available: true,
             detail: None,
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         },
         "starting" | "restarting" => EndpointHealthRecord {
             state: "starting".into(),
             available: false,
             detail: summary.error.clone(),
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         },
         "degraded" => EndpointHealthRecord {
             state: "unhealthy".into(),
             available: false,
             detail: summary.error.clone(),
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         },
         _ => EndpointHealthRecord {
             state: "unavailable".into(),
             available: false,
             detail: summary.error.clone(),
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         },
     }
 }
@@ -269,6 +319,7 @@ async fn endpoint_health_for_summary(
             available: true,
             detail: None,
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         });
     apply_endpoint_probe(
         previous,
@@ -288,6 +339,9 @@ fn restrict_endpoint_models(
             .models
             .retain(|model| allowed_models.iter().any(|allowed| allowed == model));
     }
+    probe
+        .model_output_modalities
+        .retain(|model, _| probe.models.contains(model));
     probe
 }
 
@@ -321,6 +375,7 @@ fn apply_endpoint_probe(
             available: false,
             detail: probe.detail,
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         }
     } else if was_available && failure_streak < ENDPOINT_FAILURE_THRESHOLD {
         EndpointHealthRecord {
@@ -331,6 +386,9 @@ fn apply_endpoint_probe(
             models: previous
                 .map(|state| state.record.models.clone())
                 .unwrap_or_default(),
+            model_output_modalities: previous
+                .map(|state| state.record.model_output_modalities.clone())
+                .unwrap_or_default(),
         }
     } else {
         EndpointHealthRecord {
@@ -338,6 +396,7 @@ fn apply_endpoint_probe(
             available: false,
             detail: probe.detail,
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         }
     };
 
@@ -396,6 +455,7 @@ async fn probe_openai_compatible_http_endpoint_for_protocol(
                 available: false,
                 detail: Some(format!("invalid endpoint address '{address}'")),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             };
         }
     };
@@ -411,79 +471,42 @@ async fn probe_openai_compatible_http_endpoint_for_protocol(
                 available: false,
                 detail: Some(format!("build health probe client: {err}")),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             };
         }
     };
 
     match client.get(models_url.clone()).send().await {
-        Ok(response) if response.status().is_success() => EndpointHealthRecord {
-            state: "healthy".into(),
-            available: true,
-            detail: Some(format!("GET {} -> {}", models_url, response.status())),
-            models: parse_models_response(response, protocol)
+        Ok(response) if response.status().is_success() => {
+            let detail = Some(format!("GET {} -> {}", models_url, response.status()));
+            let (models, model_output_modalities) = response
+                .json::<serde_json::Value>()
                 .await
-                .unwrap_or_default(),
-        },
+                .map(|body| super::endpoint_models::parse_models(&body, protocol))
+                .unwrap_or_default();
+            EndpointHealthRecord {
+                state: "healthy".into(),
+                available: true,
+                detail,
+                models,
+                model_output_modalities,
+            }
+        }
         Ok(response) => EndpointHealthRecord {
             state: "unhealthy".into(),
             available: false,
             detail: Some(format!("GET {} -> {}", models_url, response.status())),
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         },
         Err(err) => EndpointHealthRecord {
             state: "unhealthy".into(),
             available: false,
             detail: Some(format!("GET {} failed: {}", models_url, err)),
             models: Vec::new(),
+            model_output_modalities: BTreeMap::new(),
         },
     }
-}
-
-async fn parse_models_response(
-    response: reqwest::Response,
-    protocol: Option<&str>,
-) -> Result<Vec<String>> {
-    let body = response.json::<Value>().await?;
-    let models = body
-        .get("data")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter(|entry| model_matches_protocol(entry, protocol))
-        .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>();
-    Ok(models)
-}
-
-fn model_matches_protocol(entry: &Value, protocol: Option<&str>) -> bool {
-    if entry
-        .get("availability")
-        .and_then(Value::as_str)
-        .is_some_and(|state| !matches!(state, "ready" | "loadable" | "busy"))
-    {
-        return false;
-    }
-    let expected = match protocol {
-        Some("document_ocr_v1") => "document_ocr",
-        Some("transcription_v1") => "speech_recognition",
-        Some("image_text_similarity_v1") => "image_text_similarity",
-        Some("depth_estimation_v1") => "depth_estimation",
-        _ => {
-            return entry
-                .get("workload_class")
-                .and_then(Value::as_str)
-                .is_none_or(|class| class == "causal_generation" || class == "encoder_decoder");
-        }
-    };
-    // Single-task legacy OCR endpoints omit class; modern multi-task providers
-    // declare every entry, so none can leak onto another endpoint.
-    entry
-        .get("workload_class")
-        .and_then(Value::as_str)
-        .map_or(protocol == Some("document_ocr_v1"), |class| {
-            class == expected
-        })
 }
 
 fn endpoint_models_url(address: &str) -> Option<Url> {
@@ -568,6 +591,7 @@ mod tests {
                 available: true,
                 detail: None,
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             }
         );
     }
@@ -586,6 +610,7 @@ mod tests {
                 available: false,
                 detail: Some("timed out".into()),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             }
         );
     }
@@ -600,6 +625,7 @@ mod tests {
                 available: false,
                 detail: Some("GET /models failed".into()),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             },
             now,
         );
@@ -617,6 +643,7 @@ mod tests {
                 available: true,
                 detail: None,
                 models: vec!["demo".into()],
+                model_output_modalities: BTreeMap::from([("demo".into(), vec!["image".into()])]),
             },
             first_checked_at: now - Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS + 1),
             consecutive_failures: 0,
@@ -629,6 +656,7 @@ mod tests {
                 available: false,
                 detail: Some("503".into()),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             },
             now,
         );
@@ -636,6 +664,10 @@ mod tests {
         assert!(degraded.record.available);
         assert_eq!(degraded.consecutive_failures, 1);
         assert_eq!(degraded.record.models, healthy.record.models);
+        assert_eq!(
+            degraded.record.model_output_modalities,
+            healthy.record.model_output_modalities
+        );
 
         let unhealthy = apply_endpoint_probe(
             Some(&degraded),
@@ -644,6 +676,7 @@ mod tests {
                 available: false,
                 detail: Some("503".into()),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             },
             now + Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS),
         );
@@ -651,6 +684,7 @@ mod tests {
         assert!(!unhealthy.record.available);
         assert_eq!(unhealthy.consecutive_failures, 2);
         assert!(unhealthy.record.models.is_empty());
+        assert!(unhealthy.record.model_output_modalities.is_empty());
     }
 
     #[test]
@@ -662,6 +696,7 @@ mod tests {
                 available: false,
                 detail: Some("503".into()),
                 models: Vec::new(),
+                model_output_modalities: BTreeMap::new(),
             },
             first_checked_at: now - Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS + 1),
             consecutive_failures: ENDPOINT_FAILURE_THRESHOLD,
@@ -674,6 +709,7 @@ mod tests {
                 available: true,
                 detail: None,
                 models: vec!["demo".into()],
+                model_output_modalities: BTreeMap::new(),
             },
             now,
         );
@@ -847,7 +883,7 @@ mod tests {
         let (address, handle, _requests) = spawn_fake_models_server(vec![
             (
                 "200 OK",
-                r#"{"data":[{"id":"sold"},{"id":"unpriced"},{"id":"also-unpriced"}]}"#,
+                r#"{"data":[{"id":"sold","output_modalities":["text","image"]},{"id":"unpriced","output_modalities":["image"]},{"id":"also-unpriced"}]}"#,
             ),
             ("503 Service Unavailable", r#"{"error":"temporary"}"#),
             ("200 OK", r#"{"data":[{"id":"sold"}]}"#),
@@ -873,6 +909,11 @@ mod tests {
             endpoint_health_for_summary(&summary, &endpoint, Some(&allowed), None, now).await;
         assert!(healthy.record.available);
         assert_eq!(healthy.record.models, ["sold"]);
+        assert_eq!(healthy.record.model_output_modalities.len(), 1);
+        assert_eq!(
+            healthy.record.model_output_modalities["sold"],
+            ["image", "text"]
+        );
 
         let degraded = endpoint_health_for_summary(
             &summary,
@@ -895,6 +936,7 @@ mod tests {
         .await;
         assert!(nothing_allowed.record.available);
         assert!(nothing_allowed.record.models.is_empty());
+        assert!(nothing_allowed.record.model_output_modalities.is_empty());
         handle.await.unwrap();
     }
 
@@ -917,6 +959,52 @@ mod tests {
                 "endpoint:inference".to_string(),
                 "endpoint:inference/openai_compatible".to_string()
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod output_modalities_tests;
+
+#[cfg(test)]
+mod safety_snapshot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_health_is_distinct_from_accepted_legacy_text_metadata() {
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        assert!(
+            manager
+                .endpoint_output_modalities_snapshot("provider", "inference")
+                .await
+                .is_none()
+        );
+        manager
+            .set_test_inference_endpoints(vec![InferenceEndpointRoute {
+                plugin_name: "provider".into(),
+                endpoint_id: "inference".into(),
+                protocol: Some("openai_compatible".into()),
+                address: "http://127.0.0.1:1".into(),
+                models: vec!["legacy-text".into()],
+            }])
+            .await;
+        assert_eq!(
+            manager
+                .endpoint_output_modalities_snapshot("provider", "inference")
+                .await,
+            Some(BTreeMap::new())
+        );
+        manager
+            .inner
+            .endpoint_health
+            .lock()
+            .await
+            .remove(&endpoint_key("provider", "inference"));
+        assert!(
+            manager
+                .endpoint_output_modalities_snapshot("provider", "inference")
+                .await
+                .is_none()
         );
     }
 }

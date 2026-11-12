@@ -27,6 +27,27 @@ pub(super) async fn admit_invocation(
     dispatch: PreparedSubdispatch<'_>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<ClientStream, Box<proxy::RouteDispatchOutcome>> {
+    if crate::network::openai::response::prepared_dispatch::outputs_images(node, dispatch.model)
+        .await
+    {
+        let _ = stream.require_image_safety(
+            crate::network::openai::client_stream::ImageResponseSafetyPlan {
+                guard_plugins: Vec::new(),
+            },
+        );
+        let written = proxy::send_error_observed(
+            stream,
+            503,
+            crate::network::openai::response::prepared_dispatch::IMAGE_SAFETY_UNSUPPORTED_DISPATCH,
+            route_observer,
+        )
+        .await;
+        return Err(Box::new(if written.is_err() {
+            proxy::RouteDispatchOutcome::Dropped("virtual_model_response_write_failed")
+        } else {
+            proxy::RouteDispatchOutcome::Responded(503)
+        }));
+    }
     if let Some(result) = admit(node, dispatch).await {
         let _ = stream.add_response_metadata(result.headers.clone());
         if let Some(status) = result.error_status() {

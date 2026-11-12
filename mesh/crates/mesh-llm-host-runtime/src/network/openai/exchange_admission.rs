@@ -59,6 +59,16 @@ pub(super) async fn admit_selected_candidate(
     attempt: usize,
     more_candidates: bool,
 ) -> SelectedRouteAdmission {
+    if let Err(error) = super::image_admission::admit(node, stream, request, model, &target).await {
+        stream.record_exchange_outcome(if error.status() == 403 {
+            "policy_denied"
+        } else {
+            "internal_hook_failure"
+        });
+        return SelectedRouteAdmission::Rejected(
+            send_image_safety_denial(stream, error.status()).await,
+        );
+    }
     let Some(manager) = node.plugin_manager().await else {
         return SelectedRouteAdmission::Proceed;
     };
@@ -88,6 +98,34 @@ pub(super) async fn admit_selected_candidate(
         }
     };
     apply_selected_route_policy(&manager, request, stream, event, more_candidates).await
+}
+
+async fn send_image_safety_denial(
+    stream: &mut ClientStream,
+    status: u16,
+) -> transport::RouteDispatchOutcome {
+    let code = if status == 403 {
+        "content_policy_violation"
+    } else {
+        "image_safety_unavailable"
+    };
+    let body = json!({"error":{"message":"Required local image safety checks did not approve this request", "type":code, "code":code}}).to_string();
+    let reason = if status == 403 {
+        "Forbidden"
+    } else {
+        "Service Unavailable"
+    };
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    match stream.write_all(response.as_bytes()).await {
+        Ok(()) => {
+            let _ = stream.shutdown().await;
+            transport::RouteDispatchOutcome::admission_rejected(status)
+        }
+        Err(_) => transport::RouteDispatchOutcome::Dropped("response_write_failed"),
+    }
 }
 
 /// The identity of `model` on the selected target, as this node knows it: its

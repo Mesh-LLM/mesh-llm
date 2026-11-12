@@ -15,6 +15,7 @@
       "bootstrap-build-tools",
       "build",
       "build-dev",
+      "build-image-guards",
       "build-openai-exchange-exemplar",
       "package-openai-exchange-exemplar",
       "qa-logging-console-e2e",

@@ -55,12 +55,12 @@ async fn dispatch(
         reason: reason.into(),
     };
     if !peer.authenticated
-        || !peer
+        || peer
             .runtime
             .lock()
             .await
             .as_ref()
-            .is_some_and(|runtime| runtime.generation == peer.generation)
+            .is_none_or(|runtime| runtime.generation != peer.generation)
     {
         return denied("authenticated current connection required");
     }

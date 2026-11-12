@@ -41,6 +41,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-tui"
   "mesh-llm-ui"
   "mesh-llm-plugin"
+  "mesh-llm-image-guards"
   "mesh-llm-skills"
   "mesh-llm-plugin-manager"
   "mesh-llm-client"

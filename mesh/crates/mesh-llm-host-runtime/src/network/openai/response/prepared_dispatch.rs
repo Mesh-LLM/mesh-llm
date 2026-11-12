@@ -2,6 +2,55 @@
 use crate::{mesh, plugin};
 use serde_json::json;
 
+pub(crate) const IMAGE_SAFETY_UNSUPPORTED_DISPATCH: &str = "Image output safety is not supported for orchestrated model requests; select the image model directly";
+
+/// Orchestrators prepare additional model calls and can commit progress before
+/// their final output exists. Until they have their own safety boundary, never
+/// execute an image-producing model through this path.
+pub(crate) async fn outputs_images(node: &mesh::Node, model: &str) -> bool {
+    if node
+        .served_model_descriptors()
+        .await
+        .iter()
+        .any(|descriptor| {
+            mesh::model_identity::descriptor_matches_routable_name(descriptor, model)
+                && descriptor.metadata.as_ref().is_some_and(|metadata| {
+                    metadata
+                        .output_modalities
+                        .iter()
+                        .any(|value| value == "image")
+                })
+        })
+    {
+        return true;
+    }
+    let Some(manager) = node.plugin_manager().await else {
+        return false;
+    };
+    if let Ok(Some(route)) = manager.virtual_model_for_model(model).await
+        && route.output_modalities.iter().any(|value| value == "image")
+    {
+        return true;
+    }
+    let Ok(endpoints) = manager.inference_endpoints().await else {
+        return true;
+    };
+    for endpoint in endpoints {
+        if endpoint.models.iter().any(|name| name == model) {
+            let modalities = manager
+                .endpoint_output_modalities(&endpoint.plugin_name, &endpoint.endpoint_id)
+                .await;
+            if modalities
+                .get(model)
+                .is_some_and(|values| values.iter().any(|value| value == "image"))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) struct PreparedSubdispatch<'a> {
     pub observation_id: Option<&'a str>,
     pub exchange_id: String,
@@ -66,6 +115,16 @@ pub(super) async fn admit_pipeline_body(
     target: &str,
     attempt: usize,
 ) -> Option<super::pipeline::PipelineProxyResult> {
+    if outputs_images(node, model).await {
+        let _ = stream.require_image_safety(
+            crate::network::openai::client_stream::ImageResponseSafetyPlan {
+                guard_plugins: Vec::new(),
+            },
+        );
+        return Some(
+            write_pipeline_rejection(stream, 503, IMAGE_SAFETY_UNSUPPORTED_DISPATCH).await,
+        );
+    }
     let bytes = serde_json::to_vec(body).ok()?;
     let result = admit(
         node,
@@ -87,16 +146,24 @@ pub(super) async fn admit_pipeline_body(
     .await?;
     let _ = stream.add_response_metadata(result.headers.clone());
     let status = result.error_status()?;
-    Some(write_pipeline_rejection(stream, status).await)
+    Some(
+        write_pipeline_rejection(
+            stream,
+            status,
+            "OpenAI plugin policy rejected pipeline dispatch",
+        )
+        .await,
+    )
 }
 
 async fn write_pipeline_rejection(
     stream: &mut crate::network::openai::client_stream::ClientStream,
     status: u16,
+    message: &str,
 ) -> super::pipeline::PipelineProxyResult {
     use tokio::io::AsyncWriteExt;
     let denied = matches!(status, 402 | 403);
-    let body = json!({"error":{"message":"OpenAI plugin policy rejected pipeline dispatch","type":if denied {"permission_error"} else {"service_unavailable"}}}).to_string();
+    let body = json!({"error":{"message":message,"type":if denied {"permission_error"} else {"service_unavailable"}}}).to_string();
     let wire = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         match status {
@@ -192,7 +259,7 @@ mod tests {
                 }
                 stream.shutdown().await.unwrap();
                 assert!(matches!(
-                    write_pipeline_rejection(&mut stream, status).await,
+                    write_pipeline_rejection(&mut stream, status, "test rejection").await,
                     super::super::pipeline::PipelineProxyResult::Dropped
                 ));
                 let commitment = recorder.0.lock().unwrap().clone().unwrap();

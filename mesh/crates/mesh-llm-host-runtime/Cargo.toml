@@ -84,6 +84,9 @@ async-trait = "0.1"
 crossbeam-queue.workspace = true
 rand = "0.10"
 base64 = "0.23"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+crc32fast = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
 dirs = "6.0.0"
 hex = "0.4.3"
 nostr-sdk = { version = "0.45.1", default-features = false }
