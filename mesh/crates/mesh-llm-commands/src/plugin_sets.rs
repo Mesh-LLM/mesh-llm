@@ -15,6 +15,7 @@ use mesh_llm_plugin_manager::{
 };
 
 use crate::plugin::CliPluginProgress;
+use crate::plugin_set_offers::{SetOffers, added_members_notice, members_added_since};
 
 /// The catalog set setup and update offer by name.
 pub const RECOMMENDED_SET: &str = "recommended";
@@ -115,16 +116,16 @@ pub fn offer_lines(
     ])
 }
 
-/// Ask whether to install `set_name`, defaulting to No. An EOF, a read
-/// error, or a missing terminal declines; unattended callers never reach
-/// here.
+/// Ask whether to install `set_name`, with install preselected (Enter
+/// accepts). Answering `n`, an EOF, or a terminal read error declines;
+/// unattended callers never reach here.
 pub fn prompt_install_set(set_name: &str) -> bool {
     crate::terminal::confirm_yes_no(
         &format!("Install plugin set '{set_name}'?"),
-        crate::terminal::ConfirmDefault::No,
+        crate::terminal::ConfirmDefault::Yes,
     )
     .unwrap_or(Some(false))
-    .unwrap_or(false)
+    .unwrap_or(true)
 }
 
 /// Install the named set against one catalog snapshot, with the CLI progress
@@ -171,6 +172,11 @@ pub async fn install_set_command(
             result.installed_count() + result.failed.len()
         );
     }
+    // An explicit install also settles the offer: a later update on this
+    // machine must not offer or install the set again. A damaged record is
+    // replaced here, since the operator just chose the set.
+    let mut offers = SetOffers::load(&options.store_root).unwrap_or_default();
+    record_offer(&mut offers, options, catalog, set_name);
     Ok(result)
 }
 
@@ -220,10 +226,14 @@ impl PluginProgressReporter for VerifyingPluginProgress {
 pub enum OptionalPluginPlan {
     /// Install this catalog set without prompting (explicit `--plugin-set`).
     InstallSet(String),
-    /// Offer this set when attended; default No.
+    /// Offer this set when attended; install is preselected (default Yes).
     Offer(String),
+    /// Install this set without prompting because no one chose either way
+    /// (unattended runs): the catalog's default. A catalog that publishes no
+    /// such set (or an empty one) makes this a quiet skip, never an error.
+    InstallDefault(String),
     /// Skip optional plugin installation and say so.
-    Skip(Option<String>),
+    Skip,
 }
 
 /// Decide the optional-plugin plan for setup and update from the explicit
@@ -240,10 +250,10 @@ pub fn optional_plugin_plan(
         return OptionalPluginPlan::InstallSet(name.to_string());
     }
     if skip_plugin_install || legacy_no_default_plugins {
-        return OptionalPluginPlan::Skip(Some("Optional plugin installation skipped.".to_string()));
+        return OptionalPluginPlan::Skip;
     }
     if !attended {
-        return OptionalPluginPlan::Skip(None);
+        return OptionalPluginPlan::InstallDefault(RECOMMENDED_SET.to_string());
     }
     OptionalPluginPlan::Offer(RECOMMENDED_SET.to_string())
 }
@@ -263,9 +273,11 @@ pub enum OptionalPluginResult {
 /// reach the normal optional phase. Never silently discard a selected set.
 pub fn handoff_optional_plugin_lines(plan: &OptionalPluginPlan) -> Vec<String> {
     let (name, action) = match plan {
-        OptionalPluginPlan::InstallSet(name) => (name, "was not installed"),
+        OptionalPluginPlan::InstallSet(name) | OptionalPluginPlan::InstallDefault(name) => {
+            (name, "was not installed")
+        }
         OptionalPluginPlan::Offer(name) => (name, "was not offered"),
-        OptionalPluginPlan::Skip(_) => return Vec::new(),
+        OptionalPluginPlan::Skip => return Vec::new(),
     };
     vec![
         format!(
@@ -280,79 +292,180 @@ pub fn handoff_optional_plugin_lines(plan: &OptionalPluginPlan) -> Vec<String> {
 /// retry guidance, and reports the installation as incomplete. `prompt`
 /// answers "install set NAME?" for an attended offer; an explicit
 /// `--plugin-set` selection never asks it.
+///
+/// A defaulted or offered set installs once per machine. The per-machine
+/// record (`SetOffers`) says whether this machine was already offered it:
+/// when it was, nothing installs or prompts (a member the operator removed
+/// stays removed) and an attended run only learns of members the catalog
+/// added since. An explicit `--plugin-set` always installs, and records.
 pub async fn run_optional_plugin_phase(
     plan: &OptionalPluginPlan,
     host_version: &str,
     prompt: &mut dyn FnMut(&str) -> bool,
 ) -> Result<OptionalPluginResult> {
     let mut err = mesh_llm_events::console_err();
-    match plan {
-        OptionalPluginPlan::Skip(reason) => {
-            if let Some(reason) = reason {
-                let _ = writeln!(err, "ℹ️  {reason}");
-            } else {
-                let _ = writeln!(err, "ℹ️  No optional plugin set selected.");
-            }
-            Ok(OptionalPluginResult::Skipped)
+    let name = match plan {
+        OptionalPluginPlan::Skip => {
+            let _ = writeln!(err, "ℹ️  Optional plugin installation skipped.");
+            return Ok(OptionalPluginResult::Skipped);
         }
-        OptionalPluginPlan::InstallSet(name) | OptionalPluginPlan::Offer(name) => {
-            let mut options = match PluginInstallOptions::from_env() {
-                Ok(options) => options,
-                Err(error) => {
-                    // No usable plugin store on this machine (for example an
-                    // unsupported platform): an incomplete optional install,
-                    // never a failed core setup or upgrade.
-                    let _ = writeln!(
-                        err,
-                        "⚠️  Optional plugin installation needs a plugin store ({error:#}). \
-                         Optional plugin installation incomplete."
-                    );
-                    let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
-                    return Ok(OptionalPluginResult::Incomplete(0));
-                }
-            };
-            // An update may already have replaced the executable on disk; this
-            // process still contains the old release's build information.
-            options.host_version = host_version.to_string();
-            let catalog = match fetch_catalog(&options).await {
-                Ok(catalog) => catalog,
-                Err(error) => {
-                    let _ = writeln!(
-                        err,
-                        "⚠️  Could not read the plugin catalog ({error:#}). Optional plugin \
-                         installation incomplete."
-                    );
-                    let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
-                    return Ok(OptionalPluginResult::Incomplete(0));
-                }
-            };
-            if matches!(plan, OptionalPluginPlan::Offer(_)) {
-                let Some(lines) =
-                    offer_lines(&catalog, name, options.target.triple(), host_version)
-                else {
-                    let _ = writeln!(
-                        err,
-                        "ℹ️  No members of plugin set '{name}' can be installed for this platform \
-                         and host; nothing to offer."
-                    );
-                    return Ok(OptionalPluginResult::Skipped);
-                };
-                for line in lines {
-                    let _ = writeln!(err, "{line}");
-                }
-                if !prompt(name) {
-                    let _ = writeln!(err, "ℹ️  Optional plugin installation skipped.");
-                    return Ok(OptionalPluginResult::Skipped);
-                }
-            } else {
-                let _ = writeln!(err, "ℹ️  Installing plugin set: {name}");
-            }
-            Ok(report_optional_set_result(
-                name,
-                install_set_quiet(&catalog, name, &options).await,
-            ))
+        OptionalPluginPlan::InstallSet(name)
+        | OptionalPluginPlan::Offer(name)
+        | OptionalPluginPlan::InstallDefault(name) => name,
+    };
+    let mut options = match PluginInstallOptions::from_env() {
+        Ok(options) => options,
+        Err(error) => {
+            // No usable plugin store on this machine (for example an
+            // unsupported platform): an incomplete optional install,
+            // never a failed core setup or upgrade.
+            let _ = writeln!(
+                err,
+                "⚠️  Optional plugin installation needs a plugin store ({error:#}). \
+                 Optional plugin installation incomplete."
+            );
+            let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
+            return Ok(OptionalPluginResult::Incomplete(0));
         }
+    };
+    // An update may already have replaced the executable on disk; this
+    // process still contains the old release's build information.
+    options.host_version = host_version.to_string();
+    run_phase_with(
+        plan,
+        name,
+        &options,
+        async || fetch_catalog(&options).await,
+        prompt,
+    )
+    .await
+}
+
+/// The phase against explicit options and a catalog source, so tests drive it
+/// with a temporary store and a local catalog.
+async fn run_phase_with(
+    plan: &OptionalPluginPlan,
+    name: &str,
+    options: &PluginInstallOptions,
+    fetch: impl AsyncFn() -> Result<PluginCatalog>,
+    prompt: &mut dyn FnMut(&str) -> bool,
+) -> Result<OptionalPluginResult> {
+    let mut err = mesh_llm_events::console_err();
+    let defaulted = !matches!(plan, OptionalPluginPlan::InstallSet(_));
+    let mut offers = match SetOffers::load(&options.store_root) {
+        Ok(offers) => offers,
+        // The operator chose this set explicitly: replace a damaged record.
+        Err(_) if !defaulted => SetOffers::default(),
+        Err(error) => {
+            // A damaged record must never cause a reinstall: skip and say why.
+            let path = SetOffers::path(&options.store_root);
+            let _ = writeln!(
+                err,
+                "⚠️  Could not read the plugin set record ({error:#}); not installing plugin sets. \
+                 `mesh-llm plugins sets install {name}` rewrites it, or delete {} to be offered again.",
+                path.display()
+            );
+            return Ok(OptionalPluginResult::Skipped);
+        }
+    };
+    if defaulted && let Some(offered) = offers.offered(name) {
+        let offered = offered.to_vec();
+        if matches!(plan, OptionalPluginPlan::Offer(_)) {
+            notify_added_members(options, &mut offers, name, &offered, &fetch).await;
+        }
+        return Ok(OptionalPluginResult::Skipped);
     }
+    let catalog = match fetch().await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let _ = writeln!(
+                err,
+                "⚠️  Could not read the plugin catalog ({error:#}). Optional plugin \
+                 installation incomplete."
+            );
+            let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
+            return Ok(OptionalPluginResult::Incomplete(0));
+        }
+    };
+    let result = match offer_gate(plan, &catalog, name, options, prompt) {
+        OfferGate::Absent => return Ok(OptionalPluginResult::Skipped),
+        OfferGate::Declined => {
+            // Declining is an answer: this machine was offered the set.
+            record_offer(&mut offers, options, &catalog, name);
+            return Ok(OptionalPluginResult::Skipped);
+        }
+        OfferGate::Proceed => install_and_report(&catalog, name, options).await,
+    };
+    // A complete install (or one with nothing left to install) settles the
+    // offer; an incomplete one stays unrecorded so a later run retries.
+    if settles_offer(&result) {
+        record_offer(&mut offers, options, &catalog, name);
+    }
+    Ok(result)
+}
+
+/// Whether a finished install settles the offer: complete or nothing left to
+/// install does; an incomplete one stays unrecorded so a later run retries.
+fn settles_offer(result: &OptionalPluginResult) -> bool {
+    !matches!(result, OptionalPluginResult::Incomplete(_))
+}
+
+/// An already-offered set on an attended run: show members the catalog added
+/// since, once, and record them as seen. A catalog that cannot be read
+/// changes nothing (there is no install to report as incomplete).
+async fn notify_added_members(
+    options: &PluginInstallOptions,
+    offers: &mut SetOffers,
+    name: &str,
+    offered: &[String],
+    fetch: &impl AsyncFn() -> Result<PluginCatalog>,
+) {
+    let Ok(catalog) = fetch().await else {
+        return;
+    };
+    let added = members_added_since(offered, &set_members(&catalog, name));
+    if added.is_empty() {
+        return;
+    }
+    let mut err = mesh_llm_events::console_err();
+    for line in added_members_notice(name, &added) {
+        let _ = writeln!(err, "{line}");
+    }
+    record_offer(offers, options, &catalog, name);
+}
+
+/// Record every current member of `set` as offered; a failed write only warns,
+/// because the install itself already happened.
+pub(crate) fn record_offer(
+    offers: &mut SetOffers,
+    options: &PluginInstallOptions,
+    catalog: &PluginCatalog,
+    set: &str,
+) {
+    if let Err(error) = offers.record(&options.store_root, set, &set_members(catalog, set)) {
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(
+            err,
+            "⚠️  Could not record the {set} plugin set offer ({error:#}); a later update may offer it again."
+        );
+    }
+}
+
+/// The member names the catalog publishes for `set`; empty when it has none.
+fn set_members(catalog: &PluginCatalog, set: &str) -> Vec<String> {
+    catalog
+        .find_set(set)
+        .map(|set| set.plugins.clone())
+        .unwrap_or_default()
+}
+
+/// Install the set and print what happened to every member.
+async fn install_and_report(
+    catalog: &PluginCatalog,
+    name: &str,
+    options: &PluginInstallOptions,
+) -> OptionalPluginResult {
+    report_optional_set_result(name, install_set_quiet(catalog, name, options).await)
 }
 
 /// Core setup/update has already succeeded: even an invalid optional
@@ -364,22 +477,12 @@ fn report_optional_set_result(
     let mut err = mesh_llm_events::console_err();
     match result {
         Ok(result) => {
+            // Every member is accounted for: what landed, what was left as it
+            // is (and why), and what failed.
             for (skipped_name, reason) in &result.skipped {
                 let _ = writeln!(err, "ℹ️  {skipped_name} skipped: {reason}");
             }
-            if result.failed.is_empty() {
-                if result.installed_count() == 0 {
-                    let _ = writeln!(err, "ℹ️  No member of this set needed installing.");
-                    OptionalPluginResult::Skipped
-                } else {
-                    let _ = writeln!(
-                        err,
-                        "✅ Plugin set installed: {} installed.",
-                        result.installed_count()
-                    );
-                    OptionalPluginResult::Installed(result.installed_count())
-                }
-            } else {
+            if !result.failed.is_empty() {
                 for (failed_name, reason) in &result.failed {
                     let _ = writeln!(
                         err,
@@ -388,8 +491,18 @@ fn report_optional_set_result(
                     );
                 }
                 let _ = writeln!(err, "ℹ️  Retry: mesh-llm plugins sets install {name}");
-                OptionalPluginResult::Incomplete(result.installed_count())
+                return OptionalPluginResult::Incomplete(result.installed_count());
             }
+            if result.installed_count() == 0 {
+                let _ = writeln!(err, "ℹ️  No member of this set needed installing.");
+                return OptionalPluginResult::Skipped;
+            }
+            let _ = writeln!(
+                err,
+                "✅ Plugin set installed: {} installed.",
+                result.installed_count()
+            );
+            OptionalPluginResult::Installed(result.installed_count())
         }
         Err(error) => {
             let _ = writeln!(
@@ -400,6 +513,60 @@ fn report_optional_set_result(
             OptionalPluginResult::Incomplete(0)
         }
     }
+}
+
+/// How an optional install gate resolved.
+#[derive(Debug, Eq, PartialEq)]
+enum OfferGate {
+    /// Install the set.
+    Proceed,
+    /// The operator answered no to an attended offer.
+    Declined,
+    /// The catalog publishes no such set with members; nothing to offer.
+    Absent,
+}
+
+/// Decide whether an optional install proceeds, printing what the operator
+/// should see first. An explicit set proceeds; a defaulted or offered set
+/// proceeds only when the catalog publishes it with members, and an offer also
+/// needs the prompt's yes. `InstallDefault` never asks, so a missing or empty
+/// set is a quiet skip, never an error.
+fn offer_gate(
+    plan: &OptionalPluginPlan,
+    catalog: &PluginCatalog,
+    name: &str,
+    options: &PluginInstallOptions,
+    prompt: &mut dyn FnMut(&str) -> bool,
+) -> OfferGate {
+    let mut err = mesh_llm_events::console_err();
+    if !matches!(
+        plan,
+        OptionalPluginPlan::Offer(_) | OptionalPluginPlan::InstallDefault(_)
+    ) {
+        let _ = writeln!(err, "ℹ️  Installing plugin set: {name}");
+        return OfferGate::Proceed;
+    }
+    let Some(lines) = offer_lines(
+        catalog,
+        name,
+        options.target.triple(),
+        &options.host_version,
+    ) else {
+        let _ = writeln!(
+            err,
+            "ℹ️  No members of plugin set '{name}' can be installed for this platform and host; \
+             nothing to offer."
+        );
+        return OfferGate::Absent;
+    };
+    for line in lines {
+        let _ = writeln!(err, "{line}");
+    }
+    if matches!(plan, OptionalPluginPlan::InstallDefault(_)) || prompt(name) {
+        return OfferGate::Proceed;
+    }
+    let _ = writeln!(err, "ℹ️  Optional plugin installation skipped.");
+    OfferGate::Declined
 }
 
 /// Install a set without the command's own summary lines; per-member progress
@@ -450,6 +617,7 @@ pub fn render_update_notices(plan: &mesh_llm_plugin_manager::PluginUpgradePlan) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mesh_llm_plugin_manager::PluginStore;
 
     const ENTRIES: &str = r#"{"name":"capsules","description":"Audit and provenance records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
 "#;
@@ -558,6 +726,69 @@ mod tests {
         assert!(offer_lines(&catalog, "empty", "x86_64-unknown-linux-gnu", "0.90.0").is_none());
     }
 
+    #[test]
+    fn the_default_install_never_prompts_and_skips_a_missing_set_quietly() {
+        let root = tempfile::tempdir().unwrap();
+        let options = phase_options(root.path());
+        let mut never = |_: &str| -> bool { panic!("InstallDefault must not prompt") };
+        let default = OptionalPluginPlan::InstallDefault("recommended".into());
+        assert_eq!(
+            offer_gate(&default, &catalog(), "recommended", &options, &mut never),
+            OfferGate::Proceed
+        );
+        let missing = OptionalPluginPlan::InstallDefault("missing".into());
+        assert_eq!(
+            offer_gate(&missing, &catalog(), "missing", &options, &mut never),
+            OfferGate::Absent
+        );
+    }
+
+    #[test]
+    fn an_offer_installs_only_on_yes() {
+        let root = tempfile::tempdir().unwrap();
+        let options = phase_options(root.path());
+        let offer = OptionalPluginPlan::Offer("recommended".into());
+        assert_eq!(
+            offer_gate(&offer, &catalog(), "recommended", &options, &mut |_| true),
+            OfferGate::Proceed
+        );
+        assert_eq!(
+            offer_gate(&offer, &catalog(), "recommended", &options, &mut |_| false),
+            OfferGate::Declined
+        );
+    }
+
+    #[test]
+    fn explicit_selection_wins_and_unattended_defaults_to_the_recommended_set() {
+        assert_eq!(
+            optional_plugin_plan(Some("extra"), false, false, false),
+            OptionalPluginPlan::InstallSet("extra".into())
+        );
+        assert_eq!(
+            optional_plugin_plan(Some("recommended"), true, false, true),
+            OptionalPluginPlan::InstallSet("recommended".into()),
+            "an explicit set with --skip-plugin-install is rejected at parse time"
+        );
+        assert_eq!(
+            optional_plugin_plan(None, true, false, true),
+            OptionalPluginPlan::Skip
+        );
+        assert_eq!(
+            optional_plugin_plan(None, false, true, false),
+            OptionalPluginPlan::Skip,
+            "the legacy environment default skips optional installation"
+        );
+        assert_eq!(
+            optional_plugin_plan(None, false, false, false),
+            OptionalPluginPlan::InstallDefault(RECOMMENDED_SET.into()),
+            "unattended installs the recommended set by default"
+        );
+        assert_eq!(
+            optional_plugin_plan(None, false, false, true),
+            OptionalPluginPlan::Offer(RECOMMENDED_SET.into())
+        );
+    }
+
     #[tokio::test]
     async fn an_unrelated_corrupt_record_does_not_block_set_installation() {
         use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, PluginTarget};
@@ -638,37 +869,242 @@ mod tests {
         let offer = handoff_optional_plugin_lines(&OptionalPluginPlan::Offer("recommended".into()));
         assert!(offer[0].contains("was not offered"));
         assert!(offer[1].ends_with("mesh-llm plugins sets install recommended"));
-        assert!(handoff_optional_plugin_lines(&OptionalPluginPlan::Skip(None)).is_empty());
+        let default = handoff_optional_plugin_lines(&OptionalPluginPlan::InstallDefault(
+            "recommended".into(),
+        ));
+        assert!(default[0].contains("was not installed"));
+        assert!(handoff_optional_plugin_lines(&OptionalPluginPlan::Skip).is_empty());
+    }
+
+    // The install-once phase, driven against a temporary store and a local
+    // catalog so no test needs the network.
+
+    const PHASE_ENTRIES: &str = r#"{"name":"capsules","description":"Audit","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v0.2.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
+{"name":"notes","description":"Notes","github_url":"https://github.com/Mesh-LLM/notes","author_email":"m@meshllm.cloud","author_name":"Mesh LLM","version":"v1.0.0","sha256":{"x86_64-unknown-linux-gnu":"abababababababababababababababababababababababababababababababab"}}
+"#;
+
+    fn phase_catalog(members: &[&str]) -> PluginCatalog {
+        let sets = format!(
+            r#"{{"name":"recommended","description":"Recommended","plugins":{}}}"#,
+            serde_json::to_string(members).unwrap()
+        );
+        PluginCatalog::parse_jsonl(PHASE_ENTRIES)
+            .unwrap()
+            .with_sets(PluginCatalog::parse_sets_jsonl(&sets).unwrap())
+            .unwrap()
+    }
+
+    fn phase_options(root: &std::path::Path) -> PluginInstallOptions {
+        PluginInstallOptions {
+            store_root: root.to_path_buf(),
+            install_root: root.join("installed"),
+            catalog_url: "http://127.0.0.1:9/unreachable".into(),
+            target: mesh_llm_plugin_manager::PluginTarget::from_os_arch("linux", "x86_64").unwrap(),
+            host_version: "0.90.0".into(),
+        }
+    }
+
+    fn install_marker(root: &std::path::Path, name: &str) {
+        PluginStore::new(root)
+            .save(&mesh_llm_plugin_manager::InstalledPluginMetadata {
+                name: name.into(),
+                source_repository: format!("https://github.com/mesh-llm/{name}"),
+                installed_version: "v1.0.0".into(),
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                downloaded_asset_name: format!("{name}.tar.gz"),
+                install_path: root.join("installed").join(name),
+                enabled: true,
+                default_managed: false,
+                host_compatibility: None,
+                allowed_surfaces: None,
+                manifest: None,
+                last_protocol_version: None,
+                last_status: None,
+                last_error: None,
+                verified_sha256: None,
+            })
+            .unwrap();
+    }
+
+    fn offered(root: &std::path::Path) -> Option<Vec<String>> {
+        SetOffers::load(root)
+            .unwrap()
+            .offered("recommended")
+            .map(<[String]>::to_vec)
+    }
+
+    async fn run_phase(
+        plan: &OptionalPluginPlan,
+        root: &std::path::Path,
+        catalog: &PluginCatalog,
+        fetches: &std::cell::Cell<u32>,
+        answer: bool,
+    ) -> OptionalPluginResult {
+        run_phase_with(
+            plan,
+            "recommended",
+            &phase_options(root),
+            async || {
+                fetches.set(fetches.get() + 1);
+                Ok(catalog.clone())
+            },
+            &mut |_| answer,
+        )
+        .await
+        .unwrap()
+    }
+
+    fn default_plan() -> OptionalPluginPlan {
+        OptionalPluginPlan::InstallDefault("recommended".into())
+    }
+
+    fn offer_plan() -> OptionalPluginPlan {
+        OptionalPluginPlan::Offer("recommended".into())
+    }
+
+    #[tokio::test]
+    async fn the_first_default_run_settles_the_offer_for_this_machine() {
+        let temp = tempfile::tempdir().unwrap();
+        install_marker(temp.path(), "capsules");
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        run_phase(&default_plan(), temp.path(), &catalog, &fetches, true).await;
+        assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn an_uninstalled_member_is_not_reinstalled_by_a_later_update() {
+        let temp = tempfile::tempdir().unwrap();
+        SetOffers::default()
+            .record(temp.path(), "recommended", &["capsules".to_string()])
+            .unwrap();
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        for plan in [default_plan(), offer_plan()] {
+            let result = run_phase(&plan, temp.path(), &catalog, &fetches, true).await;
+            assert_eq!(result, OptionalPluginResult::Skipped);
+        }
+        assert!(
+            PluginStore::new(temp.path())
+                .load_optional("capsules")
+                .unwrap()
+                .is_none(),
+            "a removed member stays removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_offered_set_never_prompts_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        // Declining the first offer still counts as having been offered.
+        run_phase(&offer_plan(), temp.path(), &catalog, &fetches, false).await;
+        assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
+        let result = run_phase_with(
+            &offer_plan(),
+            "recommended",
+            &phase_options(temp.path()),
+            async || Ok(catalog.clone()),
+            &mut |_| panic!("an offered set must not prompt again"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, OptionalPluginResult::Skipped);
+    }
+
+    #[tokio::test]
+    async fn members_added_later_are_a_notice_once_and_never_an_unattended_install() {
+        let temp = tempfile::tempdir().unwrap();
+        SetOffers::default()
+            .record(temp.path(), "recommended", &["capsules".to_string()])
+            .unwrap();
+        let grown = phase_catalog(&["capsules", "notes"]);
+        let fetches = std::cell::Cell::new(0);
+
+        // Unattended: no catalog read, no install, and the new member stays
+        // unseen so a later attended run can still show it.
+        run_phase(&default_plan(), temp.path(), &grown, &fetches, true).await;
+        assert_eq!(fetches.get(), 0);
+        assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
+
+        // Attended: the notice is shown, nothing installs, and the member is
+        // recorded as seen.
+        let result = run_phase(&offer_plan(), temp.path(), &grown, &fetches, true).await;
+        assert_eq!(result, OptionalPluginResult::Skipped);
+        assert_eq!(fetches.get(), 1);
+        assert!(
+            PluginStore::new(temp.path())
+                .load_optional("notes")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            offered(temp.path()),
+            Some(vec!["capsules".to_string(), "notes".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_plugin_set_installs_even_when_the_machine_was_offered() {
+        let temp = tempfile::tempdir().unwrap();
+        install_marker(temp.path(), "capsules");
+        SetOffers::default()
+            .record(temp.path(), "recommended", &["capsules".to_string()])
+            .unwrap();
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        let plan = OptionalPluginPlan::InstallSet("recommended".into());
+        run_phase(&plan, temp.path(), &catalog, &fetches, true).await;
+        assert_eq!(
+            fetches.get(),
+            1,
+            "the explicit selection reaches the catalog"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_damaged_record_skips_instead_of_installing() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("set-offers.json"), b"not json").unwrap();
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        let result = run_phase(&default_plan(), temp.path(), &catalog, &fetches, true).await;
+        assert_eq!(result, OptionalPluginResult::Skipped);
+        assert_eq!(fetches.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_explicit_plugin_set_replaces_a_damaged_record() {
+        let temp = tempfile::tempdir().unwrap();
+        install_marker(temp.path(), "capsules");
+        std::fs::write(temp.path().join("set-offers.json"), b"not json").unwrap();
+        let fetches = std::cell::Cell::new(0);
+        let catalog = phase_catalog(&["capsules"]);
+        let plan = OptionalPluginPlan::InstallSet("recommended".into());
+        run_phase(&plan, temp.path(), &catalog, &fetches, true).await;
+        assert_eq!(fetches.get(), 1, "the explicit selection still installs");
+        assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
     }
 
     #[test]
-    fn explicit_selection_wins_and_unattended_defaults_to_no_optional_plugins() {
-        assert_eq!(
-            optional_plugin_plan(Some("extra"), false, false, false),
-            OptionalPluginPlan::InstallSet("extra".into())
-        );
-        assert_eq!(
-            optional_plugin_plan(Some("recommended"), true, false, true),
-            OptionalPluginPlan::InstallSet("recommended".into()),
-            "an explicit set with --skip-plugin-install is rejected at parse time"
-        );
-        assert_eq!(
-            optional_plugin_plan(None, true, false, true),
-            OptionalPluginPlan::Skip(Some("Optional plugin installation skipped.".into()))
-        );
-        assert_eq!(
-            optional_plugin_plan(None, false, true, false),
-            OptionalPluginPlan::Skip(Some("Optional plugin installation skipped.".into())),
-            "the legacy environment default skips optional installation"
-        );
-        assert_eq!(
-            optional_plugin_plan(None, false, false, false),
-            OptionalPluginPlan::Skip(None),
-            "unattended installs no optional plugin by default"
-        );
-        assert_eq!(
-            optional_plugin_plan(None, false, false, true),
-            OptionalPluginPlan::Offer(RECOMMENDED_SET.into())
-        );
+    fn only_an_incomplete_install_leaves_the_offer_unrecorded() {
+        assert!(settles_offer(&OptionalPluginResult::Skipped));
+        assert!(settles_offer(&OptionalPluginResult::Installed(1)));
+        assert!(!settles_offer(&OptionalPluginResult::Incomplete(0)));
+    }
+
+    #[tokio::test]
+    async fn the_explicit_set_command_records_the_offer() {
+        let temp = tempfile::tempdir().unwrap();
+        install_marker(temp.path(), "capsules");
+        install_set_command(
+            &phase_catalog(&["capsules"]),
+            "recommended",
+            &phase_options(temp.path()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
     }
 }

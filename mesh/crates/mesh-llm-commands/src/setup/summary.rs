@@ -67,62 +67,48 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
     let _ = writeln!(err, "{} Mesh setup complete", style_ok("✓"));
     let _ = writeln!(err, "  Runtime  {}", runtime_brief(plan, actions));
     let _ = writeln!(err, "  Service  {}", service_brief(plan, actions));
-    if let Some(plugins) = plugin_brief(plan, actions) {
-        let _ = writeln!(err, "  Plugins  {plugins}");
-    }
+    let _ = writeln!(err, "  Plugins  {}", plugin_brief(plan, actions));
     if let Some(github) = github_brief(actions) {
         let _ = writeln!(err, "  GitHub star  {github}");
     }
     let _ = writeln!(err, "  Next     {}", next_step(actions));
 }
 
-/// One line for the optional plugin phase in the concise summary; `None`
-/// when nothing happened worth a line.
-fn plugin_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> Option<String> {
+/// One line for the optional plugin phase in the concise summary.
+fn plugin_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
     let set_name = match &plan.plugins {
         super::SetupPluginPlan::Install(name) => name.as_str(),
         _ => crate::plugin_sets::RECOMMENDED_SET,
     };
     match &plan.plugins {
-        super::SetupPluginPlan::Install(_) | super::SetupPluginPlan::Offer => {
-            Some(match actions.plugin_outcome {
-                SetupPluginOutcome::Installed(count) => format!("installed {count}"),
-                SetupPluginOutcome::Incomplete => {
-                    format!(
-                        "{} incomplete; retry with `mesh-llm plugins sets install {set_name}`",
-                        style_warn("installation")
-                    )
-                }
-                SetupPluginOutcome::Skipped | SetupPluginOutcome::NotRequested => {
-                    "skipped".to_string()
-                }
-            })
-        }
-        super::SetupPluginPlan::Skip(reason) => match reason {
-            super::SetupPluginSkipReason::ExplicitSkip => Some("skipped".to_string()),
-            super::SetupPluginSkipReason::HiddenPrompt => None,
+        super::SetupPluginPlan::Install(_)
+        | super::SetupPluginPlan::Offer
+        | super::SetupPluginPlan::InstallDefault => match actions.plugin_outcome {
+            SetupPluginOutcome::Installed(count) => format!("installed {count}"),
+            SetupPluginOutcome::Incomplete => {
+                format!(
+                    "{} incomplete; retry with `mesh-llm plugins sets install {set_name}`",
+                    style_warn("installation")
+                )
+            }
+            SetupPluginOutcome::Skipped | SetupPluginOutcome::NotRequested => "skipped".to_string(),
         },
+        super::SetupPluginPlan::Skip => "skipped".to_string(),
     }
 }
 
 /// The verbose summary line for the optional plugin phase.
 fn plugin_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
-    match plugin_brief(plan, actions) {
-        Some(brief) => format!(
-            "{brief} ({})",
-            match &plan.plugins {
-                super::SetupPluginPlan::Install(name) => format!("--plugin-set {name}"),
-                super::SetupPluginPlan::Offer => "recommended offer".to_string(),
-                super::SetupPluginPlan::Skip(reason) => match reason {
-                    super::SetupPluginSkipReason::ExplicitSkip => {
-                        "--skip-plugin-install".to_string()
-                    }
-                    super::SetupPluginSkipReason::HiddenPrompt => "no prompt available".to_string(),
-                },
-            }
-        ),
-        None => "none (no prompt available and no set selected)".to_string(),
-    }
+    format!(
+        "{} ({})",
+        plugin_brief(plan, actions),
+        match &plan.plugins {
+            super::SetupPluginPlan::Install(name) => format!("--plugin-set {name}"),
+            super::SetupPluginPlan::Offer => "recommended offer".to_string(),
+            super::SetupPluginPlan::InstallDefault => "recommended by default".to_string(),
+            super::SetupPluginPlan::Skip => "--skip-plugin-install".to_string(),
+        }
+    )
 }
 
 /// What to run after setup. An installed service runs `serve` on the default
@@ -361,7 +347,7 @@ mod tests {
                 ),
             );
             let retry = format!("`mesh-llm plugins sets install {name}`");
-            assert!(plugin_brief(&plan, &actions).unwrap().contains(&retry));
+            assert!(plugin_brief(&plan, &actions).contains(&retry));
             assert!(plugin_summary(&plan, &actions).contains(&retry));
         }
     }

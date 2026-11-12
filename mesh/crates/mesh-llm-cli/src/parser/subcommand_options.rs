@@ -114,7 +114,7 @@ pub struct SetupArgs {
     /// Run without prompting for interactive input.
     #[arg(long = "no-interactive")]
     pub no_interactive: bool,
-    /// Explicitly install this catalog plugin set instead of offering the
+    /// Explicitly install this catalog plugin set instead of the default
     /// recommended one. Suppresses the plugin-set prompt.
     #[arg(
         long = "plugin-set",
@@ -122,7 +122,7 @@ pub struct SetupArgs {
         conflicts_with_all = ["skip_plugin_install", "no_default_plugins"]
     )]
     pub plugin_set: Option<String>,
-    /// Skip optional plugin installation and its prompt.
+    /// Skip the default recommended plugin set and its prompt.
     #[arg(long = "skip-plugin-install")]
     pub skip_plugin_install: bool,
     /// Deprecated alias for --skip-plugin-install. Bundled default

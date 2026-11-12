@@ -1,7 +1,7 @@
 use super::{
     SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupGitHubStarSkipReason,
-    SetupOptions, SetupPlan, SetupPlatform, SetupPluginPlan, SetupPluginSkipReason,
-    SetupPromptDefault, SetupPromptKind, SetupPrompter, SetupRuntimePlan, SetupServicePlan,
+    SetupOptions, SetupPlan, SetupPlatform, SetupPluginPlan, SetupPromptDefault, SetupPromptKind,
+    SetupPrompter, SetupRuntimePlan, SetupServicePlan,
 };
 use crate::plugin_sets::{OptionalPluginPlan, optional_plugin_plan};
 use std::error::Error;
@@ -57,9 +57,9 @@ pub fn plan_setup<P: SetupPrompter>(
 }
 
 /// Optional plugins: an explicit set installs without prompting, an explicit
-/// skip (or the legacy default) skips and says so, and only an attended run
-/// is offered the recommended set — defaulting to No, because `--yes` accepts
-/// core defaults, not additional plugins.
+/// skip (or the legacy default) skips and says so, an attended run is offered
+/// the recommended set with install preselected, and a run that cannot prompt
+/// (`--yes`, `--no-interactive`, no terminal) installs the recommended set.
 fn plan_plugins(options: &SetupOptions, environment: &SetupEnvironment) -> SetupPluginPlan {
     match optional_plugin_plan(
         options.plugin_set.as_deref(),
@@ -69,10 +69,8 @@ fn plan_plugins(options: &SetupOptions, environment: &SetupEnvironment) -> Setup
     ) {
         OptionalPluginPlan::InstallSet(name) => SetupPluginPlan::Install(name),
         OptionalPluginPlan::Offer(_) => SetupPluginPlan::Offer,
-        OptionalPluginPlan::Skip(reason) => match reason {
-            Some(_) => SetupPluginPlan::Skip(SetupPluginSkipReason::ExplicitSkip),
-            None => SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
-        },
+        OptionalPluginPlan::InstallDefault(_) => SetupPluginPlan::InstallDefault,
+        OptionalPluginPlan::Skip => SetupPluginPlan::Skip,
     }
 }
 

@@ -107,8 +107,10 @@ mesh-llm setup --verbose
 
 Switches:
 
-- `--yes`: automatically answer yes to setup prompts. This accepts the service prompt and skips the GitHub star prompt.
-- `--no-interactive`: run without prompting. When service is not requested, setup prints guidance to rerun with `--service`.
+- `--yes`: automatically answer yes to setup prompts. This accepts the service prompt, installs the catalog's `recommended` plugin set (once per machine), and skips the GitHub star prompt.
+- `--no-interactive`: run without prompting. When service is not requested, setup prints guidance to rerun with `--service`. The `recommended` plugin set is still installed, once per machine.
+- `--plugin-set <NAME>`: install this catalog plugin set instead of `recommended`, without a prompt. Conflicts with `--skip-plugin-install`.
+- `--skip-plugin-install`: skip the default `recommended` plugin set and its prompt.
 - `--service`: install and enable the background service.
 - `--no-service`: skip installing and enabling the background service.
 - `--skip-runtime`: skip downloading or configuring the native runtime.
@@ -481,10 +483,11 @@ Switches:
 - `--plugin-set <NAME>`: after the upgrade, explicitly install this catalog
   plugin set (see [plugin sets](plugins/README.md#plugin-sets)). Conflicts
   with `--skip-plugin-install`.
-- `--skip-plugin-install`: skip optional plugin installation and its prompt.
-  Required plugin repairs still run.
-- `--no-interactive`: never prompt; installs no optional plugins unless
-  `--plugin-set` names one.
+- `--skip-plugin-install`: skip the default `recommended` plugin set and its
+  prompt. Required plugin repairs still run.
+- `--no-interactive`: never prompt; installs the catalog's `recommended`
+  plugin set once per machine unless `--skip-plugin-install` is given or `--plugin-set` names
+  another set.
 - `--no-default-plugins`: deprecated alias for `--skip-plugin-install`.
 
 The upgrade checks every installed plugin against the target host version and

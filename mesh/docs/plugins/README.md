@@ -562,12 +562,19 @@ the installed archive, extracted files, and local plugin metadata.
 ## Plugin Sets
 
 The catalog publishes named **plugin sets**: a name, a description, and a list
-of catalog plugin names. `recommended` is the set setup and update offer; it
-contains `capsules` today. Membership lives in the catalog, so adding or
-removing a member needs no host rebuild, and installing a set installs its
-current eligible members **once** — a later membership change never installs
-or uninstalls anything on an existing machine. Sets grant no permissions and
-never enable, disable, or update an installed plugin.
+of catalog plugin names. Setup and update install the `recommended` set by
+default; it contains `capsules` today. Membership lives in the catalog, so
+adding or removing a member needs no host rebuild. Installing a set installs
+its current missing members and never uninstalls anything. The default
+install happens once per machine: at setup, or at the first update on a
+machine that was never offered the set. The machine records that in
+`set-offers.json` in the plugin store root; after that, setup and update
+never install or prompt for the set again, a member the operator removed is
+not reinstalled, and members the catalog adds later appear as an attended
+notice (`mesh-llm plugins sets install recommended` installs them).
+`--skip-plugin-install` opts out of the default install entirely.
+Sets grant no permissions and never enable, disable, or update an installed
+plugin.
 
 - `mesh-llm plugins sets list` — discover named sets. Read-only; needs no
   running node.
@@ -578,16 +585,20 @@ never enable, disable, or update an installed plugin.
   members. Idempotent: already-installed members (whatever their state) are
   skipped, disabled state, settings, and data are preserved, and a partial
   failure reports every per-plugin result and exits nonzero.
-- `mesh-llm setup` offers the `recommended` set when attended, defaulting to
-  skip; `--plugin-set NAME` selects any catalog set explicitly (and suppresses
-  the prompt), and `--skip-plugin-install` skips optional installation. An
+- `mesh-llm setup` installs the `recommended` set by default: attended runs
+  are offered it with install preselected, and `--yes` / `--no-interactive`
+  runs install it without asking, once per machine (see above).
+  `--plugin-set NAME` selects any catalog set
+  explicitly (and suppresses the prompt), and `--skip-plugin-install` is the
+  one opt-out. An
   optional install that fails never fails setup: it warns and shows the retry
   command.
 - `mesh-llm update --plugin-set NAME` / `--skip-plugin-install` /
   `--no-interactive` carry the same choices on the host upgrade. Unattended
-  runs install no optional plugins and never read input. When Windows must
-  hand off to its host installer, an explicit `--plugin-set` is rejected before
-  plugin repairs or host replacement. Update without that flag, then run
+  runs install the `recommended` set (unless skipped, and only if this machine
+  was never offered it) and never read input. When Windows must hand off to its
+  host installer, an explicit `--plugin-set` is rejected before plugin repairs
+  or host replacement. Update without that flag, then run
   `mesh-llm plugins sets install NAME` after the installer finishes.
 
 Unknown set names report `Unknown plugin set 'missing'`, never an empty

@@ -2,8 +2,8 @@ use super::service_paths::ServiceInstallContext;
 use super::service_runner::{ServiceCommand, ServiceCommandRunner};
 use super::{
     SetupActions, SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan,
-    SetupGitHubStarSkipReason, SetupOptions, SetupPlatform, SetupPluginPlan, SetupPluginSkipReason,
-    SetupPrompter, SetupServicePlan, SetupStep, run_setup,
+    SetupGitHubStarSkipReason, SetupOptions, SetupPlatform, SetupPluginPlan, SetupPrompter,
+    SetupServicePlan, SetupStep, run_setup,
 };
 use crate::setup::command::CliSetupActions;
 use crate::setup::github::{SetupGitHubOutcome, github_summary};
@@ -185,7 +185,7 @@ fn github_summary_reports_authenticated_star_success() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Skip,
-        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
+        SetupPluginPlan::Skip,
         SetupGitHubStarPlan::PromptIfEligible,
     );
 
@@ -200,7 +200,7 @@ async fn service_summary_reports_real_service_installation() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Install,
-        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
+        SetupPluginPlan::Skip,
         SetupGitHubStarPlan::Skip(SetupGitHubStarSkipReason::AutomaticYes),
     );
     let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -243,7 +243,7 @@ fn github_summary_reports_nonfatal_star_request_failure() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Skip,
-        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
+        SetupPluginPlan::Skip,
         SetupGitHubStarPlan::PromptIfEligible,
     );
 

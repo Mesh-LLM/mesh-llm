@@ -591,12 +591,13 @@ pub enum Command {
             conflicts_with_all = ["skip_plugin_install", "no_default_plugins"]
         )]
         plugin_set: Option<String>,
-        /// Skip optional plugin installation and its prompt. Required plugin
-        /// repairs still run.
+        /// Skip the default recommended plugin set and its prompt. Required
+        /// plugin repairs still run.
         #[arg(long = "skip-plugin-install")]
         skip_plugin_install: bool,
-        /// Never prompt. Installs no optional plugins unless `--plugin-set`
-        /// names one. Required plugin repairs still run.
+        /// Never prompt. Installs the recommended plugin set once per machine unless
+        /// `--skip-plugin-install` is given or `--plugin-set` names another
+        /// set. Required plugin repairs still run.
         #[arg(long = "no-interactive")]
         no_interactive: bool,
         /// Deprecated alias for --skip-plugin-install. Bundled default

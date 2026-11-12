@@ -1,7 +1,7 @@
 use super::{
     SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupGitHubStarSkipReason,
-    SetupOptions, SetupPlatform, SetupPrompter, SetupRuntimePlan, SetupServicePlan, SetupStep,
-    plan_setup,
+    SetupOptions, SetupPlatform, SetupPluginPlan, SetupPrompter, SetupRuntimePlan,
+    SetupServicePlan, SetupStep, plan_setup,
 };
 use std::collections::VecDeque;
 
@@ -236,4 +236,59 @@ fn yes_and_no_service_keeps_explicit_service_skip_without_prompt() {
         vec![SetupStep::InstallRuntime, SetupStep::PruneInactiveRuntimes]
     );
     assert!(prompter.prompts.is_empty());
+}
+
+#[test]
+fn yes_and_no_interactive_install_the_recommended_set_by_default() {
+    for options in [
+        SetupOptions {
+            yes: true,
+            ..SetupOptions::default()
+        },
+        SetupOptions {
+            no_interactive: true,
+            ..SetupOptions::default()
+        },
+    ] {
+        let environment = SetupEnvironment {
+            platform: SetupPlatform::Linux,
+            interactive: true,
+        };
+        let mut prompter = FakePrompter::default();
+        let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
+        assert_eq!(plan.plugins, SetupPluginPlan::InstallDefault);
+    }
+}
+
+#[test]
+fn attended_setup_offers_the_recommended_set_and_skip_is_the_one_opt_out() {
+    let environment = SetupEnvironment {
+        platform: SetupPlatform::Linux,
+        interactive: true,
+    };
+    let mut prompter = FakePrompter::default();
+    let plan = plan_setup(&SetupOptions::default(), &environment, &mut prompter)
+        .expect("plan should succeed");
+    assert_eq!(plan.plugins, SetupPluginPlan::Offer);
+
+    for options in [
+        SetupOptions {
+            yes: true,
+            skip_plugin_install: true,
+            ..SetupOptions::default()
+        },
+        SetupOptions {
+            no_interactive: true,
+            skip_plugin_install: true,
+            ..SetupOptions::default()
+        },
+        SetupOptions {
+            skip_plugin_install: true,
+            ..SetupOptions::default()
+        },
+    ] {
+        let mut prompter = FakePrompter::default();
+        let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
+        assert_eq!(plan.plugins, SetupPluginPlan::Skip);
+    }
 }

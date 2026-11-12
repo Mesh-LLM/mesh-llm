@@ -56,11 +56,13 @@ orchestration in `mesh/crates/mesh-llm-commands`.
 Supported flags:
 
 - `--yes`: accept recommended core setup defaults without prompting. This
-  accepts the core defaults only: it does not opt in to optional plugins.
+  installs the catalog's `recommended` plugin set unless
+  `--skip-plugin-install` is given.
 - `--no-interactive`: never prompt; use non-interactive defaults.
 - `--plugin-set NAME`: explicitly install this catalog plugin set, skipping
   the recommendation prompt. Conflicts with `--skip-plugin-install`.
-- `--skip-plugin-install`: skip optional plugin installation and its prompt.
+- `--skip-plugin-install`: skip the default recommended plugin set and its
+  prompt.
   `--no-default-plugins` is kept as a deprecated alias, and the legacy
   `MESH_LLM_NO_DEFAULT_PLUGINS=1` setting is honored as an installation-skip
   default.
@@ -81,13 +83,25 @@ already replaced, a refusal warns and shows the retry command
 
 ### Optional plugin set offer
 
-After the core steps succeed, and only when prompts are visible, setup offers
-the catalog's `recommended` plugin set, defaulting to No. The offer shows the
-set's members and their resolvable versions and is skipped without a prompt
-when the set is absent or empty. An accepted or explicitly selected
+After the core steps succeed, setup installs the catalog's `recommended`
+plugin set by default. When prompts are visible it offers the set with install
+preselected (Enter accepts, `n` skips); when they are not (`--yes`,
+`--no-interactive`, no terminal) it installs the set without asking.
+`--skip-plugin-install` is the one opt-out. The offer shows the set's members
+and their resolvable versions and is skipped without a prompt when the set is
+absent or empty. A default, accepted, or explicitly selected
 installation is best-effort: it never fails core setup — a failure warns,
 shows the retry command (`mesh-llm plugins sets install recommended`), and
-reports the installation as incomplete in the summary. Bootstrap reaches this
+reports the installation as incomplete in the summary.
+
+The default install happens once per machine: the offer is recorded
+in the plugin store (`set-offers.json`) when it is accepted, declined, or
+nothing was left to install, and a later setup or update neither prompts nor
+installs, even if the operator removed a member. A failed install is not
+recorded, so a later run retries. Members the catalog adds afterwards are
+shown as an attended notice, once, never auto-installed.
+
+Bootstrap reaches this
 flow exactly once, with no duplicate prompt.
 
 Unsupported in v1:
