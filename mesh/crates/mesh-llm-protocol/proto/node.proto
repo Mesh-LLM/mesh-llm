@@ -513,6 +513,8 @@ message ServedModelMetadata {
   optional ModelWorkloadClass workload_class = 13;
   // Wrapper retains the distinction between an unprobed runtime and no observed levels.
   optional ThinkingEfforts thinking_efforts = 14;
+  // Provider-declared outputs; absent/empty means unknown, never text-only.
+  repeated string output_modalities = 15;
 }
 
 message ThinkingEfforts {

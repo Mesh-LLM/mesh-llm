@@ -110,6 +110,40 @@ mod tests {
     use crate::protocol::convert::proto_ann_to_local;
 
     #[test]
+    fn output_modalities_round_trip_without_inventing_legacy_support() {
+        use crate::protocol::convert::{
+            local_model_metadata_to_proto, proto_model_metadata_to_local,
+        };
+        use prost::Message;
+
+        #[derive(Clone, PartialEq, Message)]
+        struct LegacyMetadata {
+            #[prost(string, optional, tag = "1")]
+            architecture: Option<String>,
+        }
+
+        let metadata = crate::mesh::ServedModelMetadata {
+            architecture: Some("generic".into()),
+            output_modalities: vec!["text".into(), "image".into(), "future_output".into()],
+            ..Default::default()
+        };
+        let encoded = local_model_metadata_to_proto(&metadata).encode_to_vec();
+        let proto = node::ServedModelMetadata::decode(encoded.as_slice()).unwrap();
+        assert_eq!(proto_model_metadata_to_local(&proto), metadata);
+
+        // Old protobuf readers ignore the additive field and retain known facts.
+        let legacy = LegacyMetadata::decode(encoded.as_slice()).unwrap();
+        assert_eq!(legacy.architecture.as_deref(), Some("generic"));
+        let restored =
+            node::ServedModelMetadata::decode(legacy.encode_to_vec().as_slice()).unwrap();
+        assert!(
+            proto_model_metadata_to_local(&restored)
+                .output_modalities
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn system_one_capability_decodes_from_additive_proto_field() {
         let descriptor = node::ServedModelDescriptor {
             identity: Some(node::ServedModelIdentity {

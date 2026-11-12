@@ -347,6 +347,7 @@ fn local_model_metadata_to_proto(
                 values: values.clone(),
             }
         }),
+        output_modalities: metadata.output_modalities.clone(),
         workload_class: metadata.workload_class.map(local_workload_class_to_proto),
         architecture: metadata.architecture.clone(),
         parameter_size: metadata.parameter_size.clone(),
@@ -372,6 +373,7 @@ fn proto_model_metadata_to_local(
             .thinking_efforts
             .as_ref()
             .map(|efforts| efforts.values.clone()),
+        output_modalities: metadata.output_modalities.clone(),
         // Keep an explicit unknown descriptor: dropping it can re-enable the
         // legacy model-name fallback elsewhere in routing and gossip.
         workload_class: metadata

@@ -80,6 +80,18 @@ Each provider retains its runtime limits, capabilities
 and optional thinking observations and plugin requirements. See
 [Mesh model discovery](../MODEL_DISCOVERY.md) for complete HTTP and SDK shapes.
 
+Read advertised output formats from each provider's metadata:
+
+```python
+for provider in details.providers:
+    output_modalities = (provider.metadata or {}).get("output_modalities")
+```
+
+For example, `["text", "image"]` declares image output support. Missing or empty
+values mean unknown; future modality names are preserved. Providers sharing a
+model ID can advertise different outputs. This does not describe image input
+support or decide whether a prompt should generate an image.
+
 Use a Python SDK release and native bridge containing these APIs together.
 The public wrapper and generated bindings live in the companion Python SDK
 repository; updating Mesh alone does not publish a new Python wheel.

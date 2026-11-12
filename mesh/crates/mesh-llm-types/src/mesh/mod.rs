@@ -112,6 +112,11 @@ pub struct ServedModelMetadata {
     /// Absent for legacy or unprobed runtimes; an observed empty list is known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_efforts: Option<Vec<String>>,
+    /// Output modalities explicitly declared by this serving provider, such as
+    /// `text` and `image`. Empty means unknown, including legacy peers; this
+    /// does not describe accepted input or authorize a different workload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
     /// `None` is the mixed-version representation for nodes that predate
     /// workload advertisement. Callers must not treat it as evidence that a
     /// non-chat endpoint is supported.
@@ -147,6 +152,7 @@ impl ServedModelMetadata {
     /// Report whether all optional metadata is absent; a workload-only record is nonempty.
     pub fn is_empty(&self) -> bool {
         self.thinking_efforts.is_none()
+            && self.output_modalities.is_empty()
             && self.workload_class.is_none()
             && self.architecture.is_none()
             && self.parameter_size.is_none()
@@ -512,4 +518,34 @@ fn identity_hash_for(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod output_modalities_tests {
+    use super::ServedModelMetadata;
+
+    #[test]
+    fn absent_output_declarations_stay_unknown_for_legacy_json() {
+        let metadata: ServedModelMetadata =
+            serde_json::from_str(r#"{"architecture":"legacy"}"#).unwrap();
+        assert!(metadata.output_modalities.is_empty());
+        assert!(
+            serde_json::to_value(metadata)
+                .unwrap()
+                .get("output_modalities")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn output_only_metadata_is_preserved() {
+        let metadata = ServedModelMetadata {
+            output_modalities: vec!["text".into(), "image".into(), "future_output".into()],
+            ..Default::default()
+        };
+        assert!(!metadata.is_empty());
+        let restored: ServedModelMetadata =
+            serde_json::from_value(serde_json::to_value(&metadata).unwrap()).unwrap();
+        assert_eq!(restored, metadata);
+    }
 }

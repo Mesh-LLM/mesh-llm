@@ -2356,13 +2356,15 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
 
-The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+The checkout action, admission descriptor and Python-tooling policy use the
+same immutable SDK commit recorded in the [source descriptor](required-sdk-python/sdk-source.json);
+update all three together.
 Laya product readiness and Decisions smoke discovery query
 `/mesh/v1/models?workload_class=decision&available=true`, since compatibility
 model lists contain only LLMs. The golden and response checks remain required.
 
-The current checkpoint includes typed Mesh model discovery, OCR uploads,
+The current checkpoint preserves provider output modalities and advertised
+thinking efforts. It includes typed Mesh model discovery, OCR uploads,
 membership/live-session controls, full node configuration and native-runtime
 management. Its generated bindings were produced from the coordinated Mesh
 implementation recorded in the SDK's `sdk-inputs.json`; keep that source

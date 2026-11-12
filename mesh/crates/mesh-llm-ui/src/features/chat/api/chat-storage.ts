@@ -1,6 +1,11 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { ConversationGroup, ThreadMessage } from '@/features/app-tabs/types'
 import type { ChatConversation } from '@/features/chat/lib/chat-types'
+import {
+  MAX_GENERATED_IMAGE_CHARS,
+  hasGeneratedImage,
+  summarizeGeneratedImages
+} from '@/features/chat/lib/generated-images'
 
 export type ChatStorageScope = 'harness' | 'live'
 
@@ -54,6 +59,8 @@ const V1_STATE_KEY = 'chat-state'
 export const MAX_CHAT_CONVERSATIONS = 80
 export const MAX_CHAT_THREAD_MESSAGES = 120
 export const MAX_CHAT_MESSAGE_BODY_CHARS = 20_000
+export const MAX_GENERATED_IMAGE_MESSAGE_BODY_CHARS = MAX_GENERATED_IMAGE_CHARS
+export const MAX_GENERATED_IMAGE_HISTORY_CHARS = 16 * 1024 * 1024
 const TRUNCATED_MESSAGE_SUFFIX = '\n\n[Message truncated in local history to keep the browser responsive.]'
 const LOCAL_STORAGE_RECOVERY_CONVERSATION_LIMIT = 80
 const LOCAL_STORAGE_RECOVERY_THREAD_MESSAGES = 40
@@ -77,9 +84,16 @@ function trimTextValue(value: string): string {
 }
 
 function trimThreadMessage(message: ThreadMessage): ThreadMessage {
+  // Keep the complete data URL: ordinary text truncation would corrupt the image on reload.
+  const containsGeneratedImage = message.messageRole === 'assistant' && hasGeneratedImage(message.body)
+  const preserveGeneratedImage = containsGeneratedImage && message.body.length <= MAX_GENERATED_IMAGE_MESSAGE_BODY_CHARS
   const trimmedMessage: ThreadMessage = {
     ...message,
-    body: trimTextValue(message.body)
+    body: preserveGeneratedImage
+      ? message.body
+      : trimTextValue(
+          containsGeneratedImage ? summarizeGeneratedImages(message.body, ' omitted from local history') : message.body
+        )
   }
 
   if (message.inspectMessage) {
@@ -110,11 +124,27 @@ function pruneThreads(
   retainedConversationIds: Set<string>
 ): Record<string, ThreadMessage[]> {
   const prunedThreads: Record<string, ThreadMessage[]> = {}
+  let remainingImageChars = MAX_GENERATED_IMAGE_HISTORY_CHARS
 
+  // Conversations are ordered by most recent activity; keep their latest images first.
   for (const conversationId of retainedConversationIds) {
     const messages = threads[conversationId]
     if (messages) {
-      prunedThreads[conversationId] = trimThreadMessages(messages)
+      const trimmedMessages = trimThreadMessages(messages)
+      for (let index = trimmedMessages.length - 1; index >= 0; index -= 1) {
+        const message = trimmedMessages[index]!
+        if (message.messageRole !== 'assistant' || !hasGeneratedImage(message.body)) continue
+
+        if (message.body.length <= remainingImageChars) {
+          remainingImageChars -= message.body.length
+        } else {
+          trimmedMessages[index] = {
+            ...message,
+            body: trimTextValue(summarizeGeneratedImages(message.body, ' omitted from local history'))
+          }
+        }
+      }
+      prunedThreads[conversationId] = trimmedMessages
     }
   }
 
@@ -285,7 +315,11 @@ function trimTextForLocalRecovery(value: string): string {
 function trimThreadMessageForLocalRecovery(message: ThreadMessage): ThreadMessage {
   const trimmedMessage: ThreadMessage = {
     ...message,
-    body: trimTextForLocalRecovery(message.body)
+    body: trimTextForLocalRecovery(
+      message.messageRole === 'assistant'
+        ? summarizeGeneratedImages(message.body, ' omitted from local history')
+        : message.body
+    )
   }
 
   if (message.inspectMessage) {
