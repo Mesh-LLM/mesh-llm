@@ -8,7 +8,7 @@ fn actual() -> BTreeMap<String, Node> {
         .unwrap()
         .parent()
         .unwrap();
-    ["pr_linux.yml", "claude-live-model-gate.yml"]
+    ["ci-rust-tests-slice.yml", "claude-live-model-gate.yml"]
         .into_iter()
         .map(|name| {
             let source = fs::read_to_string(root.join(".github/workflows").join(name)).unwrap();
@@ -41,73 +41,92 @@ fn entry(node: &mut Node, key: &str, value: &str) {
 fn actual_required_and_manual_claude_workflows_retain_real_client_contract() {
     check(&actual()).unwrap();
 }
+const RUST_TESTS: &str = "ci-rust-tests-slice.yml";
+const BATCH: &str = "Run isolated Cargo tests for the batch";
+const CLIENT_TEST: &str = "cargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress";
+
+fn batch_script(client: &str) -> String {
+    format!(
+        "set -euo pipefail\nmapfile -t crates < <(jq -r '.[]' <<<\"$TEST_CRATES\")\nfor crate in ${{crates[@]+\"${{crates[@]}}\"}}; do\n  cargo test --locked -p \"$crate\"\n  if [[ \"$crate\" == \"mesh-llm-host-runtime\" ]]; then\n    echo \"::group::Claude Code 2.1.273 real-client integration\"\n    {client}\n    echo \"::endgroup::\"\n  fi\ndone\n"
+    )
+}
+fn with_batch(run: &str) -> BTreeMap<String, Node> {
+    let mut workflows = actual();
+    let gate = step(workflows.get_mut(RUST_TESTS).unwrap(), "rust_tests", BATCH);
+    entry(gate, "run", run);
+    workflows
+}
+
 #[test]
-fn missing_echoed_nested_or_ignored_only_pr_execution_rejects() {
-    for run in [
+fn actual_batch_script_shape_is_admissible() {
+    check(&with_batch(&batch_script(CLIENT_TEST))).unwrap();
+}
+#[test]
+fn missing_echoed_nested_or_ignored_only_batch_execution_rejects() {
+    for client in [
         "echo claude_cli_executes_read_tool_through_host_ingress",
-        "cargo test --locked -p skippy-inference-api",
-        "cargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress -- --ignored",
-        "if false; then\ncargo test --locked -p skippy-inference-api\ncargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress\nfi",
+        "cargo test --locked -p \"$crate\"",
+        "cargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress -- --ignored",
+        "if false; then\ncargo test --locked -p \"$crate\" --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress\nfi",
+        "cargo test --locked -p skippy-inference-api --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress",
     ] {
-        let mut workflows = actual();
-        let gate = step(
-            workflows.get_mut("pr_linux.yml").unwrap(),
-            "plan",
-            "Run Claude Code protocol and real-client integration",
+        assert!(
+            check(&with_batch(&batch_script(client))).is_err(),
+            "accepted {client}"
         );
-        entry(gate, "run", run);
-        assert!(check(&workflows).is_err(), "accepted {run}");
     }
 }
 #[test]
-fn pr_gate_requires_affected_admission_and_failure_propagation() {
+fn batch_must_keep_the_host_branch_and_every_planned_crate() {
+    let without_branch = batch_script(CLIENT_TEST).replace("mesh-llm-host-runtime", "mesh-llm");
+    let without_crates =
+        batch_script(CLIENT_TEST).replace("  cargo test --locked -p \"$crate\"\n", "");
+    for run in [without_branch, without_crates] {
+        assert!(check(&with_batch(&run)).is_err(), "accepted {run}");
+    }
+}
+#[test]
+fn batch_gate_requires_planned_crates_and_failure_propagation() {
     for (key, value) in [("if", "${{ false }}"), ("continue-on-error", "true")] {
         let mut workflows = actual();
-        let gate = step(
-            workflows.get_mut("pr_linux.yml").unwrap(),
-            "plan",
-            "Run Claude Code protocol and real-client integration",
-        );
+        let gate = step(workflows.get_mut(RUST_TESTS).unwrap(), "rust_tests", BATCH);
         entry(gate, key, value);
-        assert!(check(&workflows).is_err());
+        assert!(check(&workflows).is_err(), "accepted {key}");
     }
+    let mut workflows = actual();
+    let gate = step(workflows.get_mut(RUST_TESTS).unwrap(), "rust_tests", BATCH);
+    h::replace(gate, &["env", "TEST_CRATES"], Node::Scalar("[]".into()));
+    assert!(check(&workflows).is_err());
 }
 #[test]
-fn pr_build_budget_and_memory_settings_are_bound_to_owning_job_and_step() {
-    let mut workflows = actual();
-    h::replace(
-        workflows.get_mut("pr_linux.yml").unwrap(),
-        &["jobs", "plan", "timeout-minutes"],
-        Node::Scalar("5".into()),
-    );
-    assert!(check(&workflows).is_err());
+fn batch_memory_settings_are_bound_to_the_owning_workflow() {
     for key in ["CARGO_INCREMENTAL", "CARGO_PROFILE_TEST_DEBUG"] {
         let mut workflows = actual();
-        let gate = step(
-            workflows.get_mut("pr_linux.yml").unwrap(),
-            "plan",
-            "Run Claude Code protocol and real-client integration",
+        h::replace(
+            workflows.get_mut(RUST_TESTS).unwrap(),
+            &["env", key],
+            Node::Scalar("1".into()),
         );
-        h::replace(gate, &["env", key], Node::Scalar("1".into()));
-        assert!(check(&workflows).is_err());
+        assert!(check(&workflows).is_err(), "accepted {key}");
     }
 }
 #[test]
-fn pinned_client_install_cannot_be_replaced_by_a_label_or_skipped_for_affected_prs() {
+fn pinned_client_install_cannot_be_replaced_by_a_label_or_skipped_for_host_batches() {
     for (key, value) in [
         ("run", "echo @anthropic-ai/claude-code@2.1.273"),
         ("if", "${{ false }}"),
     ] {
         let mut workflows = actual();
         let install = step(
-            workflows.get_mut("pr_linux.yml").unwrap(),
-            "plan",
-            "Install pinned Claude Code client",
+            workflows.get_mut(RUST_TESTS).unwrap(),
+            "rust_tests",
+            "Install pinned Claude Code integration client",
         );
         entry(install, key, value);
-        assert!(check(&workflows).is_err());
+        assert!(check(&workflows).is_err(), "accepted {key}");
     }
 }
+
 #[test]
 fn manual_live_gate_requires_approval_environment_and_owned_secret_binding() {
     for (path, value) in [
@@ -169,17 +188,9 @@ fn manual_compiler_execution_requires_accelerator_and_direct_nonignored_round_tr
 
 #[test]
 fn equivalent_flag_order_comments_continuations_and_just_wrapper_remain_admissible() {
-    let mut workflows = actual();
-    let gate = step(
-        workflows.get_mut("pr_linux.yml").unwrap(),
-        "plan",
-        "Run Claude Code protocol and real-client integration",
-    );
-    entry(
-        gate,
-        "run",
-        "# Real client plus protocol, equivalent order\njust with-lld cargo test --features claude-code-integration --no-default-features -p mesh-llm-host-runtime --locked \\\n claude_cli_executes_read_tool_through_host_ingress -- --nocapture\njust with-lld cargo test --package skippy-inference-api --locked --quiet\n",
-    );
+    let mut workflows = with_batch(&batch_script(
+        "# Real client, equivalent order\n    just with-lld cargo test --features claude-code-integration --no-default-features -p \"$crate\" --locked \\\n      claude_cli_executes_read_tool_through_host_ingress -- --nocapture",
+    ));
     let manual = workflows.get_mut("claude-live-model-gate.yml").unwrap();
     let job = h::mutable(h::mutable(manual, "jobs"), "live_claude");
     entry(job, "if", "${{ github.repository == 'Mesh-LLM/mesh-llm' }}");
@@ -199,21 +210,11 @@ fn equivalent_flag_order_comments_continuations_and_just_wrapper_remain_admissib
 #[test]
 fn cargo_invocation_cannot_be_list_only_unlocked_or_success_masked() {
     for tail in ["-- --list", "|| true", "-- --ignored"] {
-        let mut workflows = actual();
-        let gate = step(
-            workflows.get_mut("pr_linux.yml").unwrap(),
-            "plan",
-            "Run Claude Code protocol and real-client integration",
-        );
-        entry(
-            gate,
-            "run",
-            &format!(
-                "cargo test --locked -p skippy-inference-api\ncargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress {tail}\n"
-            ),
-        );
-        assert!(check(&workflows).is_err());
+        let run = batch_script(&format!("{CLIENT_TEST} {tail}"));
+        assert!(check(&with_batch(&run)).is_err(), "accepted {tail}");
     }
+    let unlocked = batch_script(&CLIENT_TEST.replace("--locked ", ""));
+    assert!(check(&with_batch(&unlocked)).is_err());
     assert!(invocation(&["cargo", "test", "-p", "skippy-inference-api"]).is_err());
 }
 
