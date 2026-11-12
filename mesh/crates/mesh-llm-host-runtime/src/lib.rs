@@ -245,6 +245,40 @@ async fn initialize_host_runtime_with_config_and_flavor(
     Ok(())
 }
 
+/// Load the native runtime `serve` would select, for a one-shot command that
+/// reports this host's devices or sizes models for it.
+///
+/// With a dynamic runtime the device list and memory come from the loaded
+/// runtime; without one, the hardware survey falls back to what the OS
+/// exposes, which misses memory the runtime does use (on Windows, the shared
+/// memory of an integrated GPU). Loading the same selection as `serve` keeps
+/// `gpus` and the model fit budget in line with what the node advertises.
+///
+/// Only bundled and already installed runtimes are considered: a read-only
+/// command never downloads one. Without the `dynamic-native-runtime` feature
+/// there is nothing to load and this does nothing.
+pub async fn load_installed_native_runtime_for_cli(
+    config_path: Option<&Path>,
+    llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+) -> Result<()> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    {
+        let config = plugin::load_config(config_path)?;
+        let startup_selection =
+            system::native_runtime::NativeRuntimeStartupSelection::for_read_only_command(
+                config.runtime.native_runtime,
+                llama_flavor,
+            )?;
+        // Already loaded is not an error: the loader returns early then.
+        system::native_runtime::try_load_installed_native_runtime(startup_selection).await?;
+    }
+    #[cfg(not(feature = "dynamic-native-runtime"))]
+    {
+        let _ = (config_path, llama_flavor);
+    }
+    Ok(())
+}
+
 /// Install the process-local logging resources for one validated runtime config.
 ///
 /// This is shared by the CLI/native startup path and the embedded SDK entrypoint.
