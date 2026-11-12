@@ -715,6 +715,28 @@ rewrite_linux_runtime_paths() {
     done
 }
 
+# The build tree links libfoo.so and libfoo.so.0 to libfoo.so.0.x.y, and the
+# staging `cp` copies each in full. Keep the versioned file once and link the
+# other names to it again. macOS keeps its copies: each name gets its own
+# install id there.
+link_linux_soname_aliases() {
+    case "$TARGET_TRIPLE" in
+        *linux*) ;;
+        *) return 0 ;;
+    esac
+    local library name target
+    for library in "${runtime_libraries[@]}"; do
+        [[ -L "$library" ]] || continue
+        name="$(basename "$library")"
+        target="$(readlink -f "$library")"
+        [[ "$(dirname "$target")" == "$(cd "$(dirname "$library")" && pwd -P)" ]] || continue
+        target="$(basename "$target")"
+        [[ -f "$stage_dir/lib/$target" && ! -L "$stage_dir/lib/$target" ]] || continue
+        cmp -s "$stage_dir/lib/$target" "$stage_dir/lib/$name" || continue
+        ln -sf "$target" "$stage_dir/lib/$name"
+    done
+}
+
 if [[ -z "$TARGET_TRIPLE" ]]; then
     TARGET_TRIPLE="$(default_target_triple)"
 fi
@@ -857,6 +879,7 @@ collect_linux_cuda_dependencies
 
 rewrite_macos_runtime_paths
 rewrite_linux_runtime_paths
+link_linux_soname_aliases
 
 primary_library="lib/$primary_name"
 runtime_release_version="$(skippy_runtime_version)"

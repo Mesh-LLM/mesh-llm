@@ -155,9 +155,39 @@
         }
       },
       "code": 0,
-      "stdout": "libggml-base.so\nliba-extra.so\nlibcudart.so.12\nlibggml.so\nzz-readme.txt\nlibmesh.so\n",
+      "stdout": "libggml-base.so\nliba-extra.so\nlibcudart.so.12\nlibggml.so\nlibggml.so.0\nzz-readme.txt\nlibmesh.so\n",
       "stderr": "",
-      "calls": "readelf -h lib/liba-extra.so\nreadelf -d lib/liba-extra.so\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-base.so\nreadelf -d lib/libggml-base.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/liba-extra.so\nreadelf -d lib/liba-extra.so\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-base.so\nreadelf -d lib/libggml-base.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+      "calls": "readelf -h lib/liba-extra.so\nreadelf -d lib/liba-extra.so\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-base.so\nreadelf -d lib/libggml-base.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/libggml.so.0\nreadelf -d lib/libggml.so.0\nreadelf -h lib/liba-extra.so\nreadelf -d lib/liba-extra.so\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-base.so\nreadelf -d lib/libggml-base.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/libggml.so.0\nreadelf -d lib/libggml.so.0\n"
+    },
+    {
+      "group": "happy",
+      "name": "verify counts soname links beside the versioned library",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--arch",
+        "x86_64"
+      ],
+      "links": {
+        "lib/libggml.so.0": "libggml.so.0.9.4",
+        "lib/libggml.so": "libggml.so.0"
+      },
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libggml.so.0",
+            "libc.so.6"
+          ]
+        },
+        "lib/libggml.so.0.9.4": {
+          "soname": "libggml.so.0"
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": "readelf -h lib/libggml.so.0.9.4\nreadelf -d lib/libggml.so.0.9.4\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libggml.so.0\nreadelf -d lib/libggml.so.0\n"
     },
     {
       "group": "happy",
@@ -669,6 +699,32 @@
       "stdout": "",
       "stderr": "unpackaged Linux runtime ELF dependencies: libbar.so: libfoo.so.1; libmesh.so: libcudart.so.12, libggml.so; mesh-llm: libskippy.so\n",
       "calls": "readelf -h bin/mesh-llm\nreadelf -d bin/mesh-llm\nreadelf -h lib/libbar.so\nreadelf -d lib/libbar.so\nreadelf -h lib/libfoo.so.1.2\nreadelf -d lib/libfoo.so.1.2\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "verify does not count a link out of the lib dir",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "links": {
+        "lib/libggml.so.0": "../other/libggml.so.0.9.4"
+      },
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libggml.so.0"
+          ]
+        },
+        "other/libggml.so.0.9.4": {
+          "soname": "libggml.so.0"
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Linux runtime ELF dependencies: libmesh.so: libggml.so.0\n",
+      "calls": "readelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
     },
     {
       "group": "rejected",

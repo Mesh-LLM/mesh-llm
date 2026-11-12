@@ -112,6 +112,29 @@ fn walk(directory: &str, files: &mut Vec<String>) {
     }
 }
 
+/// Symlinks directly in `directory` to a regular file beside them: the soname
+/// links of a packaged library. The loader opens them by name, so each counts
+/// as a packaged file, like a copy would.
+pub(super) fn sibling_links(directory: &str) -> Vec<String> {
+    let (Ok(resolved), Ok(entries)) = (
+        std::fs::canonicalize(directory),
+        std::fs::read_dir(directory),
+    ) else {
+        return Vec::new();
+    };
+    let mut links: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_symlink()))
+        .map(|entry| join(directory, &entry.file_name().to_string_lossy()))
+        .filter(|path| {
+            std::fs::canonicalize(path)
+                .is_ok_and(|target| target.parent() == Some(resolved.as_path()) && target.is_file())
+        })
+        .collect();
+    links.sort();
+    links
+}
+
 /// `_is_elf`.
 fn is_elf(path: &str) -> Result<bool, Raised> {
     let failure =

@@ -586,3 +586,78 @@ pub(crate) fn collect_runtime_manifest_dirs(dir: &Path, matches: &mut Vec<PathBu
     }
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use skippy_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
+
+    /// Release runtimes link each soname name to the library beside it.
+    #[test]
+    fn runtime_archive_with_soname_links_installs_and_verifies() {
+        let libraries = ["lib/libllama.so.0", "lib/libllama.so.0.1.0"];
+        let checksum = hex::encode(sha2::Sha256::digest(b"runtime"));
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("rt");
+        fs::create_dir_all(source.join("lib")).unwrap();
+        fs::write(source.join("lib/libllama.so.0.1.0"), b"runtime").unwrap();
+        std::os::unix::fs::symlink("libllama.so.0.1.0", source.join("lib/libllama.so.0")).unwrap();
+        NativeRuntimeManifest {
+            runtime: NativeRuntimeArtifact {
+                id: "linked-runtime".to_string(),
+                release_version: Some("0.79.0".to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                    min_glibc: None,
+                },
+                backend: NativeRuntimeBackend::cpu(),
+                rank: 0,
+                libraries: libraries.map(str::to_string).to_vec(),
+                files: libraries
+                    .map(|library| (library.to_string(), checksum.clone()))
+                    .into(),
+                tools: Default::default(),
+                url: None,
+                sha256: None,
+                signature: None,
+            },
+        }
+        .write_to_dir(&source)
+        .unwrap();
+
+        let archive = temp.path().join("runtime.tar.gz");
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            fs::File::create(&archive).unwrap(),
+            flate2::Compression::default(),
+        ));
+        builder.follow_symlinks(false);
+        builder.append_dir_all("rt", &source).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let extracted = temp.path().join("extracted");
+        fs::create_dir(&extracted).unwrap();
+        extract_runtime_archive(&archive, &extracted).unwrap();
+        let bundle = find_extracted_runtime_dir(&extracted).unwrap();
+        assert!(
+            fs::symlink_metadata(bundle.join("lib/libllama.so.0"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the archive must carry the link for this test to cover it"
+        );
+
+        let manifest = NativeRuntimeManifest::read_from_dir(&bundle).unwrap();
+        manifest.verify_payload(&bundle).unwrap();
+
+        let installed = NativeRuntimeCache::new(temp.path().join("cache"))
+            .install_from_dir(&bundle)
+            .unwrap();
+        installed.manifest.verify_payload(&installed.path).unwrap();
+        for library in libraries {
+            assert_eq!(fs::read(installed.path.join(library)).unwrap(), b"runtime");
+        }
+    }
+}

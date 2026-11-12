@@ -116,11 +116,22 @@ fn copy_tree(source: &Path, target: &Path) -> DynResult<()> {
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let kind = entry.file_type()?;
-        if kind.is_symlink() {
-            return Err("runtime artifact must not contain symlinks".into());
-        }
         let destination = target.join(entry.file_name());
-        if kind.is_dir() {
+        if kind.is_symlink() {
+            // Linux runtimes link their soname names to the library beside
+            // them; the cache gets a copy, as `runtime install` makes.
+            let beside = std::fs::canonicalize(entry.path()).is_ok_and(|resolved| {
+                resolved.is_file()
+                    && resolved.parent() == std::fs::canonicalize(source).ok().as_deref()
+            });
+            if !beside {
+                return Err(
+                    "runtime artifact must not contain symlinks other than to a file beside them"
+                        .into(),
+                );
+            }
+            std::fs::copy(entry.path(), destination)?;
+        } else if kind.is_dir() {
             copy_tree(&entry.path(), &destination)?;
         } else if kind.is_file() {
             std::fs::copy(entry.path(), destination)?;
@@ -173,6 +184,18 @@ mod tests {
         );
         assert!(!cache.join("legacy-ignored").exists());
         assert!(!target.join("stale").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn soname_link_beside_its_library_installs_as_a_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture(root.path(), "cpu-fixture");
+        std::os::unix::fs::symlink("runtime.so", source.join("lib/runtime.so.0")).unwrap();
+        let target = install(&source, &root.path().join("cache")).unwrap();
+        let copy = target.join("lib/runtime.so.0");
+        assert!(std::fs::symlink_metadata(&copy).unwrap().is_file());
+        assert_eq!(std::fs::read(copy).unwrap(), b"fixture-runtime");
     }
 
     #[cfg(unix)]
