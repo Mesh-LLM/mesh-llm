@@ -3,7 +3,7 @@
   "native_recipe": {
     "llama_upstream_sha": "372dc5ca157276beb6c67b2e92477e8d662e964a",
     "skippy_abi": "0.1.84",
-    "patch_queue_sha256": "659c3fbfe37ed379fabc0591588220fc5e0c54a8b3237ed687c477e96070b447"
+    "patch_queue_sha256": "4f4cbca470aa7b317c02876c86c0c7c5639eee6669fa0d69adb19cef915932ca"
   },
   "architectures": [
     "afmoe",

@@ -564,7 +564,8 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
     test-skippy-verify-checkpoint-retirement
   )
   if [[ "$LLAMA_BACKEND" == "metal" ]]; then
-    BUILD_TARGETS+=(test-skippy-cachegen-metal test-skippy-tracing-metal)
+    # test-backend-ops runs as the ctest skippy_backend_ops_kv_rows
+    BUILD_TARGETS+=(test-skippy-cachegen-metal test-skippy-tracing-metal test-backend-ops)
   fi
 fi
 

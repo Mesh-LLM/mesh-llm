@@ -1,0 +1,196 @@
+From c146911d8fb5b122da53d74ec46b295ae70c7e79 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Thu, 12 Nov 2026 15:55:33 +1100
+Subject: [PATCH 35/35] tests: check row-list attention over the lists a
+ unified KV pool produces
+
+test-backend-ops compared row-list attention on a GPU backend with the CPU
+only for lists of scattered cells with padding at the tail. A pool that keeps
+a sequence's cells together produces a different shape: runs of consecutive
+cells laid out in blocks of 32 entries, each run's last block ending in
+padding. Metal reads such a block straight from the cache, and compiles the
+gather out of the kernel when every block of every list qualifies, so the
+paths most decode steps take had no backend-level check.
+
+test_flash_attn_ext_kv_rows_runs adds four layouts over the same op:
+
+  consecutive        one range filling whole blocks (the gather-free kernel)
+  runs_padded        several runs, padding inside the list (gather-free)
+  run_at_cache_end   a padded run in the cache's last cells, which a blind
+                     whole-block read would overrun (the general kernel)
+  mixed              consecutive and scattered blocks in one list
+
+On Metal builds the row-list cases run as the ctest
+skippy_backend_ops_kv_rows, so the project's native test run includes them.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ tests/CMakeLists.txt       |   5 ++
+ tests/test-backend-ops.cpp | 113 +++++++++++++++++++++++++++++++++++--
+ 2 files changed, 113 insertions(+), 5 deletions(-)
+
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 452c0dd8f..b1a34f1d2 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -393,6 +393,11 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
+ endif()
+ 
+ llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
++if (GGML_METAL)
++    # row-list attention on the GPU against the CPU, for every list layout the unified KV
++    # pool produces; selected by the row-list cases' own parameter
++    llama_test(test-backend-ops NAME skippy_backend_ops_kv_rows LABEL "main" ARGS test -o FLASH_ATTN_EXT -p n_cells=)
++endif()
+ 
+ llama_build_and_test(test-backend-tensor.cpp LINK ggml)
+ # per-call cost of ordinary vs row-list decode attention; a tool, not a test
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index cd9d2b894..5a052fbca 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -9013,11 +9013,8 @@ struct test_flash_attn_ext_kv_rows : public test_case {
+         return out;
+     }
+ 
+-    void initialize_tensors(ggml_context * ctx) override {
+-        std::mt19937 gen(0x6B76);
+-
+-        // per slice: distinct random cells, the tail of the list is padding
+-        rows.assign(kv*n_slices, -1);
++    // per slice: distinct random cells, the tail of the list is padding
++    virtual void fill_rows(std::mt19937 & gen) {
+         std::vector<int32_t> order(n_cells);
+         for (int64_t s = 0; s < n_slices; ++s) {
+             for (int64_t i = 0; i < n_cells; ++i) {
+@@ -9029,6 +9026,13 @@ struct test_flash_attn_ext_kv_rows : public test_case {
+                 rows[s*kv + i] = order[i];
+             }
+         }
++    }
++
++    void initialize_tensors(ggml_context * ctx) override {
++        std::mt19937 gen(0x6B76);
++
++        rows.assign(kv*n_slices, -1);
++        fill_rows(gen);
+ 
+         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+             if (t->view_src) {
+@@ -9058,6 +9062,91 @@ struct test_flash_attn_ext_kv_rows : public test_case {
+     }
+ };
+ 
++// GGML_OP_FLASH_ATTN_EXT over the row lists a unified KV pool produces once a sequence's
++// cells sit together: runs of consecutive cells laid out in blocks of 32 list entries.
++// A backend may read such a block straight from the cache instead of gathering it, and
++// may drop the gather altogether when every block of every list qualifies.
++struct test_flash_attn_ext_kv_rows_runs : public test_flash_attn_ext_kv_rows {
++    enum layout_t {
++        // every list is one consecutive range filling whole blocks
++        LAYOUT_CONSECUTIVE,
++        // several runs per list; a run starts on a block and its last block ends in padding,
++        // so padding sits inside the list, not only at its tail
++        LAYOUT_RUNS_PADDED,
++        // as LAYOUT_RUNS_PADDED, with one run in the cache's last cells: its padded block
++        // would read past the end of the cache if a backend read whole blocks blindly
++        LAYOUT_RUN_AT_CACHE_END,
++        // consecutive blocks and scattered blocks in the same list
++        LAYOUT_MIXED,
++    };
++
++    const layout_t layout;
++
++    static const int64_t block = 32;
++
++    std::string vars() override {
++        static const char * const names[] = { "consecutive", "runs_padded", "run_at_cache_end", "mixed" };
++        return test_flash_attn_ext_kv_rows::vars() + ",layout=" + names[layout];
++    }
++
++    test_flash_attn_ext_kv_rows_runs(layout_t layout, int64_t hs, int64_t nh, int64_t gqa, int64_t n_cells, int64_t kv,
++                                     int64_t nb, int64_t n_slices, ggml_type type_KV = GGML_TYPE_F16)
++        : test_flash_attn_ext_kv_rows(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV), layout(layout) {
++        GGML_ASSERT(kv % block == 0 && n_cells >= 2*kv);
++    }
++
++    // one run of `len` cells from `first`, at list entry `at`; returns the entry after its last block
++    int64_t put_run(int64_t s, int64_t at, int64_t first, int64_t len) {
++        for (int64_t i = 0; i < len; ++i) {
++            rows[s*kv + at + i] = (int32_t) (first + i);
++        }
++        return at + (len + block - 1)/block*block;
++    }
++
++    void fill_rows(std::mt19937 & gen) override {
++        for (int64_t s = 0; s < n_slices; ++s) {
++            switch (layout) {
++                case LAYOUT_CONSECUTIVE: {
++                    put_run(s, 0, block*(1 + 3*s), kv);
++                } break;
++                case LAYOUT_RUNS_PADDED:
++                case LAYOUT_RUN_AT_CACHE_END: {
++                    // runs of uneven length from disjoint parts of the cache, then all-padding blocks
++                    const int64_t lens[] = { 3*block + 7, block - 1, 2*block, 5 + s };
++                    int64_t at    = 0;
++                    int64_t first = 64*(s + 1) + 3;
++                    for (int64_t len : lens) {
++                        if (at + (len + block - 1)/block*block > kv - block) {
++                            break;
++                        }
++                        at     = put_run(s, at, first, len);
++                        first += len + 100;
++                    }
++                    if (layout == LAYOUT_RUN_AT_CACHE_END) {
++                        put_run(s, at, n_cells - 5 - s, 5 + s);
++                    }
++                } break;
++                case LAYOUT_MIXED: {
++                    std::vector<int32_t> scattered(n_cells/2);
++                    for (int64_t i = 0; i < (int64_t) scattered.size(); ++i) {
++                        scattered[i] = (int32_t) (n_cells/2 + i);
++                    }
++                    std::shuffle(scattered.begin(), scattered.end(), gen);
++                    for (int64_t b = 0; b < kv/block; ++b) {
++                        if ((b + s) % 3 == 0) {
++                            for (int64_t i = 0; i < block; ++i) {
++                                rows[s*kv + b*block + i] = scattered[b*block + i];
++                            }
++                        } else {
++                            put_run(s, b*block, b*block + s, (b + s) % 3 == 1 ? block : block - 9);
++                        }
++                    }
++                } break;
++            }
++        }
++    }
++};
++
+ // GGML_OP_CROSS_ENTROPY_LOSS
+ struct test_cross_entropy_loss : public test_case {
+     const ggml_type type;
+@@ -12671,6 +12760,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         }
+     }
+ 
++    // the same op over lists of consecutive runs in blocks of 32 entries
++    for (auto layout : { test_flash_attn_ext_kv_rows_runs::LAYOUT_CONSECUTIVE,
++                         test_flash_attn_ext_kv_rows_runs::LAYOUT_RUNS_PADDED,
++                         test_flash_attn_ext_kv_rows_runs::LAYOUT_RUN_AT_CACHE_END,
++                         test_flash_attn_ext_kv_rows_runs::LAYOUT_MIXED }) {
++        for (int64_t nb : {1, 4, 64}) {
++            for (int64_t n_slices : {1, 4}) {
++                test_cases.emplace_back(new test_flash_attn_ext_kv_rows_runs(layout, 128, 8, 4, 4096,  512, nb, n_slices));
++                test_cases.emplace_back(new test_flash_attn_ext_kv_rows_runs(layout, 256, 2, 8, 4096, 1024, nb, n_slices));
++                test_cases.emplace_back(new test_flash_attn_ext_kv_rows_runs(layout,  64, 4, 2, 3000,  768, nb, n_slices, GGML_TYPE_Q8_0));
++            }
++        }
++    }
++
+     // sparse mask with large batch size
+     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
+     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+-- 
+2.43.0
+
