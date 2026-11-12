@@ -1,7 +1,7 @@
-From fd0584c4b6fd9081584bf913a85349bc0df5b64b Mon Sep 17 00:00:00 2001
+From 16243cdb042855b713f08f9c38c285a39fad803f Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
-Subject: [PATCH] skippy: roll back staged verify windows in place
+Subject: [PATCH 15/16] skippy: roll back staged verify windows in place
 
 A recurrent verify window of up to n_rs_seq rows rolls back through the
 rollback snapshots instead of a host checkpoint and replay, but staged
@@ -1469,5 +1469,5 @@ index d09acccb4..8d68604c3 100644
      return 0;
  }
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

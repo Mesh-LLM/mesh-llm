@@ -1,7 +1,7 @@
-From 4954bc1b8f899e77b205e5f9a38749f61bd14cf2 Mon Sep 17 00:00:00 2001
+From b5d55de3ea6bddf0b719c9749d6a1ab3367f3459 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 29 Oct 2026 19:55:52 -0400
-Subject: [PATCH 13/15] fix(skippy): take the argmax path for temperature-0
+Subject: [PATCH 13/16] fix(skippy): take the argmax path for temperature-0
  chains that can only pick the top logit
 
 ---

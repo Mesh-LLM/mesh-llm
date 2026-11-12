@@ -105,12 +105,14 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.79`. The patch header in
+The staged ABI is versioned as `0.1.80`. The patch header in
 `skippy/llama_cpp/patches/` and the Rust constants in
 `skippy/crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
 
-ABI `0.1.79` includes llama.cpp b12144's media layouts: `mtmd_gen_audio_info`
+ABI `0.1.80` adds `mtmd_helper_get_decode_budget`, the load-time probe a caller
+uses to cap a non-causal projector's vision token budget to its decode batch
+sizes. ABI `0.1.79` includes llama.cpp b12144's media layouts: `mtmd_gen_audio_info`
 adds `n_voices`, and `mtmd_helper_gen_audio_inp` removes `voice`. The native
 loader requires the exact ABI version before using these bindings.
 

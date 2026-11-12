@@ -1,7 +1,7 @@
-From cde052e3cb5e74c012996f693357699789ab2f4f Mon Sep 17 00:00:00 2001
+From 9a3e4522d4e02a2a96fd7d5bf1a081e9be656e72 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 6 Nov 2026 10:37:22 -0800
-Subject: [PATCH] models: expose glm5-next stage graph semantics
+Subject: [PATCH 11/15] models: expose glm5-next stage graph semantics
 
 ---
  src/CMakeLists.txt                          |  12 ++
@@ -43,7 +43,7 @@ index beded64e4..0e619d785 100644
      target_include_directories(skippy-sampling-history PRIVATE .)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
-index 5789b3013..901170bcb 100644
+index 844a327b3..d55b52e1f 100644
 --- a/src/models/glm5-next.cpp
 +++ b/src/models/glm5-next.cpp
 @@ -194,7 +194,7 @@ std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const
@@ -80,7 +80,7 @@ index 5789b3013..901170bcb 100644
      return (llm_graph_input_kpool *) res->add_input(std::move(inp));
  }
  
-@@ -695,6 +704,13 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
+@@ -693,6 +702,13 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
      ggml_tensor * prev_sel = nullptr;
  
      for (int il = 0; il < n_layer; ++il) {
@@ -94,7 +94,7 @@ index 5789b3013..901170bcb 100644
          const auto & layer = model.layers[il];
  
          ggml_tensor * residual = inpL;
-@@ -763,6 +779,12 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
+@@ -761,6 +777,12 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
          cb(inpL, "l_out", il);
      }
  
@@ -107,7 +107,7 @@ index 5789b3013..901170bcb 100644
      // narrow to the output tokens, then collapse the streams
      // Unmasked nextn embeddings need all rows.
      if (crop_before_nextn(inp_out_ids)) {
-@@ -801,11 +823,11 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
+@@ -799,11 +821,11 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
      const auto * mctx_cur = inp_rs->mctx;
  
      ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
@@ -123,7 +123,7 @@ index 5789b3013..901170bcb 100644
      cb(Qcur, "kda_q_conv", il);
      cb(Kcur, "kda_k_conv", il);
      cb(Vcur, "kda_v_conv", il);
-@@ -837,7 +859,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
+@@ -835,7 +857,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
      cb(beta, "kda_beta", il);
  
      ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
@@ -132,7 +132,7 @@ index 5789b3013..901170bcb 100644
      state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
  
      // Match FLA l2 norm
-@@ -897,7 +919,10 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
+@@ -895,7 +917,10 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
      ggml_tensor * pzero = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_tokens), 0.0f);
      ggml_tensor * packed = ggml_concat(ctx0, ggml_concat(ctx0, ik, ig, 0), pzero, 0);
      packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
@@ -144,7 +144,7 @@ index 5789b3013..901170bcb 100644
  
      auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
      const int64_t n_kv = mctx_lid->get_n_kv();
-@@ -925,7 +950,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
+@@ -923,7 +948,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
  
      // scatter the fresh pooled keys into their rep rows, then gather all n_pool of them by cell:
      // the older pools come from the rows earlier ubatches wrote
@@ -155,7 +155,7 @@ index 5789b3013..901170bcb 100644
      ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
      pooled = ggml_reshape_3d(ctx0, pooled, n_embd_indexer, 1, n_pool);
      cb(pooled, "indexer_pool_k", il);
-@@ -1059,6 +1086,7 @@ llama_model_glm5_next::graph::build_dsa_layer(
+@@ -1057,6 +1084,7 @@ llama_model_glm5_next::graph::build_dsa_layer(
      cb(q_absorbed, "q_absorbed", il);
  
      ggml_tensor * k = mctx_mla->get_k(ctx0, il);
@@ -163,7 +163,7 @@ index 5789b3013..901170bcb 100644
      ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
  
      ggml_tensor * sel = prev_sel;
-@@ -1075,7 +1103,9 @@ llama_model_glm5_next::graph::build_dsa_layer(
+@@ -1073,7 +1101,9 @@ llama_model_glm5_next::graph::build_dsa_layer(
  
      ggml_build_forward_expand(gf, q_absorbed);
      ggml_build_forward_expand(gf, kv_cmpr);
@@ -379,10 +379,10 @@ index 4ee862411..0d1bbf6e7 100644
 +set_tests_properties(skippy_glm5_next_stage_layer_inputs PROPERTIES
 +    FIXTURES_REQUIRED contract-glm5-next-synthetic TIMEOUT 900)
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 89b5135a4..682a1b061 100644
+index dea533e77..363d97704 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -2138,7 +2138,7 @@ int main(int argc, char ** argv) {
+@@ -2147,7 +2147,7 @@ int main(int argc, char ** argv) {
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
                      arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
@@ -391,7 +391,7 @@ index 89b5135a4..682a1b061 100644
                      0,
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
-@@ -2169,6 +2169,13 @@ int main(int argc, char ** argv) {
+@@ -2178,6 +2178,13 @@ int main(int argc, char ** argv) {
              const std::array<bool, 3> recurrent = {model->hparams.is_recr(0), model->hparams.is_recr(1), false};
              gguf_set_arr_data(saver.gguf_ctx, saver.llm_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str(),
                      GGUF_TYPE_BOOL, recurrent.data(), recurrent.size());

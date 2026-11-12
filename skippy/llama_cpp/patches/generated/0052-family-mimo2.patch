@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
-index 420cdf6f03700e3af87d2556590da27a82a61a5c..e1eb69cf062f4ec52e98532bc8f7d6e91beafee4 100644
+index ac36e666496d16e552f55c98a7bfa11d1682f471..e91006eb1fd90685acfe3470ad649651df269cf1 100644
 --- a/src/models/mimo2.cpp
 +++ b/src/models/mimo2.cpp
 @@ -101,6 +101,8 @@ llama_model_mimo2::graph::graph(const llm_graph_params & params) : llm_graph_con

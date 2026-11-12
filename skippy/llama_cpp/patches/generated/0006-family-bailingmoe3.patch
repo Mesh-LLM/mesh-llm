@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
-index 6b358a8f93087ed2f5c93e4ad082bde1b9c2ef42..57681f9fed16382b78210e685c258ea00368aef4 100644
+index aadc71bb1c7d721f8fb9613aa791619d1205b8e3..01fdd8067fe5e06de37560ecee206f3cb4c56557 100644
 --- a/src/models/bailingmoe3.cpp
 +++ b/src/models/bailingmoe3.cpp
 @@ -217,6 +217,8 @@ llama_model_bailingmoe3::graph::graph(const llm_graph_params & params) :

@@ -1,7 +1,7 @@
-From 496758edf6baa6855541004c10c9988f201c893c Mon Sep 17 00:00:00 2001
+From df645f043528a642d59c3e23de88a53ebbbbd940 Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:27:44 +1100
-Subject: [PATCH] skippy: add clef joint decision reads
+Subject: [PATCH 12/15] skippy: add clef joint decision reads
 
 Render the systemone template, tokenize the prompt pieces with their
 decision order, and read one score per option from the embeddings output
@@ -180,7 +180,7 @@ index 000000000..cf13822ed
 +
 +#endif // SKIPPY_CLEF_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 93232a2b8..d2ab5d538 100644
+index 93232a2b8..8845ab5fd 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -188,7 +188,7 @@ index 93232a2b8..d2ab5d538 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 78
-+#define SKIPPY_ABI_VERSION_PATCH 79
++#define SKIPPY_ABI_VERSION_PATCH 80
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
