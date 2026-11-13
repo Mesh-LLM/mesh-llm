@@ -409,6 +409,63 @@ async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
     assert!(state.attempt_history[1].get("admission_denied").is_none());
 }
 
+/// A dispatch names its own exchange: the session must hand a plugin the id
+/// the `backend_selected` event carries (a model re-pick has its own), and
+/// only fill in the session's id for an event that has none.
+#[tokio::test]
+async fn selected_event_keeps_its_own_exchange_id_and_empty_takes_the_sessions() {
+    let (manager, _, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let (session, admission) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "session-id".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(admission.error_status().is_none());
+    for (carried, expected) in [(Some("repick-id"), "repick-id"), (None, "session-id")] {
+        let mut selected = request_event(
+            "ignored".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(1);
+        selected["target"] = json!("peer");
+        match carried {
+            Some(id) => selected["exchange_id"] = json!(id),
+            None => {
+                selected.as_object_mut().unwrap().remove("exchange_id");
+            }
+        }
+        manager
+            .selected_exchange_phase(session.observation_id(), selected)
+            .await;
+        let state = manager
+            .inner
+            .exchange_observations
+            .0
+            .lock()
+            .unwrap()
+            .get(session.observation_id())
+            .and_then(Weak::upgrade)
+            .unwrap();
+        let state = state.lock().unwrap();
+        assert_eq!(state.selected.as_ref().unwrap()["exchange_id"], expected);
+    }
+}
+
 #[test]
 fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
     let deny = |required_failure, deny_status| PhaseResult {

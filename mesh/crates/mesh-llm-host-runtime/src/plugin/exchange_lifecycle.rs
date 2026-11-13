@@ -223,7 +223,12 @@ impl PluginManager {
         };
         {
             let state = state.lock().unwrap();
-            event["exchange_id"] = json!(state.exchange_id);
+            // A dispatch names its own exchange (a model re-pick is a new
+            // exchange of the same session); only an event that carries no id
+            // takes the session's.
+            if event["exchange_id"].as_str().is_none_or(str::is_empty) {
+                event["exchange_id"] = json!(state.exchange_id);
+            }
             event["endpoint"] = json!(state.endpoint);
         }
         event["observation_id"] = json!(observation_id);

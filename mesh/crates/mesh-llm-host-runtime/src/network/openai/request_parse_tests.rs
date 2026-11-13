@@ -430,6 +430,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -936,6 +937,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
             exchange_observation_id: None,
+            exchange_seq: 0,
             automatic_repick: 0,
             automatic_route: false,
         };
@@ -985,6 +987,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -1237,6 +1240,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     }

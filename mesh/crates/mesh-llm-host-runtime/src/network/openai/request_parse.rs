@@ -194,6 +194,9 @@ pub struct BufferedHttpRequest {
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
+    /// Node-local sequence number assigned when the request was parsed; the
+    /// host-only root of [`Self::exchange_id`].
+    pub exchange_seq: u64,
     /// How many times an automatic route has re-picked a model for this
     /// request; 0 for the first dispatch. See [`Self::exchange_id`].
     pub automatic_repick: u32,
@@ -206,19 +209,40 @@ pub struct BufferedHttpRequest {
     pub automatic_route: bool,
 }
 
+/// Random per process: keeps exchange ids unique across restarts and nodes.
+fn process_boot_id() -> uuid::Uuid {
+    static BOOT_ID: std::sync::OnceLock<uuid::Uuid> = std::sync::OnceLock::new();
+    *BOOT_ID.get_or_init(uuid::Uuid::new_v4)
+}
+
+fn next_exchange_seq() -> u64 {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl BufferedHttpRequest {
-    /// The exchange id of this dispatch on the raw-proxy / remote-mesh paths:
-    /// the ingress request id's UUID text, which the `backend_selected` event
-    /// and payment plugins' payer events already carry. A model re-pick
-    /// re-dispatches the same request and publishes another effective/terminal
-    /// pair, so it derives a distinct id (deterministically, so every event of
-    /// that dispatch agrees) to keep each pair unambiguous.
+    /// The exchange id of this dispatch on the raw-proxy / remote-mesh paths.
+    ///
+    /// Internal to the serving node and deterministic there:
+    /// `hash(boot_id, seq, dispatch)` over a per-process random boot id, the
+    /// request's node-local sequence number and its re-pick count. Nothing a
+    /// client sends (`x-request-id` included) goes into it, and `request_id`
+    /// stays a separate field. Every event of one dispatch computes the same
+    /// id from the request; a model re-pick re-dispatches the same request and
+    /// gets its own.
     pub(crate) fn exchange_id(&self) -> String {
-        let base = self.request_id.as_uuid();
-        if self.automatic_repick == 0 {
-            return base.to_string();
-        }
-        uuid::Uuid::from_u128(base.as_u128() ^ u128::from(self.automatic_repick)).to_string()
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"mesh-llm.openai.exchange-id.v1");
+        hasher.update(process_boot_id().as_bytes());
+        hasher.update(self.exchange_seq.to_be_bytes());
+        hasher.update(self.automatic_repick.to_be_bytes());
+        let digest = hasher.finalize();
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        uuid::Builder::from_custom_bytes(bytes)
+            .into_uuid()
+            .to_string()
     }
 
     /// Whether this is the product tokenizer capability route.
@@ -585,6 +609,7 @@ where
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
+        exchange_seq: next_exchange_seq(),
         automatic_repick: 0,
         automatic_route: false,
     })

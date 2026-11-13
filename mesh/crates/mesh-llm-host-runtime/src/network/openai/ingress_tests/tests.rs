@@ -43,6 +43,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     }
@@ -221,6 +222,7 @@ fn dispatch_kind_request(
         response_adapter,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     }
@@ -321,6 +323,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -1249,6 +1252,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -1333,13 +1337,16 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         events[0].exchange_id, events[1].exchange_id,
         "effective and terminal envelopes must share the same exchange_id"
     );
-    // The id is the ingress request id, the value the `backend_selected`
-    // event and payment plugins' payer events already carry, so a consumer
-    // can join them.
+    // The id is the node-internal one `backend_selected` carries too, so a
+    // consumer can join them; it is not the ingress request id.
     assert_eq!(
         events[0].exchange_id,
-        request.request_id.as_uuid().to_string(),
-        "exchange_id must equal the ingress request id"
+        request.exchange_id(),
+        "exchange_id must be the dispatch's node-internal id"
+    );
+    assert_ne!(
+        events[0].exchange_id,
+        request.request_id.as_uuid().to_string()
     );
 
     // (4) The SAME nonce on both envelopes, matching the request's nonce header.
@@ -1429,6 +1436,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -1624,6 +1632,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -1952,6 +1961,7 @@ pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     }
@@ -2378,6 +2388,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
@@ -2688,6 +2699,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
         automatic_repick: 0,
         automatic_route: false,
     };
