@@ -138,7 +138,7 @@ impl RequestTrust {
                     .to_owned()
             }
             Self::Receipts { audit: false } => format!(
-                "this node does not serve model '{model}' with receipts, and no peer can satisfy the request's trust policy: receipt audits are turned off here ([receipts] offline = true), so a peer's receipts cannot be checked"
+                "this node does not serve model '{model}' with receipts, and no peer can satisfy the request's trust policy: this node audits no peer's receipts, so none can be checked: receipt audits are turned off ([receipts] offline = true), or no native runtime is loaded to run them (a client loads it at startup when [receipts] audit or require is set)"
             ),
             Self::Receipts { audit: true }
                 if !crate::network::receipt_audit::ties_model_name(model) =>
@@ -190,9 +190,23 @@ fn decide_with(receipts: &ReceiptsConfig, raw: &[u8]) -> Result<RequestTrust, St
 
 /// Decides the policy of the request `raw` a local client sent: one read of
 /// the node's settings and one parse of the head, for the whole request.
+///
+/// A node that cannot run an audit now (no native runtime loaded: a
+/// `client` started without `[receipts] audit` or `require`) audits no
+/// peer, so under `receipts` no peer qualifies and the request fails
+/// closed, rather than reaching a peer whose turn would go unaudited.
 pub(crate) async fn decide(node: &mesh::Node, raw: &[u8]) -> Result<RequestTrust, Unsatisfied> {
     let receipts = node.config_state.lock().await.config().receipts.clone();
-    decide_with(&receipts, raw).map_err(Unsatisfied::Invalid)
+    let trust = decide_with(&receipts, raw).map_err(Unsatisfied::Invalid)?;
+    Ok(with_auditor(trust, node.receipt_audits.auditor_ready()))
+}
+
+/// `trust` on a node whose auditor is `ready` or not.
+fn with_auditor(trust: RequestTrust, ready: bool) -> RequestTrust {
+    match trust {
+        RequestTrust::Receipts { audit: true } if !ready => RequestTrust::Receipts { audit: false },
+        trust => trust,
+    }
 }
 
 /// Whether this node audits the turn the forwarded request `raw` asks a
