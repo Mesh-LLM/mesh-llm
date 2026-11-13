@@ -142,6 +142,7 @@
       "ci-validate",
       "no-console-print",
       "publish-crates",
+      "research-source-admit",
       "research-source-restore",
       "runner-cleanup-bootstrap",
       "test-all"

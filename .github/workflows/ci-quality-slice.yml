@@ -250,8 +250,6 @@ jobs:
         with:
           node-version: 24.20.0
           package-manager-cache: false
-      - name: Prepare external Python SDK contract source
-        uses: ./.github/actions/prepare-python-sdk-source
       - name: Prepare external Python research contract source
         uses: ./.github/actions/prepare-python-research-source
       - name: Test CI, packaging, and SDK contracts

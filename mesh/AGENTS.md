@@ -21,6 +21,10 @@ These instructions apply under `mesh/` in addition to the root `AGENTS.md`. Path
 | `mesh/website/src/docs/pages/analytics.md` | Public analytics disclosure |
 | `tools/relay-fly-legacy/README.md` | Archived relay reference; production uses services.iroh.computer |
 
+The Python SDK source and package are maintained in `mesh/sdk/python/` alongside
+the other Mesh SDKs. Keep its generated bindings, native API revision, tests and
+maintained examples synchronized with the native FFI surface.
+
 ## Public Website
 
 The maintained website source lives in `mesh/website/`. Eleventy writes generated static-hosting output into root `docs/`; authored documentation lives under `mesh/docs/` and `skippy/docs/`. Do not hand-edit generated website files.

@@ -240,9 +240,9 @@ the benchmark/correctness tools. Native runtime and serving tests run separately
 with `--no-default-features`, avoiding dynamic-runtime feature unification from
 Mesh. Existing ignored tests retain their declared prerequisites. CI cache
 fixture timestamps require `TZ=UTC` for their expected ordering on this host.
-The full CI gate also requires `MESH_PYTHON_SDK_SOURCE` pointing to the external
-SDK revision declared in `ci/required-sdk-python/sdk-source.json`; source
-admission and the affected SDK fixtures pass with that exact checkout.
+The full CI gate admits the in-tree Python SDK at `mesh/sdk/python` from its
+`sdk-inputs.json` manifest; source admission and the affected SDK fixtures use
+that checked-in component.
 
 The original rebase's `just ci-validate` was not green on this host. That run passed 2,325 unit
 contracts and reached 1,155 passing lifecycle fixtures with one failure:

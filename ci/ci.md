@@ -1067,7 +1067,7 @@ but does not establish a measured hosted duration. It adds one possible
 concurrent hosted worker plus checkout and cold/cached automation setup.
 
 Quality runs both `just ci-automation-contracts` and `just ci-legacy-contracts`,
-with pinned external SDK and research source preparation. Model-resolution
+with in-tree SDK admission and pinned external research source preparation. Model-resolution
 steps call the native resolver directly. The compatibility changes merged in
 PR #2312 allow main's protected workflows to validate this native source before
 the separate full migration rollout.
@@ -2203,10 +2203,9 @@ Runner provisioning owns the lock path: create
 pre-create `mesh-canary-family-host.lock` as root with mode `0666`. Jobs verify
 both owner and permissions and never create the path themselves.
 
-The shared `setup-canary-python` action restores the fixed external Python SDK
-checkout through `prepare-python-sdk-source` and admits its commit, tracked
-roster and file hashes through native `smoke-observation sdk-source`. Its
-embedding profile restores the external `ci/canary-python/uv.lock` into a
+The shared `setup-canary-python` action admits the checked-in Python SDK under
+`mesh/sdk/python` through native `smoke-observation sdk-source`. Its embedding
+profile restores `ci/canary-python/uv.lock` from that component into a
 controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
 The producer build uses it for the early embedding battery, and historical
 source workers consume that exact SDK interpreter. This is managed
@@ -2442,57 +2441,26 @@ run from the frozen protected source. A first run after any hashed input changes
 is a cold miss. Pull requests execute main's reusable workflows, so none of this
 applies to a PR until it is merged. No hosted execution is recorded here.
 
-## External Python SDK source preparation
+## Python SDK component and admission
 
-The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `0357f19f02cc3c2769ab46b0299af027e07049c1`; update all three together.
-That commit is the head of the SDK repository's open effort-metadata pull
-request: one commit ahead of and five behind its `main`, so it is not a released
-checkpoint. A force-push there fails admission, and the pin stays put until that
-pull request merges.
-Laya product readiness and Decisions smoke discovery query
-`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
-model lists contain only LLMs. The golden and response checks remain required.
+The Python SDK package, generated bindings and four compatibility and embedding
+clients are maintained in `mesh/sdk/python`. Its `sdk-inputs.json` records the
+imported source checkpoint, matching Mesh native source revision, generator and
+SHA-256 hashes for every component file. Native `smoke-observation sdk-source`
+checks that manifest and exact source roster before consumers run. Dependency
+preparation uses the component's checked-in lock files. Runtime calls stay
+offline and do not compile a missing native bridge or install SDK dependencies.
 
-The pin cannot advance to a checkpoint from SDK `main` until that checkpoint's
-bindings are regenerated against a Mesh revision whose `ModelNative` record
-matches the one this tree exports. `ModelNative` gained `thinking_efforts`
-after Mesh `efd30516fd2cd92ac132dfd7b8341d24d412ee9c`, so a checkpoint whose
-bindings were generated from that source decodes `inference_list_models()`
-short and leaves unread bytes in the bridge at runtime — model lists fail even
-though the SDK's mock-FFI tests and this repository's HTTP compatibility
-smokes stay green. Moving the pin therefore needs a single SDK commit that both
-carries the live transcription wrapper and regenerates its bindings against a
-current Mesh native revision. Until one exists, the Python
-live-transcription guide stays marked draft and the SDK's own tests do not
-qualify the bridge.
-
-The current checkpoint includes typed Mesh model discovery, OCR uploads,
-membership/live-session controls, full node configuration and native-runtime
-management. Its generated bindings were produced from the coordinated Mesh
-implementation recorded in the SDK's `sdk-inputs.json`; keep that source
-checkpoint synchronized with native API changes.
-
-The Python SDK package, generated Python bindings and four genuine compatibility
-and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
-fixed commit and manifest in `ci/required-sdk-python/sdk-source.json`; source
-admission rejects changed bytes, unexpected tracked or nonignored files, and
-path substitution. Dependency preparation restores the original locked profiles
-from that admitted source. Runtime calls remain offline and never compile a
-missing native bridge or install missing SDK dependencies.
-
-`prepare-python-sdk-source` restores the fixed source before the Quality contract
-job and Rust/Kotlin/Swift SDK source consumers. `setup-canary-python` reuses it
-before compatibility or embedding dependency preparation. The bare macOS Swift SDK
-smoke restores the lane's `product_automation_macos_arm64` executable through
-`restore-automation` before admission and never compiles xtask. Required SDK cadence
-is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, set
-`MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
-inherits that input and does not acquire external source. The source-dependent
-`migration_repository` and `migration_lifecycle` fixtures use that same input.
-The [SDK checkpoint](required-sdk-python/sdk-source.json) is published; fresh anonymous restore and native source admission passed.
-Hosted restore remains unqualified. A passing source contract or mock FFI test does not qualify the native
-bridge, model serving or real client requests.
+`setup-canary-python` admits the in-tree component before compatibility or
+embedding dependency preparation. The bare macOS Swift SDK smoke restores the
+lane's `product_automation_macos_arm64` executable through `restore-automation`
+before admission and never compiles xtask. Required SDK cadence is unchanged.
+For local `just ci-automation-contracts` or `just ci-validate`, set
+`MESH_PYTHON_SDK_SOURCE="$PWD/mesh/sdk/python"` so source-dependent
+`migration_lifecycle` fixtures consume the same component. The
+`migration_repository` contract reads it through native source admission. A
+source contract or mock FFI test does not qualify the native bridge, model
+serving or real client requests.
 
 The retired Skippy benchmark harness no longer selects external research-source
 preparation in Rust test batches. Explicit research source admission remains

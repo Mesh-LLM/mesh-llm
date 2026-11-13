@@ -136,5 +136,6 @@ pages, exact lookup and provider metadata:
 - [Kotlin](/docs/pages/sdk-kotlin/)
 
 Update every SDK and its generated native bridge together. Python is maintained
-in the separate `Mesh-LLM/mesh-llm-python-sdk` repository. Use matching SDK/native
-artifacts; this source change alone does not publish new packages.
+under [mesh/sdk/python](https://github.com/Mesh-LLM/mesh-llm/tree/main/mesh/sdk/python).
+Use matching SDK/native artifacts; this source change alone does not publish
+new packages.

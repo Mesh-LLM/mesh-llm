@@ -1,4 +1,4 @@
-//! Native custody of the two fixed external Python SDK/research checkouts.
+//! Native custody of the fixed external Python research checkout.
 use super::hf_certify::admission::{digest, read};
 use crate::{
     command::DynResult,
@@ -112,7 +112,7 @@ fn git_capture(root: &Path, args: &[&str], research_roster: bool) -> DynResult<V
         || !report.stdout.line_capture_complete
         || report.stdout.suppressed_lines != 0
     {
-        return Err("external SDK Git admission failed".into());
+        return Err("external research Git admission failed".into());
     }
     read(&stdout, 65536)
 }
@@ -122,7 +122,7 @@ pub(super) fn checkout(root: &Path, revision: &str) -> DynResult<PathBuf> {
         || revision.len() != 40
         || !revision.bytes().all(|b| b.is_ascii_hexdigit())
     {
-        return Err("external SDK source pin refused".into());
+        return Err("external research source pin refused".into());
     }
     let root = root.canonicalize()?;
     let top = String::from_utf8(git(&root, &["rev-parse", "--show-toplevel"])?)?;
@@ -142,22 +142,12 @@ pub(super) fn checkout(root: &Path, revision: &str) -> DynResult<PathBuf> {
         )?
         .is_empty()
     {
-        return Err("external SDK checkout identity/drift refused".into());
+        return Err("external research checkout identity/drift refused".into());
     }
     if !git(&root, &["ls-files", "--others", "--exclude-standard"])?.is_empty() {
-        return Err("external SDK has unbound untracked source".into());
+        return Err("external research has unbound untracked source".into());
     }
     Ok(root)
-}
-
-pub(super) fn files(
-    root: &Path,
-    manifest: &str,
-    expected: &BTreeMap<String, String>,
-    maximum: usize,
-    leaf_bytes: u64,
-) -> DynResult<Vec<(PathBuf, String)>> {
-    files_with_roster(root, manifest, expected, maximum, leaf_bytes, false)
 }
 
 pub(super) fn research_files(
@@ -183,14 +173,14 @@ fn files_with_roster(
     research_roster: bool,
 ) -> DynResult<Vec<(PathBuf, String)>> {
     if expected.is_empty() || expected.len() > maximum {
-        return Err("external SDK tracked roster bound refused".into());
+        return Err("external research tracked roster bound refused".into());
     }
     let mut expected_paths = expected.keys().map(String::as_str).collect::<Vec<_>>();
     expected_paths.push(manifest);
     expected_paths.sort();
     let tracked = git_capture(root, &["ls-files"], research_roster)?;
     if std::str::from_utf8(&tracked)?.lines().collect::<Vec<_>>() != expected_paths {
-        return Err("external SDK tracked roster refused".into());
+        return Err("external research tracked roster refused".into());
     }
     let mut pins = Vec::new();
     for (relative, hash) in expected {
@@ -198,7 +188,7 @@ fn files_with_roster(
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
         {
-            return Err("external SDK file path refused".into());
+            return Err("external research file path refused".into());
         }
         let path =
             Path::new(relative)
@@ -208,7 +198,7 @@ fn files_with_roster(
                     path
                 });
         if path.canonicalize()? != path || digest(&read(&path, leaf_bytes)?) != *hash {
-            return Err("external SDK file custody refused".into());
+            return Err("external research file custody refused".into());
         }
         pins.push((path, hash.clone()));
     }

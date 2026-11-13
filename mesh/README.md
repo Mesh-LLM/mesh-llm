@@ -33,7 +33,7 @@ development workflow.
 |---|---|
 | [`crates/`](crates/) | Mesh binaries, runtimes, networking, APIs, plugins, UI, and shared libraries |
 | [`docs/`](docs/) | Authored Mesh guides, designs, specifications, and plans |
-| [`sdk/`](sdk/) | Node.js, Swift, Kotlin, and other SDK packaging |
+| [`sdk/`](sdk/) | Python, Node.js, Swift, Kotlin, and other SDK packaging |
 | [`deploy/`](deploy/) | Service and platform deployment assets |
 | [`evals/`](evals/) | Mesh-level evaluations and benchmark scenarios |
 | [`scripts/`](scripts/) | Mesh-owned build, test, release, and maintenance scripts |

@@ -44,9 +44,10 @@ fn complete_rewriter_passes_have_a_separate_default_budget_from_git() {
 fn both_rewriter_passes_can_outlast_the_short_git_budget() {
     let root = tempfile::tempdir().unwrap();
     let mut options = setup(root.path());
-    options.publication.git.timeout = Duration::from_secs(1);
+    options.publication.git.timeout = Duration::from_secs(10);
+    options.rewriter_timeout = Duration::from_secs(20);
     for pass in ["first", "second"] {
-        std::fs::write(root.path().join(format!("delay-{pass}-ms")), b"1200").unwrap();
+        std::fs::write(root.path().join(format!("delay-{pass}-ms")), b"10200").unwrap();
     }
     execute(&options, &Cancellation::default(), |diff| {
         publish_count(diff, &options.publication)
