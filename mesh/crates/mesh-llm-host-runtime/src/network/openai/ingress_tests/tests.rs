@@ -1329,6 +1329,14 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         events[0].exchange_id, events[1].exchange_id,
         "effective and terminal envelopes must share the same exchange_id"
     );
+    // The id is the ingress request id, the value the `backend_selected`
+    // event and payment plugins' payer events already carry, so a consumer
+    // can join them.
+    assert_eq!(
+        events[0].exchange_id,
+        request.request_id.as_uuid().to_string(),
+        "exchange_id must equal the ingress request id"
+    );
 
     // (4) The SAME nonce on both envelopes, matching the request's nonce header.
     assert_eq!(
