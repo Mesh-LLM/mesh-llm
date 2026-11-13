@@ -19,7 +19,7 @@ Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
  src/skippy/tests/profile_residency.cpp        |  260 +++
  .../tests/renamed_multishard_planning.cpp     | 1667 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  697 +++++++
+ src/skippy/tests/runtime_events.cpp           |  825 ++++++++
  src/skippy/tests/sampling_history.cpp         |  520 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
@@ -41,7 +41,7 @@ Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 37 files changed, 10293 insertions(+), 30 deletions(-)
+ 37 files changed, 10421 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
@@ -5373,10 +5373,10 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..d764514ed
+index 000000000..b675889a6
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -0,0 +1,697 @@
+@@ -0,0 +1,825 @@
 +#include "skippy.h"
 +#include "log_gate.h"
 +static const skippy::log_gate::installer skippy_log_gate_installer{};
@@ -5774,6 +5774,8 @@ index 000000000..d764514ed
 +    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
 +}
 +
++void test_plain_request_after_kept_backend_sampler(skippy_model * model);
++
 +int test_native_model_load_production(const char * fixture_path) {
 +    const char * old_detach_setting = std::getenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
 +    const bool had_detach_setting = old_detach_setting != nullptr;
@@ -5918,6 +5920,7 @@ index 000000000..d764514ed
 +    CHECK(global.kv_cleared_events.load() > 0);
 +    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
 +    test_sampler_row_transitions(model);
++    test_plain_request_after_kept_backend_sampler(model);
 +    CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
 +    CHECK(global.unload_started_events.load() == 1);
 +    CHECK(global.unload_completed_events.load() == 1);
@@ -5969,6 +5972,131 @@ index 000000000..d764514ed
 +    }
 +    skippy_clear_runtime_event_reporter();
 +    return 0;
++}
++
++// Reset keeps a greedy chat's backend sampler on the lane. A later request
++// without chat metadata configures its sampler only at its first sample, so
++// the decode that produces that row must not run a kept sampler that the
++// request cannot reuse: once the chain is replaced, the processed row cannot
++// be read and no token is produced.
++void test_plain_request_after_kept_backend_sampler(skippy_model * model) {
++    skippy_session * session = nullptr;
++    skippy_error * error = nullptr;
++    CHECK(skippy_session_create(model, &session, &error) == SKIPPY_STATUS_OK);
++    skippy_sampling_config greedy{};
++    greedy.version = 1;
++    greedy.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    greedy.repeat_penalty = 1.0f;
++    greedy.reasoning_budget_tokens = -1;
++    skippy_sampling_config sampled = greedy;
++    sampled.temperature = 0.8f;
++    sampled.top_k = 40;
++    sampled.top_p = 0.95f;
++    sampled.seed = 7;
++    const llama_token tokens[3] = {2, 3, 4};
++    int failures = 0;
++    const auto run_case = [&](const char * name, const skippy_sampling_config & sampling,
++                                  const auto & decode_and_sample) {
++        CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++        size_t bytes = 0;
++        llama_token predicted = LLAMA_TOKEN_NULL;
++        CHECK(skippy_session_configure_chat_sampling(
++                session, &greedy, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
++        CHECK(skippy_decode_step_sampled(session, tokens[0], &greedy, nullptr, 0, nullptr, 0,
++                &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++        CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++        CHECK(session->sampling_backend_enabled);
++        predicted = LLAMA_TOKEN_NULL;
++        const enum skippy_status status = decode_and_sample(sampling, &predicted);
++        if (status != SKIPPY_STATUS_OK || predicted < 0) {
++            std::fprintf(stderr, "plain %s request after a kept backend sampler: status %d token %d: %s\n",
++                    name, static_cast<int>(status), predicted,
++                    error != nullptr && error->message != nullptr ? error->message : "");
++            ++failures;
++        }
++        skippy_error_free(error);
++        error = nullptr;
++    };
++    const auto decode_step = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        size_t bytes = 0;
++        return skippy_decode_step_sampled(session, tokens[0], &sampling, nullptr, 0, nullptr, 0,
++                &bytes, predicted, &error);
++    };
++    const auto prefill_frame = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        size_t bytes = 0;
++        return skippy_prefill_chunk_frame_sampled(session, tokens, 3, &sampling, nullptr, nullptr,
++                nullptr, nullptr, 0, &bytes, predicted, &error);
++    };
++    // The scheduler path samples the last row of an iteration request.
++    const auto iteration = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        skippy_iteration_request request{};
++        request.session = session;
++        request.token_ids = tokens;
++        request.token_count = 3;
++        request.sampling = &sampling;
++        request.sample_last = true;
++        size_t sampled_index = 0;
++        size_t sampled_count = 0;
++        return skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr,
++                &sampled_index, predicted, 1, &sampled_count, &error);
++    };
++    // The output token is optional; such a caller samples the current row
++    // later, with sampling the decode did not see.
++    const auto decode_step_then_sample = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        size_t bytes = 0;
++        CHECK(skippy_decode_step_sampled(session, tokens[0], &sampling, nullptr, 0, nullptr, 0,
++                &bytes, nullptr, &error) == SKIPPY_STATUS_OK);
++        return skippy_session_sample_current(session, &sampling, predicted, &error);
++    };
++    const auto step_frame_then_sample = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        size_t bytes = 0;
++        CHECK(skippy_decode_step_frame_sampled(session, tokens[0], &sampling, nullptr, nullptr,
++                nullptr, nullptr, 0, &bytes, nullptr, &error) == SKIPPY_STATUS_OK);
++        return skippy_session_sample_current(session, &sampling, predicted, &error);
++    };
++    const auto prefill_frame_then_sample = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        size_t bytes = 0;
++        CHECK(skippy_prefill_chunk_frame_sampled(session, tokens, 3, &sampling, nullptr, nullptr,
++                nullptr, nullptr, 0, &bytes, nullptr, &error) == SKIPPY_STATUS_OK);
++        return skippy_session_sample_current(session, &sampling, predicted, &error);
++    };
++    // Media prompts are decoded by the caller between begin and end of an
++    // external decode, then sampled from the current row.
++    const auto external = [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        CHECK(skippy_session_begin_external_decode(session, &error) == SKIPPY_STATUS_OK);
++        llama_batch batch = llama_batch_init(1, 0, 1);
++        batch.n_tokens = 1;
++        batch.token[0] = tokens[0];
++        batch.pos[0] = session->n_past;
++        batch.n_seq_id[0] = 1;
++        batch.seq_id[0][0] = session->seq_id;
++        batch.logits[0] = 1;
++        CHECK(llama_decode(session->ctx, batch) == 0);
++        llama_batch_free(batch);
++        CHECK(skippy_session_end_external_decode(session, &error) == SKIPPY_STATUS_OK);
++        CHECK(skippy_session_set_position(session, session->n_past + 1, &error) == SKIPPY_STATUS_OK);
++        return skippy_session_sample_current(session, &sampling, predicted, &error);
++    };
++    run_case("decode step", sampled, decode_step);
++    run_case("prefill frame", sampled, prefill_frame);
++    run_case("scheduler iteration", sampled, iteration);
++    run_case("external decode", sampled, external);
++    run_case("decode step without an output token", sampled, decode_step_then_sample);
++    run_case("step frame without an output token", sampled, step_frame_then_sample);
++    run_case("prefill frame without an output token", sampled, prefill_frame_then_sample);
++    CHECK(failures == 0);
++
++    // A greedy request without chat metadata reuses the kept sampler, so it
++    // keeps backend sampling and needs no scheduler reservation.
++    uint64_t reserves = 0;
++    run_case("greedy decode step", greedy, [&](const skippy_sampling_config & sampling, llama_token * predicted) {
++        reserves = session->ctx->get_sched_reserve_count();
++        return decode_step(sampling, predicted);
++    });
++    CHECK(failures == 0);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves);
++    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
 +}
 +
 +int test_kv_events_dispatch() {
