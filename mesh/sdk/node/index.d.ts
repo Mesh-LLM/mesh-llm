@@ -362,7 +362,30 @@ export type EmbeddedMeshNodeConfig = {
   startup_timeout?: { secs: number; nanos: number }
 }
 
+export type NodeLifecycle =
+  | { phase: 'loading' | 'downloading' | 'ready' | 'stopped' }
+  | { phase: 'failed'; error: string }
+
+export type NativeNodeStatus = {
+  state: NodeLifecycle
+  servingModels: string[]
+  models: MeshModel[]
+  /** Native served descriptors, including optional identity and metadata facts. */
+  localModels: Record<string, unknown>[]
+  capacities: { model: string; contextPerLane: number[]; lastSuccessUnixMs: number | null }[]
+  download: { file: string; downloadedBytes: number; totalBytes: number | null } | null
+}
+
+export declare class StatusEvents implements AsyncIterable<NativeNodeStatus> {
+  nextEvent(): Promise<NativeNodeStatus | null>
+  close(): Promise<void>
+  events(): AsyncGenerator<NativeNodeStatus>
+  [Symbol.asyncIterator](): AsyncGenerator<NativeNodeStatus>
+}
+
 export declare class Node {
+  nativeStatus(): Promise<NativeNodeStatus>
+  statusEvents(): Promise<StatusEvents>
   static create(options?: NodeOptions): Node
   static fromConfig(config: EmbeddedMeshNodeConfig): Node
   readonly inference: Inference

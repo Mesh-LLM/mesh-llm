@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 pub use mesh_llm_embedded_runtime::{
@@ -12,9 +13,12 @@ pub use mesh_llm_embedded_runtime::{
 
 pub type MeshNodeStatus = mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus;
 
+pub use mesh_llm_embedded_runtime::status;
+
 pub struct MeshNode {
     handle: mesh_llm_embedded_runtime::EmbeddedMeshNodeHandle,
     mode: EmbeddedMeshNodeMode,
+    status_subscriptions: Mutex<Vec<Weak<status::StatusSubscription>>>,
 }
 
 impl MeshNode {
@@ -68,6 +72,26 @@ impl MeshNode {
 
     pub async fn status(&self) -> anyhow::Result<MeshNodeStatus> {
         self.handle.status().await
+    }
+
+    pub async fn native_status(&self) -> anyhow::Result<status::NativeNodeStatus> {
+        self.handle.native_status().await
+    }
+
+    pub fn status_events(&self) -> anyhow::Result<status::StatusEvents> {
+        self.handle.status_events()
+    }
+
+    /// A cancellable native status stream, automatically closed by node shutdown.
+    pub fn status_subscription(&self) -> anyhow::Result<Arc<status::StatusSubscription>> {
+        let subscription = Arc::new(status::StatusSubscription::new(self.status_events()?));
+        let mut subscriptions = self
+            .status_subscriptions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("status subscription registry poisoned"))?;
+        subscriptions.retain(|subscription| subscription.strong_count() > 0);
+        subscriptions.push(Arc::downgrade(&subscription));
+        Ok(subscription)
     }
 
     /// Discover local and peer models, including their advertised effort levels.
@@ -136,6 +160,13 @@ impl MeshNode {
     }
 
     pub async fn shutdown(self) -> anyhow::Result<()> {
+        let subscriptions = self
+            .status_subscriptions
+            .into_inner()
+            .map_err(|_| anyhow::anyhow!("status subscription registry poisoned"))?;
+        for subscription in subscriptions.into_iter().filter_map(|item| item.upgrade()) {
+            subscription.close().await;
+        }
         self.handle.stop().await
     }
 
@@ -433,7 +464,11 @@ impl MeshNodeBuilder {
         let config = self.build();
         let mode = config.mode.clone();
         let handle = mesh_llm_embedded_runtime::start_embedded_node(config).await?;
-        Ok(MeshNode { handle, mode })
+        Ok(MeshNode {
+            handle,
+            mode,
+            status_subscriptions: Mutex::new(Vec::new()),
+        })
     }
 }
 

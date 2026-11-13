@@ -182,6 +182,22 @@ public final class Node: @unchecked Sendable {
         )
     }
 
+    public func nativeStatus() async throws -> NativeNodeStatus {
+        let handle = self.handle
+        return try NativeNodeStatus.decode(await runBlocking { try handle.nativeStatusJson() })
+    }
+
+    public func statusEvents() async throws -> StatusEvents {
+        let handle = self.handle
+        let subscription = try await runBlocking { try handle.statusEvents() }
+        return StatusEvents(
+            nextJSON: { try await runBlocking { try subscription.nextEventJson() } },
+            close: { await withCheckedContinuation { continuation in
+                DispatchQueue.global().async { subscription.closeEvents(); continuation.resume() }
+            } }
+        )
+    }
+
     public func joinToken(_ token: String) async throws {
         let handle = self.handle
         try await runBlocking { try handle.joinToken(token: token) }

@@ -8,6 +8,30 @@ which includes the embedded runtime and native runtime management APIs.
 See [Rust SDK usage](../../docs/sdk/rust.md) and
 [native runtime guidance](../../docs/SDK.md#native-runtime-artifacts).
 
+## Native lifecycle status
+
+`node.native_status().await?` reads typed lifecycle, download progress, local
+capacity and model advertisements directly from the embedded runtime.
+`node.status_events()?` returns an initial snapshot and then waits for native
+changes with `events.next().await?`. Neither operation calls the console HTTP API
+or starts a polling timer. Download callbacks publish bytes and completion; the
+loading state lasts until native serving readiness is observed. A client-only
+node is ready once started; this does not promise a reachable remote provider.
+
+Updates are coalesced: slow subscribers receive current state rather than replaying
+every progress tick. Subscribe before reading when an atomic initial handoff is
+needed. A runtime failure or normal exit produces a terminal snapshot followed by
+stream closure; a lost publisher returns an error. Subscriptions belong to one
+node generation and must be recreated after restarting. Drop subscriptions before
+awaiting node shutdown so their native transport references can be released.
+`node.status_subscription()?` offers the same snapshots with cancellable
+`next().await?` and `close().await`; node shutdown automatically closes these
+subscriptions, including blocked reads. Platform SDKs use this shared handle.
+
+`node.status().await?` also uses native state. Its JSON payload retains
+`serving_models`, `llama_ready`, `token`, and runtime intent errors, but is no longer
+the complete console management payload; use the typed snapshot for new code.
+
 ## Install the serving runtime
 
 Client-only nodes need no native serving runtime. Before starting a serve-only
@@ -200,8 +224,8 @@ stream reports shutdown as an error rather than successful truncated output.
 Native remote inference cannot consume a model requiring payment; use a provider
 that permits unpaid inference or a separate supported payment integration.
 
-The legacy `status()`, `openai_client()` and live-transcription APIs still use
-HTTP. They are not used by the native discovery/inference path above.
+The `openai_client()` and live-transcription APIs use HTTP. Native status,
+discovery and inference do not.
 
 ## Live transcription
 

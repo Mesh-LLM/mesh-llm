@@ -35,14 +35,17 @@ pub(crate) struct ModelTargetReconciliationState {
     retired_intents: BTreeSet<String>,
     next_intent_sequence: u64,
     shared_history: Option<Arc<Mutex<Vec<DesiredRuntimeIntent>>>>,
+    collector: Option<crate::runtime_data::RuntimeDataCollector>,
 }
 
 impl ModelTargetReconciliationState {
     pub(crate) fn with_shared_history(
         shared_history: Arc<Mutex<Vec<DesiredRuntimeIntent>>>,
+        collector: crate::runtime_data::RuntimeDataCollector,
     ) -> Self {
         Self {
             shared_history: Some(shared_history),
+            collector: Some(collector),
             ..Self::default()
         }
     }
@@ -334,6 +337,9 @@ impl ModelTargetReconciliationState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             self.intent_history.iter().cloned().collect();
+        if let Some(collector) = &self.collector {
+            collector.mark_dirty(crate::runtime_data::RuntimeDataDirty::STATUS);
+        }
     }
 
     // ─── Load tracking ─────────────────────────────────────────────────────

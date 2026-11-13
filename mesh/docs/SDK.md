@@ -226,3 +226,14 @@ MESH_SDK_NATIVE_RUNTIME_DIR
 Check the Rust SDK, UniFFI bridge, Node.js addon, and the platform package tests
 using their package-local test commands. A serve-only or combined node needs a
 matching installed native runtime; see the installation guidance above.
+
+## Native status and lifecycle events
+
+Rust (`native_status`, `status_events`), Swift, Kotlin and Node.js/TypeScript
+(`nativeStatus`, `statusEvents`) expose in-process status and readiness without
+the console. Snapshots include lifecycle, download progress, serving models,
+model advertisements, local descriptors and per-model execution lane capacity.
+See the language SDK READMEs for subscription ownership and cancellation.
+The JSON `status` compatibility payload is now a native projection; it retains
+`serving_models`, `llama_ready` and `token`, rather than the full console schema.
+Python's high-level wrapper has not yet adopted these new APIs.

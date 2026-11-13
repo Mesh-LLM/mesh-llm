@@ -17,6 +17,7 @@
     "index.d.ts",
     "inference.js",
     "models.js",
+    "status.js",
     "live-transcription.js",
     "memberships.js",
     "native-runtime.js",

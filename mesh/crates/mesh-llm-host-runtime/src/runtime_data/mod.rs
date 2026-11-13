@@ -17,7 +17,7 @@ mod processes;
 mod producers;
 mod runtime_status;
 mod snapshots;
-mod subscriptions;
+pub(crate) mod subscriptions;
 
 pub(crate) use self::api_views::{collect_views, mesh_models, status_payload};
 pub(crate) use self::collector::RuntimeDataCollector;

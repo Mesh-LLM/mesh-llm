@@ -33,6 +33,7 @@ mod embedded_openai;
 pub(crate) mod embedded_shutdown;
 mod embedded_startup;
 pub mod native;
+pub mod status;
 
 pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
@@ -78,6 +79,7 @@ pub struct EmbeddedServeHandle {
     task: Option<std::thread::JoinHandle<Result<()>>>,
     shutdown: tokio::sync::watch::Sender<bool>,
     native_node: Option<crate::mesh::Node>,
+    exit: tokio::sync::watch::Receiver<Option<status::NodeLifecycle>>,
 }
 
 pub type EmbeddedMeshNodeHandle = EmbeddedServeHandle;
@@ -95,14 +97,24 @@ impl EmbeddedServeHandle {
         self.invite_token.as_deref()
     }
 
-    /// Read the legacy management status over the local HTTP console.
-    /// Native discovery and inference do not call this method.
+    /// Native lifecycle snapshot, with a JSON projection for legacy SDK bindings.
+    /// The payload describes native state rather than the console's management view.
     pub async fn status(&self) -> Result<EmbeddedServeStatus> {
-        let payload = fetch_json(&format!("{}/api/status", self.console_url)).await?;
+        let native = self.native_status().await?;
+        let mut payload = serde_json::to_value(&native)?;
+        payload["llama_ready"] = (!native.serving_models.is_empty()
+            && native.state == status::NodeLifecycle::Ready)
+            .into();
+        payload["token"] = serde_json::to_value(&self.invite_token)?;
+        let errors: Vec<_> = match native.state {
+            status::NodeLifecycle::Failed(error) => vec![error],
+            _ => Vec::new(),
+        };
+        payload["runtime"] = serde_json::json!({"intent_summary": {"recent_errors": errors}});
         Ok(EmbeddedServeStatus {
             api_base_url: self.api_base_url.clone(),
             console_url: self.console_url.clone(),
-            invite_token: token_from_status(&payload),
+            invite_token: self.invite_token.clone(),
             payload,
         })
     }
@@ -138,6 +150,7 @@ pub async fn start_embedded_node(
     drop(isolated_config);
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
     let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+    let (exit_tx, exit) = tokio::sync::watch::channel(None);
     // Readiness is reported only by the worker itself, after it has bound its
     // listeners, so a foreign HTTP service on the console port cannot make
     // startup report ready (#2147).
@@ -169,6 +182,10 @@ pub async fn start_embedded_node(
             if let Err(error) = &result {
                 let _ = worker_readiness_tx.send(Err(error.to_string()));
             }
+            exit_tx.send_replace(Some(match &result {
+                Ok(()) => status::NodeLifecycle::Stopped,
+                Err(error) => status::NodeLifecycle::Failed(format!("{error:#}")),
+            }));
             result
         })
         .context("spawn embedded mesh runtime thread")?;
@@ -181,6 +198,7 @@ pub async fn start_embedded_node(
         task: Some(task),
         shutdown,
         native_node: None,
+        exit,
     };
     let node = wait_for_embedded_startup(&mut handle, readiness_rx, startup_timeout).await?;
     handle.invite_token = Some(node.invite_token().await);
@@ -315,27 +333,6 @@ async fn wait_for_embedded_readiness(
             anyhow::bail!("embedded mesh runtime exited before the console became ready")
         }
     }
-}
-
-async fn fetch_json(url: &str) -> Result<serde_json::Value> {
-    let response = crate::network::local_http::local_http_client()
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url} returned an error status"))?;
-    response
-        .json::<serde_json::Value>()
-        .await
-        .with_context(|| format!("decode JSON from {url}"))
-}
-
-fn token_from_status(payload: &serde_json::Value) -> Option<String> {
-    payload
-        .get("token")
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string)
 }
 
 fn embedded_worker_stack_size() -> usize {

@@ -83,27 +83,29 @@ class Models internal constructor(
     suspend fun get(id: String): MeshModel =
         decodeModel(Json.parseToJsonElement(modelJson(id)).jsonObject)
 
-    private fun decodeModel(value: JsonObject): MeshModel = MeshModel(
-        value.string("id"), value.string("display_name"), value.string("kind"),
-        value.optionalString("workload_class"), value.string("availability"),
-        value.strings("operations"), value.optional("metadata"),
-        value.getValue("providers").jsonArray.map { decodeProvider(it.jsonObject) },
-        value.optional("virtual_model"),
-    )
+    internal companion object {
+        fun decodeModel(value: JsonObject): MeshModel = MeshModel(
+            value.string("id"), value.string("display_name"), value.string("kind"),
+            value.optionalString("workload_class"), value.string("availability"),
+            value.strings("operations"), value.optional("metadata"),
+            value.getValue("providers").jsonArray.map { decodeProvider(it.jsonObject) },
+            value.optional("virtual_model"),
+        )
 
-    private fun decodeProvider(value: JsonObject): MeshModelProvider = MeshModelProvider(
-        value.string("provider_id"), value.getValue("local").jsonPrimitive.boolean,
-        value.optionalString("endpoint_id"), value.optionalString("plugin"),
-        value.optionalString("workload_class"), value.getValue("available").jsonPrimitive.boolean,
-        value.strings("operations"), value.optional("capabilities"), value.optional("metadata"),
-        value.optional("runtime")?.jsonObject?.let { runtime ->
-            MeshModelRuntime(
-                runtime.string("model_name"), runtime.optionalString("identity_hash"),
-                runtime.optional("context_length")?.jsonPrimitive?.long,
-                runtime.getValue("ready").jsonPrimitive.boolean,
-            )
-        }, value.optional("thinking"), value.optional("requires"),
-    )
+        private fun decodeProvider(value: JsonObject): MeshModelProvider = MeshModelProvider(
+            value.string("provider_id"), value.getValue("local").jsonPrimitive.boolean,
+            value.optionalString("endpoint_id"), value.optionalString("plugin"),
+            value.optionalString("workload_class"), value.getValue("available").jsonPrimitive.boolean,
+            value.strings("operations"), value.optional("capabilities"), value.optional("metadata"),
+            value.optional("runtime")?.jsonObject?.let { runtime ->
+                MeshModelRuntime(
+                    runtime.string("model_name"), runtime.optionalString("identity_hash"),
+                    runtime.optional("context_length")?.jsonPrimitive?.long,
+                    runtime.getValue("ready").jsonPrimitive.boolean,
+                )
+            }, value.optional("thinking"), value.optional("requires"),
+        )
+    }
 }
 
 private fun JsonObject.optional(name: String): JsonElement? = get(name)?.takeUnless { it == JsonNull }

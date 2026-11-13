@@ -21,6 +21,10 @@ pub mod native {
     pub use mesh_llm_host_runtime::sdk::native::*;
 }
 
+pub mod status {
+    pub use mesh_llm_host_runtime::sdk::status::*;
+}
+
 pub mod native_runtime {
     pub use mesh_llm_host_runtime::sdk::native_runtime::*;
 }

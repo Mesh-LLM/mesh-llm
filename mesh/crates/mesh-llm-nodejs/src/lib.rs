@@ -6,6 +6,7 @@ mod live_transcription;
 mod memberships;
 mod model_discovery;
 mod node_config;
+mod status;
 
 use mesh_llm_sdk::embedded_node::{SseDecoder, SseFrame};
 use mesh_llm_sdk::{MeshNode, MeshNodeBuilder, OpenAiClient};

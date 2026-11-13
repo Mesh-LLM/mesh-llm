@@ -104,6 +104,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         model_target_reconciliation_policy: model_target_reconciliation_policy(config),
         model_target_reconciliation_state: ModelTargetReconciliationState::with_shared_history(
             node.runtime_intents.clone(),
+            node.runtime_data_collector(),
         ),
     };
 
@@ -149,7 +150,10 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
                     shutdown_requested = true;
                     break;
                 }
-                result = resolve_eager_startup_models(options, config, std::slice::from_ref(spec)) => result,
+                result = crate::models::download_status::COLLECTOR.scope(
+                    node.runtime_data_collector(),
+                    resolve_eager_startup_models(options, config, std::slice::from_ref(spec))
+                ) => result,
             };
             match resolved {
                 Ok(mut models) => {
@@ -589,15 +593,20 @@ pub(super) async fn run_auto_handle_model_intent(
                     .stack_load_completion(&spec, &profile, tx);
             }
 
-            let result = run_auto_load_runtime_model(
-                ctx,
-                spec.clone(),
-                config_model_id,
-                profile.clone(),
-                source == IntentSource::NativeLifecycle,
-                sizing,
-            )
-            .await;
+            let collector = ctx.node.runtime_data_collector();
+            let result = crate::models::download_status::COLLECTOR
+                .scope(
+                    collector,
+                    run_auto_load_runtime_model(
+                        ctx,
+                        spec.clone(),
+                        config_model_id,
+                        profile.clone(),
+                        source == IntentSource::NativeLifecycle,
+                        sizing,
+                    ),
+                )
+                .await;
             match &result {
                 Ok(response) => {
                     ctx.model_target_reconciliation_state
