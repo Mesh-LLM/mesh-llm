@@ -151,9 +151,10 @@ fn listed_nodes(config_override: Option<&Path>) -> Result<Vec<String>> {
 }
 
 /// Change `[private] nodes` in the file at `path`, keeping the rest of the
-/// file. `change` gets the list as the file holds it when it is rewritten, so
-/// an edit made since this command started is not lost; nothing is written
-/// when it fails.
+/// file. The read and the rewrite happen under the config file's lock, which a
+/// running node's config applies take too, so `change` gets the list as the
+/// file holds it and no other edit lands before it is written; nothing is
+/// written when it fails.
 fn update_nodes<T>(path: &Path, change: impl FnOnce(&mut Vec<String>) -> Result<T>) -> Result<T> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

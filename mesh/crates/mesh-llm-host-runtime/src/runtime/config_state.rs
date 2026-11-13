@@ -107,6 +107,9 @@ pub(crate) struct PendingConfigApply {
             AppliedRequestDefaults<<ScopedServingBackends as RequestDefaultsBackends>::Previous>,
         >,
     >,
+    /// Held until this apply is written and done, so no other writer of the
+    /// file edits it between the read in `prepare_apply` and that write.
+    _file_lock: mesh_llm_config::ConfigFileLock,
 }
 
 impl PendingConfigApply {
@@ -570,14 +573,34 @@ impl ConfigState {
         expected_revision: u64,
     ) -> ConfigApplyPreparation {
         record_config_operational_event(ConfigOperationalEvent::ApplyStarted);
-        // `mesh-llm private` and hand edits change `[private]` in the file
-        // without telling this state. An apply that leaves the list as this
-        // state knew it keeps the file's current list, so a stale snapshot
-        // cannot bring back a removed node.
-        if new_config.private == self.config.private
-            && let Ok(on_disk) = mesh_llm_config::load_config(Some(&self.config_path))
-        {
-            new_config.private = on_disk.private;
+        // `mesh-llm private` changes `[private]` in the file without telling
+        // this state. Holding the file's lock from this read until the pending
+        // apply is written and dropped keeps such an edit from landing in
+        // between, where this write would undo it.
+        let file_lock = match mesh_llm_config::lock_config_file(&self.config_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+                return ConfigApplyPreparation::Immediate(ApplyResult::PersistError(format!(
+                    "{error:#}"
+                )));
+            }
+        };
+        // An apply that leaves the list as this state knew it keeps the file's
+        // current list, so a stale snapshot cannot bring back a removed node.
+        // A file that cannot be read gives no current list to keep, and
+        // writing this state's could restore a removed node, so the apply is
+        // refused until the file is fixed.
+        if new_config.private == self.config.private {
+            match load_config(Some(&self.config_path)) {
+                Ok(on_disk) => new_config.private = on_disk.private,
+                Err(error) => {
+                    record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+                    return ConfigApplyPreparation::Immediate(ApplyResult::PersistError(format!(
+                        "cannot read the current config file: {error:#}"
+                    )));
+                }
+            }
         }
         new_config.source_directory = self.config.source_directory.clone().or_else(|| {
             std::path::absolute(&self.config_path)
@@ -664,6 +687,7 @@ impl ConfigState {
             changes_staged_settings,
             live_request_defaults: std::sync::Arc::clone(&self.live_request_defaults),
             request_defaults_undo: std::sync::Mutex::new(None),
+            _file_lock: file_lock,
         }))
     }
 

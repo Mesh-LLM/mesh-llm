@@ -62,6 +62,47 @@ pub fn config_to_toml(config: &MeshConfig) -> Result<String> {
     toml::to_string(config).context("toml serialization failed")
 }
 
+/// An exclusive hold on a config file, for one read-modify-write of it.
+///
+/// Every process that rewrites the file from what it read takes this first:
+/// the CLI's edits and a running node's owner-control applies. It is an
+/// advisory lock on a `<file>.lock` beside the config, released on drop.
+#[derive(Debug)]
+pub struct ConfigFileLock {
+    _file: std::fs::File,
+}
+
+/// The lock file guarding the config file at `path`.
+pub fn config_lock_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_else(|| "config".into());
+    name.push(".lock");
+    path.with_file_name(name)
+}
+
+/// Wait for the exclusive hold on the config file at `path`.
+pub fn lock_config_file(path: &Path) -> Result<ConfigFileLock> {
+    let lock_path = config_lock_path(path);
+    if let Some(parent) = lock_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open config lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("failed to lock config {}", lock_path.display()))?;
+    Ok(ConfigFileLock { _file: file })
+}
+
 #[derive(Clone, Debug)]
 pub struct ConfigStore {
     path: PathBuf,
@@ -96,6 +137,7 @@ impl ConfigStore {
     where
         F: FnOnce(&mut ConfigEditor) -> Result<()>,
     {
+        let _lock = lock_config_file(&self.path)?;
         let mut editor = ConfigEditor::new(self.load()?);
         edit(&mut editor)?;
         let config = editor.into_config();
@@ -107,6 +149,7 @@ impl ConfigStore {
     where
         F: FnOnce(&mut DocumentMut) -> Result<()>,
     {
+        let _lock = lock_config_file(&self.path)?;
         let mut doc = self.read_document()?;
         edit(&mut doc)?;
         let config = parse_config_toml(&doc.to_string())
