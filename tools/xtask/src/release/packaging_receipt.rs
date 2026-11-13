@@ -148,7 +148,14 @@ fn validate_receipt(
     Ok(())
 }
 
-fn gh(args: &[String]) -> DynResult<Vec<u8>> {
+fn remaining(deadline: Instant) -> DynResult<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or_else(|| "timed out waiting for packaging readiness".into())
+}
+
+fn gh(args: &[String], deadline: Instant) -> DynResult<Vec<u8>> {
     let cwd = std::env::current_dir()?.canonicalize()?;
     let executable = std::env::split_paths(&std::env::var_os("PATH").ok_or("PATH is missing")?)
         .map(|p| p.join("gh"))
@@ -172,7 +179,7 @@ fn gh(args: &[String]) -> DynResult<Vec<u8>> {
             )
         })
         .collect::<BTreeMap<OsString, Value>>();
-    gh_from(args, executable, cwd, env)
+    gh_from(args, executable, cwd, env, deadline)
 }
 
 fn gh_from(
@@ -180,6 +187,7 @@ fn gh_from(
     executable: PathBuf,
     cwd: PathBuf,
     env: BTreeMap<OsString, Value>,
+    deadline: Instant,
 ) -> DynResult<Vec<u8>> {
     let spec = ProcessSpec {
         executable,
@@ -191,7 +199,7 @@ fn gh_from(
         environment: env,
     };
     let limits = Limits {
-        execution: Duration::from_secs(60),
+        execution: remaining(deadline)?.min(Duration::from_secs(60)),
         graceful_shutdown: Duration::from_secs(2),
         forced_shutdown: Duration::from_secs(5),
         retained_bytes_per_stream: LIMIT,
@@ -207,6 +215,7 @@ fn gh_from(
             stderr: NonZeroUsize::new(LIMIT),
         },
     )?;
+    remaining(deadline)?;
     if !result.process.cleanup.complete
         || !result.process.success()
         || result.process.failure.is_some()
@@ -220,7 +229,7 @@ fn gh_from(
         .to_vec())
 }
 
-fn api(path: &str, fields: &[String]) -> DynResult<Vec<u8>> {
+fn api(path: &str, fields: &[String], deadline: Instant) -> DynResult<Vec<u8>> {
     let mut args = vec![
         "api".into(),
         "--allow-escape-sequences".into(),
@@ -231,11 +240,11 @@ fn api(path: &str, fields: &[String]) -> DynResult<Vec<u8>> {
     for field in fields {
         args.extend(["-f".into(), field.clone()]);
     }
-    gh(&args)
+    gh(&args, deadline)
 }
 
-fn api_json(path: &str, fields: &[String]) -> DynResult<Json> {
-    Ok(serde_json::from_slice(&api(path, fields)?)?)
+fn api_json(path: &str, fields: &[String], deadline: Instant) -> DynResult<Json> {
+    Ok(serde_json::from_slice(&api(path, fields, deadline)?)?)
 }
 
 type Run = (u64, u64, String, String);
@@ -266,7 +275,7 @@ fn admit_runs(rows: &[Json], title: &str, found: &mut Option<Run>) -> DynResult<
     Ok(())
 }
 
-fn runs(expected: &Expected) -> DynResult<Option<Run>> {
+fn runs(expected: &Expected, deadline: Instant) -> DynResult<Option<Run>> {
     let mut found = None;
     let title = format!("Packaging · {}", expected.correlation);
     for page in 1..=MAX_PAGES {
@@ -278,6 +287,7 @@ fn runs(expected: &Expected) -> DynResult<Option<Run>> {
                 "per_page=100".into(),
                 format!("page={page}"),
             ],
+            deadline,
         )?;
         let rows = json["workflow_runs"]
             .as_array()
@@ -317,12 +327,13 @@ fn admit_artifacts(rows: &[Json], run: u64, ids: &mut Vec<u64>) -> DynResult<()>
     Ok(())
 }
 
-fn artifacts(run: u64) -> DynResult<Vec<u64>> {
+fn artifacts(run: u64, deadline: Instant) -> DynResult<Vec<u64>> {
     let mut ids = Vec::new();
     for page in 1..=MAX_PAGES {
         let json = api_json(
             &format!("repos/{REPO}/actions/runs/{run}/artifacts"),
             &["per_page=100".into(), format!("page={page}")],
+            deadline,
         )?;
         let rows = json["artifacts"]
             .as_array()
@@ -413,32 +424,43 @@ fn verify_final_run(value: &Json, run: u64, attempt: u64, correlation: &str) -> 
     Ok(())
 }
 
+fn wait_for_receipt(
+    deadline: Instant,
+    mut poll: impl FnMut(Instant) -> DynResult<Option<(u64, u64)>>,
+) -> DynResult<(u64, u64)> {
+    loop {
+        remaining(deadline)?;
+        if let Some(result) = poll(deadline)? {
+            remaining(deadline)?;
+            return Ok(result);
+        }
+        std::thread::sleep(remaining(deadline)?.min(Duration::from_secs(15)));
+    }
+}
+
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let expected = parse(args)?;
     let deadline = Instant::now() + Duration::from_secs(7200);
-    loop {
-        if let Some((id, attempt, status, conclusion)) = runs(&expected)?
+    let (id, attempt) = wait_for_receipt(deadline, |deadline| {
+        if let Some((id, attempt, status, conclusion)) = runs(&expected, deadline)?
             && completed(&status, &conclusion)?
         {
-            let ids = artifacts(id)?;
+            let ids = artifacts(id, deadline)?;
             verify_receipts(&ids, &expected, id, attempt, |artifact| {
                 api(
                     &format!("repos/{REPO}/actions/artifacts/{artifact}/zip"),
                     &[],
+                    deadline,
                 )
             })?;
-            let final_run = api_json(&format!("repos/{REPO}/actions/runs/{id}"), &[])?;
+            let final_run = api_json(&format!("repos/{REPO}/actions/runs/{id}"), &[], deadline)?;
             verify_final_run(&final_run, id, attempt, &expected.correlation)?;
-            println!(
-                "packaging run {id} attempt {attempt} succeeded with matching readiness receipt"
-            );
-            return Ok(());
+            return Ok(Some((id, attempt)));
         }
-        if Instant::now() >= deadline {
-            return Err("timed out waiting for packaging readiness".into());
-        }
-        std::thread::sleep(Duration::from_secs(15));
-    }
+        Ok(None)
+    })?;
+    println!("packaging run {id} attempt {attempt} succeeded with matching readiness receipt");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -547,6 +569,24 @@ mod tests {
         assert!(verify_final_run(&run, 1234, 2, "mesh-123-2").is_err());
     }
 
+    #[test]
+    fn deadline_rejects_late_success_and_bounds_waits() {
+        let expired = Instant::now() - Duration::from_secs(1);
+        assert!(wait_for_receipt(expired, |_| panic!("expired poll must not run")).is_err());
+        let deadline = Instant::now() + Duration::from_millis(30);
+        assert!(
+            wait_for_receipt(deadline, |_| {
+                std::thread::sleep(Duration::from_millis(50));
+                Ok(Some((1234, 2)))
+            })
+            .is_err()
+        );
+        let deadline = Instant::now() + Duration::from_millis(30);
+        let start = Instant::now();
+        assert!(wait_for_receipt(deadline, |_| Ok(None)).is_err());
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
     #[cfg(unix)]
     #[test]
     fn supervised_transport_keeps_binary_zip_bytes() {
@@ -564,8 +604,42 @@ mod tests {
             Value::Public(std::env::var_os("PATH").unwrap()),
         );
         env.insert("FIXTURE".into(), Value::Public(archive.into_os_string()));
-        let bytes = gh_from(&[], command, dir.path().canonicalize().unwrap(), env).unwrap();
+        let bytes = gh_from(
+            &[],
+            command,
+            dir.path().canonicalize().unwrap(),
+            env,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(bytes, zip);
         assert!(crate::artifact::packaging_receipt_zip(bytes).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_transport_respects_remaining_deadline() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let command = dir.path().join("gh");
+        std::fs::write(&command, "#!/usr/bin/env sh\nsleep 15\nprintf success\n").unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut env = BTreeMap::new();
+        env.insert(
+            "PATH".into(),
+            Value::Public(std::env::var_os("PATH").unwrap()),
+        );
+        let start = Instant::now();
+        assert!(
+            gh_from(
+                &[],
+                command,
+                dir.path().canonicalize().unwrap(),
+                env,
+                start + Duration::from_millis(100),
+            )
+            .is_err()
+        );
+        assert!(start.elapsed() < Duration::from_secs(10));
     }
 }
