@@ -264,6 +264,13 @@ edit of the TOML file takes effect when the node restarts, because the
 node does not watch the file. One request asks for the tier with
 `x-mesh-trust: receipts`. `--request-trust` is not built.
 
+An audit replays the turn on the native runtime. A `client` loads it at
+startup only when `audit` or `require` is set. A node without a runtime
+loaded audits no peer, so no peer satisfies the tier there, as with
+`offline`: a request under it fails with 409 rather than reach a peer
+whose turn it could not audit. That covers a request that asks with the
+header, and a `require` that owner control sets after startup.
+
 ## Model Identity as a Weight Hash
 
 The tiers that make integrity claims need an identity based on bytes, not names.
