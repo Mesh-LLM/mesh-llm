@@ -184,6 +184,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         cache_affinity: None,
@@ -201,3 +202,4 @@ mod control_frames;
 mod frame_reading;
 mod mesh_timestamps;
 mod owner_control;
+mod peer_model_downloads;

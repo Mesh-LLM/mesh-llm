@@ -183,6 +183,17 @@ pub(super) fn owner_runtime_config(
         None => None,
     };
 
+    let peer_model_downloads =
+        config.runtime.peer_model_downloads_enabled() && !options.no_peer_model_downloads;
+    if !peer_model_downloads {
+        let _ = emit_event(OutputEvent::Info {
+            message:
+                "Peer model downloads are off: peers may only use model files already on this node"
+                    .to_string(),
+            context: None,
+        });
+    }
+
     Ok(mesh::OwnerRuntimeConfig {
         keypair,
         control_bind: options.control_bind.or(config.owner_control.bind),
@@ -196,6 +207,7 @@ pub(super) fn owner_runtime_config(
         drain_timeout_secs: config.runtime.drain_timeout_secs,
         drain_timeout_max_secs: config.runtime.drain_timeout_max_secs,
         public_mesh: options.publish || options.nostr_discovery,
+        peer_model_downloads,
     })
 }
 
@@ -1183,8 +1195,14 @@ async fn resolve_startup_models_with_package_discovery(
         let declared_ref = if let Some(declared_ref) = &spec.declared_ref {
             declared_ref.clone()
         } else if spec.config_model_id.is_none()
+            && direct_local_gguf
             && let Some(identity) = preindexed_split_package.as_ref()
         {
+            // Only a bare local GGUF path is content-addressed: it has no
+            // resolvable identity of its own. A remote ref that resolved to a
+            // GGUF in the cache keeps the requested identity, so the model is
+            // known by the same name on every surface (catalog, gossip,
+            // runtime registry, embedded server).
             direct_gguf_model_id(identity)
         } else {
             find_remote_catalog_model_exact_blocking(requested_ref.clone())

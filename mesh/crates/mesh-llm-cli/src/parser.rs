@@ -235,6 +235,21 @@ mod tests {
     }
 
     #[test]
+    fn serve_takes_no_peer_model_downloads_flag() {
+        let parse = |args: &[&str]| {
+            let normalized = super::normalize_runtime_surface_args(
+                args.iter()
+                    .map(std::ffi::OsString::from)
+                    .collect::<Vec<_>>(),
+            );
+            Cli::try_parse_from(normalized.normalized).expect("serve flags should parse")
+        };
+
+        assert!(!parse(&["mesh-llm", "serve"]).no_peer_model_downloads);
+        assert!(parse(&["mesh-llm", "serve", "--no-peer-model-downloads"]).no_peer_model_downloads);
+    }
+
+    #[test]
     fn kv_cache_lifecycle_commands_parse_exact_model_identity_and_confirmation() {
         let cli = Cli::try_parse_from([
             "mesh-llm",

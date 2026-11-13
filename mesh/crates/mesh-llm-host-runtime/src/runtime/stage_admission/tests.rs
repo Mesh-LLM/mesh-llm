@@ -58,8 +58,12 @@ fn realizes_and_admits_a_real_package_v2_chain() {
             sidecars: Vec::new(),
         };
         let (_, model_parts, projector) =
-            crate::inference::skippy::resolve_package_v2_stage_to_local(&package_ref, &descriptor)
-                .expect("real package-v2 stage artifacts must resolve");
+            crate::inference::skippy::resolve_package_v2_stage_to_local(
+                &package_ref,
+                &descriptor,
+                crate::inference::skippy::StageSourceFetch::Allowed,
+            )
+            .expect("real package-v2 stage artifacts must resolve");
         assert!(projector.is_none());
         assert!(
             model_parts

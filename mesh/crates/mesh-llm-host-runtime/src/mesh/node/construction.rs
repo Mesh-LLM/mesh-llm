@@ -240,6 +240,7 @@ impl Node {
             public_mesh: policy.public_mesh,
             drain_timeout_secs: policy.drain_timeout_secs,
             drain_timeout_max_secs: policy.drain_timeout_max_secs,
+            peer_stage_source_fetch: policy.peer_stage_source_fetch,
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
@@ -302,10 +303,12 @@ struct StartupPolicies {
     public_mesh: bool,
     drain_timeout_secs: u64,
     drain_timeout_max_secs: u64,
+    peer_stage_source_fetch: crate::inference::skippy::StageSourceFetch,
 }
 
 impl StartupPolicies {
-    /// Resolve activity, public-mesh and drain policies from optional owner settings.
+    /// Resolve activity, public-mesh, drain and peer-download policies from
+    /// optional owner settings.
     fn new(owner: Option<&OwnerRuntimeConfig>) -> Self {
         let activity = owner
             .map(|owner| owner.activity.clone())
@@ -321,6 +324,7 @@ impl StartupPolicies {
                 .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS, |owner| {
                     owner.drain_timeout_max_secs
                 }),
+            peer_stage_source_fetch: OwnerRuntimeConfig::peer_stage_source_fetch(owner),
         }
     }
 }

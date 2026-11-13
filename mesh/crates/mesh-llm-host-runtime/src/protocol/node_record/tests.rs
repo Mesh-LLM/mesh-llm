@@ -224,3 +224,23 @@ fn hop_observation_supplies_the_relays_latency_view() {
     assert_eq!(restored.latency_age_ms, Some(1_500));
     assert_eq!(restored.latency_observer_id, Some(observer));
 }
+
+#[test]
+fn record_carries_peer_model_download_refusal() {
+    let mut original = decoded_host_announcement(0x44);
+    original.refuses_peer_model_downloads = true;
+    let record = node_record_from_wire_ann(&local_ann_to_proto_ann(&original), &original.addr);
+    assert_eq!(record.refuses_peer_model_downloads, Some(true));
+
+    let (_, restored) =
+        node_record_to_local(original.addr.id, &record, None).expect("record converts");
+    assert!(restored.refuses_peer_model_downloads);
+
+    let legacy_record = wire::NodeRecord {
+        refuses_peer_model_downloads: None,
+        ..record
+    };
+    let (_, restored) =
+        node_record_to_local(original.addr.id, &legacy_record, None).expect("record converts");
+    assert!(!restored.refuses_peer_model_downloads);
+}

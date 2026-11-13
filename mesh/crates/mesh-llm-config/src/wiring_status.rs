@@ -520,6 +520,7 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    runtime::PEER_MODEL_DOWNLOADS,
     WiringEntry {
         path: "runtime.native_runtime.mesh_version",
         status: WiringStatus::Wired,

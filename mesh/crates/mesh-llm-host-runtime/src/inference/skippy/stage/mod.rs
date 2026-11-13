@@ -24,7 +24,8 @@ mod runtime_events;
 mod tests;
 mod types;
 
-use inventory::resolve_inventory_source;
+use super::StageSourceFetch;
+use inventory::{layer_ranges, local_only_package_layers, resolve_inventory_source};
 pub(crate) use types::*;
 
 struct RunningStage {
@@ -84,12 +85,13 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                         StageControlCommand::Execute {
                             request,
                             requester,
+                            source_fetch,
                             resp,
                         } => {
                             tokio::select! {
                                 biased;
                                 _ = &mut shutdown_rx => break,
-                                result = state.handle(request, requester) => {
+                                result = state.handle(request, requester, source_fetch) => {
                                     let _ = resp.send(result);
                                 }
                             }
@@ -133,6 +135,7 @@ impl StageControlState {
         &mut self,
         request: StageControlRequest,
         requester: iroh::EndpointId,
+        source_fetch: StageSourceFetch,
     ) -> Result<StageControlResponse> {
         match request {
             StageControlRequest::Claim(claim) => self
@@ -140,12 +143,12 @@ impl StageControlState {
                 .await
                 .map(StageControlResponse::ClaimAccepted),
             StageControlRequest::Load(load) => self
-                .load(load, requester)
+                .load(load, requester, source_fetch)
                 .await
                 .map(StageControlResponse::Ready),
             StageControlRequest::LoadLocal(mut load) => {
                 load.local_source_required = true;
-                self.load(load, requester)
+                self.load(load, requester, source_fetch)
                     .await
                     .map(StageControlResponse::Ready)
             }
@@ -157,7 +160,7 @@ impl StageControlState {
                 Ok(StageControlResponse::Status(self.statuses(&filter)))
             }
             StageControlRequest::Inventory(request) => Ok(StageControlResponse::Inventory(
-                self.inventory(request).await,
+                self.inventory(request, source_fetch).await,
             )),
         }
     }
@@ -214,23 +217,32 @@ impl StageControlState {
         }
     }
 
-    async fn inventory(&self, request: StageInventoryRequest) -> StageLayerInventory {
+    async fn inventory(
+        &self,
+        request: StageInventoryRequest,
+        source_fetch: StageSourceFetch,
+    ) -> StageLayerInventory {
         let source_request = request.clone();
-        let source =
-            match tokio::task::spawn_blocking(move || resolve_inventory_source(&source_request))
-                .await
-            {
-                Ok(source) => source,
-                Err(error) => {
-                    tracing::warn!(
-                        model_id = request.model_id,
-                        package_ref = request.package_ref,
-                        error = %error,
-                        "GGUF inventory verification task failed"
-                    );
-                    None
-                }
-            };
+        let (source, local_layers) = match tokio::task::spawn_blocking(move || {
+            let source = resolve_inventory_source(&source_request, source_fetch);
+            let local_layers = source
+                .as_ref()
+                .and_then(|_| local_only_package_layers(&source_request, source_fetch));
+            (source, local_layers)
+        })
+        .await
+        {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                tracing::warn!(
+                    model_id = request.model_id,
+                    package_ref = request.package_ref,
+                    error = %error,
+                    "GGUF inventory verification task failed"
+                );
+                (None, None)
+            }
+        };
         let layer_count = source
             .as_ref()
             .map(|source| source.layer_count)
@@ -239,10 +251,13 @@ impl StageControlState {
             && layer_count > 0
             && crate::system::native_runtime_requirement::ensure_native_runtime_available().is_ok()
         {
-            vec![LayerRange {
-                layer_start: 0,
-                layer_end: layer_count,
-            }]
+            match &local_layers {
+                Some(layers) => layer_ranges(layers, true),
+                None => vec![LayerRange {
+                    layer_start: 0,
+                    layer_end: layer_count,
+                }],
+            }
         } else {
             Vec::new()
         };
@@ -264,6 +279,8 @@ impl StageControlState {
                 layer_start: 0,
                 layer_end: layer_count,
             }]
+        } else if let Some(layers) = &local_layers {
+            layer_ranges(layers, false)
         } else {
             Vec::new()
         };
@@ -305,6 +322,7 @@ impl StageControlState {
         &mut self,
         mut load: StageLoadRequest,
         requester: iroh::EndpointId,
+        source_fetch: StageSourceFetch,
     ) -> Result<StageReadyResponse> {
         let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
         if let Some(existing) = self.stages.get(&key) {
@@ -373,22 +391,16 @@ impl StageControlState {
         .await
         .context("join verify local-required stage load source task")??;
         let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
-        if let Some(existing) = self.stages.remove(&key) {
-            existing.server.shutdown().await?;
-        }
-
-        let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?;
         let mut effective_load = load;
-        effective_load.bind_addr = bind_addr.to_string();
         super::configure_materialized_stage_cache();
         if let Some(plan) = effective_load.dflash.as_mut() {
-            crate::inference::skippy::materialize_split_dflash_draft(plan).await;
+            crate::inference::skippy::materialize_split_dflash_draft(plan, source_fetch).await;
         }
         settle_final_stage_dflash(&mut effective_load);
         let package_request = effective_load.clone();
         let mut resolved_package = None;
         if let Some(package) = tokio::task::spawn_blocking(move || {
-            resolve_stage_load_package_with_borrowed_tensors(&package_request)
+            resolve_stage_load_package_with_borrowed_tensors(&package_request, source_fetch)
         })
         .await
         .context("join resolve stage load package task")??
@@ -397,6 +409,14 @@ impl StageControlState {
             effective_load.source_model_bytes = package.source_model_bytes;
             resolved_package = Some(package);
         }
+        // Stop a running stage only once its replacement's files are on disk,
+        // so a replacement that cannot resolve (a refused fetch, a network
+        // error) leaves the running stage serving.
+        if let Some(existing) = self.stages.remove(&key) {
+            existing.server.shutdown().await?;
+        }
+        let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&effective_load.bind_addr)?)?;
+        effective_load.bind_addr = bind_addr.to_string();
         let config = stage_config(&effective_load, resolved_package.as_ref())?;
         let compute_meter = Arc::new(skippy_serving::compute_meter::StageComputeMeter::default());
         let server = skippy_serving::start_binary_stage(BinaryStageOptions {
@@ -743,6 +763,7 @@ fn settle_final_stage_dflash(load: &mut StageLoadRequest) {
 /// serves without the draft.
 fn resolve_stage_load_package_with_borrowed_tensors(
     load: &StageLoadRequest,
+    fetch: StageSourceFetch,
 ) -> Result<Option<super::materialization::ResolvedStagePackage>> {
     let borrowed = load.dflash.as_ref().and_then(|plan| {
         skippy_serving::split_dflash::borrowed_resident_tensor_ids(
@@ -754,7 +775,7 @@ fn resolve_stage_load_package_with_borrowed_tensors(
     if let Some(resident_tensor_ids) = borrowed {
         let mut widened = load.clone();
         widened.admission.resident_tensor_ids = resident_tensor_ids;
-        match super::materialization::resolve_stage_load_package(&widened) {
+        match super::materialization::resolve_stage_load_package(&widened, fetch) {
             Ok(package) => return Ok(package),
             Err(error) => tracing::warn!(
                 stage = load.stage_id,
@@ -763,7 +784,7 @@ fn resolve_stage_load_package_with_borrowed_tensors(
             ),
         }
     }
-    super::materialization::resolve_stage_load_package(load)
+    super::materialization::resolve_stage_load_package(load, fetch)
 }
 
 pub(crate) fn admitted_resident_tensor_names(
