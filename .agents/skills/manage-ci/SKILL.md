@@ -415,7 +415,19 @@ retired parser behavior, and source review still owns semantic emulation.
   workflow containing the first failure so that lane can publish its stable
   diagnostic result. This policy is PR-only; main, manual, release,
   deployment, cleanup, cache-warming, and newer PR revisions are never targets.
-- Within a PR platform lane, compilation, functional-test, product, and smoke
+- Linux backend runtimes start independently of the shared host. Each product
+  needs only its own runtime, the shared host, and its existing automation and
+  authority producers. Each smoke needs only its consumed backend product;
+  Rust and Kotlin SDK smokes consume CPU. Keep catalog rows and artifact IDs.
+  Four singleton runtime and product calls stay below Linux's existing 7-worker
+  PR and 12-worker main/manual matrix budgets. A failed backend fails the lane;
+  other backends in that lane may finish. The protected sibling monitor alone
+  cancels other PR lanes; never add cancellation credentials to executors.
+  Windows retains its shared 1-worker PR/2-worker main/manual matrices until
+  row-specific consumers can advance without multiplying native capacity.
+  macOS has one Metal row. Release restructuring remains deferred because its
+  literal image bindings require a separate runner-image catalog change.
+- Within other PR platform matrices, compilation, functional-test, product, and smoke
   matrices fail fast so a required row failure cancels their queued and
   in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
   runs continue sibling rows to retain complete diagnostics, and Quality

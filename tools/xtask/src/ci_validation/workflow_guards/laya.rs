@@ -134,7 +134,7 @@ fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
     let job = h::job(workflow, "gpu_runner_gate")?;
     h::condition(
         job,
-        "${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}",
+        "${{ (inputs.backend == 'rocm' || inputs.backend == 'vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}",
     )?;
     h::binding(job, "runs-on", "ubuntu-24.04")?;
     let steps = h::steps(job)?;
@@ -277,8 +277,13 @@ fn row(job: &Node, backend: &str, device: &str, plan: &str, smoke: &str) -> DynR
         "ROCm0" => " && needs.gpu_runner_gate.outputs.rocm_enabled == 'true'",
         _ => "",
     };
+    let backend_gate = if plan.starts_with("linux-") {
+        format!("inputs.backend == '{backend}' && ")
+    } else {
+        String::new()
+    };
     let gate = format!(
-        "${{{{ contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') && contains(fromJson(inputs.smoke_matrix).*.id, '{smoke}'){qualification} }}}}"
+        "${{{{ {backend_gate}contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') && contains(fromJson(inputs.smoke_matrix).*.id, '{smoke}'){qualification} }}}}"
     );
     h::condition(job, &gate)?;
     if matches!(device, "Vulkan0" | "ROCm0") {

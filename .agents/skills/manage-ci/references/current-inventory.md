@@ -648,6 +648,20 @@ automation and legacy contracts and its protected authority dependency, so
 main/manual-full contracts still run after a consistency failure. This adds
 one hosted worker and checkout/bootstrap overhead; live timing is unmeasured.
 
+Linux calls runtime and product slices separately for CPU, CUDA, ROCm and
+Vulkan. All four runtimes retain their automation-only start dependencies,
+independent of the shared host. Products join that host and their own runtime;
+each smoke joins its consumed backend product. Rust SDK needs CPU only, while
+Kotlin SDK additionally needs its existing native SDK producer. Every call is
+included in the unchanged exhaustive lane summary policy. A failed backend
+fails that result while other same-lane backends may finish; the existing
+protected monitor cancels other PR lanes without new executor permissions.
+Each runtime/product call has one selected catalog row and max-parallel 1,
+so four calls stay within the existing Linux 7/12 matrix limits. Windows keeps
+its 1/2 shared native budget and matrix barriers pending bounded row admission.
+macOS has one Metal row. Release is deferred because its static extraction
+requires runner-image catalog changes. Slice IDs and catalog rows are unchanged.
+
 | Workflow | Contract |
 | --- | --- |
 | `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
@@ -1958,7 +1972,7 @@ source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
 Seven root workflows freeze one protected source commit per run, then provision
-11 topic/native producer instances across those workflows. All 28 reusable calls
+11 topic/native producer instances across those workflows. All 34 reusable calls
 into the 17 audit workflows forward dependency-provided identities; lane summaries
 require the selected producer jobs to succeed. These metadata inputs are not yet
 consumed by the 27 existing audit steps, which retain their published immutable

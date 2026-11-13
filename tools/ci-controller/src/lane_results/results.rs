@@ -141,14 +141,18 @@ impl Planner<'_> {
         self.add(self.selected("static-abi"), &["static_abi"]);
         let rust_tests = !self.rows("rust_tests")?.is_empty();
         self.add(rust_tests, &["rust_tests"]);
-        self.add(
-            !runtimes.is_empty(),
-            &["native_runtimes", "runtime_product"],
-        );
+        let smoke = self.rows("smoke")?;
+        for (row, runtime, product, consumer) in super::linux_backends::JOBS {
+            let selected = runtimes.iter().any(|id| id == row);
+            self.add(selected, &[runtime, product]);
+            self.add(
+                selected && super::linux_backends::smoke_selected(row, &smoke),
+                &[consumer],
+            );
+        }
         self.add(sdk.iter().any(|id| id == "kotlin"), &["kotlin_sdk_input"]);
-        self.add(!sdk.is_empty(), &["sdk"]);
-        let smoke = !self.rows("smoke")?.is_empty();
-        self.add(smoke, &["product_smoke"]);
+        self.add(sdk.iter().any(|id| id == "rust"), &["sdk_rust"]);
+        self.add(sdk.iter().any(|id| id == "kotlin"), &["sdk_kotlin"]);
         Ok(())
     }
 
