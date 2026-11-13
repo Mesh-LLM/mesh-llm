@@ -202,3 +202,24 @@ omitted fields use native defaults, and unknown keys are rejected by the core.
 Full-config `mode` is `client`, `serve_only`, or `serve` (combined); the
 full-config default is combined, matching Rust. The existing `Node(...)`
 constructor keeps its client default and Kotlin convenience arguments.
+
+## Structured inference failures
+
+`OpenAIRequestException.details` and `OpenAIStreamException.details` expose
+typed `InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```kotlin
+try {
+    node.inference.chatCompletions(request)
+} catch (error: OpenAIRequestException) {
+    if (error.details?.code == "context_length_exceeded") {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `null` for transport failures or an unstructured body;
+missing optional fields stay `null`. Unknown codes are preserved.

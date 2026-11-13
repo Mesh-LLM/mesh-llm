@@ -211,3 +211,25 @@ the core. In this schema, `mode: 'serve'` means combined serving and inference,
 while `'serve_only'` means serving without SDK inference. The full-config
 default is combined, exactly as in Rust. Existing `Node.create()` keeps its
 client default and camelCase convenience options.
+
+## Structured inference failures
+
+`OpenAIRequestError.details` exposes the backend's `message`, `type`, `code`
+and `param` for both failed requests and streams. Check the code rather than
+matching display text:
+
+```javascript
+try {
+  await node.inference.chatCompletions({ model, messages })
+} catch (error) {
+  if (error instanceof OpenAIRequestError && error.details?.code === 'context_length_exceeded') {
+    // Compact the conversation before retrying.
+  } else {
+    throw error
+  }
+}
+```
+
+Import `OpenAIRequestError` from `@mesh-llm/sdk`. `statusCode` and the raw `body`
+remain available. `details` is `null` for transport failures or an unstructured
+body; missing optional fields stay `null`. Unknown codes are preserved.

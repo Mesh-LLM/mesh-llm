@@ -45,6 +45,7 @@ public struct OpenAIResponse: Sendable {
 public struct OpenAIRequestFailure: Error, Sendable, CustomStringConvertible {
     public let statusCode: UInt16
     public let body: String
+    public var details: InferenceErrorDetails? { InferenceErrorDetails.decode(body) }
     public var description: String { "OpenAI-compatible request failed with HTTP \(statusCode): \(body)" }
 }
 
@@ -72,6 +73,7 @@ public struct OpenAIStreamFailure: Error, Sendable, CustomStringConvertible {
     public let statusCode: UInt16?
     public let message: String
     public let body: String?
+    public var details: InferenceErrorDetails? { InferenceErrorDetails.decode(body) }
 
     public var description: String {
         if let statusCode {

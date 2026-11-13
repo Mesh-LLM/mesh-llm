@@ -9,6 +9,19 @@ class OpenAIRequestError extends Error {
     this.statusCode = statusCode == null ? null : statusCode
     this.body = body == null ? null : body
   }
+
+  get details() {
+    try {
+      const error = JSON.parse(this.body).error
+      if (!error || typeof error !== 'object' || Array.isArray(error) ||
+          typeof error.message !== 'string' || typeof error.type !== 'string' ||
+          (error.code != null && typeof error.code !== 'string') ||
+          (error.param != null && typeof error.param !== 'string')) return null
+      return { message: error.message, type: error.type, code: error.code ?? null, param: error.param ?? null }
+    } catch {
+      return null
+    }
+  }
 }
 
 class AsyncEventQueue {

@@ -4,6 +4,41 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const { Inference, OpenAIRequestError } = require('../inference')
 
+test('request and stream failures expose the same structured backend fields', async () => {
+  const details = { message: 'too much context', type: 'invalid_request_error', code: 'context_length_exceeded', param: 'messages' }
+  const body = JSON.stringify({ error: { ...details, future: true } })
+  const inference = new Inference({
+    async openaiRequestJson() { return JSON.stringify({ statusCode: 400, body }) },
+    async openaiStream(_path, _body, callback) {
+      queueMicrotask(() => callback(null, JSON.stringify({ type: 'failed', statusCode: 400, body, error: 'stream failed' })))
+      return 'request'
+    },
+    async cancel() { assert.fail('terminal stream already closed') }
+  })
+  function check(error) {
+    assert.ok(error instanceof OpenAIRequestError)
+    assert.equal(error.statusCode, 400)
+    assert.equal(error.body, body)
+    assert.deepEqual(error.details, details)
+    return true
+  }
+  await assert.rejects(inference.chatCompletions({}), check)
+  await assert.rejects(async () => {
+    for await (const _event of inference.streamChatCompletions({})) {}
+  }, check)
+})
+
+test('unstructured failures retain raw details without invented classification', () => {
+  for (const body of [null, 'bad gateway', '{"error":"failed"}', '{"error":{"message":"failed","type":"server_error","code":2}}']) {
+    const error = new OpenAIRequestError(null, body, 'transport failed')
+    assert.equal(error.details, null)
+    assert.equal(error.body, body)
+    assert.equal(error.message, 'transport failed')
+  }
+  assert.deepEqual(new OpenAIRequestError(500, '{"error":{"message":"failed","type":"server_error"}}').details,
+    { message: 'failed', type: 'server_error', code: null, param: null })
+})
+
 test('buffered requests preserve rich agent payloads and responses', async () => {
   const calls = []
   const handle = {

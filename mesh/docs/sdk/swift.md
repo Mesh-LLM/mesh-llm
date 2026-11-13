@@ -186,3 +186,23 @@ empty text clears it. Append `delta` text to the confirmed transcript and let
 `completed` replace the whole turn, including tentative text. Read events
 concurrently with microphone input. `stop()` finishes the turn and returns
 unread events; `close()` abandons the session.
+## Structured inference failures
+
+`OpenAIRequestFailure.details` and `OpenAIStreamFailure.details` expose typed
+`InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```swift
+do {
+    _ = try await node.inference.chatCompletions(request)
+} catch let error as OpenAIRequestFailure {
+    if error.details?.code == "context_length_exceeded" {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `nil` for transport failures or an unstructured body;
+missing optional fields stay `nil`. Unknown codes are preserved.
