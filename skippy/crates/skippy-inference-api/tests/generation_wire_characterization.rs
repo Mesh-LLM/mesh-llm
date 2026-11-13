@@ -368,11 +368,12 @@ fn normalize(value: &mut Value) {
 
 fn frontend_id(id: &str) -> bool {
     id.starts_with("chatcmpl-")
-        || ["resp_", "msg_", "fc_"].iter().any(|prefix| {
+        || ["resp_", "msg_", "rs_", "fc_"].iter().any(|prefix| {
             id.strip_prefix(prefix).is_some_and(|tail| {
-                tail.split('_')
-                    .next()
-                    .is_some_and(|part| part.parse::<u64>().is_ok_and(|v| v > 42))
+                tail.split('_').next().is_some_and(|part| {
+                    part.parse::<u64>().is_ok_and(|v| v > 42)
+                        || (part.len() == 32 && part.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                })
             })
         })
 }

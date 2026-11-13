@@ -71,6 +71,7 @@ async fn missing_local_model_response_with_targets(
         model_name: Some(model.to_owned()),
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,

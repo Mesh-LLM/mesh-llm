@@ -4,7 +4,9 @@ use serde_json::{Map, Value};
 
 pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, InferenceError> {
     let mut changed = false;
-    if let Some(tools) = request.get_mut("tools") {
+    if let Some(tools) = request.get_mut("tools")
+        && !tools.is_null()
+    {
         let tools = tools.as_array_mut().ok_or_else(|| {
             InferenceError::invalid_request("tools must be an array").with_param("tools")
         })?;

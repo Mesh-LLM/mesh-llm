@@ -78,6 +78,13 @@ impl StreamLifecycle {
         self.protocol_complete.store(true, Ordering::Release);
     }
 
+    /// Mark a client-visible protocol terminal as failed even when the
+    /// backend stream itself ended cleanly (for example, without its required
+    /// finish marker).
+    pub(crate) fn mark_protocol_failed(&self, message: &str) {
+        self.failed(&InferenceError::internal(message));
+    }
+
     fn first_item(&self) {
         self.observe(&InferenceLifecycleEvent::StreamFirstItem {
             context: self.context.clone(),
@@ -343,6 +350,26 @@ mod tests {
                     ..
                 },
             ]
+        ));
+    }
+
+    #[test]
+    fn protocol_failure_cannot_be_reclassified_as_success_at_eof() {
+        let observer = Arc::new(RecordingObserver::default());
+        let lifecycle = lifecycle(observer.clone());
+        lifecycle.mark_protocol_failed("missing terminal marker");
+
+        lifecycle.finish_natural();
+        lifecycle.finish_drop(false);
+
+        let events = observer.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.as_slice(),
+            [InferenceLifecycleEvent::StreamTerminal {
+                result: InferenceTerminalResult::Failed { .. },
+                ..
+            }]
         ));
     }
 

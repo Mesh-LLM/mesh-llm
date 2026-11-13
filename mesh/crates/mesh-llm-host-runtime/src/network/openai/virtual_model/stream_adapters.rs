@@ -168,11 +168,12 @@ pub(super) async fn send_responses_sse(
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     continuation: Option<ProgressContinuation>,
+    turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> std::io::Result<()> {
     if continuation.is_none() {
         write_sse_headers(&mut stream, extra_headers).await?;
     }
-    for event in responses_stream_events(response, continuation) {
+    for event in responses_stream_events(response, continuation, turn) {
         write_named_sse_event(&mut stream, &event).await?;
     }
     finish_sse(&mut stream).await
@@ -216,8 +217,12 @@ pub(super) async fn send_anthropic_messages_sse(
 fn responses_stream_events(
     response: &serde_json::Value,
     continuation: Option<ProgressContinuation>,
+    turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> Vec<Value> {
-    let responses = chat_completion_to_responses_json(response);
+    let responses = match turn {
+        Some(turn) => turn.finish_chat_completion(response),
+        None => chat_completion_to_responses_json(response),
+    };
     let mut events = skippy_inference_api::responses_stream_events_for_response(&responses);
     let Some(continuation) = continuation else {
         return events;
@@ -330,7 +335,7 @@ mod tests {
 
     #[test]
     fn responses_stream_starts_with_created_without_a_continuation() {
-        let events = responses_stream_events(&chat_completion(), None);
+        let events = responses_stream_events(&chat_completion(), None, None);
 
         assert_eq!(events[0]["type"], "response.created");
         assert_eq!(events[0]["sequence_number"], 0);
@@ -353,6 +358,7 @@ mod tests {
                 created_at: 1_600_000_000,
                 next_sequence_number: 4,
             }),
+            None,
         );
 
         assert!(
@@ -387,6 +393,7 @@ mod tests {
                 created_at: 42,
                 next_sequence_number: 1,
             }),
+            None,
         );
 
         let item_id = events

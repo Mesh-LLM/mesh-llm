@@ -33,6 +33,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
         request_id,
         retry_policy,
         response_adapter,
+        responses_turn,
         route_observer,
         served_by,
         peer_capsule_id,
@@ -65,13 +66,14 @@ pub(in crate::network::openai) async fn route_local_attempt(
         );
         return RouteAttemptResult::RetryableUnavailable;
     }
-    route_local_attempt_after_forward(
+    route_local_attempt_after_forward_with_responses(
         tcp_stream,
         &mut upstream,
         port,
         request_id,
         retry_policy,
         response_adapter,
+        responses_turn,
         served_by,
         served_model.as_ref(),
         peer_capsule_id,
@@ -116,13 +118,14 @@ async fn acquire_local_attempt_upstream(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream>(
+async fn route_local_attempt_after_forward_with_responses<U: AsyncRead + Unpin + CancelUpstream>(
     tcp_stream: &mut ClientStream,
     upstream: &mut U,
     port: u16,
     request_id: RequestId,
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
+    responses_turn: Option<&std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
     served_by: Option<&str>,
     served_model: Option<&ServedModelHeaders>,
     peer_capsule_id: Option<&PeerCapsuleIdSink>,
@@ -139,7 +142,7 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
             // records its own model as a peer's, and a paid seller's headers
             // read here never reach this node's client.
             set_served_model_headers(&mut probe, served_model);
-            let result = relay_attempted_response(
+            let result = Box::pin(relay_attempted_response(
                 tcp_stream,
                 upstream,
                 probe,
@@ -149,10 +152,11 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
                     commit_message: "API proxy (local) ended after commit",
                     served_by,
                     route_observer,
+                    responses_turn,
                 },
                 retry_policy,
                 response_adapter,
-            )
+            ))
             .await;
             cancel_upstream_if_client_disconnected(result, upstream).await
         }
@@ -189,13 +193,16 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstream>(
+async fn route_remote_attempt_after_forward_with_responses<
+    R: AsyncRead + Unpin + CancelUpstream,
+>(
     tcp_stream: &mut ClientStream,
     quic_recv: &mut R,
     host_id: iroh::EndpointId,
     request_id: RequestId,
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
+    responses_turn: Option<&std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
     served_by: Option<&str>,
     peer_capsule_id: Option<&PeerCapsuleIdSink>,
     route_observer: OpenAiRouteObserver<'_>,
@@ -213,7 +220,7 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
             // The peer's served-model headers are for this node's own exchange
             // events; they are never relayed on to this node's client.
             set_served_model_headers(&mut probe, None);
-            let result = relay_attempted_response(
+            let result = Box::pin(relay_attempted_response(
                 tcp_stream,
                 quic_recv,
                 probe,
@@ -223,10 +230,11 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
                     commit_message: "API proxy (remote) ended after commit",
                     served_by,
                     route_observer,
+                    responses_turn,
                 },
                 retry_policy,
                 response_adapter,
-            )
+            ))
             .await;
             cancel_upstream_if_client_disconnected(result, quic_recv).await
         }
@@ -251,6 +259,7 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         request_id,
         retry_policy,
         response_adapter,
+        responses_turn,
         route_observer,
         served_by,
         peer_capsule_id,
@@ -273,13 +282,72 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         return RouteAttemptResult::RetryableUnavailable;
     }
 
-    route_remote_attempt_after_forward(
+    route_remote_attempt_after_forward_with_responses(
         tcp_stream,
         &mut quic_recv,
         host_id,
         request_id,
         retry_policy,
         response_adapter,
+        responses_turn,
+        served_by,
+        peer_capsule_id,
+        route_observer,
+    )
+    .await
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream>(
+    tcp_stream: &mut ClientStream,
+    upstream: &mut U,
+    port: u16,
+    request_id: RequestId,
+    retry_policy: ResponseRetryPolicy,
+    response_adapter: ResponseAdapter,
+    served_by: Option<&str>,
+    served_model: Option<&ServedModelHeaders>,
+    peer_capsule_id: Option<&PeerCapsuleIdSink>,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> RouteAttemptResult {
+    route_local_attempt_after_forward_with_responses(
+        tcp_stream,
+        upstream,
+        port,
+        request_id,
+        retry_policy,
+        response_adapter,
+        None,
+        served_by,
+        served_model,
+        peer_capsule_id,
+        route_observer,
+    )
+    .await
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstream>(
+    tcp_stream: &mut ClientStream,
+    quic_recv: &mut R,
+    host_id: iroh::EndpointId,
+    request_id: RequestId,
+    retry_policy: ResponseRetryPolicy,
+    response_adapter: ResponseAdapter,
+    served_by: Option<&str>,
+    peer_capsule_id: Option<&PeerCapsuleIdSink>,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> RouteAttemptResult {
+    route_remote_attempt_after_forward_with_responses(
+        tcp_stream,
+        quic_recv,
+        host_id,
+        request_id,
+        retry_policy,
+        response_adapter,
+        None,
         served_by,
         peer_capsule_id,
         route_observer,

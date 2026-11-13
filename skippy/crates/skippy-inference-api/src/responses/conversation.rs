@@ -12,7 +12,7 @@ fn responses_item_type(item: &Value) -> Option<&str> {
 pub(super) fn is_responses_tool_item(item: &Value) -> bool {
     matches!(
         responses_item_type(item),
-        Some("function_call" | "function_call_output")
+        Some("function_call" | "function_call_output" | "reasoning")
     )
 }
 
@@ -24,20 +24,72 @@ pub(super) fn translate_responses_conversation_items(
     items: &[Value],
 ) -> Result<Vec<Value>, InferenceError> {
     let mut messages: Vec<Value> = Vec::new();
+    let mut pending_reasoning = String::new();
     for item in items {
         match responses_item_type(item) {
-            Some("function_call") => push_responses_function_call(&mut messages, item),
+            Some("function_call") => {
+                push_responses_function_call(&mut messages, item, &mut pending_reasoning)
+            }
             Some("function_call_output") => {
+                flush_reasoning(&mut messages, &mut pending_reasoning);
                 messages.push(responses_function_call_output_message(item)?);
             }
-            Some("reasoning") => {}
-            _ => messages.push(Value::Object(translate_responses_input_message(item)?)),
+            Some("reasoning") => pending_reasoning.push_str(&reasoning_text(item)?),
+            _ => {
+                let mut message = translate_responses_input_message(item)?;
+                if message.get("role").and_then(Value::as_str) == Some("assistant")
+                    && !pending_reasoning.is_empty()
+                {
+                    message.insert(
+                        "reasoning_content".into(),
+                        Value::String(std::mem::take(&mut pending_reasoning)),
+                    );
+                } else {
+                    flush_reasoning(&mut messages, &mut pending_reasoning);
+                }
+                messages.push(Value::Object(message));
+            }
         }
     }
+    flush_reasoning(&mut messages, &mut pending_reasoning);
     Ok(messages)
 }
 
-fn push_responses_function_call(messages: &mut Vec<Value>, item: &Value) {
+fn reasoning_text(item: &Value) -> Result<String, InferenceError> {
+    if item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .is_some_and(|content| !content.is_empty())
+    {
+        return Err(InferenceError::unsupported(
+            "encrypted reasoning continuation is not supported",
+        )
+        .with_param("input"));
+    }
+    Ok(["content", "summary"]
+        .into_iter()
+        .filter_map(|field| item.get(field).and_then(Value::as_array))
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect())
+}
+
+fn flush_reasoning(messages: &mut Vec<Value>, pending: &mut String) {
+    if pending.is_empty() {
+        return;
+    }
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": Value::Null,
+        "reasoning_content": std::mem::take(pending),
+    }));
+}
+
+fn push_responses_function_call(
+    messages: &mut Vec<Value>,
+    item: &Value,
+    pending_reasoning: &mut String,
+) {
     // A call without arguments still sends a JSON object, which backends parse.
     let arguments = match item.get("arguments") {
         Some(Value::String(arguments)) if !arguments.is_empty() => arguments.clone(),
@@ -61,6 +113,12 @@ fn push_responses_function_call(messages: &mut Vec<Value>, item: &Value) {
     if let Some(last) = messages.last_mut().and_then(Value::as_object_mut)
         && last.get("role").and_then(Value::as_str) == Some("assistant")
     {
+        if !pending_reasoning.is_empty() {
+            last.insert(
+                "reasoning_content".into(),
+                Value::String(std::mem::take(pending_reasoning)),
+            );
+        }
         let calls = last
             .entry("tool_calls")
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -69,11 +127,15 @@ fn push_responses_function_call(messages: &mut Vec<Value>, item: &Value) {
             return;
         }
     }
-    messages.push(serde_json::json!({
+    let mut message = serde_json::json!({
         "role": "assistant",
         "content": Value::Null,
         "tool_calls": [tool_call],
-    }));
+    });
+    if !pending_reasoning.is_empty() {
+        message["reasoning_content"] = Value::String(std::mem::take(pending_reasoning));
+    }
+    messages.push(message);
 }
 
 fn responses_function_call_output_message(item: &Value) -> Result<Value, InferenceError> {
@@ -142,5 +204,29 @@ mod tests {
         let messages = translate_responses_input_to_messages(&input).unwrap();
         assert_eq!(messages[1]["tool_calls"][0]["function"]["arguments"], "{}");
         assert_eq!(messages[3]["tool_calls"][0]["function"]["arguments"], "{}");
+    }
+
+    #[test]
+    fn raw_reasoning_and_phase_survive_a_tool_loop_translation() {
+        let input = serde_json::json!([
+            {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "checking"}]},
+            {"type": "message", "role": "assistant", "phase": "commentary", "content": "one moment"},
+            {"type": "function_call", "call_id": "call_a", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_a", "output": "done"},
+        ]);
+        let messages = translate_responses_input_to_messages(&input).unwrap();
+        assert_eq!(messages[0]["reasoning_content"], "checking");
+        assert_eq!(messages[0]["phase"], "commentary");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_a");
+    }
+
+    #[test]
+    fn opaque_reasoning_is_rejected_instead_of_discarded() {
+        let input = serde_json::json!([
+            {"type": "reasoning", "summary": [], "encrypted_content": "opaque"},
+            {"type": "message", "role": "user", "content": "continue"},
+        ]);
+        let error = translate_responses_input_to_messages(&input).unwrap_err();
+        assert!(error.to_string().contains("encrypted reasoning"));
     }
 }

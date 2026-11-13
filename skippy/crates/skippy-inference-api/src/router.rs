@@ -45,15 +45,7 @@ use crate::{
     models::ModelsResponse,
     request_lifecycle::RequestLifecycle,
     rerank::{RerankRequest, RerankResponse},
-    responses::{
-        ResponseAdapterMode, ResponseSseState, chunk_delta_text, normalize_openai_compat_request,
-        responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
-        responses_stream_content_part_done_event, responses_stream_created_event_with_sequence,
-        responses_stream_delta_event_with_logprobs_and_sequence,
-        responses_stream_output_item_added_event, responses_stream_output_item_done_event,
-        responses_stream_text_done_event_with_sequence,
-        translate_chat_completion_response_to_responses, usage_to_responses_usage,
-    },
+    responses::{ResponseAdapterMode, ResponseStore, normalize_openai_compat_request},
     sse::{done_event, json_event},
     stream_lifecycle::{
         StreamLifecycle, is_streaming_response, observe_backend_stream, sse_response,
@@ -64,8 +56,10 @@ use crate::{
 const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
 mod audio_upload;
 mod generation;
+mod responses;
 use audio_upload::parse_audio_multipart;
-use generation::{chat_completions, responses};
+use generation::chat_completions;
+use responses::responses;
 const BACKEND_TIMEOUT_SECS_ENV: &str = "MESH_OPENAI_BACKEND_TIMEOUT_SECS";
 const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 
@@ -187,6 +181,9 @@ pub struct InferenceFrontendConfig {
     pub agent_session_header: Option<HeaderName>,
     pub(crate) lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
     pub http_exchange_policy: Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>>,
+    /// Completed responses kept for `previous_response_id`. `None` turns
+    /// response storage and continuation off for this frontend's lifetime.
+    pub response_store: Option<Arc<ResponseStore>>,
 }
 
 impl std::fmt::Debug for InferenceFrontendConfig {
@@ -201,6 +198,7 @@ impl std::fmt::Debug for InferenceFrontendConfig {
                 "has_http_exchange_policy",
                 &self.http_exchange_policy.is_some(),
             )
+            .field("response_storage", &self.response_store.is_some())
             .finish()
     }
 }
@@ -245,6 +243,19 @@ impl InferenceFrontendConfig {
         self
     }
 
+    /// Keep completed responses in `store` for `previous_response_id`.
+    pub fn with_response_store(mut self, store: Arc<ResponseStore>) -> Self {
+        self.response_store = Some(store);
+        self
+    }
+
+    /// Turn response storage and continuation off: nothing is saved and
+    /// every `previous_response_id` is not found.
+    pub fn without_response_storage(mut self) -> Self {
+        self.response_store = None;
+        self
+    }
+
     pub fn with_http_exchange_policy(
         mut self,
         policy: Arc<dyn crate::http_exchange::HttpExchangePolicy>,
@@ -263,6 +274,8 @@ impl Default for InferenceFrontendConfig {
             agent_session_header: configured_agent_session_header(),
             lifecycle_observer: None,
             http_exchange_policy: None,
+            response_store: crate::responses::configured_response_storage()
+                .then(|| Arc::new(ResponseStore::default())),
         }
     }
 }

@@ -1761,7 +1761,7 @@ async fn responses_stream_frames_backend_errors_without_completed_tail() {
     assert!(body.contains(r#""message":"stream backend failed""#));
     assert!(body.contains(r#""code":"service_unavailable""#));
     assert!(!body.contains("event: response.completed"));
-    assert!(body.contains("data: [DONE]"));
+    assert!(body.contains("event: response.failed"));
 }
 
 #[tokio::test]
@@ -1948,12 +1948,12 @@ async fn responses_route_preserves_tool_calls_and_logprobs() {
     let body = response_body_json(response).await;
     assert_eq!(body["output_text"], "calling lookup");
     assert_eq!(
-        body["output"][0]["content"][0]["logprobs"]["content"][0]["token"],
+        body["output"][0]["content"][0]["logprobs"][0]["token"],
         "calling"
     );
     assert_eq!(body["output"][1]["type"], "function_call");
     assert_eq!(body["output"][1]["call_id"], "call_123");
-    assert_eq!(body["finish_reason"], "tool_calls");
+    assert_eq!(body["status"], "completed");
 }
 
 #[tokio::test]
@@ -2052,7 +2052,8 @@ async fn responses_stream_route_returns_responses_sse() {
     assert!(body.contains("event: response.output_text.done"));
     assert!(body.contains("event: response.content_part.done"));
     assert!(body.contains("event: response.output_item.done"));
-    assert!(body.contains("event: response.completed"));
+    assert!(body.contains("event: response.incomplete"));
+    assert!(body.contains(r#""reason":"max_output_tokens""#));
     assert!(body.contains(r#""sequence_number":1"#));
     assert!(body.contains(r#""output_text":"hello""#));
     assert!(body.contains("data: [DONE]"));
@@ -2073,7 +2074,7 @@ async fn responses_stream_route_preserves_logprobs() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_body_text(response).await;
     assert!(body.contains("event: response.output_text.delta"));
-    assert!(body.contains(r#""logprobs":{"content":[{"logprob":-0.1,"token":"tok"}]}"#));
+    assert!(body.contains(r#""logprobs":[{"logprob":-0.1,"token":"tok"}]"#));
 }
 
 #[tokio::test]

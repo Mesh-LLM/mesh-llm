@@ -77,10 +77,7 @@ pub async fn serve_openai_backend_with_shutdown(
             message: format!("skippy-serving listening: openai={bind_addr}"),
         })
     })?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
-    Ok(())
+    serve_openai_router(listener, app, shutdown).await
 }
 
 #[derive(Clone)]
@@ -177,9 +174,20 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
         })
     })?;
 
-    axum::serve(listener, binding.router)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    serve_openai_router(listener, binding.router, shutdown).await
+}
+
+async fn serve_openai_router(
+    listener: tokio::net::TcpListener,
+    router: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<()> {
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
     Ok(())
 }
 
@@ -679,6 +687,112 @@ mod tests {
     use crate::serving_hooks::ModelServingHooks;
     use std::io::Write;
     use std::sync::Arc;
+
+    #[derive(Default)]
+    struct ContinuationBackend {
+        requests: std::sync::Mutex<Vec<skippy_inference_api::generation::GenerationRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl skippy_inference_api::InferenceBackend for ContinuationBackend {
+        async fn models(
+            &self,
+        ) -> skippy_inference_api::InferenceResult<Vec<skippy_inference_api::ModelObject>> {
+            Ok(Vec::new())
+        }
+
+        async fn chat_completion(
+            &self,
+            request: skippy_inference_api::generation::GenerationRequest,
+        ) -> skippy_inference_api::InferenceResult<
+            skippy_inference_api::generation::GenerationResponse,
+        > {
+            self.requests.lock().unwrap().push(request);
+            Ok(skippy_inference_api::generation::GenerationResponse::new(
+                "m",
+                "answer",
+                skippy_inference_api::Usage::new(1, 1),
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: skippy_inference_api::generation::GenerationRequest,
+            _context: skippy_inference_api::InferenceRequestContext,
+        ) -> skippy_inference_api::InferenceResult<
+            skippy_inference_api::generation::GenerationEventStream,
+        > {
+            Err(skippy_inference_api::InferenceError::unsupported(
+                "streaming is not used by this test",
+            ))
+        }
+    }
+
+    async fn post_json(
+        address: std::net::SocketAddr,
+        body: serde_json::Value,
+    ) -> serde_json::Value {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = body.to_string();
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(
+                format!(
+                    "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len(),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        let body_start = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        serde_json::from_slice(&response[body_start..]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn served_router_supplies_connect_info_for_responses_continuation() {
+        let backend = Arc::new(ContinuationBackend::default());
+        let config = skippy_inference_api::InferenceFrontendConfig::default().with_response_store(
+            Arc::new(skippy_inference_api::responses::ResponseStore::default()),
+        );
+        let router = skippy_inference_api::router_with_config(backend.clone(), config);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(super::serve_openai_router(listener, router, async move {
+            let _ = stopped.await;
+        }));
+
+        let first = post_json(
+            address,
+            serde_json::json!({"model": "m", "input": "remember"}),
+        )
+        .await;
+        assert_eq!(first["store"], true);
+        let second = post_json(
+            address,
+            serde_json::json!({
+                "previous_response_id": first["id"],
+                "input": "again",
+            }),
+        )
+        .await;
+        assert_eq!(second["status"], "completed");
+        {
+            let requests = backend.requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1].messages.len(), 3);
+        }
+        let _ = stop.send(());
+        server.await.unwrap().unwrap();
+    }
 
     #[test]
     fn backend_setup_stores_capped_native_mtp_plan() {

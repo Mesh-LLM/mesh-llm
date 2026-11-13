@@ -170,6 +170,8 @@ mod tests {
             super::super::HTTP_READ_LIMITS,
             Some(manager),
             transforms,
+            None,
+            None,
         )
         .await
         .map_err(super::super::OpenAiRequestReadError::into_error)
@@ -256,6 +258,8 @@ mod tests {
             super::super::HTTP_READ_LIMITS,
             Some(&manager),
             RequestTransforms::Apply,
+            None,
+            None,
         )
         .await
         .map_err(super::super::OpenAiRequestReadError::into_error)
@@ -282,6 +286,8 @@ mod tests {
             super::super::HTTP_READ_LIMITS,
             None,
             RequestTransforms::Apply,
+            None,
+            None,
         )
         .await
         .map_err(super::super::OpenAiRequestReadError::into_error)

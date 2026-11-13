@@ -51,7 +51,7 @@ struct AssembledStreamToolCall {
 /// content/tool_calls/reasoning folded across every chunk actually sent to
 /// the client.
 #[derive(Debug, Default)]
-struct StreamedChatAssembly {
+pub(super) struct StreamedChatAssembly {
     content: String,
     saw_content: bool,
     reasoning_content: String,
@@ -72,7 +72,7 @@ impl StreamedChatAssembly {
     /// isn't a recognizable chat-completion chunk, or carries no delta (an
     /// error frame, a bare `[DONE]`), is silently skipped — best-effort over
     /// whatever the client actually saw, never a guess.
-    fn ingest_chunk(&mut self, data: &str) {
+    pub(super) fn ingest_chunk(&mut self, data: &str) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return;
         };
@@ -168,7 +168,7 @@ impl StreamedChatAssembly {
     /// result, or an all-`None` bundle when nothing was assembled — or when
     /// the stream carried more than one choice, which this fold cannot
     /// honestly cover (see [`Self::multi_choice`]).
-    fn output_digests(&self) -> ExchangeOutputDigests {
+    pub(super) fn output_digests(&self) -> ExchangeOutputDigests {
         if self.multi_choice {
             return ExchangeOutputDigests::default();
         }
@@ -269,6 +269,9 @@ fn normalized_stream_is_truncated(done_seen: bool, upstream_error_seen: bool) ->
 }
 
 /// Relay a streaming chat-completions upstream response translated into Responses-API SSE.
+// Keep this wrapper's transport arguments aligned with the sibling protocol
+// relays; the final argument is the ingress-owned Responses state.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::network::openai::response) async fn relay_translated_responses_stream<
     R: AsyncRead + Unpin,
 >(
@@ -279,7 +282,23 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
+    responses_turn: Option<std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
 ) -> Result<RouteAttemptResult> {
+    if let Some(turn) = responses_turn {
+        // Keep the shared relay's state out of the already large routed
+        // ingress future, including for non-Responses requests.
+        return Box::pin(super::shared_responses_stream::relay(
+            tcp_stream,
+            reader,
+            probe,
+            retry_policy,
+            served_by,
+            route_observer,
+            request_id,
+            turn,
+        ))
+        .await;
+    }
     fn should_parse_stream_chunk(data: &str, model_missing: bool, usage_missing: bool) -> bool {
         model_missing
             || usage_missing
@@ -857,6 +876,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
+                None,
             )
             .await
             .expect("relay")
@@ -1115,6 +1135,7 @@ mod tests {
                     commit_message: "test stream relay failed",
                     served_by: None,
                     route_observer: OpenAiRouteObserver::default(),
+                    responses_turn: None,
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsStream,
@@ -1171,6 +1192,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
+                None,
             )
             .await
         });
@@ -1264,6 +1286,7 @@ data: [DONE]\n\n",
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
+                None,
             )
             .await
         });
@@ -1427,6 +1450,7 @@ data: [DONE]\n\n",
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
+                None,
             )
             .await
             .expect("relay")
@@ -1700,6 +1724,7 @@ data: [DONE]\n\n";
                 None,
                 OpenAiRouteObserver::default(),
                 request_id,
+                None,
             )
             .await
             .expect("relay")

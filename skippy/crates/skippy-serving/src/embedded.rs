@@ -469,11 +469,14 @@ fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServer
                 let mut status = task_status.lock().expect("server status lock poisoned");
                 status.state = EmbeddedState::Ready;
             }
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await?;
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await?;
             Ok(())
         }
         .await;

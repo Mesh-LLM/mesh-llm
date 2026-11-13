@@ -118,6 +118,7 @@ async fn route_observed(
         model_name: Some(MODEL.to_owned()),
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,

@@ -152,13 +152,16 @@ pub(super) async fn handle_buffered_api_request(
         }
     };
 
-    let tcp_stream = match try_handle_virtual_model_intercept(
+    // This dispatch owns the largest route future (plugin execution plus all
+    // response adapters). Keep it behind a heap boundary so the inactive
+    // virtual-model variant does not inflate every peer-ingress poll frame.
+    let tcp_stream = match Box::pin(try_handle_virtual_model_intercept(
         tcp_stream,
         &mut request,
         &ctx,
         &decision,
         lifecycle.route_observer(),
-    )
+    ))
     .await
     {
         VirtualModelInterceptResult::Handled(outcome) => {

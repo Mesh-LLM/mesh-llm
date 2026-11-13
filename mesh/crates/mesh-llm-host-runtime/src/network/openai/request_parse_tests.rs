@@ -151,6 +151,7 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
             &mut stream.into(),
             None,
             RequestTransforms::Apply,
+            None,
         )
         .await
         .unwrap_err()
@@ -174,6 +175,7 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
             &mut stream.into(),
             None,
             RequestTransforms::Apply,
+            None,
         )
         .await
         .unwrap_err()
@@ -185,6 +187,106 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
         .unwrap();
     client.shutdown().await.unwrap();
     assert!(server.await.unwrap().context().is_none());
+}
+
+async fn read_loopback_responses_request(
+    body: serde_json::Value,
+    extra_headers: &str,
+    store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        read_http_request_with_plugin_manager_with_context(
+            &mut stream.into(),
+            None,
+            RequestTransforms::Apply,
+            Some(store),
+        )
+        .await
+    });
+    let body = body.to_string();
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(
+            format!(
+                "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
+                body.len(),
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    client.shutdown().await.unwrap();
+    server.await.unwrap()
+}
+
+#[tokio::test]
+async fn responses_continuation_is_restored_at_ingress_before_worker_routing() {
+    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let first = read_loopback_responses_request(
+        serde_json::json!({"model": "m", "input": "use the weather tool"}),
+        "",
+        store.clone(),
+    )
+    .await
+    .unwrap();
+    let turn = first
+        .responses_turn
+        .expect("Responses ingress owns the turn");
+    let first_response = turn.finish_chat_completion(&serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": null, "tool_calls": [{
+                "id": "call_weather",
+                "type": "function",
+                "function": {"name": "weather", "arguments": "{\"city\":\"Oslo\"}"}
+            }]},
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    }));
+
+    let second = read_loopback_responses_request(
+        serde_json::json!({
+            "previous_response_id": first_response["id"],
+            "input": [{"type": "function_call_output", "call_id": "call_weather", "output": "sunny"}]
+        }),
+        "",
+        store.clone(),
+    )
+    .await
+    .unwrap();
+    let messages = second.body_json.unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["content"], "use the weather tool");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_weather");
+    assert_eq!(messages[2]["tool_call_id"], "call_weather");
+    assert_eq!(messages[2]["content"], "sunny");
+    assert!(
+        !String::from_utf8_lossy(&second.raw).contains("previous_response_id"),
+        "workers receive expanded history, not an ingress-local id"
+    );
+
+    let denied = read_loopback_responses_request(
+        serde_json::json!({
+            "previous_response_id": first_response["id"],
+            "input": "continue"
+        }),
+        "X-Forwarded-For: 127.0.0.1\r\n",
+        store,
+    )
+    .await
+    .unwrap_err();
+    let inference = denied.inference_error().expect("typed continuation error");
+    assert_eq!(inference.status(), http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        inference.body().error.code.as_deref(),
+        Some("previous_response_not_found")
+    );
 }
 
 fn catalog_model_ref_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
@@ -428,6 +530,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -933,6 +1036,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             stream: None,
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
+            responses_turn: None,
             correlation_id: None,
             exchange_observation_id: None,
             automatic_route: false,
@@ -981,6 +1085,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -1232,6 +1337,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         model_name: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,

@@ -76,7 +76,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `GET /v1/models` | Supported | Returns backend-provided model objects with opaque ids such as `org/repo:Q4_K_M`. |
 | `POST /v1/chat/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/completions` | Supported | Handles streaming and non-streaming response shapes. |
-| `POST /v1/responses` | Supported | Adapts OpenAI responses requests onto chat/completion backend calls and preserves response metadata where possible. |
+| `POST /v1/responses` | HTTP/SSE subset | Uses the shared Responses state machine described below; unsupported capabilities fail explicitly. |
 | `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared generation backend and returns Anthropic JSON or SSE. |
 | `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
 | `POST /v1/systemone` (canonical; legacy alias `POST /systemone`) | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
@@ -109,6 +109,25 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | Vision input | Supported | Preserved through chat/Responses content parts and executed by projector-backed runtimes. |
 | Non-chat staging | Fail closed | Embedding, rerank, encoder-decoder, and speech-synthesis models currently require an unsplit full-model runtime. |
 | Mesh routing headers | Supported (remote-mesh routing only) | Implemented by the host runtime's public `:9337` proxy, not this crate, but documented here as part of the same header contract. `x-mesh-target: <EndpointId>` forces dispatch to exactly that peer if it currently advertises the requested model; otherwise the request fails closed with a `409` naming the mismatch — it is never silently rerouted to another peer or served locally. `x-mesh-exclude: <EndpointId>[,...]` removes one or more peers from the candidate set before selection (comma-separated within one header, or repeated). The routing node echoes the resolved peer back as `x-mesh-served-by: <EndpointId>` on the response when `x-mesh-target` resolves to a remote peer or a locally-served (non-plugin) model; plugin-served self-targets do not yet echo this header. Both request headers are no-ops when absent, and an unparseable value is a `400`, never a silently ignored one. `x-mesh-twin-bracket: <id>` (1–128 characters of `A-Za-z0-9._:-`; spaces or tabs around it are trimmed, any other whitespace is a `400`) lets a client mark requests it sent to different nodes as one pair: the routing node copies the value, unread, onto each of the request's `openai.exchange.v1` remote-mesh envelopes as `twin_bracket_id` (including the terminal of a request that a node serving the model itself handed to a peer), and strips the header before forwarding, so the serving peer never sees it. The host never sends a second request or compares answers. |
+
+### Responses lifecycle and continuation
+
+The shared Responses adapter owns JSON and SSE lifecycle events, reasoning and
+function-call output items, structured-output request translation, usage detail
+objects, and terminal status mapping. A caller that supplies a
+`ResponseContinuation` can store completed turns and restore the full input and
+output transcript for `previous_response_id`. Effective generation controls
+inherit when omitted and explicit child values override them; instructions are
+per-turn and never inherit. Failed and incomplete turns are never retained. The
+store is bounded, in-memory, and caller-scoped. Mesh creates and owns that store
+at localhost ingress so worker selection and retries cannot lose the
+conversation.
+
+This is not a claim of full Open Responses conformance. Background execution,
+automatic truncation, `max_tool_calls`, hosted tools, encrypted reasoning,
+non-default service tiers, verbosity, compaction, and the optional Responses
+WebSocket transport are unsupported and are either rejected or not routed.
+The adapter never fabricates opaque compaction state.
 
 ## Shape
 
@@ -186,7 +205,7 @@ chain remains backend-owned.
 | `/v1/models` | Route shape and model-object serialization | Advertise exact full model refs accepted by the runtime | Supported |
 | `/v1/chat/completions` | Parse common and advanced fields, stream/non-stream envelopes | Tokenization, sampling, stop handling, usage, feature execution | Supported with backend feature guards |
 | `/v1/completions` | Prompt parsing and response envelopes | Token prompts, sampling, stop handling, usage | Supported with backend feature guards |
-| `/v1/responses` | Translate request/response shapes onto the backend contract | Execute the resulting chat/completion request | Supported |
+| `/v1/responses` | Own the supported HTTP/SSE lifecycle and continuation state | Execute the resulting chat/completion request | Partial; explicit gaps above |
 | `/v1/embeddings` | Parse OpenAI input/encoding shapes and serialize vectors | Tokenize or accept token IDs, pool, normalize, and report usage | Supported for compatible local full models |
 | `/v1/rerank` | Parse query/documents and serialize ranked results | Execute classifier scoring and report usage | Supported for compatible local full models |
 | `/v1/audio/*` | Parse JSON or bounded multipart bodies; return JSON, text, or binary media | Execute TTS or projector-backed speech recognition | Supported for compatible local full models |

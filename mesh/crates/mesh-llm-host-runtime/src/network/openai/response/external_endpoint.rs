@@ -1,16 +1,12 @@
 use super::common::{
-    ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
-    retryable_route_result_from_error,
+    RouteAttemptLoggingContext, RouteAttemptResult, retryable_route_result_from_error,
 };
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
 use super::served_model_headers::set_served_model_headers;
-use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::forwarded_request::is_ingress_credential_header;
-use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Context, Result};
-use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
@@ -27,14 +23,6 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     request_path: &str,
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
-    let RouteAttemptLoggingContext {
-        request_id,
-        retry_policy,
-        response_adapter,
-        route_observer,
-        served_by: _,
-        peer_capsule_id: _,
-    } = logging;
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
         Ok(target) => target,
         Err(()) => return RouteAttemptResult::RetryableUnavailable,
@@ -46,16 +34,7 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     if let Err(result) = forward_external_endpoint_request(&mut upstream, base_url, &target).await {
         return result;
     }
-    route_http_endpoint_attempt_after_forward(
-        tcp_stream,
-        &mut upstream,
-        base_url,
-        request_id,
-        retry_policy,
-        response_adapter,
-        route_observer,
-    )
-    .await
+    route_http_endpoint_attempt_after_forward(tcp_stream, &mut upstream, base_url, logging).await
 }
 
 // `RouteAttemptResult` is deliberately `Copy`; its usage-plus-output-digests variant
@@ -108,11 +87,17 @@ async fn route_http_endpoint_attempt_after_forward(
     tcp_stream: &mut ClientStream,
     upstream: &mut ClientStream,
     base_url: &str,
-    request_id: RequestId,
-    retry_policy: ResponseRetryPolicy,
-    response_adapter: ResponseAdapter,
-    route_observer: OpenAiRouteObserver<'_>,
+    logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
+    let RouteAttemptLoggingContext {
+        request_id,
+        retry_policy,
+        response_adapter,
+        responses_turn,
+        route_observer,
+        served_by: _,
+        peer_capsule_id: _,
+    } = logging;
     match probe_http_response(upstream).await {
         Ok(mut probe) => {
             // A plugin backend is not this node's native runtime, so any
@@ -129,6 +114,7 @@ async fn route_http_endpoint_attempt_after_forward(
                     commit_message: "API proxy (external endpoint) ended after commit",
                     served_by: None,
                     route_observer,
+                    responses_turn,
                 },
                 retry_policy,
                 response_adapter,
@@ -317,7 +303,11 @@ fn rewrite_http_request_target(
 
 #[cfg(test)]
 mod tests {
+    use super::super::common::ResponseRetryPolicy;
     use super::*;
+    use crate::logging::OpenAiRouteObserver;
+    use crate::network::openai::request_normalize::ResponseAdapter;
+    use mesh_llm_events::logging::identifiers::RequestId;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -342,10 +332,15 @@ mod tests {
                 &mut client,
                 &mut upstream,
                 "http://plugin.test",
-                RequestId::new(),
-                ResponseRetryPolicy::next_target_available(false),
-                ResponseAdapter::None,
-                OpenAiRouteObserver::default(),
+                RouteAttemptLoggingContext {
+                    request_id: RequestId::new(),
+                    retry_policy: ResponseRetryPolicy::next_target_available(false),
+                    response_adapter: ResponseAdapter::None,
+                    responses_turn: None,
+                    route_observer: OpenAiRouteObserver::default(),
+                    served_by: None,
+                    peer_capsule_id: None,
+                },
             )
             .await
         });
@@ -514,6 +509,7 @@ mod tests {
                     request_id: RequestId::new(),
                     retry_policy: ResponseRetryPolicy::next_target_available(false),
                     response_adapter: ResponseAdapter::OpenAiChatCompletionsJson,
+                    responses_turn: None,
                     route_observer: OpenAiRouteObserver::default(),
                     served_by: None,
                     peer_capsule_id: None,

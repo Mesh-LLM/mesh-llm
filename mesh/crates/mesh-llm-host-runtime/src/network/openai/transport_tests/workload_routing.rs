@@ -364,6 +364,7 @@ fn request_with_model(path: &str, model: Option<&str>) -> BufferedHttpRequest {
         model_name: model.map(Into::into),
         request_object_request_ids: vec![],
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,

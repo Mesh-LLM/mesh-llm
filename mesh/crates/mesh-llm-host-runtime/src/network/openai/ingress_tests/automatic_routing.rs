@@ -126,6 +126,7 @@ fn request_with_body(model: Option<&str>, body: &serde_json::Value) -> proxy::Bu
         model_name: model.map(str::to_owned),
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,

@@ -1153,14 +1153,14 @@ data: [DONE]
 
     let first = read_until_contains(
         &mut stream,
-        br#"event: response.reasoning_text.delta
+        br#"event: response.reasoning.delta
 data: {"#,
         Duration::from_secs(2),
     )
     .await;
     let first_text = String::from_utf8_lossy(&first);
     assert!(first_text.contains("event: response.created"));
-    assert!(first_text.contains("event: response.reasoning_text.delta"));
+    assert!(first_text.contains("event: response.reasoning.delta"));
     assert!(first_text.contains(r#""delta":"thinking""#));
     assert!(!first_text.contains("event: response.output_text.delta"));
     assert!(!first_text.contains(r#""delta":"answer""#));

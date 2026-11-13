@@ -1898,6 +1898,7 @@ pub(crate) mod tests {
             crate::network::openai::transport::RouteTargetContext {
                 request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
                 response_adapter: ResponseAdapter::None,
+                responses_turn: None,
                 route_observer: crate::logging::OpenAiRouteObserver::default(),
             },
         )

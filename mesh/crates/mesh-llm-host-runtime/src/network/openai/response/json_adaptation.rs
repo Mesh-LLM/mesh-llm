@@ -13,7 +13,7 @@ use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::normalize_chat_completion_json_body;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::identifiers::RequestId;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWriteExt};
@@ -64,6 +64,9 @@ async fn read_whole_response_body<R: AsyncRead + Unpin>(
 }
 
 /// Relay a chat-completions upstream response translated into Responses-API JSON.
+// Keep this wrapper's transport arguments aligned with the sibling protocol
+// relays; the final argument is the ingress-owned Responses state.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::network::openai::response) async fn relay_translated_responses_json<
     R: AsyncRead + Unpin,
 >(
@@ -74,6 +77,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
+    responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> Result<RouteAttemptResult> {
     relay_translated_json(
         tcp_stream,
@@ -84,6 +88,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
         route_observer,
         request_id,
         false,
+        responses_turn,
     )
     .await
 }
@@ -108,6 +113,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_json
         route_observer,
         request_id,
         true,
+        None,
     )
     .await
 }
@@ -122,6 +128,7 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
     anthropic: bool,
+    responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> Result<RouteAttemptResult> {
     if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
         return Ok(result);
@@ -162,7 +169,14 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
             &value,
         )?)?
     } else {
-        response_adapter::translate_chat_completion_to_responses(body)?
+        match responses_turn {
+            Some(turn) => {
+                let chat: serde_json::Value = serde_json::from_slice(body)
+                    .context("parse chat completion for Responses translation")?;
+                serde_json::to_vec(&turn.finish_chat_completion(&chat))?
+            }
+            None => response_adapter::translate_chat_completion_to_responses(body)?,
+        }
     };
     let usage = parse_token_usage_from_json_body(body);
     let cache_cost = parse_cache_cost_from_json_body(body);
@@ -587,6 +601,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
+                None,
             )
             .await
             .expect("relay")
@@ -684,6 +699,7 @@ mod tests {
                         observer,
                         RequestId::new(),
                         matches!(relay, Relay::Anthropic),
+                        None,
                     )
                     .await
                 }
@@ -764,6 +780,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 request_id,
+                None,
             )
             .await
             .expect("relay")

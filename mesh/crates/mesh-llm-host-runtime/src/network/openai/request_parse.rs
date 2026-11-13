@@ -4,6 +4,7 @@ use crate::plugin;
 use anyhow::{Context, Result, bail};
 use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
@@ -160,6 +161,10 @@ impl OpenAiRequestReadError {
         self.context.as_ref()
     }
 
+    pub(crate) fn inference_error(&self) -> Option<&skippy_inference_api::InferenceError> {
+        self.error.downcast_ref()
+    }
+
     fn into_error(self) -> anyhow::Error {
         self.error
     }
@@ -191,6 +196,10 @@ pub struct BufferedHttpRequest {
     pub model_name: Option<String>,
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
+    /// The caller-ingress Responses turn. It never crosses to a worker: its
+    /// expanded chat history does, while this state builds and stores the
+    /// client-facing terminal response after any worker returns.
+    pub responses_turn: Option<Arc<skippy_inference_api::responses::ResponsesTurn>>,
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
@@ -378,6 +387,7 @@ struct RequestRewriteOutcome {
     request_object_request_ids: Vec<String>,
     request_path: String,
     response_adapter: ResponseAdapter,
+    responses_turn: Option<Arc<skippy_inference_api::responses::ResponsesTurn>>,
     rewritten_body: Option<Vec<u8>>,
     /// A plugin request transform replaced the body.
     transformed: bool,
@@ -406,12 +416,16 @@ pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
     transforms: RequestTransforms,
+    response_store: Option<Arc<skippy_inference_api::responses::ResponseStore>>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    let response_peer = stream.peer_addr().ok().map(|address| address.ip());
     let result = read_http_request_with_limits_with_context(
         stream,
         HTTP_READ_LIMITS,
         plugin_manager,
         transforms,
+        response_store,
+        response_peer,
     )
     .await;
     match &result {
@@ -438,6 +452,8 @@ where
         limits,
         plugin_manager,
         RequestTransforms::Skip,
+        None,
+        None,
     )
     .await
     .map_err(OpenAiRequestReadError::into_error)
@@ -448,6 +464,8 @@ async fn read_http_request_with_limits_with_context<S>(
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
     transforms: RequestTransforms,
+    response_store: Option<Arc<skippy_inference_api::responses::ResponseStore>>,
+    response_peer: Option<std::net::IpAddr>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -482,6 +500,17 @@ where
     let requires_json_transform =
         request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some())
             || (transformer.is_some() && plugin_transform::is_transformable_path(&parsed.path));
+    let forwarded = skippy_inference_api::responses::FORWARDING_HEADERS
+        .iter()
+        .any(|name| {
+            header_values_from_raw(&raw[..header_end], name).is_ok_and(|values| !values.is_empty())
+        });
+    let continuation = (transforms == RequestTransforms::Apply).then(|| {
+        skippy_inference_api::responses::ResponseContinuation::new(
+            response_store,
+            skippy_inference_api::responses::caller_scope_for_http_peer(response_peer, forwarded),
+        )
+    });
     let rewrite = rewrite_request_body_for_forwarding(
         &parsed.path,
         &body,
@@ -493,6 +522,7 @@ where
             node_limit: super::routing_scope::head_node_limit(&raw),
         },
         requires_json_transform,
+        continuation,
     )
     .await
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
@@ -565,6 +595,7 @@ where
         model_name,
         request_object_request_ids: rewrite.request_object_request_ids,
         response_adapter,
+        responses_turn: rewrite.responses_turn,
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
@@ -696,12 +727,14 @@ async fn rewrite_request_body_for_forwarding(
     plugin_manager: Option<&plugin::PluginManager>,
     transformer: Transformer<'_>,
     requires_json_transform: bool,
+    response_continuation: Option<skippy_inference_api::responses::ResponseContinuation>,
 ) -> Result<RequestRewriteOutcome> {
     let mut outcome = RequestRewriteOutcome {
         body_json: None,
         request_object_request_ids: Vec::new(),
         request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         rewritten_body: None,
         transformed: false,
     };
@@ -717,6 +750,13 @@ async fn rewrite_request_body_for_forwarding(
         return Ok(outcome);
     };
 
+    if path.split('?').next() == Some("/v1/responses")
+        && let Some(continuation) = response_continuation
+    {
+        outcome.responses_turn = Some(Arc::new(
+            skippy_inference_api::responses::ResponsesTurn::prepare(body_json, continuation)?,
+        ));
+    }
     let normalization = normalize_openai_compat_request(path, body_json)?;
     let mut changed = normalization.changed;
     if let Some(rewritten_path) = normalization.rewritten_path {

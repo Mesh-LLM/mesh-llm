@@ -1,6 +1,18 @@
 mod content_items;
 mod conversation;
+mod resource;
+mod store;
+mod stream;
 mod tools;
+mod turn;
+
+pub use resource::{ResponseStatus, ResponsesUsage};
+pub use store::{
+    CallerScope, FORWARDING_HEADERS, RESPONSE_STORAGE_ENV, ResponseStore, ResponseStoreLimits,
+    caller_scope_for_http_peer, configured_response_storage,
+};
+pub use stream::{ResponsesStream, ResponsesStreamEvent, stream_events_for_response};
+pub use turn::{ResponseContinuation, ResponsesTurn};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -175,14 +187,27 @@ fn translate_responses_input_message(
         .transpose()?
         .unwrap_or_else(|| Value::String(String::new()));
 
-    Ok(Map::from_iter([
+    let mut translated = Map::from_iter([
         ("role".to_string(), Value::String(role)),
         ("content".to_string(), content_value),
-    ]))
+    ]);
+    if let Some(phase) = object.get("phase") {
+        let valid = object.get("role").and_then(Value::as_str) == Some("assistant")
+            && matches!(phase.as_str(), Some("commentary" | "final_answer"));
+        if !valid {
+            return Err(InferenceError::invalid_request(
+                "phase is only valid on assistant messages and must be \"commentary\" or \"final_answer\"",
+            )
+            .with_param("input"));
+        }
+        translated.insert("phase".into(), phase.clone());
+    }
+    Ok(translated)
 }
 
 fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, InferenceError> {
     match input {
+        Value::Null => Ok(Vec::new()),
         Value::String(text) => Ok(vec![serde_json::json!({
             "role": "user",
             "content": text,
@@ -260,12 +285,18 @@ fn translate_openai_responses_input(
         object.insert("messages".to_string(), Value::Array(messages));
     }
 
-    if let Some(value) = object.get("previous_response_id") {
-        state_cache_key = value.as_str().map(ToString::to_string);
-    }
-    if state_cache_key.is_none()
-        && let Some(value) = object.get("conversation")
+    // Only a prepared `ResponsesTurn` can restore a previous response; a
+    // reference that reaches translation unresolved fails closed.
+    if let Some(id) = object
+        .get("previous_response_id")
+        .filter(|id| !id.is_null())
     {
+        return Err(store::previous_response_not_found(
+            id.as_str().unwrap_or_default(),
+        ));
+    }
+    turn::reject_unsupported_request_fields(object)?;
+    if let Some(value) = object.get("conversation") {
         state_cache_key = responses_conversation_id(value);
     }
     if let Some(cache_key) = state_cache_key {
@@ -273,8 +304,50 @@ fn translate_openai_responses_input(
             .entry("prompt_cache_key".to_string())
             .or_insert(Value::String(cache_key));
     }
+    if let Some(format) = object.get("text").and_then(|text| text.get("format"))
+        && let Some(response_format) = chat_response_format(format)?
+    {
+        object
+            .entry("response_format".to_string())
+            .or_insert(response_format);
+    }
+    if let Some(include) = object.get("include").cloned() {
+        let include = include.as_array().ok_or_else(|| {
+            InferenceError::invalid_request("include must be an array").with_param("include")
+        })?;
+        for value in include {
+            match value.as_str() {
+                Some("message.output_text.logprobs") => {
+                    object.insert("logprobs".into(), Value::Bool(true));
+                }
+                Some("reasoning.encrypted_content") => {
+                    return Err(InferenceError::unsupported(
+                        "encrypted reasoning content is not supported",
+                    )
+                    .with_param("include"));
+                }
+                _ => {
+                    return Err(InferenceError::invalid_request(
+                        "include contains an unknown value",
+                    )
+                    .with_param("include"));
+                }
+            }
+        }
+    }
+    if object.get("stream").and_then(Value::as_bool) == Some(true) {
+        // Responses always report usage, so ask the chat backend for it.
+        let options = object
+            .entry("stream_options".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(options) = options.as_object_mut() {
+            options.insert("include_usage".to_string(), Value::Bool(true));
+        }
+        changed = true;
+    }
 
     for key in [
+        "background",
         "conversation",
         "include",
         "output",
@@ -303,6 +376,39 @@ fn responses_conversation_id(value: &Value) -> Option<String> {
         }
     }
     None
+}
+
+/// The Chat Completions `response_format` for a Responses `text.format`.
+fn chat_response_format(format: &Value) -> Result<Option<Value>, InferenceError> {
+    let invalid = |message: &str| {
+        InferenceError::invalid_request(message.to_string()).with_param("text.format")
+    };
+    match format.get("type").and_then(Value::as_str) {
+        None | Some("text") => Ok(None),
+        Some("json_object") => Ok(Some(serde_json::json!({"type": "json_object"}))),
+        Some("json_schema") => {
+            let name = format
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("json_schema format requires a name"))?;
+            let schema = format
+                .get("schema")
+                .ok_or_else(|| invalid("json_schema format requires a schema"))?;
+            let mut json_schema = serde_json::json!({"name": name, "schema": schema});
+            for key in ["description", "strict"] {
+                if let Some(value) = format.get(key) {
+                    json_schema[key] = value.clone();
+                }
+            }
+            Ok(Some(
+                serde_json::json!({"type": "json_schema", "json_schema": json_schema}),
+            ))
+        }
+        Some(other) => Err(InferenceError::unsupported(format!(
+            "unsupported text.format type {other:?}"
+        ))
+        .with_param("text.format")),
+    }
 }
 
 /// Fast-path detection for request bodies that need OpenAI compatibility
@@ -1333,16 +1439,48 @@ mod tests {
     }
 
     #[test]
-    fn normalize_responses_maps_state_to_prompt_cache_key() {
+    fn normalize_responses_fails_closed_on_unrestored_previous_response() {
         let mut body = json!({
             "model": "qwen",
             "input": "continue",
             "previous_response_id": "resp_abc"
         });
+        let error = normalize_openai_compat_request("/v1/responses", &mut body).unwrap_err();
+
+        assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            error.body().error.code.as_deref(),
+            Some("previous_response_not_found")
+        );
+    }
+
+    #[test]
+    fn normalize_responses_maps_text_format_and_requests_stream_usage() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": "json please",
+            "stream": true,
+            "store": true,
+            "truncation": "disabled",
+            "text": {"format": {"type": "json_schema", "name": "r", "schema": {"type": "object"}, "strict": true}}
+        });
         normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
 
-        assert_eq!(body["prompt_cache_key"], "resp_abc");
-        assert!(body.get("previous_response_id").is_none());
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(body["response_format"]["json_schema"]["name"], "r");
+        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        for key in ["text", "store", "truncation"] {
+            assert!(body.get(key).is_none(), "{key} is not forwarded");
+        }
+    }
+
+    #[test]
+    fn normalize_responses_rejects_unsupported_text_format() {
+        let mut body = json!({"input": "x", "text": {"format": {"type": "grammar"}}});
+        assert!(normalize_openai_compat_request("/v1/responses", &mut body).is_err());
+        let mut body = json!({"input": "x", "background": true});
+        assert!(normalize_openai_compat_request("/v1/responses", &mut body).is_err());
     }
 
     #[test]

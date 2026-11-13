@@ -1152,6 +1152,7 @@ async fn route_prepared_request(
             proxy::RouteTargetContext {
                 request_id: request.request_id,
                 response_adapter: request.response_adapter,
+                responses_turn: request.responses_turn.as_ref(),
                 route_observer,
             },
         )
@@ -1517,6 +1518,7 @@ async fn try_handle_virtual_model_intercept(
         candidate_models,
         decision.required_tokens,
         request.response_adapter,
+        request.responses_turn.clone(),
         route_observer,
         request.exchange_observation_id.as_deref(),
         request.request_id.as_uuid().to_string(),
@@ -1579,6 +1581,7 @@ async fn handle_api_proxy_connection_inner(
         &mut tcp_stream,
         plugin_manager.as_ref(),
         transforms,
+        affinity.response_store(),
     )
     .await
     {

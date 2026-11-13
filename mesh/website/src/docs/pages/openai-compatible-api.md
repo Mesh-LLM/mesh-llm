@@ -95,6 +95,58 @@ System One models answer typed questions through
 [native System One API](/docs/pages/system-one-api/) at `POST /v1/systemone`.
 Chat completion methods do not call either route.
 
+## Responses API
+
+`POST /v1/responses` implements the HTTP and SSE portions of the Open
+Responses 2026-04-24 protocol. Mesh translates the request onto the selected
+model backend, but the localhost ingress owns the response ID, transcript, and
+stream lifecycle. A later request can send `previous_response_id` plus only its
+new input; Mesh restores the earlier structured input and output before it
+chooses a local or peer worker. Function calls and `function_call_output` items
+keep their `call_id` across that continuation. Effective tools, tool choice,
+structured-output/reasoning controls, sampling controls, and output limits are
+inherited when the follow-up omits them; explicit child values replace them.
+Instructions never inherit, matching the protocol's conversation-state rule.
+
+```sh
+curl -s http://localhost:9337/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"mesh","input":"Remember that my code word is cobalt."}'
+```
+
+Completed responses are retained in bounded process memory for 30 minutes
+after their last use, up to 128 responses and 64 MiB of charged transcript per
+caller (and 256 MiB total). A restart, expiry, or eviction makes the ID unknown
+and returns `previous_response_not_found`; Mesh never treats an unknown ID as
+an empty conversation. `store: false` prevents HTTP retention. Set
+`MESH_RESPONSE_STORAGE=off` before startup to disable retention entirely.
+
+HTTP continuation is deliberately limited to direct loopback clients without
+`Forwarded`, `X-Forwarded-For`, or `X-Real-IP`. All local processes share that
+host-local trust scope. A reverse proxy or multi-user deployment must disable
+storage unless it supplies a separately authenticated ingress identity; a
+body field or caller-provided header cannot select another caller's scope.
+
+The following standard behavior is available when the selected model supports
+it:
+
+- typed message history, images/files handled by the existing Mesh media path,
+  developer-hosted function tools, parallel calls, and structured output via
+  `text.format`;
+- text, function-call, reasoning, usage, incomplete, and failed lifecycle
+  events over SSE, with stable response/item IDs and one terminal response
+  event;
+- assistant input `phase` labels preserved through translation. Output phase
+  labels are emitted only when a backend actually provides them.
+
+Unsupported semantics fail explicitly. Mesh does not currently implement
+background responses, automatic truncation, `max_tool_calls`, non-default
+service tiers, text verbosity, hosted tools, or encrypted reasoning
+continuation. `POST /v1/responses/compact` and the optional Responses WebSocket
+transport are not implemented. The existing `/v1/realtime` WebSocket is a
+transcription protocol and is not a Responses transport. Mesh does not create
+opaque compaction or encrypted reasoning state.
+
 ## Streaming
 
 Clients that support streamed OpenAI-compatible responses can use the same base URL.

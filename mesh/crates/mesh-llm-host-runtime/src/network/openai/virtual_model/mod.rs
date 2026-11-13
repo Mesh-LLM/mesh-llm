@@ -274,6 +274,7 @@ pub(crate) async fn route_virtual_model_or_passthrough(
         candidates,
         proxy::request_context_budget(request),
         request.response_adapter,
+        request.responses_turn.clone(),
         route_observer,
         request.exchange_observation_id.as_deref(),
         request.request_id.as_uuid().to_string(),
@@ -329,6 +330,21 @@ fn validate_virtual_request(
     None
 }
 
+fn virtual_progress_plan(
+    route: &crate::plugin::VirtualModelRoute,
+    response_adapter: proxy::ResponseAdapter,
+    requests_stream: bool,
+    has_responses_turn: bool,
+) -> Option<progress::ProgressPlan> {
+    // The shared Responses state machine owns the response identity and
+    // terminal commit. The legacy progress adapter creates its own identity,
+    // so do not mix it into an ingress-owned turn.
+    if has_responses_turn && response_adapter == proxy::ResponseAdapter::OpenAiResponsesStream {
+        return None;
+    }
+    progress::ProgressPlan::for_route(route, response_adapter, requests_stream)
+}
+
 /// Invoke the plugin's turn. A private turn keeps the plugin's own inference
 /// calls private for as long as the turn runs, including after progress has
 /// been committed. The scope is read here, on the request's task, not when
@@ -372,6 +388,7 @@ pub(crate) async fn try_handle_virtual_model(
     candidate_models: Vec<String>,
     required_tokens: Option<u32>,
     response_adapter: proxy::ResponseAdapter,
+    responses_turn: Option<std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
     route_observer: OpenAiRouteObserver<'_>,
     observation_id: Option<&str>,
     exchange_id: String,
@@ -444,7 +461,12 @@ pub(crate) async fn try_handle_virtual_model(
     // out the whole turn with nothing on the wire. When the route declares
     // progress lines the host commits the head and drips them while the turn
     // runs; see `progress` for what that commit costs.
-    let plan = progress::ProgressPlan::for_route(&route, response_adapter, requests_stream);
+    let plan = virtual_progress_plan(
+        &route,
+        response_adapter,
+        requests_stream,
+        responses_turn.is_some(),
+    );
     let (tcp_stream, response, continuation) =
         match progress::drive(plan, tcp_stream, invocation).await {
             progress::Driven::Buffered { stream, response } => {
@@ -517,6 +539,7 @@ pub(crate) async fn try_handle_virtual_model(
                     &response.body,
                     &headers,
                     continuation,
+                    responses_turn.as_deref(),
                 )
                 .await
             }
@@ -540,7 +563,12 @@ pub(crate) async fn try_handle_virtual_model(
             }
         }
     } else {
-        let body = translated_json_body(&response.body, response_adapter, status);
+        let body = translated_json_body(
+            &response.body,
+            response_adapter,
+            status,
+            responses_turn.as_deref(),
+        );
         proxy::send_json_with_status_and_headers_observed(
             tcp_stream,
             status,
@@ -770,10 +798,14 @@ fn translated_json_body(
     body: &serde_json::Value,
     response_adapter: proxy::ResponseAdapter,
     status: u16,
+    responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> serde_json::Value {
     match response_adapter {
         proxy::ResponseAdapter::OpenAiResponsesJson if (200..300).contains(&status) => {
-            stream_adapters::chat_completion_to_responses_json(body)
+            match responses_turn {
+                Some(turn) => turn.finish_chat_completion(body),
+                None => stream_adapters::chat_completion_to_responses_json(body),
+            }
         }
         proxy::ResponseAdapter::AnthropicMessagesJson => {
             stream_adapters::chat_completion_to_messages_json(body, !(200..300).contains(&status))
