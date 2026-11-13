@@ -341,10 +341,10 @@ independently of its 60-second Git command budget. `--timeout` overrides both.
 Both generation and idempotence remain required; deadline diagnostics retain
 readable child output and process cleanup status.
 
-The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
-runs in the repair session and trusted build. The Linux build job uses 4 to
-limit concurrent CUDA test memory pressure. The per-case timeout remains 900
-seconds.
+The macOS and Linux build jobs set `CTEST_PARALLEL_LEVEL=4` for complete
+upstream CTest runs in the repair session and trusted build. This limits
+contention between graph-contract cases and concurrent CUDA test memory
+pressure. The complete suite and 900-second per-case timeout remain unchanged.
 The build job prepares the locked canary Python SDK before its early Metal
 battery, so Nomic embedding uses the same interpreter as family workers.
 Non-chat certification starts the candidate through `skippy serve --model-path`
