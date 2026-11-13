@@ -194,6 +194,15 @@ async fn read_loopback_responses_request(
     extra_headers: &str,
     store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    read_loopback_request("/v1/responses", body, extra_headers, store).await
+}
+
+async fn read_loopback_request(
+    path: &str,
+    body: serde_json::Value,
+    extra_headers: &str,
+    store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -211,7 +220,7 @@ async fn read_loopback_responses_request(
     client
         .write_all(
             format!(
-                "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
                 body.len(),
             )
             .as_bytes(),
@@ -220,6 +229,98 @@ async fn read_loopback_responses_request(
         .unwrap();
     client.shutdown().await.unwrap();
     server.await.unwrap()
+}
+
+#[tokio::test]
+async fn loopback_compaction_restores_into_a_new_responses_request() {
+    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::new(
+        skippy_inference_api::responses::ResponseStoreLimits::default(),
+    ));
+    let compact_request = serde_json::json!({
+        "model": "qwen",
+        "input": [
+            {"type":"message","role":"user","content":"code word slate"},
+            {"type":"message","role":"assistant","content":"remembered"}
+        ]
+    });
+    let original_len = compact_request.to_string().len();
+    let compact =
+        read_loopback_request("/v1/responses/compact", compact_request, "", store.clone())
+            .await
+            .unwrap();
+    assert_eq!(compact.client_path, "/v1/responses/compact");
+    assert_eq!(compact.path, "/v1/chat/completions");
+    assert_eq!(
+        compact.response_adapter,
+        ResponseAdapter::OpenAiResponsesJson
+    );
+    let forwarded_body = compact
+        .raw
+        .split(|byte| *byte == b'\n')
+        .next_back()
+        .unwrap();
+    assert_eq!(compact.body_len_bytes, forwarded_body.len());
+    assert!(compact.body_len_bytes > original_len);
+    let compacted = compact
+        .responses_turn
+        .unwrap()
+        .finish_chat_completion(&serde_json::json!({
+            "choices":[{"message":{"content":"The code word is slate."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":11,"completion_tokens":6,"total_tokens":17}
+        }));
+    assert_eq!(compacted["object"], "response.compaction");
+    assert_eq!(compacted["usage"]["total_tokens"], 17);
+
+    let mut input = compacted["output"].as_array().unwrap().clone();
+    input.push(serde_json::json!({
+        "type":"message","role":"user","content":"What is the code word?"
+    }));
+    let next = read_loopback_responses_request(
+        serde_json::json!({"model":"qwen","input":input}),
+        "",
+        store,
+    )
+    .await
+    .unwrap();
+    let forwarded = next.body_json.unwrap();
+    assert!(
+        forwarded["messages"]
+            .to_string()
+            .contains("The code word is slate.")
+    );
+    assert!(
+        !forwarded["messages"]
+            .to_string()
+            .contains("encrypted_content")
+    );
+}
+
+#[tokio::test]
+async fn compact_expansion_over_body_limit_is_rejected_without_plugins() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "model":"qwen",
+        "input":[{"type":"message","role":"user","content":"\"".repeat(3 * 1024 * 1024)}]
+    }))
+    .unwrap();
+    assert!(body.len() < MAX_BODY_BYTES);
+    let error = match rewrite_request_body_for_forwarding(
+        "/v1/responses/compact",
+        &body,
+        None,
+        Transformer {
+            plugins: None,
+            private_hint: false,
+            node_limit: None,
+        },
+        true,
+        Some(skippy_inference_api::responses::ResponseContinuation::disabled()),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("oversized rewritten compact request should be rejected"),
+    };
+    assert!(error.to_string().contains("rewritten request body exceeds"));
 }
 
 #[tokio::test]

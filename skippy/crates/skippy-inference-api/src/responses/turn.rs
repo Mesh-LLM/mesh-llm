@@ -20,6 +20,15 @@ use super::resource::{
 use super::store::{CallerScope, ResponseStore, StoredResponse, previous_response_not_found};
 use crate::errors::InferenceError;
 
+#[derive(Debug, Clone)]
+enum TurnKind {
+    Response,
+    Compaction {
+        user_messages: Vec<Value>,
+        pending_calls: Vec<Value>,
+    },
+}
+
 /// Where a request may look up and save earlier responses.
 ///
 /// Storage is a startup setting: when it is off no store exists, nothing is
@@ -46,7 +55,7 @@ impl ResponseContinuation {
         Some((self.store.as_deref()?, self.scope.as_ref()?))
     }
 
-    fn lookup(&self, id: &str) -> Result<Arc<StoredResponse>, InferenceError> {
+    pub(super) fn lookup(&self, id: &str) -> Result<Arc<StoredResponse>, InferenceError> {
         let (store, scope) = self
             .available()
             .ok_or_else(|| previous_response_not_found(id))?;
@@ -66,6 +75,7 @@ pub struct ResponsesTurn {
     input: Vec<Value>,
     parent: Option<Arc<StoredResponse>>,
     continuation: ResponseContinuation,
+    kind: TurnKind,
 }
 
 impl ResponsesTurn {
@@ -80,16 +90,11 @@ impl ResponsesTurn {
             .as_object_mut()
             .ok_or_else(|| InferenceError::invalid_request("request body must be a JSON object"))?;
         reject_unsupported_request_fields(object)?;
-        let previous_response_id = match object.remove("previous_response_id") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(id)) => Some(id),
-            Some(_) => {
-                return Err(InferenceError::invalid_request(
-                    "previous_response_id must be a string",
-                )
-                .with_param("previous_response_id"));
-            }
-        };
+        let explicit_model = object
+            .get("model")
+            .and_then(Value::as_str)
+            .is_some_and(|model| !model.is_empty());
+        let previous_response_id = take_previous_response_id(object)?;
         let parent = previous_response_id
             .as_deref()
             .map(|id| continuation.lookup(id))
@@ -134,6 +139,7 @@ impl ResponsesTurn {
                 .entry("prompt_cache_key")
                 .or_insert_with(|| Value::String(parent.root_id().to_string()));
         }
+        super::compaction::restore_input(object, &model, explicit_model)?;
         let instructions = object
             .get("instructions")
             .and_then(Value::as_str)
@@ -150,6 +156,32 @@ impl ResponsesTurn {
             input,
             parent,
             continuation,
+            kind: TurnKind::Response,
+        })
+    }
+
+    /// Prepare `/v1/responses/compact` as one non-streaming model summary.
+    /// The original transcript is serialized inside a data-only prompt so its
+    /// instructions and tool calls are never executed by the compaction pass.
+    pub fn prepare_compact(
+        body: &mut Value,
+        continuation: ResponseContinuation,
+    ) -> Result<Self, InferenceError> {
+        let prepared = super::compaction::prepare(body, &continuation)?;
+        Ok(Self {
+            id: prepared.id,
+            created_at: prepared.created_at,
+            model: prepared.model,
+            envelope: ResponseEnvelope::default(),
+            instructions: None,
+            configuration: Map::new(),
+            input: prepared.input,
+            parent: prepared.parent,
+            continuation: ResponseContinuation::disabled(),
+            kind: TurnKind::Compaction {
+                user_messages: prepared.user_messages,
+                pending_calls: prepared.pending_calls,
+            },
         })
     }
 
@@ -166,6 +198,7 @@ impl ResponsesTurn {
             input: Vec::new(),
             parent: None,
             continuation: ResponseContinuation::disabled(),
+            kind: TurnKind::Response,
         }
     }
 
@@ -245,8 +278,27 @@ impl ResponsesTurn {
     /// Translate a whole Chat Completions body into this turn's terminal
     /// response, and save it when it completed.
     pub fn finish_chat_completion(&self, chat: &Value) -> Value {
+        self.try_finish_chat_completion(chat)
+            .unwrap_or_else(|error| {
+                serde_json::to_value(error.body()).expect("InferenceError body serializes")
+            })
+    }
+
+    /// Fallibly translate a terminal Chat Completions body.
+    ///
+    /// Ordinary Responses failures remain response resources for compatibility.
+    /// Compaction instead rejects an invalid or truncated backend result so an
+    /// HTTP owner can return a non-success status and mark its lifecycle failed.
+    pub fn try_finish_chat_completion(&self, chat: &Value) -> Result<Value, InferenceError> {
+        if let TurnKind::Compaction {
+            user_messages,
+            pending_calls,
+        } = &self.kind
+        {
+            return self.finish_compaction(chat, user_messages, pending_calls);
+        }
         if let Some(error) = chat.get("error") {
-            return self.fail(
+            return Ok(self.fail(
                 &[],
                 None,
                 ResponseError {
@@ -260,7 +312,7 @@ impl ResponsesTurn {
                         .or_else(|| error.as_str())
                         .unwrap_or("upstream response failed"),
                 },
-            );
+            ));
         }
         let choice = chat
             .get("choices")
@@ -270,18 +322,34 @@ impl ResponsesTurn {
             .and_then(|choice| choice.get("finish_reason"))
             .and_then(Value::as_str);
         if choice.is_none() || finish_reason.is_none() || finish_reason == Some("error") {
-            return self.fail(
+            return Ok(self.fail(
                 &[],
                 chat.get("usage").and_then(ResponsesUsage::from_chat_value),
                 ResponseError {
                     code: "upstream_response_invalid",
                     message: "upstream response did not contain a successful terminal choice",
                 },
-            );
+            ));
         }
         let (output, status) = chat_completion_output(chat);
         let usage = chat.get("usage").and_then(ResponsesUsage::from_chat_value);
-        self.finish(status, &output, usage)
+        Ok(self.finish(status, &output, usage))
+    }
+
+    fn finish_compaction(
+        &self,
+        chat: &Value,
+        user_messages: &[Value],
+        pending_calls: &[Value],
+    ) -> Result<Value, InferenceError> {
+        super::compaction::finish(
+            &self.id,
+            self.created_at,
+            &self.model,
+            user_messages,
+            pending_calls,
+            chat,
+        )
     }
 
     fn commit(&self, output: &[Value]) -> bool {
@@ -331,6 +399,19 @@ fn inheritable_configuration(request: &Map<String, Value>) -> Map<String, Value>
                 .map(|value| ((*key).to_string(), value.clone()))
         })
         .collect()
+}
+
+pub(super) fn take_previous_response_id(
+    object: &mut Map<String, Value>,
+) -> Result<Option<String>, InferenceError> {
+    match object.remove("previous_response_id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if !id.is_empty() => Ok(Some(id)),
+        Some(_) => Err(InferenceError::invalid_request(
+            "previous_response_id must be a non-empty string",
+        )
+        .with_param("previous_response_id")),
+    }
 }
 
 /// Fields this server reads but cannot honour. They are rejected rather than
@@ -391,7 +472,7 @@ pub(super) fn reject_unsupported_request_fields(
 }
 
 /// The structured items a request's `input` adds to the conversation.
-fn input_items(input: &Value) -> Result<Vec<Value>, InferenceError> {
+pub(super) fn input_items(input: &Value) -> Result<Vec<Value>, InferenceError> {
     let user_message =
         |content: Value| json!({"type": "message", "role": "user", "content": content});
     match input {
@@ -415,7 +496,7 @@ fn is_conversation_item(item: &Value) -> bool {
     item.get("role").is_some()
         || matches!(
             item.get("type").and_then(Value::as_str),
-            Some("message" | "function_call" | "function_call_output" | "reasoning")
+            Some("message" | "function_call" | "function_call_output" | "reasoning" | "compaction")
         )
 }
 
@@ -534,7 +615,7 @@ mod tests {
     fn chat(text: &str) -> Value {
         json!({
             "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
         })
     }
 
@@ -770,6 +851,103 @@ mod tests {
         }
         let mut body = json!({"input": "x", "background": false, "truncation": "disabled"});
         assert!(ResponsesTurn::prepare(&mut body, ResponseContinuation::disabled()).is_ok());
+    }
+
+    #[test]
+    fn compaction_uses_model_summary_usage_and_preserves_user_messages() {
+        let mut body = json!({
+            "model": "m",
+            "input": [
+                {"type":"message","role":"user","content":"launch Tuesday"},
+                {"type":"message","role":"assistant","content":"support first"}
+            ],
+            "prompt_cache_key": "compact-test"
+        });
+        let turn =
+            ResponsesTurn::prepare_compact(&mut body, ResponseContinuation::disabled()).unwrap();
+        assert_eq!(body["tool_choice"], "none");
+        assert!(
+            body["messages"][1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("launch Tuesday")
+        );
+        let compacted = turn.finish_chat_completion(&json!({
+            "choices": [{"message":{"content":"Launch Tuesday; notify support first."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":23,"completion_tokens":7,"total_tokens":30}
+        }));
+        assert_eq!(compacted["object"], "response.compaction");
+        assert_eq!(compacted["usage"]["input_tokens"], 23);
+        assert_eq!(compacted["usage"]["output_tokens"], 7);
+        assert_eq!(compacted["output"][0]["role"], "user");
+        assert_eq!(compacted["output"][1]["type"], "compaction");
+        assert_ne!(
+            compacted["output"][1]["encrypted_content"],
+            "Launch Tuesday; notify support first."
+        );
+    }
+
+    #[test]
+    fn compact_previous_response_resolves_history_but_does_not_store_a_response() {
+        let store = store();
+        let (_, parent) = run(
+            json!({"model":"m","input":"remember slate"}),
+            local(&store),
+            "remembered",
+        );
+        let mut body = json!({
+            "model":"m",
+            "previous_response_id":parent["id"],
+            "input":"compact now"
+        });
+        let compact = ResponsesTurn::prepare_compact(&mut body, local(&store)).unwrap();
+        let data = body["messages"][1]["content"].as_str().unwrap();
+        assert!(data.contains("remember slate") && data.contains("remembered"));
+        let compacted = compact.finish_chat_completion(&chat("slate was remembered"));
+        let mut bogus = json!({"previous_response_id":compacted["id"],"input":"continue"});
+        assert!(ResponsesTurn::prepare(&mut bogus, local(&store)).is_err());
+    }
+
+    #[test]
+    fn compaction_item_requires_explicit_matching_model_and_restores_summary() {
+        let mut compact_body = json!({"model":"m","input":"remember slate"});
+        let compact =
+            ResponsesTurn::prepare_compact(&mut compact_body, ResponseContinuation::disabled())
+                .unwrap()
+                .finish_chat_completion(&chat("the code word is slate"));
+        let item = compact["output"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+
+        let mut missing = json!({"input":[item.clone()]});
+        assert!(ResponsesTurn::prepare(&mut missing, ResponseContinuation::disabled()).is_err());
+        let mut wrong = json!({"model":"other","input":[item.clone()]});
+        assert!(ResponsesTurn::prepare(&mut wrong, ResponseContinuation::disabled()).is_err());
+        let mut valid = json!({"model":"m","input":[item]});
+        ResponsesTurn::prepare(&mut valid, ResponseContinuation::disabled()).unwrap();
+        assert!(
+            valid["input"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("the code word is slate")
+        );
+    }
+
+    #[test]
+    fn compaction_rejects_unknown_fields_and_missing_model() {
+        for mut body in [
+            json!({"input":"x"}),
+            json!({"model":"m","stream":false,"input":"x"}),
+            json!({"model":"m","prompt_cache_key":"x".repeat(65)}),
+        ] {
+            assert!(
+                ResponsesTurn::prepare_compact(&mut body, ResponseContinuation::disabled())
+                    .is_err()
+            );
+        }
     }
 
     #[test]

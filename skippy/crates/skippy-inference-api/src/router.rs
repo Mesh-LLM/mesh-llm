@@ -59,7 +59,7 @@ mod generation;
 mod responses;
 use audio_upload::parse_audio_multipart;
 use generation::chat_completions;
-use responses::responses;
+use responses::{responses, responses_compact};
 const BACKEND_TIMEOUT_SECS_ENV: &str = "MESH_OPENAI_BACKEND_TIMEOUT_SECS";
 const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 
@@ -326,6 +326,7 @@ pub fn router_for_with_config(
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
+        .route("/v1/responses/compact", post(responses_compact))
         .route("/v1/decisions", post(decisions))
         .route("/v1/messages", post(crate::anthropic::messages))
         .route(
@@ -961,6 +962,7 @@ fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
         "/v1/chat/completions" => InferenceFrontendRoute::ChatCompletions,
         "/v1/completions" => InferenceFrontendRoute::Completions,
         "/v1/responses" => InferenceFrontendRoute::Responses,
+        "/v1/responses/compact" => InferenceFrontendRoute::Responses,
         "/v1/decisions" => InferenceFrontendRoute::Decisions,
         "/v1/messages/count_tokens" => InferenceFrontendRoute::MessagesCountTokens,
         "/v1/messages" => InferenceFrontendRoute::Messages,

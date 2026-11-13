@@ -312,7 +312,11 @@ impl BufferedHttpRequest {
             .unwrap_or(&self.client_path);
         matches!(
             path,
-            "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/messages"
+            "/v1/chat/completions"
+                | "/v1/completions"
+                | "/v1/responses"
+                | "/v1/responses/compact"
+                | "/v1/messages"
         )
         .then_some(())
         .filter(|()| {
@@ -576,7 +580,7 @@ where
     // Context budgets follow what reaches the model: a transform may replace
     // a large attachment with a little text, or the reverse.
     let body_len_bytes = match rewrite.rewritten_body.as_deref() {
-        Some(forwarded) if rewrite.transformed => forwarded.len(),
+        Some(forwarded) => forwarded.len(),
         _ => body.len(),
     };
     let body_bytes = if body.is_empty() { None } else { Some(body) };
@@ -750,12 +754,19 @@ async fn rewrite_request_body_for_forwarding(
         return Ok(outcome);
     };
 
-    if path.split('?').next() == Some("/v1/responses")
-        && let Some(continuation) = response_continuation
-    {
-        outcome.responses_turn = Some(Arc::new(
-            skippy_inference_api::responses::ResponsesTurn::prepare(body_json, continuation)?,
-        ));
+    if let Some(continuation) = response_continuation {
+        outcome.responses_turn = match path.split('?').next() {
+            Some("/v1/responses") => Some(Arc::new(
+                skippy_inference_api::responses::ResponsesTurn::prepare(body_json, continuation)?,
+            )),
+            Some("/v1/responses/compact") => Some(Arc::new(
+                skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+                    body_json,
+                    continuation,
+                )?,
+            )),
+            _ => None,
+        };
     }
     let normalization = normalize_openai_compat_request(path, body_json)?;
     let mut changed = normalization.changed;
@@ -787,9 +798,14 @@ async fn rewrite_request_body_for_forwarding(
         }
         let rewritten = serde_json::to_vec(body_json)
             .context("serialize normalized OpenAI-compatible request body")?;
-        // A peer reading the forwarded request enforces the same limit.
-        if transformed && rewritten.len() > MAX_BODY_BYTES {
-            bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+        // A peer reading the forwarded request enforces the same limit. This
+        // applies to protocol normalization and continuation expansion too,
+        // not only bodies changed by a plugin.
+        if rewritten.len() > MAX_BODY_BYTES {
+            if transformed {
+                bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+            }
+            bail!("rewritten request body exceeds {MAX_BODY_BYTES} bytes");
         }
         Ok((transformed, Some(rewritten)))
     }

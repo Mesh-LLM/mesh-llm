@@ -229,6 +229,7 @@ async fn begin_exchange(
         Some("/v1/chat/completions") => "chat_completions",
         Some("/v1/completions") => "completions",
         Some("/v1/responses") => "responses",
+        Some("/v1/responses/compact") => "responses_compact",
         _ => return Ok((stream, None)),
     };
     let Some(manager) = ctx.route.plugin_manager else {

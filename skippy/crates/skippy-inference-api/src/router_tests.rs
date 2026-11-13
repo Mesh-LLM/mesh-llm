@@ -2304,3 +2304,125 @@ async fn response_body_text(response: axum::response::Response) -> String {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(body.to_vec()).unwrap()
 }
+
+#[tokio::test]
+async fn compact_endpoint_requires_an_explicit_model() {
+    let response = post_json(
+        "/v1/responses/compact",
+        json!({"input":"compact this conversation"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_body_json(response).await;
+    assert_eq!(body["error"]["param"], "model");
+}
+
+#[tokio::test]
+async fn compact_invalid_terminal_is_non_success_and_lifecycle_failed() {
+    let observer = Arc::new(RecordingLifecycleObserver::default());
+    let app = router_for_with_config(
+        Arc::new(FakeBackend),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+    );
+    let response = post_json_with_app_and_request_id(
+        app,
+        "/v1/responses/compact",
+        json!({"model":"tool-call","input":"compact this conversation"}),
+        Some("00000000-0000-4000-8000-000000000041"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = response_body_json(response).await;
+    assert_eq!(body["error"]["code"], "upstream_response_invalid");
+    let events = observer.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, InferenceLifecycleEvent::ResponseCompleted { .. }))
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        InferenceLifecycleEvent::NonStreamTerminal {
+            result: InferenceTerminalResult::Failed {
+                status_code: 502,
+                failure: InferenceFailure::Backend,
+            },
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn live_socket_compact_output_starts_a_genuine_new_responses_turn() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn live_post(address: std::net::SocketAddr, path: &str, body: Value) -> Value {
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let body = body.to_string();
+        stream
+            .write_all(
+                format!(
+                    "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let body_start = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        serde_json::from_slice(&response[body_start..]).unwrap()
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router_for(Arc::new(FakeBackend))
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let compacted = live_post(
+        address,
+        "/v1/responses/compact",
+        json!({
+            "model":"gpt-mesh",
+            "input":[
+                {"type":"message","role":"user","content":"Remember slate."},
+                {"type":"message","role":"assistant","content":"OK."}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(compacted["object"], "response.compaction");
+    assert_eq!(compacted["usage"]["total_tokens"], 5);
+    let encrypted = compacted["output"].as_array().unwrap().last().unwrap()["encrypted_content"]
+        .as_str()
+        .unwrap();
+    assert!(!encrypted.contains("Remember slate"));
+
+    let mut input = compacted["output"].as_array().unwrap().clone();
+    input.push(json!({"type":"message","role":"user","content":"What was the word?"}));
+    let response = live_post(
+        address,
+        "/v1/responses",
+        json!({"model":"gpt-mesh","input":input}),
+    )
+    .await;
+    assert_eq!(response["object"], "response");
+    assert!(
+        response["output_text"]
+            .as_str()
+            .unwrap()
+            .contains("Provider-verified compacted conversation context")
+    );
+    server.abort();
+}

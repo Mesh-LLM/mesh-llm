@@ -1,3 +1,4 @@
+mod compaction;
 mod content_items;
 mod conversation;
 mod resource;
@@ -420,7 +421,10 @@ pub fn request_body_requires_json_normalization(path: &str, body: &[u8]) -> bool
         return false;
     }
     let path_only = path_only(path);
-    if matches!(path_only, "/v1/responses" | "/v1/messages") {
+    if matches!(
+        path_only,
+        "/v1/responses" | "/v1/responses/compact" | "/v1/messages"
+    ) {
         return true;
     }
     if path_only != "/v1/chat/completions" {
@@ -474,6 +478,11 @@ pub fn normalize_openai_compat_request(
     let mut agent_session_id = None;
 
     let path_only = path_only(path);
+    if path_only == "/v1/responses/compact" {
+        changed = true;
+        rewritten_path = Some(rewrite_path_preserving_query(path, "/v1/chat/completions"));
+        response_adapter = ResponseAdapterMode::OpenAiResponsesJson;
+    }
     if path_only == "/v1/responses" {
         agent_session_id = object
             .get("conversation")
@@ -490,7 +499,10 @@ pub fn normalize_openai_compat_request(
             ResponseAdapterMode::OpenAiResponsesJson
         };
     }
-    if matches!(path_only, "/v1/chat/completions" | "/v1/responses") {
+    if matches!(
+        path_only,
+        "/v1/chat/completions" | "/v1/responses" | "/v1/responses/compact"
+    ) {
         changed |= normalize_reasoning_compat_fields(object)?;
     }
 

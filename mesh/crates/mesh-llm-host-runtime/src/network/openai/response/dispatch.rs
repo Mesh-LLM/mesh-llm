@@ -311,4 +311,45 @@ mod tests {
         .await;
         assert!(matches!(result, RouteAttemptResult::RetryableUnavailable));
     }
+
+    #[tokio::test]
+    async fn invalid_buffered_compaction_is_retryable_before_commit_not_delivered() {
+        let body = br#"{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#;
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut request = serde_json::json!({"model":"m","input":"remember"});
+        let turn = std::sync::Arc::new(
+            skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+                &mut request,
+                skippy_inference_api::responses::ResponseContinuation::disabled(),
+            )
+            .unwrap(),
+        );
+        let mut client = ClientStream::null();
+        let mut reader = std::io::Cursor::new(body.to_vec());
+        let result = relay_attempted_response(
+            &mut client,
+            &mut reader,
+            ResponseProbe {
+                buffered: header.as_bytes().to_vec(),
+                header_end: header.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            },
+            RelayAttemptContext {
+                request_id: RequestId::new(),
+                disconnect_message: "test disconnect",
+                commit_message: "test failure",
+                served_by: None,
+                route_observer: OpenAiRouteObserver::default(),
+                responses_turn: Some(&turn),
+            },
+            ResponseRetryPolicy::next_target_available(false),
+            ResponseAdapter::OpenAiResponsesJson,
+        )
+        .await;
+        assert!(matches!(result, RouteAttemptResult::RetryableUnavailable));
+    }
 }

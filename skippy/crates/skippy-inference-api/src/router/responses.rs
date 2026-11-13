@@ -50,6 +50,30 @@ pub(super) async fn responses(
     }
 }
 
+pub(super) async fn responses_compact(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<InferenceLifecycleContext>,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Response, InferenceError> {
+    let Json(mut value) = json_payload(payload)?;
+    let peer = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip());
+    let continuation = ResponseContinuation::new(
+        state.config.response_store.clone(),
+        http_caller_scope(peer, &headers),
+    );
+    let turn = Arc::new(ResponsesTurn::prepare_compact(&mut value, continuation)?);
+    normalize_openai_compat_request("/v1/responses/compact", &mut value)?;
+    let request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
+        InferenceError::invalid_request(format!("invalid compact request: {error}"))
+    })?;
+    let mut request = GenerationRequest::from(request);
+    request.validate()?;
+    request.set_agent_session(None);
+    non_streaming_responses(&state, &context, request, false, &turn).await
+}
+
 /// The caller scope of a direct HTTP request: loopback peers without
 /// forwarding headers share the host-local scope; anything else has none.
 fn http_caller_scope(peer: Option<std::net::IpAddr>, headers: &HeaderMap) -> Option<CallerScope> {
@@ -187,18 +211,14 @@ async fn non_streaming_responses(
             .chat_completion_with_context(request, backend_context.clone()),
     )
     .await?;
-    state.response_completed(
-        context,
-        InferenceBackendOperation::Responses,
-        &response.usage,
-    );
     let usage = response.usage.clone();
     let capsule_marker = response.capsule_marker.clone();
     let exchange_id = response.exchange_id.clone();
     let chat = serde_json::to_value(ChatCompletionResponse::from(response)).map_err(|error| {
         InferenceError::internal(format!("serialize chat completion response: {error}"))
     })?;
-    let translated = turn.finish_chat_completion(&chat);
+    let translated = turn.try_finish_chat_completion(&chat)?;
+    state.response_completed(context, InferenceBackendOperation::Responses, &usage);
     let mut http_response = json_response_with_usage(translated, &usage);
     if let Some(marker) = capsule_marker {
         http_response

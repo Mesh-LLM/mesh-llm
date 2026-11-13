@@ -173,7 +173,7 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
             Some(turn) => {
                 let chat: serde_json::Value = serde_json::from_slice(body)
                     .context("parse chat completion for Responses translation")?;
-                serde_json::to_vec(&turn.finish_chat_completion(&chat))?
+                serde_json::to_vec(&turn.try_finish_chat_completion(&chat)?)?
             }
             None => response_adapter::translate_chat_completion_to_responses(body)?,
         }
@@ -330,6 +330,54 @@ mod tests {
         assert_eq!(response["usage"]["input_tokens"], 5);
         assert_eq!(response["usage"]["output_tokens"], 3);
         assert_eq!(response["usage"]["total_tokens"], 8);
+    }
+
+    #[test]
+    fn shared_responses_adapter_emits_compaction_for_virtual_and_plugin_paths() {
+        let mut request = serde_json::json!({
+            "model":"qwen",
+            "input":[{"type":"message","role":"user","content":"remember slate"}]
+        });
+        let turn = skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+            &mut request,
+            skippy_inference_api::responses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let chat = serde_json::json!({
+            "choices":[{"message":{"content":"The code word is slate."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":7,"completion_tokens":6,"total_tokens":13}
+        });
+        let response = crate::network::openai::virtual_model::translated_json_body(
+            &chat,
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap();
+        assert_eq!(response["object"], "response.compaction");
+        assert_eq!(response["usage"]["total_tokens"], 13);
+        assert_eq!(response["output"][1]["type"], "compaction");
+    }
+
+    #[test]
+    fn shared_responses_adapter_rejects_truncated_compaction() {
+        let mut request = serde_json::json!({"model":"qwen","input":"remember slate"});
+        let turn = skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+            &mut request,
+            skippy_inference_api::responses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let error = crate::network::openai::virtual_model::translated_json_body(
+            &serde_json::json!({
+                "choices":[{"message":{"content":"partial"},"finish_reason":"length"}],
+                "usage":{"prompt_tokens":7,"completion_tokens":6,"total_tokens":13}
+            }),
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap_err();
+        assert_eq!(error.status().as_u16(), 502);
     }
 
     #[tokio::test]

@@ -8888,6 +8888,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "chacha20poly1305 0.11.0",
  "futures-core",
  "futures-util",
  "http-body",

@@ -33,7 +33,12 @@ pub(crate) async fn send_read_failure(
     // protocols keep their own error envelopes (notably Anthropic Messages).
     let inference = error
         .context()
-        .filter(|context| context.client_path.split('?').next() == Some("/v1/responses"))
+        .filter(|context| {
+            matches!(
+                context.client_path.split('?').next(),
+                Some("/v1/responses" | "/v1/responses/compact")
+            )
+        })
         .and_then(|_| error.inference_error());
     let code = inference.map_or(400, |error| error.status().as_u16());
     let result = if let (Some(lifecycle), Some(inference)) = (lifecycle.as_ref(), inference) {

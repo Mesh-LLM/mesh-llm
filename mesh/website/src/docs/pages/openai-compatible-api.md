@@ -127,6 +127,38 @@ host-local trust scope. A reverse proxy or multi-user deployment must disable
 storage unless it supplies a separately authenticated ingress identity; a
 body field or caller-provided header cannot select another caller's scope.
 
+### Compaction
+
+`POST /v1/responses/compact` summarizes a Responses transcript into an opaque
+compaction item. Send `model` plus `input`; the compact request may also name a
+stored `previous_response_id` to include that response's transcript. The
+endpoint is non-streaming and returns `object: "response.compaction"` with the
+original user messages followed by a `compaction` item. Feed that `output`
+array into a later `/v1/responses` request and append the new input:
+
+```sh
+curl -s http://localhost:9337/v1/responses/compact \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"mesh","input":[{"type":"message","role":"user","content":"Remember cobalt."}]}'
+```
+
+The item's `encrypted_content` authenticates the model-generated summary and
+metadata for unresolved function calls. On restore, Mesh inserts those calls
+immediately after the summary and before newly appended
+`function_call_output` items; completed parallel calls are not retained.
+
+Compaction encryption is deliberately process-local. An item can be restored
+only by the same ingress process and exact model ID that created it. A restart,
+another ingress instance, a changed model, tampering, or an oversized item
+fails closed. The encrypted item is opaque provider state, not portable
+end-to-end encryption for client data.
+
+A compaction resource is not stored and has no usable
+`previous_response_id`. Do not pass its `id` as `previous_response_id`; retain
+and resend its `output` items instead. A compact request may consume an earlier
+stored response ID, but the compact result does not create another stored
+Responses turn.
+
 The following standard behavior is available when the selected model supports
 it:
 
@@ -142,10 +174,10 @@ it:
 Unsupported semantics fail explicitly. Mesh does not currently implement
 background responses, automatic truncation, `max_tool_calls`, non-default
 service tiers, text verbosity, hosted tools, or encrypted reasoning
-continuation. `POST /v1/responses/compact` and the optional Responses WebSocket
-transport are not implemented. The existing `/v1/realtime` WebSocket is a
-transcription protocol and is not a Responses transport. Mesh does not create
-opaque compaction or encrypted reasoning state.
+continuation. The optional Responses WebSocket transport is not implemented.
+The existing `/v1/realtime` WebSocket is a transcription protocol and is not a
+Responses transport. Compaction items are the one opaque provider-state item
+described above; Mesh does not create encrypted reasoning state.
 
 ## Streaming
 

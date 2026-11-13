@@ -517,19 +517,7 @@ pub(crate) async fn try_handle_virtual_model(
             }
         };
     let status = response.status_code;
-    let headers: Vec<(&str, String)> = if continuation.is_some() {
-        // The committed path sent its own head first, so the plugin's
-        // result-derived headers can no longer reach the caller.
-        Vec::new()
-    } else {
-        response
-            .headers
-            .iter()
-            .take(32)
-            .filter(|(name, value)| virtual_response_header_allowed(name, value))
-            .map(|(name, value)| (name.as_str(), value.clone()))
-            .collect()
-    };
+    let headers = virtual_response_headers(&response, continuation.is_some());
     let write = if requests_stream && (200..300).contains(&status) {
         let header_already_sent = continuation.is_some();
         match response_adapter {
@@ -563,12 +551,24 @@ pub(crate) async fn try_handle_virtual_model(
             }
         }
     } else {
-        let body = translated_json_body(
+        let body = match translated_json_body(
             &response.body,
             response_adapter,
             status,
             responses_turn.as_deref(),
-        );
+        ) {
+            Ok(body) => body,
+            Err(error) => {
+                return send_terminal_transform_error(
+                    tcp_stream,
+                    error,
+                    &headers,
+                    route_observer,
+                    continuation.is_some(),
+                )
+                .await;
+            }
+        };
         proxy::send_json_with_status_and_headers_observed(
             tcp_stream,
             status,
@@ -583,13 +583,16 @@ pub(crate) async fn try_handle_virtual_model(
             "virtual_model_response_write_failed",
         ));
     }
-    let usage = parse_usage(&response.body);
-    let outcome = if !(200..300).contains(&status) {
+    VirtualModelDispatchResult::Responded(virtual_response_outcome(status, &response.body))
+}
+
+fn virtual_response_outcome(status: u16, body: &serde_json::Value) -> proxy::RouteDispatchOutcome {
+    if !(200..300).contains(&status) {
         proxy::RouteDispatchOutcome::FailedWithStatus {
             status_code: status,
             reason: "virtual_model_failed",
         }
-    } else if let Some(usage) = usage {
+    } else if let Some(usage) = parse_usage(body) {
         proxy::RouteDispatchOutcome::RespondedWithUsage {
             status_code: status,
             usage,
@@ -597,6 +600,58 @@ pub(crate) async fn try_handle_virtual_model(
         }
     } else {
         proxy::RouteDispatchOutcome::Responded(status)
+    }
+}
+
+fn virtual_response_headers(
+    response: &mesh_llm_plugin::VirtualModelResponse,
+    committed: bool,
+) -> Vec<(&str, String)> {
+    // A committed progress stream already sent its response head.
+    if committed {
+        return Vec::new();
+    }
+    response
+        .headers
+        .iter()
+        .take(32)
+        .filter(|(name, value)| virtual_response_header_allowed(name, value))
+        .map(|(name, value)| (name.as_str(), value.clone()))
+        .collect()
+}
+
+async fn send_terminal_transform_error(
+    tcp_stream: ClientStream,
+    error: skippy_inference_api::InferenceError,
+    headers: &[(&str, String)],
+    route_observer: OpenAiRouteObserver<'_>,
+    committed: bool,
+) -> VirtualModelDispatchResult {
+    if committed {
+        return VirtualModelDispatchResult::Responded(
+            proxy::RouteDispatchOutcome::FailedWithStatus {
+                status_code: 200,
+                reason: "responses_terminal_transform_failed_after_commit",
+            },
+        );
+    }
+    let status = error.status().as_u16();
+    let body = serde_json::to_value(error.body()).expect("InferenceError body should serialize");
+    let written = proxy::send_json_with_status_and_headers_observed(
+        tcp_stream,
+        status,
+        &body,
+        headers,
+        route_observer,
+    )
+    .await;
+    let outcome = if written.is_ok() {
+        proxy::RouteDispatchOutcome::FailedWithStatus {
+            status_code: status,
+            reason: "responses_terminal_transform_failed",
+        }
+    } else {
+        proxy::RouteDispatchOutcome::Dropped("virtual_model_response_write_failed")
     };
     VirtualModelDispatchResult::Responded(outcome)
 }
@@ -794,23 +849,23 @@ fn parse_usage(body: &serde_json::Value) -> Option<TokenUsage> {
 /// A failed turn that carries no top-level `error` object is still translated
 /// for the Anthropic adapter: the Messages envelope has no way to express a
 /// chat completion whose `finish_reason` is `error`.
-fn translated_json_body(
+pub(super) fn translated_json_body(
     body: &serde_json::Value,
     response_adapter: proxy::ResponseAdapter,
     status: u16,
     responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, skippy_inference_api::InferenceError> {
     match response_adapter {
         proxy::ResponseAdapter::OpenAiResponsesJson if (200..300).contains(&status) => {
             match responses_turn {
-                Some(turn) => turn.finish_chat_completion(body),
-                None => stream_adapters::chat_completion_to_responses_json(body),
+                Some(turn) => turn.try_finish_chat_completion(body),
+                None => Ok(stream_adapters::chat_completion_to_responses_json(body)),
             }
         }
-        proxy::ResponseAdapter::AnthropicMessagesJson => {
-            stream_adapters::chat_completion_to_messages_json(body, !(200..300).contains(&status))
-        }
-        _ => body.clone(),
+        proxy::ResponseAdapter::AnthropicMessagesJson => Ok(
+            stream_adapters::chat_completion_to_messages_json(body, !(200..300).contains(&status)),
+        ),
+        _ => Ok(body.clone()),
     }
 }
 

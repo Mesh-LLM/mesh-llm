@@ -68,7 +68,7 @@ pub(crate) async fn http_exchange_middleware(
     }
     if !matches!(
         request.uri().path(),
-        "/v1/chat/completions" | "/v1/completions" | "/v1/responses"
+        "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/responses/compact"
     ) {
         return next.run(request).await;
     }

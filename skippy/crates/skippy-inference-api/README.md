@@ -77,6 +77,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `POST /v1/chat/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/responses` | HTTP/SSE subset | Uses the shared Responses state machine described below; unsupported capabilities fail explicitly. |
+| `POST /v1/responses/compact` | Supported subset | Produces process-local, model-bound encrypted compaction items for a later Responses request. |
 | `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared generation backend and returns Anthropic JSON or SSE. |
 | `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
 | `POST /v1/systemone` (canonical; legacy alias `POST /systemone`) | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
@@ -123,11 +124,27 @@ store is bounded, in-memory, and caller-scoped. Mesh creates and owns that store
 at localhost ingress so worker selection and retries cannot lose the
 conversation.
 
+`POST /v1/responses/compact` runs a non-streaming summary pass over explicit
+input and, optionally, the transcript resolved from `previous_response_id`.
+Its `response.compaction` output retains user messages and seals the summary
+plus unresolved typed function calls in authenticated `encrypted_content`.
+Restoration expands the summary and then those pending calls before any newly
+appended `function_call_output`; calls already completed in a parallel group
+are omitted.
+
+The encryption key exists only in the ingress process. An item is accepted
+only at that same process with the exact model ID; restart, another ingress,
+model changes, tampering, malformed data, and size violations fail closed.
+Compaction resources are not stored Responses turns and do not provide a
+continuation `previous_response_id`: clients continue by resending the returned
+`output` items, not by referencing the compaction resource ID. A compact
+request may still consume a previously stored response ID as source history.
+
 This is not a claim of full Open Responses conformance. Background execution,
 automatic truncation, `max_tool_calls`, hosted tools, encrypted reasoning,
-non-default service tiers, verbosity, compaction, and the optional Responses
-WebSocket transport are unsupported and are either rejected or not routed.
-The adapter never fabricates opaque compaction state.
+non-default service tiers, verbosity, and the optional Responses WebSocket
+transport are unsupported and are either rejected or not routed. Compaction is
+limited to the process-local contract above; it is not portable provider state.
 
 ## Shape
 
@@ -206,6 +223,7 @@ chain remains backend-owned.
 | `/v1/chat/completions` | Parse common and advanced fields, stream/non-stream envelopes | Tokenization, sampling, stop handling, usage, feature execution | Supported with backend feature guards |
 | `/v1/completions` | Prompt parsing and response envelopes | Token prompts, sampling, stop handling, usage | Supported with backend feature guards |
 | `/v1/responses` | Own the supported HTTP/SSE lifecycle and continuation state | Execute the resulting chat/completion request | Partial; explicit gaps above |
+| `/v1/responses/compact` | Resolve history, validate terminal summary/usage, and seal process-local state | Produce one complete summary with usage | Supported subset; non-streaming and ingress-bound |
 | `/v1/embeddings` | Parse OpenAI input/encoding shapes and serialize vectors | Tokenize or accept token IDs, pool, normalize, and report usage | Supported for compatible local full models |
 | `/v1/rerank` | Parse query/documents and serialize ranked results | Execute classifier scoring and report usage | Supported for compatible local full models |
 | `/v1/audio/*` | Parse JSON or bounded multipart bodies; return JSON, text, or binary media | Execute TTS or projector-backed speech recognition | Supported for compatible local full models |
