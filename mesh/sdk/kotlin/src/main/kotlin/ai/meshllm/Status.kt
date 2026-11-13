@@ -1,6 +1,7 @@
 package ai.meshllm
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
@@ -17,6 +18,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+
+// An elastic IO view leaves close capacity available even when every reader worker blocks.
+@OptIn(ExperimentalCoroutinesApi::class)
+private val statusCloseDispatcher = Dispatchers.IO.limitedParallelism(1)
 
 sealed interface NodeLifecycle {
     data object Loading : NodeLifecycle
@@ -80,7 +85,7 @@ class StatusEvents internal constructor(
         val readerScope = CoroutineScope(Dispatchers.IO)
         continuation.invokeOnCancellation {
             // Closing must run independently of the synchronous FFI reader's cancellation join.
-            CoroutineScope(Dispatchers.IO).launch {
+            CoroutineScope(statusCloseDispatcher).launch {
                 try { closeNative() } finally { readerScope.cancel() }
             }
         }
@@ -90,7 +95,7 @@ class StatusEvents internal constructor(
             } finally { readerScope.cancel() }
         }
     }
-    suspend fun close(): Unit = withContext(Dispatchers.IO + NonCancellable) { closeNative() }
+    suspend fun close(): Unit = withContext(statusCloseDispatcher + NonCancellable) { closeNative() }
 
     fun events(): Flow<NativeNodeStatus> = callbackFlow {
         // A blocking native read needs close to run outside the collector's cancellation join.
@@ -102,7 +107,7 @@ class StatusEvents internal constructor(
             } catch (error: Throwable) { channel.close(error) }
         }
         awaitClose {
-            nativeScope.launch {
+            CoroutineScope(statusCloseDispatcher).launch {
                 try { closeNative() } finally { nativeScope.cancel() }
             }
         }

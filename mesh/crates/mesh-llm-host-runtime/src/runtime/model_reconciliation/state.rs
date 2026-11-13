@@ -315,6 +315,17 @@ impl ModelTargetReconciliationState {
         }
     }
 
+    pub(crate) fn clear_intent_error(&mut self, intent_id: &str) {
+        if let Some(intent) = self
+            .intent_history
+            .iter_mut()
+            .find(|intent| intent.intent_id == intent_id)
+        {
+            intent.last_error = None;
+            self.publish_history();
+        }
+    }
+
     pub(crate) fn set_effective_intent_error(
         &mut self,
         model_ref: &str,
@@ -660,6 +671,37 @@ mod desired_intent_tests {
                 .as_deref(),
             Some("unload failed")
         );
+    }
+
+    #[test]
+    fn unload_recovery_clears_absent_and_draining_intent_errors() {
+        for draining in [false, true] {
+            let collector = crate::runtime_data::RuntimeDataCollector::new();
+            let history = Arc::new(Mutex::new(Vec::new()));
+            let mut state = ModelTargetReconciliationState::with_shared_history(
+                history.clone(),
+                collector.clone(),
+            );
+            let intent =
+                state.suppress_desired(MODEL, "", None, IntentSource::OwnerDrain, draining);
+            state.set_intent_error(&intent, "unload failed");
+            assert_eq!(
+                collector
+                    .runtime_status_snapshot()
+                    .model_intent_error
+                    .as_deref(),
+                Some("unload failed")
+            );
+            state.clear_intent_error(&intent);
+            assert_eq!(collector.runtime_status_snapshot().model_intent_error, None);
+            assert!(
+                history
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|intent| intent.last_error.is_none())
+            );
+        }
     }
 
     #[test]

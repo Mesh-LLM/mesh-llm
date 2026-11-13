@@ -733,6 +733,8 @@ async fn run_auto_handle_unload_intent(
     );
     match &result {
         Ok(response) => {
+            ctx.model_target_reconciliation_state
+                .clear_intent_error(&intent_id);
             if matches!(source, IntentSource::OwnerDrain) {
                 ctx.model_target_reconciliation_state
                     .transition_drain_to_absent(
