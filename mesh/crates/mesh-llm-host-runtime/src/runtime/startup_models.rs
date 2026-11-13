@@ -1195,8 +1195,14 @@ async fn resolve_startup_models_with_package_discovery(
         let declared_ref = if let Some(declared_ref) = &spec.declared_ref {
             declared_ref.clone()
         } else if spec.config_model_id.is_none()
+            && direct_local_gguf
             && let Some(identity) = preindexed_split_package.as_ref()
         {
+            // Only a bare local GGUF path is content-addressed: it has no
+            // resolvable identity of its own. A remote ref that resolved to a
+            // GGUF in the cache keeps the requested identity, so the model is
+            // known by the same name on every surface (catalog, gossip,
+            // runtime registry, embedded server).
             direct_gguf_model_id(identity)
         } else {
             find_remote_catalog_model_exact_blocking(requested_ref.clone())
