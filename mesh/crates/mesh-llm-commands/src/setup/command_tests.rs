@@ -59,6 +59,10 @@ impl SetupActions for FakeActions {
         ready(Ok(()))
     }
 
+    fn check_installed_plugins(&mut self) -> Self::PluginInstallFuture<'_> {
+        ready(Ok(()))
+    }
+
     fn handle_plugin_install<'a>(
         &'a mut self,
         plan: SetupPluginPlan,

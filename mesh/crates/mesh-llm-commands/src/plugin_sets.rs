@@ -8,30 +8,18 @@
 
 use std::io::{IsTerminal, Write};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mesh_llm_plugin_manager::{
     MemberAvailability, PluginCatalog, PluginInstallOptions, PluginProgressEvent,
     PluginProgressReporter, SetInstallResult,
 };
-use reqwest::Client;
 
 use crate::plugin::CliPluginProgress;
 
 /// The catalog set setup and update offer by name.
 pub const RECOMMENDED_SET: &str = "recommended";
 
-/// One catalog snapshot for one operation: the same fetched copy backs set
-/// resolution and installation so membership cannot shift mid-operation.
-/// The request carries a timeout so a stalled catalog server cannot hang a
-/// set command, setup's optional phase, or an upgrade.
-pub async fn fetch_catalog(options: &PluginInstallOptions) -> Result<PluginCatalog> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("build plugin catalog client")?;
-    let sets_url = mesh_llm_plugin_manager::sets_url_for(&options.catalog_url);
-    PluginCatalog::fetch_with_sets(&client, &options.catalog_url, sets_url.as_deref()).await
-}
+pub use mesh_llm_plugin_manager::upgrade_gate::fetch_catalog;
 
 /// An operator is attended only on an interactive terminal without
 /// `--no-interactive`; automation and missing input must never be prompted.

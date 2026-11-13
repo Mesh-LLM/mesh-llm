@@ -70,6 +70,15 @@ Supported flags:
 - `--verbose`: print detailed setup paths, commands, log locations, and
   status. Default setup output is concise and formatted for interactive use.
 
+### Installed-plugin check
+
+Bootstrap replaces the host before setup runs, so setup owes installed plugins
+the same compatibility check and repairs `mesh-llm update` runs, against the
+host now installed. It runs after the core steps and before the optional
+plugin phase, on every setup, whatever the plugin flags. Because the host is
+already replaced, a refusal warns and shows the retry command
+(`mesh-llm update`) and never fails core setup.
+
 ### Optional plugin set offer
 
 After the core steps succeed, and only when prompts are visible, setup offers

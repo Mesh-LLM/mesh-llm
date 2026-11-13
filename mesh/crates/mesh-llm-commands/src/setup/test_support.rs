@@ -37,18 +37,24 @@ impl SetupPrompter for FakePrompter {
 #[derive(Default)]
 pub(super) struct RecordingActions {
     pub(super) steps: Vec<SetupStep>,
+    /// Every setup action in call order, to pin the plugin check's position.
+    pub(super) order: Vec<&'static str>,
     pub(super) plugin_plans: Vec<SetupPluginPlan>,
     pub(super) github: Vec<SetupGitHubStarPlan>,
     failed_step: Option<SetupStep>,
+    /// Make `check_installed_plugins` return an error.
+    pub(super) plugin_check_fails: bool,
 }
 
 impl RecordingActions {
     pub(super) fn failing_on(step: SetupStep) -> Self {
         Self {
             steps: Vec::new(),
+            order: Vec::new(),
             plugin_plans: Vec::new(),
             github: Vec::new(),
             failed_step: Some(step),
+            plugin_check_fails: false,
         }
     }
 }
@@ -70,8 +76,17 @@ impl SetupActions for RecordingActions {
 
     fn run_step(&mut self, step: SetupStep) -> Self::StepFuture<'_> {
         self.steps.push(step);
+        self.order.push("step");
         if self.failed_step == Some(step) {
             return ready(Err(anyhow!("simulated step failure for {step:?}")));
+        }
+        ready(Ok(()))
+    }
+
+    fn check_installed_plugins(&mut self) -> Self::PluginInstallFuture<'_> {
+        self.order.push("plugin-check");
+        if self.plugin_check_fails {
+            return ready(Err(anyhow!("simulated plugin check error")));
         }
         ready(Ok(()))
     }
@@ -81,6 +96,7 @@ impl SetupActions for RecordingActions {
         plan: SetupPluginPlan,
         _prompter: &'a mut dyn SetupPrompter,
     ) -> Self::PluginInstallFuture<'a> {
+        self.order.push("plugin-install");
         self.plugin_plans.push(plan);
         ready(Ok(()))
     }
