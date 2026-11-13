@@ -183,6 +183,7 @@ pub(super) fn split_test_peer(
         local_gguf_content_id_supported: stage_protocol_generation_supported,
         decode_batch_policy_supported: stage_protocol_generation_supported,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,

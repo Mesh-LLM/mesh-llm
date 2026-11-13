@@ -15,6 +15,9 @@ pub const NODE_PROTOCOL_GENERATION: u32 = 1;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const PLUGIN_MESH_SUBPROTOCOL: &str = "plugin-mesh";
 pub const PLUGIN_ORIGIN_SIGNATURE_FEATURE: &str = "plugin-origin-signature";
+/// Advertised by nodes that keep a request marked private inside its
+/// trust circle (`x-mesh-scope`); private requests go to no other peer.
+pub const PRIVATE_ROUTING_SUBPROTOCOL: &str = "private-routing";
 
 pub const STREAM_GOSSIP: u8 = 0x01;
 pub const STREAM_TUNNEL: u8 = 0x02;

@@ -429,3 +429,55 @@ fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
     );
     assert!(!PhaseResult::default().is_candidate_deny());
 }
+
+/// A private exchange keeps its observing plugin's own inference private
+/// between callbacks, while it holds response bytes, and through
+/// `exchange_finished`; then releases it. Cancellation does the same.
+#[tokio::test]
+async fn a_private_exchange_keeps_its_observers_private_until_its_terminal_callback() {
+    use crate::plugin::private_invocations::NestedScope;
+    let (manager, mut receiver) = observer_manager(false).await;
+    let scope = crate::mesh::OwnerScope::new("me");
+    let private = Some(NestedScope::Owners(scope.clone()));
+    let event = |id: &str| {
+        request_event(
+            id.into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        )
+    };
+    let (mut session, _) = crate::mesh::with_owner_scope(
+        Some(scope.clone()),
+        ExchangeSession::begin(&manager, event("finished")),
+    )
+    .await;
+    // The request callback has replied; the response is still to come.
+    assert_eq!(manager.private_nested_scope("delayed-observer"), private);
+    let observer = session.observer();
+    assert!(observer.try_chunk(0, b"response"));
+    observer.finish(commit_wire_bytes(b"response"));
+    session.finish("completed").await;
+    assert_eq!(receiver.recv().await.unwrap(), b"response");
+    assert_eq!(manager.private_nested_scope("delayed-observer"), None);
+
+    let (session, _) = crate::mesh::with_owner_scope(
+        Some(scope),
+        ExchangeSession::begin(&manager, event("cancelled")),
+    )
+    .await;
+    drop(session);
+    assert_eq!(manager.private_nested_scope("delayed-observer"), private);
+    let released = async {
+        while manager.private_nested_scope("delayed-observer").is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), released)
+        .await
+        .expect("a cancelled exchange releases its observers after its terminal callback");
+    manager.shutdown().await;
+}

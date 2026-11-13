@@ -111,6 +111,7 @@ pub(super) async fn relay(
             targets
                 .targets
                 .extend(service.targets_for(&requested).targets);
+            targets = node.targets_in_current_owner_scope(targets).await;
         }
     }
     let _residency = residency;

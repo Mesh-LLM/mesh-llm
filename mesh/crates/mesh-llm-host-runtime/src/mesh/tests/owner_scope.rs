@@ -21,6 +21,7 @@ fn owned_host(seed: u8, owner: &str, status: OwnershipStatus) -> PeerInfo {
         expires_at_unix_ms: Some(u64::MAX),
         ..OwnershipSummary::default()
     };
+    peer.private_routing_supported = true;
     peer
 }
 
@@ -55,6 +56,26 @@ async fn a_private_request_only_routes_to_peers_signed_by_the_same_owner() {
     let served_by_stranger =
         with_owner_scope(Some(OwnerScope::new("nobody")), node.models_being_served()).await;
     assert!(!served_by_stranger.iter().any(|name| name == MODEL));
+}
+
+/// A node too old to know the private marker would serve a private request
+/// as public, so it gets none even when it is mine.
+#[tokio::test]
+async fn an_owned_peer_without_private_routing_gets_no_private_request() {
+    let (node, mine, _theirs, _forged) = node_with_mine_and_theirs().await;
+    let mut old = owned_host(64, "me", OwnershipStatus::Verified);
+    old.private_routing_supported = false;
+    let old_id = old.id;
+    node.insert_test_peer_without_liveness(old).await;
+    let scope = Some(OwnerScope::new("me"));
+    let private = with_owner_scope(scope.clone(), node.hosts_for_model(MODEL)).await;
+    assert_eq!(private, vec![mine]);
+    assert!(node.hosts_for_model(MODEL).await.contains(&old_id));
+    assert!(
+        with_owner_scope(scope, node.open_http_tunnel(old_id))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

@@ -595,13 +595,31 @@ async fn resolve_remote_mesh_route(
     target: Option<iroh::EndpointId>,
     excluded: &[iroh::EndpointId],
 ) -> RemoteMeshRoute {
-    let remote_hosts: Vec<iroh::EndpointId> = ctx
+    let mut remote_hosts: Vec<iroh::EndpointId> = ctx
         .node
         .hosts_for_model(model_name)
         .await
         .into_iter()
         .filter(|id| !excluded.contains(id))
         .collect();
+    // A private request: these hosts were found after the ingress snapshot,
+    // so they get its split check too.
+    if mesh::current_owner_scope().is_some() {
+        let mut found = election::ModelTargets::default();
+        found.targets.insert(
+            model_name.to_string(),
+            remote_hosts
+                .iter()
+                .map(|id| election::InferenceTarget::Remote(*id))
+                .collect(),
+        );
+        let kept = ctx
+            .node
+            .targets_in_current_owner_scope(found)
+            .await
+            .candidates(model_name);
+        remote_hosts.retain(|id| kept.contains(&election::InferenceTarget::Remote(*id)));
+    }
 
     if let Some(target) = target {
         return if remote_hosts.contains(&target) {

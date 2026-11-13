@@ -560,6 +560,7 @@ pub(crate) mod tests {
             local_gguf_content_id_supported: false,
             decode_batch_policy_supported: false,
             plugin_origin_signature_supported: false,
+            private_routing_supported: false,
             persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
             cache_affinity: None,
@@ -702,6 +703,7 @@ pub(crate) mod tests {
             local_gguf_content_id_supported: false,
             decode_batch_policy_supported: false,
             plugin_origin_signature_supported: false,
+            private_routing_supported: false,
             persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
             cache_affinity: None,
@@ -847,6 +849,7 @@ pub(crate) mod tests {
             local_gguf_content_id_supported: false,
             decode_batch_policy_supported: false,
             plugin_origin_signature_supported: false,
+            private_routing_supported: false,
             persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),

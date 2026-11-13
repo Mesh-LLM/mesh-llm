@@ -256,9 +256,81 @@ pub(crate) fn owner_limit_header_line(scope: &OwnerScope) -> String {
     )
 }
 
+/// A private request on its way to this node's own local server. That
+/// server is reached over loopback, outside this task's scope, so: its peer
+/// consultation hooks are turned off (they would pick peers unscoped), and
+/// the circle is named for its exchange hooks ([`local_server_scope`]).
+pub(crate) fn mark_private_for_local_server(raw: &[u8], scope: &OwnerScope) -> Vec<u8> {
+    let mut raw = raw.to_vec();
+    // Hooks are off unless the body turns them on; a body that names them
+    // gets both flags set off. Others are left as they are.
+    if raw.windows(b"_hooks".len()).any(|bytes| bytes == b"_hooks") {
+        super::request_parse::inject_skippy_hooks_flag(&mut raw, false);
+    }
+    let request_line_end = raw
+        .windows(2)
+        .position(|pair| pair == b"\r\n")
+        .map_or(0, |at| at + 2);
+    let marker = private_scope_header_line() + &owner_limit_header_line(scope);
+    raw.splice(request_line_end..request_line_end, marker.into_bytes());
+    raw
+}
+
+/// The scope a request reached this node's local server in, from
+/// [`mark_private_for_local_server`]. Any scope header makes it private,
+/// limited to the owners every owner limit names; none of them, no owners.
+pub(crate) fn local_server_scope(headers: &axum::http::HeaderMap) -> Option<OwnerScope> {
+    headers.get(MESH_SCOPE_HEADER)?;
+    let limits = headers
+        .get_all(MESH_SCOPE_OWNERS_HEADER)
+        .iter()
+        .map(|value| {
+            OwnerScope::of(
+                value
+                    .to_str()
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|owner| !owner.is_empty())
+                    .map(str::to_string),
+            )
+        });
+    Some(
+        limits
+            .reduce(|scope, limit| scope.intersect(&limit))
+            .unwrap_or_else(|| OwnerScope::of(Vec::new())),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The loopback hop to this node's own server: peer consultation off,
+    /// the circle named, and a client's own limit can only narrow it.
+    #[test]
+    fn a_private_request_reaches_the_local_server_marked_and_without_hooks() {
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nx-mesh-scope-owners: me,friend,evil\r\nContent-Length: 39\r\n\r\n{\"model\":\"m\",\"skippy_hooks\":true,\"x\":1}";
+        let scope = OwnerScope::of(["me".to_string(), "friend".to_string()]);
+        let marked = mark_private_for_local_server(raw, &scope);
+        let text = String::from_utf8_lossy(&marked);
+        assert!(text.contains("\"skippy_hooks\":false"), "{text}");
+        assert!(text.contains("\"mesh_hooks\":false"), "{text}");
+        let head_end = text.find("\r\n\r\n").unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        for line in text[..head_end].lines().skip(1) {
+            let (name, value) = line.split_once(':').unwrap();
+            headers.append(
+                axum::http::HeaderName::from_bytes(name.trim().as_bytes()).unwrap(),
+                value.trim().parse().unwrap(),
+            );
+        }
+        assert_eq!(local_server_scope(&headers), Some(scope));
+        assert_eq!(local_server_scope(&axum::http::HeaderMap::new()), None);
+        let mut bare = axum::http::HeaderMap::new();
+        bare.insert(MESH_SCOPE_HEADER, "private".parse().unwrap());
+        assert_eq!(local_server_scope(&bare), Some(OwnerScope::of(Vec::new())));
+    }
 
     #[test]
     fn the_private_base_url_maps_onto_v1() {

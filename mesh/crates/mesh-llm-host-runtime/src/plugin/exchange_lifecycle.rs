@@ -680,6 +680,12 @@ pub(crate) struct ExchangeSession {
     incomplete: bool,
     finished: bool,
     response_delivery: BTreeMap<String, bool>,
+    /// A private exchange's owner scope, restored for its terminal callback.
+    scope: Option<crate::mesh::OwnerScope>,
+    /// For a private exchange, keeps every observing plugin's own inference
+    /// private from admission to its terminal callback: between callbacks it
+    /// still holds request and response content.
+    private_observers: Vec<super::private_invocations::PrivateInvocationGuard>,
 }
 
 impl ExchangeSession {
@@ -710,6 +716,17 @@ impl ExchangeSession {
                 .unwrap_or(1),
         );
         let deadline = Instant::now() + budget;
+        let scope = crate::mesh::current_owner_scope();
+        let private_observers = match &scope {
+            Some(scope) => manager
+                .inner
+                .plugins
+                .keys()
+                .filter(|name| manager.effective_exchange_grant(name).is_some())
+                .map(|name| manager.begin_private_invocation(name, Some(scope.clone())))
+                .collect(),
+            None => Vec::new(),
+        };
         let mut result = manager
             .exchange_permissions_preflight(event["endpoint"].as_str().unwrap_or_default())
             .await;
@@ -765,6 +782,8 @@ impl ExchangeSession {
                 incomplete: result.incomplete,
                 finished: false,
                 response_delivery: BTreeMap::new(),
+                scope,
+                private_observers,
             },
             result,
         )
@@ -791,15 +810,11 @@ impl ExchangeSession {
             .lock()
             .unwrap()
             .remove(self.observation_id());
-        let mut owner = self.terminal_owner();
+        let owner = self.terminal_owner();
         let outcome = outcome.to_owned();
-        exchange_terminal_completion::complete(async move {
-            let terminal = owner.final_terminal_event(&outcome).await;
-            owner.manager.exchange_phase(terminal).await;
-        })
-        .await;
+        exchange_terminal_completion::complete(owner.run_terminal(outcome)).await;
     }
-    fn terminal_owner(&self) -> Self {
+    fn terminal_owner(&mut self) -> Self {
         Self {
             started: self.started,
             manager: self.manager.clone(),
@@ -808,6 +823,21 @@ impl ExchangeSession {
             incomplete: self.incomplete,
             finished: true,
             response_delivery: BTreeMap::new(),
+            scope: self.scope.clone(),
+            private_observers: std::mem::take(&mut self.private_observers),
+        }
+    }
+    /// Send `exchange_finished` in the exchange's own scope, then release
+    /// its observers' private binding.
+    async fn run_terminal(mut self, outcome: String) {
+        let scope = self.scope.clone();
+        crate::mesh::with_owner_scope(scope, async {
+            let terminal = self.final_terminal_event(&outcome).await;
+            self.manager.exchange_phase(terminal).await;
+        })
+        .await;
+        for observer in std::mem::take(&mut self.private_observers) {
+            observer.finish();
         }
     }
     async fn final_terminal_event(&mut self, outcome: &str) -> Value {
@@ -892,12 +922,10 @@ impl Drop for ExchangeSession {
             .lock()
             .unwrap()
             .remove(self.observation_id());
-        let mut owner = self.terminal_owner();
+        let owner = self.terminal_owner();
+        // Without a runtime the guards drop unfinished and linger.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let terminal = owner.final_terminal_event("client_cancelled").await;
-                owner.manager.exchange_phase(terminal).await;
-            });
+            runtime.spawn(owner.run_terminal("client_cancelled".to_owned()));
         }
     }
 }

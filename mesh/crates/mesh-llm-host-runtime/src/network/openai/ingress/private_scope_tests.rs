@@ -105,6 +105,7 @@ fn owned_peer(seed: u32, model: &str, owner: &str) -> mesh::PeerInfo {
         expires_at_unix_ms: Some(u64::MAX),
         ..Default::default()
     };
+    peer.private_routing_supported = true;
     peer
 }
 

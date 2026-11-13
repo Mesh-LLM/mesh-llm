@@ -170,14 +170,15 @@ beyond what the mesh's QUIC transport already does.
 
 ## Mixed versions
 
-Only the entry node needs this release for the guarantees above, with one
-exception. A node of yours running an older release ignores the
-`x-mesh-scope: private` marker on a request forwarded to it. If that node
-serves the model through a split whose stages include nodes outside your
-circle, the request's activations reach those nodes. When the entry node
-itself takes part in that split, it knows its stages and does not send the
-request there; otherwise it cannot tell. Upgrade every node in your circle
-before relying on private routing with splits.
+A node advertises private routing in its gossip (the `private-routing`
+subprotocol). A private request goes only to nodes that advertise it, even
+your own: a node on an older release would ignore the private marker and
+could serve the request from a split with a stranger's stage. Until you
+upgrade them, your older nodes simply don't serve private requests.
+
+On the node itself, requests marked private turn off peer consultation
+(Mesh hooks for images, uncertainty and drift), which would pick peers
+outside the circle, and run its exchange hooks in the request's circle.
 
 ## Not yet
 
@@ -186,3 +187,4 @@ before relying on private routing with splits.
 - A separate prompt-cache namespace, console and launcher (`--private`)
   support.
 - Per-turn private scope for MoA nested requests.
+- Peer consultation for private requests.

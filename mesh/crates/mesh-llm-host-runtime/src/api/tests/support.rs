@@ -677,6 +677,7 @@ fn make_test_peer(
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],

@@ -94,6 +94,14 @@ impl OwnerScope {
                 .expires_at_unix_ms
                 .is_some_and(|expires| expires > now_unix_ms)
     }
+
+    /// Whether a private request may go to `peer`: it is in the scope and
+    /// advertises private routing. A node too old to know the private
+    /// marker would serve the request as public (a split, a consultation),
+    /// so it gets none, owned or not.
+    pub(crate) fn admits_peer(&self, peer: &super::PeerInfo, now_unix_ms: u64) -> bool {
+        peer.private_routing_supported && self.admits(&peer.owner_summary, now_unix_ms)
+    }
 }
 
 /// Run `future` with `scope` as the current owner scope; `None` runs it
@@ -132,7 +140,7 @@ impl super::Node {
         state
             .peers
             .get(&peer)
-            .is_some_and(|info| scope.admits(&info.owner_summary, now_unix_ms()))
+            .is_some_and(|info| scope.admits_peer(info, now_unix_ms()))
     }
 
     pub(crate) async fn ensure_peer_in_current_owner_scope(
@@ -162,10 +170,7 @@ impl super::Node {
         let me = self.endpoint.id();
         // A narrowed scope (a plugin's nested call) may leave out this
         // node's own owner; then this node is out of scope too.
-        let me_in_scope = self
-            .local_scope_owner_id()
-            .await
-            .is_some_and(|owner| scope.owner_ids.contains(&owner));
+        let me_in_scope = self.local_in_owner_scope(scope).await;
         // Splits with a stage out of scope, by model and the node that runs
         // stage 0 (the one a target names). A split this node only takes part
         // in, coordinated elsewhere, leaves this node's own target alone. A
@@ -214,9 +219,28 @@ impl super::Node {
         state
             .peers
             .values()
-            .filter(|peer| scope.admits(&peer.owner_summary, now))
+            .filter(|peer| scope.admits_peer(peer, now))
             .map(|peer| peer.id)
             .collect()
+    }
+
+    /// Whether this node itself is in `scope`.
+    pub(crate) async fn local_in_owner_scope(&self, scope: &OwnerScope) -> bool {
+        self.local_scope_owner_id()
+            .await
+            .is_some_and(|owner| scope.owner_ids.contains(&owner))
+    }
+
+    /// [`Self::targets_in_owner_scope`] for the current request, if it is
+    /// private: for targets a route builds after the ingress snapshot.
+    pub(crate) async fn targets_in_current_owner_scope(
+        &self,
+        targets: crate::inference::election::ModelTargets,
+    ) -> crate::inference::election::ModelTargets {
+        match current_owner_scope() {
+            Some(scope) => self.targets_in_owner_scope(&scope, &targets).await,
+            None => targets,
+        }
     }
 
     /// This node's owner, if its own certificate verifies and has not

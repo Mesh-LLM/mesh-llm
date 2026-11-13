@@ -13,7 +13,7 @@ pub use mesh_llm_membership::peer_state::{
 fn retain_owner_scoped(peers: &mut Vec<PeerInfo>) {
     if let Some(scope) = super::owner_scope::current_owner_scope() {
         let now = super::owner_scope::now_unix_ms();
-        peers.retain(|peer| scope.admits(&peer.owner_summary, now));
+        peers.retain(|peer| scope.admits_peer(peer, now));
     }
 }
 
