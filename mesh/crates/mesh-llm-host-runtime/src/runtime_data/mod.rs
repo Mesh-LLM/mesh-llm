@@ -40,7 +40,8 @@ pub(crate) use self::processes::{
 };
 pub(crate) use self::producers::{RuntimeDataProducer, RuntimeDataSource};
 pub(crate) use self::snapshots::{
-    HardwareViewInput, ModelViewInput, PluginDataKey, PluginEndpointKey, StatusViewInput,
+    HardwareViewInput, ModelViewInput, PluginDataKey, PluginEndpointKey, RuntimeStatusSnapshot,
+    StatusViewInput,
 };
 pub(crate) use self::subscriptions::RuntimeDataDirty;
 
@@ -1583,6 +1584,9 @@ pub(crate) mod tests {
             plugin_data_key: None,
             plugin_endpoint_key: None,
         });
+
+        producer.publish_runtime_instance_registered("model-a", "runtime-1");
+        producer.publish_runtime_instance_registered("model-a", "runtime-2");
 
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
             status: RuntimeLlamaEndpointStatus::Ready,

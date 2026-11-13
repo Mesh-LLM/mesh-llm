@@ -1,7 +1,7 @@
 package ai.meshllm
 
 /** Complete local capacity for one exact serving ID. This does not reserve lanes. */
-data class RuntimeCapacity(
+data class LaneCapacity(
     val executionLanes: ULong,
     /** Smallest lane context, safe for any lane. */
     val contextTokensPerLane: ULong,

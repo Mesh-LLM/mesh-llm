@@ -169,8 +169,8 @@ pub(super) async fn register_runtime_instance(
             },
         );
         let next_context = runtime_registry_model_context(instances);
-        node.runtime_data_collector()
-            .register_runtime_instance(model_name, instance_id);
+        node.runtime_data_producer
+            .publish_runtime_instance_registered(model_name, instance_id);
         (
             was_empty,
             previous_context != next_context,
@@ -213,8 +213,8 @@ pub(super) async fn unregister_runtime_instance(
         let previous_context = runtime_registry_model_context(instances);
         let removed = instances.remove(instance_id).is_some();
         if removed {
-            node.runtime_data_collector()
-                .unregister_runtime_instance(instance_id);
+            node.runtime_data_producer
+                .publish_runtime_instance_unregistered(instance_id);
         }
         let next_context = runtime_registry_model_context(instances);
         let next_efforts = model_thinking_efforts(instances);

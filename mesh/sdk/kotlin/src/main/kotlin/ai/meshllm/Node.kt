@@ -121,9 +121,9 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
     suspend fun stop(): Unit = withContext(Dispatchers.IO) { handle.stop() }
 
     /** Latest local observation, including busy lanes; null means unavailable or incomplete. */
-    suspend fun runtimeCapacity(model: String): RuntimeCapacity? = withContext(Dispatchers.IO) {
+    suspend fun runtimeCapacity(model: String): LaneCapacity? = withContext(Dispatchers.IO) {
         handle.runtimeCapacity(model)?.let {
-            RuntimeCapacity(it.executionLanes, it.contextTokensPerLane, it.contextPoolTokens, it.capturedAtUnixMs)
+            LaneCapacity(it.executionLanes, it.contextTokensPerLane, it.contextPoolTokens, it.capturedAtUnixMs)
         }
     }
 

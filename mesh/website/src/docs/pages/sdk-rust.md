@@ -50,9 +50,9 @@ have been removed from this SDK. Migrate callers to the embedded `MeshNode`.
 Rust hosts can read their embedded runtime's published capacity without HTTP:
 
 ```rust,no_run
-use mesh_llm_sdk::{MeshNode, capacity::RuntimeCapacity};
+use mesh_llm_sdk::{MeshNode, capacity::LaneCapacity};
 
-fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<RuntimeCapacity>> {
+fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<LaneCapacity>> {
     node.runtime_capacity(model)
 }
 ```

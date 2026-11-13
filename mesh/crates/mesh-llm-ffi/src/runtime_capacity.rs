@@ -1,7 +1,7 @@
 //! Lossless local runtime observations for UniFFI SDKs.
 
 use crate::{FfiError, MeshNodeHandle};
-use mesh_llm_sdk::capacity::RuntimeCapacity;
+use mesh_llm_sdk::capacity::LaneCapacity;
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct RuntimeCapacityNative {
@@ -11,17 +11,14 @@ pub struct RuntimeCapacityNative {
     pub captured_at_unix_ms: u64,
 }
 
-impl TryFrom<RuntimeCapacity> for RuntimeCapacityNative {
-    type Error = FfiError;
-
-    fn try_from(value: RuntimeCapacity) -> Result<Self, Self::Error> {
-        Ok(Self {
-            execution_lanes: u64::try_from(value.execution_lanes)
-                .map_err(|error| FfiError::HostUnavailable(error.to_string()))?,
+impl From<LaneCapacity> for RuntimeCapacityNative {
+    fn from(value: LaneCapacity) -> Self {
+        Self {
+            execution_lanes: value.execution_lanes,
             context_tokens_per_lane: value.context_tokens_per_lane,
             context_pool_tokens: value.context_pool_tokens,
             captured_at_unix_ms: value.captured_at_unix_ms,
-        })
+        }
     }
 }
 
@@ -39,10 +36,10 @@ impl MeshNodeHandle {
         let node = node
             .as_ref()
             .ok_or_else(|| FfiError::HostUnavailable("node is not running".into()))?;
-        node.runtime_capacity(&model)
+        Ok(node
+            .runtime_capacity(&model)
             .map_err(|error| FfiError::HostUnavailable(error.to_string()))?
-            .map(RuntimeCapacityNative::try_from)
-            .transpose()
+            .map(RuntimeCapacityNative::from))
     }
 }
 
@@ -52,13 +49,12 @@ mod tests {
 
     #[test]
     fn bridge_preserves_unsigned_capacity_and_refuses_stopped_nodes() {
-        let capacity = RuntimeCapacityNative::try_from(RuntimeCapacity {
+        let capacity = RuntimeCapacityNative::from(LaneCapacity {
             execution_lanes: 2,
             context_tokens_per_lane: u64::MAX / 2,
             context_pool_tokens: u64::MAX - 1,
             captured_at_unix_ms: u64::MAX,
-        })
-        .unwrap();
+        });
         assert_eq!(capacity.execution_lanes, 2);
         assert_eq!(capacity.context_tokens_per_lane, u64::MAX / 2);
         assert_eq!(capacity.context_pool_tokens, u64::MAX - 1);

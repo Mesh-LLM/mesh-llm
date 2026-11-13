@@ -1,5 +1,5 @@
 /// Complete local capacity for one exact serving ID. This does not reserve lanes.
-public struct RuntimeCapacity: Sendable, Equatable {
+public struct LaneCapacity: Sendable, Equatable {
     public let executionLanes: UInt64
     /// Smallest lane context, safe for any lane.
     public let contextTokensPerLane: UInt64

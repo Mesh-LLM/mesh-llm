@@ -11,7 +11,7 @@ node.runtimeCapacity("exact-serving-id")?.let { capacity ->
 }
 ```
 
-`RuntimeCapacity` fields use `ULong`. Each call reads the latest published
+`LaneCapacity` fields use `ULong`. Each call reads the latest published
 observation without HTTP. Busy lanes count toward capacity; this does not reserve
 resources. `null` means unknown, unsupported, unavailable, or incomplete capacity.
 Stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;

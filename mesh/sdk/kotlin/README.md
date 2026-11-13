@@ -1,20 +1,5 @@
 # MeshLLM Kotlin SDK
 
-## Local runtime capacity
-
-```kotlin
-node.runtimeCapacity("exact-serving-id")?.let { capacity ->
-    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
-    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
-}
-```
-
-`RuntimeCapacity` fields are `ULong`. This reads the latest native observation,
-including busy lanes, without HTTP or a reservation. Unknown, unsupported,
-unavailable or incomplete capacity returns `null`; stopped nodes throw. The
-timestamp is the oldest observation in Unix milliseconds; callers choose the
-freshness policy. The total pool is not a per-request context limit.
-
 The package exposes one real embedded `Node` with client, serve-only, and
 combined roles. The legacy thin `Client` is removed. See the
 [kotlin usage guide](../../docs/sdk/kotlin.md) for current constructors,
@@ -42,6 +27,21 @@ when unknown. Open-ended capabilities,
 thinking, channel requirements and plugin metadata uses `JsonElement`. Runtime observations
 apply to their provider. `inference.listModels()` remains the LLM-only
 compatibility view. Full model discovery queries the embedded node directly.
+
+## Local runtime capacity
+
+```kotlin
+node.runtimeCapacity("exact-serving-id")?.let { capacity ->
+    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
+    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
+}
+```
+
+`LaneCapacity` fields are `ULong`. This reads the latest native observation,
+including busy lanes, without HTTP or a reservation. Unknown, unsupported,
+unavailable or incomplete capacity returns `null`; stopped nodes throw. The
+timestamp is the oldest observation in Unix milliseconds; callers choose the
+freshness policy. The total pool is not a per-request context limit.
 
 ## Document OCR
 

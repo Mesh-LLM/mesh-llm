@@ -5,17 +5,17 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 #[napi(object)]
-pub struct RuntimeCapacity {
+pub struct LaneCapacity {
     pub execution_lanes: BigInt,
     pub context_tokens_per_lane: BigInt,
     pub context_pool_tokens: BigInt,
     pub captured_at_unix_ms: BigInt,
 }
 
-impl From<mesh_llm_sdk::capacity::RuntimeCapacity> for RuntimeCapacity {
-    fn from(value: mesh_llm_sdk::capacity::RuntimeCapacity) -> Self {
+impl From<mesh_llm_sdk::capacity::LaneCapacity> for LaneCapacity {
+    fn from(value: mesh_llm_sdk::capacity::LaneCapacity) -> Self {
         Self {
-            execution_lanes: BigInt::from(value.execution_lanes as u64),
+            execution_lanes: BigInt::from(value.execution_lanes),
             context_tokens_per_lane: BigInt::from(value.context_tokens_per_lane),
             context_pool_tokens: BigInt::from(value.context_pool_tokens),
             captured_at_unix_ms: BigInt::from(value.captured_at_unix_ms),
@@ -26,13 +26,13 @@ impl From<mesh_llm_sdk::capacity::RuntimeCapacity> for RuntimeCapacity {
 #[napi]
 impl Node {
     #[napi(js_name = "runtimeCapacity")]
-    pub async fn runtime_capacity(&self, model: String) -> Result<Option<RuntimeCapacity>> {
+    pub async fn runtime_capacity(&self, model: String) -> Result<Option<LaneCapacity>> {
         let node = self.node.lock().await;
         let node = node
             .as_ref()
             .ok_or_else(|| Error::from_reason("node is not running"))?;
         node.runtime_capacity(&model)
-            .map(|capacity| capacity.map(RuntimeCapacity::from))
+            .map(|capacity| capacity.map(LaneCapacity::from))
             .map_err(to_napi_error)
     }
 }
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn capacity_fields_keep_full_unsigned_precision() {
-        let capacity = RuntimeCapacity::from(mesh_llm_sdk::capacity::RuntimeCapacity {
+        let capacity = LaneCapacity::from(mesh_llm_sdk::capacity::LaneCapacity {
             execution_lanes: 2,
             context_tokens_per_lane: u64::MAX / 2,
             context_pool_tokens: u64::MAX - 1,

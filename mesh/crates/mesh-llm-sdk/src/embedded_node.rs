@@ -72,11 +72,11 @@ impl MeshNode {
 
     /// Latest local lane and context budgets, read in process. Unknown,
     /// unsupported or incomplete observations return `None`; a stopped node
-    /// returns an error. See [`crate::capacity::RuntimeCapacity`] for freshness.
+    /// returns an error. See [`crate::capacity::LaneCapacity`] for freshness.
     pub fn runtime_capacity(
         &self,
         model: &str,
-    ) -> anyhow::Result<Option<crate::capacity::RuntimeCapacity>> {
+    ) -> anyhow::Result<Option<crate::capacity::LaneCapacity>> {
         self.handle.runtime_capacity(model)
     }
 

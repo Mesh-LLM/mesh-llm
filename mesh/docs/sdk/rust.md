@@ -5,9 +5,9 @@
 For a started serving node and an exact local serving ID:
 
 ```rust,no_run
-use mesh_llm_sdk::{MeshNode, capacity::RuntimeCapacity};
+use mesh_llm_sdk::{MeshNode, capacity::LaneCapacity};
 
-fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<RuntimeCapacity>> {
+fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<LaneCapacity>> {
     node.runtime_capacity(model)
 }
 ```

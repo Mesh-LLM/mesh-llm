@@ -7,8 +7,8 @@ use anyhow::Result;
 /// A complete observation across the local instances of one exact serving ID.
 /// Busy lanes count toward capacity; this is not a count of free reservations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RuntimeCapacity {
-    pub execution_lanes: usize,
+pub struct LaneCapacity {
+    pub execution_lanes: u64,
     /// The smallest lane context, safe for a request assigned to any lane.
     pub context_tokens_per_lane: u64,
     /// Sum of all lane contexts, not the per-request context limit.
@@ -28,30 +28,27 @@ impl EmbeddedServeHandle {
     ///
     /// # Errors
     /// Returns an error after runtime shutdown or when the native node is absent.
-    pub fn runtime_capacity(&self, model: &str) -> Result<Option<RuntimeCapacity>> {
+    pub fn runtime_capacity(&self, model: &str) -> Result<Option<LaneCapacity>> {
         let collector = self.native_node()?.runtime_data_collector();
         Ok(snapshot(&collector, model))
     }
 }
 
-fn snapshot(collector: &RuntimeDataCollector, model: &str) -> Option<RuntimeCapacity> {
-    let status = collector.runtime_status_snapshot();
-    let legacy = status.llama_runtime.slots.instance_id.is_none()
-        && status.llama_runtime_by_instance.is_empty()
-        && status
-            .active_runtime_instances
-            .values()
-            .filter(|name| name.as_str() == model)
-            .count()
-            == 1;
-    let mut capacity = RuntimeCapacity {
+fn snapshot(collector: &RuntimeDataCollector, model: &str) -> Option<LaneCapacity> {
+    collector.with_runtime_status(|status| capacity_from_status(status, model))
+}
+
+fn capacity_from_status(
+    status: &crate::runtime_data::RuntimeStatusSnapshot,
+    model: &str,
+) -> Option<LaneCapacity> {
+    let mut capacity = LaneCapacity {
         execution_lanes: 0,
         context_tokens_per_lane: u64::MAX,
         context_pool_tokens: 0,
         captured_at_unix_ms: u64::MAX,
     };
-    // Slot history outlives unload and may receive a late unavailable update.
-    // Require every active instance, excluding all retired observations.
+    // Require a fresh observation for every active instance.
     for (instance, _) in status
         .active_runtime_instances
         .iter()
@@ -60,8 +57,7 @@ fn snapshot(collector: &RuntimeDataCollector, model: &str) -> Option<RuntimeCapa
         let slots = status
             .llama_runtime_by_instance
             .get(instance)
-            .map(|runtime| &runtime.slots)
-            .or(legacy.then_some(&status.llama_runtime.slots))?;
+            .map(|runtime| &runtime.slots)?;
         if slots.model.as_deref() != Some(model)
             || slots.instance_id.as_ref().is_some_and(|id| id != instance)
         {
@@ -73,7 +69,9 @@ fn snapshot(collector: &RuntimeDataCollector, model: &str) -> Option<RuntimeCapa
         capacity.captured_at_unix_ms = capacity
             .captured_at_unix_ms
             .min(slots.last_success_unix_ms?);
-        capacity.execution_lanes = capacity.execution_lanes.checked_add(slots.slots.len())?;
+        capacity.execution_lanes = capacity
+            .execution_lanes
+            .checked_add(u64::try_from(slots.slots.len()).ok()?)?;
         for lane in &slots.slots {
             let context = lane.n_ctx.filter(|context| *context > 0)?;
             capacity.context_tokens_per_lane = capacity.context_tokens_per_lane.min(context);
@@ -117,19 +115,24 @@ mod tests {
         collector.register_runtime_instance("chat", "a");
         collector.register_runtime_instance("chat", "b");
         collector.register_runtime_instance("other", "c");
-        collector.replace_llama_slots_snapshot(observation("chat", "a", &[8192, 16384], 100));
-        collector.replace_llama_slots_snapshot(observation("chat", "b", &[4096], 200));
-        collector.replace_llama_slots_snapshot(observation("other", "c", &[32768], 300));
+        collector.replace_active_llama_slots_snapshot(observation(
+            "chat",
+            "a",
+            &[8192, 16384],
+            100,
+        ));
+        collector.replace_active_llama_slots_snapshot(observation("chat", "b", &[4096], 200));
+        collector.replace_active_llama_slots_snapshot(observation("other", "c", &[32768], 300));
         assert_eq!(
             snapshot(&collector, "chat"),
-            Some(RuntimeCapacity {
+            Some(LaneCapacity {
                 execution_lanes: 3,
                 context_tokens_per_lane: 4096,
                 context_pool_tokens: 28672,
                 captured_at_unix_ms: 100,
             })
         );
-        collector.replace_llama_slots_snapshot(observation("chat", "a", &[8192], 400));
+        collector.replace_active_llama_slots_snapshot(observation("chat", "a", &[8192], 400));
         assert_eq!(snapshot(&collector, "chat").unwrap().execution_lanes, 2);
         assert_eq!(
             snapshot(&collector, "chat").unwrap().context_pool_tokens,
@@ -141,7 +144,7 @@ mod tests {
         );
         let mut stopped = observation("chat", "b", &[], 500);
         stopped.status = RuntimeLlamaEndpointStatus::Unavailable;
-        collector.replace_llama_slots_snapshot(stopped);
+        collector.replace_active_llama_slots_snapshot(stopped);
         assert_eq!(snapshot(&collector, "chat"), None);
         assert!(snapshot(&collector, "other").is_some());
     }
@@ -163,57 +166,9 @@ mod tests {
         for slots in invalid {
             let collector = RuntimeDataCollector::new();
             collector.register_runtime_instance("chat", "a");
-            collector.replace_llama_slots_snapshot(slots);
+            collector.replace_active_llama_slots_snapshot(slots);
             assert_eq!(snapshot(&collector, "chat"), None);
         }
-        let collector = RuntimeDataCollector::new();
-        collector.register_runtime_instance("chat", "a");
-        let mut legacy = valid;
-        legacy.instance_id = None;
-        collector.replace_llama_slots_snapshot(legacy);
-        assert_eq!(snapshot(&collector, "chat").unwrap().execution_lanes, 1);
-        assert_eq!(snapshot(&collector, "unknown"), None);
-        collector.register_runtime_instance("chat", "b");
-        assert_eq!(snapshot(&collector, "chat"), None);
-    }
-
-    #[test]
-    fn replacement_requires_a_new_anonymous_observation() {
-        let collector = RuntimeDataCollector::new();
-        collector.update_runtime_status(crate::runtime_data::RuntimeDataDirty::RUNTIME, |status| {
-            status.primary_model = Some("chat".into());
-            true
-        });
-        collector.register_runtime_instance("chat", "a");
-        let mut anonymous = observation("chat", "a", &[8192], 100);
-        anonymous.instance_id = None;
-        collector.replace_llama_slots_snapshot(anonymous.clone());
-        assert_eq!(
-            snapshot(&collector, "chat").unwrap().context_pool_tokens,
-            8192
-        );
-
-        collector.unregister_runtime_instance("a");
-        collector.register_runtime_instance("chat", "b");
-        assert_eq!(snapshot(&collector, "chat"), None);
-        // Publishing another model reselects the legacy model projection.
-        let mut other = observation("other", "c", &[4096], 200);
-        other.instance_id = None;
-        collector.replace_llama_slots_snapshot(other);
-        assert_eq!(snapshot(&collector, "chat"), None);
-
-        anonymous.slots[0].n_ctx = Some(16384);
-        anonymous.last_success_unix_ms = Some(300);
-        collector.replace_llama_slots_snapshot(anonymous);
-        assert_eq!(
-            snapshot(&collector, "chat"),
-            Some(RuntimeCapacity {
-                execution_lanes: 1,
-                context_tokens_per_lane: 16384,
-                context_pool_tokens: 16384,
-                captured_at_unix_ms: 300,
-            })
-        );
     }
 
     #[test]
@@ -221,12 +176,25 @@ mod tests {
         let collector = RuntimeDataCollector::new();
         collector.register_runtime_instance("chat", "a");
         collector.register_runtime_instance("chat", "b");
-        collector.replace_llama_slots_snapshot(observation("chat", "a", &[8192], 100));
-        collector.replace_llama_slots_snapshot(observation("chat", "b", &[4096], 200));
+        collector.replace_active_llama_slots_snapshot(observation("chat", "a", &[8192], 100));
+        collector.replace_active_llama_slots_snapshot(observation("chat", "b", &[4096], 200));
         collector.unregister_runtime_instance("a");
+        assert!(
+            !collector
+                .runtime_llama_snapshots_by_instance()
+                .contains_key("a")
+        );
+        assert_eq!(
+            collector
+                .runtime_llama_snapshot()
+                .slots
+                .instance_id
+                .as_deref(),
+            Some("b")
+        );
         assert_eq!(
             snapshot(&collector, "chat"),
-            Some(RuntimeCapacity {
+            Some(LaneCapacity {
                 execution_lanes: 1,
                 context_tokens_per_lane: 4096,
                 context_pool_tokens: 4096,
@@ -235,15 +203,22 @@ mod tests {
         );
         collector.unregister_runtime_instance("b");
         assert_eq!(snapshot(&collector, "chat"), None);
+        assert_eq!(collector.runtime_llama_snapshot().items.slots_total, 0);
+        assert!(collector.runtime_llama_snapshots_by_instance().is_empty());
         collector.register_runtime_instance("chat", "new");
         assert_eq!(snapshot(&collector, "chat"), None);
-        collector.replace_llama_slots_snapshot(observation("chat", "new", &[16384], 300));
+        collector.replace_active_llama_slots_snapshot(observation("chat", "new", &[16384], 300));
         let mut late_unavailable = observation("chat", "b", &[], 400);
         late_unavailable.status = RuntimeLlamaEndpointStatus::Unavailable;
-        collector.replace_llama_slots_snapshot(late_unavailable);
+        assert!(!collector.replace_active_llama_slots_snapshot(late_unavailable));
+        assert!(
+            !collector
+                .runtime_llama_snapshots_by_instance()
+                .contains_key("b")
+        );
         assert_eq!(
             snapshot(&collector, "chat"),
-            Some(RuntimeCapacity {
+            Some(LaneCapacity {
                 execution_lanes: 1,
                 context_tokens_per_lane: 16384,
                 context_pool_tokens: 16384,
