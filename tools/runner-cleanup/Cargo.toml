@@ -1,0 +1,14 @@
+[package]
+name = "runner-cleanup"
+version.workspace = true
+edition = "2024"
+publish = false
+description = "Narrow executable for ci-ops runner-cleanup: bounded deletion of a persistent CI job's own outputs"
+
+[dependencies]
+ci-controller = { path = "../ci-controller" }
+process-supervision = { path = "../process-supervision" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

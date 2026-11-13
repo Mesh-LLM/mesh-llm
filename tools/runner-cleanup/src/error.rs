@@ -7,7 +7,7 @@ pub(crate) enum Failure<T> {
     #[error("cleanup finalization failed: {reason}; preceding={summary}", summary = Summary(preceding))]
     Finalization {
         #[source]
-        reason: crate::command_interrupt::Reason,
+        reason: process_supervision::interrupt::Reason,
         preceding: Result<T, Error>,
     },
 }
@@ -71,9 +71,9 @@ pub(crate) enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
-    Interrupt(#[from] crate::command_interrupt::Reason),
+    Interrupt(#[from] process_supervision::interrupt::Reason),
     #[error(transparent)]
-    Process(#[from] crate::process::Failure),
+    Process(#[from] process_supervision::Failure),
     #[error("Git worktree command failed: {0:?}")]
-    Git(Box<crate::process::ProcessReport>),
+    Git(Box<process_supervision::ProcessReport>),
 }
