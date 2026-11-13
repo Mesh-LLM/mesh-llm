@@ -2249,11 +2249,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "success",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -2291,11 +2291,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "failure",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -2330,11 +2330,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "state",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4119,11 +4119,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "failure",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4160,11 +4160,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "success",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4202,11 +4202,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "failure",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4241,11 +4241,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "progress",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4280,11 +4280,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "state",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4363,11 +4363,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "failure",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4404,11 +4404,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "success",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4445,11 +4445,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "success",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4486,11 +4486,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "success",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -4525,11 +4525,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "state",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -7000,11 +7000,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "success",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",
@@ -7042,11 +7042,11 @@ export const runtimeEventInventory = {
       "projectionProfile": "failure",
       "producerSymbols": [
         "skippy_serving::frontend::generation_receipt",
-        "inference::pipeline"
+        "inference::skippy::runtime_events::facts"
       ],
       "sourcePaths": [
         "skippy/crates/skippy-serving/src/frontend/generation_receipt.rs",
-        "mesh/crates/mesh-llm-host-runtime/src/inference/pipeline.rs"
+        "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/runtime_events/facts.rs"
       ],
       "authoritativeOutcome": "prefill and tokenization returns",
       "reducerEffect": "request prefill state",

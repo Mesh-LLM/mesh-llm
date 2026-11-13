@@ -6,8 +6,8 @@
 
 use super::manifest::Selection;
 use super::resolve::{Request, execute};
-use crate::repository::check_args::Grammar;
-use crate::repository::check_report::CheckReport;
+use ci_controller::repository::check_args::Grammar;
+use ci_controller::repository::check_report::CheckReport;
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -35,7 +35,7 @@ struct Inputs<'a> {
     cadence: &'a str,
 }
 
-pub(super) fn run(args: &[String]) -> CheckReport {
+pub fn run(args: &[String]) -> CheckReport {
     let parsed = match GRAMMAR.parse(args) {
         Ok(parsed) if parsed.positionals.is_empty() => parsed,
         Ok(parsed) => {

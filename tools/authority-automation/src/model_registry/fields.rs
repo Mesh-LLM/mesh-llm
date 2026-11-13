@@ -1,12 +1,12 @@
 //! Field checks shared by registry validation, with the legacy generator's
 //! exact diagnostics (`_object`, `_string`, `_string_list`, `_exact_keys`).
 
-use crate::ci_plan::document::Json;
+use ci_controller::plan::document::Json;
 use std::fmt;
 
 /// A registry or manifest contract violation; the text is the diagnostic.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct ModelError(pub(super) String);
+pub struct ModelError(pub String);
 
 impl fmt::Display for ModelError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -14,17 +14,14 @@ impl fmt::Display for ModelError {
     }
 }
 
-pub(super) type ModelResult<T> = Result<T, ModelError>;
+pub type ModelResult<T> = Result<T, ModelError>;
 
-pub(super) fn fail<T>(message: impl Into<String>) -> ModelResult<T> {
+pub fn fail<T>(message: impl Into<String>) -> ModelResult<T> {
     Err(ModelError(message.into()))
 }
 
 /// The object entries of `value`, or `<field> must be an object`.
-pub(super) fn object<'a>(
-    value: Option<&'a Json>,
-    field: &str,
-) -> ModelResult<&'a [(String, Json)]> {
+pub fn object<'a>(value: Option<&'a Json>, field: &str) -> ModelResult<&'a [(String, Json)]> {
     match value.and_then(Json::as_object) {
         Some(entries) => Ok(entries),
         None => fail(format!("{field} must be an object")),
@@ -32,7 +29,7 @@ pub(super) fn object<'a>(
 }
 
 /// A non-empty, single-line string without NUL, tab or `|`.
-pub(super) fn string<'a>(value: Option<&'a Json>, field: &str) -> ModelResult<&'a str> {
+pub fn string<'a>(value: Option<&'a Json>, field: &str) -> ModelResult<&'a str> {
     let text = match value.and_then(Json::as_str) {
         Some(text) if !text.is_empty() => text,
         _ => return fail(format!("{field} must be a non-empty string")),
@@ -44,7 +41,7 @@ pub(super) fn string<'a>(value: Option<&'a Json>, field: &str) -> ModelResult<&'
 }
 
 /// A non-empty list of distinct [`string`] values.
-pub(super) fn string_list<'a>(value: Option<&'a Json>, field: &str) -> ModelResult<Vec<&'a str>> {
+pub fn string_list<'a>(value: Option<&'a Json>, field: &str) -> ModelResult<Vec<&'a str>> {
     let items = match value.and_then(Json::as_array) {
         Some(items) if !items.is_empty() => items,
         _ => return fail(format!("{field} must be a non-empty array")),
@@ -62,11 +59,7 @@ pub(super) fn string_list<'a>(value: Option<&'a Json>, field: &str) -> ModelResu
 }
 
 /// Rejects keys outside `allowed`, naming them in sorted order.
-pub(super) fn exact_keys(
-    entries: &[(String, Json)],
-    allowed: &[&str],
-    field: &str,
-) -> ModelResult<()> {
+pub fn exact_keys(entries: &[(String, Json)], allowed: &[&str], field: &str) -> ModelResult<()> {
     let mut unknown = entries
         .iter()
         .map(|(key, _)| key.as_str())
@@ -83,19 +76,19 @@ pub(super) fn exact_keys(
 }
 
 /// `dict.get` over object entries.
-pub(super) fn get<'a>(entries: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
+pub fn get<'a>(entries: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
     entries
         .iter()
         .find(|(name, _)| name == key)
         .map(|(_, value)| value)
 }
 
-pub(super) fn has(entries: &[(String, Json)], key: &str) -> bool {
+pub fn has(entries: &[(String, Json)], key: &str) -> bool {
     entries.iter().any(|(name, _)| name == key)
 }
 
 /// `^[a-z0-9][a-z0-9._-]*$`.
-pub(super) fn is_identifier(text: &str) -> bool {
+pub fn is_identifier(text: &str) -> bool {
     let mut chars = text.chars();
     chars
         .next()
@@ -106,7 +99,7 @@ pub(super) fn is_identifier(text: &str) -> bool {
 }
 
 /// Lowercase hex of a length in `lengths`.
-pub(super) fn is_lower_hex(text: &str, lengths: std::ops::RangeInclusive<usize>) -> bool {
+pub fn is_lower_hex(text: &str, lengths: std::ops::RangeInclusive<usize>) -> bool {
     lengths.contains(&text.len())
         && text
             .bytes()
@@ -114,7 +107,7 @@ pub(super) fn is_lower_hex(text: &str, lengths: std::ops::RangeInclusive<usize>)
 }
 
 /// `PurePosixPath` escape checks: absolute or any `..` component.
-pub(super) fn escapes_root(path: &str) -> bool {
+pub fn escapes_root(path: &str) -> bool {
     path.starts_with('/') || path.split('/').any(|part| part == "..")
 }
 

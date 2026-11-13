@@ -1,5 +1,5 @@
 use super::{Error, Git, Options, Profile};
-use crate::{command::DynResult, repository::check_report::CheckReport};
+use ci_controller::{DynResult, repository::check_report::CheckReport};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -9,7 +9,7 @@ use std::{
 
 const USAGE: &str = "ci-ops runner-cleanup --job {build|family|replay|cuda-release|smoke|runner-contract|canary-preflight|canary-controller} --evidence-uploaded {true|false} [--package-uploaded {true|false}] [--git <absolute-executable>]";
 
-pub(crate) fn run(args: &[String]) -> DynResult<()> {
+pub fn run(args: &[String]) -> DynResult<()> {
     if args == ["--help"] {
         return CheckReport::success(format!("usage: {USAGE}\n")).emit();
     }

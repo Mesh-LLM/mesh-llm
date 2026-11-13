@@ -11,8 +11,10 @@ pub(crate) const XTASK: BootstrapTool = BootstrapTool {
     package: "xtask",
     local_packages: &[
         "xtask",
+        "authority-automation",
         "ci-controller",
         "process-supervision",
+        "runner-cleanup",
         "mesh-llm-release-footer",
         "trajectory-reader",
     ],

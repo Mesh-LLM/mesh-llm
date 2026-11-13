@@ -1,9 +1,10 @@
 name: Prepare repository automation
 description: >
-  Build only the xtask automation tool through `just automation-bootstrap`
-  and expose its absolute path. The recipe proves the tool compiled with no
-  product, native-runtime, or UI crate, so llama.cpp and the UI are never
-  prepared. Toolchain, linker, and compiler-cache setup reuse the existing
+  Build only one automation tool, full xtask through `just automation-bootstrap`
+  or the narrow authority-automation executable through
+  `just authority-automation-bootstrap`, and expose its absolute path. The
+  recipe proves the tool compiled with no product, native-runtime, or UI
+  crate, so llama.cpp and the UI are never prepared. Toolchain, linker, and compiler-cache setup reuse the existing
   per-platform bootstrap: Linux requires the digest-pinned runner image
   (verify-runner-image); macOS uses the pinned Rust action plus
   setup-macos-lld; Windows uses setup-windows-short-paths, the pinned Rust
@@ -18,6 +19,10 @@ description: >
   verifies and initializes them.
 
 inputs:
+  tool:
+    description: Closed automation executable to build, xtask (full repository automation) or authority-automation (the narrow executable the protected authority producers publish). Any other value fails.
+    required: false
+    default: xtask
   runner-profile:
     description: Closed preparation profile (image, hosted-bare, preinstalled-macos, or preinstalled-linux). Preinstalled profiles check existing self-hosted tools without installing them.
     required: false
@@ -37,7 +42,7 @@ inputs:
 
 outputs:
   binary_path:
-    description: Absolute path to the built xtask executable.
+    description: Absolute path to the built automation executable named by the tool input.
     value: ${{ steps.bootstrap_unix.outputs.binary_path || steps.bootstrap_windows.outputs.binary_path }}
   target_directory:
     description: Cargo's resolved target directory for this checkout.
@@ -50,8 +55,13 @@ runs:
       shell: bash
       env:
         AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
+        AUTOMATION_TOOL: ${{ inputs.tool }}
       run: |
         set -euo pipefail
+        case "$AUTOMATION_TOOL" in
+          xtask|authority-automation) ;;
+          *) echo "unsupported automation tool" >&2; exit 1 ;;
+        esac
         case "$AUTOMATION_PROFILE" in
           image) ;;
           hosted-bare)
@@ -113,6 +123,11 @@ runs:
     - name: Install Windows compiler cache
       if: runner.os == 'Windows'
       uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      # sccache 0.17+ expands Cargo's rustc argfile and exceeds the Windows
+      # command-line limit with Rust 1.100's build-dir layout (os error 206,
+      # mozilla/sccache#2787). 0.16.0 passes the argfile through.
+      with:
+        version: v0.16.0
 
     - name: Configure Windows compiler cache
       if: runner.os == 'Windows'
@@ -136,11 +151,11 @@ runs:
     # cache namespace is repository-wide rather than ref-scoped.
     - name: Restore hosted automation binary
       id: hosted_binary
-      if: inputs.runner-profile == 'hosted-bare' && inputs.reuse-hosted-binary == 'true'
+      if: inputs.runner-profile == 'hosted-bare' && inputs.reuse-hosted-binary == 'true' && inputs.tool == 'xtask'
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: target/release/xtask
-        key: xtask-hosted-bare-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust_toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', '.github/actions/prepare-automation/action.yml', '.github/cache-version.txt', 'tools/xtask/**', 'tools/ci-controller/**', 'tools/process-supervision/**', 'tools/trajectory-reader/**', 'mesh/crates/mesh-llm-release-footer/**', 'ci/python-research-source.json', 'ci/required-sdk-python/sdk-source.json', 'scripts/ci-compat-smoke.sh', 'scripts/linux-glibc-floor.txt', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh') }}
+        key: xtask-hosted-bare-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust_toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', '.github/actions/prepare-automation/action.yml', '.github/cache-version.txt', 'tools/xtask/**', 'tools/authority-automation/**', 'tools/ci-controller/**', 'tools/process-supervision/**', 'tools/runner-cleanup/**', 'tools/trajectory-reader/**', 'mesh/crates/mesh-llm-release-footer/**', 'ci/python-research-source.json', 'ci/required-sdk-python/sdk-source.json', 'scripts/ci-compat-smoke.sh', 'scripts/linux-glibc-floor.txt', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh') }}
 
     - name: Build automation tool
       id: bootstrap_unix
@@ -148,21 +163,27 @@ runs:
       shell: bash
       env:
         AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
+        AUTOMATION_TOOL: ${{ inputs.tool }}
         AUTOMATION_CACHE_HIT: ${{ steps.hosted_binary.outputs.cache-hit }}
       run: |
         set -euo pipefail
         report="$RUNNER_TEMP/automation-bootstrap.txt"
+        case "$AUTOMATION_TOOL" in
+          xtask) recipe=automation-bootstrap ;;
+          authority-automation) recipe=authority-automation-bootstrap ;;
+          *) echo "unsupported automation tool" >&2; exit 1 ;;
+        esac
         if [[ "$AUTOMATION_PROFILE" == hosted-bare ]]; then
           # Hosted runners have no sccache; bootstrap also runs Cargo.
           export RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER=''
         fi
-        if [[ "$AUTOMATION_PROFILE" == hosted-bare && "${AUTOMATION_CACHE_HIT:-}" == true && -x target/release/xtask ]]; then
+        if [[ "$AUTOMATION_TOOL" == xtask && "$AUTOMATION_PROFILE" == hosted-bare && "${AUTOMATION_CACHE_HIT:-}" == true && -x target/release/xtask ]]; then
           target/release/xtask automation bootstrap | tee "$report"
         elif [[ "$AUTOMATION_PROFILE" == hosted-bare ]]; then
-          cargo build --locked --release -p xtask --bin xtask
-          cargo run --locked --release -p xtask --bin xtask -- automation bootstrap | tee "$report"
+          cargo build --locked --release -p "$AUTOMATION_TOOL" --bin "$AUTOMATION_TOOL"
+          cargo run --locked --release -p "$AUTOMATION_TOOL" --bin "$AUTOMATION_TOOL" -- automation bootstrap | tee "$report"
         else
-          just automation-bootstrap | tee "$report"
+          just "$recipe" | tee "$report"
         fi
         binary_path="$(sed -n 's/^binary_path=//p' "$report")"
         target_directory="$(sed -n 's/^target_directory=//p' "$report")"
@@ -174,7 +195,7 @@ runs:
         echo "MESH_LLM_AUTOMATION_BIN=$binary_path" >> "$GITHUB_ENV"
 
     - name: Save hosted automation binary
-      if: inputs.runner-profile == 'hosted-bare' && inputs.reuse-hosted-binary == 'true' && steps.hosted_binary.outputs.cache-hit != 'true'
+      if: inputs.runner-profile == 'hosted-bare' && inputs.reuse-hosted-binary == 'true' && inputs.tool == 'xtask' && steps.hosted_binary.outputs.cache-hit != 'true'
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: target/release/xtask
@@ -184,10 +205,17 @@ runs:
       id: bootstrap_windows
       if: runner.os == 'Windows'
       shell: pwsh
+      env:
+        AUTOMATION_TOOL: ${{ inputs.tool }}
       run: |
         $ErrorActionPreference = "Stop"
         $PSNativeCommandUseErrorActionPreference = $true
-        $report = @(just automation-bootstrap)
+        $recipe = switch -CaseSensitive ($env:AUTOMATION_TOOL) {
+          "xtask" { "automation-bootstrap" }
+          "authority-automation" { "authority-automation-bootstrap" }
+          default { throw "unsupported automation tool" }
+        }
+        $report = @(just $recipe)
         $report | Write-Host
         $binaryPath = ($report | Where-Object { $_ -like "binary_path=*" }) -replace "^binary_path=", ""
         $targetDirectory = ($report | Where-Object { $_ -like "target_directory=*" }) -replace "^target_directory=", ""
