@@ -273,8 +273,8 @@ mod tests {
     }
 
     /// The `backend_selected` event carries the same exchange id as the
-    /// `openai.exchange.v1` events of its dispatch: the request id, and a
-    /// distinct derived id on each automatic re-pick.
+    /// `openai.exchange.v1` events of its dispatch: a node-internal id that no
+    /// client header chooses, distinct on each automatic re-pick.
     #[tokio::test]
     async fn selected_event_exchange_id_follows_the_dispatch() {
         let (mut reader, mut writer) = tokio::io::duplex(1024);

@@ -466,6 +466,59 @@ async fn selected_event_keeps_its_own_exchange_id_and_empty_takes_the_sessions()
     }
 }
 
+/// After a re-pick the terminal joins the dispatch that served: it carries the
+/// selected event's exchange id, and `attempt_history` records each attempt's.
+#[tokio::test]
+async fn terminal_takes_the_served_dispatchs_exchange_id() {
+    let (manager, _, terminals) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let (mut session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    for (attempt, id) in [(1, "dispatch-0"), (2, "dispatch-1")] {
+        let mut selected = request_event(
+            id.into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+            .await;
+    }
+    session.observer().finish(commit_wire_bytes(b"response"));
+    session.finish("completed").await;
+    let terminal = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = terminals.lock().unwrap().first().cloned() {
+                break event;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(terminal["exchange_id"], "dispatch-1");
+    assert_eq!(terminal["attempt_history"][0]["exchange_id"], "dispatch-0");
+    assert_eq!(terminal["attempt_history"][1]["exchange_id"], "dispatch-1");
+}
+
 #[test]
 fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
     let deny = |required_failure, deny_status| PhaseResult {
