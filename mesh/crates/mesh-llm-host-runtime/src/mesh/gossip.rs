@@ -14,7 +14,7 @@ use crate::mesh::plugin_keys::Announced;
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::protocol::{
-    ControlProtocol, GossipWithPluginKeys, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP,
+    ControlProtocol, GossipWithPluginKeys, NODE_PROTOCOL_GENERATION, OutboundGossip, STREAM_GOSSIP,
     connection_protocol, decode_gossip_frame_and_plugin_keys, read_len_prefixed,
     write_gossip_payload,
 };
@@ -27,6 +27,7 @@ use mesh_llm_membership::announcements::{
 use mesh_llm_membership::transitions::{TransitiveMention, TransitivePeerUpdate};
 
 mod admission;
+pub(super) mod reply_limit;
 
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
 ///
@@ -889,7 +890,7 @@ impl Node {
         let (mut send, mut recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_GOSSIP]).await?;
 
-        let outbound = self.collect_outbound_gossip().await;
+        let outbound = self.collect_gossip_reply(remote).await;
         write_gossip_payload(
             &mut send,
             protocol,
@@ -955,6 +956,19 @@ impl Node {
         }
 
         Ok(())
+    }
+
+    /// A remote that reconnects in a loop gets the whole table once per
+    /// interval; in between it gets only our own announcement (#3070).
+    pub(super) async fn collect_gossip_reply(&self, remote: EndpointId) -> OutboundGossip {
+        if self.gossip_reply_limiter.allow_full_reply(remote) {
+            return self.collect_outbound_gossip().await;
+        }
+        tracing::debug!(
+            remote = %remote.fmt_short(),
+            "gossip: repeat inside the full-reply interval; replying with own announcement only"
+        );
+        self.collect_own_outbound_gossip().await
     }
 
     pub(super) async fn handle_gossip_stream(

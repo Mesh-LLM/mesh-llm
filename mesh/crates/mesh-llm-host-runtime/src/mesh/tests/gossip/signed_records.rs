@@ -523,3 +523,37 @@ async fn cache_affinity_for_models_the_peer_does_not_route_is_dropped() {
         .expect("advertisement kept");
     assert!(advertisement.entries.is_empty());
 }
+
+#[tokio::test]
+async fn repeat_inbound_gossip_gets_own_announcement_only_until_the_interval_passes() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    receive(
+        &node,
+        0x62,
+        vec![unsigned_worker(0x61, "third-party-model")],
+        vec![signed_worker_record(0x63, 1, "signed-model")],
+    )
+    .await;
+    let stranger = test_endpoint_id(0x70);
+    let other = test_endpoint_id(0x71);
+
+    let first = node.collect_gossip_reply(stranger).await;
+    assert!(first.announcements.len() > 1, "first reply is the full table");
+    assert!(first.signed_records.len() > 1);
+
+    let repeat = node.collect_gossip_reply(stranger).await;
+    assert_eq!(repeat.announcements.len(), 1);
+    assert_eq!(repeat.announcements[0].addr.id, node.id());
+    assert_eq!(repeat.signed_records.len(), 1, "only our own signed record");
+
+    let unrelated = node.collect_gossip_reply(other).await;
+    assert!(unrelated.announcements.len() > 1, "limit is per remote");
+
+    // Rewind the recorded reply past the interval instead of sleeping.
+    node.gossip_reply_limiter.age_for_tests(
+        stranger,
+        crate::mesh::gossip::reply_limit::FULL_REPLY_INTERVAL,
+    );
+    let after = node.collect_gossip_reply(stranger).await;
+    assert!(after.announcements.len() > 1, "full table again after the interval");
+}

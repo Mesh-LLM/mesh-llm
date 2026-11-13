@@ -51,6 +51,20 @@ impl Node {
         }
     }
 
+    /// Gossip describing only this node: its own announcement and signed
+    /// records, with no rebroadcast of other peers.
+    pub(super) async fn collect_own_outbound_gossip(&self) -> OutboundGossip {
+        let local = self.snapshot_local_announcement_data().await;
+        let announcements = vec![self.build_local_announcement(local)];
+        let (signed_records, signed_cache_affinity) =
+            self.collect_signed_records(&announcements).await;
+        OutboundGossip {
+            announcements,
+            signed_records,
+            signed_cache_affinity,
+        }
+    }
+
     /// This node's own records plus every held record for a peer we are
     /// rebroadcasting. Each relayed node record carries our latency view of
     /// that peer as unsigned hop data.

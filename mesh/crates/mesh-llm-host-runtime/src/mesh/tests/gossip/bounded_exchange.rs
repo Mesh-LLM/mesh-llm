@@ -71,6 +71,14 @@ async fn oversized_snapshots_complete_real_quic_exchanges_in_both_directions() {
     // the round count without assuming a particular encoded record size.
     let mut progress = Vec::new();
     for _ in 0..ORIGIN_COUNT {
+        // Each page is a full reply; the responder spaces those by the
+        // reply interval (#3070), so rewind it instead of sleeping.
+        for (responder, remote) in [(&receiver, &sender), (&sender, &receiver)] {
+            responder.gossip_reply_limiter.age_for_tests(
+                remote.id(),
+                crate::mesh::gossip::reply_limit::FULL_REPLY_INTERVAL,
+            );
+        }
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
             sender.initiate_gossip_inner(connection.clone(), receiver.id(), false),

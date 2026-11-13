@@ -328,6 +328,7 @@ impl Node {
             state: Arc::new(Mutex::new(MembershipState::default())),
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
+            gossip_reply_limiter: Arc::default(),
             plugin_message_history: Default::default(),
             direct_rescue_endpoints: super::super::direct_rescue::DirectRescueEndpoints::default(),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),

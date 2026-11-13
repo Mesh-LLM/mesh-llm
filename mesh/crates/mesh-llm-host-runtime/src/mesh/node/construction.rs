@@ -118,12 +118,7 @@ impl Node {
         let config_revision_init = config_state_init.revision();
         let live_request_defaults = config_state_init.live_request_defaults();
         let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
-        let runtime_data_producer =
-            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
-                scope: "routing",
-                plugin_data_key: None,
-                plugin_endpoint_key: None,
-            });
+        let runtime_data_producer = routing_runtime_data_producer(&runtime_data_collector);
 
         let owner_keypair = owner_config
             .as_ref()
@@ -168,6 +163,7 @@ impl Node {
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
+            gossip_reply_limiter: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -359,4 +355,14 @@ async fn bind_discoverable_endpoint(
     // of the externally visible NAT-mapped address.
     let public_addr = Node::startup_public_addr(&endpoint, relay).await;
     Ok((endpoint, public_addr))
+}
+
+fn routing_runtime_data_producer(
+    collector: &crate::runtime_data::RuntimeDataCollector,
+) -> crate::runtime_data::RuntimeDataProducer {
+    collector.producer(crate::runtime_data::RuntimeDataSource {
+        scope: "routing",
+        plugin_data_key: None,
+        plugin_endpoint_key: None,
+    })
 }
