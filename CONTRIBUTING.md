@@ -3,6 +3,7 @@
 Join the [#mesh-llm channel on the Goose Discord](https://discord.gg/goose-oss) for discussion and questions.
 
 This file covers local build and development workflows for this repository.
+See [MAINTAINERS.md](MAINTAINERS.md) for the project maintainers and their affiliations.
 
 ## Prerequisites
 

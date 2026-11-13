@@ -394,6 +394,9 @@ are proven. Hardware-qualified GPU tests remain on dedicated runners.
 
 ## Community
 
+See [MAINTAINERS.md](MAINTAINERS.md) for the project maintainers and their affiliations,
+and [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
+
 Mesh LLM is experimental distributed-systems software. When you report bugs,
 include the command you ran, platform/backend flavor, `/api/status` output if
 available, and whether the node was private, published, or joined with `--auto`.
