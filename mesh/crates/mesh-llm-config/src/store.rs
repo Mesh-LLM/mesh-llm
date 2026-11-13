@@ -127,6 +127,9 @@ impl ConfigStore {
         load_config(Some(&self.path))
     }
 
+    /// Write `config` over the file. This does not take the config file's
+    /// lock: for a read-modify-write, use [`Self::update`] or
+    /// [`Self::edit_preserving`], or hold [`lock_config_file`] across it.
     pub fn save(&self, config: &MeshConfig) -> Result<()> {
         let toml_str = config_to_toml(config)?;
         crate::private_file::write_private_file(&self.path, toml_str.as_bytes())
