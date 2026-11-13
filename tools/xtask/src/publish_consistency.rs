@@ -373,7 +373,7 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let release_script = fs::read_to_string(repo_root.join("scripts/release.sh"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let quality_workflow =
-        fs::read_to_string(repo_root.join(".github/workflows/ci-quality-slice.yml"))?;
+        fs::read_to_string(repo_root.join(".github/workflows/ci-quality-lane.yml"))?;
 
     ensure_contains(
         &release,
@@ -469,7 +469,7 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &quality_workflow,
-        "cargo run -p xtask -- repo-consistency publish-crates",
+        "\"$MESH_LLM_AUTOMATION_BIN\" repo-consistency publish-crates",
         "PR quality publish-chain drift check",
     )?;
 

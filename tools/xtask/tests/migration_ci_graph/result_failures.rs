@@ -78,7 +78,7 @@ fn migration_ci_graph_unknown_and_absent_results_are_rejected() -> TestResult {
     rejects(QUALITY, "{}", "planned job 'quality' finished with None")?;
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
+        r#"{"consistency":{"result":"success"},"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
         "lane job 'x\\n' finished with 1.5",
     )
 }
@@ -88,7 +88,7 @@ fn migration_ci_graph_unplanned_job_must_skip() -> TestResult {
     // Given/When/Then: an unplanned job that ran anyway.
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
+        r#"{"consistency":{"result":"success"},"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
         "lane job 'runner_contract' finished with 'success'",
     )
 }
@@ -221,10 +221,11 @@ fn lane_inline_and_reordered_exact_options_reach_domain_validation() -> TestResu
 
 #[test]
 fn selected_native_authority_cannot_fail_cancel_skip_or_disappear() -> TestResult {
-    for job in ["authority_source", "authority_linux_x64"] {
+    for job in ["consistency", "authority_source", "authority_linux_x64"] {
         for result in [Some("failure"), Some("cancelled"), Some("skipped"), None] {
             let mut states = serde_json::json!({
                 "quality": {"result": "success"},
+                "consistency": {"result": "success"},
                 "authority_source": {"result": "success"},
                 "authority_linux_x64": {"result": "success"}
             });
