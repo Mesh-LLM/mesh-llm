@@ -516,6 +516,11 @@ pub(super) async fn startup_register_loaded_runtime(
     }
     ctx.node
         .register_runtime_instance_lifecycle(handle.port, ctx.lifecycle.clone());
+    // Publish Skippy's render-only reasoning-control observations for this model,
+    // so `/mesh/v1/models` can attach them to the entry this node serves. The
+    // on-demand lifecycle does this in `finish_runtime_model_load`; the startup
+    // path must too, or startup-served models never publish `thinking`.
+    skippy::register_local_thinking(loaded_name, handle.thinking.as_ref());
     add_runtime_local_target(ctx.target_tx, loaded_name, handle.port);
     register_runtime_instance(
         ctx.runtime_instance_registry,
