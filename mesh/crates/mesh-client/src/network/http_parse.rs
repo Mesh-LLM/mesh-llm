@@ -628,6 +628,12 @@ fn translate_responses_input_to_messages(
 fn translate_openai_responses_input(
     object: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<bool> {
+    if object
+        .get("max_tool_calls")
+        .is_some_and(|value| !value.is_null())
+    {
+        bail!("max_tool_calls is unsupported by the legacy mesh client Responses path");
+    }
     let mut changed = false;
     let mut messages = Vec::new();
 
@@ -657,6 +663,7 @@ fn translate_openai_responses_input(
 
     for key in [
         "include",
+        "max_tool_calls",
         "output",
         "output_text",
         "parallel_tool_calls",
@@ -672,4 +679,35 @@ fn translate_openai_responses_input(
     }
 
     Ok(changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_responses_path_rejects_nonnull_max_tool_calls_and_strips_null() {
+        let mut nonnull = json!({"model": "m", "input": "hi", "max_tool_calls": 1});
+        let Err(error) = normalize_openai_compat_request("/v1/responses", &mut nonnull) else {
+            panic!("legacy Responses normalization must reject max_tool_calls");
+        };
+        assert!(error.to_string().contains("max_tool_calls is unsupported"));
+
+        let mut nullable = json!({"model": "m", "input": "hi", "max_tool_calls": null});
+        normalize_openai_compat_request("/v1/responses", &mut nullable).unwrap();
+        assert!(nullable.get("max_tool_calls").is_none());
+    }
+
+    #[test]
+    fn chat_requests_do_not_gain_responses_max_tool_calls_behavior() {
+        let mut chat = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tool_calls": 1,
+        });
+        let outcome = normalize_openai_compat_request("/v1/chat/completions", &mut chat).unwrap();
+        assert!(!outcome.changed);
+        assert_eq!(chat["max_tool_calls"], 1);
+    }
 }

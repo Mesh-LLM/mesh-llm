@@ -70,19 +70,21 @@ pub(super) async fn apply_request_transforms(
         }
         _ => Ok(false),
     }?;
-    let reasserted = reassert_responses_no_compaction(client_path, body);
+    let reasserted = reassert_responses_ingress_policy(client_path, body);
     Ok(transformed || reasserted)
 }
 
-fn reassert_responses_no_compaction(client_path: &str, body: &mut serde_json::Value) -> bool {
+fn reassert_responses_ingress_policy(client_path: &str, body: &mut serde_json::Value) -> bool {
     if client_path.split('?').next() != Some("/v1/responses") {
         return false;
     }
     let Some(object) = body.as_object_mut() else {
         return false;
     };
-    object.insert(MESH_COMPACT_FIELD.into(), serde_json::Value::Bool(false))
-        != Some(serde_json::Value::Bool(false))
+    let compact_changed = object.insert(MESH_COMPACT_FIELD.into(), serde_json::Value::Bool(false))
+        != Some(serde_json::Value::Bool(false));
+    let max_tool_calls_removed = object.remove("max_tool_calls").is_some();
+    compact_changed || max_tool_calls_removed
 }
 
 /// Reject a request that still holds an attachment only a transform can use
@@ -141,6 +143,9 @@ mod tests {
                     }
                     "enable-compact" => {
                         body[MESH_COMPACT_FIELD] = json!(true);
+                    }
+                    "inject-max-tool-calls" => {
+                        body["max_tool_calls"] = json!(999);
                     }
                     _ => {}
                 }
@@ -263,6 +268,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_transform_cannot_reintroduce_ingress_max_tool_calls() {
+        let manager = stamping_manager().await;
+        let request = read(
+            "/v1/responses",
+            json!({
+                "model": "m",
+                "input": "inject-max-tool-calls",
+                "max_tool_calls": 1,
+            }),
+            &manager,
+            RequestTransforms::Apply,
+        )
+        .await;
+        let body = forwarded_body(&request);
+        assert!(body.get("max_tool_calls").is_none());
+        let response = request.responses_turn.as_ref().unwrap().response(
+            skippy_inference_api::responses::ResponseStatus::InProgress,
+            &[],
+            None,
+            None,
+        );
+        assert_eq!(response["max_tool_calls"], 1);
+        assert_eq!(
+            request.body_len_bytes,
+            serde_json::to_vec(&body).unwrap().len()
+        );
+        assert_eq!(request.body_json.unwrap(), body);
+    }
+
+    #[tokio::test]
     async fn chat_transform_compaction_override_is_unchanged() {
         let manager = stamping_manager().await;
         let request = read(
@@ -334,6 +369,49 @@ mod tests {
         let body = forwarded_body(&request);
 
         assert_eq!(body[MESH_COMPACT_FIELD], false);
+        assert_eq!(
+            request.body_len_bytes,
+            serde_json::to_vec(&body).unwrap().len()
+        );
+        assert_eq!(request.body_json.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn responses_websocket_turn_strips_reintroduced_max_tool_calls() {
+        let manager = stamping_manager().await;
+        let session = skippy_inference_api::responses::ResponsesSession::new(
+            skippy_inference_api::responses::ResponsesSessionConfig::default(),
+            None,
+            None,
+        );
+        let prepared = session
+            .prepare_create(
+                json!({
+                    "type": "response.create",
+                    "model": "m",
+                    "input": "inject-max-tool-calls",
+                    "max_tool_calls": 1
+                }),
+                None,
+            )
+            .unwrap();
+        let handshake = responses_handshake("/v1/responses?transport=websocket");
+        let request = super::super::responses_websocket::buffer_prepared_responses_turn(
+            &handshake,
+            prepared,
+            Some(&manager),
+        )
+        .await
+        .unwrap();
+        let body = forwarded_body(&request);
+        assert!(body.get("max_tool_calls").is_none());
+        let response = request.responses_turn.as_ref().unwrap().response(
+            skippy_inference_api::responses::ResponseStatus::InProgress,
+            &[],
+            None,
+            None,
+        );
+        assert_eq!(response["max_tool_calls"], 1);
         assert_eq!(
             request.body_len_bytes,
             serde_json::to_vec(&body).unwrap().len()

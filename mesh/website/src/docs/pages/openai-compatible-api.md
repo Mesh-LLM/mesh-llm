@@ -157,6 +157,23 @@ plugin generated it. The default allowed-tools mode is `auto`; `none` forbids
 calls, and a completed `required` response must contain a permitted call.
 An incomplete response may end without a required call.
 
+`max_tool_calls` accepts a positive JSON integer through `u64::MAX`, or
+`null`. It counts every function call generated for the current response,
+including repeated names. Reaching the cap completes normally. If a backend,
+peer, virtual model, or plugin returns more calls, the original ingress fails
+the entire response with `tool_call_limit_exceeded`, empty output, and no
+stored continuation. Streamed calls remain quarantined, so no executable call
+events are emitted. Follow-ups inherit an omitted cap, explicit `null` clears
+it, and every response starts a fresh count.
+
+Enforcement is post-generation and the policy is neither sent over the Mesh
+wire nor forwarded to Chat Completions backends. Values above 128 are accepted
+and echoed without clamping, while Mesh retains a separate internal 128-call
+safety ceiling. Parsing is exact through `u64::MAX`; still-larger JSON integers
+are rejected. Mesh itself executes no developer-hosted tools, so rejection has
+no hidden execution side effects in this layer. `parallel_tool_calls` keeps its
+existing behavior.
+
 For SSE and WebSocket turns, output from the first tool-call fragment onward
 is buffered within bounded limits until the full function names can be
 validated. This delays tool-call events until generation finishes. A forbidden
@@ -219,8 +236,8 @@ The following standard behavior is available when the selected model supports
 it:
 
 - typed message history, images/files handled by the existing Mesh media path,
-  developer-hosted function tools, parallel calls, and structured output via
-  `text.format`;
+  developer-hosted function tools with `max_tool_calls`, parallel calls, and
+  structured output via `text.format`;
 - text, function-call, reasoning, usage, incomplete, and failed lifecycle
   events over SSE, with stable response/item IDs and one terminal response
   event;
@@ -228,7 +245,7 @@ it:
   labels are emitted only when a backend actually provides them.
 
 Unsupported semantics fail explicitly. Mesh does not currently implement
-background responses, automatic truncation, `max_tool_calls`, non-default
+background responses, automatic truncation, non-default
 service tiers, text verbosity, hosted tools, or encrypted reasoning
 continuation. The existing `/v1/realtime` WebSocket is a separate transcription
 protocol. Compaction items are the one opaque provider-state item described

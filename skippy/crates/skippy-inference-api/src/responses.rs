@@ -3,6 +3,8 @@ mod content_items;
 mod continuation;
 mod conversation;
 mod execution;
+#[cfg(test)]
+mod max_tool_calls_tests;
 mod resource;
 mod session;
 mod store;
@@ -367,6 +369,7 @@ fn translate_openai_responses_input(
         "background",
         "conversation",
         "include",
+        "max_tool_calls",
         "output",
         "output_text",
         "previous_response_id",

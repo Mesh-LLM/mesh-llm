@@ -968,5 +968,8 @@ fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
 }
 
 #[cfg(test)]
+#[path = "router/max_tool_calls_tests.rs"]
+mod max_tool_calls_tests;
+#[cfg(test)]
 #[path = "router_tests.rs"]
 mod tests;

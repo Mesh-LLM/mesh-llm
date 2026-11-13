@@ -151,3 +151,61 @@ fn event_count_rejection_does_not_return_truncated_item_indices() {
     );
     assert_failed_lifecycle(&failed);
 }
+
+#[test]
+fn max_tool_calls_rejects_buffered_replay_before_calls_or_continuation_commit() {
+    let store = Arc::new(ResponseStore::default());
+    let session = Arc::new(ResponseSessionCache::new(1024 * 1024));
+    let continuation = ResponseContinuation::for_session(
+        Some(store.clone()),
+        Some(CallerScope::LocalHost),
+        session.clone(),
+        true,
+    );
+    let mut request = json!({
+        "model": "m",
+        "input": "hello",
+        "max_tool_calls": 1,
+        "tools": [{"type": "function", "name": "same"}],
+    });
+    let turn = ResponsesTurn::prepare(&mut request, continuation).unwrap();
+    let id = turn.id().to_string();
+    let chat = json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": null, "tool_calls": [
+                {"id":"c0","type":"function","function":{"name":"same","arguments":"{}"}},
+                {"id":"c1","type":"function","function":{"name":"same","arguments":"{}"}}
+            ]},
+            "finish_reason": "tool_calls"
+        }]
+    });
+
+    let events = stream_events_for_chat_completion(&turn, &chat);
+    assert_eq!(
+        events.iter().map(|event| event.event).collect::<Vec<_>>(),
+        [
+            "response.created",
+            "response.in_progress",
+            "response.failed"
+        ]
+    );
+    for (sequence, event) in events.iter().enumerate() {
+        assert_eq!(event.data["sequence_number"], sequence as u64);
+    }
+    assert_eq!(events.last().unwrap().data["response"]["store"], false);
+    assert_eq!(events.last().unwrap().data["response"]["output"], json!([]));
+    assert_eq!(
+        events.last().unwrap().data["response"]["error"]["code"],
+        "tool_call_limit_exceeded"
+    );
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event.event,
+            "response.output_item.added"
+                | "response.function_call_arguments.delta"
+                | "response.function_call_arguments.done"
+        )
+    }));
+    assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+    assert!(session.get(&id).is_none());
+}

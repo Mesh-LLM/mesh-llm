@@ -70,6 +70,36 @@ impl InferenceBackend for SocketBackend {
                 });
                 std::future::pending().await
             }
+            "tool-call-pair" => {
+                let model = request.model;
+                Ok(Box::pin(stream::iter([
+                    Ok(GenerationEvent {
+                        id: "chatcmpl_socket_tool_pair".to_string(),
+                        created: 123,
+                        model: model.clone(),
+                        choices: vec![crate::generation::GenerationEventChoice {
+                            index: 0,
+                            delta: crate::generation::GenerationDelta {
+                                role: None,
+                                content: None,
+                                reasoning_content: None,
+                                tool_calls: Some(json!([
+                                    {"index":0,"id":"call_0","type":"function","function":{"name":"same","arguments":"{}"}},
+                                    {"index":1,"id":"call_1","type":"function","function":{"name":"same","arguments":"{}"}}
+                                ])),
+                            },
+                            logprobs: None,
+                            finish_reason: None,
+                        }],
+                        usage: None,
+                        timings: None,
+                    }),
+                    Ok(GenerationEvent::done_with_reason(
+                        model,
+                        crate::FinishReason::ToolCalls,
+                    )),
+                ])))
+            }
             _ => {
                 let model = request.model;
                 let text = format!("echo: {}", messages_to_plain_prompt(&request.messages));
@@ -190,6 +220,49 @@ fn completed(events: &[Value]) -> &Value {
         .iter()
         .find(|event| event["type"] == "response.completed")
         .expect("completed response")
+}
+
+#[tokio::test]
+async fn websocket_quarantines_calls_over_max_tool_calls() {
+    let server = serve(
+        Arc::new(SocketBackend::default()),
+        config(ResponsesSessionConfig::default()),
+    )
+    .await;
+    let mut socket = connect(server.address).await;
+    send(
+        &mut socket,
+        json!({
+            "type":"response.create",
+            "model":"tool-call-pair",
+            "input":"hi",
+            "max_tool_calls":1,
+            "tools":[{"type":"function","name":"same"}]
+        }),
+    )
+    .await;
+
+    let events = terminal(&mut socket).await;
+    for (sequence, event) in events.iter().enumerate() {
+        assert_eq!(event["sequence_number"], sequence as u64);
+    }
+    let failed = events.last().unwrap();
+    assert_eq!(failed["type"], "response.failed");
+    assert_eq!(
+        failed["response"]["error"]["code"],
+        "tool_call_limit_exceeded"
+    );
+    assert_eq!(failed["response"]["output"], json!([]));
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event["type"].as_str(),
+            Some(
+                "response.output_item.added"
+                    | "response.function_call_arguments.delta"
+                    | "response.function_call_arguments.done"
+            )
+        )
+    }));
 }
 
 #[tokio::test]

@@ -454,6 +454,7 @@ mod tests {
             "instructions": "be brief",
             "temperature": 0.2,
             "max_output_tokens": 16,
+            "max_tool_calls": u64::MAX,
             "store": false,
             "metadata": {"k": "v"},
             "tools": [{"type": "function", "name": "f"}],
@@ -465,6 +466,7 @@ mod tests {
         assert_eq!(response["instructions"], "be brief");
         assert_eq!(response["temperature"], 0.2);
         assert_eq!(response["max_output_tokens"], 16);
+        assert_eq!(response["max_tool_calls"], u64::MAX);
         assert_eq!(response["store"], false);
         assert_eq!(response["metadata"]["k"], "v");
         assert_eq!(response["tools"][0]["name"], "f");

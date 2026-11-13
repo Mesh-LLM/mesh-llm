@@ -126,6 +126,11 @@ impl ResponsesTurn {
             .to_string();
         let mut envelope = ResponseEnvelope::from_request(&echoed);
         envelope.set_store(envelope.store() && continuation.available().is_some());
+        let configuration = inheritable_configuration(object);
+        // This is a Responses ingress policy, not a Chat Completions field.
+        // The captured policy, envelope, and continuation configuration remain
+        // authoritative after the backend body is normalized or transformed.
+        object.remove("max_tool_calls");
 
         let input = object
             .get("input")
@@ -146,8 +151,6 @@ impl ResponsesTurn {
             .get("instructions")
             .and_then(Value::as_str)
             .map(ToString::to_string);
-        let configuration = inheritable_configuration(object);
-
         Ok(Self {
             id: new_response_id(),
             created_at: crate::responses::now_unix_secs_i64(),
@@ -476,6 +479,7 @@ const INHERITABLE_CONFIGURATION_FIELDS: &[&str] = &[
     "frequency_penalty",
     "top_logprobs",
     "max_output_tokens",
+    "max_tool_calls",
 ];
 
 fn inheritable_configuration(request: &Map<String, Value>) -> Map<String, Value> {
@@ -528,15 +532,6 @@ pub(super) fn reject_unsupported_request_fields(
             )
             .with_param("truncation"));
         }
-    }
-    if object
-        .get("max_tool_calls")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(
-            InferenceError::unsupported("max_tool_calls is not supported")
-                .with_param("max_tool_calls"),
-        );
     }
     if object
         .get("text")
@@ -837,7 +832,6 @@ mod tests {
             json!({"input": "x", "background": true}),
             json!({"input": "x", "truncation": "middle"}),
             json!({"input": "x", "truncation": "auto"}),
-            json!({"input": "x", "max_tool_calls": 2}),
             json!({"input": "x", "text": {"verbosity": "high"}}),
             json!({"input": "x", "service_tier": "priority"}),
             json!({"input": "x", "previous_response_id": 7}),

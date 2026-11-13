@@ -351,6 +351,55 @@ mod tests {
         String::from_utf8(relayed).unwrap()
     }
 
+    async fn relay_plugin_responses_response(response: &str) -> String {
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client_address = client_listener.local_addr().unwrap();
+        let response = response.to_owned();
+        tokio::spawn(async move {
+            let (mut backend, _) = upstream_listener.accept().await.unwrap();
+            backend.write_all(response.as_bytes()).await.unwrap();
+        });
+        let mut request = serde_json::json!({
+            "model":"m", "input":"one call only", "max_tool_calls":1,
+            "tools":[{"type":"function","name":"same"}]
+        });
+        let turn = std::sync::Arc::new(
+            skippy_inference_api::responses::ResponsesTurn::prepare(
+                &mut request,
+                skippy_inference_api::responses::ResponseContinuation::disabled(),
+            )
+            .unwrap(),
+        );
+        let relay = tokio::spawn(async move {
+            let (client, _) = client_listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            let mut upstream: ClientStream =
+                TcpStream::connect(upstream_address).await.unwrap().into();
+            route_http_endpoint_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                "http://plugin.test",
+                RouteAttemptLoggingContext {
+                    request_id: RequestId::new(),
+                    retry_policy: ResponseRetryPolicy::next_target_available(false),
+                    response_adapter: ResponseAdapter::OpenAiResponsesJson,
+                    responses_turn: Some(&turn),
+                    route_observer: OpenAiRouteObserver::default(),
+                    served_by: None,
+                    peer_capsule_id: None,
+                },
+            )
+            .await
+        });
+        let mut socket = TcpStream::connect(client_address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        relay.await.unwrap();
+        String::from_utf8(relayed).unwrap()
+    }
+
     /// A plugin backend's served-model headers are its own claims, not this
     /// node's: they never reach a mesh peer that reads the response as ours.
     #[tokio::test]
@@ -368,6 +417,28 @@ mod tests {
             "{relayed}"
         );
         assert!(relayed.ends_with(body));
+    }
+
+    #[tokio::test]
+    async fn plugin_backend_responses_are_checked_against_ingress_max_tool_calls() {
+        let body = serde_json::json!({
+            "id":"c", "object":"chat.completion", "model":"m",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"call_a","type":"function","function":{"name":"same","arguments":"{}"}},
+                {"id":"call_b","type":"function","function":{"name":"same","arguments":"{}"}}
+            ]},"finish_reason":"tool_calls"}]
+        })
+        .to_string();
+        let relayed = relay_plugin_responses_response(&format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        assert!(relayed.starts_with("HTTP/1.1 200 OK"), "{relayed}");
+        assert!(relayed.contains("tool_call_limit_exceeded"), "{relayed}");
+        assert!(relayed.contains(r#""status":"failed""#), "{relayed}");
+        assert!(relayed.contains(r#""output":[]"#), "{relayed}");
+        assert!(!relayed.contains(r#""type":"function_call""#), "{relayed}");
     }
 
     #[test]

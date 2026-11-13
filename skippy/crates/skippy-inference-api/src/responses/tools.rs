@@ -49,12 +49,14 @@ pub(super) struct ToolPolicy {
     mode: ToolMode,
     defined: BTreeSet<String>,
     allowed: BTreeSet<String>,
+    max_calls: Option<u64>,
 }
 
 impl ToolPolicy {
     pub(super) fn capture(request: &Map<String, Value>) -> Result<Self, InferenceError> {
         let defined = declared_tool_names(request.get("tools"))?;
         let (mode, allowed) = choice_policy(request.get("tool_choice"), &defined)?;
+        let max_calls = max_tool_calls(request.get("max_tool_calls"))?;
         if mode == ToolMode::Required && allowed.is_empty() {
             return Err(InferenceError::invalid_request(
                 "required tool_choice needs at least one declared tool",
@@ -65,6 +67,7 @@ impl ToolPolicy {
             mode,
             defined,
             allowed,
+            max_calls,
         })
     }
 
@@ -79,6 +82,15 @@ impl ToolPolicy {
             return Err(ToolOutputViolation::new(
                 "tool_call_limit_exceeded",
                 "upstream response exceeded the tool-call limit",
+            ));
+        }
+        if self
+            .max_calls
+            .is_some_and(|max_calls| names.len() as u64 > max_calls)
+        {
+            return Err(ToolOutputViolation::new(
+                "tool_call_limit_exceeded",
+                "upstream response exceeded max_tool_calls",
             ));
         }
         if self.mode == ToolMode::None && had_call_fragments {
@@ -125,6 +137,15 @@ pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, Infere
     // Revalidate at this public normalization boundary as well as when a turn
     // captures its policy. Some compatibility callers normalize without a turn.
     let policy = ToolPolicy::capture(request)?;
+    if request
+        .get("max_tool_calls")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(InferenceError::unsupported(
+            "max_tool_calls requires a prepared Responses turn",
+        )
+        .with_param("max_tool_calls"));
+    }
     let mut changed = false;
     if let Some(tools) = request.get_mut("tools")
         && !tools.is_null()
@@ -151,6 +172,20 @@ pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, Infere
         changed |= normalize_function(choice, "tool_choice")?;
     }
     Ok(changed)
+}
+
+fn max_tool_calls(value: Option<&Value>) -> Result<Option<u64>, InferenceError> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .filter(|value| *value > 0)
+        .map(Some)
+        .ok_or_else(|| {
+            InferenceError::invalid_request("max_tool_calls must be a positive integer")
+                .with_param("max_tool_calls")
+        })
 }
 
 fn declared_tool_names(value: Option<&Value>) -> Result<BTreeSet<String>, InferenceError> {
@@ -443,5 +478,73 @@ mod tests {
                 .validate_calls(ResponseStatus::Completed, false, [])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn max_tool_calls_accepts_null_and_the_complete_u64_range() {
+        for value in [
+            json!(null),
+            json!(1),
+            json!(128),
+            json!(129),
+            json!(u64::MAX),
+        ] {
+            let request = json!({"max_tool_calls": value});
+            ToolPolicy::capture(request.as_object().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn max_tool_calls_rejects_non_positive_or_non_u64_json_values() {
+        for value in [
+            json!(0),
+            json!(-1),
+            json!(1.0),
+            json!(1.5),
+            json!(true),
+            json!("1"),
+            json!([]),
+            json!({"value": 1}),
+        ] {
+            let request = json!({"max_tool_calls": value});
+            let error = ToolPolicy::capture(request.as_object().unwrap()).unwrap_err();
+            assert_eq!(error.body().error.param.as_deref(), Some("max_tool_calls"));
+            assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
+        }
+        let too_large: Value =
+            serde_json::from_str(r#"{"max_tool_calls":18446744073709551616}"#).unwrap();
+        assert!(ToolPolicy::capture(too_large.as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn requested_cap_counts_repeated_names_and_does_not_clamp_large_values() {
+        let request = json!({
+            "tools": [{"type": "function", "name": "same"}],
+            "max_tool_calls": 2,
+        });
+        let policy = ToolPolicy::capture(request.as_object().unwrap()).unwrap();
+        assert!(
+            policy
+                .validate_calls(ResponseStatus::Completed, true, ["same", "same"])
+                .is_ok()
+        );
+        let violation = policy
+            .validate_calls(ResponseStatus::Completed, true, ["same", "same", "same"])
+            .unwrap_err();
+        assert_eq!(violation.code, "tool_call_limit_exceeded");
+
+        let request = json!({
+            "tools": [{"type": "function", "name": "same"}],
+            "max_tool_calls": u64::MAX,
+        });
+        let policy = ToolPolicy::capture(request.as_object().unwrap()).unwrap();
+        let violation = policy
+            .validate_calls(
+                ResponseStatus::Completed,
+                true,
+                std::iter::repeat_n("same", MAX_TOOL_CALLS + 1),
+            )
+            .unwrap_err();
+        assert_eq!(violation.code, "tool_call_limit_exceeded");
     }
 }

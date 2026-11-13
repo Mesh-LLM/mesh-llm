@@ -101,6 +101,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | penalties / `logit_bias` | Supported | Presence/frequency/repeat penalties and token-id logit bias are passed to llama.cpp. |
 | `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether logits/probability data can be produced. |
 | `tools` / `tool_choice` | Responses-enforced; Chat backend-gated | Responses validates function identifiers and references at ingress. Its `allowed_tools` keeps the complete `tools` array visible to the backend, reduces only the backend choice to its effective mode, and rejects terminal calls outside the original allowed set. Chat Completions preserves tool settings; the backend decides generation support. |
+| `max_tool_calls` | Responses-enforced | Accepts positive JSON integers through `u64::MAX` or `null`, inherits across continuations, and fails the whole response with `tool_call_limit_exceeded` when generated calls exceed the effective cap. The field is never forwarded to Chat backends. |
 | `response_format` | Frontend-compatible | Text and structured-output shapes are parsed and preserved. Backend decides whether constrained decoding is available. |
 | OpenAI-style error envelope | Supported | Includes strict `type`, `param`, and `code` fields. |
 | OpenAI-style HTTP fallbacks | Supported | Unknown routes, unsupported methods, invalid JSON, and oversized JSON return the shared error envelope. |
@@ -142,7 +143,18 @@ atomically replay only authorized calls. A rejection emits a gap-free failed
 terminal, exposes no executable call event, and updates neither shared nor
 connection-local continuation state. `required` is enforced on completed
 responses; an incomplete response may end without a call. `none` rejects any
-tool-call fragment.
+tool-call fragment. `max_tool_calls` counts every generated function call in
+the current response, including repeated names. Reaching the cap completes;
+exceeding it fails the entire response with empty output, and quarantined calls
+are neither exposed nor retained. An omitted child value inherits the cap,
+explicit `null` clears it, and every response starts a fresh count.
+
+Enforcement is post-generation because the cap is not forwarded to Chat
+backends. Values above 128 are accepted and echoed without clamping, but the
+independent internal 128-call safety ceiling still applies. Parsing is exact
+for positive JSON integers through `u64::MAX`; larger mathematical integers
+are rejected. This layer executes no tools, so rejection creates no hidden tool
+side effects here. This checkpoint does not change `parallel_tool_calls`.
 
 `GET /v1/responses` upgrades the standalone Axum frontend to the April 2026
 Open Responses WebSocket transport. It processes exactly one turn at a time,
@@ -178,7 +190,7 @@ continuation `previous_response_id`: clients continue by resending the returned
 request may still consume a previously stored response ID as source history.
 
 This is not a claim of full Open Responses conformance. Background execution,
-automatic truncation, `max_tool_calls`, hosted tools, encrypted reasoning,
+automatic truncation, hosted tools, encrypted reasoning,
 non-default service tiers, and verbosity are unsupported and are rejected.
 Compaction is limited to the process-local contract above; it is not portable
 provider state. Mesh reuses this session at its full public ingress and routes

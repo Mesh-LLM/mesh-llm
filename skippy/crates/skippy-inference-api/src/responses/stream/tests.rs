@@ -551,3 +551,50 @@ fn rejected_stream_does_not_replace_websocket_session_state() {
     assert_eq!(stream.finish().last().unwrap().event, "response.failed");
     assert!(session.get(&id).is_none());
 }
+
+#[test]
+fn max_tool_calls_failure_quarantines_repeated_calls_and_commits_nothing() {
+    let store = Arc::new(ResponseStore::default());
+    let session = Arc::new(ResponseSessionCache::new(1024 * 1024));
+    let continuation = ResponseContinuation::for_session(
+        Some(store.clone()),
+        Some(CallerScope::LocalHost),
+        session.clone(),
+        true,
+    );
+    let mut stream = stream_for(
+        json!({
+            "model":"m", "input":"hi", "max_tool_calls": 1,
+            "tools":[{"type":"function","name":"same"}]
+        }),
+        continuation,
+    );
+    let id = stream.turn().id().to_string();
+    let mut events = stream.start();
+    events.extend(stream.push_chunk(&json!({"choices":[{
+        "delta":{"tool_calls":[
+            {"index":0,"id":"c0","function":{"name":"same","arguments":"{}"}},
+            {"index":1,"id":"c1","function":{"name":"same","arguments":"{}"}}
+        ]},
+        "finish_reason":"tool_calls"
+    }]})));
+    events.extend(stream.finish());
+
+    assert_well_formed(&events);
+    assert_eq!(events.last().unwrap().event, "response.failed");
+    assert_eq!(
+        events.last().unwrap().data["response"]["error"]["code"],
+        "tool_call_limit_exceeded"
+    );
+    assert_eq!(events.last().unwrap().data["response"]["output"], json!([]));
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event.event,
+            "response.output_item.added"
+                | "response.function_call_arguments.delta"
+                | "response.function_call_arguments.done"
+        )
+    }));
+    assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+    assert!(session.get(&id).is_none());
+}
