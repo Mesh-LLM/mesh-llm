@@ -25,14 +25,19 @@ use skippy_runtime::{BackendDevice, BackendDeviceType};
 ///   products to an accelerator such as BLAS whenever one is registered,
 ///   and offloads large batches of them to a GPU unless `op_offload` is
 ///   off.
-/// - On a GPU, selected or not, every layer must be offloaded with no
-///   routed experts kept in host memory: selecting a device does not
-///   offload a layer to it. The GPUs llama.cpp picks must share one
-///   audited family.
+/// - On a GPU, selected or not, every layer of the stage must be offloaded
+///   ([`offloads_every_layer`]) with no routed experts kept in host
+///   memory: selecting a device does not offload a layer to it. The GPUs
+///   llama.cpp picks must share one audited family.
 ///
 /// Any other placement gets a name no audit covers, so the stage issues no
-/// receipts.
-pub(super) fn stage_backend(config: &StageConfig, devices: &[BackendDevice]) -> String {
+/// receipts. `block_count` is the model's layer count, which llama.cpp
+/// counts `n_gpu_layers` against.
+pub(super) fn stage_backend(
+    config: &StageConfig,
+    devices: &[BackendDevice],
+    block_count: Option<u32>,
+) -> String {
     let of_type = |kind: BackendDeviceType| -> Vec<&str> {
         devices
             .iter()
@@ -56,9 +61,12 @@ pub(super) fn stage_backend(config: &StageConfig, devices: &[BackendDevice]) -> 
         }
     };
     let on_gpu = |gpu: &str| {
-        if config.n_gpu_layers >= 0 {
+        if !offloads_every_layer(config, block_count) {
             // the stage's layers may sit on both the CPU and the GPU
-            format!("CPU+{gpu} (offload of {} layers)", config.n_gpu_layers)
+            format!(
+                "CPU+{gpu} (partial offload of {} layers)",
+                config.n_gpu_layers
+            )
         } else if config.host_expert_layers.is_some() {
             format!("CPU+{gpu} (routed experts in host memory)")
         } else {
@@ -91,6 +99,22 @@ pub(super) fn stage_backend(config: &StageConfig, devices: &[BackendDevice]) -> 
     }
 }
 
+/// Whether `n_gpu_layers` puts every layer of the stage on a GPU.
+///
+/// llama.cpp numbers the model's layers `0..=block_count`, the output
+/// layer last, and offloads the last `n_gpu_layers` of them; a negative
+/// count offloads all. So the stage's layers from `layer_start` on are all
+/// offloaded when `n_gpu_layers >= block_count + 1 - layer_start`. A count
+/// such as 99 that operators use for "everything" is thus a full offload,
+/// and an unknown `block_count` counts as a partial one.
+fn offloads_every_layer(config: &StageConfig, block_count: Option<u32>) -> bool {
+    let Ok(count) = u32::try_from(config.n_gpu_layers) else {
+        return true;
+    };
+    block_count
+        .is_some_and(|blocks| u64::from(count) + u64::from(config.layer_start) > u64::from(blocks))
+}
+
 /// Why a stage on `backend` issues no receipts, when it issues none.
 pub(super) fn unaudited(backend: &str) -> Option<String> {
     BackendFamily::of(backend).is_none().then(|| {
@@ -103,7 +127,15 @@ mod tests {
     use skippy_protocol::{StageConfig, StageDevice};
     use skippy_runtime::{BackendDevice, BackendDeviceType};
 
-    use super::{stage_backend, unaudited};
+    use super::unaudited;
+
+    /// The layers of the model the stages below serve.
+    const BLOCKS: Option<u32> = Some(36);
+
+    /// The backend of a stage of that model.
+    fn stage_backend(config: &StageConfig, devices: &[BackendDevice]) -> String {
+        super::stage_backend(config, devices, BLOCKS)
+    }
 
     fn device(name: &str, device_type: BackendDeviceType) -> BackendDevice {
         BackendDevice {
@@ -185,10 +217,12 @@ mod tests {
         use BackendDeviceType::{Cpu, Gpu};
         let cuda = [device("CPU", Cpu), device("CUDA0", Gpu)];
         assert_eq!(stage_backend(&placed(-1, Some("CUDA0")), &cuda), "CUDA0");
-        for layers in [0, 1, 12, 999] {
+        for layers in [0, 1, 12, 36] {
             let backend = stage_backend(&placed(layers, Some("CUDA0")), &cuda);
             assert!(unaudited(&backend).is_some(), "{layers}: {backend}");
         }
+        // a count that covers every layer is an offload of every layer
+        assert_eq!(stage_backend(&placed(999, Some("CUDA0")), &cuda), "CUDA0");
         let experts = |selected| StageConfig {
             host_expert_layers: Some(skippy_protocol::HostExpertLayers { start: 0, end: 4 }),
             ..placed(-1, selected)
@@ -228,6 +262,36 @@ mod tests {
             stage_backend(&placed(0, None), &[device("CPU", Cpu)]),
             "CPU"
         );
+    }
+
+    #[test]
+    fn a_count_that_offloads_every_layer_of_the_stage_is_a_full_offload() {
+        use BackendDeviceType::{Cpu, Gpu};
+        let cuda = [device("CPU", Cpu), device("CUDA0", Gpu)];
+        let backend = |n_gpu_layers, layer_start| {
+            let config = StageConfig {
+                layer_start,
+                ..placed(n_gpu_layers, None)
+            };
+            stage_backend(&config, &cuda)
+        };
+        // the counts operators use for "everything"
+        for count in [-1, 99, 999, i32::MAX] {
+            assert_eq!(backend(count, 0), "CUDA0", "{count}");
+            assert_eq!(backend(count, 18), "CUDA0", "{count}");
+        }
+        // 37 layers with the output: the first stage needs all 37
+        assert_eq!(backend(37, 0), "CUDA0");
+        let below = backend(36, 0);
+        assert_eq!(below, "CPU+CUDA0 (partial offload of 36 layers)");
+        assert!(unaudited(&below).is_some());
+        // the second stage, layers 18 to 35, needs 19: its 18 and the output
+        assert_eq!(backend(19, 18), "CUDA0");
+        assert!(unaudited(&backend(18, 18)).is_some());
+        assert!(unaudited(&backend(10, 18)).is_some());
+        // a model whose layer count is unknown is not judged offloaded
+        let unknown = super::stage_backend(&placed(99, None), &cuda, None);
+        assert!(unaudited(&unknown).is_some(), "{unknown}");
     }
 
     #[test]

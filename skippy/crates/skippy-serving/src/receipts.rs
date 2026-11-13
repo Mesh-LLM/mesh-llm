@@ -263,9 +263,10 @@ pub fn start(
 ) -> Result<()> {
     check_listen(&options)?;
     // a registry that cannot be read leaves the placement unknown
+    let block_count = lock_runtime(&runtime).model.block_count();
     let backend = skippy_runtime::backend_devices().map_or_else(
         |_| "unknown".to_string(),
-        |devices| audited_backend::stage_backend(config, &devices),
+        |devices| audited_backend::stage_backend(config, &devices, block_count),
     );
     let unaudited = kv_cache::unaudited(config)
         .or_else(|| audited_backend::unaudited(&backend))

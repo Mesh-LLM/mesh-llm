@@ -230,6 +230,26 @@ impl StageModel {
         raw.try_into()
     }
 
+    /// The model's `<arch>.block_count`, the layer count llama.cpp counts
+    /// `n_gpu_layers` against, also on a stage that loads only some of the
+    /// layers. `None` when the model does not name one.
+    pub fn block_count(&self) -> Option<u32> {
+        if self.inner.raw.is_null() {
+            return None;
+        }
+        let model: *const skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_model_llama_model(self.inner.raw) }.cast();
+        if model.is_null() {
+            return None;
+        }
+        let architecture =
+            unsafe { skippy_ffi::llama_model_meta_val_str(model, "general.architecture") }?;
+        let key = format!("{architecture}.block_count");
+        unsafe { skippy_ffi::llama_model_meta_val_str(model, &key) }?
+            .parse()
+            .ok()
+    }
+
     /// A loaded causal graph can read next-token scores without sampling.
     /// This is independent of whether this worker owns the terminal head.
     pub fn supports_causal_readout(&self) -> bool {
