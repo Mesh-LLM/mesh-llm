@@ -6,6 +6,7 @@ mod execution;
 mod lineage;
 #[cfg(test)]
 mod max_tool_calls_tests;
+mod request_validation;
 mod resource;
 mod session;
 mod store;
@@ -314,7 +315,7 @@ fn translate_openai_responses_input(
             id.as_str().unwrap_or_default(),
         ));
     }
-    turn::reject_unsupported_request_fields(object)?;
+    request_validation::validate_request_fields(object)?;
     if object.insert(MESH_COMPACT_FIELD.into(), Value::Bool(false)) != Some(Value::Bool(false)) {
         changed = true;
     }

@@ -87,7 +87,7 @@ impl ResponsesTurn {
         let object = body
             .as_object_mut()
             .ok_or_else(|| InferenceError::invalid_request("request body must be a JSON object"))?;
-        reject_unsupported_request_fields(object)?;
+        super::request_validation::validate_request_fields(object)?;
         let explicit_model = object
             .get("model")
             .and_then(Value::as_str)
@@ -501,54 +501,6 @@ pub(super) fn take_previous_response_id(
         )
         .with_param("previous_response_id")),
     }
-}
-
-/// Fields this server reads but cannot honour. They are rejected rather than
-/// silently ignored.
-pub(super) fn reject_unsupported_request_fields(
-    object: &Map<String, Value>,
-) -> Result<(), InferenceError> {
-    if object.get("background").and_then(Value::as_bool) == Some(true) {
-        return Err(
-            InferenceError::unsupported("background responses are not supported")
-                .with_param("background"),
-        );
-    }
-    match object.get("truncation") {
-        None | Some(Value::Null) => {}
-        Some(Value::String(mode)) if mode == "disabled" => {}
-        Some(Value::String(mode)) if mode == "auto" => {
-            return Err(
-                InferenceError::unsupported("automatic input truncation is not supported")
-                    .with_param("truncation"),
-            );
-        }
-        Some(_) => {
-            return Err(InferenceError::invalid_request(
-                "truncation must be \"disabled\" or \"auto\"",
-            )
-            .with_param("truncation"));
-        }
-    }
-    if object
-        .get("text")
-        .and_then(|text| text.get("verbosity"))
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(
-            InferenceError::unsupported("text verbosity is not supported")
-                .with_param("text.verbosity"),
-        );
-    }
-    if let Some(tier) = object.get("service_tier").filter(|value| !value.is_null())
-        && !matches!(tier.as_str(), Some("auto" | "default"))
-    {
-        return Err(
-            InferenceError::unsupported("only the default service tier is supported")
-                .with_param("service_tier"),
-        );
-    }
-    Ok(())
 }
 
 /// The structured items a request's `input` adds to the conversation.

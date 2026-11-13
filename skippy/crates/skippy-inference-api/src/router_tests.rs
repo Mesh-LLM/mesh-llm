@@ -1036,6 +1036,8 @@ async fn models_route_returns_model_list() {
 mod decisions;
 #[path = "router_tests/non_chat.rs"]
 mod non_chat;
+#[path = "router_tests/responses_retention.rs"]
+mod responses_retention;
 #[path = "router_tests/system_one.rs"]
 mod system_one;
 

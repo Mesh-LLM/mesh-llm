@@ -1,6 +1,8 @@
 use super::*;
 #[path = "request_parse/audio_multipart_tests.rs"]
 mod audio_multipart_tests;
+#[path = "request_parse/responses_retention_tests.rs"]
+mod responses_retention_tests;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
