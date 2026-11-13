@@ -1,4 +1,4 @@
-use super::super::immutable_sdk_checkout::git;
+use super::super::immutable_research_checkout::git;
 use super::*;
 fn fixture() -> (tempfile::TempDir, Pin) {
     fixture_bytes(b"inert research source fixture")
@@ -130,7 +130,7 @@ fn research_raw_roster_preserves_the_finite_path_count_bound() {
         .map(|index| (format!("source-{index}.fixture"), digest(b"source")))
         .collect();
     assert!(
-        immutable_sdk_checkout::research_files(&dir.path().canonicalize().unwrap(), &expected)
+        immutable_research_checkout::research_files(&dir.path().canonicalize().unwrap(), &expected)
             .unwrap_err()
             .to_string()
             .contains("tracked roster bound refused")

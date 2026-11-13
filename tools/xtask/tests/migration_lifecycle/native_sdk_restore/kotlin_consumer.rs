@@ -34,15 +34,15 @@ pub(super) fn consumer_fixture() -> Fixture {
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
         fs::copy(repository.join(name), destination).unwrap();
     }
-    // These are copied external SDK source data; the exact SDK-only observer below
+    // These are copied in-tree SDK source data; the exact SDK-only observer below
     // is a fixture seam, not source qualification. Other owners execute real xtask.
     let sdk = PathBuf::from(
-        std::env::var_os("MESH_PYTHON_SDK_SOURCE").expect("prepare pinned external SDK source"),
+        std::env::var_os("MESH_PYTHON_SDK_SOURCE").expect("set the in-tree SDK source root"),
     );
     for leaf in ["client.py", "types.py"] {
-        let path = fixture.root.join("sdk-source/sdk/src/meshllm").join(leaf);
+        let path = fixture.root.join("sdk-source/src/meshllm").join(leaf);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::copy(sdk.join("sdk/src/meshllm").join(leaf), path).unwrap();
+        fs::copy(sdk.join("src/meshllm").join(leaf), path).unwrap();
     }
     write_executable(
         &fixture.root,

@@ -159,24 +159,32 @@ platform adapters may remain thin. Existing Python checks, Just recipes and
 workflow entrypoints remain operational during migration and are transitional,
 not templates for new tooling. Existing isolated compatibility or upstream
 fixtures may be retained only with an explicit maintainer decision; new Python
-tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
-Python-free or remove legacy validation before its Rust replacement passes.
+tooling requires an explicit maintainer decision to change that policy. The
+Python SDK is a product component under `mesh/sdk/python`; its package source,
+component tests, locked client environments and four ecosystem smoke clients
+are permitted there. `ci/python-tooling-policy.json` lists the exact in-tree
+Python source files and their interpreter invocations. This product-source
+exception does not permit generic repository automation. Do not claim the
+required path is Python-free or remove legacy validation before its Rust
+replacement passes.
 
-Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
-using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
-an immutable default source commit. These interfaces do not authorize new
-repository Python implementations. The canary Jinja environment belongs to its
-run's state directory and must use a preinstalled interpreter; dependency
-restoration must not download an interpreter or skip upstream tests. Freeze the
-Jinja project before selecting historical source checkouts so older sources do
-not need to contain the dependency manifest.
+Retained external Python dependencies have bounded owners: llama.cpp's upstream
+Jinja and FP8 conversion tests using the trusted controller's
+`ci/llama-canary/jinja/uv.lock`, the optional llama-benchy wrapper with an
+immutable default source commit, and the separate Python research project.
+These interfaces do not authorize new repository Python implementations. The
+canary Jinja environment belongs to its run's state directory and must use a
+preinstalled interpreter; dependency restoration must not download an
+interpreter or skip upstream tests. Freeze the Jinja project before selecting
+historical source checkouts so older sources do not need to contain the
+dependency manifest.
 
 `just ci-crate-lists`, selected by the normal Quality validation gate, also
 checks repository Python tooling. Its typed policy is
-`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
-and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. Platform-specific runner prerequisite lists require
+`ci/python-tooling-policy.json`: the exact in-tree Python SDK source roster,
+external dependency inputs, source pins and executable invocation exceptions
+must retain their documented owners and reviewed occurrence counts.
+Platform-specific runner prerequisite lists require
 separate exact entries; listing an interpreter as a prerequisite does not
 authorize executing or installing it. The census includes tracked and new
 nonignored files, including hidden directories. Python sources, shebangs, unapproved

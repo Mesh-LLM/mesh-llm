@@ -10,79 +10,252 @@
       "project_name": "mesh-llama-canary-jinja-tests",
       "project_version": "0.1.0",
       "direct_dependencies": [
-        { "name": "jinja2", "version": "3.1.6" },
-        { "name": "numpy", "version": "2.5.4" },
-        { "name": "safetensors", "version": "0.8.0" },
-        { "name": "torch", "version": "2.15.0" },
-        { "name": "transformers", "version": "5.22.1" }
+        {
+          "name": "jinja2",
+          "version": "3.1.6"
+        },
+        {
+          "name": "numpy",
+          "version": "2.5.4"
+        },
+        {
+          "name": "safetensors",
+          "version": "0.8.0"
+        },
+        {
+          "name": "torch",
+          "version": "2.15.0"
+        },
+        {
+          "name": "transformers",
+          "version": "5.22.1"
+        }
       ],
       "locked_packages": [
-        { "name": "annotated-doc", "version": "0.0.5" },
-        { "name": "anyio", "version": "4.16.0" },
-        { "name": "click", "version": "8.5.0" },
-        { "name": "colorama", "version": "0.4.6" },
-        { "name": "cuda-bindings", "version": "13.5.0" },
-        { "name": "cuda-pathfinder", "version": "1.8.6" },
-        { "name": "cuda-toolkit", "version": "13.2.2" },
-        { "name": "filelock", "version": "4.2.9" },
-        { "name": "fsspec", "version": "2026.9.0" },
-        { "name": "h11", "version": "0.16.0" },
-        { "name": "hf-xet", "version": "1.8.0" },
-        { "name": "httpcore2", "version": "2.16.0" },
-        { "name": "httpx2", "version": "2.16.0" },
-        { "name": "httpx2-jsfetch", "version": "1.0" },
-        { "name": "huggingface-hub", "version": "2.4.0" },
-        { "name": "idna", "version": "3.20" },
-        { "name": "jinja2", "version": "3.1.6" },
-        { "name": "markdown-it-py", "version": "4.2.0" },
-        { "name": "markupsafe", "version": "3.0.4" },
-        { "name": "mdurl", "version": "0.1.2" },
-        { "name": "mpmath", "version": "1.3.0" },
-        { "name": "networkx", "version": "3.7" },
-        { "name": "numpy", "version": "2.5.4" },
-        { "name": "nvidia-cublas", "version": "13.4.1.3" },
-        { "name": "nvidia-cuda-cccl", "version": "13.3.5.0.6" },
-        { "name": "nvidia-cuda-cupti", "version": "13.2.86" },
-        { "name": "nvidia-cuda-nvrtc", "version": "13.2.86" },
-        { "name": "nvidia-cuda-runtime", "version": "13.2.86" },
-        { "name": "nvidia-cudnn-cu13", "version": "9.26.0.51" },
-        { "name": "nvidia-cufft", "version": "12.2.0.57" },
-        { "name": "nvidia-cufile", "version": "1.17.1.22" },
-        { "name": "nvidia-cusolver", "version": "12.2.0.11" },
-        { "name": "nvidia-cusparse", "version": "12.7.10.12" },
-        { "name": "nvidia-cusparselt-cu13", "version": "0.8.1" },
-        { "name": "nvidia-nccl-cu13", "version": "2.30.7" },
-        { "name": "nvidia-nvjitlink", "version": "13.5.37" },
-        { "name": "nvidia-nvshmem-cu13", "version": "3.7.2" },
-        { "name": "nvidia-nvtx", "version": "13.2.86" },
-        { "name": "packaging", "version": "26.3" },
-        { "name": "pygments", "version": "2.21.0" },
-        { "name": "pyyaml", "version": "6.0.3" },
-        { "name": "regex", "version": "2026.9.29" },
-        { "name": "rich", "version": "15.0.0" },
-        { "name": "safetensors", "version": "0.8.0" },
-        { "name": "setuptools", "version": "84.2.1" },
-        { "name": "shellingham", "version": "1.5.4" },
-        { "name": "sympy", "version": "1.14.0" },
-        { "name": "tokenizers", "version": "0.23.3" },
-        { "name": "torch", "version": "2.15.0" },
-        { "name": "tqdm", "version": "4.70.1" },
-        { "name": "transformers", "version": "5.22.1" },
-        { "name": "triton", "version": "3.9.0" },
-        { "name": "truststore", "version": "0.10.5" },
-        { "name": "typer", "version": "0.27.3" },
-        { "name": "typing-extensions", "version": "4.16.0" }
+        {
+          "name": "annotated-doc",
+          "version": "0.0.5"
+        },
+        {
+          "name": "anyio",
+          "version": "4.16.0"
+        },
+        {
+          "name": "click",
+          "version": "8.5.0"
+        },
+        {
+          "name": "colorama",
+          "version": "0.4.6"
+        },
+        {
+          "name": "cuda-bindings",
+          "version": "13.5.0"
+        },
+        {
+          "name": "cuda-pathfinder",
+          "version": "1.8.6"
+        },
+        {
+          "name": "cuda-toolkit",
+          "version": "13.2.2"
+        },
+        {
+          "name": "filelock",
+          "version": "4.2.9"
+        },
+        {
+          "name": "fsspec",
+          "version": "2026.9.0"
+        },
+        {
+          "name": "h11",
+          "version": "0.16.0"
+        },
+        {
+          "name": "hf-xet",
+          "version": "1.8.0"
+        },
+        {
+          "name": "httpcore2",
+          "version": "2.16.0"
+        },
+        {
+          "name": "httpx2",
+          "version": "2.16.0"
+        },
+        {
+          "name": "httpx2-jsfetch",
+          "version": "1.0"
+        },
+        {
+          "name": "huggingface-hub",
+          "version": "2.4.0"
+        },
+        {
+          "name": "idna",
+          "version": "3.20"
+        },
+        {
+          "name": "jinja2",
+          "version": "3.1.6"
+        },
+        {
+          "name": "markdown-it-py",
+          "version": "4.2.0"
+        },
+        {
+          "name": "markupsafe",
+          "version": "3.0.4"
+        },
+        {
+          "name": "mdurl",
+          "version": "0.1.2"
+        },
+        {
+          "name": "mpmath",
+          "version": "1.3.0"
+        },
+        {
+          "name": "networkx",
+          "version": "3.7"
+        },
+        {
+          "name": "numpy",
+          "version": "2.5.4"
+        },
+        {
+          "name": "nvidia-cublas",
+          "version": "13.4.1.3"
+        },
+        {
+          "name": "nvidia-cuda-cccl",
+          "version": "13.3.5.0.6"
+        },
+        {
+          "name": "nvidia-cuda-cupti",
+          "version": "13.2.86"
+        },
+        {
+          "name": "nvidia-cuda-nvrtc",
+          "version": "13.2.86"
+        },
+        {
+          "name": "nvidia-cuda-runtime",
+          "version": "13.2.86"
+        },
+        {
+          "name": "nvidia-cudnn-cu13",
+          "version": "9.26.0.51"
+        },
+        {
+          "name": "nvidia-cufft",
+          "version": "12.2.0.57"
+        },
+        {
+          "name": "nvidia-cufile",
+          "version": "1.17.1.22"
+        },
+        {
+          "name": "nvidia-cusolver",
+          "version": "12.2.0.11"
+        },
+        {
+          "name": "nvidia-cusparse",
+          "version": "12.7.10.12"
+        },
+        {
+          "name": "nvidia-cusparselt-cu13",
+          "version": "0.8.1"
+        },
+        {
+          "name": "nvidia-nccl-cu13",
+          "version": "2.30.7"
+        },
+        {
+          "name": "nvidia-nvjitlink",
+          "version": "13.5.37"
+        },
+        {
+          "name": "nvidia-nvshmem-cu13",
+          "version": "3.7.2"
+        },
+        {
+          "name": "nvidia-nvtx",
+          "version": "13.2.86"
+        },
+        {
+          "name": "packaging",
+          "version": "26.3"
+        },
+        {
+          "name": "pygments",
+          "version": "2.21.0"
+        },
+        {
+          "name": "pyyaml",
+          "version": "6.0.3"
+        },
+        {
+          "name": "regex",
+          "version": "2026.9.29"
+        },
+        {
+          "name": "rich",
+          "version": "15.0.0"
+        },
+        {
+          "name": "safetensors",
+          "version": "0.8.0"
+        },
+        {
+          "name": "setuptools",
+          "version": "84.2.1"
+        },
+        {
+          "name": "shellingham",
+          "version": "1.5.4"
+        },
+        {
+          "name": "sympy",
+          "version": "1.14.0"
+        },
+        {
+          "name": "tokenizers",
+          "version": "0.23.3"
+        },
+        {
+          "name": "torch",
+          "version": "2.15.0"
+        },
+        {
+          "name": "tqdm",
+          "version": "4.70.1"
+        },
+        {
+          "name": "transformers",
+          "version": "5.22.1"
+        },
+        {
+          "name": "triton",
+          "version": "3.9.0"
+        },
+        {
+          "name": "truststore",
+          "version": "0.10.5"
+        },
+        {
+          "name": "typer",
+          "version": "0.27.3"
+        },
+        {
+          "name": "typing-extensions",
+          "version": "4.16.0"
+        }
       ]
     }
   ],
   "external_source_descriptors": [
-    {
-      "descriptor_path": "ci/required-sdk-python/sdk-source.json",
-      "repository": "Mesh-LLM/mesh-llm-python-sdk",
-      "revision": "0357f19f02cc3c2769ab46b0299af027e07049c1",
-      "manifest_sha256": "774e1fb4c94aff1d134ebdac64ffbad0cdef7288531fc9631140c00d01d74426",
-      "purpose": "required external SDK compatibility and embedding clients"
-    },
     {
       "descriptor_path": "ci/python-research-source.json",
       "repository": "Mesh-LLM/mesh-llm-research",
@@ -117,7 +290,7 @@
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "host_python=\"$(command -v python3)\"",
       "occurrences": 1,
-      "purpose": "select the runner-provisioned interpreter for external SDK dependencies"
+      "purpose": "select the runner-provisioned interpreter for in-tree SDK dependencies"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
@@ -129,49 +302,49 @@
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "uv sync --locked --project \"$sdk_project\" --python \"$host_python\"",
       "occurrences": 1,
-      "purpose": "restore the exact external SDK embedding lock"
+      "purpose": "restore the exact in-tree SDK embedding lock"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "\"$sdk_python\" -I \"$sdk_root/scripts/import-embedding.py\"",
       "occurrences": 1,
-      "purpose": "run the external SDK embedding import smoke"
+      "purpose": "run the in-tree SDK embedding import smoke"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "[[ \"$(\"$host_python\" --version)\" == 'Python 3.12.'* ]] || { echo \"required SDK lock needs existing CPython 3.12\" >&2; exit 1; }",
       "occurrences": 1,
-      "purpose": "verify the installed interpreter required by the external SDK lock"
+      "purpose": "verify the installed interpreter required by the in-tree SDK lock"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "\"$host_python\" -I -m venv \"$sdk_environment\"",
       "occurrences": 1,
-      "purpose": "create the run-owned external SDK environment"
+      "purpose": "create the run-owned in-tree SDK environment"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "\"$sdk_python\" -I -m pip --isolated install --disable-pip-version-check --no-input \\",
       "occurrences": 1,
-      "purpose": "install the exact external SDK compatibility lock"
+      "purpose": "install the exact in-tree SDK compatibility lock"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "\"$sdk_python\" -I -m pip --isolated check",
       "occurrences": 1,
-      "purpose": "check the external SDK compatibility environment"
+      "purpose": "check the in-tree SDK compatibility environment"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "\"$sdk_python\" -I \"$sdk_root/scripts/import-compatibility.py\"",
       "occurrences": 1,
-      "purpose": "run the external SDK compatibility import smoke"
+      "purpose": "run the in-tree SDK compatibility import smoke"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "[[ \"$sdk_python\" == /* && -f \"$sdk_python\" && -x \"$sdk_python\" ]] || exit 1",
       "occurrences": 1,
-      "purpose": "require the prepared external SDK interpreter path"
+      "purpose": "require the prepared in-tree SDK interpreter path"
     },
     {
       "path": "scripts/run-llama-benchy-openai.sh",
@@ -183,37 +356,37 @@
       "path": "scripts/ci-compat-smoke.sh",
       "line": "if [[ \"$SDK_PYTHON\" != /* || ! -f \"$SDK_PYTHON\" || ! -x \"$SDK_PYTHON\" ]]; then",
       "occurrences": 1,
-      "purpose": "require the prepared external SDK interpreter for compatibility probes"
+      "purpose": "require the prepared in-tree SDK interpreter for compatibility probes"
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
       "line": "\"${automation[@]}\" automation smoke-observation sdk-client --client openai --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/openai-sdk.json\"",
       "occurrences": 1,
-      "purpose": "forward the prepared external SDK interpreter to the OpenAI compatibility client"
+      "purpose": "forward the prepared in-tree SDK interpreter to the OpenAI compatibility client"
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
       "line": "\"${automation[@]}\" automation smoke-observation sdk-client --client litellm --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/litellm-sdk.json\"",
       "occurrences": 1,
-      "purpose": "forward the prepared external SDK interpreter to the LiteLLM compatibility client"
+      "purpose": "forward the prepared in-tree SDK interpreter to the LiteLLM compatibility client"
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
       "line": "\"${automation[@]}\" automation smoke-observation sdk-client --client langchain --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/langchain-sdk.json\"",
       "occurrences": 1,
-      "purpose": "forward the prepared external SDK interpreter to the LangChain compatibility client"
+      "purpose": "forward the prepared in-tree SDK interpreter to the LangChain compatibility client"
     },
     {
       "path": "skippy/scripts/skippy-workload-certify.sh",
       "line": "if [[ \"$SDK_PYTHON\" != /* || ! -f \"$SDK_PYTHON\" || ! -x \"$SDK_PYTHON\" ]]; then",
       "occurrences": 1,
-      "purpose": "require the prepared external SDK interpreter for embedding workload smoke"
+      "purpose": "require the prepared in-tree SDK interpreter for embedding workload smoke"
     },
     {
       "path": "skippy/scripts/skippy-workload-certify.sh",
       "line": "--client embeddings --python \"$SDK_PYTHON\" \\",
       "occurrences": 1,
-      "purpose": "forward the prepared external SDK interpreter to the native embedding workload"
+      "purpose": "forward the prepared in-tree SDK interpreter to the native embedding workload"
     },
     {
       "path": "skippy/scripts/skippy-openai-smoke.sh",
@@ -221,5 +394,35 @@
       "occurrences": 1,
       "purpose": "check the optional upstream llama-benchy command before its smoke wrapper"
     }
-  ]
+  ],
+  "in_tree_python_component": {
+    "root": "mesh/sdk/python",
+    "manifest_path": "mesh/sdk/python/sdk-inputs.json",
+    "source_files": [
+      "mesh/sdk/python/hatch_build.py",
+      "mesh/sdk/python/scripts/ci-langchain-openai-smoke.py",
+      "mesh/sdk/python/scripts/ci-litellm-smoke.py",
+      "mesh/sdk/python/scripts/ci-openai-embeddings-smoke.py",
+      "mesh/sdk/python/scripts/ci-openai-python-smoke.py",
+      "mesh/sdk/python/scripts/import-compatibility.py",
+      "mesh/sdk/python/scripts/import-embedding.py",
+      "mesh/sdk/python/src/meshllm/__init__.py",
+      "mesh/sdk/python/src/meshllm/_binding.py",
+      "mesh/sdk/python/src/meshllm/_generated/__init__.py",
+      "mesh/sdk/python/src/meshllm/_generated/mesh_ffi.py",
+      "mesh/sdk/python/src/meshllm/client.py",
+      "mesh/sdk/python/src/meshllm/types.py",
+      "mesh/sdk/python/tests/test_binding.py",
+      "mesh/sdk/python/tests/test_client.py"
+    ],
+    "package_inputs": [
+      "mesh/sdk/python/pyproject.toml",
+      "mesh/sdk/python/ci/canary-python/pyproject.toml",
+      "mesh/sdk/python/ci/canary-python/uv.lock",
+      "mesh/sdk/python/ci/required-sdk-python/pyproject.toml",
+      "mesh/sdk/python/ci/required-sdk-python/requirements.lock",
+      "mesh/sdk/python/ci/required-sdk-python/uv.lock"
+    ],
+    "purpose": "in-tree MeshLLM Python SDK package, component tests, and locked ecosystem clients"
+  }
 }

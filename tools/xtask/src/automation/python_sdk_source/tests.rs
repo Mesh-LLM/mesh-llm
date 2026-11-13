@@ -1,108 +1,102 @@
 use super::*;
-fn fixture() -> (tempfile::TempDir, Pin) {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
-    git(&root, &["init"]).unwrap();
-    std::fs::write(root.join("client.py"), "inert SDK source fixture").unwrap();
-    std::fs::write(root.join(".gitignore"), ".venv/\n").unwrap();
-    let value = serde_json::json!({"schema_version":1,"repository":"Mesh-LLM/mesh-llm-python-sdk","mesh_source":"fixture", "generator":{"uniffi":"0.32.0"},"files":{"client.py":digest(b"inert SDK source fixture"),".gitignore":digest(b".venv/\n")}});
-    let bytes = serde_json::to_vec(&value).unwrap();
-    std::fs::write(root.join("sdk-inputs.json"), &bytes).unwrap();
-    git(&root, &["add", "."]).unwrap();
-    git(
-        &root,
-        &[
-            "-c",
-            "user.name=fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "commit",
-            "-m",
-            "fixture",
-        ],
+use std::fs;
+
+fn write_manifest(root: &Path) {
+    let mut files = BTreeMap::new();
+    for relative in [
+        ".gitignore",
+        "README.md",
+        "ci/required-sdk-python/requirements.lock",
+    ] {
+        let path = root.join(relative);
+        files.insert(relative, digest(&read(&path, MAX_FILE_BYTES).unwrap()));
+    }
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "source_checkpoint": "0357f19f02cc3c2769ab46b0299af027e07049c1",
+        "mesh_source": "e819fd4fe8d3d87517708faa0f2589c05aa48d80",
+        "generator": {"uniffi": "0.32.0"},
+        "files": files,
+    });
+    fs::write(root.join(MANIFEST), serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
+fn fixture() -> tempfile::TempDir {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join(SDK_ROOT);
+    fs::create_dir_all(root.join("ci/required-sdk-python")).unwrap();
+    fs::write(root.join(".gitignore"), ".venv/\n").unwrap();
+    fs::write(root.join("README.md"), "in-tree SDK fixture\n").unwrap();
+    fs::write(
+        root.join("ci/required-sdk-python/requirements.lock"),
+        "openai==1.0.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
     )
     .unwrap();
-    let revision = String::from_utf8(git(&root, &["rev-parse", "HEAD"]).unwrap())
-        .unwrap()
-        .trim()
-        .to_owned();
-    (
-        dir,
-        Pin {
-            schema_version: 1,
-            repository: "Mesh-LLM/mesh-llm-python-sdk".into(),
-            revision,
-            manifest_sha256: digest(&bytes),
-        },
-    )
+    write_manifest(&root);
+    temporary
 }
+
 #[test]
-fn immutable_sdk_source_accepts_environment_outputs_but_refuses_source_and_commit_drift() {
-    let (dir, pin) = fixture();
-    let root = dir.path().canonicalize().unwrap();
-    assert!(admit_pin(&root, &pin).is_ok());
-    std::fs::create_dir(root.join(".venv")).unwrap();
-    std::fs::write(root.join(".venv/output"), "untracked environment").unwrap();
-    assert!(admit_pin(&root, &pin).is_ok());
-    std::fs::write(root.join("openai.py"), "unbound source").unwrap();
-    assert!(admit_pin(&root, &pin).is_err());
-    std::fs::remove_file(root.join("openai.py")).unwrap();
-    std::fs::write(root.join("client.py"), "changed").unwrap();
-    assert!(admit_pin(&root, &pin).is_err());
-    git(&root, &["add", "client.py"]).unwrap();
-    git(
-        &root,
-        &[
-            "-c",
-            "user.name=fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "commit",
-            "-m",
-            "changed",
-        ],
-    )
-    .unwrap();
-    assert!(admit_pin(&root, &pin).is_err());
+fn local_sdk_manifest_admits_only_its_exact_source_roster_and_hashes() {
+    let temporary = fixture();
+    let mesh = temporary.path().canonicalize().unwrap();
+    let source = admit(&mesh).unwrap();
+    assert_eq!(source.root, mesh.join(SDK_ROOT));
+    assert_eq!(source.pins.len(), 4);
+
+    let ignored = source.root.join(".venv");
+    fs::create_dir(&ignored).unwrap();
+    fs::write(ignored.join("runtime-output"), "environment output").unwrap();
+    fs::create_dir(source.root.join("dist")).unwrap();
+    fs::write(source.root.join("dist/wheel.whl"), "build output").unwrap();
+    assert!(admit(&mesh).is_ok());
+
+    fs::write(source.root.join("README.md"), "changed").unwrap();
+    assert!(admit(&mesh).is_err());
 }
+
+#[cfg(unix)]
 #[test]
-fn manifest_digest_roster_and_symlink_substitution_fail_closed() {
-    let (dir, mut pin) = fixture();
-    let root = dir.path().canonicalize().unwrap();
-    pin.manifest_sha256 = "0".repeat(64);
-    assert!(admit_pin(&root, &pin).is_err());
-    let bytes = std::fs::read(root.join("sdk-inputs.json")).unwrap();
-    pin.manifest_sha256 = digest(&bytes);
-    std::fs::write(root.join("unbound.py"), "inert unbound fixture").unwrap();
-    git(&root, &["add", "unbound.py"]).unwrap();
-    assert!(admit_pin(&root, &pin).is_err());
-    git(&root, &["reset", "--", "unbound.py"]).unwrap();
-    std::fs::remove_file(root.join("unbound.py")).unwrap();
-    std::fs::remove_file(root.join("client.py")).unwrap();
-    std::os::unix::fs::symlink("sdk-inputs.json", root.join("client.py")).unwrap();
-    assert!(admit_pin(&root, &pin).is_err());
+fn local_sdk_manifest_refuses_unlisted_files_and_symlink_substitution() {
+    let temporary = fixture();
+    let mesh = temporary.path().canonicalize().unwrap();
+    let root = mesh.join(SDK_ROOT);
+    fs::write(root.join("unlisted.py"), "new Python source\n").unwrap();
+    assert!(admit(&mesh).is_err());
+    fs::remove_file(root.join("unlisted.py")).unwrap();
+
+    fs::remove_file(root.join("README.md")).unwrap();
+    std::os::unix::fs::symlink(".gitignore", root.join("README.md")).unwrap();
+    assert!(admit(&mesh).is_err());
 }
+
 #[test]
-fn setup_restore_and_runtime_share_the_compiled_external_pin() {
-    let pin: Pin = serde_json::from_slice(include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../ci/required-sdk-python/sdk-source.json"
-    )))
-    .unwrap();
-    let action = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../.github/actions/prepare-python-sdk-source/action.yml"
-    ));
-    assert!(action.contains(&format!("repository: {}", pin.repository)));
-    assert!(action.contains(&format!("ref: {}", pin.revision)));
-    assert!(!action.contains("-I -c"));
+fn checked_in_sdk_snapshot_is_admitted_from_the_mesh_checkout() {
+    let mesh = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let source = admit(&mesh).unwrap();
+    assert!(source.root.join("src/meshllm/client.py").is_file());
+    assert!(
+        source
+            .root
+            .join("ci/required-sdk-python/requirements.lock")
+            .is_file()
+    );
+    assert!(!source.root.join("sdk").exists());
+}
+
+#[test]
+fn setup_uses_in_tree_sdk_and_no_external_checkout() {
     let setup = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../.github/actions/setup-canary-python/action.yml"
     ));
-    assert!(setup.contains("./.github/actions/prepare-python-sdk-source"));
-    assert!(!setup.contains("-I -c"));
-    assert!(action.contains("sdk-source --kind root"));
+    assert!(setup.contains("sdk-source --kind root"));
+    assert!(setup.contains("sdk-source --kind \"$SDK_KIND\""));
+    assert!(!setup.contains("prepare-python-sdk-source"));
+
     for workflow in [
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -113,40 +107,15 @@ fn setup_restore_and_runtime_share_the_compiled_external_pin() {
             "/../../.github/workflows/sdk-smoke.yml"
         )),
     ] {
-        assert!(workflow.contains("./.github/actions/prepare-python-sdk-source"));
+        assert!(!workflow.contains("prepare-python-sdk-source"));
     }
-    let sdk_smoke = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../.github/workflows/sdk-smoke.yml"
-    ));
-    let automation = sdk_smoke
-        .find("./.github/actions/restore-automation")
-        .unwrap();
-    let admission = sdk_smoke
-        .find("./.github/actions/prepare-python-sdk-source")
-        .unwrap();
-    assert!(automation < admission);
 }
 
+#[cfg(windows)]
 #[test]
-fn physical_source_admission_does_not_execute_local_git_clean_filters() {
-    let (dir, pin) = fixture();
-    let root = dir.path().canonicalize().unwrap();
-    let sentinel = root.join("filter-executed");
-    std::fs::write(
-        root.join(".git/info/attributes"),
-        "client.py filter=poison\n",
-    )
-    .unwrap();
-    git(
-        &root,
-        &[
-            "config",
-            "filter.poison.clean",
-            &format!("/bin/sh -c 'touch \"{}\"; cat'", sentinel.display()),
-        ],
-    )
-    .unwrap();
-    assert!(admit_pin(&root, &pin).is_ok());
-    assert!(!sentinel.exists());
+fn in_tree_sdk_relative_paths_keep_native_separators() {
+    let temporary = fixture();
+    let source = admit(&temporary.path().canonicalize().unwrap()).unwrap();
+    let project = source_path(&source.root, "ci/canary-python").unwrap();
+    assert!(!project.to_string_lossy().ends_with("/"));
 }

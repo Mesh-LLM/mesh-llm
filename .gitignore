@@ -3,7 +3,7 @@
 /llama.cpp
 llama.cpp-rpc-b2b/
 .deps/
-# Immutable external SDK/research checkouts restored by CI and admitted separately.
+# Pinned external research checkout restored by CI and admitted separately.
 /.sdk-source/
 # The Llama workflow checks out the selected source separately; the frozen
 # controller's clean-source gate must not treat that nested checkout as edits.
