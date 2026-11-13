@@ -1,5 +1,5 @@
 use super::{Error, error::Failure, finalization::finalize};
-use crate::{command_interrupt::Reason, process};
+use process_supervision::{self as process, interrupt::Reason};
 use std::{io, time::Duration};
 
 fn cancelled() -> process::ProcessReport {

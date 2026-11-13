@@ -5,10 +5,10 @@
 use super::fields::{ModelError, ModelResult, fail};
 use super::json_bytes::{ASCII, ASCII_COMPACT, dumps};
 use super::manifest::{PinnedFile, Resolved, Selection, resolve};
-use crate::ci_plan::catalog::{os_error_text, python_path_display};
-use crate::ci_plan::document::Json;
-use crate::repository::check_args::Grammar;
-use crate::repository::check_report::CheckReport;
+use ci_controller::plan::catalog::{os_error_text, python_path_display};
+use ci_controller::plan::document::Json;
+use ci_controller::repository::check_args::Grammar;
+use ci_controller::repository::check_report::CheckReport;
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -34,17 +34,17 @@ const GRAMMAR: Grammar = Grammar {
 };
 
 /// One resolution, as the legacy argv or the restore step describes it.
-pub(super) struct Request<'a> {
-    pub(super) manifest: &'a str,
-    pub(super) selection: Selection<'a>,
-    pub(super) require_single_file: bool,
-    pub(super) print_serving_file: bool,
-    pub(super) github_output: Option<&'a str>,
-    pub(super) output_prefix: &'a str,
-    pub(super) verify_root: Option<&'a str>,
+pub struct Request<'a> {
+    pub manifest: &'a str,
+    pub selection: Selection<'a>,
+    pub require_single_file: bool,
+    pub print_serving_file: bool,
+    pub github_output: Option<&'a str>,
+    pub output_prefix: &'a str,
+    pub verify_root: Option<&'a str>,
 }
 
-pub(super) fn run(args: &[String]) -> CheckReport {
+pub fn run(args: &[String]) -> CheckReport {
     if args.len() == 1 && matches!(args[0].as_str(), "-h" | "--help") {
         let usage = GRAMMAR.usage.replace(
             "[--require-single-file]",
@@ -94,7 +94,7 @@ pub(super) fn run(args: &[String]) -> CheckReport {
 }
 
 /// Resolves `request`; stdout keeps verified lines written before a failure.
-pub(super) fn execute(request: &Request<'_>) -> CheckReport {
+pub fn execute(request: &Request<'_>) -> CheckReport {
     let mut stdout = String::new();
     match resolve_into(request, &mut stdout) {
         Ok(()) => CheckReport::success(stdout),
@@ -112,9 +112,7 @@ pub(super) fn execute(request: &Request<'_>) -> CheckReport {
 fn serving_file(files: &[PinnedFile]) -> ModelResult<&PinnedFile> {
     files
         .iter()
-        .filter_map(|file| {
-            crate::model_registry::serving_entry::rank(&file.name).map(|rank| (rank, file))
-        })
+        .filter_map(|file| super::serving_entry::rank(&file.name).map(|rank| (rank, file)))
         .min_by(|(ar, a), (br, b)| {
             ar.cmp(br)
                 .then(a.size_bytes.cmp(&b.size_bytes))
@@ -218,13 +216,13 @@ fn joined(root: &str, name: &str) -> String {
 }
 
 /// Size first, then a streamed SHA-256, against the pinned record.
-pub(super) fn verify(root: &str, file: &PinnedFile) -> ModelResult<String> {
+pub fn verify(root: &str, file: &PinnedFile) -> ModelResult<String> {
     verify_with_guard(root, file, &mut || Ok(()))
 }
 
 /// The parity owner supplies cancellation/deadline admission between file chunks.
 /// Existing resolver callers keep their established adapter and output contract.
-pub(super) fn verify_with_guard(
+pub fn verify_with_guard(
     root: &str,
     file: &PinnedFile,
     guard: &mut impl FnMut() -> std::io::Result<()>,
@@ -336,14 +334,15 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let file = scratch.path().join("model.gguf");
         std::fs::write(&file, vec![42_u8; 3 * 1024 * 1024]).unwrap();
-        let cancellation = crate::process::Cancellation::default();
+        // A cancellation flag owned by the caller, as the parity download supplies.
+        let cancelled = std::cell::Cell::new(false);
         let mut calls = 0;
         let mut guard = || {
             calls += 1;
             if calls == 3 {
-                cancellation.cancel();
+                cancelled.set(true);
             }
-            if cancellation.is_cancelled() {
+            if cancelled.get() {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
                     "cancelled",
@@ -373,15 +372,16 @@ mod tests {
             sha256: hex::encode(Sha256::digest(&bytes)),
             url: "https://fixture.invalid/model.gguf".into(),
         };
-        let cancellation = crate::process::Cancellation::default();
+        // A cancellation flag owned by the caller, as the parity download supplies.
+        let cancelled = std::cell::Cell::new(false);
         let mut calls = 0;
         let mut guard = || {
             calls += 1;
             // Three bounded chunks have been consumed before the EOF guard.
             if calls == 7 {
-                cancellation.cancel();
+                cancelled.set(true);
             }
-            if cancellation.is_cancelled() {
+            if cancelled.get() {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
                     "cancelled",

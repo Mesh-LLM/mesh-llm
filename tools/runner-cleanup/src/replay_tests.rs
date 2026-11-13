@@ -1,6 +1,7 @@
 use super::{Error, Git, Profile, admission, deletion, fixtures::Fixture};
-use crate::process::{
-    self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
+use process_supervision::{
+    self as process, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness,
+    Value,
 };
 use std::{collections::BTreeMap, ffi::OsString, num::NonZeroUsize, path::Path, time::Duration};
 

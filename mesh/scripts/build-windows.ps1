@@ -106,6 +106,27 @@ function Test-BashIsWsl {
     return $kernel -eq "Linux"
 }
 
+# package-native-runtime.sh runs Windows cargo and collects Windows DLLs, so it
+# needs a Windows bash (Git Bash, MSYS2 or Cygwin): WSL bash would reach Linux
+# tools. From PowerShell, System32's WSL launcher can come first on PATH, even
+# where WSL is not installed, so take Git for Windows' bash next to git then.
+# Resolved before the ABI build, not after it.
+function Resolve-PackagingBash {
+    $kernel = try { (& bash -c "uname -s" 2>$null | Out-String).Trim() } catch { "" }
+    if ($kernel -match '^(MINGW|MSYS|CYGWIN)') {
+        return "bash"
+    }
+    $git = Resolve-CommandPath "git"
+    if ($git) {
+        # git.exe sits in <Git>\cmd or <Git>\bin, and Git Bash in <Git>\bin.
+        $gitBash = Join-Path (Split-Path -Parent (Split-Path -Parent $git)) "bin\bash.exe"
+        if (Test-Path $gitBash) {
+            return $gitBash
+        }
+    }
+    throw "Packaging the native runtime needs Git Bash, MSYS2 or Cygwin bash, but bash on PATH is not one (uname -s: '$kernel') and no Git Bash was found next to git. Put Git for Windows' bin directory first on PATH."
+}
+
 function Prepare-Llama {
     # Prepare through scripts/prepare-llama.sh, the patch queue Linux, macOS
     # and CI apply: the main series, the model_support series in its series
@@ -1070,6 +1091,8 @@ switch ($backendName) {
     }
 }
 
+$packagingBash = Resolve-PackagingBash
+
 Invoke-InRepo {
     Prepare-Llama
     # Resolve after preparing, so a pin switch builds into the new pin's
@@ -1191,12 +1214,12 @@ Invoke-InRepo {
         $env:LLAMA_STAGE_AMDGPU_TARGETS = $RocmArch
     }
     $profileDir = if ($buildProfile -eq "release") { "release" } else { "debug" }
-    # Invoke-InRepo makes this shell-relative path portable across Git Bash and
-    # WSL. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
+    # Invoke-InRepo makes these shell-relative paths resolve from the repository
+    # root. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
     # remote host and fail after the expensive ABI build has already completed.
     $runtimeOut = "target/$profileDir/native-runtimes"
-    Invoke-NativeCommand "bash" @(
-        (Join-Path $scriptDir "package-native-runtime.sh"),
+    Invoke-NativeCommand $packagingBash @(
+        "scripts/package-native-runtime.sh",
         "--backend", $backendName,
         "--target", "x86_64-pc-windows-msvc",
         "--out", $runtimeOut

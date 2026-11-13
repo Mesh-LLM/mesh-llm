@@ -3,28 +3,28 @@
 //! [`Resolved`] is the only way a consumer sees an artifact.
 
 use super::fields::{ModelResult, escapes_root, fail, get, is_lower_hex};
-use crate::ci_plan::document::Json;
-use crate::repository::text::repr;
+use ci_controller::plan::document::Json;
+use ci_controller::repository::text::repr;
 
 /// One integrity-pinned file of a resolved artifact.
-pub(super) struct PinnedFile {
-    pub(super) name: String,
-    pub(super) url: String,
-    pub(super) size_bytes: u64,
-    pub(super) sha256: String,
+pub struct PinnedFile {
+    pub name: String,
+    pub url: String,
+    pub size_bytes: u64,
+    pub sha256: String,
 }
 
 /// An artifact authorized for the requested cadence.
-pub(super) struct Resolved<'a> {
-    pub(super) row: &'a [(String, Json)],
-    pub(super) id: &'a str,
-    pub(super) files: Vec<PinnedFile>,
+pub struct Resolved<'a> {
+    pub row: &'a [(String, Json)],
+    pub id: &'a str,
+    pub files: Vec<PinnedFile>,
 }
 
 /// What the consumer asked for.
-pub(super) struct Selection<'a> {
-    pub(super) artifact_id: Option<&'a str>,
-    pub(super) cadence: &'a str,
+pub struct Selection<'a> {
+    pub artifact_id: Option<&'a str>,
+    pub cadence: &'a str,
 }
 
 fn nonempty(value: Option<&Json>) -> Option<&str> {
@@ -32,10 +32,7 @@ fn nonempty(value: Option<&Json>) -> Option<&str> {
 }
 
 /// `_load`: select, authorize and shape-check one artifact.
-pub(super) fn resolve<'a>(
-    manifest: &'a Json,
-    selection: &Selection<'_>,
-) -> ModelResult<Resolved<'a>> {
+pub fn resolve<'a>(manifest: &'a Json, selection: &Selection<'_>) -> ModelResult<Resolved<'a>> {
     if manifest.get("manifest_kind").and_then(Json::as_str) != Some("test-model-artifacts") {
         return fail("manifest_kind must be test-model-artifacts");
     }

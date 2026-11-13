@@ -35,6 +35,12 @@ fn invoke(
     late_dirty: bool,
     head: &str,
 ) -> (tempfile::TempDir, Output) {
+    // Mirrors upload-automation's mapping: only protected-clean builds the narrow tool.
+    let (tool, recipe) = if source_profile == "protected-clean" {
+        ("authority-automation", "authority-automation-bootstrap")
+    } else {
+        ("xtask", "automation-bootstrap")
+    };
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("host-input")).unwrap();
     fs::write(
@@ -59,7 +65,7 @@ git() {
   esac
 }
 just() {
-  test "$1" = automation-bootstrap || return 96
+  test "$1" = "$FIXTURE_RECIPE" || return 96
   if test "$FIXTURE_LATE_DIRTY" = 1; then printf ' M tools/xtask/Cargo.toml\n' > "$FIXTURE_ROOT/status"; fi
   printf 'binary_path=%s/prepared-xtask\n' "$FIXTURE_ROOT"
 }
@@ -79,6 +85,8 @@ just() {
         .env("AUTOMATION_SOURCE_SHA", SOURCE)
         .env("AUTOMATION_PROFILE", profile)
         .env("AUTOMATION_SOURCE_PROFILE", source_profile)
+        .env("AUTOMATION_TOOL", tool)
+        .env("FIXTURE_RECIPE", recipe)
         .env(
             "AUTOMATION_BINARY_PATH",
             if profile == "hosted-bare" {

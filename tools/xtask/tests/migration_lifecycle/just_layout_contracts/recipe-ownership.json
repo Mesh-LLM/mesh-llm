@@ -129,6 +129,7 @@
     ],
     "just/ci.just": [
       "agentic-trajectory-reader-contracts",
+      "authority-automation-bootstrap",
       "automation-bootstrap",
       "automation-run",
       "ci-automation-contracts",
@@ -142,6 +143,7 @@
       "no-console-print",
       "publish-crates",
       "research-source-restore",
+      "runner-cleanup-bootstrap",
       "test-all"
     ],
     "just/mesh-client.just": [

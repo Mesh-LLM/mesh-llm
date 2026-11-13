@@ -159,7 +159,6 @@ Host runtime (main monolith — `mesh/crates/mesh-llm-host-runtime/src/`):
 - `mesh/heartbeat.rs` — heartbeat publishing and freshness.
 - `inference/election.rs` — host election, tensor split calculation.
 - `inference/skippy/` — embedded staged runtime integration.
-- `inference/pipeline.rs` — inference pipeline coordination.
 - `inference/virtual_llm.rs` — virtual LLM (inter-model collaboration).
 - `network/proxy.rs` — HTTP proxy: request parsing, model routing, response helpers.
 - `network/router.rs` — request classification, model scoring, multimodal routing.
