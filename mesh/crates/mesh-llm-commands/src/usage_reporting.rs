@@ -169,8 +169,10 @@ fn is_post_update_restart() -> bool {
 /// report sent earlier describes a different machine than the node advertises.
 ///
 /// Hardware probes shell out to platform tools, so this runs on a blocking
-/// thread and reports whenever it finishes. Startup never waits for it.
-pub fn report_hardware_profile() {
+/// thread and reports whenever it finishes. Startup never waits for it. The
+/// returned handle lets a caller that is about to shut analytics down wait a
+/// bounded time for the report first; dropping it leaves the task running.
+pub fn report_hardware_profile() -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(|| {
         use mesh_llm_system::hardware::Metric;
 
@@ -188,7 +190,7 @@ pub fn report_hardware_profile() {
             Event::HardwareProfile,
             hardware_properties(&survey, &flavors),
         );
-    });
+    })
 }
 
 /// Build hardware properties from a survey and the detected backends.
