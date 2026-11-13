@@ -667,6 +667,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   workflows. Every CI invocation of `mesh-llm` includes `--log-format json`.
 - Release and packaging wrap the same producers with signing, attestation,
   publication, and retention. They do not fork the underlying build commands.
+- Stable downstream packaging dispatch carries the published tag commit, native
+  runtime release manifest digest, and a run-attempt correlation ID. The tag
+  commit can differ from the build source after release resources are generated.
+  The dispatcher does not wait for downstream readiness; operators verify the
+  matching receipt and all requested channels before reporting distribution complete.
 
 ## Workflow definition and dependencies
 

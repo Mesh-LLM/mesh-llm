@@ -270,6 +270,11 @@ have published successfully. Prereleases never dispatch it. The upstream
 `docker.yml` workflow performs Dockerfile validation only and is not a
 distribution channel.
 
+The dispatch binds the published tag commit and native runtime manifest digest
+to an upstream run-attempt correlation ID. The release operator must verify the
+matching downstream packaging readiness receipt and requested publication
+results; the upstream job does not wait for packaging.
+
 If the downstream dispatch preflight fails, update the repository Actions secret
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
 that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
