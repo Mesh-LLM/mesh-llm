@@ -39,6 +39,11 @@ path = "hatch_build.py"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/meshllm", "scripts", "README.md", "pyproject.toml", "hatch_build.py", "uniffi.toml"]
+artifacts = [
+  "src/meshllm/_generated/libuniffi.dylib",
+  "src/meshllm/_generated/libuniffi.so",
+  "src/meshllm/_generated/uniffi.dll",
+]
 exclude = ["src/meshllm/_generated/.gitignore"]
 
 [tool.pyright]

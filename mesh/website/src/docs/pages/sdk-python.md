@@ -236,5 +236,14 @@ python3 -I -m pip install -e "$MESH_ROOT/mesh/sdk/python"
 
 The stager never compiles a missing native bridge. Generate from the exact
 library's metadata so the wrapper checksums match the packaged artifact.
+After regeneration, update the matching generated file hash in
+`mesh/sdk/python/sdk-inputs.json`. For `mesh_ffi.py`, hash
+`mesh/sdk/python/src/meshllm/_generated/mesh_ffi.py` with `shasum -a 256` or
+`sha256sum`, replace its `files` entry, then validate the manifest from the
+repository root with `cargo xtool automation smoke-observation sdk-source
+--kind root`.
+The source distribution includes the prebuilt native bridge, allowing the
+default `python -m build` sdist-to-wheel flow to produce a platform wheel
+without compiling or downloading the bridge.
 Catalog queries are native; compatibility inference and some lifecycle queries
 still use the embedded listener. See [SDK overview](/docs/pages/sdk/).
