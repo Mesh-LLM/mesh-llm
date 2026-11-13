@@ -392,6 +392,13 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Dependencies, summaries, and cancellation
 
+- Quality candidate-source consistency runs in a required hosted peer job,
+  independent of protected authority production and the full contract suite.
+  Check crate lists, publishing, release targets, client dependency purity,
+  console output and environment mutation on `inputs.source_sha`. Keep the
+  full automation and legacy contract suite in the existing Quality slice,
+  with its authority dependencies intact. Consistency failure must not gate
+  that suite on main or manual-full; PR sibling cancellation remains unchanged.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
@@ -820,6 +827,11 @@ selection steps may receive the read-only GitHub token; workers and repair
 agents remain credential-free. Runner placement uses managed labels and queues
 when matching capacity is unavailable; it never queries the repository runner
 API or adds an administrator credential to repair workers.
+
+Native candidate producers on both macOS and Linux cap CTest concurrency at
+four processes. Graph-contract cases construct many full-model contexts; do
+not saturate the host with sixteen such cases or increase per-case timeouts
+to mask contention. Keep the complete suite and its 900-second case deadline.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation

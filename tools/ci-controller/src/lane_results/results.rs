@@ -205,7 +205,7 @@ fn required_jobs(plan: &Json) -> Checked<Outcome> {
     };
     match lane {
         Lane::Quality => {
-            planner.add(planner.selected("quality"), &["quality"]);
+            planner.add(planner.selected("quality"), &["quality", "consistency"]);
             planner.add(planner.selected("runner-contract"), &["runner_contract"]);
         }
         Lane::Website => planner.add(planner.selected("web"), &["web"]),

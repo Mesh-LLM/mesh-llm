@@ -436,10 +436,10 @@ deadline, separate from the 60-second Git command default. An explicit
 `--timeout` overrides both. Generation and idempotence each remain required;
 deadline failures report readable retained output and process cleanup status.
 
-The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
-runs in the repair session and trusted build. The Linux build job uses 4 to
-limit concurrent CUDA test memory pressure. The per-case timeout remains 900
-seconds.
+The macOS and Linux build jobs set `CTEST_PARALLEL_LEVEL=4` for complete
+upstream CTest runs in the repair session and trusted build. This limits
+contention between graph-contract cases and concurrent CUDA test memory
+pressure. The complete suite and 900-second per-case timeout remain unchanged.
 Non-chat certification uses ordinary `skippy serve --model-path` startup and
 binds oracle evidence to the same candidate `skippy` executable. It does not
 generate a stage configuration or supply cache-admission labels.
@@ -1023,6 +1023,23 @@ and optional credentials may differ, along with row selection and bounded
 parallelism.
 
 ## Native contract execution
+
+Quality consistency now runs as a required lane peer on the candidate
+`source_sha`, without waiting for protected authority production or the full
+contract suite. It checks crate lists, publish order, release targets, embedded
+client dependency purity, console output and process environment ownership.
+The existing hosted-bare preparation reuses an exact cached candidate xtask or
+builds it on a miss. The lane summary directly needs `consistency`, and the
+validator requires success whenever the `quality` slice is selected.
+
+The graph is `plan -> consistency` alongside
+`plan -> authority_source -> authority_linux_x64 -> quality -> contracts`.
+There is no consistency-to-contract edge, so an early consistency failure
+does not suppress main/manual-full contracts. Existing authority edges, PR
+sibling cancellation, format, convention and Clippy behavior remain intact.
+This removes the observed 27-minute contract wait from consistency reporting,
+but does not establish a measured hosted duration. It adds one possible
+concurrent hosted worker plus checkout and cold/cached automation setup.
 
 Quality runs both `just ci-automation-contracts` and `just ci-legacy-contracts`,
 with in-tree SDK admission and pinned external research source preparation. Model-resolution
