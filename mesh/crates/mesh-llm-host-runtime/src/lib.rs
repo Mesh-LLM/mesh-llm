@@ -255,8 +255,13 @@ async fn initialize_host_runtime_with_config_and_flavor(
 /// `gpus` and the model fit budget in line with what the node advertises.
 ///
 /// Only bundled and already installed runtimes are considered: a read-only
-/// command never downloads one. Without the `dynamic-native-runtime` feature
-/// there is nothing to load and this does nothing.
+/// command never downloads one, and a discovered bundle is served in place
+/// (`NativeRuntimeBundleInstallPolicy::UseInPlace`), so this also writes
+/// nothing into the runtime cache. Without the `dynamic-native-runtime`
+/// feature there is nothing to load and this does nothing.
+///
+/// `Ok(())` covers both outcomes that are not an error: a runtime was loaded,
+/// or one was already loaded (the loader returns early then).
 pub async fn load_installed_native_runtime_for_cli(
     config_path: Option<&Path>,
     llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
