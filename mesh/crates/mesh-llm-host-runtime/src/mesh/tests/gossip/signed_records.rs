@@ -540,6 +540,11 @@ async fn repeat_inbound_gossip_gets_own_announcement_only_until_the_interval_pas
     let first = node.collect_gossip_reply(stranger).await;
     assert!(first.announcements.len() > 1, "first reply is the full table");
     assert!(first.signed_records.len() > 1);
+    // A restart or a retry inside the window still gets the table.
+    for _ in 1..3 {
+        let retry = node.collect_gossip_reply(stranger).await;
+        assert!(retry.announcements.len() > 1, "allowance covers retries");
+    }
 
     let repeat = node.collect_gossip_reply(stranger).await;
     assert_eq!(repeat.announcements.len(), 1);

@@ -958,15 +958,16 @@ impl Node {
         Ok(())
     }
 
-    /// A remote that reconnects in a loop gets the whole table once per
-    /// interval; in between it gets only our own announcement (#3070).
+    /// A remote that reconnects in a loop gets the whole table a few times per
+    /// interval; after that it gets only our own announcement (#3070).
     pub(super) async fn collect_gossip_reply(&self, remote: EndpointId) -> OutboundGossip {
         if self.gossip_reply_limiter.allow_full_reply(remote) {
+            tracing::info!("Inbound gossip from {}", remote.fmt_short());
             return self.collect_outbound_gossip().await;
         }
         tracing::debug!(
             remote = %remote.fmt_short(),
-            "gossip: repeat inside the full-reply interval; replying with own announcement only"
+            "Inbound gossip: full replies used up for this interval; replying with own announcement only"
         );
         self.collect_own_outbound_gossip().await
     }
@@ -978,8 +979,6 @@ impl Node {
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
-        tracing::info!("Inbound gossip from {}", remote.fmt_short());
-
         let buf = super::pre_admission::read_pre_admission_frame(&mut recv).await?;
         let (inbound, their_plugin_keys) =
             decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;

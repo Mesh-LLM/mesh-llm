@@ -146,7 +146,7 @@ async fn inbound_gossip_repeats_get_own_announcement_only_over_real_quic() {
     .unwrap()
     .unwrap();
     let mut replies = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..4 {
         let ((announcements, _), _) = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             sender.gossip_round_trip(&connection, receiver.id()),
@@ -156,8 +156,11 @@ async fn inbound_gossip_repeats_get_own_announcement_only_over_real_quic() {
         .unwrap();
         replies.push(announcements.len());
     }
-    assert!(replies[0] > 1, "first reply is the full table: {replies:?}");
-    assert_eq!(replies[1], 1, "repeat gets own announcement only: {replies:?}");
+    assert!(
+        replies[..3].iter().all(|count| *count > 1),
+        "the first replies in the window are the full table: {replies:?}"
+    );
+    assert_eq!(replies[3], 1, "past the allowance: own announcement only: {replies:?}");
     sender.close_endpoint().await;
     receiver.close_endpoint().await;
     for listener in listeners {
