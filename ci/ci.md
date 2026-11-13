@@ -436,10 +436,10 @@ deadline, separate from the 60-second Git command default. An explicit
 `--timeout` overrides both. Generation and idempotence each remain required;
 deadline failures report readable retained output and process cleanup status.
 
-The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
-runs in the repair session and trusted build. The Linux build job uses 4 to
-limit concurrent CUDA test memory pressure. The per-case timeout remains 900
-seconds.
+The macOS and Linux build jobs set `CTEST_PARALLEL_LEVEL=4` for complete
+upstream CTest runs in the repair session and trusted build. This limits
+contention between graph-contract cases and concurrent CUDA test memory
+pressure. The complete suite and 900-second per-case timeout remain unchanged.
 Non-chat certification uses ordinary `skippy serve --model-path` startup and
 binds oracle evidence to the same candidate `skippy` executable. It does not
 generate a stage configuration or supply cache-admission labels.

@@ -813,6 +813,11 @@ agents remain credential-free. Runner placement uses managed labels and queues
 when matching capacity is unavailable; it never queries the repository runner
 API or adds an administrator credential to repair workers.
 
+Native candidate producers on both macOS and Linux cap CTest concurrency at
+four processes. Graph-contract cases construct many full-model contexts; do
+not saturate the host with sixteen such cases or increase per-case timeouts
+to mask contention. Keep the complete suite and its 900-second case deadline.
+
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
 generation, patch equality and idempotence must pass before rebuilding and
