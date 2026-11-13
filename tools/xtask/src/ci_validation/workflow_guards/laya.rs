@@ -217,11 +217,16 @@ fn gpu_skip_report(step: &Node) -> DynResult<()> {
     // planned row that stays skipped.
     unconditional(step, "GPU skip report")?;
     let env = h::member(step, "env")?;
-    for (backend, plan) in [("VULKAN", "linux-vulkan"), ("ROCM", "linux-rocm")] {
+    for (backend, input_backend, plan) in [
+        ("VULKAN", "vulkan", "linux-vulkan"),
+        ("ROCM", "rocm", "linux-rocm"),
+    ] {
         h::binding(
             env,
             &format!("{backend}_PLANNED"),
-            &format!("${{{{ contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') }}}}"),
+            &format!(
+                "${{{{ inputs.backend == '{input_backend}' && contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') }}}}"
+            ),
         )?;
         h::binding(
             env,
@@ -592,7 +597,7 @@ mod tests {
             ),
             (
                 vec!["env", "ROCM_PLANNED"],
-                "${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}",
+                "${{ inputs.backend == 'rocm' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}",
             ),
         ] {
             let mut nodes = workflows();
@@ -601,6 +606,20 @@ mod tests {
             h::replace(&mut steps[index], &path, Node::Scalar(value.into()));
             assert!(platforms(&nodes).is_err(), "{path:?}");
         }
+        let mut nodes = workflows();
+        let steps = gate_steps(&mut nodes);
+        let index = report_index(steps);
+        h::replace(
+            &mut steps[index],
+            &["env", "VULKAN_PLANNED"],
+            Node::Scalar(
+                "${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}".into(),
+            ),
+        );
+        assert!(
+            platforms(&nodes).is_err(),
+            "VULKAN_PLANNED must be backend-scoped"
+        );
         for (before, after) in [
             (
                 "if [[ \"${!enabled}\" == \"true\" ]]; then",

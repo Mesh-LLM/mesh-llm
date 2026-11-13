@@ -257,8 +257,8 @@ jobs:
       # row from the normalized decision, with the reason it did not run.
       - name: Report GPU rows without a qualified runner
         env:
-          VULKAN_PLANNED: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}
-          ROCM_PLANNED: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') }}
+          VULKAN_PLANNED: ${{ inputs.backend == 'vulkan' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}
+          ROCM_PLANNED: ${{ inputs.backend == 'rocm' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') }}
           VULKAN_ENABLED: ${{ steps.check.outputs.vulkan_enabled }}
           ROCM_ENABLED: ${{ steps.check.outputs.rocm_enabled }}
         run: |
