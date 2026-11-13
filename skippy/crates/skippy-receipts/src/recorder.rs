@@ -123,6 +123,12 @@ struct SeqLog {
     /// The turn the log records.
     turn: TurnId,
     events: Vec<Event>,
+    /// Bytes of [`Self::events`], kept as they arrive so the window counts
+    /// a log before its turn commits ([`RecorderState::shed_live`]).
+    event_bytes: usize,
+    /// The log outgrew the window and its turn gets no receipt: it records
+    /// no more ubatches until the sequence's next turn.
+    shed: bool,
     /// What the stage committed per position.
     leaves: BTreeMap<u32, PositionLeaves>,
     /// First position recorded since the last commit.
@@ -150,6 +156,31 @@ impl SeqLog {
             turn,
             ..Self::default()
         }
+    }
+
+    fn push_event(&mut self, event: Event) {
+        if self.shed {
+            return;
+        }
+        self.event_bytes += event.bytes();
+        self.events.push(event);
+    }
+
+    /// Takes the events, for a commit or a new turn.
+    fn take_events(&mut self) -> Vec<Event> {
+        self.event_bytes = 0;
+        self.shed = false;
+        std::mem::take(&mut self.events)
+    }
+
+    /// Bytes a live log holds that a commit moves into its committed turn:
+    /// its ubatches, with their input rows, and its recurrent state.
+    fn live_bytes(&self) -> usize {
+        let state = match &self.state {
+            Some(Ok(state)) => state.bytes_held(),
+            _ => 0,
+        };
+        self.event_bytes + state
     }
 
     fn pending(&self) -> Option<Range<u32>> {
@@ -323,13 +354,26 @@ impl RecorderState {
         true
     }
 
+    /// Bytes of every live log ([`SeqLog::live_bytes`]).
+    fn live_bytes(&self) -> usize {
+        self.seqs
+            .values()
+            .map(|entry| entry.live.live_bytes())
+            .sum()
+    }
+
+    fn held_bytes(&self) -> usize {
+        self.committed_bytes + self.retired_bytes + self.live_bytes()
+    }
+
     /// Keeps what the recorder holds within `window` bytes as far as it may:
     /// logs nobody committed go first, then committed turns no client can
     /// still challenge, oldest first. A turn inside its challenge window
     /// ([`pins::Pin::holds`]) is never dropped for room; a new turn that
-    /// does not fit beside them gets no receipt ([`Self::make_room`]).
+    /// does not fit beside them gets no receipt ([`Self::make_room`]), and
+    /// a live log that does not fit is shed ([`Self::shed_live`]).
     fn enforce_window(&mut self, window: usize, now: Instant) {
-        while self.committed_bytes + self.retired_bytes > window {
+        while self.held_bytes() > window {
             if self.drop_oldest_retired() {
                 continue;
             }
@@ -343,11 +387,35 @@ impl RecorderState {
         }
     }
 
+    /// Sheds live logs, largest first, while what the recorder holds is
+    /// past `window` after [`Self::enforce_window`]: a long or wide prefill
+    /// must not hold more than the window before its turn commits. A shed
+    /// log's turn gets no receipt; the sequence's next turn records again.
+    fn shed_live(&mut self, window: usize) {
+        while self.held_bytes() > window {
+            let largest = self
+                .seqs
+                .values_mut()
+                .map(|entry| &mut entry.live)
+                .filter(|log| log.live_bytes() > 0)
+                .max_by_key(|log| log.live_bytes());
+            let Some(log) = largest else {
+                return;
+            };
+            log.tainted.get_or_insert_with(|| {
+                format!("its replay log outgrew the recorder's window of {window} bytes")
+            });
+            log.take_events();
+            log.shed = true;
+            log.state = None;
+        }
+    }
+
     /// Makes room for a turn of `bytes` within `window`, or fails, dropping
     /// nothing a client can still challenge.
     fn make_room(&mut self, window: usize, bytes: usize, now: Instant) -> anyhow::Result<()> {
         self.enforce_window(window.saturating_sub(bytes), now);
-        let held = self.committed_bytes + self.retired_bytes;
+        let held = self.held_bytes();
         if held + bytes > window {
             anyhow::bail!(
                 "the stage holds {held} bytes of turns a client can still challenge, of \
@@ -555,13 +623,13 @@ impl Recorder {
             let log = &mut state.seqs.entry(seq).or_default().live;
             if log.prefix.is_none() {
                 // a new turn: it replays from the cells it attends to now
-                log.events.clear();
+                log.take_events();
                 log.tainted = None;
                 log.missed = false;
                 let end = u32::try_from(pos).unwrap_or(0);
                 log.prefix = Some(state.cells.prefix(seq, end).map_err(|e| format!("{e:#}")));
             }
-            log.events.push(Event::Ubatch(record.clone()));
+            log.push_event(Event::Ubatch(record.clone()));
             log.cache_types.extend(&cache_types);
         }
         let mut committed = Vec::with_capacity(record.seq.len());
@@ -589,6 +657,8 @@ impl Recorder {
             });
         }
         state.cells.write_ubatch(&record, committed);
+        state.enforce_window(self.window_bytes, now);
+        state.shed_live(self.window_bytes);
     }
 
     fn cache_types(&self, columns: &dyn UbatchColumns) -> BTreeSet<i32> {
@@ -670,7 +740,7 @@ impl Recorder {
             MemoryOp::SeqRm => {
                 for s in targets {
                     let log = &mut state.seqs.entry(s).or_default().live;
-                    log.events.push(Event::SeqRm { p0, p1 });
+                    log.push_event(Event::SeqRm { p0, p1 });
                     log.leaves
                         .retain(|&position, _| !event_log::removes(p0, p1, position));
                 }
