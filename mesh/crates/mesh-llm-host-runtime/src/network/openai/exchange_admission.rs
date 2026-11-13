@@ -168,7 +168,7 @@ fn selected_route_event(
     };
     let body = request.effective_http_entity()?;
     let mut event = crate::plugin::request_event(
-        request.request_id.as_uuid().to_string(),
+        request.exchange_id(),
         endpoint,
         &request.method,
         &request.client_path,
@@ -269,6 +269,38 @@ mod tests {
             public_target(&SelectedRouteTarget::Mesh(&InferenceTarget::Local(3131))),
             "Local(3131)"
         );
+    }
+
+    /// The `backend_selected` event carries the same exchange id as the
+    /// `openai.exchange.v1` events of its dispatch: the request id, and a
+    /// distinct derived id on each automatic re-pick.
+    #[tokio::test]
+    async fn selected_event_exchange_id_follows_the_dispatch() {
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+        let mut request = transport::read_http_request(&mut reader).await.unwrap();
+        let id_of = |request: &transport::BufferedHttpRequest| {
+            let event = selected_route_event(
+                request,
+                Some("model"),
+                "mesh",
+                SelectedRouteTarget::Mesh(&InferenceTarget::Local(1)),
+                None,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+            event["exchange_id"].as_str().unwrap().to_owned()
+        };
+        let request_id = request.request_id.as_uuid().to_string();
+        assert_eq!(id_of(&request), request_id);
+        assert_eq!(request.exchange_id(), request_id);
+        request.automatic_repick = 1;
+        let first = id_of(&request);
+        assert_ne!(first, request_id);
+        assert_eq!(first, request.exchange_id());
+        request.automatic_repick = 2;
+        assert_ne!(id_of(&request), first);
     }
 
     #[tokio::test]

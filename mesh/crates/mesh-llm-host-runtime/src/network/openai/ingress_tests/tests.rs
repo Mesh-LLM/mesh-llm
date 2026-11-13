@@ -43,6 +43,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
@@ -220,6 +221,7 @@ fn dispatch_kind_request(
         response_adapter,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
@@ -319,6 +321,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
     let decision = AutoRouteDecision {
@@ -1165,59 +1168,6 @@ pub(super) fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
     }
 }
 
-/// A request's exchange id is its ingress request id, except on an automatic
-/// model re-pick: that re-dispatches the same request and publishes another
-/// effective/terminal pair, which needs its own id to stay unambiguous.
-#[tokio::test]
-async fn exchange_id_is_the_request_id_except_on_an_automatic_repick() {
-    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
-        .await
-        .expect("test node");
-    let targets = election::ModelTargets::default();
-    let affinity = affinity::AffinityRouter::new();
-    let request = proxy::BufferedHttpRequest {
-        raw: Vec::new(),
-        method: "POST".to_owned(),
-        path: "/v1/chat/completions".to_owned(),
-        client_path: "/v1/chat/completions".to_owned(),
-        request_id: RequestId::default(),
-        body_json: None,
-        body_json_attempted: false,
-        body_bytes: None,
-        body_len_bytes: 0,
-        completion_tokens: None,
-        stream: None,
-        model_name: None,
-        request_object_request_ids: Vec::new(),
-        response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
-        correlation_id: None,
-        exchange_observation_id: None,
-        automatic_route: false,
-    };
-    let first = crate::network::openai::automatic_retry::AutomaticRetryHandoff::default();
-    let repick = crate::network::openai::automatic_retry::AutomaticRetryHandoff::for_repick();
-    let ctx = |retry| IngressRouteContext {
-        node: &node,
-        targets: &targets,
-        affinity: &affinity,
-        plugin_manager: None,
-        requested_by_node_id: None,
-        automatic_retry: retry,
-        exchange_channel: None,
-    };
-    let want = request.request_id.as_uuid().to_string();
-    assert_eq!(
-        exchange_events::exchange_id_for_request(&request, &ctx(None)),
-        want
-    );
-    assert_eq!(
-        exchange_events::exchange_id_for_request(&request, &ctx(Some(&first))),
-        want
-    );
-    let repicked = exchange_events::exchange_id_for_request(&request, &ctx(Some(&repick)));
-    assert_ne!(repicked, want, "a re-pick must not reuse the request id");
-}
-
 /// Verifies that `route_missing_local_model` enters the remote-mesh branch
 /// when at least one admitted peer serves the requested model, AND that the
 /// function publishes BOTH the effective-request and terminal envelopes on
@@ -1299,6 +1249,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 
@@ -1478,6 +1429,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 
@@ -1672,6 +1624,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 
@@ -1999,6 +1952,7 @@ pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
@@ -2424,6 +2378,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 
@@ -2733,6 +2688,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
     let peer_hex = "ab".repeat(32);

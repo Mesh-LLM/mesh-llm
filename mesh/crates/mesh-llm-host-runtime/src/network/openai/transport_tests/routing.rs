@@ -181,6 +181,7 @@ fn text_auto_request() -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
@@ -210,6 +211,7 @@ fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
@@ -231,6 +233,7 @@ fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
@@ -752,6 +755,7 @@ fn test_capture_path_for_request_uses_client_path() {
         response_adapter: ResponseAdapter::OpenAiResponsesStream,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 

@@ -370,37 +370,12 @@ pub(super) fn exchange_output_digests_from_outcome(
     }
 }
 
-/// The exchange id for a dispatch on the raw-proxy / remote-mesh paths: the
-/// ingress request id's UUID text. The `backend_selected` event
-/// (`exchange_admission::selected_route_event`) already names the exchange by
-/// this value, and payment plugins key their payer lifecycle events on it, so
-/// deriving the `openai.exchange.v1` id from it lets a consumer join the two
-/// without a second identifier.
-///
-/// Scope: the id is unique per request on this node, not per dispatch. A
-/// model re-pick of an automatic route re-dispatches the same request and
-/// publishes another effective/terminal pair, so a re-pick gets a fresh id to
-/// keep each pair unambiguous. The serving peer of a routed request sees the
-/// same request id, as it already does for `backend_selected`, so a consumer
-/// merging several nodes' streams keys on (node, `exchange_id`). A client may
-/// supply the request id as a UUID header, which the host does not
-/// de-duplicate.
-pub(super) fn exchange_id_for_request(
-    request: &proxy::BufferedHttpRequest,
-    ctx: &IngressRouteContext<'_>,
-) -> String {
-    if ctx.automatic_retry.is_some_and(|retry| retry.is_repick()) {
-        return uuid::Uuid::new_v4().to_string();
-    }
-    request.request_id.as_uuid().to_string()
-}
-
 /// Path 2's own "effective request" moment: the plugin/endpoint is resolved
 /// and dispatch is about to happen. There is no typed `GenerationRequest`
 /// on this path (see the #1331 design note), so the envelope carries only
 /// the model — the same narrow route fact path 1's `ChatExchangeRoute`
 /// carries. Derives the exchange id here, at admission (see
-/// [`exchange_id_for_request`]), so it can pair this effective event with its
+/// [`proxy::BufferedHttpRequest::exchange_id`]), so it can pair this effective event with its
 /// terminal event even when concurrent raw-proxy requests share the same
 /// model. Returns `None` — no id derived, no publish
 /// — when nobody declares `openai.exchange.v1`: nothing downstream would
@@ -408,13 +383,12 @@ pub(super) fn exchange_id_for_request(
 pub(super) async fn mint_and_publish_effective_raw_proxy(
     plugin_manager: &crate::plugin::PluginManager,
     request: &proxy::BufferedHttpRequest,
-    ctx: &IngressRouteContext<'_>,
     model_name: &str,
 ) -> Option<String> {
     if !plugin_manager.has_subscriber().await {
         return None;
     }
-    let exchange_id = exchange_id_for_request(request, ctx);
+    let exchange_id = request.exchange_id();
     plugin_manager
         .publish(&OpenAiExchangeEnvelope::effective(
             exchange_id.clone(),

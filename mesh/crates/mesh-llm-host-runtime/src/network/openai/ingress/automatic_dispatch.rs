@@ -62,6 +62,7 @@ pub(super) async fn dispatch(
         };
         tracing::info!(previous = ?model, next = %next, repick = repicks + 1, "automatic route spilling to another model");
         proxy::rewrite_model_field(request, &next);
+        request.automatic_repick = repicks as u32 + 1;
         *model = Some(next);
     }
     unreachable!("the bounded retry loop returns on its final iteration")

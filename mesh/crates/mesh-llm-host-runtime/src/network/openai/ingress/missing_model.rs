@@ -95,7 +95,7 @@ pub(super) async fn route_missing_local_model(
             // this exchange too (previously it observed nothing at all for a
             // routed exchange). The peer's `X-Capsule-Id` response header IS
             // read back here -- see `PeerCapsuleIdSink` below.
-            let exchange_id = super::exchange_events::exchange_id_for_request(request, ctx);
+            let exchange_id = request.exchange_id();
             // The client-contributed capsule nonce, already stabilized (and,
             // if the client sent none, minted) by `finalize_forwarded_request`
             // at ingress -- read back off the already-buffered request rather

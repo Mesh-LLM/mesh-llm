@@ -562,6 +562,7 @@ async fn a_retry_to_a_different_target_does_not_inherit_the_previous_peers_stale
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 
@@ -746,6 +747,7 @@ async fn route_across_mock_backends(
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
 

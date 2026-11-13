@@ -366,6 +366,7 @@ fn request_with_model(path: &str, model: Option<&str>) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     }
 }
