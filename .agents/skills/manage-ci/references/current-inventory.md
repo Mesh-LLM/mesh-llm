@@ -2030,7 +2030,12 @@ on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 --stdin` and `plan-ci` calls `ci plan` through that variable, and each prepares
 the controller only when it is unset, so a planner job builds it once. Lane
 summaries run `ci validate-lane`; the Quality summary also runs `repository
-llama-upstream-pin` on PRs. Its exact-key cache entry
+llama-upstream-pin` on PRs. Each summary checks out the protected revision frozen
+by its `authority_source` job, so a default-branch update cannot change validation
+while producers run. If no authority producer is selected, the summary retains
+the protected default-branch checkout. Linux validation also admits the preceding
+grouped layout for in-flight workflows, identified by dependency names. Mixed
+layouts fail and every planned job must still succeed. Its exact-key cache entry
 (`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
 `Cargo.toml`, `.cargo/config.toml`, the action file,
 `.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker

@@ -135,13 +135,23 @@ impl Planner<'_> {
         Ok(runtimes)
     }
 
-    fn linux(&mut self) -> Checked<()> {
+    fn linux(&mut self, grouped: bool) -> Checked<()> {
         let runtimes = self.products()?;
         let sdk = self.rows("sdk")?;
         self.add(self.selected("static-abi"), &["static_abi"]);
         let rust_tests = !self.rows("rust_tests")?.is_empty();
         self.add(rust_tests, &["rust_tests"]);
         let smoke = self.rows("smoke")?;
+        if grouped {
+            self.add(
+                !runtimes.is_empty(),
+                &["native_runtimes", "runtime_product"],
+            );
+            self.add(sdk.iter().any(|id| id == "kotlin"), &["kotlin_sdk_input"]);
+            self.add(!sdk.is_empty(), &["sdk"]);
+            self.add(!smoke.is_empty(), &["product_smoke"]);
+            return Ok(());
+        }
         for (row, runtime, product, consumer) in super::linux_backends::JOBS {
             let selected = runtimes.iter().any(|id| id == row);
             self.add(selected, &[runtime, product]);
@@ -188,7 +198,7 @@ impl Planner<'_> {
     }
 }
 
-fn required_jobs(plan: &Json) -> Checked<Outcome> {
+fn required_jobs(plan: &Json, needs: &Json) -> Checked<Outcome> {
     let lane = plan.get("lane").and_then(Json::as_str);
     let slices = plan.get("required_slices").and_then(Json::as_array);
     let (Some(name), Some(slices)) = (lane, slices) else {
@@ -213,7 +223,7 @@ fn required_jobs(plan: &Json) -> Checked<Outcome> {
             planner.add(planner.selected("runner-contract"), &["runner_contract"]);
         }
         Lane::Website => planner.add(planner.selected("web"), &["web"]),
-        Lane::Linux => planner.linux()?,
+        Lane::Linux => planner.linux(super::linux_backends::grouped_layout(needs)?)?,
         Lane::Macos => planner.macos()?,
         Lane::Windows => planner.windows()?,
     }
@@ -223,6 +233,10 @@ fn required_jobs(plan: &Json) -> Checked<Outcome> {
         planned: planner.jobs,
     })
 }
+
+#[cfg(test)]
+#[path = "grouped_linux_tests.rs"]
+mod grouped_linux_tests;
 
 fn result(state: Option<&Json>) -> Option<&Json> {
     state.and_then(|state| state.get("result"))
@@ -236,7 +250,7 @@ pub(super) fn validate(plan: &Json, needs: &Json) -> Checked<Outcome> {
     let Some(Json::Bool(required)) = plan.get("required") else {
         return Err("lane plan required must be a boolean".to_owned());
     };
-    let outcome = required_jobs(plan)?;
+    let outcome = required_jobs(plan, needs)?;
     if *required && outcome.planned.is_empty() {
         return Err("required lane has no planned jobs".to_owned());
     }
