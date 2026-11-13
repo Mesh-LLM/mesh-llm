@@ -36,6 +36,7 @@ fn gpus_json_without_native_runtime_keeps_json_stdout_and_warns_on_stderr() {
         .env("XDG_CACHE_HOME", home.join("xdg-cache"))
         .env("XDG_DATA_HOME", home.join("xdg-data"))
         .env_remove("MESH_LLM_NO_RUNTIME_DOWNLOAD")
+        .env_remove("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR")
         .output()
         .expect("mesh-llm command should run");
 
@@ -47,11 +48,15 @@ fn gpus_json_without_native_runtime_keeps_json_stdout_and_warns_on_stderr() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
     serde_json::from_str::<serde_json::Value>(&stdout)
         .expect("gpus --json stdout should parse as JSON");
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
-    assert!(
-        stderr.contains("Native runtime not loaded"),
-        "stderr should carry the OS-survey fallback notice, got: {stderr:?}"
-    );
+    if cfg!(feature = "dynamic-native-runtime") {
+        // Without the feature the loader is a no-op that never fails, so no
+        // notice is printed; the notice is specific to the dynamic build.
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+        assert!(
+            stderr.contains("Native runtime not loaded"),
+            "stderr should carry the OS-survey fallback notice, got: {stderr:?}"
+        );
+    }
 }
 
 #[test]
