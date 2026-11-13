@@ -76,7 +76,7 @@ impl PrivateScope {
 
     pub(crate) fn contains(&self, id: &EndpointId) -> bool {
         let key = node_key(id);
-        self.node_ids.iter().any(|listed| *listed == key)
+        self.node_ids.contains(&key)
     }
 
     /// Whether a private request may go to `peer`: it is listed and
