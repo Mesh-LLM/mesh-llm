@@ -224,6 +224,9 @@ pub(crate) struct Audits {
     /// the toy model (`two_node_seam`); Hugging Face otherwise.
     #[cfg(test)]
     claimed_opener: std::sync::OnceLock<claimed_models::Opener>,
+    /// A test's stand-in for a node with no native runtime loaded.
+    #[cfg(test)]
+    auditor_unavailable: std::sync::atomic::AtomicBool,
 }
 
 impl Audits {
@@ -232,6 +235,25 @@ impl Audits {
     /// released. Later turns are no audit.
     pub(crate) async fn shut_down(&self) {
         self.worker.shut_down().await;
+    }
+
+    /// Whether this node can audit a peer's turn: an audit replays it on the
+    /// native runtime, which a `client` loads only with `[receipts] audit`
+    /// or `require` set. Tests have no runtime loaded and stand in for one.
+    pub(crate) fn auditor_ready(&self) -> bool {
+        #[cfg(test)]
+        return !self
+            .auditor_unavailable
+            .load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(test))]
+        skippy_runtime::native_runtime_loaded()
+    }
+
+    /// Makes [`Self::auditor_ready`] false, as on a node without a runtime.
+    #[cfg(test)]
+    pub(crate) fn set_auditor_unavailable(&self) {
+        self.auditor_unavailable
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether `peer` stopped satisfying the `receipts` tier on this node:
