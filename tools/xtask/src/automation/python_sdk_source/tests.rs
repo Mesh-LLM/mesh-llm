@@ -93,21 +93,36 @@ fn setup_uses_in_tree_sdk_and_no_external_checkout() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../.github/actions/setup-canary-python/action.yml"
     ));
-    assert!(setup.contains("sdk-source --kind root"));
     assert!(setup.contains("sdk-source --kind \"$SDK_KIND\""));
-    assert!(!setup.contains("prepare-python-sdk-source"));
+    assert!(setup.contains("uses: ./.github/actions/prepare-python-sdk-source"));
 
-    for workflow in [
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../.github/workflows/ci-quality-slice.yml"
-        )),
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../.github/workflows/sdk-smoke.yml"
-        )),
-    ] {
-        assert!(!workflow.contains("prepare-python-sdk-source"));
+    let admission = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../.github/actions/prepare-python-sdk-source/action.yml"
+    ));
+    assert!(admission.contains("mesh/sdk/python"));
+    assert!(admission.contains("sdk-source --kind root"));
+    assert!(!admission.contains("actions/checkout"));
+
+    let quality = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../.github/workflows/ci-quality-slice.yml"
+    ));
+    assert!(quality.contains("uses: ./.github/actions/prepare-python-sdk-source"));
+
+    let sdk_smoke = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../.github/workflows/sdk-smoke.yml"
+    ));
+    assert!(sdk_smoke.contains("uses: ./.github/actions/restore-smoke-inputs"));
+
+    let restore = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../.github/actions/restore-smoke-inputs/action.yml"
+    ));
+    assert!(restore.contains("uses: ./.github/actions/prepare-python-sdk-source"));
+    for source in [setup, admission, quality, sdk_smoke, restore] {
+        assert!(!source.contains("repository: Mesh-LLM/mesh-llm-python-sdk"));
     }
 }
 
