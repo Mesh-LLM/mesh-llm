@@ -146,6 +146,7 @@ default_target_triple() {
         linux/x86_64) printf 'x86_64-unknown-linux-gnu\n' ;;
         linux/aarch64) printf 'aarch64-unknown-linux-gnu\n' ;;
         windows/x86_64) printf 'x86_64-pc-windows-msvc\n' ;;
+        windows/aarch64) printf 'aarch64-pc-windows-msvc\n' ;;
         *) printf '\n' ;;
     esac
 }
@@ -157,6 +158,7 @@ target_platform() {
         x86_64-unknown-linux-gnu) printf 'linux-x86_64\n' ;;
         aarch64-unknown-linux-gnu) printf 'linux-aarch64\n' ;;
         x86_64-pc-windows-msvc) printf 'windows-x86_64\n' ;;
+        aarch64-pc-windows-msvc) printf 'windows-aarch64\n' ;;
         *) printf '%s\n' "$1" | tr '_' '-' ;;
     esac
 }
