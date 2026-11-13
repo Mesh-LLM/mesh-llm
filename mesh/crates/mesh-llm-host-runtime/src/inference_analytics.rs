@@ -60,20 +60,22 @@ impl GenerationStatsObserver for AnalyticsObserver {
         let Some(weight) = REQUEST_LIMITER.admit(Instant::now()) else {
             return;
         };
-        let mut properties =
-            request_properties(stats, &model_identity::lookup(&stats.model_id), weight);
+        let model = model_identity::lookup(&stats.model_id);
+        let mut properties = request_properties(stats, &model, weight);
         if let Some(hardware) = mesh_llm_analytics::serving_hardware() {
-            properties = hardware.apply(properties, loaded_backend());
+            // The device the model was loaded onto decides the backend; with
+            // no device selected, the runtime offloads to its GPU devices.
+            let backend = model.backend.or_else(loaded_backend);
+            properties = hardware.apply(properties, backend);
         }
         mesh_llm_analytics::capture(Event::InferenceRequest, properties);
     }
 }
 
-/// The backend of the native runtime this process serves on, read once from
-/// its devices on the first reported request. By then a runtime is loaded,
-/// so this is what ran, whatever the hardware survey saw at startup. A
-/// runtime with only CPU devices is `cpu`; `None` if the devices cannot be
-/// read.
+/// The backend a model loaded with no selected device runs on: the first GPU
+/// device the loaded runtime registers, which is where it offloads, or `cpu`
+/// when it registers none. Read once, on the first reported request, when a
+/// runtime is certainly loaded. `None` if the devices cannot be read.
 fn loaded_backend() -> Option<&'static str> {
     static LOADED_BACKEND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
     *LOADED_BACKEND.get_or_init(|| {

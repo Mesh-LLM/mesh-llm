@@ -23,6 +23,7 @@ fn loaded<'a>(served_name: &'a str, source: ModelLoadSource) -> LoadedModel<'a> 
         path: None,
         package_ref: None,
         dflash: None,
+        device: None,
     }
 }
 
@@ -223,4 +224,17 @@ fn a_redacted_model_is_still_described_by_architecture_and_size() {
         identity.apply(mesh_llm_analytics::Properties::new())
     );
     assert!(!rendered.contains("acme"), "{rendered}");
+}
+
+#[test]
+fn a_model_loaded_onto_the_cpu_reports_the_cpu_backend() {
+    // A CUDA device can be registered while the model runs on the CPU; the
+    // selected device, not the registered ones, decides the backend.
+    let model = LoadedModel {
+        device: Some("CPU"),
+        ..loaded("Qwen3-8B-Q4_K_M", ModelLoadSource::DirectGguf)
+    };
+    assert_eq!(model_identity(&model, None).backend, Some("cpu"));
+    let unselected = loaded("Qwen3-8B-Q4_K_M", ModelLoadSource::DirectGguf);
+    assert_eq!(model_identity(&unselected, None).backend, None);
 }
