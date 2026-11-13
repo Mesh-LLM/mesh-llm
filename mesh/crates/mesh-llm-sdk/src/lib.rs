@@ -4,6 +4,9 @@
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
+pub use mesh_llm_embedded_runtime::capacity;
+
+#[cfg(feature = "serving")]
 pub mod documents;
 
 #[cfg(feature = "serving")]
