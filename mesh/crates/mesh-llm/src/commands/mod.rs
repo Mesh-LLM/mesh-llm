@@ -67,6 +67,41 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     }
 }
 
+/// `gpus`, model and download commands read this host's devices and memory.
+/// With a dynamic native runtime those come from the loaded runtime, so load
+/// the one `serve` would select (bundled or installed, never downloaded)
+/// before surveying. Without it the survey falls back to what the OS reports
+/// and can disagree with what `serve` advertises. A runtime that fails to load
+/// leaves that fallback in place rather than failing a read-only command.
+///
+/// The model subcommands that render the local fit budget (`search`, `show`)
+/// or resolve a repo ref fit-aware (`download`) need the same survey; the
+/// others never read device memory and skip the load.
+async fn load_installed_native_runtime(cli: &Cli) {
+    if let Err(error) = mesh_llm_host_runtime::load_installed_native_runtime_for_cli(
+        cli.config.as_deref(),
+        cli.placement.llama_flavor.map(crate::map_binary_flavor),
+    )
+    .await
+    {
+        use std::io::Write as _;
+        if cli.logging.debug {
+            // The full chain is debug-only: it names settings these commands
+            // forced themselves (downloads off), which reads as advice about
+            // config the user never touched.
+            let _ = writeln!(
+                mesh_llm_events::console_err(),
+                "native runtime load failed: {error:#}"
+            );
+        }
+        // stderr, so `--json` output on stdout stays machine-readable.
+        let _ = writeln!(
+            mesh_llm_events::console_err(),
+            "⚠️ Native runtime not loaded; this host's device memory comes from what the OS reports and may differ from what `serve` advertises. Run `mesh-llm runtime install` to match `serve`."
+        );
+    }
+}
+
 /// Model and download commands size and select models for this host with the
 /// same local fit budget as `serve`, so they honour `gpu.host_ram_offload`
 /// from the config. An absent config leaves the default, off; an unreadable or
@@ -80,21 +115,47 @@ fn apply_config_host_ram_offload(config_path: Option<&std::path::Path>) -> Resul
     Ok(())
 }
 
+/// The `models` subcommands that render the local fit budget in their output
+/// (`search`, `show`) or resolve a repo ref fit-aware (`download`), so they
+/// read this host's device memory and need the runtime-backed survey.
+fn models_command_reads_fit_budget(command: &mesh_llm_cli::models::ModelsCommand) -> bool {
+    matches!(
+        command,
+        mesh_llm_cli::models::ModelsCommand::Search { .. }
+            | mesh_llm_cli::models::ModelsCommand::Show { .. }
+            | mesh_llm_cli::models::ModelsCommand::Download { .. }
+    )
+}
+
+/// Whether a `gpus` subcommand reads the hardware survey. `run-benchmark`
+/// resolves and runs its own benchmark tool and never reads the survey, so it
+/// skips the runtime load.
+fn gpu_command_reads_survey(command: Option<&mesh_llm_cli::GpuCommand>) -> bool {
+    !matches!(command, Some(mesh_llm_cli::GpuCommand::RunBenchmark { .. }))
+}
+
 /// Dispatch general CLI commands and propagate the selected command's result.
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Serve | Command::Client => Ok(()),
         Command::Models { command } => {
             apply_config_host_ram_offload(cli.config.as_deref())?;
+            if models_command_reads_fit_budget(command) {
+                load_installed_native_runtime(cli).await;
+            }
             dispatch_models_command(command).await?;
             Ok(())
         }
         Command::Download { name, draft } => {
             apply_config_host_ram_offload(cli.config.as_deref())?;
+            load_installed_native_runtime(cli).await;
             dispatch_download_command(name.as_deref(), *draft).await
         }
         Command::Update { .. } => mesh_llm_commands::update::run_update(cli).await,
         Command::Gpus { json, command } => {
+            if gpu_command_reads_survey(command.as_ref()) {
+                load_installed_native_runtime(cli).await;
+            }
             mesh_llm_commands::gpus::dispatch_gpu_command(
                 *json,
                 command.as_ref(),
