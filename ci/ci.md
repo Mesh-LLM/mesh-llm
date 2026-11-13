@@ -52,11 +52,11 @@ and finite source-admission contracts do not qualify the pinned Linux image's
 C++23/clang toolchain or model behavior. Activate the executor on protected
 main, update the four feature branches with the admitted catalogs and owning
 recipes, then retain successful PR-associated execution at their final heads.
-The dedicated `public-cpp-api` image entry binds only the `skippy-cpp-api`
-consumer role. Its immutable multi-architecture CPU index is
+The former dedicated `public-cpp-api` image entry bound the `skippy-cpp-api`
+consumer role. Its immutable multi-architecture CPU index was
 `sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`;
-the existing `public-cpu` image, consumers, runtime rows and compiler seed keep
-their previous identities. Runner-images main run `41127631709`, attempt 1,
+the existing `public-cpu` image, consumers, runtime rows and compiler seed kept
+their previous identities at that time. Runner-images main run `41127631709`, attempt 1,
 successfully staged and verified AMD64/ARM64 CPU candidates at producer
 `2ca51592535c29ddbed768b75481451d3fa5a49e` and Mesh source
 `5e2fdddf6a6ea10d16e3689741483574f1274103`. The exact producer's
@@ -72,7 +72,7 @@ which still requires the protected-main executor rollout and real PR runs.
 
 ### Libclang-capable CPU image
 
-The dedicated `public-cpu-libclang` image entry binds the compiler-seed
+The `public-cpu-libclang` image entry binds the compiler-seed
 cohort: the `rust-tests`, `rust-clippy`, `linux-host`,
 `safetensors-runtime-smoke`, `compiler-seed-publisher` and
 `runtime-seed-canary` consumer roles, the `linux-cpu` runtime row, and the
@@ -83,13 +83,24 @@ exists so `skippy-ffi`'s bindgen freshness gate (which dlopens libclang through
 clang-sys) runs with the tool baked in instead of a job-time install. Its
 immutable multi-architecture CPU index is
 `sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`;
-the previous `public-cpu` image remains admitted for the consumers that stay
+the previous `public-cpu` image remained admitted for the consumers that stayed
 on it (including release-compose and SDK roles). Runner-images main run
 `41541864277`, attempt 3, successfully staged and verified AMD64/ARM64 CPU
 candidates at producer `45e0c35a191cc7026fb1b9a24700cc1b40be7ca6` and Mesh
 source `06f6347323552d07bdeffdb1bc1aba2808c26519`. Native
 `runner-identity bind` retained the complete cohort bytes under
 `ci/runner-image-evidence/032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153.json`.
+
+Runner-images run `43392701387`, attempt 1, staged the current cohort from
+producer `c2a825a5f38a0ff8b3a87843d933ec3f89c1195a` and Mesh source
+`2c2051a4084ed8dcd8f93c0f7f1b14fd01ca9a5c`. The exact-attempt producer
+admission and native bindings retain its bytes at
+`ci/runner-image-evidence/88ea93ca4b1d70c4787cfe1ddf7857a25aa0d95112dbfaf34a23e2ab7e38e0ef.json`.
+The C++ role now uses `public-cpu` alongside ordinary CPU consumers. The
+libclang roles, compiler seed, and protected runtime rows retain their previous
+images and epochs; changing those runtime rows requires a separate protected
+catalog rollout. Admission and offline binding do not establish workload or GPU
+qualification.
 
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that

@@ -97,7 +97,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:37dc12322bd2efaefc59e51ad58d8cd3284974cb23721d13f0ff3564715037bb
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:2334fa4c8d338759e746f49328381a368bd6e8587b373aed56c087fa6d1b4c6e
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -144,7 +144,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6bc7df4166f2729d7c8e8bb070c14ae261cb67116d6b025760dcb4b56eea3cfd
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:25d7b556fca2b744d1ce34bde65db15e72a2bb3a655ed5f582ea57a8fd85f48c
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -202,7 +202,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ff53048ee7a87b3244ccbfa1b2888fde5db31a73d0dfa42f283d25dde0115307
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:857e6641d78868318d81a353c13d5a021187dec8694ffc4a2ecdf6c34b84de0f
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:

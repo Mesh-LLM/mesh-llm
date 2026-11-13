@@ -266,7 +266,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_8 }}
     timeout-minutes: 120
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     defaults:
       run:
         shell: bash
