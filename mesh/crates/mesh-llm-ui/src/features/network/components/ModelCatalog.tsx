@@ -73,7 +73,6 @@ function ModelRow({
 }) {
   const sizeLabel = model.sizeGB === undefined ? model.size : formatModelSizeGB(model.sizeGB)
   const contextLabel = model.ctxMaxK === undefined ? model.context : `${model.ctxMaxK}k ctx`
-  const architectureLabel = model.moe ? 'MoE' : 'Dense'
   const provider = getModelProvider(model)
   const ProviderIcon = provider.Icon
   const familyColorKey = modelFamilyColorKey(model)
@@ -119,9 +118,6 @@ function ModelRow({
         <StatusBadge dot tone={status.tone}>
           {status.label}
         </StatusBadge>
-        <span className="inline-flex items-center rounded-full border border-border px-2.5 py-[3px] text-[length:var(--density-type-caption)] font-medium text-fg-faint">
-          {architectureLabel}
-        </span>
       </div>
     </button>
   )
