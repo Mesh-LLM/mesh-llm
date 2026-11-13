@@ -70,6 +70,16 @@ impl MeshNode {
         self.handle.status().await
     }
 
+    /// Latest local lane and context budgets, read in process. Unknown,
+    /// unsupported or incomplete observations return `None`; a stopped node
+    /// returns an error. See [`crate::capacity::RuntimeCapacity`] for freshness.
+    pub fn runtime_capacity(
+        &self,
+        model: &str,
+    ) -> anyhow::Result<Option<crate::capacity::RuntimeCapacity>> {
+        self.handle.runtime_capacity(model)
+    }
+
     /// Discover local and peer models, including their advertised effort levels.
     /// Each entry retains its exact provider and serving ID. This query uses
     /// in-process mesh state and makes no HTTP request.
