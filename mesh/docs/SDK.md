@@ -96,6 +96,8 @@ Remote-only speech models are rejected before audio is accepted. Rust's explicit
 Sample rates remain 8000–96000 Hz, with the same language, prompt, model/profile,
 VAD, cadence and tentative-result options. Dropping either native half, closing
 the session, or stopping the node cancels inference and releases admission.
+Native sessions validate audio rate, cadence and VAD settings before startup
+returns; invalid options fail before audio is accepted.
 Turn IDs remain opaque and stable within each session.
 The separately versioned Python SDK retains its current transport; its native
 transcription migration is deferred.

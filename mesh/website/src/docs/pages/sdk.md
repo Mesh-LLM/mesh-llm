@@ -74,6 +74,8 @@ channels to a locally loaded speech model; they do not open HTTP or WebSocket
 connections. Remote-only speech models are rejected explicitly. Rust callers
 can opt into network relaying with
 `LiveTranscription::start`. Model queries use the in-process discovery service.
+Native sessions validate audio rate, cadence and VAD settings before startup
+returns; invalid options fail before audio is accepted.
 The separately versioned Python SDK retains its current transport; its native
 transcription migration is deferred.
 
