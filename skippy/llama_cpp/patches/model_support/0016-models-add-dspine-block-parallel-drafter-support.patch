@@ -1,7 +1,7 @@
-From a071d1256173acfeff6fcd4181f123a4af4f9ea7 Mon Sep 17 00:00:00 2001
+From b9eaa0fcda491c94120600ccfcf3db7519b937ad Mon Sep 17 00:00:00 2001
 From: AjHomelab <31621065+Ajay9o9@users.noreply.github.com>
 Date: Mon, 9 Nov 2026 07:03:22 +1100
-Subject: [PATCH] dflash : add DSpine draft model support
+Subject: [PATCH 32/32] dflash : add DSpine draft model support
 
 Imported from Ajay9o9/llama.cpp@dspine (d493f841b) into the mesh-llm patch
 queue, with a zero-lattice fallback for probe/chunked (non-block-shaped)
@@ -32,10 +32,10 @@ Review hardening on top of the import:
  9 files changed, 404 insertions(+)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
-index e678bd042..6682de472 100644
+index 4b7b921f8..1b459a4ed 100644
 --- a/conversion/qwen.py
 +++ b/conversion/qwen.py
-@@ -1009,6 +1009,9 @@ class DFlashModel(Qwen3Model):
+@@ -1010,6 +1010,9 @@ class DFlashModel(Qwen3Model):
          causal = self.hparams.get("is_causal")
          if causal is None:
              causal = dflash_config.get("causal")
@@ -45,7 +45,7 @@ index e678bd042..6682de472 100644
          if causal is not None:
              self.gguf_writer.add_causal_attention(bool(causal))
  
-@@ -1018,6 +1021,45 @@ class DFlashModel(Qwen3Model):
+@@ -1019,6 +1022,45 @@ class DFlashModel(Qwen3Model):
              head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
              self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
  
@@ -91,7 +91,7 @@ index e678bd042..6682de472 100644
      def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
          yield from super().generate_extra_tensors()
  
-@@ -1115,6 +1157,44 @@ class DFlashModel(Qwen3Model):
+@@ -1116,6 +1158,44 @@ class DFlashModel(Qwen3Model):
          ):
              name += ".weight"
  
@@ -188,7 +188,7 @@ index d8f3bcb39..28a03957d 100644
  
  An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index b563b6236..8cb07fcaa 100644
+index 6773c748e..6e3a9d61d 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
 @@ -1442,6 +1442,12 @@ class MODEL_TENSOR(IntEnum):
@@ -231,7 +231,7 @@ index b563b6236..8cb07fcaa 100644
          MODEL_TENSOR.LILICORR_PASS_HIDDEN_PROJ,
          MODEL_TENSOR.LILICORR_SLOT_EMBD,
 diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index 8888dc76e..5dd8c85be 100644
+index bb7d6dcae..7da6629cf 100644
 --- a/gguf-py/gguf/tensor_mapping.py
 +++ b/gguf-py/gguf/tensor_mapping.py
 @@ -1722,6 +1722,30 @@ class TensorNameMap:
@@ -313,10 +313,10 @@ index f39f71ec3..037bbd02e 100644
      LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,
      LLM_TENSOR_LILICORR_SLOT_EMBD,
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 6bf0ba2f9..dc84985b5 100644
+index 1b1f856ad..5205f8dfd 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -405,6 +405,9 @@ struct llama_layer {
+@@ -407,6 +407,9 @@ struct llama_layer {
      struct ggml_tensor * dflash_ffn_conv_base  = nullptr;
      struct ggml_tensor * dflash_ffn_conv_proj  = nullptr;
  
@@ -326,7 +326,7 @@ index 6bf0ba2f9..dc84985b5 100644
      struct ggml_tensor * lilicorr_attn_norm       = nullptr;
      struct ggml_tensor * lilicorr_mlp_norm        = nullptr;
      struct ggml_tensor * lilicorr_attn_in_proj    = nullptr;
-@@ -907,6 +910,13 @@ struct llama_model {
+@@ -909,6 +912,13 @@ struct llama_model {
      struct ggml_tensor * dflash_selector_next   = nullptr;
      struct ggml_tensor * dflash_selector_hidden = nullptr;
  
@@ -604,6 +604,3 @@ index 52d146ae5..0913a99c3 100644
      } else if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
          build_lilicorr_scores(*this, model, tok_embd, inp_anchor);
      }
--- 
-2.56.0
-

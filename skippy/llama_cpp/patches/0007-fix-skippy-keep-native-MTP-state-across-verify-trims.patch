@@ -1,7 +1,7 @@
-From 42e2234c2059141ca45450f71153eaadd10764b5 Mon Sep 17 00:00:00 2001
+From 58741f071009bd49f572455d0e69423823441bdf Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
-Subject: [PATCH 07/16] fix(skippy): keep native MTP state across verify trims
+Subject: [PATCH 07/32] fix(skippy): keep native MTP state across verify trims
 
 A rejected verify window used to cost the MTP sidecar its whole prefix:
 trimming the session cleared the sidecar's cache and seed, so the next
@@ -268,6 +268,3 @@ index 0812485d7..bb3c0e621 100644
              if (status != SKIPPY_STATUS_OK) {
                  return status;
              }
--- 
-2.54.0 (Apple Git-157)
-

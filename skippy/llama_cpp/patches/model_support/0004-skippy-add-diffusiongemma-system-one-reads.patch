@@ -1,7 +1,7 @@
-From e79d73c9266f31209d3ac3200c8d8f8fbb998722 Mon Sep 17 00:00:00 2001
+From 907323582a11fa74807453097cf5fa43857a2c01 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH 04/15] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH 20/32] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -118,7 +118,7 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 4f4fc1cd1..d3c86694f 100644
+index bb9de46af..c197f4737 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -94,6 +94,7 @@ add_library(llama
@@ -390,6 +390,3 @@ index 000000000..d0c51d87a
 +                "unexpected native exception during system-one read");
 +    }
 +}
--- 
-2.54.0 (Apple Git-157)
-
