@@ -370,6 +370,16 @@ pub(super) fn exchange_output_digests_from_outcome(
     }
 }
 
+/// The exchange id for a request admitted on the raw-proxy / remote-mesh
+/// paths: the ingress request id's UUID text. The `backend_selected` event
+/// (`exchange_admission::selected_route_event`) already names the exchange by
+/// this value, and payment plugins key their payer lifecycle events on it, so
+/// minting the `openai.exchange.v1` id from it lets a consumer join the two
+/// without a second identifier.
+pub(super) fn exchange_id_for_request(request: &proxy::BufferedHttpRequest) -> String {
+    request.request_id.as_uuid().to_string()
+}
+
 /// Path 2's own "effective request" moment: the plugin/endpoint is resolved
 /// and dispatch is about to happen. There is no typed `GenerationRequest`
 /// on this path (see the #1331 design note), so the envelope carries only
@@ -381,12 +391,13 @@ pub(super) fn exchange_output_digests_from_outcome(
 /// ever see it.
 pub(super) async fn mint_and_publish_effective_raw_proxy(
     plugin_manager: &crate::plugin::PluginManager,
+    request: &proxy::BufferedHttpRequest,
     model_name: &str,
 ) -> Option<String> {
     if !plugin_manager.has_subscriber().await {
         return None;
     }
-    let exchange_id = uuid::Uuid::new_v4().to_string();
+    let exchange_id = exchange_id_for_request(request);
     plugin_manager
         .publish(&OpenAiExchangeEnvelope::effective(
             exchange_id.clone(),
