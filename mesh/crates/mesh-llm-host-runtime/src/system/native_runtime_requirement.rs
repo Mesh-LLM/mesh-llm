@@ -75,7 +75,8 @@ pub(crate) async fn initialize(options: &RuntimeOptions) -> Result<()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let config = plugin::load_config(options.config.as_deref())?;
     crate::initialize_logging_foundation(&config.logging).await;
-    if options.client {
+    // a client loads no model, but its receipt audits run on the runtime
+    if options.client && !client_audits_receipts(&config.receipts) {
         return Ok(());
     }
     #[cfg(feature = "dynamic-native-runtime")]
@@ -124,10 +125,24 @@ pub(crate) async fn initialize(options: &RuntimeOptions) -> Result<()> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner) =
                     Some(format!("{error:#}"));
             }
+            Err(error) if options.client => {
+                return Err(error.context(
+                    "[receipts] audit or require is set, and a client's audits of its peers' turns run on the native runtime",
+                ));
+            }
             Err(error) => return Err(error),
         }
     }
     Ok(())
+}
+
+/// Whether a `client` node audits the receipts of the peers it sends turns
+/// to (`network/request_trust.rs`), and so needs the native runtime an
+/// audit checks a turn with. A request's `x-mesh-trust: receipts` alone
+/// asks for audits too; a client without `audit` or `require` set reports
+/// such a turn as not audited instead of loading the runtime for it.
+pub(crate) fn client_audits_receipts(receipts: &mesh_llm_config::ReceiptsConfig) -> bool {
+    (receipts.audit || receipts.require) && !receipts.offline
 }
 
 #[cfg(feature = "dynamic-native-runtime")]

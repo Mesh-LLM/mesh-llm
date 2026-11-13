@@ -130,7 +130,9 @@ it as an unknown key, so run it after you change this table.
   only when it can tie the request's model name to a Hugging Face file: name
   the model as `owner/repo:selector`, as `owner/repo@revision/file.gguf`, or
   by a name in this node's loaded catalog. Every watched turn writes one log
-  line with its verdict. Read for every request.
+  line with its verdict. An audit runs on the native runtime, so a
+  `mesh-llm client` with `audit` or `require` set loads it at startup, as
+  `serve` does, and loads no model. Read for every request.
 - `require` — the node's clients get chat completions only from a runtime
   that issues receipts: this node's own, or a peer that advertises them, whose
   turns the node then audits even with `audit` off. A request nothing can
