@@ -93,17 +93,7 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
         if !matches!(input.retry_recovered.as_str(), "" | "true" | "false") {
             return Err("publication retry recovery marker must be true, false or absent".into());
         }
-        if recovered && selected {
-            return Err(
-                "recovered retry publication does not accept a selected source package".into(),
-            );
-        }
         if selected {
-            if identity.pass_id != "verify-1" || bundle {
-                return Err(
-                    "selected publication requires unchanged independent verifier package".into(),
-                );
-            }
             super::canary_package_closure::selected_publication::prepare(
                 input
                     .source_root
@@ -112,6 +102,7 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
                 &input.package,
                 &input.controller_revision,
                 identity,
+                recovered,
             )?;
         } else if input.source_root.is_some() {
             return Err("ordinary publication does not accept selected source root".into());
@@ -417,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_rejects_recovered_selected_source_package() {
+    fn recovered_selected_source_requires_controller_checkout_for_export() {
         let root = tempfile::tempdir().unwrap();
         let source = "a".repeat(40);
         let (package, identity_sha256) =
@@ -427,7 +418,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("does not accept a selected source package")
+                .contains("selected publication requires source root")
         );
     }
 

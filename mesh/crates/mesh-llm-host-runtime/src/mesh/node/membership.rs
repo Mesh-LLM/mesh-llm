@@ -386,6 +386,7 @@ impl Node {
             owner_summary: Arc::new(Mutex::new(owner_summary)),
             trust_store: Arc::new(Mutex::new(trust_store)),
             trust_policy: TrustPolicy::Allowlist,
+            private_nodes: self.private_nodes.clone(),
             enumerate_host: config.enumerate_host,
             public_mesh: false,
             // The serving state it shares with this node.
@@ -430,6 +431,7 @@ impl Node {
             activity_policy_guard: self.activity_policy_guard.clone(),
             drain_timeout_secs: self.drain_timeout_secs,
             drain_timeout_max_secs: self.drain_timeout_max_secs,
+            peer_stage_source_fetch: self.peer_stage_source_fetch,
             runtime_intents: self.runtime_intents.clone(),
             runtime_instance_lifecycles: self.runtime_instance_lifecycles.clone(),
         };

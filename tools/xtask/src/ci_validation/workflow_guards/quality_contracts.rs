@@ -218,11 +218,13 @@ fn reader_component(commands: &[&str], build: usize, fixture: usize, test: usize
 }
 
 /// The narrow crates are contract-tested here, unfiltered, rather than in the
-/// Rust test matrix (`CONTRACT_TESTED_CRATES`). Supervision tests keep the
-/// single-threaded harness they had inside xtask.
-const COMPONENT_TESTS: [&str; 2] = [
+/// Rust test matrix (`CONTRACT_TESTED_CRATES`). Supervision and cleanup
+/// tests keep the single-threaded harness they had inside xtask.
+const COMPONENT_TESTS: [&str; 4] = [
     "just with-lld cargo test --locked -p ci-controller",
+    "just with-lld cargo test --locked -p authority-automation",
     "just with-lld cargo test --locked -p process-supervision -- --test-threads=1",
+    "just with-lld cargo test --locked -p runner-cleanup -- --test-threads=1",
 ];
 
 fn component_tests(commands: &[&str], build: usize, fixture: usize) -> DynResult<()> {

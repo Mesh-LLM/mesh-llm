@@ -729,6 +729,25 @@ model_target_demand_upgrade_max_age_secs = 900
     }
 
     #[test]
+    fn runtime_peer_model_downloads_defaults_on_and_parses_off() {
+        let unset = parse_config_toml("version = 1\n").unwrap();
+        assert_eq!(unset.runtime.peer_model_downloads, None);
+        assert!(unset.runtime.peer_model_downloads_enabled());
+
+        let off = parse_config_toml(
+            r#"
+version = 1
+
+[runtime]
+peer_model_downloads = false
+"#,
+        )
+        .unwrap();
+        assert_eq!(off.runtime.peer_model_downloads, Some(false));
+        assert!(!off.runtime.peer_model_downloads_enabled());
+    }
+
+    #[test]
     fn nested_hardware_device_does_not_serialize_as_legacy_gpu_id() {
         let config = parse_config_toml(
             r#"

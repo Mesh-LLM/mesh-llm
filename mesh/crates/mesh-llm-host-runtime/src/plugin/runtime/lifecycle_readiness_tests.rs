@@ -257,7 +257,7 @@ async fn verified_handles_remain_bound_to_their_generation_after_replacement() {
         .openai_exchange_hook
         .as_deref()
         .unwrap();
-    let (sender, _) = plugin
+    let (_, sender, _) = plugin
         .lifecycle_runtime_handles(LifecycleOperation::Callback(declaration))
         .await
         .unwrap();

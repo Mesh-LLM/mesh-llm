@@ -983,3 +983,44 @@ fn passive_streams_are_gated_when_trust_policy_enforces_ownership() {
         ));
     }
 }
+
+#[tokio::test]
+async fn peer_load_without_downloads_is_refused_before_execution() -> Result<()> {
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let executed_by_loop = Arc::clone(&executed);
+    tokio::spawn(async move {
+        while let Some(command) = rx.recv().await {
+            match command {
+                crate::inference::skippy::StageControlCommand::ValidateLoad { resp, .. } => {
+                    let _ = resp.send(None);
+                }
+                crate::inference::skippy::StageControlCommand::Execute { .. } => {
+                    executed_by_loop.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+    });
+    let mut load = test_stage_load_request();
+    load.model_path = Some("/nonexistent/peer-requested.gguf".to_string());
+    let mut request = crate::inference::skippy::StageControlRequest::Load(load);
+
+    let error = node
+        .resolve_stage_control_request(
+            Some(&tx),
+            &mut request,
+            crate::inference::skippy::StageSourceFetch::LocalOnly,
+        )
+        .await
+        .expect_err("a peer load with no local source must be refused");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("model model-a is not on local disk"),
+        "{message}"
+    );
+    assert!(message.contains("refuses peer model downloads"), "{message}");
+    assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
+    Ok(())
+}

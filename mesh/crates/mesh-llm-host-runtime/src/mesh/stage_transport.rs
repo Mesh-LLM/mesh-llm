@@ -926,6 +926,7 @@ impl Node {
         tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request: crate::inference::skippy::StageControlRequest::Status(filter),
             requester: self.endpoint.id(),
+            source_fetch: crate::inference::skippy::StageSourceFetch::Allowed,
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
@@ -948,8 +949,12 @@ impl Node {
         // against other local stage-control commands.
         let control_tx_guard = self.stage_control_tx.lock().await;
         let control_tx = control_tx_guard.clone();
-        self.resolve_stage_control_request(control_tx.as_ref(), &mut request)
-            .await?;
+        self.resolve_stage_control_request(
+            control_tx.as_ref(),
+            &mut request,
+            crate::inference::skippy::StageSourceFetch::Allowed,
+        )
+        .await?;
         if let crate::inference::skippy::StageControlRequest::Load(load)
         | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
         {
@@ -973,6 +978,7 @@ impl Node {
         tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request,
             requester: self.endpoint.id(),
+            source_fetch: crate::inference::skippy::StageSourceFetch::Allowed,
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;

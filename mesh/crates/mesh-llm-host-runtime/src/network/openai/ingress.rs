@@ -25,6 +25,9 @@ mod lifecycle_prepared_dispatch_live_tests;
 #[path = "ingress/typed_frontend_live_tests.rs"]
 mod lifecycle_typed_frontend_live_tests;
 mod missing_model;
+#[cfg(test)]
+#[path = "ingress/private_scope_tests.rs"]
+mod private_scope_tests;
 mod realtime_relay;
 mod rejection_telemetry;
 use buffered_exchange::handle_buffered_api_request;
@@ -592,13 +595,31 @@ async fn resolve_remote_mesh_route(
     target: Option<iroh::EndpointId>,
     excluded: &[iroh::EndpointId],
 ) -> RemoteMeshRoute {
-    let remote_hosts: Vec<iroh::EndpointId> = ctx
+    let mut remote_hosts: Vec<iroh::EndpointId> = ctx
         .node
         .hosts_for_model(model_name)
         .await
         .into_iter()
         .filter(|id| !excluded.contains(id))
         .collect();
+    // A private request: these hosts were found after the ingress snapshot,
+    // so they get its split check too.
+    if mesh::current_private_scope().is_some() {
+        let mut found = election::ModelTargets::default();
+        found.targets.insert(
+            model_name.to_string(),
+            remote_hosts
+                .iter()
+                .map(|id| election::InferenceTarget::Remote(*id))
+                .collect(),
+        );
+        let kept = ctx
+            .node
+            .targets_in_current_private_scope(found)
+            .await
+            .candidates(model_name);
+        remote_hosts.retain(|id| kept.contains(&election::InferenceTarget::Remote(*id)));
+    }
 
     if let Some(target) = target {
         return if remote_hosts.contains(&target) {
@@ -1407,10 +1428,19 @@ async fn admit_buffered_api_request(
     ingress_type: crate::runtime::IngressType,
     lifecycle: &OpenAiLifecycleAttachment,
 ) -> Result<ClientStream, proxy::RouteDispatchOutcome> {
+    let requester = ctx
+        .route
+        .requested_by_node_id
+        .as_deref()
+        .and_then(parse_endpoint_id_hex);
+    let admitted_as = ctx
+        .route
+        .node
+        .private_node_admission_ingress(ingress_type, requester);
     check_activity_admission(
         tcp_stream,
         &ctx.route.node.activity_policy_guard,
-        ingress_type,
+        admitted_as,
         lifecycle.route_observer(),
     )
     .await
@@ -1545,14 +1575,38 @@ async fn handle_api_proxy_connection_inner(
     } else {
         super::request_parse::RequestTransforms::Apply
     };
-    match proxy::read_http_request_with_plugin_manager_with_context(
+    let request = match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
         transforms,
     )
     .await
     {
-        Ok(request) if realtime_relay::is_realtime_upgrade(&request) => {
+        Ok(request) => request,
+        Err(error) => {
+            let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
+            return;
+        }
+    };
+    let Some((tcp_stream, request, scope)) = super::routing_scope::resolve_at_ingress(
+        &node,
+        tcp_stream,
+        request,
+        ingress_type,
+        requested_by,
+    )
+    .await
+    else {
+        return;
+    };
+    let targets = match &scope {
+        Some(scope) => node.targets_in_private_scope(scope, &targets).await,
+        None => targets,
+    };
+    // Boxed: the dispatch future is large, and the scope wrapper would
+    // otherwise move it across another stack frame.
+    let dispatch = Box::pin(async move {
+        if realtime_relay::is_realtime_upgrade(&request) {
             realtime_relay::relay(
                 &node,
                 tcp_stream,
@@ -1562,31 +1616,28 @@ async fn handle_api_proxy_connection_inner(
                 requested_by,
             )
             .await;
+            return;
         }
-        Ok(request) => {
-            let route = IngressRouteContext {
-                node: &node,
-                targets: &targets,
-                affinity: &affinity,
-                plugin_manager: plugin_manager.as_ref(),
-                requested_by_node_id: requested_by.map(|id| hex::encode(id.as_bytes())),
-                automatic_retry: None,
-                #[cfg(test)]
-                exchange_channel: None,
-            };
-            handle_buffered_api_request(
-                tcp_stream,
-                request,
-                ProxyConnectionContext { route },
-                source_addr,
-                ingress_type,
-            )
-            .await;
-        }
-        Err(error) => {
-            let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
-        }
-    }
+        let route = IngressRouteContext {
+            node: &node,
+            targets: &targets,
+            affinity: &affinity,
+            plugin_manager: plugin_manager.as_ref(),
+            requested_by_node_id: requested_by.map(|id| hex::encode(id.as_bytes())),
+            automatic_retry: None,
+            #[cfg(test)]
+            exchange_channel: None,
+        };
+        handle_buffered_api_request(
+            tcp_stream,
+            request,
+            ProxyConnectionContext { route },
+            source_addr,
+            ingress_type,
+        )
+        .await;
+    });
+    mesh::with_private_scope(scope, dispatch).await;
 }
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's

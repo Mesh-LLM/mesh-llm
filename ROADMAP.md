@@ -1,69 +1,126 @@
 # Roadmap
 
-High-level directions for mesh-llm. Not promises — just things we're thinking about, or have thought about.
+**High level focus areas and project ideas the mesh-llm community is thinking about. Contributions and more ideas welcome!**
 
-## Smart model router ✅
+## Inference proof
 
-Implemented. Heuristic classifier detects Code/Reasoning/Chat/Creative/ToolCall with Quick/Moderate/Deep complexity. Task-dominant scoring ensures the right model handles each request. Tool capability is a hard filter. Multi-model per node with auto packs by VRAM tier. Auto-fallback ladders walk to the next-best model when the top pick's peers are unhealthy.
+* Improve the initial proof-of-inference implementation based on commit-llm.
+* Explore alternative approaches to proving inference.
+* Investigate how to prove inference when using external inference engines.
 
-## Mixture of Agents (MoA) ✅
+## Trust & security
 
-Implemented as the `mesh` virtual model. Fan-out across multiple worker models on the mesh, reducer synthesizes the result. Streaming output, tool-call passthrough, opinionated no-think default, configurable first-answer grace. See [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md).
+* Verify that nodes run untampered mesh-llm binaries.
+* Make clients more resistant to prompt injection when using mesh inference.
+* Improve the capsules plugin and its support in mesh-llm.
+* Explore a node reputation system, potentially based on a web of trust.
+* Improve resilience to network denial-of-service attacks.
+* Continue security work, including red teaming and addressing Loupe findings.
 
-This could do with ongoing development and benchmarking to improve. 
+## Usability
 
-## Mobile chat app (exemplar)
+* Maintain a reliable baseline of high-quality inference capacity.
+* Make mesh-llm easier for users and developers to use through apps and extensions. Explore desktop apps that run mesh-llm in the background, serve local users, and share spare compute.
+* Let GPU owners prioritize their own jobs over incoming requests, manage priorities from a dashboard, and keep local workloads secure.
+* Improve mobile support.
 
-A native mobile app that joins a mesh by scanning a QR code. Client-only — no GPU, no model serving. Just a beautiful chat interface backed by the mesh's GPU pool.
+## Performance
 
-- Scan QR code → join mesh → chat with any model the mesh serves
-- Uses iroh relay for connectivity (works through NAT, cellular, WiFi)
-- OpenAI-compatible API underneath (same as any mesh client)
-- iOS first (Swift + iroh-ffi), Android follow-up
-- "AirDrop for AI" — one scan and you're talking to a 235B parameter model
+* Optimize the Skippy inference engine.
+* Reduce CPU usage, memory usage, and energy consumption.
+* Improve load balancing across the decentralized network, including peer selection.
+* Improve opt-in speculative decoding with n-grams and draft models.
 
-This is the best way to show what mesh-llm does: zero setup, zero config, just scan and chat.
+## Privacy
 
-## Multimodal
+* Optimize mesh-llm for trusted execution environments (TEEs).
+* Explore privacy protections for inference workloads on hosts outside TEEs.
+* Prevent unauthorized access and data exfiltration from serving nodes.
 
-Vision, audio, and image generation/editing routed across the mesh. Capability advertisement gossiped so requests find compatible peers automatically. See [docs/design/MULTI_MODAL.md](mesh/docs/design/MULTI_MODAL.md).
+## Training
 
-Done:
-- Vision input on capable models (Qwen3-VL, MiniMax-M2.5, etc.)
-- Audio input (transcription, multimodal audio understanding)
-- Capability-aware routing — image/audio requests only go to peers that advertise the capability
-- Blob plugin for request-scoped media storage
+* Use the mesh for distributed pre-training.
+* Use the mesh for distributed fine-tuning.
+* Use the mesh for distributed reinforcement learning during post-training.
 
-Wanted:
-- **Image generation models** (SDXL, FLUX, etc.) as first-class mesh peers — same gossip + capability + routing story, just emits PNG bytes instead of tokens
-- **Image editing / inpainting** — accept an input image + mask + prompt, return edited image
-- Audio generation (TTS) as a peer role
-- Video generation as a future peer role
+## Model splitting
 
-The goal is "every modality is just another model behind the mesh's OpenAI-compatible facade." Same QR-code-to-join story works for image-gen as for chat.
+* Improve serving for models split across the mesh.
 
-## Speculative decoding
+## Mixture of agents
 
-Verify draft tokens against the target model to accelerate generation. Experimental, opt-in. See PR #567.
-More work around using ngrams, drafting models is in progress. 
-Some experimental work around predictive prompt completion into prefile has been done (yet to be proven, prefil is parallel so latency tolerant)
-MTP work with llama.cpp ongoing, but should be part of this to accelerate inference and especially reduce vulnerability to latency between layers. 
+* Improve and benchmark serving split Mixture of Agents (MoA) workloads across the mesh.
 
-## Demand-based rebalancing
+## Wide model support
 
-Partially done. Unified demand map via gossip, standby nodes promote to serve, and large-VRAM hosts can opt into fresh active-demand upgrades for local artifacts. Next: download-backed upgrades, split-aware upgrades, and replica-count balancing.
+* Improve dynamic model selection.
+* Support classification models, including jev-style models.
+* Support image-generation models.
+* Support image editing and inpainting from an input image, mask, and prompt.
+* Support audio generation, including text-to-speech, as a peer capability.
+* Support video generation as a peer capability.
+* Support real-time models.
+* Explore support for long-running asynchronous inference tasks.
+* Keep mesh-llm compatible with new open-weight models as they emerge.
+* Optimize mesh-llm for specific and widely used models.
+* Explore how to optimize mesh-llm for agent swarms.
 
-## Blackboard ✅
+## Payments
 
-Blackboard is moving out to its own plugin repository. The mesh-llm host keeps the generic plugin transport and CLI dispatch; blackboard installs through the plugin manager and owns its own CLI/MCP surface there.
+* Refine the payment architecture and mechanics, including streaming payments and possible MPP experiments.
+* Suggest default prices.
+* Support payments when models are served across multiple nodes.
+* Explore Lightning BOLT 12 support.
+* Explore support for additional Lightning wallets.
+* Add and maintain a stablecoin payment engine and wallet plugins.
+* Explore additional payment rails, such as Ark or fiat.
 
-## MoE expert sharding ✅
+## Buzz
 
-Implemented. Auto-detects MoE, computes overlapping expert assignments, splits locally, and uses session-sticky routing with zero cross-node expert traffic.
-Best thought of as experimental, most results show this doesn't perform as well as one would hope, more research is needed to see if expert sharding this way is actually practical.
+* Maintain and improve the Buzz integration with mesh-llm.
 
-## Platform targetting, Desktop apps, embedding of mesh SDK, distribution
+## Dynamic sharing
 
-Mesh is packaged for many platforms, and can be run as a background process, but it would make sense to have desktop/GUI apps which host it in way that can offer utility to end consumer utility as well as being able to yield compute when needed locally. 
+* Make it easy for GPU providers to switch between their own workloads and earning revenue by sharing spare capacity with the mesh, so the mesh can act as a buyer of last resort for idle GPUs.
+* Test and optimize support for additional inference engines, including SGLang and vLLM.
 
-Mesh also needs to be packaged as an SDK which can be used from various client languages to launch as a client/serve node as seamlessly as possible.
+## Dev platform
+
+* Improve the mesh-llm SDK and package it for multiple client languages so apps can easily launch client and serving nodes.
+* Improve developer documentation for humans and agents.
+* Build example and demo apps that show what developers can build with mesh-llm.
+* Expand developer outreach and engagement.
+
+## Testing
+
+* Improve pre-release testing.
+* Build simulations to evaluate potential network changes.
+
+## Monitoring
+
+* Improve live network health and performance monitoring. Track metrics such as average time to first token (TTFT), average throughput in tokens per second, total tokens served, total earnings, and the number of active consumers and providers.
+* Add alerts for network health and performance.
+
+## Build & release
+
+* Improve the build and release toolchain across supported platforms.
+* Improve the Windows build process.
+
+## Distribution
+
+* Explore integration with Vercel AI Gateway.
+* Explore integration with OpenRouter.
+* Explore how to adapt mesh-llm to specific use cases, such as open science.
+
+## Analyses
+
+* Build a micropayments profitability calculator.
+* Estimate market size.
+* Conduct competitive and SWOT analyses.
+
+## Marketing
+
+* Build and maintain the mesh website.
+* Maintain the mesh social media presence.
+* Publish blog posts.
+* Reach out to potential partners.

@@ -148,7 +148,7 @@ mod tests {
     /// Keep the leader unreaped, as the supervisor does, throughout shutdown.
     #[test]
     fn macos_group_membership_observes_live_then_unreaped_exit() {
-        let mut child = Command::new("/bin/sleep")
+        let mut child = Command::new(crate::test_sleep::sleep_executable())
             .arg("30")
             .process_group(0)
             .spawn()

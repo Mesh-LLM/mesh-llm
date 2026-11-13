@@ -91,6 +91,9 @@ message NodeRecord {
   optional SignedNodeOwnership owner_attestation = 23;
   optional SignedMeshGenesisPolicy genesis_policy = 24;
   optional ReleaseBuildAttestation release_attestation = 25;
+  // Mirrors PeerAnnouncement.refuses_peer_model_downloads. Absent means the
+  // node accepts peer model downloads.
+  optional bool refuses_peer_model_downloads = 26;
 }
 
 // Decode-only projection of the old LightningOffer wire message. Prices,
@@ -181,6 +184,11 @@ message PeerAnnouncement {
   // Plugin keys this node has withdrawn; see `PluginKeyWithdrawal`. At most 16,
   // one per plugin.
   repeated PluginKeyWithdrawal plugin_key_withdrawals = 54;
+  // Set when this node refuses split-stage requests that would make it fetch
+  // model files it does not already have (`runtime.peer_model_downloads =
+  // false`). Additive; older nodes ignore it. Absent means the node accepts
+  // peer model downloads, which is the legacy behavior.
+  optional bool refuses_peer_model_downloads = 55;
 }
 
 // A public key a plugin on this node signs with, bound to this node by the

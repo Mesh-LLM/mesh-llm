@@ -539,6 +539,12 @@ pub struct Cli {
     #[command(flatten)]
     pub kv_cache: KvCacheOptions,
 
+    /// Refuse peer split-stage requests that need model files not already on
+    /// this node. Local and configured models still load and serve. Same as
+    /// `runtime.peer_model_downloads = false`.
+    #[arg(long)]
+    pub no_peer_model_downloads: bool,
+
     #[command(flatten)]
     pub owner: OwnerOptions,
 

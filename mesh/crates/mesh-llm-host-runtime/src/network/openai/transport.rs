@@ -398,6 +398,27 @@ async fn handle_mesh_control_request(
 
 // ── Model-aware tunnel routing ──
 
+/// Private routing is decided by the full ingress; the bootstrap path never
+/// scopes, so it refuses a private request instead of routing it to whichever
+/// host it finds. Returns the stream back when the request is not private.
+async fn refuse_private_at_bootstrap(
+    node: &mesh::Node,
+    tcp_stream: ClientStream,
+    request: &mut BufferedHttpRequest,
+) -> Option<ClientStream> {
+    let (status, message) = match super::routing_scope::resolve(node, request).await {
+        Ok(None) => return Some(tcp_stream),
+        Ok(Some(_)) => (
+            503,
+            "private routing is not available until this node finishes starting".to_string(),
+        ),
+        Err(rejection) => (rejection.status, rejection.message),
+    };
+    release_request_objects(node, &request.request_object_request_ids).await;
+    let _ = super::response::send_error(tcp_stream, status, &message).await;
+    None
+}
+
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
 ///
 /// Peeks at the HTTP request, handles `/v1/models`, resolves the target host
@@ -425,6 +446,10 @@ pub async fn handle_mesh_request(
             let _ = super::parse_failure::send_read_failure(tcp_stream, &err).await;
             return;
         }
+    };
+    let Some(tcp_stream) = refuse_private_at_bootstrap(&node, tcp_stream, &mut request).await
+    else {
+        return;
     };
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.

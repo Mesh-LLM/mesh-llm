@@ -136,6 +136,11 @@ pub struct RuntimeConfig {
     pub reconcile_model_targets: bool,
     #[serde(default)]
     pub reconcile_model_target_demand_upgrades: bool,
+    /// Whether a peer's split-stage request may make this node fetch model
+    /// files it does not already have. Unset means yes; off, peers may only
+    /// use model files already on local disk. Local loads are unaffected.
+    #[serde(default)]
+    pub peer_model_downloads: Option<bool>,
     #[serde(default)]
     pub native_runtime: NativeRuntimeConfig,
     /// Node-wide resident and durable KV-cache policy.
@@ -145,6 +150,12 @@ pub struct RuntimeConfig {
     pub model_target_demand_upgrade_min_requests: u64,
     #[serde(default = "default_model_target_demand_upgrade_max_age_secs")]
     pub model_target_demand_upgrade_max_age_secs: u64,
+}
+
+impl RuntimeConfig {
+    pub fn peer_model_downloads_enabled(&self) -> bool {
+        self.peer_model_downloads != Some(false)
+    }
 }
 
 impl Default for RuntimeConfig {
@@ -162,6 +173,7 @@ impl Default for RuntimeConfig {
             activity: runtime::RuntimeActivityConfig::default(),
             reconcile_model_targets: false,
             reconcile_model_target_demand_upgrades: false,
+            peer_model_downloads: None,
             native_runtime: NativeRuntimeConfig::default(),
             kv_cache: RuntimeKvCacheConfig::default(),
             model_target_demand_upgrade_min_requests:

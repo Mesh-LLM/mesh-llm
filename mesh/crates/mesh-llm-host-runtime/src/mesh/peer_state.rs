@@ -9,6 +9,13 @@ pub use mesh_llm_membership::peer_state::{
     PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
 };
 
+/// Inside a private request, keep only the peers its scope admits.
+fn retain_private_scoped(peers: &mut Vec<PeerInfo>) {
+    if let Some(scope) = super::private_scope::current_private_scope() {
+        peers.retain(|peer| scope.admits_peer(peer));
+    }
+}
+
 pub(crate) fn peer_info_to_mesh_peer(peer: &PeerInfo) -> crate::plugin::proto::MeshPeer {
     crate::plugin::proto::MeshPeer {
         peer_id: endpoint_id_hex(peer.id),
@@ -117,10 +124,25 @@ pub struct OwnerRuntimeConfig {
     pub node_label: Option<String>,
     pub trust_store: TrustStore,
     pub trust_policy: TrustPolicy,
+    /// Other nodes that may serve this node's private requests.
+    pub private_nodes: Vec<EndpointId>,
     pub activity: mesh_llm_config::RuntimeActivityConfig,
     pub drain_timeout_secs: u64,
     pub drain_timeout_max_secs: u64,
     pub public_mesh: bool,
+    /// `runtime.peer_model_downloads`, off when `--no-peer-model-downloads` is set.
+    pub peer_model_downloads: bool,
+}
+
+impl OwnerRuntimeConfig {
+    /// Peers may fetch on a node started without runtime config.
+    pub(crate) fn peer_stage_source_fetch(
+        config: Option<&Self>,
+    ) -> crate::inference::skippy::StageSourceFetch {
+        crate::inference::skippy::StageSourceFetch::for_peers(
+            config.is_none_or(|config| config.peer_model_downloads),
+        )
+    }
 }
 
 pub(crate) struct ControlListenerLifecycle {
@@ -476,6 +498,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect()
         };
+        retain_private_scoped(&mut peer_data);
         self.filter_model_requirements(&mut peer_data).await;
         let mut served = std::collections::HashSet::new();
         for s in &my_hosted_models {
@@ -717,6 +740,7 @@ impl Node {
         let now_ms = crate::network::peer_blocks::now_ms();
         let mut peers = self.peers().await;
         peers.retain(|peer| !self.peer_blocks.is_blocked(&peer.id, now_ms));
+        retain_private_scoped(&mut peers);
         self.filter_model_requirements(&mut peers).await;
         peers
     }

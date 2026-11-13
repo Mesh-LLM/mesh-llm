@@ -39,6 +39,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | [skippy/LLAMA_PARITY.md](../../skippy/docs/LLAMA_PARITY.md) | Remaining llama.cpp parity queue |
 | [specs/layer-package-repos.md](../../skippy/docs/specs/layer-package-repos.md) | Manifest schema and package artifact rules |
 | [specs/mesh-setup-installer.md](specs/mesh-setup-installer.md) | Bootstrap installer and `mesh-llm setup` ownership boundary |
+| [specs/private-routing.md](specs/private-routing.md) | `@private`/`@incognito` requests that stay on your own nodes, and how to list them |
 | [SKIPPY.md](../../skippy/docs/SKIPPY.md) | Skippy integration readiness and parity notes |
 
 Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serving workflows.

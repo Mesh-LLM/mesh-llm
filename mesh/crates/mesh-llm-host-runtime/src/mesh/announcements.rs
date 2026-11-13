@@ -311,7 +311,9 @@ impl Node {
             // Ordinary nodes support this independently of build features.
             decode_batch_policy_supported: !self.full_model_only,
             plugin_origin_signature_supported: true,
+            private_routing_supported: true,
             persistent_lane_marker_supported: true,
+            refuses_peer_model_downloads: !self.peer_stage_source_fetch.allows_fetch(),
             advertised_model_throughput: data.advertised_model_throughput,
             cache_affinity: data.cache_affinity,
             latency_ms: None,

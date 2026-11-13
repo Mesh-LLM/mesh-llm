@@ -4,15 +4,25 @@ use crate::command::DynResult;
 use std::collections::BTreeMap;
 
 const CLIENT: &str = "@anthropic-ai/claude-code@2.1.273";
-const AFFECTED: &str = "${{ contains(steps.changes.outputs.affected_crates, 'skippy-inference-api') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}";
+const HOST: &str = "mesh-llm-host-runtime";
+const BATCH_CRATES: &str = "${{ steps.resolve_batch_crates.outputs.crates }}";
+const BATCH_AFFECTED: &str =
+    "${{ contains(steps.resolve_batch_crates.outputs.crates, 'mesh-llm-host-runtime') }}";
+const BATCH_LOOP: &str = r#"for crate in ${crates[@]+"${crates[@]}"}; do"#;
+const BATCH_TEST: &str = r#"cargo test --locked -p "$crate""#;
+const HOST_BRANCH: &str = r#"if [[ "$crate" == "mesh-llm-host-runtime" ]]; then"#;
+const GROUP_MARKERS: [&str; 2] = [
+    r#"echo "::group::Claude Code 2.1.273 real-client integration""#,
+    r#"echo "::endgroup::""#,
+];
 const PR_TEST: &str = "claude_cli_executes_read_tool_through_host_ingress";
 const LIVE_TEST: &str = "claude_cli_round_trips_through_host_ingress_and_live_claude_model";
 
 pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     required(
         workflows
-            .get("pr_linux.yml")
-            .ok_or("missing Claude PR workflow")?,
+            .get("ci-rust-tests-slice.yml")
+            .ok_or("missing Claude Rust test workflow")?,
     )?;
     manual(
         workflows
@@ -28,25 +38,26 @@ fn not_optional(step: &Node) -> DynResult<()> {
     Ok(())
 }
 
-fn pinned_client(steps: &[Node]) -> DynResult<(usize, &Node)> {
-    let (index, install) = h::step(steps, "name", "Install pinned Claude Code client")?;
+fn pinned_client<'a>(steps: &'a [Node], name: &str) -> DynResult<(usize, &'a Node)> {
+    let (index, install) = h::step(steps, "name", name)?;
     not_optional(install)?;
     h::command(install, &["npm", "install", "--global", CLIENT], &[])?;
     Ok((index, install))
 }
 
-// Bind this small source-owned execution shape. Accept comments, indentation,
-// and line continuations, but never certify echoed, conditional or ignored tests.
-fn execution(step: &Node, feature: &str, filter: &str, protocol: bool) -> DynResult<()> {
-    not_optional(step)?;
-    let source = field(step, "run").ok_or("missing Claude execution scalar")?;
-    let normalized = source
+fn normalized(source: &str) -> String {
+    source
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
         .join("\n")
-        .replace("\\\n", " ");
-    let observed = normalized
+        .replace("\\\n", " ")
+}
+
+// Bind this small source-owned execution shape. Accept comments, indentation,
+// and line continuations, but never certify echoed, conditional or ignored tests.
+fn execution(source: &str, feature: &str, filter: &str) -> DynResult<()> {
+    let observed = normalized(source)
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| invocation(&line.split_whitespace().collect::<Vec<_>>()))
@@ -54,22 +65,13 @@ fn execution(step: &Node, feature: &str, filter: &str, protocol: bool) -> DynRes
     let client = observed
         .iter()
         .filter(|call| {
-            call.package.as_deref() == Some("mesh-llm-host-runtime")
+            call.package.as_deref() == Some(HOST)
                 && call.no_default
                 && call.features.iter().any(|value| value == feature)
                 && call.filter.as_deref() == Some(filter)
         })
         .count();
-    let protocols = observed
-        .iter()
-        .filter(|call| {
-            call.package.as_deref() == Some("skippy-inference-api") && call.filter.is_none()
-        })
-        .count();
-    if client != 1
-        || protocols != usize::from(protocol)
-        || observed.len() != 1 + usize::from(protocol)
-    {
+    if client != 1 || observed.len() != 1 {
         return Err(
             "Claude gate must directly execute its required Cargo package, feature and test filter"
                 .into(),
@@ -78,25 +80,64 @@ fn execution(step: &Node, feature: &str, filter: &str, protocol: bool) -> DynRes
     Ok(())
 }
 
+// The Rust test batch runs every planned crate, including skippy-inference-api,
+// and adds the real-client test whenever the batch holds the host runtime.
 fn required(workflow: &Node) -> DynResult<()> {
-    let job = h::job(workflow, "plan")?;
-    h::binding(job, "timeout-minutes", "45")?;
-    not_optional(job)?;
-    let steps = h::steps(job)?;
-    let (install_index, install) = pinned_client(steps)?;
-    h::condition(install, AFFECTED)?;
-    let (index, gate) = h::step(
-        steps,
-        "name",
-        "Run Claude Code protocol and real-client integration",
-    )?;
-    h::before(install_index, index)?;
-    h::condition(gate, AFFECTED)?;
-    let env = h::member(gate, "env")?;
+    let env = h::member(workflow, "env")?;
     for key in ["CARGO_INCREMENTAL", "CARGO_PROFILE_TEST_DEBUG"] {
         h::binding(env, key, "0")?;
     }
-    execution(gate, "claude-code-integration", PR_TEST, true)
+    let job = h::job(workflow, "rust_tests")?;
+    not_optional(job)?;
+    let steps = h::steps(job)?;
+    let (install_index, install) =
+        pinned_client(steps, "Install pinned Claude Code integration client")?;
+    h::condition(install, BATCH_AFFECTED)?;
+    let (index, gate) = h::step(steps, "name", "Run isolated Cargo tests for the batch")?;
+    h::before(install_index, index)?;
+    not_optional(gate)?;
+    if gate.get("if").is_some() {
+        return Err("required Rust test batch must not be conditionally skipped".into());
+    }
+    h::binding(h::member(gate, "env")?, "TEST_CRATES", BATCH_CRATES)?;
+    let source = normalized(field(gate, "run").ok_or("missing Rust test batch script")?);
+    if source
+        .lines()
+        .any(|line| line.contains("set +e") || line.contains("set +o errexit"))
+    {
+        return Err("Rust test batch must keep errexit enabled for its Cargo tests".into());
+    }
+    if !source.lines().any(|line| line.trim() == BATCH_LOOP) {
+        return Err("Rust test batch must iterate over every planned crate".into());
+    }
+    if !source.lines().any(|line| line.trim() == BATCH_TEST) {
+        return Err("Rust test batch must run every planned crate's tests".into());
+    }
+    execution(&host_branch(&source)?, "claude-code-integration", PR_TEST)
+}
+
+// The branch condition pins `$crate` to the host runtime, so its body names that
+// package. Only the exact group markers are inert; any other command, including
+// one chained after an echo, or a nested branch rejects.
+fn host_branch(source: &str) -> DynResult<String> {
+    let mut lines = source.lines().map(str::trim);
+    lines
+        .by_ref()
+        .find(|line| *line == HOST_BRANCH)
+        .ok_or("Rust test batch must run the Claude client test for the host runtime")?;
+    let mut body = Vec::new();
+    for line in lines {
+        if line == "fi" {
+            return Ok(body.join("\n"));
+        }
+        if line.starts_with("if ") {
+            return Err("Claude client test must not be nested in another condition".into());
+        }
+        if !GROUP_MARKERS.contains(&line) {
+            body.push(line.replace(r#""$crate""#, HOST));
+        }
+    }
+    Err("unterminated Claude client branch".into())
 }
 
 fn manual(workflow: &Node) -> DynResult<()> {
@@ -112,7 +153,7 @@ fn manual(workflow: &Node) -> DynResult<()> {
     h::binding(env, "ANTHROPIC_API_KEY", "${{ secrets.ANTHROPIC_API_KEY }}")?;
     h::binding(env, "CARGO_PROFILE_TEST_DEBUG", "0")?;
     let steps = h::steps(job)?;
-    let (install_index, install) = pinned_client(steps)?;
+    let (install_index, install) = pinned_client(steps, "Install pinned Claude Code client")?;
     if install.get("if").is_some() {
         return Err("manual Claude gate requires its pinned client install".into());
     }
@@ -137,7 +178,12 @@ fn manual(workflow: &Node) -> DynResult<()> {
     if gate.get("if").is_some() {
         return Err("authorized manual Claude test must not be silently skipped".into());
     }
-    execution(gate, "claude-live-model-integration", LIVE_TEST, false)
+    not_optional(gate)?;
+    execution(
+        field(gate, "run").ok_or("missing Claude execution scalar")?,
+        "claude-live-model-integration",
+        LIVE_TEST,
+    )
 }
 
 // Literal unconditional skips cannot qualify a required manual gate. Other
