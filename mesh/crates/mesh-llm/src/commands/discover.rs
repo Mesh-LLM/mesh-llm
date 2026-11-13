@@ -250,8 +250,13 @@ fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) ->
         }
     };
 
-    let targets = discovery::collect_runtime_stop_targets(&root)?;
     let mut tally = StopTally::default();
+    // First, so the service host cannot restart the node stopped below.
+    writeln_some(
+        err,
+        tally.record_service(mesh_llm_commands::uninstall::end_background_service()),
+    )?;
+    let targets = discovery::collect_runtime_stop_targets(&root)?;
     for target in targets {
         let outcome = backend::terminate_process_blocking(
             target.pid,
@@ -269,6 +274,13 @@ fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) ->
     // (issue #2352, papercut 1).
     writeln!(err, "{CLIENT_COVERAGE_NOTE}")?;
     Ok(())
+}
+
+fn writeln_some(err: &mut impl Write, line: Option<String>) -> std::io::Result<()> {
+    match line {
+        Some(line) => writeln!(err, "{line}"),
+        None => Ok(()),
+    }
 }
 
 /// What `mesh-llm stop` says about each owner, counted for the closing line.
@@ -302,6 +314,37 @@ impl StopTally {
             backend::TerminationOutcome::Failed => {
                 self.failed += 1;
                 format!("  Could not stop owner pid={pid} ({label})")
+            }
+        }
+    }
+
+    /// The line for the Windows background service, when there was one.
+    fn record_service(
+        &mut self,
+        stop: mesh_llm_commands::uninstall::BackgroundServiceStop,
+    ) -> Option<String> {
+        use mesh_llm_commands::uninstall::BackgroundServiceStop;
+        match stop {
+            BackgroundServiceStop::NotRunning => None,
+            BackgroundServiceStop::Ended => {
+                self.stopped += 1;
+                Some(
+                    "  Ended the background service (scheduled task mesh-llm); it starts again \
+                     at your next logon"
+                        .to_string(),
+                )
+            }
+            BackgroundServiceStop::StillRunning(warnings) => {
+                self.failed += 1;
+                let detail = if warnings.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", warnings.join("; "))
+                };
+                Some(format!(
+                    "  Could not end the background service{detail}; end it with \
+                     `schtasks -End -TN mesh-llm`"
+                ))
             }
         }
     }
@@ -375,5 +418,34 @@ mod stop_tests {
             StopTally::default().finish().expect("exit 0"),
             Some("Nothing running.")
         );
+    }
+
+    #[test]
+    fn the_background_service_counts_like_an_owner() {
+        use mesh_llm_commands::uninstall::BackgroundServiceStop;
+
+        let mut tally = StopTally::default();
+        assert_eq!(
+            tally.record_service(BackgroundServiceStop::NotRunning),
+            None
+        );
+        assert_eq!(tally.finish().expect("exit 0"), Some("Nothing running."));
+
+        let mut tally = StopTally::default();
+        let ended = tally
+            .record_service(BackgroundServiceStop::Ended)
+            .expect("an ended service is reported");
+        assert!(ended.contains("Ended the background service"));
+        assert_eq!(tally.finish().expect("exit 0"), None);
+
+        let mut tally = StopTally::default();
+        let still = tally
+            .record_service(BackgroundServiceStop::StillRunning(vec![
+                "access denied".to_string(),
+            ]))
+            .expect("a service still running is reported");
+        assert!(still.contains("(access denied)"));
+        assert!(still.contains("schtasks -End -TN mesh-llm"));
+        tally.finish().expect_err("the service is still running");
     }
 }

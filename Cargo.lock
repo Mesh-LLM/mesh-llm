@@ -546,6 +546,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "authority-automation"
+version = "0.79.0"
+dependencies = [
+ "ci-controller",
+ "hex",
+ "libc",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1234,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "ci-controller"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "hex",
  "serde",
@@ -4474,7 +4487,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-spec-bench"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4644,7 +4657,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4672,7 +4685,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-analytics"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4690,7 +4703,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-api-client"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "hex",
  "mesh-llm-client",
@@ -4700,7 +4713,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-api-server"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "mesh-llm-api-client",
@@ -4710,11 +4723,11 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-build-info"
-version = "0.78.0"
+version = "0.79.0"
 
 [[package]]
 name = "mesh-llm-cli"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4727,7 +4740,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-client"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4755,7 +4768,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-commands"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4803,7 +4816,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-config"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4824,7 +4837,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-console-server"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "mesh-llm-ui",
@@ -4833,7 +4846,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-control-api"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "http",
@@ -4847,14 +4860,14 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-embedded-runtime"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "mesh-llm-host-runtime",
 ]
 
 [[package]]
 name = "mesh-llm-events"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4872,7 +4885,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-ffi"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "mesh-llm-sdk",
  "reqwest 0.13.5",
@@ -4885,7 +4898,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-host-runtime"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4986,7 +4999,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-identity"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "apple-native-keyring-store",
  "argon2",
@@ -5009,7 +5022,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-log-store"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "chrono",
  "data-encoding",
@@ -5026,7 +5039,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-membership"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -5051,7 +5064,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-moa-plugin"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5063,7 +5076,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-node"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "mesh-llm-types",
@@ -5077,7 +5090,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-nodejs"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "mesh-llm-sdk",
  "napi",
@@ -5091,11 +5104,11 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-payments"
-version = "0.78.0"
+version = "0.79.0"
 
 [[package]]
 name = "mesh-llm-plugin"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5116,7 +5129,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-plugin-manager"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -5137,7 +5150,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-protocol"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -5145,11 +5158,12 @@ dependencies = [
  "prost",
  "serde_json",
  "sha2 0.11.0",
+ "tokio",
 ]
 
 [[package]]
 name = "mesh-llm-release-footer"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "hex",
  "serde",
@@ -5159,7 +5173,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-routing"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "blake3",
  "iroh",
@@ -5169,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-runtime-event-contracts"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5180,7 +5194,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-sdk"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -5194,6 +5208,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-runtime-install",
  "tokio",
  "tokio-tungstenite 0.29.0",
@@ -5201,7 +5216,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-skills"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -5212,13 +5227,14 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-skippy-adapter"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "dirs",
  "mesh-llm-config",
  "mesh-llm-events",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-api",
  "skippy-config",
  "skippy-hf-hub",
@@ -5236,7 +5252,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-system"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5267,7 +5283,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-test-harness"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "reqwest 0.13.5",
  "serde_json",
@@ -5276,7 +5292,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-transport"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5287,7 +5303,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-tui"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
@@ -5304,7 +5320,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-types"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "hex",
  "serde",
@@ -5315,18 +5331,18 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-ui"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "include_dir",
 ]
 
 [[package]]
 name = "mesh-llm-wallet"
-version = "0.78.0"
+version = "0.79.0"
 
 [[package]]
 name = "mesh-mixture-of-agents"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "async-trait",
  "reqwest 0.13.5",
@@ -5339,11 +5355,11 @@ dependencies = [
 
 [[package]]
 name = "mesh-native-serving-plugin-api"
-version = "0.78.0"
+version = "0.79.0"
 
 [[package]]
 name = "mesh-native-serving-plugin-host"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "libloading 0.9.0",
@@ -5355,7 +5371,7 @@ dependencies = [
 
 [[package]]
 name = "metrics-server"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7060,7 +7076,7 @@ dependencies = [
 
 [[package]]
 name = "process-supervision"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "libc",
  "serde_json",
@@ -7871,6 +7887,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "runner-cleanup"
+version = "0.79.0"
+dependencies = [
+ "ci-controller",
+ "process-supervision",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8630,7 +8656,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skippy-api"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -8662,7 +8688,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-cache"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -8677,7 +8703,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-cli"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -8707,7 +8733,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-commands"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8743,7 +8769,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-config"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -8754,7 +8780,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-coordinator"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "skippy-model-artifact",
  "thiserror 2.0.21",
@@ -8762,7 +8788,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-correctness"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -8782,7 +8808,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-events"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -8791,7 +8817,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-ffi"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "bindgen",
  "libloading 0.9.0",
@@ -8799,7 +8825,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-gpu-bench"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -8808,14 +8834,14 @@ dependencies = [
 
 [[package]]
 name = "skippy-guardrails"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "skippy-hardware-profile"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -8826,7 +8852,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-hf-hub"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "base64 0.22.1",
  "bon",
@@ -8857,7 +8883,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-inference-api"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -8880,11 +8906,11 @@ dependencies = [
 
 [[package]]
 name = "skippy-metrics"
-version = "0.78.0"
+version = "0.79.0"
 
 [[package]]
 name = "skippy-model"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -8899,7 +8925,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-artifact"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8911,7 +8937,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-hf"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8937,7 +8963,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-package"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8962,14 +8988,14 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-ref"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "skippy-model-resolver"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -8981,7 +9007,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-native-runtime"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -8993,7 +9019,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-package-builder"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -9016,7 +9042,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-package-format"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9025,7 +9051,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-protocol"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -9037,7 +9063,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-quantize"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -9052,7 +9078,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-runtime"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "crossbeam-queue",
@@ -9072,7 +9098,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-runtime-install"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -9095,7 +9121,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-scheduler"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9106,7 +9132,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-serving"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -9143,7 +9169,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-tokenizer"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9151,7 +9177,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-topology"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -10277,7 +10303,7 @@ dependencies = [
 
 [[package]]
 name = "trajectory-reader"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
  "libc",
  "md5",
@@ -11745,8 +11771,9 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.78.0"
+version = "0.79.0"
 dependencies = [
+ "authority-automation",
  "caseless",
  "ci-controller",
  "ed25519-dalek",
@@ -11766,6 +11793,7 @@ dependencies = [
  "process-supervision",
  "rcgen",
  "regex",
+ "runner-cleanup",
  "rustix",
  "rustls",
  "semver",

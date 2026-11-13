@@ -18,7 +18,7 @@ use crate::common::{PromptCacheRetention, ReasoningConfig, ReasoningEffort};
 use crate::errors::InferenceError;
 use crate::generation::{
     GenerationEvent, GenerationMessage, GenerationRequest, GenerationResponse, MessageContent,
-    MessageContentPart,
+    MessageContentPart, REQUIRES_TRANSFORM_KEY,
 };
 
 /// Anthropic stop reasons. `refusal` maps from the OpenAI content-filter
@@ -329,7 +329,11 @@ fn expand_message(
                         {
                             continue;
                         }
-                        media_parts.push(image_part(value)?);
+                        let part = media_part(value)?;
+                        if let Some(text) = part.text.as_deref() {
+                            text_parts.push(text.to_string());
+                        }
+                        media_parts.push(part);
                     }
                 }
             }
@@ -373,6 +377,119 @@ fn expand_message(
             Ok(())
         }
     }
+}
+
+fn media_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("document") => document_part(value),
+        _ => image_part(value),
+    }
+}
+
+/// An Anthropic `document` block becomes the Chat-shaped `input_file` part
+/// that `/v1/responses` files also normalize to, so a request transform or a
+/// file-capable backend sees one form. A `text` source is already text.
+fn document_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| InferenceError::invalid_request("unsupported document block"))?;
+    if object.keys().any(|key| {
+        ![
+            "type",
+            "source",
+            "title",
+            "context",
+            "citations",
+            "cache_control",
+        ]
+        .contains(&key.as_str())
+    }) {
+        return Err(InferenceError::invalid_request(
+            "unsupported document field",
+        ));
+    }
+    // Neither survives normalization, so asking for them is an error rather
+    // than a silent loss: `context` would vanish before the model sees it and
+    // the answer could not carry citations.
+    if object
+        .get("context")
+        .is_some_and(|context| !context.is_null() && context.as_str() != Some(""))
+    {
+        return Err(InferenceError::invalid_request(
+            "document context is not supported",
+        ));
+    }
+    if object
+        .get("citations")
+        .and_then(|citations| citations.get("enabled"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Err(InferenceError::invalid_request(
+            "document citations are not supported",
+        ));
+    }
+    let source = object
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or_else(|| InferenceError::invalid_request("document block requires a source"))?;
+    let string = |key: &str| {
+        source
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    };
+    let mut file = serde_json::Map::new();
+    match source.get("type").and_then(Value::as_str) {
+        Some("text") => {
+            let text = string("data").ok_or_else(|| {
+                InferenceError::invalid_request("document text source requires data")
+            })?;
+            return Ok(MessageContentPart {
+                content_type: "text".into(),
+                text: Some(text.into()),
+                extra: BTreeMap::new(),
+            });
+        }
+        Some("base64") => {
+            let (mime, data) = string("media_type").zip(string("data")).ok_or_else(|| {
+                InferenceError::invalid_request("document base64 source requires media_type/data")
+            })?;
+            file.insert(
+                "file_data".into(),
+                json!(format!("data:{mime};base64,{data}")),
+            );
+            file.insert("mime_type".into(), json!(mime));
+        }
+        Some("url") => {
+            let url = string("url").ok_or_else(|| {
+                InferenceError::invalid_request("document url source requires url")
+            })?;
+            file.insert("file_url".into(), json!(url));
+        }
+        Some("file") => {
+            let file_id = string("file_id").ok_or_else(|| {
+                InferenceError::invalid_request("document file source requires file_id")
+            })?;
+            file.insert("file_id".into(), json!(file_id));
+        }
+        _ => {
+            return Err(InferenceError::invalid_request(
+                "document source must be base64, url, file or text",
+            ));
+        }
+    }
+    if let Some(title) = object.get("title").and_then(Value::as_str) {
+        file.insert("filename".into(), json!(title));
+    }
+    Ok(MessageContentPart {
+        content_type: "input_file".into(),
+        text: None,
+        extra: BTreeMap::from([
+            ("input_file".into(), Value::Object(file)),
+            (REQUIRES_TRANSFORM_KEY.into(), json!(true)),
+        ]),
+    })
 }
 
 fn image_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
@@ -464,7 +581,7 @@ fn tool_result_content(
                         extra: BTreeMap::new(),
                     });
                 } else {
-                    parts.push(image_part(block)?);
+                    parts.push(media_part(block)?);
                 }
             }
         }

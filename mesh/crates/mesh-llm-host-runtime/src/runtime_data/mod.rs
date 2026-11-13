@@ -646,7 +646,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_release_attestation_status_surfaces_in_api_and_runtime_data() {
+    #[test]
+    fn release_attestation_status_surfaces_in_api_and_runtime_data() {
         let collector = RuntimeDataCollector::new();
         let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x33; 32]).public());
         let peer = PeerInfo {
@@ -852,6 +853,7 @@ pub(crate) mod tests {
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
                 measurement: None,
+                prefill: None,
             }],
             cache_affinity: None,
             display_rtt: None,

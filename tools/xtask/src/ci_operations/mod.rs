@@ -1,8 +1,6 @@
 //! `ci-ops`: Rust owners of the runner, cache and CI metrics helper scripts.
 //! Each command keeps its legacy script's argv, streams and exit statuses.
 
-mod authority_audit;
-mod authority_command;
 mod build_cache;
 mod build_cache_argv;
 mod build_cache_cargo;
@@ -49,9 +47,8 @@ mod identity_text;
 pub(crate) mod json_access;
 pub(crate) mod json_decode;
 mod performance_history;
-mod pr_authority;
+mod prepared_images;
 mod registry_pulls;
-mod runner_cleanup;
 mod runner_identity;
 pub(crate) mod runner_identity_argv;
 mod runner_identity_check;
@@ -138,8 +135,12 @@ pub(crate) fn run(
         CiOperationsCommand::ConfigureCanaryCache => unreachable!(),
         CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::ChatDisplay => unreachable!(),
-        CiOperationsCommand::AuthorityAudit => authority_command::run(args),
-        CiOperationsCommand::PrAuthorityAudit => pr_authority::run(args),
+        CiOperationsCommand::AuthorityAudit => {
+            authority_automation::ci_operations::authority_command::run(args)
+        }
+        CiOperationsCommand::PrAuthorityAudit => {
+            authority_automation::ci_operations::pr_authority::run(args)
+        }
         CiOperationsCommand::RuntimeSeed => runtime_seed::run(args),
         CiOperationsCommand::RegistryPulls => {
             let output = registry_pulls::run(args)?;

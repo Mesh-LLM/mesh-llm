@@ -1,0 +1,272 @@
+From 35c1595adad835b677ff64149da817fe54d3f285 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 09:20:42 +1100
+Subject: [PATCH 14/15] test(skippy): cover head-input publication and stage
+ capture
+
+DeepSeek-V4 publishes the head input as the mean of its hyper-connection
+streams, so the final stage of a split must keep it: its stage capture
+covers target layers 41, 42 and 43 on every stage of an even 2- and
+4-way cut, and llama_layer_inp_published reports it. Its verify-rollback
+case runs in native-rollback mode.
+---
+ src/CMakeLists.txt                          |  16 +++
+ src/skippy/tests/graph_build_inputs.cpp     | 112 +++++++++++++++++---
+ src/skippy/tests/graph_contract_cases.cmake |  23 ++++
+ 3 files changed, 134 insertions(+), 17 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index c2238097e..d8e31aa55 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -515,6 +515,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     # lfm2's fixture slides its attention window, so it checkpoints every window.
+     add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
+     add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
++    # DeepSeek-V4 rewinds its derived compressor state through its own seq_rm,
++    # within the snapshots of the last decode.
++    add_skippy_verify_rollback_test(deepseek4 deepseek4-moe.gguf native-rollback)
+     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
+     target_include_directories(skippy-sampling-history PRIVATE .)
+     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+@@ -793,6 +796,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_noalloc_graph_planning_recurrent_rollback PROPERTIES
+         FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
+ 
++    add_test(
++        NAME skippy_nemotron_h_head_layer_input
++        COMMAND skippy-graph-build-inputs --layer-inputs
++            "${SKIPPY_MODEL_FIXTURE_DIR}/nemotron_h-dense.gguf" --head-input)
++    set_tests_properties(skippy_nemotron_h_head_layer_input PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
++    add_test(
++        NAME skippy_nemotron_h_head_input_published
++        COMMAND skippy-graph-build-inputs --head-input-published
++            "${SKIPPY_MODEL_FIXTURE_DIR}/nemotron_h-dense.gguf" 1)
++    set_tests_properties(skippy_nemotron_h_head_input_published PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
++
+     add_test(
+         NAME skippy_generate_mamba2_fixture
+         COMMAND skippy-model-fixture-generator
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 511e647f4..7418c05c5 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -11,7 +11,9 @@
+ #include "skippy/stage_slice_plan.h"
+ #include "skippy/stage_realization.h"
+ 
++#include <algorithm>
+ #include <atomic>
++#include <charconv>
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
+@@ -21,6 +23,7 @@
+ #include <memory>
+ #include <set>
+ #include <stdexcept>
++#include <string>
+ #include <thread>
+ #include <utility>
+ #include <vector>
+@@ -903,8 +906,8 @@ static int check_execution_profile_residency() {
+ 
+ // Speculative drafters capture the residual entering each trunk layer. Every
+ // layer must publish a finite input row per token, and distinct layers must
+-// not alias one tensor.
+-static int check_layer_inputs(const char * model_path) {
++// not alias one tensor. The optional head input is the final layer's output.
++static int check_layer_inputs(const char * model_path, bool head_input) {
+     llama_model_params model_params = llama_model_default_params();
+     model_params.n_gpu_layers = 0;
+     model_params.load_mtp = true; // the fixture carries a NextN block beside the trunk
+@@ -917,14 +920,15 @@ static int check_layer_inputs(const char * model_path) {
+     }
+     const int32_t n_layer = llama_model_n_layer(model);
+     const int32_t n_embd = llama_model_n_embd(model);
+-    for (int32_t il = 0; il < n_layer; ++il) {
++    const int32_t n_captured = head_input ? n_layer + 1 : n_layer;
++    for (int32_t il = 0; il < n_captured; ++il) {
+         llama_set_embeddings_layer_inp(ctx, il, true);
+     }
+     llama_token tokens[] = {1, 2, 3, 4};
+     const int32_t n_tokens = 4;
+     int rc = llama_decode(ctx, llama_batch_get_one(tokens, n_tokens)) == 0 ? 0 : 122;
+     std::vector<std::vector<float>> rows;
+-    for (int32_t il = 0; rc == 0 && il < n_layer; ++il) {
++    for (int32_t il = 0; rc == 0 && il < n_captured; ++il) {
+         const float * data = llama_get_embeddings_layer_inp(ctx, il);
+         if (data == nullptr) {
+             std::fprintf(stderr, "layer %d input was not captured\n", il);
+@@ -956,24 +960,90 @@ static int check_layer_inputs(const char * model_path) {
+     return rc;
+ }
+ 
++static int check_head_input_published(const char * model_path, bool expected) {
++    llama_model_params model_params = llama_model_default_params();
++    model_params.n_gpu_layers = 0;
++    model_params.load_mtp = true;
++    llama_model * model = llama_model_load_from_file(model_path, model_params);
++    if (model == nullptr) return 140;
++    const uint32_t n_layer = (uint32_t) llama_model_n_layer(model);
++    int rc = 0;
++    for (uint32_t n_seq_max : {1u, 2u}) {
++        llama_context * ctx = llama_init_from_model(model, make_context_params(n_seq_max));
++        if (ctx == nullptr) {
++            rc = 141;
++            break;
++        }
++        if (!llama_layer_inp_published(ctx, 0)) {
++            std::fprintf(stderr, "layer 0 input is not published (n_seq_max %u)\n", n_seq_max);
++            rc = 142;
++        }
++        const bool published = llama_layer_inp_published(ctx, n_layer);
++        if (rc == 0 && published != expected) {
++            std::fprintf(stderr, "head input published = %d, expected %d (n_seq_max %u)\n",
++                    published, expected, n_seq_max);
++            rc = 143;
++        }
++        if (rc == 0) {
++            std::atomic<bool> start{false};
++            int decode_status = -1;
++            std::thread decoder([&] {
++                while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
++                llama_token token = 1;
++                decode_status = llama_decode(ctx, llama_batch_get_one(&token, 1));
++            });
++            start.store(true, std::memory_order_release);
++            const bool during_decode = llama_layer_inp_published(ctx, n_layer);
++            decoder.join();
++            if (decode_status != 0 || during_decode != expected) {
++                std::fprintf(stderr, "head input probe overlapped a failed decode (n_seq_max %u)\n", n_seq_max);
++                rc = 144;
++            }
++        }
++        llama_free(ctx);
++        if (rc != 0) break;
++    }
++    llama_model_free(model);
++    return rc;
++}
++
+ // A split stage captures the input of each drafter target layer it runs,
+ // except its first layer when that input arrives from the previous stage.
+-// The realized stage graph must keep every such capture.
+-static int check_stage_layer_inputs(const char * model_path) {
++// The final stage also owns the output head's input at layer n_layer.
++static int check_stage_layer_inputs(const char * model_path, const char * targets_csv) {
+     llama_model_params model_params = llama_model_default_params();
+     model_params.n_gpu_layers = 0;
+     model_params.load_mtp = true;
+     llama_model * model = llama_model_load_from_file(model_path, model_params);
+     const int32_t n_layer = model == nullptr ? 0 : llama_model_n_layer(model);
+-    if (n_layer < 44) {
++    std::vector<int32_t> targets = {6, 15, 25, 34, 43};
++    std::vector<std::vector<int32_t>> splits = {
++        {0, 23, n_layer}, {0, 11, 23, 34, n_layer},
++    };
++    if (targets_csv != nullptr) {
++        targets.clear();
++        const std::string list = targets_csv;
++        for (size_t pos = 0;;) {
++            const size_t comma = list.find(',', pos);
++            const std::string token = list.substr(pos, comma - pos);
++            int32_t layer = 0;
++            const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), layer);
++            if (error != std::errc{} || end != token.data() + token.size()) {
++                llama_model_free(model);
++                return 130;
++            }
++            targets.push_back(layer);
++            if (comma == std::string::npos) break;
++            pos = comma + 1;
++        }
++        splits = {{0, n_layer / 2, n_layer}, {0, n_layer / 4, n_layer / 2, 3 * n_layer / 4, n_layer}};
++    }
++    const bool targets_in_range = std::all_of(targets.begin(), targets.end(),
++            [n_layer](int32_t layer) { return layer >= 0 && layer <= n_layer; });
++    if (n_layer < 4 || targets.empty() || !targets_in_range) {
+         llama_model_free(model);
+         return 130;
+     }
+-    // GLM-5.3-Flash's DFlash draft targets, on its two- and four-stage cuts.
+-    const int32_t targets[] = {6, 15, 25, 34, 43};
+-    const std::vector<std::vector<int32_t>> splits = {
+-        {0, 23, n_layer}, {0, 11, 23, 34, n_layer},
+-    };
+     int rc = 0;
+     for (const auto & cuts : splits) {
+         for (size_t stage = 0; rc == 0 && stage + 1 < cuts.size(); ++stage) {
+@@ -992,7 +1062,8 @@ static int check_stage_layer_inputs(const char * model_path) {
+             }
+             std::vector<int32_t> captured;
+             for (int32_t layer : targets) {
+-                if (layer >= start && layer < end && (layer != start || start == 0)) {
++                const bool computed = (layer >= start && layer < end) || (layer == n_layer && end == n_layer);
++                if (computed && (layer != start || start == 0)) {
+                     captured.push_back(layer);
+                     context->set_embeddings_layer_inp(layer, true);
+                 }
+@@ -1033,15 +1104,22 @@ int main(int argc, char ** argv) {
+     if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
+         return check_decode_input_width();
+     }
+-    if (argc == 3 && std::strcmp(argv[1], "--stage-layer-inputs") == 0) {
++    if ((argc == 3 || argc == 4) && std::strcmp(argv[1], "--stage-layer-inputs") == 0) {
++        llama_backend_init();
++        const int rc = check_stage_layer_inputs(argv[2], argc == 4 ? argv[3] : nullptr);
++        llama_backend_free();
++        return rc;
++    }
++    if (argc == 4 && std::strcmp(argv[1], "--head-input-published") == 0) {
+         llama_backend_init();
+-        const int rc = check_stage_layer_inputs(argv[2]);
++        const int rc = check_head_input_published(argv[2], std::strcmp(argv[3], "1") == 0);
+         llama_backend_free();
+         return rc;
+     }
+-    if (argc == 3 && std::strcmp(argv[1], "--layer-inputs") == 0) {
++    if ((argc == 3 || (argc == 4 && std::strcmp(argv[3], "--head-input") == 0)) &&
++            std::strcmp(argv[1], "--layer-inputs") == 0) {
+         llama_backend_init();
+-        const int rc = check_layer_inputs(argv[2]);
++        const int rc = check_layer_inputs(argv[2], argc == 4);
+         llama_backend_free();
+         return rc;
+     }
+diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
+index 0d1bbf6e7..fdcdc631f 100644
+--- a/src/skippy/tests/graph_contract_cases.cmake
++++ b/src/skippy/tests/graph_contract_cases.cmake
+@@ -135,3 +135,26 @@ add_test(NAME skippy_glm5_next_stage_layer_inputs COMMAND skippy-graph-build-inp
+     "${glm5_next_contract_dir}/graph-contract.gguf")
+ set_tests_properties(skippy_glm5_next_stage_layer_inputs PROPERTIES
+     FIXTURES_REQUIRED contract-glm5-next-synthetic TIMEOUT 900)
++
++# DeepSeek-V4-Flash-0731's DSpark draft reads target layers 41, 42 and 43:
++# layer 43 of the 43-layer trunk is its output, the output head's input, and
++# DeepSeek-V4 publishes it (the hyper-connection streams' mean) like every
++# trunk layer's input.
++add_test(NAME skippy_deepseek4_stage_layer_inputs COMMAND skippy-graph-build-inputs --stage-layer-inputs
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek4/graph-contract.gguf" 41,42,43)
++set_tests_properties(skippy_deepseek4_stage_layer_inputs PROPERTIES
++    FIXTURES_REQUIRED contract-deepseek4 TIMEOUT 900)
++add_test(NAME skippy_deepseek4_head_input_published COMMAND skippy-graph-build-inputs --head-input-published
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek4/graph-contract.gguf" 1)
++set_tests_properties(skippy_deepseek4_head_input_published PROPERTIES
++    FIXTURES_REQUIRED contract-deepseek4 TIMEOUT 900)
++
++add_test(NAME skippy_nemotron_stage_layer_inputs COMMAND skippy-graph-build-inputs --stage-layer-inputs
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-nemotron/graph-contract.gguf" 2,6,20,30,42,52)
++set_tests_properties(skippy_nemotron_stage_layer_inputs PROPERTIES
++    FIXTURES_REQUIRED contract-nemotron TIMEOUT 900)
++
++add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-inputs --head-input-published
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
++set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
++    FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)
+-- 
+2.54.0 (Apple Git-157)
+

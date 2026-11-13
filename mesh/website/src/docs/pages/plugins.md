@@ -8,72 +8,73 @@ Plugins add capabilities to mesh-llm without putting every integration into the 
 
 Use this page to install a plugin. If you are writing one, start with [Developing Plugins](/docs/pages/developing-plugins/).
 
-## Official plugins
+## Released plugins
 
-The Mesh-LLM organization currently publishes seven first-party plugin repositories. They are separate from the main `mesh-llm` repository and release native archives for supported platforms.
+The [Extending Mesh directory](/plugins/) describes {{ plugins.count }} plugins with published native binaries: alternative inference engines, agent tools, evidence, observability and Lightning payments. It lists each release's platforms, prerequisites and preview limits. Mesh {{ plugins.hostVersion }} does not bundle plugins; install the integrations you need separately.
 
-| Plugin | Use it for | Install |
-| --- | --- | --- |
-| [`blackboard`](https://github.com/Mesh-LLM/blackboard) | Share short-lived status, findings, questions, and tips across a mesh. The plugin also ships a Blackboard Agent Skill. | `mesh-llm plugins install blackboard` |
-| [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint) | Add an already-running OpenAI-compatible server such as Ollama, vLLM, LM Studio, TGI, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
-| [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
-| [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
-| [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
-| [`ds4-plugin`](https://github.com/Mesh-LLM/ds4-plugin) | Run [DwarfStar (ds4)](https://github.com/antirez/ds4) models such as DeepSeek V4 Flash on Apple Silicon. Add `[[plugin]] name = "ds4-plugin"`, `args = ["serve", "--model", "ds4f-q2"]` to config; the model downloads on first start. [Setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/plugins/dwarfstar.md). | `mesh-llm plugins install Mesh-LLM/ds4-plugin` |
-| [`powermetrics-plugin`](https://github.com/Mesh-LLM/powermetrics-plugin) | Measure the energy this node spends per output token from GPU power (NVIDIA, AMD, Apple Silicon), what it costs at your electricity price, and how that compares with your own seller prices, on an Energy page in the console. Add `[[plugin]] name = "powermetrics-plugin"`, `allow_inference_observation = true` to config. [Setup](https://github.com/Mesh-LLM/powermetrics-plugin#readme). | `mesh-llm plugins install Mesh-LLM/powermetrics-plugin` |
+These are the release references checked on {{ plugins.checkedOn }}. Pass a GitHub reference to `mesh-llm plugins install`; use the downloaded-archive instructions where indicated. The installed identifier can differ from the repository name.
 
-The catalog can also contain community plugins. Search it before installing an unfamiliar integration:
+| Installed identifier / release | Pinned GitHub reference |
+| --- | --- |
+{% for group in plugins.groups -%}
+{% for plugin in group.plugins -%}
+| [`{{ plugin.name }}`](https://github.com/Mesh-LLM/{{ plugin.repository }}#readme)<br>[{{ plugin.version }}](https://github.com/Mesh-LLM/{{ plugin.repository }}/releases/tag/{{ plugin.version }}) | {% if plugin.archiveInstall %}[Download archive](#install-a-downloaded-archive){% else %}`Mesh-LLM/{{ plugin.repository }}@{{ plugin.version }}`{% endif %} |
+{% endfor -%}
+{% endfor %}
+
+The catalog is a separate discovery source and may contain fewer entries or pin a different release. Search it before installing an unfamiliar integration:
 
 ```bash
 mesh-llm plugins search
 mesh-llm plugins search database
 ```
 
-Treat a catalog entry as a discovery aid: read the linked repository, check its release assets and permissions, and only then install it.
+Read the repository, release notes and required permissions before installing. Plugins are trusted native code, **not sandboxed extensions**. An available archive is not a host/plugin compatibility guarantee.
 
 ## Install a plugin
 
-Install the latest release archive for the current machine (platform selection
-is not host/plugin protocol negotiation):
+Install a catalog entry's selected release for the current machine:
 
 ```bash
 mesh-llm plugins install openai-endpoint
 ```
 
-You can also install directly from a GitHub repository. This is useful when a plugin is not yet in the catalog or when you want to pin a release:
+Install directly from GitHub when a plugin is not in the catalog, or pin a known release:
 
 ```bash
-mesh-llm plugins install Mesh-LLM/openai-endpoint
-mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2 # protocol-2 hosts only
+mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin
+mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin@v0.2.0
 ```
 
-Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
+Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents-plugin`, for GitHub installs. Check compatibility before updating an older host.
 
-Plugin authors can install a local release archive through the same validation
-boundary without publishing it first:
+The installer selects a native release archive using the plugin name, version, operating system and CPU architecture. It does not select GPU-specific variants or negotiate the plugin protocol. If there is no archive for your target, build from the repository and configure the binary with `command`.
+
+### Install a downloaded archive
+
+Download the archive for your OS and CPU from the linked release page and check its accompanying checksum when provided. Then install it with its declared plugin name. For example, with DwarfStar's Apple Silicon archive:
 
 ```bash
-mesh-llm plugins install --archive ./my-plugin-0.1.0-local.tar.gz \
-  --name my-plugin --version 0.1.0
+mesh-llm plugins install --archive ./ds4-plugin-aarch64-apple-darwin.tar.gz \
+  --name ds4-plugin --version v0.2.0
 ```
 
-`--archive` accepts `.tar.gz` or `.zip`, requires `--name`, and conflicts with
-the positional catalog/GitHub reference. `--version` is optional and defaults
-to `dev`. Rebuild and reinstall local archives; `plugins update` is for GitHub
-release sources.
+On Mesh {{ plugins.hostVersion }}, use this route for the DwarfStar, Uzu and Slotstream releases in the table. Their stable archive filenames retain the `-plugin` suffix that the GitHub installer strips from a repository name; those releases do not provide versioned filenames for its fallback matching.
 
-The installer selects a native release archive using the plugin name, version, operating system, and CPU architecture. It does not download GPU-specific plugin variants. If a plugin does not publish an archive for your target, build it from its repository and configure the binary with `command`.
+`--archive` also supports locally built packages. It accepts `.tar.gz` or `.zip`, requires `--name`, and cannot be combined with a catalog/GitHub reference. `--version` is optional and defaults to `dev`. Download and reinstall an archive to update it; `plugins update` is for GitHub release sources.
 
-After installing, inspect the recorded source, version, target, and path:
+After installing, inspect the recorded source, version, target and path:
 
 ```bash
 mesh-llm plugins list
 mesh-llm plugins info openai-endpoint
 ```
 
+Installing an engine plugin does not select or download its models, and installing a wallet does not authorize spending. Follow the plugin's setup instructions before starting Mesh.
+
 ## Configure a plugin
 
-Add one `[[plugin]]` table to `~/.mesh-llm/config.toml`:
+Installed, enabled plugins are discovered automatically when Mesh starts. Add a `[[plugin]]` table to `~/.mesh-llm/config.toml` when the plugin needs arguments, settings or explicit permissions. For an external endpoint:
 
 ```toml
 [[plugin]]
@@ -90,12 +91,7 @@ Use `serve` on the provider machine and `client --join` on a consuming machine.
 See [Share Ollama, vLLM or LM Studio](/docs/pages/external-model-endpoints/) for
 the short setup, provider-specific URLs, a completion check and troubleshooting.
 
-**Release compatibility:** published adapter 0.1.2 uses plugin protocol 2 and
-cannot initialize on Mesh 0.76.0 (protocol 3), despite installing successfully.
-Use adapter **0.2.0** (protocol 3) for that host. Check the
-[adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint/blob/v0.2.0/README.md#compatibility)
-before installing; do not assume “latest” means compatible. Older protocol-2
-hosts must retain a compatible adapter such as 0.1.2 rather than blindly updating.
+**Release compatibility:** adapter **0.2.0** uses plugin protocol 3, as does Mesh {{ plugins.hostVersion }}. Adapter 0.1.2 uses protocol 2 and cannot initialize on that host, despite installing successfully. Check the [adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint-plugin/blob/v0.2.0/README.md#compatibility) before installing; do not assume “latest” means compatible. Older protocol-2 hosts must retain a compatible adapter such as 0.1.2 rather than blindly updating.
 
 See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for zero-model and
 on-demand behavior, and [OpenAI-Compatible API](/docs/pages/openai-compatible-api/)
@@ -117,7 +113,7 @@ enabled = true
 endpoint = "https://otel.example.com"
 ```
 
-For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-moe) for both existing-endpoint and managed-process examples. For agents, see the [agents repository](https://github.com/Mesh-LLM/agents) for agent definitions and runtime configuration.
+For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-moe-plugin) for both existing-endpoint and managed-process examples. For agents, see the [agents repository](https://github.com/Mesh-LLM/agents-plugin) for agent definitions and runtime configuration.
 
 ### Plugin fields
 
@@ -227,6 +223,4 @@ For the protocol and host/plugin boundary, read [Plugin Architecture](/docs/page
 | [Plugin Architecture](/docs/pages/plugin-architecture/) | Control sessions, side streams, host projections, and ownership boundaries |
 | [Developing Plugins](/docs/pages/developing-plugins/) | Rust author API, manifests, packaging, skills, and testing |
 | [Plugin Reference](/docs/pages/plugin-reference/) | MCP, HTTP, inference, capabilities, mesh channels, and control messages |
-| [Plugin Web UI exemplar](https://github.com/Mesh-LLM/mesh-llm/tree/main/docs/plugins/exemplars/web-ui) | A maintained manifest, package, config, bundle, and lifecycle reference |
-
-Useful next topics for this section are a plugin compatibility matrix by mesh-llm release, a configuration-schema guide with examples, a security and permissions guide for third-party binaries, and a release checklist for plugin authors.
+| [Plugin Web UI exemplar](https://github.com/Mesh-LLM/mesh-llm/tree/main/mesh/docs/plugins/exemplars/web-ui) | A maintained manifest, package, config, bundle, and lifecycle reference |

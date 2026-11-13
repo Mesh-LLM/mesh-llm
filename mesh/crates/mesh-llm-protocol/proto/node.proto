@@ -85,10 +85,19 @@ message NodeRecord {
   repeated MeshSubprotocol subprotocols = 19;
   InferenceAdmissionState admission_state = 20;
   repeated AdvertisedModelThroughput throughput = 21;
-  reserved 22;
+  // Original pre-plugin gate messages, retained opaquely for old readers.
+  // Message and bytes fields have the same length-delimited wire encoding.
+  repeated bytes legacy_lightning_offers = 22;
   optional SignedNodeOwnership owner_attestation = 23;
   optional SignedMeshGenesisPolicy genesis_policy = 24;
   optional ReleaseBuildAttestation release_attestation = 25;
+}
+
+// Decode-only projection of the old LightningOffer wire message. Prices,
+// invoice settings and payment protocol details are intentionally not read.
+message LegacyModelGate {
+  string model = 1;
+  reserved 2 to 6;
 }
 
 message TransportAddr {
@@ -163,7 +172,9 @@ message PeerAnnouncement {
   // Never verified by mesh-llm itself — carried opaquely so a receiver MAY
   // verify independently.
   optional ClaimedLogHead claimed_log_head = 51;
-  reserved 52;
+  // Original pre-plugin gate messages. Read only the LegacyModelGate projection
+  // for admission; relay every other byte unchanged so old readers keep the gate.
+  repeated bytes legacy_lightning_offers = 52;
   // Public keys plugins on this node sign with, each bound to this node's key;
   // see `PluginKey`. At most 16, one per plugin.
   repeated PluginKey plugin_keys = 53;
@@ -386,6 +397,11 @@ message AdvertisedModelThroughput {
   optional uint32 window_ms = 5;
   // What the average measures.
   optional ThroughputMeasurementKind kind = 6;
+  // The node's prompt-processing cost for this model in microseconds per
+  // token, measured on its own requests with or without a cache hit, and the
+  // wall-clock time of its newest sample. Both or neither.
+  optional uint64 prefill_micros_per_token = 7;
+  optional uint64 prefill_observed_at_unix_ms = 8;
 }
 
 enum ThroughputMeasurementKind {

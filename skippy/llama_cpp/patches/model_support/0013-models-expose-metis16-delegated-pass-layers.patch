@@ -1,208 +1,125 @@
-From 835db9ff5625dc0235585ea526e788fd7c654184 Mon Sep 17 00:00:00 2001
+From 982923d59eee72eddc1c073300ea4c2ee62c89ae Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Mon, 9 Nov 2026 07:09:49 +1100
-Subject: [PATCH] models: expose Metis16 virtual decoder layers
+Date: Fri, 6 Nov 2026 10:38:07 -0800
+Subject: [PATCH 13/15] models: expose Metis16 delegated pass layers
 
 ---
- src/models/metis16.cpp | 287 +++++++++++++++++++++++------------------
- src/models/models.h    |  10 ++
- 2 files changed, 172 insertions(+), 125 deletions(-)
+ src/models/metis16.cpp | 167 +++++++++++++++++++++--------------------
+ src/models/models.h    |   3 +
+ 2 files changed, 90 insertions(+), 80 deletions(-)
 
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
-index 8a433f3cc..f482ff224 100644
+index 8a433f3cc..6f0b32b54 100644
 --- a/src/models/metis16.cpp
 +++ b/src/models/metis16.cpp
-@@ -171,7 +171,7 @@ std::unique_ptr<llm_graph_context> llama_model_metis16::build_arch_graph(const l
- 
- // streams are kept stream-innermost: [n_stream, n_embd, n_tokens]
- ggml_tensor * llama_model_metis16::graph::stream_mean(ggml_tensor * x) const {
--    ggml_tensor * mean = ggml_mean(ctx0, ggml_reshape_2d(ctx0, x, x->ne[0], x->ne[1]*x->ne[2]));
-+    ggml_tensor * mean = ggml_mean(ctx0, x);
-     return ggml_reshape_2d(ctx0, mean, x->ne[1], x->ne[2]);
- }
- 
-@@ -179,22 +179,20 @@ ggml_tensor * llama_model_metis16::graph::stream_mean(ggml_tensor * x) const {
- ggml_tensor * llama_model_metis16::graph::hc_read(ggml_tensor * x, ggml_tensor * mix, ggml_tensor * read, ggml_tensor * norm,
-         int p, ggml_tensor ** mixed, int il) const {
-     const int64_t n_s = x->ne[0];
--    ggml_tensor * x2 = ggml_reshape_2d(ctx0, x, n_s, x->ne[1]*x->ne[2]);
- 
-     ggml_tensor * m = ggml_view_2d(ctx0, mix, n_s, n_s, mix->nb[1], p*mix->nb[2]);
--    *mixed = ggml_mul_mat(ctx0, m, x2);
-+    *mixed = ggml_mul_mat(ctx0, m, x);
- 
-     ggml_tensor * r   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, read, n_s, p*read->nb[1]), n_s, 1);
--    ggml_tensor * src = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, r, x2), x->ne[1], x->ne[2]);
-+    ggml_tensor * src = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, r, x), x->ne[1], x->ne[2]);
-     return build_norm(src, norm, NULL, LLM_NORM_RMS, il);
- }
- 
- ggml_tensor * llama_model_metis16::graph::hc_write(ggml_tensor * mixed, ggml_tensor * write, ggml_tensor * update, int p) const {
-     const int64_t n_s = mixed->ne[0];
-     ggml_tensor * w   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, write, n_s, p*write->nb[1]), 1, n_s);
--    ggml_tensor * u   = ggml_reshape_2d(ctx0, update, 1, update->ne[0]*update->ne[1]);
--    ggml_tensor * out = ggml_add(ctx0, mixed, ggml_mul_mat(ctx0, w, u));
--    return ggml_reshape_3d(ctx0, out, n_s, update->ne[0], update->ne[1]);
-+    ggml_tensor * u   = ggml_reshape_3d(ctx0, update, 1, update->ne[0], update->ne[1]);
-+    return ggml_add(ctx0, mixed, ggml_mul_mat(ctx0, w, u));
- }
- 
- // blends the retrieved entries into the streams; returns their summary
-@@ -241,6 +239,8 @@ void llama_model_metis16::graph::mem_write(const llama_model_metis16 & model, gg
-     v = ggml_reshape_3d(ctx0, v, 1, n_m, n_tokens);
-     bank_k  = bank_k  ? ggml_concat(ctx0, bank_k,  k, 1) : k;
-     bank_vt = bank_vt ? ggml_concat(ctx0, bank_vt, v, 0) : v;
-+    cb(bank_k, "depth_mem_keys", entry);
-+    cb(bank_vt, "depth_mem_values", entry);
- }
- 
- ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis16 & model, ggml_tensor * state,
-@@ -258,133 +258,171 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
+@@ -258,17 +258,98 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
      return ggml_tanh(ctx0, ggml_add(ctx0, f, model.depth_mem_route_b));
  }
  
--llama_model_metis16::graph::graph(const llm_graph_params & params) :
--    llm_build_mamba_base(params) {
-+void llama_model_metis16::graph::build_pass_layer(const llama_model_metis16 &  model,
-+                                                  int                          il,
-+                                                  llm_graph_input_mem_hybrid * inp,
-+                                                  ggml_tensor *&               x,
-+                                                  ggml_tensor *&               history,
-+                                                  ggml_tensor *&               cont,
-+                                                  ggml_tensor *&               summ,
-+                                                  ggml_tensor *&               ent,
-+                                                  ggml_tensor *&               conf,
-+                                                  int &                        n_entry) {
-+    const int     n_phys = model.n_layer_phys;
-+    const int     p      = il / n_phys;
-+    const int     il_p   = il % n_phys;
-+    const int64_t n_r    = model.n_route;
-+    const int64_t n_hd   = hparams.n_embd_head_k();
-+    const int64_t n_exp  = hparams.n_expert;
-+    const int64_t n_used = hparams.n_expert_used();
++void llama_model_metis16::graph::build_pass_layers(const llama_model_metis16 & model, int p,
++        llm_graph_input_mem_hybrid * inp, ggml_tensor * & x, ggml_tensor * & history, ggml_tensor * & cont,
++        ggml_tensor * & summ, ggml_tensor * & ent, ggml_tensor * & conf, int & n_entry) {
++    const int     n_phys   = model.n_layer_phys;
++    const int64_t n_r      = model.n_route;
++    const int64_t n_hd     = hparams.n_embd_head_k();
++    const int64_t n_exp    = hparams.n_expert;
++    const int64_t n_used   = hparams.n_expert_used();
 +
-+    const auto & layer   = model.layers[il];
-+    const bool   is_attn = !hparams.is_recr(il);
-+    const bool   writes  = is_attn || il_p == n_phys - 1;
++    for (int il_p = 0; il_p < n_phys; ++il_p) {
++        const int il = p*n_phys + il_p;
++        const auto & layer = model.layers[il];
++        const bool is_attn  = !hparams.is_recr(il);
++        const bool writes   = is_attn || il_p == n_phys - 1;
 +
-+    ggml_tensor * retrieved = bank_k ? mem_read(model, &x) : nullptr;
-+    ggml_tensor * feats     = route_features(model, stream_mean(x), retrieved, nullptr, history);
++        ggml_tensor * retrieved = bank_k ? mem_read(model, &x) : nullptr;
++        ggml_tensor * feats = route_features(model, stream_mean(x), retrieved, nullptr, history);
 +
-+    ggml_tensor * mixed = nullptr;
-+    ggml_tensor * cur   = hc_read(x, layer.hc_attn_mix, layer.hc_attn_read, layer.attn_norm, p, &mixed, il);
-+    if (is_attn) {
-+        ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur);
-+        ggml_tensor * lora =
-+            ggml_mul_mat(ctx0, layer.attn_pass_lora_up, ggml_mul_mat(ctx0, layer.attn_pass_lora_down, cur));
-+        qkv = ggml_add(
-+            ctx0, qkv,
-+            ggml_mul(ctx0, lora, ggml_view_1d(ctx0, layer.attn_pass_gate, 1, p * layer.attn_pass_gate->nb[0])));
++        ggml_tensor * mixed = nullptr;
++        ggml_tensor * cur = hc_read(x, layer.hc_attn_mix, layer.hc_attn_read, layer.attn_norm, p, &mixed, il);
++        if (is_attn) {
++            ggml_tensor * qkv  = build_lora_mm(layer.wqkv, cur);
++            ggml_tensor * lora = ggml_mul_mat(ctx0, layer.attn_pass_lora_up, ggml_mul_mat(ctx0, layer.attn_pass_lora_down, cur));
++            qkv = ggml_add(ctx0, qkv, ggml_mul(ctx0, lora, ggml_view_1d(ctx0, layer.attn_pass_gate, 1, p*layer.attn_pass_gate->nb[0])));
 +
-+        const int64_t n_head    = hparams.n_head(il);
-+        const int64_t n_head_kv = hparams.n_head_kv(il);
-+        const size_t  es        = ggml_element_size(qkv);
-+        ggml_tensor * Q = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head, n_tokens, n_hd * es, qkv->nb[1], 0));
-+        ggml_tensor * K = ggml_cont(
-+            ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd * es, qkv->nb[1], n_hd * n_head * es));
-+        ggml_tensor * V = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd * es, qkv->nb[1],
-+                                                       n_hd * (n_head + n_head_kv) * es));
++            const int64_t n_head    = hparams.n_head(il);
++            const int64_t n_head_kv = hparams.n_head_kv(il);
++            const size_t  es        = ggml_element_size(qkv);
++            ggml_tensor * Q = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head,    n_tokens, n_hd*es, qkv->nb[1], 0));
++            ggml_tensor * K = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd*es, qkv->nb[1], n_hd*n_head*es));
++            ggml_tensor * V = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd*es, qkv->nb[1], n_hd*(n_head + n_head_kv)*es));
 +
-+        cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr,
-+                         1.0f / sqrtf(float(n_hd)), il);
-+    } else {
-+        cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
-+    }
-+    cb(cur, "mixer_out", il);
-+    x = hc_write(mixed, layer.hc_attn_write, cur, p);
-+
-+    cur = hc_read(x, layer.hc_ffn_mix, layer.hc_ffn_read, layer.ffn_norm, p, &mixed, il);
-+    {
-+        ggml_tensor * latent = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
-+        ggml_tensor * logits = ggml_mul_mat(ctx0, layer.ffn_gate_inp, ggml_concat(ctx0, latent, feats, 0));
-+        logits               = ggml_add(ctx0, logits, layer.ffn_gate_inp_b);
-+
-+        // the balance bias picks the experts; the weights come from the unbiased logits
-+        ggml_tensor * selected = ggml_argsort_top_k(ctx0, ggml_add(ctx0, logits, layer.ffn_exp_probs_b), n_used);
-+
-+        ggml_tensor * moe_out =
-+            build_moe_ffn(latent, nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr, n_exp, n_used, LLM_FFN_SILU,
-+                          false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT, il_p, logits,
-+                          layer.ffn_gate_up_exps, nullptr, nullptr, nullptr, selected);
-+        ggml_tensor * shexp = build_ffn(latent, layer.ffn_up_shexp, NULL, NULL, layer.ffn_gate_shexp, NULL, NULL,
-+                                        layer.ffn_down_shexp, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il_p);
-+        cur                 = ggml_mul_mat(ctx0, layer.ffn_latent_up, ggml_add(ctx0, moe_out, shexp));
-+        cb(cur, "ffn_out", il);
-+
-+        // routing summary: the chosen experts' identity vectors blended by their weights
-+        ggml_tensor * logits3 = ggml_reshape_3d(ctx0, logits, 1, n_exp, n_tokens);
-+        ggml_tensor * weights =
-+            ggml_soft_max(ctx0, ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, logits3, selected), n_used, n_tokens));
-+        ggml_tensor * rows = ggml_get_rows(ctx0, layer.ffn_exp_embd,
-+                                           ggml_reshape_1d(ctx0, ggml_cont(ctx0, selected), n_used * n_tokens));
-+        rows = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_3d(ctx0, rows, n_r, n_used, n_tokens), 1, 0, 2, 3));
-+        summ = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, rows, ggml_reshape_3d(ctx0, weights, n_used, 1, n_tokens)), n_r,
-+                               n_tokens);
-+
-+        cb(summ, "route_summary", il);
-+
-+        if (writes) {
-+            ggml_tensor * probs = ggml_soft_max(ctx0, logits);
-+            ent  = ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, ggml_log(ctx0, ggml_clamp(ctx0, probs, 1.0e-9f, 1.0f))));
-+            ent  = ggml_scale(ctx0, ent, -1.0f);
-+            conf = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, probs, 1, n_exp, n_tokens),
-+                                 ggml_reshape_2d(ctx0, ggml_argmax(ctx0, probs), 1, n_tokens));
-+            conf = ggml_reshape_2d(ctx0, conf, 1, n_tokens);
-+            cb(ent, "route_entropy", il);
-+            cb(conf, "route_confidence", il);
++            cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
++        } else {
++            cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
 +        }
-+    }
-+    x = hc_write(mixed, layer.hc_ffn_write, cur, p);
-+    cb(x, "streams", il);
++        cb(cur, "mixer_out", il);
++        x = hc_write(mixed, layer.hc_attn_write, cur, p);
 +
-+    history = history ? ggml_add(ctx0, ggml_scale(ctx0, history, 0.5f), ggml_scale(ctx0, summ, 0.5f)) :
-+                        ggml_scale(ctx0, summ, 0.5f);
-+    cb(history, "route_history", il);
++        cur = hc_read(x, layer.hc_ffn_mix, layer.hc_ffn_read, layer.ffn_norm, p, &mixed, il);
++        {
++            ggml_tensor * latent = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
++            ggml_tensor * logits = ggml_mul_mat(ctx0, layer.ffn_gate_inp, ggml_concat(ctx0, latent, feats, 0));
++            logits = ggml_add(ctx0, logits, layer.ffn_gate_inp_b);
 +
-+    if (is_attn) {
-+        mem_write(model, x, summ, ent, conf, cont, n_entry++);
++            // the balance bias picks the experts; the weights come from the unbiased logits
++            ggml_tensor * selected = ggml_argsort_top_k(ctx0, ggml_add(ctx0, logits, layer.ffn_exp_probs_b), n_used);
++
++            ggml_tensor * moe_out = build_moe_ffn(latent, nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr,
++                    n_exp, n_used, LLM_FFN_SILU, false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT, il_p,
++                    logits, layer.ffn_gate_up_exps, nullptr, nullptr, nullptr, selected);
++            ggml_tensor * shexp = build_ffn(latent,
++                    layer.ffn_up_shexp,   NULL, NULL,
++                    layer.ffn_gate_shexp, NULL, NULL,
++                    layer.ffn_down_shexp, NULL, NULL,
++                    NULL, LLM_FFN_SILU, LLM_FFN_PAR, il_p);
++            cur = ggml_mul_mat(ctx0, layer.ffn_latent_up, ggml_add(ctx0, moe_out, shexp));
++            cb(cur, "ffn_out", il);
++
++            // routing summary: the chosen experts' identity vectors blended by their weights
++            ggml_tensor * logits3 = ggml_reshape_3d(ctx0, logits, 1, n_exp, n_tokens);
++            ggml_tensor * weights = ggml_soft_max(ctx0, ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, logits3, selected), n_used, n_tokens));
++            ggml_tensor * rows    = ggml_get_rows(ctx0, layer.ffn_exp_embd, ggml_reshape_1d(ctx0, ggml_cont(ctx0, selected), n_used*n_tokens));
++            rows = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_3d(ctx0, rows, n_r, n_used, n_tokens), 1, 0, 2, 3));
++            summ = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, rows, ggml_reshape_3d(ctx0, weights, n_used, 1, n_tokens)), n_r, n_tokens);
++
++            if (writes) {
++                ggml_tensor * probs = ggml_soft_max(ctx0, logits);
++                ent  = ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, ggml_log(ctx0, ggml_clamp(ctx0, probs, 1.0e-9f, 1.0f))));
++                ent  = ggml_scale(ctx0, ent, -1.0f);
++                conf = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, probs, 1, n_exp, n_tokens),
++                        ggml_reshape_2d(ctx0, ggml_argmax(ctx0, probs), 1, n_tokens));
++                conf = ggml_reshape_2d(ctx0, conf, 1, n_tokens);
++            }
++        }
++        x = hc_write(mixed, layer.hc_ffn_write, cur, p);
++        cb(x, "streams", il);
++
++        history = history ? ggml_add(ctx0, ggml_scale(ctx0, history, 0.5f), ggml_scale(ctx0, summ, 0.5f)) : ggml_scale(ctx0, summ, 0.5f);
++
++        if (is_attn) {
++            mem_write(model, x, summ, ent, conf, cont, n_entry++);
++        }
 +    }
 +}
 +
-+llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_mamba_base(params) {
+ llama_model_metis16::graph::graph(const llm_graph_params & params) :
+     llm_build_mamba_base(params) {
      const auto & model = static_cast<const llama_model_metis16 &>(this->model);
  
--    const int64_t n_s      = model.n_stream;
--    const int     n_p      = model.n_pass;
+     const int64_t n_s      = model.n_stream;
+     const int     n_p      = model.n_pass;
 -    const int     n_phys   = model.n_layer_phys;
 -    const int64_t n_r      = model.n_route;
 -    const int64_t n_hd     = hparams.n_embd_head_k();
 -    const int64_t n_exp    = hparams.n_expert;
 -    const int64_t n_used   = hparams.n_expert_used();
-+    const int64_t n_s     = model.n_stream;
-+    const int     n_phys  = model.n_layer_phys;
-+    const int     n_layer = hparams.n_layer();
  
--    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
--    auto * inp = build_inp_mem_hybrid();
-+    ggml_tensor * x           = build_inp_embd(model.tok_embd);
-+    auto *        inp         = build_inp_mem_hybrid();
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
+     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+     auto * inp = build_inp_mem_hybrid();
+@@ -288,81 +369,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
+         ggml_tensor * ent  = nullptr;
+         ggml_tensor * conf = nullptr;
  
--    ggml_tensor * x = ggml_repeat_4d(ctx0, ggml_reshape_3d(ctx0, inpL, 1, n_embd, n_tokens), n_s, n_embd, n_tokens, 1);
-+    x = ggml_repeat_4d(ctx0, ggml_reshape_3d(ctx0, x, 1, n_embd, n_tokens), n_s, n_embd, n_tokens, 1);
-     x = ggml_add(ctx0, x, model.stream_embd);
-     cb(x, "streams_in", -1);
- 
-     ggml_tensor * prev_state = stream_mean(x);
--    ggml_tensor * history    = nullptr; // routing history, [n_route, n_tokens]
--    ggml_tensor * cont       = nullptr; // depth head reading of the last pass, [1, n_tokens]
--    int n_entry = 0;
--
--    for (int p = 0; p < n_p; ++p) {
--        ggml_tensor * summ = nullptr;
--        ggml_tensor * ent  = nullptr;
--        ggml_tensor * conf = nullptr;
--
 -        for (int il_p = 0; il_p < n_phys; ++il_p) {
 -            const int il = p*n_phys + il_p;
 -            const auto & layer = model.layers[il];
@@ -277,102 +194,25 @@ index 8a433f3cc..f482ff224 100644
 -            if (is_attn) {
 -                mem_write(model, x, summ, ent, conf, cont, n_entry++);
 -            }
-+    cb(prev_state, "previous_pass_state", -1);
-+    ggml_tensor * history    = nullptr;  // routing history, [n_route, n_tokens]
-+    ggml_tensor * cont       = nullptr;  // depth head reading of the last pass, [1, n_tokens]
-+    int           n_entry    = 0;
-+
-+    ggml_tensor * summ = nullptr;
-+    ggml_tensor * ent  = nullptr;
-+    ggml_tensor * conf = nullptr;
-+    for (int il = 0; il < n_layer; ++il) {
-+
-+        const int p = il / n_phys;
-+        if (il % n_phys == 0) {
-+            summ = nullptr;
-+            ent  = nullptr;
-+            conf = nullptr;
-         }
--
--        // end of the pass: one more memory read, the depth head, and an entry recording where the pass left the token
--        ggml_tensor * retrieved = mem_read(model, &x);
--        ggml_tensor * state = stream_mean(x);
--        ggml_tensor * diff  = ggml_sub(ctx0, state, prev_state);
--        ggml_tensor * feats = route_features(model, state, retrieved, diff, history);
--
--        ggml_tensor * h = ggml_mul_mat(ctx0, model.cont_hidden_state, state);
--        h = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_retr,  retrieved));
--        h = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_diff,  diff));
--        h = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_route, feats));
--        h = ggml_silu(ctx0, ggml_add(ctx0, h, model.cont_hidden_b));
--
--        ggml_tensor * logit = ggml_add(ctx0, ggml_mul_mat(ctx0, model.cont_output, h), model.cont_output_b);
--        ggml_tensor * scale = ggml_clamp(ctx0, ggml_sqrt(ctx0, ggml_mean(ctx0, ggml_sqr(ctx0, state))), 1.0e-6f, INFINITY);
--        ggml_tensor * innov = ggml_sqrt(ctx0, ggml_mean(ctx0, ggml_sqr(ctx0, diff)));
--        logit = ggml_add(ctx0, logit, ggml_scale_bias(ctx0, ggml_tanh(ctx0, ggml_div(ctx0, innov, scale)), 1.0f, -0.5f));
--        cont  = ggml_sigmoid(ctx0, ggml_clamp(ctx0, logit, -model.cont_limit, model.cont_limit));
--        cb(cont, "continuation", p);
--
--        mem_write(model, x, summ, ent, conf, cont, n_entry++);
--        prev_state = state;
-+        build_pass_layer(model, il, inp, x, history, cont, summ, ent, conf, n_entry);
-+        if (il % n_phys == n_phys - 1) {
-+            // end of the pass: one more memory read, the depth head, and an entry recording where the pass left the token
-+            ggml_tensor * retrieved = mem_read(model, &x);
-+            ggml_tensor * state     = stream_mean(x);
-+            ggml_tensor * diff      = ggml_sub(ctx0, state, prev_state);
-+            ggml_tensor * feats     = route_features(model, state, retrieved, diff, history);
-+
-+            ggml_tensor * h = ggml_mul_mat(ctx0, model.cont_hidden_state, state);
-+            h               = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_retr, retrieved));
-+            h               = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_diff, diff));
-+            h               = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_route, feats));
-+            h               = ggml_silu(ctx0, ggml_add(ctx0, h, model.cont_hidden_b));
-+
-+            ggml_tensor * logit = ggml_add(ctx0, ggml_mul_mat(ctx0, model.cont_output, h), model.cont_output_b);
-+            ggml_tensor * scale =
-+                ggml_clamp(ctx0, ggml_sqrt(ctx0, ggml_mean(ctx0, ggml_sqr(ctx0, state))), 1.0e-6f, INFINITY);
-+            ggml_tensor * innov = ggml_sqrt(ctx0, ggml_mean(ctx0, ggml_sqr(ctx0, diff)));
-+            logit = ggml_add(ctx0, logit,
-+                             ggml_scale_bias(ctx0, ggml_tanh(ctx0, ggml_div(ctx0, innov, scale)), 1.0f, -0.5f));
-+            cont  = ggml_sigmoid(ctx0, ggml_clamp(ctx0, logit, -model.cont_limit, model.cont_limit));
-+            cb(cont, "continuation", p);
-+
-+            mem_write(model, x, summ, ent, conf, cont, n_entry++);
-+            prev_state = state;
-+            cb(prev_state, "previous_pass_state", il);
-+        }
-+        cb(x, "l_out", il);
-     }
+-        }
++        build_pass_layers(model, p, inp, x, history, cont, summ, ent, conf, n_entry);
  
-     ggml_tensor * cur = stream_mean(x);
-@@ -399,5 +437,4 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
-     cur = build_lora_mm(model.output, cur);
-     cb(cur, "result_output", -1);
-     res->t_logits = cur;
--
- }
+         // end of the pass: one more memory read, the depth head, and an entry recording where the pass left the token
+         ggml_tensor * retrieved = mem_read(model, &x);
 diff --git a/src/models/models.h b/src/models/models.h
-index 15aca9529..4d554d631 100644
+index 15aca9529..8c92196cd 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1817,6 +1817,16 @@ struct llama_model_metis16 : public llama_model_base {
+@@ -1817,6 +1817,9 @@ struct llama_model_metis16 : public llama_model_base {
  
      struct graph : public llm_build_mamba_base {
          graph(const llm_graph_params & params);
-+        void build_pass_layer(const llama_model_metis16 &  model,
-+                              int                          il,
-+                              llm_graph_input_mem_hybrid * inp,
-+                              ggml_tensor *&               x,
-+                              ggml_tensor *&               history,
-+                              ggml_tensor *&               cont,
-+                              ggml_tensor *&               summ,
-+                              ggml_tensor *&               ent,
-+                              ggml_tensor *&               conf,
-+                              int &                        n_entry);
++        void build_pass_layers(const llama_model_metis16 & model, int p, llm_graph_input_mem_hybrid * inp,
++                               ggml_tensor * & x, ggml_tensor * & history, ggml_tensor * & cont,
++                               ggml_tensor * & summ, ggml_tensor * & ent, ggml_tensor * & conf, int & n_entry);
  
          // memory bank of the current forward: keys [n_mem, n_entry, n_tokens], values [n_entry, n_mem, n_tokens]
          ggml_tensor * bank_k  = nullptr;
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

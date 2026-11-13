@@ -11,8 +11,10 @@
 0011-models-expose-glm5-next-stage-graph-semantics.patch
 0012-skippy-add-clef-joint-decision-reads.patch
 0013-models-expose-metis16-delegated-pass-layers.patch
-0014-models-support-kolibri-biased-logit-sigmoid-routing.patch
-0015-tests-model-kolibri-biased-logit-router-fixture.patch
-0016-models-admit-legacy-clover-shared-expert-metadata.patch
-0017-test-skippy-cover-head-input-publication.patch
-0018-models-register-deepseek41-request-inputs.patch
+0014-test-skippy-cover-head-input-publication.patch
+0015-models-add-laguna-dflash-drafts.patch
+0016-models-add-dspine-block-parallel-drafter-support.patch
+0017-models-support-kolibri-biased-logit-sigmoid-routing.patch
+0018-tests-model-kolibri-biased-logit-router-fixture.patch
+0019-models-admit-legacy-clover-shared-expert-metadata.patch
+0020-models-register-deepseek41-request-inputs.patch

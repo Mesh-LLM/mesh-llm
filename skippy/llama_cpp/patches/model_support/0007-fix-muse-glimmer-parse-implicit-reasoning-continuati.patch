@@ -1,7 +1,8 @@
-From c7d2370e34e6e64005d4b0c1995758a1f9cdac0f Mon Sep 17 00:00:00 2001
+From 75c5d872a980d24f2610e235e7c539b5a05baa4b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 17 Oct 2026 03:37:10 +1100
-Subject: [PATCH] fix(muse-glimmer): parse implicit reasoning continuations
+Subject: [PATCH 07/15] fix(muse-glimmer): parse implicit reasoning
+ continuations
 
 ---
  common/parsers/muse-glimmer.cpp | 5 ++++-

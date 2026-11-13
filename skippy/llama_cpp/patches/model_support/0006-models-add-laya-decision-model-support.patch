@@ -1,7 +1,7 @@
-From 9fc01de9b3dd2f513a0fa624c8bf377e2c6c96e1 Mon Sep 17 00:00:00 2001
+From 4720e07dc8f478e9b08ddf0e60a748fd6b6282a5 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH] models: add Laya decision model support
+Subject: [PATCH 06/15] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -403,7 +403,7 @@ index 89856dd5c..f35716bfe 100644
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 3486feb6e..ff95ba534 100644
+index 2153d6cfe..c77de22ee 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -389,6 +389,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -426,7 +426,7 @@ index 3486feb6e..ff95ba534 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
          case LLM_ARCH_GEMMA_EMBEDDING2:
          case LLM_ARCH_DREAM:
-@@ -3895,6 +3901,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3897,6 +3903,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_BERT:
          case LLM_ARCH_JINA_BERT_V3:
          case LLM_ARCH_MODERN_BERT:

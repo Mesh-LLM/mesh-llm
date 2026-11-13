@@ -1,0 +1,518 @@
+From 0aa5d8250686c5f980d5136d5ff21214966b033a Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Mon, 9 Nov 2026 15:52:17 +1100
+Subject: [PATCH 15/15] models: add Laguna DFlash drafts
+
+Laguna drafters (poolside/Laguna-XS-2.1-DFlash, Laguna-S-2.1-DFlash) read
+the target's layer inputs, including layer n_layer: the last layer's
+output, which enters the output head. laguna.cpp now publishes each
+layer's input and, when the head input is captured, keeps every row
+through the last layer and trims afterwards.
+
+The drafts follow Poolside's Laguna decoder contract, marked in the GGUF
+as dflash.decoder_arch = laguna:
+- each captured target feature is RMS-normed before fc (enc.aux_norm,
+  the per-feature weights stacked to [n_embd, n_target_layers]);
+- context K/V are projected from each layer's input norm;
+- a softplus gate scales the attention output per head or per element
+  before the output projection, as in the Laguna target;
+- the noise block attends causally: a Laguna draft publishes
+  dflash.attention.causal = true in its metadata unless the file sets it,
+  so hosts read the semantic key rather than the decoder name.
+
+convert_hf_to_gguf converts DFlashLagunaForCausalLM checkpoints: it
+splits the fused qkv_proj, stacks aux_hidden_norms, writes the sliding
+window per layer_types and marks the decoder architecture. It fails
+when the aux norms do not match the target layers rather than write a
+draft without enc.aux_norm. The layout
+matches Poolside's published laguna-s-2.1-DFlash GGUF.
+
+Tests: a random Laguna fixture publishes a finite, distinct input for
+every layer and the head input, and llama_layer_inp_published reports
+the head input as published on one- and two-sequence contexts; splits
+of the Laguna contract fixture keep the draft's target layers 2, 14,
+26, 34 and 40 on the stages that compute them.
+---
+ conversion/__init__.py                      |   1 +
+ conversion/laguna.py                        |  74 ++++++++++++++
+ gguf-py/gguf/constants.py                   |   5 +
+ gguf-py/gguf/gguf_writer.py                 |   3 +
+ src/llama-arch.cpp                          |   3 +
+ src/llama-arch.h                            |   2 +
+ src/models/dflash.cpp                       | 104 ++++++++++++++++++--
+ src/models/laguna.cpp                       |  14 ++-
+ src/models/models.h                         |   8 ++
+ src/skippy/tests/graph_contract_cases.cmake |  23 +++++
+ 10 files changed, 230 insertions(+), 7 deletions(-)
+
+diff --git a/conversion/__init__.py b/conversion/__init__.py
+index f9dabf4f2..a8b2d7a9c 100644
+--- a/conversion/__init__.py
++++ b/conversion/__init__.py
+@@ -66,6 +66,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+     "Xing4_0ForCausalLM": "xing",
+     "DFlashDraftModel": "qwen",
+     "DFlash2DraftModel": "qwen",
++    "DFlashLagunaForCausalLM": "laguna",
+     "LiLiCorrDraftModel": "nemotron",
+     "Qwen3DSparkModel": "qwen",
+     "DSparkDraftModel": "qwen",
+diff --git a/conversion/laguna.py b/conversion/laguna.py
+index 29e0b3d6b..3510a0489 100644
+--- a/conversion/laguna.py
++++ b/conversion/laguna.py
+@@ -10,6 +10,7 @@ if TYPE_CHECKING:
+     from torch import Tensor
+ 
+ from .base import ModelBase, TextModel, gguf, logger
++from .qwen import DFlashModel
+ 
+ 
+ @ModelBase.register("LagunaForCausalLM")
+@@ -206,3 +207,76 @@ class LagunaModel(TextModel):
+                     f"declared {gate_type} gate (expected {expected}); weights and config disagree.")
+ 
+         yield from TextModel.modify_tensors(self, data_torch, name, bid)
++
++
++@ModelBase.register("DFlashLagunaForCausalLM")
++@ModelBase.example("poolside/Laguna-XS-2.1-DFlash", "poolside/Laguna-S-2.1-DFlash")
++class DFlashLagunaModel(DFlashModel):
++    """Laguna DFlash drafter: dense Laguna-style draft layers on the DFlash
++    contract. The checkpoint fuses q/k/v (split here), gates the attention
++    output (g_proj), RMS-norms each captured target feature before fc
++    (aux_hidden_norms, stacked here into enc.aux_norm) and attends causally
++    within the noise block. dflash.decoder_arch = "laguna" selects that
++    contract at load. The draft shares embeddings and the output head with
++    the target."""
++
++    model_arch = gguf.MODEL_ARCH.DFLASH
++    _aux_norms: dict[int, Tensor] | None = None
++
++    def _target_layer_ids(self) -> list[int]:
++        # The same lookup as DFlashModel.set_gguf_parameters.
++        return self.hparams.get("dflash_config", {}).get("target_layer_ids", self.hparams.get("target_layer_ids", []))
++
++    def prepare_tensors(self) -> None:
++        super().prepare_tensors()
++        # Every captured target feature has a norm; a checkpoint whose norms do
++        # not match its target layers would load without enc.aux_norm.
++        n_aux = len(self._target_layer_ids())
++        if self._aux_norms is not None and (not n_aux or len(self._aux_norms) != n_aux):
++            raise ValueError(f"Laguna DFlash draft has {len(self._aux_norms)} aux_hidden_norms "
++                             f"but {n_aux} target layers; enc.aux_norm would be missing")
++
++    def set_gguf_parameters(self) -> None:
++        # The dense drafter config carries num_experts = 0; drop the expert
++        # keys so the GGUF does not pair expert_count 0 with a used count.
++        if not self.hparams.get("num_experts") and not self.hparams.get("num_local_experts"):
++            for key in ("num_experts", "num_local_experts", "num_experts_per_tok", "num_experts_per_token"):
++                self.hparams.pop(key, None)
++        super().set_gguf_parameters()
++        self.gguf_writer.add_decoder_arch("laguna")
++
++        # Laguna drafters use sliding-window attention per layer_types, which
++        # the generic DFlash path only writes under use_sliding_window.
++        dflash_config = self.hparams.get("dflash_config", {})
++        generic_swa = self.hparams.get("use_sliding_window", False) or dflash_config.get("use_swa", False)
++        layer_types = self.hparams.get("layer_types") or []
++        sliding_window = self.hparams.get("sliding_window") or 0
++        if not generic_swa and sliding_window > 0 and "sliding_attention" in layer_types:
++            self.gguf_writer.add_sliding_window(sliding_window)
++            self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in layer_types])
++
++    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
++        # Stack the per-feature norms into one [n_aux, n_embd] tensor once all
++        # of them have arrived.
++        if m := re.fullmatch(r"model\.aux_hidden_norms\.(\d+)\.weight", name):
++            if self._aux_norms is None:
++                self._aux_norms = {}
++            self._aux_norms[int(m.group(1))] = data_torch
++            n_aux = len(self._target_layer_ids())
++            if n_aux and len(self._aux_norms) == n_aux:
++                stacked = torch.stack([self._aux_norms[i] for i in range(n_aux)], dim=0)
++                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_AUX_NORM), stacked)
++            return
++
++        if name.endswith("self_attn.qkv_proj.weight"):
++            head_dim = self.hparams["head_dim"]
++            q_size = self.hparams["num_attention_heads"] * head_dim
++            kv_size = self.hparams["num_key_value_heads"] * head_dim
++            q, k, v = data_torch.split([q_size, kv_size, kv_size], dim=0)
++            base = name.removesuffix("qkv_proj.weight")
++            yield from super().modify_tensors(q, base + "q_proj.weight", bid)
++            yield from super().modify_tensors(k, base + "k_proj.weight", bid)
++            yield from super().modify_tensors(v, base + "v_proj.weight", bid)
++            return
++
++        yield from super().modify_tensors(data_torch, name, bid)
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index 7ed746229..f39c71e18 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -173,6 +173,7 @@ class Keys:
+         CONV_GROUP_SIZE                   = "{arch}.conv_group_size"
+         SELECTOR_RANK                     = "{arch}.selector_rank"
+         SELECTOR_TOP_K                    = "{arch}.selector_top_k"
++        DECODER_ARCH                      = "{arch}.decoder_arch"
+         SAMPLE_FROM_ANCHOR                = "{arch}.sample_from_anchor"
+         HAS_CONFIDENCE_HEAD               = "{arch}.has_confidence_head"
+         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
+@@ -1041,6 +1042,7 @@ class MODEL_TENSOR(IntEnum):
+     ENC_FFN_DOWN         = auto()
+     ENC_FFN_UP           = auto()
+     ENC_OUTPUT_NORM      = auto()
++    ENC_AUX_NORM         = auto()
+     CLS                  = auto() # classifier
+     CLS_OUT              = auto() # classifier output projection
+     CLS_NORM             = auto()
+@@ -1958,6 +1960,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+     MODEL_TENSOR.ENC_FFN_DOWN:              "enc.blk.{bid}.ffn_down",
+     MODEL_TENSOR.ENC_FFN_UP:                "enc.blk.{bid}.ffn_up",
+     MODEL_TENSOR.ENC_OUTPUT_NORM:           "enc.output_norm",
++    MODEL_TENSOR.ENC_AUX_NORM:              "enc.aux_norm",
+     MODEL_TENSOR.CLS:                       "cls",
+     MODEL_TENSOR.CLS_OUT:                   "cls.output",
+     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
+@@ -6195,6 +6198,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.ATTN_OUT,
+         MODEL_TENSOR.ATTN_Q_NORM,
+         MODEL_TENSOR.ATTN_K_NORM,
++        MODEL_TENSOR.ATTN_GATE,
+         MODEL_TENSOR.ATTN_SINKS,
+         MODEL_TENSOR.ATTN_Q_A,
+         MODEL_TENSOR.ATTN_Q_B,
+@@ -6230,6 +6234,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.FFN_UP_SHEXP,
+         MODEL_TENSOR.FC,
+         MODEL_TENSOR.ENC_OUTPUT_NORM,
++        MODEL_TENSOR.ENC_AUX_NORM,
+         MODEL_TENSOR.D2T,
+         # optional DSpark heads
+         MODEL_TENSOR.DSPARK_MARKOV_W1,
+diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
+index 21b354ca4..6b62f430b 100644
+--- a/gguf-py/gguf/gguf_writer.py
++++ b/gguf-py/gguf/gguf_writer.py
+@@ -1077,6 +1077,9 @@ class GGUFWriter:
+     def add_selector_top_k(self, value: int) -> None:
+         self.add_uint32(Keys.LLM.SELECTOR_TOP_K.format(arch=self.arch), value)
+ 
++    def add_decoder_arch(self, value: str) -> None:
++        self.add_string(Keys.LLM.DECODER_ARCH.format(arch=self.arch), value)
++
+     def add_sample_from_anchor(self, value: bool) -> None:
+         self.add_bool(Keys.LLM.SAMPLE_FROM_ANCHOR.format(arch=self.arch), value)
+ 
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 83ea80ed6..984d38a42 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -443,6 +443,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+     { LLM_KV_DFLASH_CONV_GROUP_SIZE,  "%s.conv_group_size"  },
+     { LLM_KV_DFLASH_SELECTOR_RANK,    "%s.selector_rank"    },
+     { LLM_KV_DFLASH_SELECTOR_TOP_K,   "%s.selector_top_k"   },
++    { LLM_KV_DFLASH_DECODER_ARCH,     "%s.decoder_arch"     },
+ 
+     { LLM_KV_LILICORR_HIDDEN_SIZE,       "lilicorr.hidden_size"      },
+     { LLM_KV_LILICORR_CANDIDATE_TOPK,    "lilicorr.candidate_topk"   },
+@@ -670,6 +671,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_ACT_HEAD_0,                             "act_head.0" },
+     { LLM_TENSOR_ACT_HEAD_2,                             "act_head.2" },
+     { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
++    { LLM_TENSOR_ENC_AUX_NORM,                           "enc.aux_norm" },
+     { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
+     { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
+     { LLM_TENSOR_SSM_CONV1D,                             "blk.%d.ssm_conv1d" },
+@@ -997,6 +999,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_OUTPUT_NORM_LFM2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_DEC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_ENC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
++    {LLM_TENSOR_ENC_AUX_NORM,               {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_ROPE_FREQS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
+     {LLM_TENSOR_ROPE_FACTORS_LONG,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
+     {LLM_TENSOR_ROPE_FACTORS_SHORT,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index f35716bfe..f39f71ec3 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -489,6 +489,7 @@ enum llm_kv {
+     LLM_KV_DFLASH_CONV_GROUP_SIZE,
+     LLM_KV_DFLASH_SELECTOR_RANK,
+     LLM_KV_DFLASH_SELECTOR_TOP_K,
++    LLM_KV_DFLASH_DECODER_ARCH,
+     LLM_KV_LILICORR_HIDDEN_SIZE,
+     LLM_KV_LILICORR_CANDIDATE_TOPK,
+     LLM_KV_LILICORR_NUM_HEADS,
+@@ -818,6 +819,7 @@ enum llm_tensor {
+     LLM_TENSOR_ENC_FFN_DOWN,
+     LLM_TENSOR_ENC_FFN_UP,
+     LLM_TENSOR_ENC_OUTPUT_NORM,
++    LLM_TENSOR_ENC_AUX_NORM,
+     LLM_TENSOR_CLS,
+     LLM_TENSOR_CLS_OUT,
+     LLM_TENSOR_CLS_NORM,
+diff --git a/src/models/dflash.cpp b/src/models/dflash.cpp
+index 13020bb32..52d146ae5 100644
+--- a/src/models/dflash.cpp
++++ b/src/models/dflash.cpp
+@@ -140,6 +140,22 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
+         return;
+     }
+ 
++    // Laguna drafters follow the Laguna decoder contract: an attention output
++    // gate, a norm per captured target feature, context K/V through each
++    // layer's input norm, and a causal noise block.
++    std::string decoder_arch;
++    ml.get_key(LLM_KV_DFLASH_DECODER_ARCH, decoder_arch, false);
++    if (!decoder_arch.empty() && decoder_arch != "laguna") {
++        throw std::runtime_error("unsupported DFlash decoder architecture: " + decoder_arch);
++    }
++    decoder_laguna = decoder_arch == "laguna";
++    // The Laguna contract attends causally within the noise block. Poolside's
++    // own GGUFs say so only through decoder_arch, so publish the semantic key
++    // that hosts read; emplace keeps an explicit value from the file.
++    if (decoder_laguna) {
++        gguf_kv.emplace(LLM_KV(LLM_ARCH_DFLASH)(LLM_KV_ATTENTION_CAUSAL), "true");
++    }
++
+     // optional interleaved sliding-window attention with per-layer pattern array.
+     // DFlash has a single rope, so the SWA rope == main rope.
+     if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
+@@ -279,6 +295,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
+     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
+ 
++    // Laguna drafters RMS-norm each captured target feature before fc; the
++    // per-feature weights are stacked to [n_embd, n_target_layers].
++    if (decoder_laguna) {
++        aux_norm = create_tensor(tn(LLM_TENSOR_ENC_AUX_NORM, "weight"), { n_embd, (int64_t) target_layer_ids.size() }, 0);
++    }
++
+     // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
+     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
+     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
+@@ -384,6 +406,20 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+         // optional per-head attention sinks (e.g. Nemotron DSpark)
+         layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), { n_head }, TENSOR_NOT_REQUIRED);
+ 
++        // Laguna drafters gate the attention output per head or per element,
++        // told apart by the gate's width as in the Laguna target.
++        if (decoder_laguna) {
++            const ggml_tensor * gate_meta = ml->get_tensor_meta(tn(LLM_TENSOR_ATTN_GATE, "weight", i).str().c_str());
++            if (gate_meta != nullptr) {
++                const int64_t n_gate_out = gate_meta->ne[1];
++                if (n_gate_out != n_head && n_gate_out != n_embd_head_k * n_head) {
++                    throw std::runtime_error(format("DFlash: attention gate of layer %d is %lld wide, expected %lld or %lld",
++                            i, (long long) n_gate_out, (long long) n_head, (long long) (n_embd_head_k * n_head)));
++                }
++                layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_gate_out }, 0);
++            }
++        }
++
+         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
+         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+@@ -401,6 +437,26 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+     }
+ }
+ 
++// Laguna drafters RMS-norm each captured target feature before fc: view the
++// concatenated input as [n_feat, n_aux, n_tokens], norm over n_feat and scale
++// by the stacked per-feature weights. Other drafters pass through.
++static ggml_tensor * build_dflash_aux_norm(llm_graph_context & g, const llama_model & model, ggml_tensor * cur) {
++    ggml_tensor * aux_norm = static_cast<const llama_model_dflash &>(model).aux_norm;
++    if (aux_norm == nullptr) {
++        return cur;
++    }
++    const int64_t n_aux    = aux_norm->ne[1];
++    const int64_t n_feat   = cur->ne[0] / n_aux;
++    const int64_t n_tokens = cur->ne[1];
++
++    cur = ggml_reshape_3d(g.ctx0, cur, n_feat, n_aux, n_tokens);
++    cur = ggml_rms_norm(g.ctx0, cur, g.hparams.f_norm_rms_eps);
++    cur = ggml_mul(g.ctx0, cur, aux_norm);
++    cur = ggml_reshape_2d(g.ctx0, cur, n_feat * n_aux, n_tokens);
++    g.cb(cur, "enc_aux_norm", -1);
++    return cur;
++}
++
+ template <>
+ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
+     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
+@@ -422,6 +478,7 @@ template <>
+ llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_graph_context(params) {
+     ggml_tensor * cur = build_inp_embd_enc();
+ 
++    cur = build_dflash_aux_norm(*this, model, cur);
+     cur = build_lora_mm(model.fc, cur, model.fc_s);
+     cb(cur, "fc_out", -1);
+ 
+@@ -965,16 +1022,27 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+         res->add_input(std::move(inp));
+ 
+         // fuse the target features through the encoder
+-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
++        ggml_tensor * inp_g = build_dflash_aux_norm(*this, model, inp_target);
++        inp_g = build_lora_mm(model.fc, inp_g, model.fc_s);
+         inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
+         cb(inp_g, "inp_g_embeddings", -1);
+ 
++        const bool decoder_laguna = static_cast<const llama_model_dflash &>(model).decoder_laguna;
++
+         for (int il = 0; il < n_layer; ++il) {
+             const auto & layer = model.layers[il];
+ 
+-            ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g, layer.wk_s);
++            // Laguna drafters project context K/V from the layer's input norm,
++            // as they do the noise block; generic DFlash projects them raw.
++            ggml_tensor * kv_inp = inp_g;
++            if (decoder_laguna) {
++                kv_inp = build_norm(inp_g, layer.attn_norm, NULL, LLM_NORM_RMS, il);
++                cb(kv_inp, "kv_inp_normed", il);
++            }
++
++            ggml_tensor * Kcur = build_lora_mm(layer.wk, kv_inp, layer.wk_s);
+             const bool shared_kv = layer.wv == nullptr;
+-            ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, inp_g, layer.wv_s);
++            ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, kv_inp, layer.wv_s);
+ 
+             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+@@ -1096,10 +1164,34 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
+         cb(Kcur, "Kcur", il);
+         cb(Vcur, "Vcur", il);
+ 
+-        // cache-aware, non-causal attention
++        // cache-aware attention: non-causal for generic DFlash, causal for
++        // Laguna drafters (the context's causal_attn flag picks the mask).
++        // A gated layer applies its output projection after the gate.
++        const bool gated = layer.wqkv_gate != nullptr;
+         ggml_tensor * cur = use_iswa
+-            ? build_attn(inp_attn_iswa, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
+-            : build_attn(inp_attn,      layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
++            ? build_attn(inp_attn_iswa, gated ? nullptr : layer.wo, NULL, gated ? nullptr : layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
++            : build_attn(inp_attn,      gated ? nullptr : layer.wo, NULL, gated ? nullptr : layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
++
++        if (gated) {
++            // softplus gate on the normed block input, per head (broadcast
++            // over head_dim) or per element, as in the Laguna target
++            ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, noise_norm);
++            gate = ggml_softplus(ctx0, gate);
++            cb(gate, "attn_gate_softplus", il);
++
++            const int64_t n_tok = cur->ne[1];
++            if (layer.wqkv_gate->ne[1] == n_head) {
++                cur  = ggml_reshape_3d(ctx0, cur,  n_embd_head, n_head, n_tok);
++                gate = ggml_reshape_3d(ctx0, gate, 1,           n_head, n_tok);
++                cur  = ggml_mul(ctx0, cur, gate);
++                cur  = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tok);
++            } else {
++                cur = ggml_mul(ctx0, cur, gate);
++            }
++            cb(cur, "attn_gated", il);
++
++            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
++        }
+ 
+         if (hparams.f_attn_value_scale != 0.0f) {
+             cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
+diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
+index 1bf25eacf..0f4029bdb 100644
+--- a/src/models/laguna.cpp
++++ b/src/models/laguna.cpp
+@@ -184,6 +184,9 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
+     llm_graph_input_attn_kv      * inp_attn_kv   = has_swa ? nullptr : build_attn_inp_kv();
+     llm_graph_input_attn_kv_iswa * inp_attn_iswa = has_swa ? build_attn_inp_kv_iswa() : nullptr;
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
++    // DFlash drafts read the last layer's output (layer n_layer's input) for
++    // every token, so keep all rows through the last layer when it is captured.
++    const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
+ 
+     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+ 
+@@ -193,6 +196,8 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
+ 
+         // Per-layer-type RoPE config. SWA layers run plain rope (no YaRN),
+         // achieved by zeroing the YaRN ext/beta params for those layers.
++        res->t_layer_inp[il] = inpL;
++
+         ggml_tensor * inpSA = inpL;
+ 
+         // Pre-norm
+@@ -258,7 +263,7 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
+             cb(cur, "attn_o_proj", il);
+         }
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == n_layer - 1 && inp_out_ids && !extract_final_inp) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -318,6 +323,13 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
+     }
+ 
+     cur = inpL;
++    if (extract_final_inp) {
++        res->t_layer_inp[n_layer] = cur;
++
++        if (inp_out_ids) {
++            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++        }
++    }
+     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+     cb(cur, "result_norm", -1);
+     res->t_embd = cur;
+diff --git a/src/models/models.h b/src/models/models.h
+index 8c92196cd..276ae1c48 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -1618,6 +1618,14 @@ struct llama_model_dflash : public llama_model_base {
+     void load_arch_hparams(llama_model_loader & ml) override;
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
++    // dflash.decoder_arch == "laguna": the draft layers follow the Laguna
++    // decoder contract (softplus attention gate, per-feature target norms,
++    // context K/V through the input norm, causal noise block)
++    bool decoder_laguna = false;
++
++    // per-feature RMSNorm weights [n_embd, n_target_layers] (Laguna drafters)
++    ggml_tensor * aux_norm = nullptr;
++
+     template <bool is_enc>
+     struct graph : public llm_graph_context {
+         graph(const llm_graph_params & params);
+diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
+index fdcdc631f..725b75ad2 100644
+--- a/src/skippy/tests/graph_contract_cases.cmake
++++ b/src/skippy/tests/graph_contract_cases.cmake
+@@ -158,3 +158,26 @@ add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-i
+     "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
+ set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
+     FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)
++
++# Laguna-XS-2.1's DFlash draft reads target layers 2, 14, 26, 34 and 40: layer
++# 40 of the 40-layer trunk is its output, the output head's input. The trunk
++# must publish every layer's input, keep all rows through the last layer when
++# the head input is captured, report the head input as published, and leave
++# that capture to the final stage.
++set(laguna_fixture_dir "${SKIPPY_MODEL_FIXTURE_DIR}/laguna-random")
++file(MAKE_DIRECTORY "${laguna_fixture_dir}")
++add_test(NAME skippy_generate_laguna_fixture COMMAND skippy-model-fixture-generator
++    --arch laguna --seed 1 --out "${laguna_fixture_dir}")
++set_tests_properties(skippy_generate_laguna_fixture PROPERTIES FIXTURES_SETUP skippy-laguna-fixture)
++add_test(NAME skippy_laguna_layer_inputs COMMAND skippy-graph-build-inputs --layer-inputs
++    "${laguna_fixture_dir}/laguna-moe.gguf" --head-input)
++set_tests_properties(skippy_laguna_layer_inputs PROPERTIES
++    FIXTURES_REQUIRED skippy-laguna-fixture TIMEOUT 900)
++add_test(NAME skippy_laguna_head_input_published COMMAND skippy-graph-build-inputs --head-input-published
++    "${laguna_fixture_dir}/laguna-moe.gguf" 1)
++set_tests_properties(skippy_laguna_head_input_published PROPERTIES
++    FIXTURES_REQUIRED skippy-laguna-fixture TIMEOUT 900)
++add_test(NAME skippy_laguna_stage_layer_inputs COMMAND skippy-graph-build-inputs --stage-layer-inputs
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-laguna/graph-contract.gguf" 2,14,26,34,40)
++set_tests_properties(skippy_laguna_stage_layer_inputs PROPERTIES
++    FIXTURES_REQUIRED contract-laguna TIMEOUT 900)
+-- 
+2.54.0 (Apple Git-157)
+

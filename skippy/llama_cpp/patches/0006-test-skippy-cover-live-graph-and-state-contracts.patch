@@ -1,28 +1,29 @@
-From 428a845a224e3677b44c0a06127f01881550f9f3 Mon Sep 17 00:00:00 2001
+From ef2d1b306ec19009abb53f52f409917c9dc8a642 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
+Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
 
 ---
  .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
- src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
- src/skippy/tests/graph_contract_cases.cmake   |  130 ++
+ src/skippy/tests/graph_build_inputs.cpp       |  950 ++++++++++
+ src/skippy/tests/graph_contract_cases.cmake   |  120 ++
  src/skippy/tests/graph_contract_checks.h      |  138 ++
- src/skippy/tests/graph_contract_models.cpp    |  221 +++
- .../tests/hardware_application_probe.cpp      |   76 +
- src/skippy/tests/input_capabilities.cpp       |   78 +
+ src/skippy/tests/graph_contract_models.cpp    |  223 +++
+ .../tests/hardware_application_probe.cpp      |   78 +
+ src/skippy/tests/input_capabilities.cpp       |   80 +
  .../tests/input_leaf_state_regression.h       |   49 +
  src/skippy/tests/live_graph_reference.h       |  194 ++
- src/skippy/tests/noalloc_graph_planning.cpp   | 1137 +++++++++++
- src/skippy/tests/profile_residency.cpp        |  258 +++
- .../tests/renamed_multishard_planning.cpp     | 1665 +++++++++++++++++
+ src/skippy/tests/log_gate.h                   |  138 ++
+ src/skippy/tests/noalloc_graph_planning.cpp   | 1139 +++++++++++
+ src/skippy/tests/profile_residency.cpp        |  260 +++
+ .../tests/renamed_multishard_planning.cpp     | 1667 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  517 +++++
+ src/skippy/tests/runtime_events.cpp           |  697 +++++++
+ src/skippy/tests/sampling_history.cpp         |  520 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
- src/skippy/tests/stage_slice_plan.cpp         | 1198 ++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp         | 1200 ++++++++++++
  tests/CMakeLists.txt                          |   31 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  189 +-
@@ -40,7 +41,7 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 36 files changed, 10134 insertions(+), 30 deletions(-)
+ 37 files changed, 10282 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
@@ -51,6 +52,7 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/input_capabilities.cpp
  create mode 100644 src/skippy/tests/input_leaf_state_regression.h
  create mode 100644 src/skippy/tests/live_graph_reference.h
+ create mode 100644 src/skippy/tests/log_gate.h
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
  create mode 100644 src/skippy/tests/profile_residency.cpp
  create mode 100644 src/skippy/tests/renamed_multishard_planning.cpp
@@ -205,10 +207,10 @@ index 000000000..803489be0
 +}
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
 new file mode 100644
-index 000000000..cd2e4af3f
+index 000000000..c53c6b4b1
 --- /dev/null
 +++ b/src/skippy/tests/graph_build_inputs.cpp
-@@ -0,0 +1,948 @@
+@@ -0,0 +1,950 @@
 +#include "llama-context.h"
 +#include "llama-graph.h"
 +#include "llama-kv-cache-msa.h"
@@ -218,6 +220,8 @@ index 000000000..cd2e4af3f
 +#include "llama-memory.h"
 +#include "llama-model.h"
 +#include "llama.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "skippy/stage_slice_plan.h"
 +#include "skippy/stage_realization.h"
 +
@@ -1159,10 +1163,10 @@ index 000000000..cd2e4af3f
 +}
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
 new file mode 100644
-index 000000000..25977b408
+index 000000000..4ee862411
 --- /dev/null
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,120 @@
 +# Registry dimensions are checked by scripts/tests/test_synthetic_graph_registry.py.
 +function(skippy_contract_case family arch layers width mtp mode)
 +    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-${family}")
@@ -1270,17 +1274,6 @@ index 000000000..25977b408
 +skippy_contract_case(bailingmoe2 bailingmoe2 19 4096 0 causal)
 +skippy_contract_case(minimax-m2 minimax-m2 62 3072 0 causal)
 +skippy_contract_case(deepseek4 deepseek4 43 4096 0 causal)
-+skippy_contract_case(limite limite 48 1280 0 causal)
-+skippy_contract_case(lfm3 lfm3 24 2048 0 causal)
-+skippy_contract_case(sensenova-u1 sensenova_u1 42 4096 0 causal)
-+skippy_contract_case(xing4-0 xing4_0 40 14336 1 causal)
-+skippy_contract_case(clover-moe clover_moe 40 2048 0 causal)
-+skippy_contract_case(flint flint 49 2048 0 causal)
-+skippy_contract_case(ricursive ricursive 80 5120 0 causal)
-+skippy_contract_case(kolibri1 kolibri1 50 2560 0 causal)
-+skippy_contract_case(beam beam 52 5120 0 causal)
-+skippy_contract_case(muse-spark muse-spark 62 8192 0 causal)
-+skippy_contract_case(metis16 metis16 24 8192 0 causal)
 +
 +# GLM-5.3 is too large for the ordinary one-host family battery. Keep its
 +# production topology in a separate synthetic-architecture lane so this case
@@ -1440,10 +1433,10 @@ index 000000000..69844b1f8
 +}
 diff --git a/src/skippy/tests/graph_contract_models.cpp b/src/skippy/tests/graph_contract_models.cpp
 new file mode 100644
-index 000000000..d22503d9e
+index 000000000..5dd31d608
 --- /dev/null
 +++ b/src/skippy/tests/graph_contract_models.cpp
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,223 @@
 +#include "ggml.h"
 +#include "gguf.h"
 +#include "skippy/stage_plan.h"
@@ -1456,6 +1449,8 @@ index 000000000..d22503d9e
 +#include <vector>
 +
 +#include "graph_contract_checks.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "../../vendor/nlohmann/json.hpp"
 +
 +// Validate real architecture graphs using sparse synthetic GGUFs, without inference.
@@ -1667,11 +1662,13 @@ index 000000000..d22503d9e
 +}
 diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
 new file mode 100644
-index 000000000..471968158
+index 000000000..cfc17776b
 --- /dev/null
 +++ b/src/skippy/tests/hardware_application_probe.cpp
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,78 @@
 +#include "skippy/model_load_config_internal.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "skippy/runtime.h"
 +
 +#include <cstdio>
@@ -1749,11 +1746,13 @@ index 000000000..471968158
 +}
 diff --git a/src/skippy/tests/input_capabilities.cpp b/src/skippy/tests/input_capabilities.cpp
 new file mode 100644
-index 000000000..a87425e96
+index 000000000..e4902c3d2
 --- /dev/null
 +++ b/src/skippy/tests/input_capabilities.cpp
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,80 @@
 +#include "ggml.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "gguf.h"
 +#include "skippy/stage_plan.h"
 +
@@ -2086,13 +2085,160 @@ index 000000000..73129bf07
 +        return status == SKIPPY_STATUS_OK;
 +    }
 +};
+diff --git a/src/skippy/tests/log_gate.h b/src/skippy/tests/log_gate.h
+new file mode 100644
+index 000000000..afafe0565442231095fd877319f2304bf6799ea9
+--- /dev/null
++++ b/src/skippy/tests/log_gate.h
+@@ -0,0 +1,138 @@
++#pragma once
++
++// Shared log gate for skippy test binaries (test-support header).
++//
++// llama.cpp emits construction diagnostics (per-tensor graph dumps in
++// llama_context graph reserve, per-layer cache setup) at DEBUG level through
++// a process-global callback that prints everything it receives. Test binaries
++// that build real graphs would otherwise write gigabytes of near-identical
++// lines into each CTest transcript (Testing/Temporary/LastTest.log). The gate
++// forwards only messages at or above a threshold to the callback that was
++// installed before the gate, so hosts keep their own handler.
++//
++// Declare one `installer` at file scope in a test main and the gate is active
++// before any check runs; no CMake target changes are needed.
++
++#include "llama.h"
++
++#include <atomic>
++#include <cctype>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++namespace skippy::log_gate {
++namespace detail {
++
++inline std::atomic<int> & minimum_level() {
++    static std::atomic<int> value{GGML_LOG_LEVEL_WARN};
++    return value;
++}
++
++inline ggml_log_callback & forward() {
++    static ggml_log_callback value = nullptr;
++    return value;
++}
++
++inline void *& forward_user_data() {
++    static void * value = nullptr;
++    return value;
++}
++
++inline bool & installed() {
++    static bool value = false;
++    return value;
++}
++
++inline void gate_callback(enum ggml_log_level level, const char * text, void * user_data) {
++    (void) user_data;
++    ggml_log_callback forward_cb = forward();
++    if (!forward_cb) {
++        return;
++    }
++    // CONT continues a message that may have been emitted at any level, so it
++    // always forwards.
++    const int minimum = minimum_level().load(std::memory_order_relaxed);
++    if (level == GGML_LOG_LEVEL_CONT || level >= minimum) {
++        forward_cb(level, text, forward_user_data());
++    }
++}
++
++inline bool parse_level(const char * value, int & out) {
++    if (!value) {
++        return false;
++    }
++    std::string name(value);
++    for (char & c : name) {
++        c = std::tolower(static_cast<unsigned char>(c));
++    }
++    if (name == "debug") {
++        out = GGML_LOG_LEVEL_DEBUG;
++        return true;
++    }
++    if (name == "info") {
++        out = GGML_LOG_LEVEL_INFO;
++        return true;
++    }
++    if (name == "warn") {
++        out = GGML_LOG_LEVEL_WARN;
++        return true;
++    }
++    if (name == "error") {
++        out = GGML_LOG_LEVEL_ERROR;
++        return true;
++    }
++    return false;
++}
++
++} // namespace detail
++
++// Change the threshold after installation. Values mirror ggml_log_level
++// (GGML_LOG_LEVEL_DEBUG..GGML_LOG_LEVEL_ERROR).
++inline void set_level(int minimum_level) {
++    detail::minimum_level().store(minimum_level, std::memory_order_relaxed);
++}
++
++// Current threshold.
++inline int level() {
++    return detail::minimum_level().load(std::memory_order_relaxed);
++}
++
++// Install the gate using the threshold named by SKIPPY_LOG_LEVEL
++// (debug|info|warn|error, case-insensitive). Unset or invalid values fall
++// back to warn, the quiet default for test transcripts. Calling this again
++// only updates the threshold; the pre-gate forwarding target is captured
++// exactly once.
++inline void install_from_environment() {
++    int minimum = GGML_LOG_LEVEL_WARN;
++    if (const char * value = std::getenv("SKIPPY_LOG_LEVEL")) {
++        if (!detail::parse_level(value, minimum)) {
++            std::fprintf(stderr,
++                    "skippy: ignoring invalid SKIPPY_LOG_LEVEL '%s' (expected debug, info, warn, or error); using warn\n",
++                    value);
++            minimum = GGML_LOG_LEVEL_WARN;
++        }
++    }
++    set_level(minimum);
++
++    if (detail::installed()) {
++        return;
++    }
++    detail::installed() = true;
++    ggml_log_callback previous = nullptr;
++    void * previous_user_data = nullptr;
++    llama_log_get(&previous, &previous_user_data);
++    detail::forward() = previous;
++    detail::forward_user_data() = previous_user_data;
++    llama_log_set(detail::gate_callback, nullptr);
++}
++
++// File-scope installer: declaring one instance in a test main TU activates
++// the gate during static initialization, before any check builds a graph.
++struct installer {
++    installer() {
++        install_from_environment();
++    }
++};
++
++} // namespace skippy::log_gate
+
 diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
 new file mode 100644
-index 000000000..f6506940c
+index 000000000..7470f3309
 --- /dev/null
 +++ b/src/skippy/tests/noalloc_graph_planning.cpp
-@@ -0,0 +1,1137 @@
+@@ -0,0 +1,1139 @@
 +#include "ggml-backend.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "ggml.h"
 +#include "gguf.h"
 +#include "llama-context.h"
@@ -3231,11 +3377,13 @@ index 000000000..f6506940c
 +}
 diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
 new file mode 100644
-index 000000000..17650efda
+index 000000000..bfcff855d
 --- /dev/null
 +++ b/src/skippy/tests/profile_residency.cpp
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,260 @@
 +#include "skippy.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "skippy/runtime_types.h"
 +#include "skippy/execution_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -3495,11 +3643,13 @@ index 000000000..17650efda
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..0832b018e
+index 000000000..720ba457a
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1665 @@
+@@ -0,0 +1,1667 @@
 +#include "embedding_input_regression.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "live_graph_reference.h"
 +#include "ggml-backend.h"
 +#include "ggml.h"
@@ -5224,11 +5374,13 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..00a6ff0ec
+index 000000000..d764514ed
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -0,0 +1,695 @@
+@@ -0,0 +1,697 @@
 +#include "skippy.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +
 +#include "../events_internal.h"
 +#include "../runtime_support.h"
@@ -5925,15 +6077,18 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..9e134586f
+index 000000000..b191ecf34
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,517 @@
+@@ -0,0 +1,520 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
 +#include "llama-model.h"
 +#include "../../../common/sampling.h"
++
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +
 +#include <cstdio>
 +#include <cstdlib>
@@ -6483,11 +6638,13 @@ index 000000000..beb86aaae
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
 new file mode 100644
-index 000000000..8336599ac
+index 000000000..21f659cbd
 --- /dev/null
 +++ b/src/skippy/tests/stage_slice_plan.cpp
-@@ -0,0 +1,1198 @@
+@@ -0,0 +1,1200 @@
 +#include "ggml.h"
++#include "log_gate.h"
++static const skippy::log_gate::installer skippy_log_gate_installer{};
 +#include "ggml-backend.h"
 +#include "ggml-cpu.h"
 +#include "llama-model.h"
@@ -8350,7 +8507,7 @@ index 000000000..c45915888
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ea9afd660..dde1b03f0 100644
+index 1f4c8a46b..fee4d8fdb 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -7,12 +7,14 @@
@@ -8368,7 +8525,7 @@ index ea9afd660..dde1b03f0 100644
  #include <cstring>
  #include <cstdint>
  #include <filesystem>
-@@ -24,6 +26,21 @@
+@@ -24,6 +26,25 @@
  #include <utility>
  #include <vector>
  
@@ -8380,17 +8537,21 @@ index ea9afd660..dde1b03f0 100644
 +    std::filesystem::remove(path, ignored);
 +}
 +
++struct fixture_write_error : std::runtime_error {
++    using std::runtime_error::runtime_error;
++};
++
 +static void require_fixture_written(const std::string & path) {
 +    std::error_code error;
 +    if (!std::filesystem::is_regular_file(path, error) || std::filesystem::file_size(path, error) == 0 || error) {
-+        throw std::runtime_error("cannot write model fixture " + path);
++        throw fixture_write_error("cannot write model fixture " + path);
 +    }
 +}
 +
  static bool arch_matches(const std::string & filter, llm_arch arch) {
      if (filter.empty()) {
          return true;
-@@ -168,6 +185,7 @@ static void usage(char ** argv) {
+@@ -177,6 +194,7 @@ static void usage(char ** argv) {
      LOG("  -v <N>                   Set log verbosity level\n");
      LOG("  -b, --backend <backend>  Run only on the given backend device\n");
      LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
@@ -8398,7 +8559,7 @@ index ea9afd660..dde1b03f0 100644
      LOG("  -h, --help               Show this help message\n\n");
      LOG("Examples:\n");
      LOG("  %s\n", argv[0]);
-@@ -238,10 +256,27 @@ struct kv_writer {
+@@ -247,10 +265,27 @@ struct kv_writer {
      }
  };
  
@@ -8428,7 +8589,7 @@ index ea9afd660..dde1b03f0 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -269,7 +304,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -278,7 +313,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
          n_embd  = 512;
          n_head  = 8;
          n_ff    = 1024;
@@ -8437,7 +8598,7 @@ index ea9afd660..dde1b03f0 100644
      } else if (arch == LLM_ARCH_DEEPSEEK41) {
          // window-only, Engram, ratio-2 and ratio-1 sources, top-k reuse and a candidate-masked index layer
          n_embd  = 512;
-@@ -319,6 +354,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -328,6 +363,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
          n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
      }
  
@@ -8454,7 +8615,7 @@ index ea9afd660..dde1b03f0 100644
      uint32_t n_head_kv = n_head;
      if (arch == LLM_ARCH_QWEN3) {
          n_head_kv = 1; // MQA coverage
-@@ -340,7 +385,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -349,7 +394,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
      ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
      ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
@@ -8466,7 +8627,7 @@ index ea9afd660..dde1b03f0 100644
  
      if (arch == LLM_ARCH_K2_HORIZON) {
          ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
-@@ -404,7 +452,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -413,7 +461,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) {
          ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
          ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
@@ -8475,7 +8636,7 @@ index ea9afd660..dde1b03f0 100644
      } else if (arch == LLM_ARCH_DEEPSEEK2
              || arch == LLM_ARCH_DEEPSEEK32
              || arch == LLM_ARCH_GLM_DSA
-@@ -555,12 +603,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -564,12 +612,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
      //       a large value makes things deterministic since all data is selected by the indexer
      //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
@@ -8522,7 +8683,7 @@ index ea9afd660..dde1b03f0 100644
      // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
      // summing to n_rot / 2 (n_rot is 64 in this fixture)
      if (arch == LLM_ARCH_BAILINGMOE3) {
-@@ -568,7 +649,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -577,7 +658,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      } else {
          ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      }
@@ -8530,7 +8691,7 @@ index ea9afd660..dde1b03f0 100644
      if (arch == LLM_ARCH_HY_V4) {
          ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
          ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
-@@ -594,13 +674,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -603,13 +683,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      }
  
      if (arch == LLM_ARCH_DEEPSEEK4) {
@@ -8553,7 +8714,7 @@ index ea9afd660..dde1b03f0 100644
          ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
          ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
-@@ -793,6 +875,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -802,6 +884,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
          ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
          gguf_add_tensor(ms.gguf_ctx, &t);
      }
@@ -8570,7 +8731,7 @@ index ea9afd660..dde1b03f0 100644
      return ret;
  }
  
-@@ -800,6 +892,61 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -809,6 +901,61 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -8632,7 +8793,7 @@ index ea9afd660..dde1b03f0 100644
  static std::string get_tmp_gguf_path() {
      static size_t id = 0;
      return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
-@@ -833,7 +980,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -842,7 +989,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
          struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
          const std::vector<ggml_backend_dev_t> & devs,
          const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
@@ -8643,7 +8804,7 @@ index ea9afd660..dde1b03f0 100644
      llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
  
      llama_context_params ctx_params = llama_context_default_params();
-@@ -848,6 +997,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -857,6 +1006,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
          ctx_params.moe_cache_size = moe_cache_size;
          ctx_params.n_ubatch = 2;
      }
@@ -8653,7 +8814,7 @@ index ea9afd660..dde1b03f0 100644
  
      llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
      if (!lctx) {
-@@ -856,6 +1008,17 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -865,6 +1017,17 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -8671,7 +8832,7 @@ index ea9afd660..dde1b03f0 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -1114,7 +1277,21 @@ static bool arch_supported(const llm_arch arch) {
+@@ -1123,7 +1286,21 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -8694,7 +8855,7 @@ index ea9afd660..dde1b03f0 100644
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -1158,11 +1335,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+@@ -1167,11 +1344,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense");
                  continue;
              }
@@ -8716,7 +8877,7 @@ index ea9afd660..dde1b03f0 100644
              const std::uintmax_t size = std::filesystem::file_size(path);
              LOG_CNT(" (%.2f MB)\n", (double) size / (1024.0 * 1024.0));
          }
-@@ -1339,6 +1525,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1348,6 +1534,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                  char mixed_str[12] = {0};
  
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -8729,7 +8890,7 @@ index ea9afd660..dde1b03f0 100644
                  bool test_executed = false;
                  bool test_ok = true;
                  if (!skip) {
-@@ -1771,6 +1963,9 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
+@@ -1780,6 +1972,9 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
      return n_failed == 0 ? 0 : 1;
  }
  
@@ -8739,7 +8900,7 @@ index ea9afd660..dde1b03f0 100644
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
      common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
-@@ -1785,11 +1980,50 @@ int main(int argc, char ** argv) {
+@@ -1794,11 +1989,50 @@ int main(int argc, char ** argv) {
      std::string out;
      const char * target_backend = nullptr;
      bool kv_shift = false;
@@ -8792,7 +8953,7 @@ index ea9afd660..dde1b03f0 100644
              usage(argv);
              return 0;
          } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
-@@ -1869,8 +2103,85 @@ int main(int argc, char ** argv) {
+@@ -1878,8 +2112,89 @@ int main(int argc, char ** argv) {
      init_normal_pool(seed, stdev);
  
      try {
@@ -8870,6 +9031,10 @@ index ea9afd660..dde1b03f0 100644
 +            if (expect_invalid) {
 +                try {
 +                    save_models(arch_filter, seed, stdev, verbosity, out, text_only, glm_dsa_indexshare);
++                } catch (const fixture_write_error &) {
++                    throw;
++                } catch (const std::filesystem::filesystem_error &) {
++                    throw;
 +                } catch (const std::exception &) {
 +                    return 0;
 +                }
@@ -10761,3 +10926,6 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

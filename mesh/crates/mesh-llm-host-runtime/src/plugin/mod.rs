@@ -14,6 +14,8 @@ mod identity_registry;
 mod identity_transport;
 pub(crate) mod inference_routing;
 mod model_assets;
+#[cfg(test)]
+pub(crate) mod selected_attempt_test_support;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;
@@ -32,6 +34,7 @@ pub(crate) mod mcp;
 pub mod openai_exchange;
 mod operation_bindings;
 pub(crate) mod operations;
+mod request_transform;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -94,12 +97,6 @@ pub use self::config::{
 pub(crate) use self::config::{HardwareConfig, ModelConfigDefaults, SkippyConfig};
 #[cfg(test)]
 pub(crate) use self::config::{ModelFitConfig, RequestDefaultsConfig, ThroughputConfig};
-#[cfg(test)]
-pub(crate) use self::config::{
-    assert_mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges,
-    assert_mesh_requirements_config_rejects_non_ed25519_signer_key,
-    assert_mesh_requirements_config_rejects_required_attestation_without_signer_keys,
-};
 pub(crate) use self::config::{
     mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
     mesh_requirements_validation_error, validate_config_diagnostics_with_installed_plugin_schemas,
@@ -1252,6 +1249,7 @@ impl PluginManager {
                 proto::ServiceKind::OpenaiExchange => {
                     bail!("OpenAI lifecycle services have no MCP projection")
                 }
+                proto::ServiceKind::RequestTransform => "request_transform/invoke",
                 proto::ServiceKind::Unspecified => {
                     bail!("Service kind is required for test plugin '{plugin_name}'")
                 }

@@ -5,28 +5,9 @@
 //! request as well as it can. `auto` is accepted as a deprecated alias so
 //! existing OpenAI-compatible clients keep working.
 //!
-//! The directive resolves to one of two modes. Both are first-class: neither
-//! is a failure path.
-//!
-//! * [`ServingMode::Committee`] — fan out to a Mixture-of-Agents committee.
-//!   Chosen when the request permits it and the mesh can actually field one.
-//! * [`ServingMode::SingleModel`] — serve from one capability-selected model.
-//!   Chosen when the request states something a committee cannot honour.
-//!
-//! Mode selection reads *declarations the client made*, not guesses about
-//! intent:
-//!
-//! * **Media.** MoA aggregation compares and synthesises drafts as strings, so
-//!   a committee has no defined semantics for image or audio input — and the
-//!   text-extraction step drops non-text content blocks outright. A media
-//!   request must reach a model whose runtime advertises the modality.
-//! * **Streaming.** Committee workers are called non-streaming because the
-//!   arbiter needs complete drafts to detect divergence, so committee "streams"
-//!   are synthesised after the fact. A client asking for `stream: true` gets a
-//!   single model, which streams tokens for real.
-//!
-//! Committee-plus-streaming is deliberately not reachable by sending
-//! `stream: true`; it would need its own opt-in.
+//! Core always selects one capability-compatible model. An explicitly installed
+//! plugin may override the directive for non-streaming, text-only chat requests.
+//! Streaming, media, non-chat and model-less requests retain core routing.
 
 use serde_json::Value;
 
@@ -37,17 +18,14 @@ pub(crate) const DIRECTIVE: &str = "mesh";
 
 /// Accepted spelling of [`DIRECTIVE`] retained for compatibility.
 ///
-/// Historically `auto` selected a single "good" model while `mesh` convened a
-/// committee. Those were never real alternatives — the committee path already
-/// served a single model whenever one was all the mesh could field — so the
-/// two names described one intent and are now one directive.
+/// Both spellings use the same single-model core routing and optional plugin override.
 pub(crate) const DEPRECATED_ALIAS: &str = "auto";
 
 /// How the mesh will serve a request that used the automatic directive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServingMode {
-    /// Fan out to a committee and aggregate the drafts.
-    Committee,
+    /// Allow an installed plugin to override the directive.
+    PluginOverride,
     /// Serve from a single capability-selected model.
     SingleModel(SingleModelReason),
 }
@@ -55,17 +33,16 @@ pub(crate) enum ServingMode {
 /// Why a request that asked for automatic routing is being served by one model.
 ///
 /// Carried so logs, tests, and the management API can distinguish a deliberate
-/// mode choice from a mesh that simply could not field a committee.
+/// eligibility constraint from an unavailable optional override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SingleModelReason {
     /// The request carries image, audio, or file content.
     MediaInput,
     /// The client asked for a streamed response.
     StreamRequested,
-    /// The request named no model, so it never opted into committee serving.
+    /// The request named no model, so it never opted into plugin override serving.
     ModelUnspecified,
-    /// The endpoint is not chat-shaped, so a committee has no messages to
-    /// fan out.
+    /// The endpoint does not supply the buffered chat body required by overrides.
     NonChatRequest,
 }
 
@@ -81,17 +58,16 @@ impl SingleModelReason {
     }
 }
 
-/// The forwarded endpoint a committee needs in order to fan out.
+/// The forwarded endpoint accepted by the buffered chat override seam.
 ///
-/// MoA builds worker calls as chat completions from a `messages` array, so it
-/// can only serve requests that arrive on (or are normalised onto) that
-/// endpoint. `/v1/completions` has a `prompt`, not `messages`.
+/// Overrides receive chat-completion bodies with a `messages` array.
+/// `/v1/completions` has a `prompt`, not `messages`, and stays on core routing.
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 
 /// True when `path` is the forwarded chat-completions endpoint.
 ///
 /// Reads the forwarded path, not the client's: `/v1/responses` is normalised
-/// onto chat completions before routing, so it is committee-eligible.
+/// onto chat completions before routing, so it is plugin override-eligible.
 pub(crate) fn is_chat_shaped_path(path: &str) -> bool {
     path.split('?').next().unwrap_or(path) == CHAT_COMPLETIONS_PATH
 }
@@ -137,17 +113,17 @@ pub(crate) struct AutomaticRequest<'a> {
 /// Callers must only reach here once they have established the request is
 /// automatic; an explicitly named model never has a mode.
 ///
-/// A request that named no model did not opt into committee serving, so it is
-/// served by a single model rather than silently paying committee latency and
+/// A request that named no model did not opt into plugin override serving, so it is
+/// served by a single model rather than silently paying plugin override latency and
 /// cost. Naming the directive is the opt-in.
 ///
-/// The MoA gateway evaluates this in two stages, because its `messages`
+/// The plugin handler evaluates this in two stages, because its `messages`
 /// contract check must stay reachable — see [`envelope_mode`] and
 /// [`content_mode`]. This function is the whole decision for callers that have
 /// no such ordering constraint.
 pub(crate) fn serving_mode(request: AutomaticRequest<'_>) -> ServingMode {
     match envelope_mode(request) {
-        ServingMode::Committee => content_mode(request.body),
+        ServingMode::PluginOverride => content_mode(request.body),
         single => single,
     }
 }
@@ -155,8 +131,8 @@ pub(crate) fn serving_mode(request: AutomaticRequest<'_>) -> ServingMode {
 /// The part of the mode decision that depends only on the request's envelope:
 /// which endpoint it arrived on and whether it named the directive at all.
 ///
-/// Separated from [`content_mode`] so the MoA gateway can answer "could a
-/// committee ever fan this out?" *before* validating the chat body. A
+/// Separated from [`content_mode`] so the plugin handler can answer "could a
+/// plugin override ever fan this out?" *before* validating the chat body. A
 /// `/v1/completions` request has a `prompt` and no `messages`, so asserting the
 /// chat contract on it would reject a shape `model=auto` used to serve from one
 /// concrete model.
@@ -168,13 +144,13 @@ pub(crate) fn envelope_mode(request: AutomaticRequest<'_>) -> ServingMode {
     if !is_chat_shaped_path(path) {
         return ServingMode::SingleModel(SingleModelReason::NonChatRequest);
     }
-    ServingMode::Committee
+    ServingMode::PluginOverride
 }
 
 /// The part of the mode decision that reads what the client declared in the
-/// body of an otherwise committee-eligible chat request.
+/// body of an otherwise plugin override-eligible chat request.
 ///
-/// Runs *after* the chat contract check in the MoA gateway, so a malformed
+/// Runs *after* the chat contract check in the plugin handler, so a malformed
 /// chat body still gets the gateway's own rejection rather than being diverted
 /// to single-model routing and failing later with a less specific error.
 pub(crate) fn content_mode(body: &Value) -> ServingMode {
@@ -187,7 +163,7 @@ pub(crate) fn content_mode(body: &Value) -> ServingMode {
     if requests_streaming(body) {
         return ServingMode::SingleModel(SingleModelReason::StreamRequested);
     }
-    ServingMode::Committee
+    ServingMode::PluginOverride
 }
 
 /// True when the body asks for a streamed response.
@@ -236,17 +212,17 @@ mod tests {
     }
 
     #[test]
-    fn plain_text_request_convenes_a_committee() {
+    fn plain_text_request_is_eligible_for_plugin_override() {
         assert_eq!(
             serving_mode(auto(Some(DIRECTIVE), &text_request())),
-            ServingMode::Committee
+            ServingMode::PluginOverride
         );
     }
 
     #[test]
     fn model_less_request_takes_a_single_model() {
-        // No `model` field means the client never opted into committee
-        // serving, so it must not silently pay committee latency and cost.
+        // No `model` field means the client never opted into plugin override
+        // serving, so it stays on the core routing path.
         let mut body = text_request();
         body.as_object_mut().unwrap().remove("model");
         assert_eq!(
@@ -256,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_alias_convenes_a_committee_too() {
+    fn deprecated_alias_is_eligible_for_plugin_override_too() {
         // `auto` and `mesh` are one directive; they must not diverge in mode.
         let body = text_request();
         assert_eq!(
@@ -267,10 +243,8 @@ mod tests {
 
     #[test]
     fn a_non_chat_endpoint_takes_a_single_model() {
-        // `/v1/completions` carries `prompt`, not `messages`. A committee has
-        // nothing to fan out, and letting one convene would reject with
-        // "MoA requires a non-empty `messages` array" a request shape that
-        // `model=auto` used to serve from one concrete model.
+        // `/v1/completions` carries `prompt`, not the buffered `messages` body
+        // accepted by the override seam. Keep it on core routing.
         let body = json!({ "model": DIRECTIVE, "prompt": "once upon a time" });
         assert_eq!(
             serving_mode(AutomaticRequest {
@@ -283,8 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_chat_body_stays_committee_eligible_at_the_envelope() {
-        // The MoA gateway rejects a missing or non-array `messages` with a
+    fn a_malformed_chat_body_stays_plugin_override_eligible_at_the_envelope() {
+        // The plugin handler rejects a missing or non-array `messages` with a
         // precise 400. That check must stay reachable, so the envelope stage
         // must not divert a chat-shaped request on body grounds — even when the
         // body also declares something `content_mode` would divert on.
@@ -295,7 +269,7 @@ mod tests {
         ] {
             assert_eq!(
                 envelope_mode(auto(Some(DIRECTIVE), &body)),
-                ServingMode::Committee,
+                ServingMode::PluginOverride,
                 "envelope stage must defer to the gateway's contract check: {body}"
             );
         }
@@ -311,7 +285,7 @@ mod tests {
         for (request, expected) in [
             (
                 auto(Some(DIRECTIVE), &text_request()),
-                ServingMode::Committee,
+                ServingMode::PluginOverride,
             ),
             (
                 auto(Some(DIRECTIVE), &streaming),
@@ -335,17 +309,17 @@ mod tests {
     }
 
     #[test]
-    fn a_normalised_responses_request_still_convenes_a_committee() {
+    fn a_normalised_responses_request_still_is_eligible_for_plugin_override() {
         // `/v1/responses` is rewritten onto chat completions with a `messages`
         // array before routing, so gating on the *forwarded* path keeps it
-        // committee-eligible. Gating on the client's path would exclude it.
+        // plugin override-eligible. Gating on the client's path would exclude it.
         assert_eq!(
             serving_mode(AutomaticRequest {
                 model: Some(DIRECTIVE),
                 path: CHAT_COMPLETIONS_PATH,
                 body: &text_request(),
             }),
-            ServingMode::Committee
+            ServingMode::PluginOverride
         );
     }
 
@@ -357,7 +331,7 @@ mod tests {
                 path: "/v1/chat/completions?trace=1",
                 body: &text_request(),
             }),
-            ServingMode::Committee
+            ServingMode::PluginOverride
         );
     }
 
@@ -372,25 +346,25 @@ mod tests {
     }
 
     #[test]
-    fn stream_false_still_convenes_a_committee() {
+    fn stream_false_still_is_eligible_for_plugin_override() {
         let mut body = text_request();
         body["stream"] = json!(false);
         assert_eq!(
             serving_mode(auto(Some(DIRECTIVE), &body)),
-            ServingMode::Committee
+            ServingMode::PluginOverride
         );
     }
 
     #[test]
     fn non_bool_stream_does_not_change_routing() {
         // A stringly-typed `stream` is not a streaming declaration; treating it
-        // as one would let a malformed field silently disable the committee.
+        // as one would let a malformed field silently disable the plugin override.
         for value in [json!("true"), json!(1), json!(null)] {
             let mut body = text_request();
             body["stream"] = value;
             assert_eq!(
                 serving_mode(auto(Some(DIRECTIVE), &body)),
-                ServingMode::Committee
+                ServingMode::PluginOverride
             );
         }
     }
@@ -416,7 +390,7 @@ mod tests {
     #[test]
     fn audio_request_takes_a_single_model() {
         // Audio-only input has `needs_vision == false`, so gating on vision
-        // alone would leave it in the committee and silently drop the audio.
+        // alone would leave it in the plugin override and silently drop the audio.
         let body = json!({
             "model": DIRECTIVE,
             "messages": [{

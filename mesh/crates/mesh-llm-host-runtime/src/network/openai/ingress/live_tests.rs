@@ -110,7 +110,6 @@ impl LiveHost {
             install_root: root.path().join("installed"),
             catalog_url: "unused".into(),
             target: PluginTarget::current().unwrap(),
-            bundled_plugins_dir: None,
         };
         let installed = mesh_llm_plugin_manager::install::install_plugin_archive(
             NAME,
@@ -274,7 +273,7 @@ impl LiveHost {
             .collect();
         let count = self.events().len();
         self.manager
-            .apply_exchange_grants(&mesh_llm_config::MeshConfig::default())
+            .apply_exchange_grants(&self.observation_disabled_config().await)
             .await;
         let response = self.request(path, body).await;
         assert_eq!(
@@ -289,6 +288,26 @@ impl LiveHost {
             })
             .await;
         response
+    }
+    /// Owner config that turns observation off for every installed plugin.
+    /// A missing stanza is not "off": a plugin without one keeps its installed
+    /// package's grant (`exchange_grants.rs`), and the packaged exemplar's
+    /// grant cannot satisfy the body hook its running child requires, so an
+    /// empty config makes ingress reject the exchange instead of skipping it.
+    async fn observation_disabled_config(&self) -> mesh_llm_config::MeshConfig {
+        let plugins = self
+            .manager
+            .list()
+            .await
+            .into_iter()
+            .map(|plugin| {
+                serde_json::from_value(json!({"name": plugin.name, "enabled": false})).unwrap()
+            })
+            .collect();
+        mesh_llm_config::MeshConfig {
+            plugins,
+            ..Default::default()
+        }
     }
     pub(super) fn events(&self) -> Vec<Value> {
         self.recipient_events(NAME)
@@ -538,7 +557,7 @@ async fn installed_lifecycle_allow_preserves_stream_and_buffered_entity_bytes() 
     assert_eq!(host.requests.lock().await.len(), 8);
     let count = host.events().len();
     host.manager
-        .apply_exchange_grants(&mesh_llm_config::MeshConfig::default())
+        .apply_exchange_grants(&host.observation_disabled_config().await)
         .await;
     let response = host
         .request(

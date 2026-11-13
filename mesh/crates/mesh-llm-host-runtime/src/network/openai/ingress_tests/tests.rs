@@ -43,6 +43,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 
@@ -219,6 +220,7 @@ fn dispatch_kind_request(
         response_adapter,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 
@@ -229,7 +231,6 @@ fn mesh_routing_unsupported_dispatch_kind_does_not_flag_virtual_dispatch() {
     let request = dispatch_kind_request(Some("mesh"), proxy::ResponseAdapter::None);
     let decision = AutoRouteDecision {
         effective_model: Some("mesh".to_owned()),
-        classification: None,
         required_tokens: None,
     };
     assert_eq!(
@@ -242,36 +243,6 @@ fn mesh_routing_unsupported_dispatch_kind_does_not_flag_virtual_dispatch() {
     );
 }
 
-/// Regression (CodeRabbit + ndizazzo P1, PR #1671 round 2): same gap for
-/// pipeline dispatch, which also runs before `route_request`.
-#[test]
-fn mesh_routing_unsupported_dispatch_kind_flags_pipeline_dispatch() {
-    use crate::network::router::{Category, Classification, Complexity};
-
-    let request = dispatch_kind_request(
-        Some("local/only-model:Q4_K_M"),
-        proxy::ResponseAdapter::None,
-    );
-    let decision = AutoRouteDecision {
-        effective_model: Some("local/only-model:Q4_K_M".to_owned()),
-        classification: Some(Classification {
-            category: Category::Code,
-            complexity: Complexity::Deep,
-            needs_tools: true,
-            has_media_inputs: false,
-        }),
-        required_tokens: None,
-    };
-    assert_eq!(
-        mesh_routing_unsupported_dispatch_kind(
-            &request,
-            &decision,
-            decision.effective_model.as_deref()
-        ),
-        Some("pipeline")
-    );
-}
-
 /// Regression (CodeRabbit, PR #1671 round 1/2): the model-less fallback
 /// (no `model` in the request at all) also bypasses `route_request`'s
 /// model-bearing branch and must not silently ignore a routing header.
@@ -280,7 +251,6 @@ fn mesh_routing_unsupported_dispatch_kind_flags_model_less_dispatch() {
     let request = dispatch_kind_request(None, proxy::ResponseAdapter::None);
     let decision = AutoRouteDecision {
         effective_model: None,
-        classification: None,
         required_tokens: None,
     };
     assert_eq!(
@@ -299,7 +269,6 @@ fn mesh_routing_unsupported_dispatch_kind_is_none_for_ordinary_dispatch() {
     );
     let decision = AutoRouteDecision {
         effective_model: Some("local/only-model:Q4_K_M".to_owned()),
-        classification: None,
         required_tokens: None,
     };
     assert_eq!(
@@ -350,10 +319,10 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
     let decision = AutoRouteDecision {
         effective_model: None,
-        classification: None,
         required_tokens: None,
     };
 
@@ -565,6 +534,7 @@ async fn api_proxy_tokenizer_route_ignores_generation_context_budget() {
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: None,
     };
     let raw_before_decision = request.raw.clone();
@@ -1274,6 +1244,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     // Confirm the nonce header round-trips through the raw bytes before the
@@ -1293,6 +1264,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         // Inject the recording double so both publish calls are observable
         // even though plugin_manager is None.
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -1443,6 +1415,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     // Confirm both headers are readable before the routing function runs.
@@ -1463,6 +1436,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -1541,6 +1515,7 @@ fn remote_mesh_test_ctx<'a>(
         affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     }
@@ -1634,6 +1609,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     let values = request.twin_bracket_header_values().unwrap();
@@ -1960,6 +1936,7 @@ pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 
@@ -2021,6 +1998,7 @@ async fn route_self_targeted_model_attempts_a_registered_plugin_instead_of_faili
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -2103,6 +2081,7 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -2382,6 +2361,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     let ctx = IngressRouteContext {
@@ -2390,6 +2370,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -2689,6 +2670,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
     let peer_hex = "ab".repeat(32);
     let outcome = proxy::RouteDispatchOutcome::Responded(200);
@@ -2841,6 +2823,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -2895,6 +2878,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3035,6 +3019,7 @@ async fn local_plugin_serves_a_shared_model_name_no_mesh_candidate_admits() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3108,6 +3093,7 @@ async fn mesh_candidate_that_admits_the_request_still_wins_over_the_plugin() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3187,6 +3173,7 @@ async fn local_plugin_serves_a_name_whose_only_peer_candidate_is_ocr_only() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3295,6 +3282,7 @@ async fn peer_ingress_ignores_a_remote_candidate_it_cannot_forward() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3382,6 +3370,7 @@ async fn excluded_peer_does_not_suppress_the_local_plugin() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3465,6 +3454,7 @@ async fn native_cold_plugin_fallback_works_for_local_peer_and_failed_loads() {
             affinity: &affinity,
             plugin_manager: Some(&plugin_manager),
             requested_by_node_id: None,
+            automatic_retry: None,
             #[cfg(test)]
             exchange_channel: None,
         };

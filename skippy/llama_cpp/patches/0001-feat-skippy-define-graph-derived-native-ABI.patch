@@ -1,7 +1,7 @@
-From 3424455e99f043132ea9db15ed0561980154bf03 Mon Sep 17 00:00:00 2001
+From f1317c1a988d59c2fc90a52f3e6cae13c80b0bfe Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 01/15] feat(skippy): define graph-derived native ABI
+Subject: [PATCH 01/16] feat(skippy): define graph-derived native ABI
 
 ---
  include/skippy.h                      |  29 +++
@@ -16,7 +16,7 @@ Subject: [PATCH 01/15] feat(skippy): define graph-derived native ABI
  include/skippy/sampling.h             |  76 +++++++
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 256 +++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 256 ++++++++++++++++++++++++
  include/skippy/state.h                | 236 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++

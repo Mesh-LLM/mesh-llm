@@ -248,10 +248,11 @@ cargo xtool automation stability nightly \
 - `--print-plan` is side-effect-free and shows the exact checks/artifacts that
   would run
 
-The scheduled GitHub workflow is opt-in through
-`MESH_NIGHTLY_STABILITY_ENABLED=1` and a configured
-`MESH_NIGHTLY_STABILITY_BASE_URL` (or the existing agent endpoint variables).
-The scheduled/manual wrapper calls the reusable `nightly-stability-run.yml`
+The daily GitHub schedule is paused pending setup qualification, so the
+workflow is manual-only through `workflow_dispatch`. When the schedule
+returns, runs are opt-in through `MESH_NIGHTLY_STABILITY_ENABLED=1` and a
+configured `MESH_NIGHTLY_STABILITY_BASE_URL` (or the existing agent endpoint
+variables). The dispatch wrapper calls the reusable `nightly-stability-run.yml`
 workflow so maintainers can reuse the same harness execution from other
 workflows or lab jobs. The job summary includes the timing snapshot from
 `summary.md`, so day-over-day drift can be checked without opening JSONL
@@ -315,14 +316,16 @@ required PR gate. Use it to prove KV/cache stability on a real direct-model
 endpoint after local unit tests and before relying on agent workloads such as
 Goose, Pi, or OpenCode for broad smoke coverage.
 
-The separate `nightly-kv-coverage.yml` schedule expands the deterministic
-radix-lease and blob-ownership state machines on a pinned public CPU image. It
-records exact seed and step budgets plus the source SHA, and preserves the
-seed/step trace in its uploaded log. Repository variables
+The separate `nightly-kv-coverage.yml` workflow expands the deterministic
+radix-lease and blob-ownership state machines on a pinned public CPU image;
+its daily schedule is paused and it runs through manual dispatch. It records
+exact seed and step budgets plus the source SHA, and preserves the seed/step
+trace in its uploaded log. Repository variables
 `MESH_NIGHTLY_KV_STATE_MACHINE_SEEDS` and
 `MESH_NIGHTLY_KV_STATE_MACHINE_STEPS` may raise or lower the bounded corpus;
-set `MESH_NIGHTLY_KV_COVERAGE_ENABLED=0` to disable the scheduled run. Manual
-dispatch still executes trusted `main` on GitHub-hosted infrastructure.
+`MESH_NIGHTLY_KV_COVERAGE_ENABLED=0` disables the scheduled run again once the
+schedule is restored. Manual dispatch still executes trusted `main` on
+GitHub-hosted infrastructure.
 
 The daily llama canary, pin advances, and explicit forced certification all
 use the complete `ci/llama-canary/family-certified.json` roster: 83 causal

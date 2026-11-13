@@ -10,6 +10,15 @@ CI planning, lane result admission, the planner-side repository checks, and
 xtask keeps those commands and delegates them to the controller library, so
 their output and exit codes are unchanged.
 
+`models resolve`, `models restore-inputs`, `ci-ops authority-audit`,
+`ci-ops pr-authority-audit`, and `artifact file-projection` live in
+[authority-automation](../authority-automation/README.md), the executable the
+protected authority producers publish. xtask delegates them the same way.
+
+`ci-ops runner-cleanup` lives in [runner-cleanup](../runner-cleanup/README.md), the
+executable the trusted runner-image job freezes for cleanup. xtask delegates it
+the same way.
+
 From the workspace root, run the repository checks through `just`:
 
 ```bash

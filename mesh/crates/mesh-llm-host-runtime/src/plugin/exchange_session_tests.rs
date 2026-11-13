@@ -347,3 +347,85 @@ async fn request_allow_then_selected_rejection_retains_admission_but_reports_typ
         manager.shutdown().await;
     }
 }
+
+/// A candidate the plugin refused must not leave the exchange marked denied
+/// when a later candidate was admitted (skip-to-next-peer on a NO).
+#[tokio::test]
+async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
+    let (manager, seen, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(1, false).await;
+    let (session, admission) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "skip-then-admit".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(admission.error_status().is_none());
+    let mut statuses = Vec::new();
+    for attempt in 1..=2 {
+        let mut selected = request_event(
+            "skip-then-admit".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        let result = manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, attempt == 1)
+            .await;
+        statuses.push(result.error_status());
+    }
+    assert_eq!(statuses, vec![Some(403), None]);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    let state = state.lock().unwrap();
+    assert!(!state.denied, "the admitted attempt decides the exchange");
+    assert!(
+        state.headers.is_empty(),
+        "a skipped deny's headers stay out"
+    );
+    assert_eq!(state.attempt_history.len(), 2);
+    assert_eq!(state.attempt_history[0]["admission_denied"], true);
+    assert!(state.attempt_history[1].get("admission_denied").is_none());
+}
+
+#[test]
+fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
+    let deny = |required_failure, deny_status| PhaseResult {
+        denied: true,
+        required_failure,
+        deny_status,
+        ..Default::default()
+    };
+    assert!(deny(false, None).is_candidate_deny());
+    assert!(deny(false, Some(402)).is_candidate_deny());
+    assert!(!deny(true, None).is_candidate_deny());
+    assert!(
+        !PhaseResult {
+            required_failure: true,
+            ..Default::default()
+        }
+        .is_candidate_deny()
+    );
+    assert!(!PhaseResult::default().is_candidate_deny());
+}

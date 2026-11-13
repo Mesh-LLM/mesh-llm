@@ -9,26 +9,26 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
-index f482ff224785ef153a1a10bdf39362205fb48e14..a62f8f950174905828001a54da12ec23a0d34b47 100644
+index 6f0b32b547e940a17808161762de0a4ccf2f4535..8b80ce07eab489be317302e42118718482dce0cb 100644
 --- a/src/models/metis16.cpp
 +++ b/src/models/metis16.cpp
-@@ -388,6 +388,8 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_m
-     ggml_tensor * ent  = nullptr;
-     ggml_tensor * conf = nullptr;
-     for (int il = 0; il < n_layer; ++il) {
+@@ -273,6 +273,8 @@ void llama_model_metis16::graph::build_pass_layers(const llama_model_metis16 & m
+         const bool is_attn  = !hparams.is_recr(il);
+         const bool writes   = is_attn || il_p == n_phys - 1;
+ 
 +        begin_block(x, il);
 +
+         ggml_tensor * retrieved = bank_k ? mem_read(model, &x) : nullptr;
+         ggml_tensor * feats = route_features(model, stream_mean(x), retrieved, nullptr, history);
  
-         const int p = il / n_phys;
-         if (il % n_phys == 0) {
-@@ -423,6 +425,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) : llm_build_m
-             cb(prev_state, "previous_pass_state", il);
+@@ -341,6 +343,7 @@ void llama_model_metis16::graph::build_pass_layers(const llama_model_metis16 & m
+         if (is_attn) {
+             mem_write(model, x, summ, ent, conf, cont, n_entry++);
          }
-         cb(x, "l_out", il);
 +        end_block(x, il);
      }
+ }
  
-     ggml_tensor * cur = stream_mean(x);
 -- 
-2.54.0
+2.56.0
 

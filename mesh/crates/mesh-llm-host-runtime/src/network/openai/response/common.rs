@@ -134,6 +134,13 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     },
     RetryableTimeout,
     RetryableUnavailable,
+    /// The peer answered 502–504 itself. Treated like `RetryableUnavailable`,
+    /// except that the same host is not retried on a fresh tunnel: the host
+    /// is up and said its backend is not, so the request moves on.
+    RetryableUpstreamUnavailable,
+    RetryableShedding {
+        retry_after: std::time::Duration,
+    },
     RetryableContextOverflow,
     /// The peer answered 402 before any body was relayed: a gate plugin on
     /// that host says this caller cannot pass right now (pay, present
@@ -142,18 +149,46 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     /// the same request through, so the fan-out tries the next one.
     RetryableGateUnsatisfied,
     RetryableResponseQuality(ResponseQualityFailure),
+    /// The response head (and possibly output) already reached the client, so
+    /// the attempt is terminal: nothing is replayed on another target. It is
+    /// still a failed inference, never a success.
     CommittedStreamFailure {
         status_code: u16,
+        cause: CommittedStreamFailureCause,
     },
     ClientDisconnected,
+}
+
+/// Why a committed stream failed. Bounded on purpose: it labels routing
+/// feedback and terminal events, never the backend's own message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::network::openai) enum CommittedStreamFailureCause {
+    /// The upstream stream ended or broke before its terminal frame.
+    Truncated,
+    /// The upstream sent an explicit error frame inside a 200 stream.
+    BackendError,
+}
+
+impl CommittedStreamFailureCause {
+    pub(in crate::network::openai) fn reason(self) -> &'static str {
+        match self {
+            Self::Truncated => "upstream_stream_incomplete",
+            Self::BackendError => "upstream_stream_error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::network::openai) struct ResponseRetryPolicy {
     pub(in crate::network::openai) context_overflow: bool,
     pub(in crate::network::openai) response_quality: bool,
+    /// Retry an uncommitted busy or unavailable response while a fallback exists.
+    pub(in crate::network::openai) availability: bool,
     /// Try the next host on a 402 instead of relaying it.
     pub(in crate::network::openai) gate_unsatisfied: bool,
+    /// The output cap the request set itself. A `length` stop that reached it
+    /// is the reply the caller asked for, not a reason to try the next host.
+    pub(in crate::network::openai) caller_completion_cap: Option<u32>,
 }
 
 impl ResponseRetryPolicy {
@@ -161,7 +196,16 @@ impl ResponseRetryPolicy {
         Self {
             context_overflow: available,
             response_quality: available,
+            availability: available,
             gate_unsatisfied: available,
+            caller_completion_cap: None,
+        }
+    }
+
+    pub(in crate::network::openai) fn with_caller_completion_cap(self, cap: Option<u32>) -> Self {
+        Self {
+            caller_completion_cap: cap,
+            ..self
         }
     }
 }
@@ -174,6 +218,24 @@ pub(in crate::network::openai::response) fn retry_before_relay(
     probe: &super::probe::ResponseProbe,
     retry_policy: ResponseRetryPolicy,
 ) -> Option<RouteAttemptResult> {
+    if retry_policy.availability {
+        if probe.status_code == 429 {
+            let retry_after = super::probe::peer_response_header_value(
+                &probe.buffered,
+                probe.header_end,
+                "retry-after",
+            )
+            .and_then(|value| retry_after_seconds(&value, chrono::Utc::now()))
+            .unwrap_or(2)
+            .min(30);
+            return Some(RouteAttemptResult::RetryableShedding {
+                retry_after: std::time::Duration::from_secs(retry_after),
+            });
+        }
+        if matches!(probe.status_code, 502..=504) {
+            return Some(RouteAttemptResult::RetryableUpstreamUnavailable);
+        }
+    }
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Some(RouteAttemptResult::RetryableContextOverflow);
     }
@@ -183,6 +245,17 @@ pub(in crate::network::openai::response) fn retry_before_relay(
     None
 }
 
+/// `Retry-After` is either delay-seconds or an HTTP-date (RFC 9110 §10.2.3).
+/// A date already past means retry now.
+fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some((at.timestamp() - now.timestamp()).max(0) as u64)
+}
+
 pub(in crate::network::openai) fn route_attempt_result_label(
     result: &RouteAttemptResult,
 ) -> &'static str {
@@ -190,10 +263,19 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::Delivered { .. } => "delivered",
         RouteAttemptResult::RetryableTimeout => "retryable_timeout",
         RouteAttemptResult::RetryableUnavailable => "retryable_unavailable",
+        RouteAttemptResult::RetryableUpstreamUnavailable => "retryable_upstream_unavailable",
+        RouteAttemptResult::RetryableShedding { .. } => "retryable_shedding",
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
         RouteAttemptResult::RetryableGateUnsatisfied => "retryable_gate_unsatisfied",
         RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
-        RouteAttemptResult::CommittedStreamFailure { .. } => "committed_stream_failure",
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: CommittedStreamFailureCause::Truncated,
+            ..
+        } => "committed_stream_failure",
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: CommittedStreamFailureCause::BackendError,
+            ..
+        } => "committed_stream_backend_error",
         RouteAttemptResult::ClientDisconnected => "client_disconnected",
     }
 }
@@ -213,8 +295,12 @@ pub(in crate::network::openai) fn target_health_outcome_for_attempt(
         }
         RouteAttemptResult::Delivered { .. } => TargetHealthOutcome::Rejected,
         RouteAttemptResult::RetryableGateUnsatisfied => TargetHealthOutcome::GateUnsatisfied,
+        RouteAttemptResult::RetryableShedding { retry_after } => TargetHealthOutcome::Shedding {
+            retry_after: *retry_after,
+        },
         RouteAttemptResult::RetryableTimeout => TargetHealthOutcome::Timeout,
-        RouteAttemptResult::RetryableUnavailable => TargetHealthOutcome::Unavailable,
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => TargetHealthOutcome::Unavailable,
         RouteAttemptResult::RetryableContextOverflow => TargetHealthOutcome::ContextOverflow,
         RouteAttemptResult::RetryableResponseQuality(_) => TargetHealthOutcome::Rejected,
         RouteAttemptResult::CommittedStreamFailure { .. } => TargetHealthOutcome::Unavailable,
@@ -335,7 +421,7 @@ pub(in crate::network::openai::response) fn retryable_quality_result(
     if !policy.response_quality {
         return None;
     }
-    let failure = response_quality::failure_from_json_body(body)?;
+    let failure = response_quality::failure_from_json_body(body, policy.caller_completion_cap)?;
     tracing::warn!(
         reason = failure.label(),
         "API proxy: upstream returned retryable low-quality success response before commit"
@@ -380,8 +466,12 @@ pub(in crate::network::openai) fn attempt_outcome_for_result(
             delivered_attempt_outcome(*status_code)
         }
         RouteAttemptResult::RetryableTimeout => crate::network::metrics::AttemptOutcome::Timeout,
-        RouteAttemptResult::RetryableUnavailable => {
+        RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableUpstreamUnavailable => {
             crate::network::metrics::AttemptOutcome::Unavailable
+        }
+        RouteAttemptResult::RetryableShedding { .. } => {
+            crate::network::metrics::AttemptOutcome::Rejected
         }
         RouteAttemptResult::RetryableContextOverflow => {
             crate::network::metrics::AttemptOutcome::ContextOverflow
@@ -437,6 +527,55 @@ mod tests {
     }
 
     #[test]
+    fn busy_headers_retry_before_commit_and_honor_retry_after() {
+        let policy = ResponseRetryPolicy::next_target_available(true);
+        for (value, seconds) in [("7", 7), ("999", 30), ("invalid", 2)] {
+            let mut busy = probe(429);
+            busy.buffered =
+                format!("HTTP/1.1 429 Too Many Requests\r\nRetry-After: {value}\r\n\r\n")
+                    .into_bytes();
+            busy.header_end = busy.buffered.len();
+            assert_eq!(
+                retry_before_relay(&busy, policy),
+                Some(RouteAttemptResult::RetryableShedding {
+                    retry_after: std::time::Duration::from_secs(seconds),
+                })
+            );
+        }
+        for status in [502, 503, 504] {
+            assert_eq!(
+                retry_before_relay(&probe(status), policy),
+                Some(RouteAttemptResult::RetryableUpstreamUnavailable)
+            );
+        }
+        assert_eq!(retry_before_relay(&probe(500), policy), None);
+        assert_eq!(
+            retry_before_relay(
+                &probe(429),
+                ResponseRetryPolicy::next_target_available(false)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn retry_after_accepts_an_http_date() {
+        let now = chrono::DateTime::parse_from_rfc2822("Wed, 21 Oct 2015 07:28:00 GMT")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            retry_after_seconds("Wed, 21 Oct 2015 07:28:12 GMT", now),
+            Some(12)
+        );
+        assert_eq!(
+            retry_after_seconds("Wed, 21 Oct 2015 07:27:00 GMT", now),
+            Some(0)
+        );
+        assert_eq!(retry_after_seconds(" 5 ", now), Some(5));
+        assert_eq!(retry_after_seconds("soon", now), None);
+    }
+
+    #[test]
     fn a_402_moves_to_the_next_host_before_relay_only_while_one_exists() {
         let more_hosts = ResponseRetryPolicy::next_target_available(true);
         let last_host = ResponseRetryPolicy::next_target_available(false);
@@ -447,7 +586,7 @@ mod tests {
         // The last host's 402 is relayed: the client sees the gate's own
         // verdict and headers, never a synthesized error.
         assert_eq!(retry_before_relay(&probe(402), last_host), None);
-        for status in [200, 400, 401, 403, 429, 500, 503] {
+        for status in [200, 400, 401, 403, 500] {
             assert_eq!(
                 retry_before_relay(&probe(status), more_hosts),
                 None,

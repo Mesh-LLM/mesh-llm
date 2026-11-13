@@ -288,12 +288,8 @@ fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
     file.write_all(contents)?;
     file.sync_all()?;
     drop(file);
-    // TODO(windows): this remove+rename sequence is not truly atomic on Windows.
-    // Replace with MoveFileExW(MOVEFILE_REPLACE_EXISTING) or tempfile::persist_noclobber-like behavior.
-    #[cfg(windows)]
-    if target.exists() {
-        std::fs::remove_file(target)?;
-    }
+    // `rename` replaces an existing target on Windows too, so the file is
+    // never missing; removing it first would leave a window without it.
     if let Err(e) = std::fs::rename(&tmp, target) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);

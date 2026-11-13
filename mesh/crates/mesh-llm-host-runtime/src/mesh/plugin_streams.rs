@@ -6,7 +6,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use super::Node;
 use crate::plugin::ChannelRoute;
-use crate::protocol::{STREAM_PLUGIN_MESH_STREAM, read_len_prefixed, write_len_prefixed};
+use crate::protocol::{STREAM_PLUGIN_MESH_STREAM, write_len_prefixed};
 
 pub(crate) fn endpoint_id_from_hex(peer_id: &str) -> Option<EndpointId> {
     let bytes = hex::decode(peer_id).ok()?;
@@ -112,7 +112,7 @@ impl Node {
         send: SendStream,
         mut recv: RecvStream,
     ) -> Result<()> {
-        let buf = read_len_prefixed(&mut recv).await?;
+        let buf = super::pre_admission::read_pre_admission_frame(&mut recv).await?;
         let request = crate::plugin::proto::OpenMeshStreamRequest::decode(buf.as_slice())?;
         if request.plugin_id.is_empty() || request.channel.is_empty() {
             anyhow::bail!("Plugin mesh stream is missing plugin_id or channel");

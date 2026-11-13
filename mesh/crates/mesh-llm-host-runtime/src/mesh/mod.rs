@@ -188,8 +188,8 @@ pub(crate) use peer_state::{
     reason = "public compatibility re-export for existing mesh state callers"
 )]
 pub use peer_state::{
-    DisplayLatency, DisplayLatencySource, MeshCatalogEntry, NodeRole, OwnerRuntimeConfig,
-    PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
+    DisplayLatency, DisplayLatencySource, MeshCatalogEntry, ModelPlacements, NodeRole,
+    OwnerRuntimeConfig, PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
 };
 pub(crate) use plugin_mesh::PluginFrameTelemetry;
 pub(crate) use stage_transport::{

@@ -1,7 +1,7 @@
-From d96bec3062e9d6b566576d2e0a11ccc00b24abf6 Mon Sep 17 00:00:00 2001
+From 58cdd19cdb8f1941e8a019511fa5b3a5c132916c Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
-Subject: [PATCH] skippy: add Whisper speech recognition
+Subject: [PATCH 09/15] skippy: add Whisper speech recognition
 
 Build pinned whisper.cpp on this tree's ggml targets and fold it into
 libllama when SKIPPY_WHISPER_SOURCE_DIR names its source, so the runtime

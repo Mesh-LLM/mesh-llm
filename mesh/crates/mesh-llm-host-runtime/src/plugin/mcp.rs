@@ -579,7 +579,7 @@ mod routed_bridge_tests {
 
         let response = bridge
             .handle_request(
-                "mesh-moa".into(),
+                "test-inference-plugin".into(),
                 "inference/chat_completions".into(),
                 "{}".into(),
             )

@@ -471,6 +471,28 @@ impl RuntimeConfig {
                 .unwrap_or_else(|| "none".to_string()),
         )
     }
+
+    /// Effective decode microbatch for a non-causal projector image chunk,
+    /// mirroring how native context creation resolves the batches: the context
+    /// size bounds n_batch, and n_batch bounds n_ubatch. A projector image
+    /// that does not fit this microbatch is rejected at decode time. A
+    /// ctx_size of 0 means automatic on the native side (it resolves to the
+    /// model's training context, which the runtime does not know here); keep
+    /// the conservative 512-token cap so the automatic configuration still
+    /// bounds the image budget instead of collapsing it to zero.
+    pub(crate) fn projector_decode_batch(&self) -> u32 {
+        self.n_ubatch
+            .unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH)
+            .min(
+                self.n_batch
+                    .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count)),
+            )
+            .min(if self.ctx_size > 0 {
+                self.ctx_size
+            } else {
+                512
+            })
+    }
 }
 
 /// Unified KV is always enabled; the per-lane batch distinction is removed.
@@ -596,6 +618,49 @@ mod tests {
             batch_thread_config.validate(),
             Err("n_threads_batch must be greater than zero when provided")
         );
+    }
+
+    #[test]
+    fn projector_decode_batch_is_bounded_by_ctx_size() {
+        // Native context creation clamps n_batch to n_ctx and n_ubatch to
+        // n_batch; the projector decode cap must fold the context size in too.
+        let small_ctx = RuntimeConfig {
+            ctx_size: 256,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(small_ctx.projector_decode_batch(), 256);
+
+        let batches_smaller_than_ctx = RuntimeConfig {
+            ctx_size: 4096,
+            n_batch: Some(1024),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(batches_smaller_than_ctx.projector_decode_batch(), 512);
+
+        let default_batches_small_ctx = RuntimeConfig {
+            ctx_size: 128,
+            n_batch: None,
+            n_ubatch: None,
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(default_batches_small_ctx.projector_decode_batch(), 128);
+
+        let defaults = RuntimeConfig::default();
+        assert_eq!(
+            defaults.projector_decode_batch(),
+            LLAMA_SERVER_DEFAULT_N_UBATCH.min(SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH)
+        );
+
+        let auto_ctx = RuntimeConfig {
+            ctx_size: 0,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(auto_ctx.projector_decode_batch(), 512);
     }
 
     #[test]

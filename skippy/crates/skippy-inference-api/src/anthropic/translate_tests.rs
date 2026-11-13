@@ -528,3 +528,102 @@ fn error_bodies_map_to_anthropic_kinds() {
         AnthropicMessagesStreamEvent::Error { error } if error.kind == "api_error"
     ));
 }
+
+fn message_json(chat: &GenerationRequest, index: usize) -> serde_json::Value {
+    serde_json::to_value(&chat.messages[index]).expect("message serializes")
+}
+
+#[test]
+fn pdf_documents_become_input_file_parts() {
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": [
+            {"type": "document", "title": "report.pdf", "cache_control": {"type": "ephemeral"},
+             "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
+            {"type": "document", "source": {"type": "file", "file_id": "file_1"}},
+            {"type": "document", "source": {"type": "url", "url": "https://example.com/a.pdf"}},
+            {"type": "text", "text": "summarize"}
+        ]}]
+    }));
+    let message = message_json(&chat, 0);
+    let parts = message["content"].as_array().expect("content parts");
+    assert_eq!(parts[0]["type"], "input_file");
+    assert_eq!(
+        parts[0]["input_file"],
+        json!({
+            "file_data": "data:application/pdf;base64,JVBERi0=",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        })
+    );
+    assert_eq!(parts[1]["input_file"], json!({"file_id": "file_1"}));
+    assert_eq!(
+        parts[2]["input_file"],
+        json!({"file_url": "https://example.com/a.pdf"})
+    );
+    assert_eq!(parts[3], json!({"type": "text", "text": "summarize"}));
+    for part in &parts[..3] {
+        assert_eq!(part[REQUIRES_TRANSFORM_KEY], true, "{part}");
+    }
+}
+
+#[test]
+fn documents_inside_tool_results_are_kept() {
+    // Claude Code's Read tool returns a PDF as a document block.
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 16,
+        "messages": [
+            {"role": "user", "content": "read it"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}
+            ]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1",
+                "content": [{"type": "document", "source":
+                    {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}}]}]}
+        ]
+    }));
+    let tool = message_json(&chat, 2);
+    assert_eq!(tool["role"], "tool");
+    assert_eq!(
+        tool["content"][0]["input_file"]["file_data"],
+        "data:application/pdf;base64,JVBERi0="
+    );
+    assert_eq!(tool["content"][0][REQUIRES_TRANSFORM_KEY], true);
+}
+
+#[test]
+fn text_documents_become_text_and_bad_documents_are_rejected() {
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": [
+            {"type": "document", "citations": {"enabled": false},
+             "source": {"type": "text", "media_type": "text/plain", "data": "notes"}}
+        ]}]
+    }));
+    assert_eq!(
+        crate::message_content_to_text(chat.messages[0].content.as_ref().unwrap()).as_deref(),
+        Some("notes")
+    );
+    for document in [
+        json!({"type": "document"}),
+        json!({"type": "document", "source": {"type": "base64", "data": "x"}}),
+        json!({"type": "document", "source": {"type": "content", "content": []}}),
+        json!({"type": "document", "unknown": 1, "source": {"type": "file", "file_id": "f"}}),
+        json!({"type": "document", "context": "in thousands", "source": {"type": "file", "file_id": "f"}}),
+        json!({"type": "document", "citations": {"enabled": true}, "source": {"type": "file", "file_id": "f"}}),
+    ] {
+        let request = serde_json::from_value(json!({
+            "model": "m",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": [document.clone()]}]
+        }))
+        .expect("request parses");
+        assert!(
+            messages_request_to_generation(request).is_err(),
+            "{document}"
+        );
+    }
+}

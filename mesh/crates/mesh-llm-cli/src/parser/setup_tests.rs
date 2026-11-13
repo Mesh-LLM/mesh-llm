@@ -1,4 +1,4 @@
-use super::{Cli, Command};
+use super::{Cli, Command, SetupArgs};
 use clap::{Parser, error::ErrorKind};
 
 #[test]
@@ -13,14 +13,14 @@ fn setup_command_parses_without_plugin_fallback() {
     ]);
 
     match cli.command.expect("setup command expected") {
-        Command::Setup {
+        Command::Setup(SetupArgs {
             yes,
             no_interactive,
             service,
             no_service,
             skip_runtime,
             verbose,
-        } => {
+        }) => {
             assert!(yes);
             assert!(no_interactive);
             assert!(!service);

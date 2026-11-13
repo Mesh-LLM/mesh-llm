@@ -8,55 +8,70 @@ use anyhow::{Context, Result};
 use super::resolver::{
     DFlashDraft, DFlashPairingIndexPin, DefaultDFlash, check_split_dflash_draft,
     dflash_draft_cache_path, dflash_pairing_index_installed, install_dflash_pairing_index,
-    load_dflash_pairing_index,
 };
 
 /// Brings in the DFlash pairing index this release pins, without waiting.
 ///
-/// A cached index is read from the Hugging Face cache (no network, so it
-/// works offline) and replaces the bootstrap table. A missing one downloads in
-/// the background; this load chooses from the bootstrap table and the next
-/// load from the index. Nothing happens until the index is published and
-/// pinned.
+/// The pin is the index's SHA-256. A cached `index/<sha256>.json` is read from
+/// the Hugging Face cache (no network, so it works offline) and, if its bytes
+/// hash to the pin, replaces the bootstrap table. A missing one downloads from
+/// `main` in the background; this load chooses from the bootstrap table and
+/// the next load from the index. An index that is unreadable or fails its hash
+/// is never used: loads keep choosing from the bootstrap table.
 pub(crate) fn refresh_dflash_pairing_index() {
     if dflash_pairing_index_installed() {
         return;
     }
-    if let Some(pin) = DFlashPairingIndexPin::shipped() {
-        refresh_cached_dflash_pairing_index(
-            &pin.cache_path(),
-            &format!("{}/{}@{}", pin.repo, pin.file, pin.revision),
-            fetch_dflash_pairing_index(pin),
-        );
-    }
+    let pin = DFlashPairingIndexPin::shipped();
+    refresh_cached_dflash_pairing_index(pin, pin.cached_paths(), fetch_dflash_pairing_index(pin));
 }
 
-/// Installs the index cached at `path`, or fetches it in the background.
+/// What [`refresh_cached_dflash_pairing_index`] did.
+#[derive(Debug)]
+enum IndexRefresh {
+    /// A cached copy was installed.
+    Installed,
+    /// No cached copy was usable. The index is being fetched in the
+    /// background if there is a runtime and no fetch of it is running; the
+    /// task resolves to whether the fetched index was installed.
+    Fetching(Option<tokio::task::JoinHandle<bool>>),
+}
+
+/// Installs the first usable index among the `cached` copies, or, when none
+/// is usable, fetches it in the background.
 fn refresh_cached_dflash_pairing_index(
-    path: &Path,
-    key: &str,
+    pin: DFlashPairingIndexPin,
+    cached: Vec<PathBuf>,
     fetch: impl Future<Output = Result<PathBuf>> + Send + 'static,
-) {
-    if path.is_file() {
-        let Err(error) = install_cached_dflash_pairing_index(path) else {
-            return;
+) -> IndexRefresh {
+    for path in cached {
+        let Err(error) = install_cached_dflash_pairing_index(pin, &path) else {
+            return IndexRefresh::Installed;
         };
-        // A partial or corrupt download: remove it so a fresh one replaces it.
+        // A partial, corrupt or wrong download: remove it so a fresh one
+        // replaces it.
         tracing::warn!(
             index = %path.display(),
-            "DFlash pairing index unusable, choosing from the bootstrap table: {error:#}"
+            "DFlash pairing index unusable: {error:#}"
         );
-        discard_cached_artifact(path);
+        discard_cached_artifact(&path);
     }
-    draft_cached_or_fetch(path, key, async move {
-        let path = fetch.await?;
-        install_cached_dflash_pairing_index(&path)?;
-        Ok(path)
-    });
+    tracing::info!("no usable DFlash pairing index cached; choosing from the bootstrap table");
+    IndexRefresh::Fetching(fetch_in_background(
+        &pairing_index_fetch_key(pin),
+        async move {
+            let path = fetch.await?;
+            if let Err(error) = install_cached_dflash_pairing_index(pin, &path) {
+                discard_cached_artifact(&path);
+                return Err(error);
+            }
+            Ok(path)
+        },
+    ))
 }
 
-fn install_cached_dflash_pairing_index(path: &Path) -> Result<()> {
-    let index = load_dflash_pairing_index(path)?;
+fn install_cached_dflash_pairing_index(pin: DFlashPairingIndexPin, path: &Path) -> Result<()> {
+    let index = pin.load(path)?;
     tracing::info!(
         index = %path.display(),
         pairings = index.pairings.len(),
@@ -66,17 +81,27 @@ fn install_cached_dflash_pairing_index(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn pairing_index_fetch_key(pin: DFlashPairingIndexPin) -> String {
+    format!(
+        "{}/{}@{}",
+        pin.repo,
+        pin.file(),
+        DFlashPairingIndexPin::REVISION
+    )
+}
+
 async fn fetch_dflash_pairing_index(pin: DFlashPairingIndexPin) -> Result<PathBuf> {
+    let file = pin.file();
     Ok(
         crate::models::catalog::download_hf_repo_file_with_progress_label(
             pin.repo,
-            Some(pin.revision),
-            pin.file,
-            &format!("DFlash pairing index {}@{}", pin.repo, pin.revision),
+            Some(DFlashPairingIndexPin::REVISION),
+            &file,
+            &format!("DFlash pairing index {}/{file}", pin.repo),
             false,
         )
         .await
-        .with_context(|| format!("download {}/{}@{}", pin.repo, pin.file, pin.revision))?
+        .with_context(|| format!("download {}", pairing_index_fetch_key(pin)))?
         .path,
     )
 }
@@ -319,37 +344,54 @@ fn draft_cached_or_fetch(
     if path.is_file() {
         return true;
     }
+    fetch_in_background(key, fetch);
+    false
+}
+
+/// The keys of the background fetches still running.
+fn in_flight_fetches() -> &'static Mutex<HashSet<String>> {
     static IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    let in_flight = IN_FLIGHT.get_or_init(Default::default);
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        return false;
-    };
+    IN_FLIGHT.get_or_init(Default::default)
+}
+
+/// Starts `fetch` in the background, once per `key` at a time, unless there is
+/// no runtime to run it on. The task resolves to whether `fetch` succeeded.
+fn fetch_in_background(
+    key: &str,
+    fetch: impl Future<Output = Result<PathBuf>> + Send + 'static,
+) -> Option<tokio::task::JoinHandle<bool>> {
+    let in_flight = in_flight_fetches();
+    let runtime = tokio::runtime::Handle::try_current().ok()?;
     let key = key.to_string();
     if !in_flight
         .lock()
         .is_ok_and(|mut keys| keys.insert(key.clone()))
     {
-        return false;
+        return None;
     }
     tracing::info!(
         artifact = key,
         "DFlash artifact is not cached; downloading it in the background, and this load goes on without it"
     );
-    runtime.spawn(async move {
-        match fetch.await {
-            Ok(path) => tracing::info!(
-                artifact = %path.display(),
-                "DFlash artifact downloaded; the next load uses it"
-            ),
-            Err(error) => {
-                tracing::warn!(artifact = key, "DFlash artifact download failed: {error:#}")
+    Some(runtime.spawn(async move {
+        let fetched = match fetch.await {
+            Ok(path) => {
+                tracing::info!(
+                    artifact = %path.display(),
+                    "DFlash artifact downloaded; the next load uses it"
+                );
+                true
             }
-        }
+            Err(error) => {
+                tracing::warn!(artifact = key, "DFlash artifact download failed: {error:#}");
+                false
+            }
+        };
         if let Ok(mut keys) = in_flight.lock() {
             keys.remove(&key);
         }
-    });
-    false
+        fetched
+    }))
 }
 
 async fn fetch_dflash_draft(draft: &DFlashDraft) -> Result<PathBuf> {
@@ -606,27 +648,139 @@ mod tests {
         );
     }
 
+    /// The checked-in index this release pins. Its pairings resolve the
+    /// default targets as the bootstrap table does, so installing it leaves
+    /// other tests' defaults as they were.
+    fn checked_in_index() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../mesh-llm-skippy-adapter/data/dflash-pairings/index.json")
+    }
+
+    /// The checked-in index's pin under a repo nothing else fetches, so a
+    /// test's fetch key never meets a real refresh's.
+    const TEST_PIN: DFlashPairingIndexPin = DFlashPairingIndexPin {
+        repo: "test/dflash-pairings",
+        sha256: mesh_llm_skippy_adapter::config::DFLASH_PAIRING_INDEX_SHA256,
+    };
+
+    /// A pin no published index hashes to, under the same test repo.
+    const OTHER_PIN: DFlashPairingIndexPin = DFlashPairingIndexPin {
+        repo: "test/dflash-pairings",
+        sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+    };
+
+    /// The background fetch a refresh started; it resolves to whether the
+    /// fetched index was installed.
+    async fn fetched(refresh: IndexRefresh) -> bool {
+        let IndexRefresh::Fetching(Some(task)) = refresh else {
+            panic!("expected a background fetch, got {refresh:?}");
+        };
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("background fetch did not finish")
+            .unwrap()
+    }
+
     #[test]
     fn a_cached_pairing_index_is_installed_offline() {
-        // The checked-in index is the bootstrap table, so installing it leaves
-        // other tests' defaults as they were.
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../skippy/evals/dflash-pairings/index.json");
+        let pin = TEST_PIN;
         let cache = tempfile::tempdir().unwrap();
         let bad = cache.path().join("bad.json");
         std::fs::write(&bad, "{\"schema_version\": 1, \"pairings\": [{}]}").unwrap();
         // An unusable cached index is removed, so a later load fetches it again.
-        refresh_cached_dflash_pairing_index(&bad, "test/bad-index", async {
-            unreachable!("no runtime, so no fetch")
-        });
+        assert!(matches!(
+            refresh_cached_dflash_pairing_index(pin, vec![bad.clone()], async {
+                unreachable!("no runtime, so no fetch")
+            }),
+            IndexRefresh::Fetching(None)
+        ));
         assert!(!bad.exists());
-        let cached = cache.path().join("index.json");
-        std::fs::copy(checked_in, &cached).unwrap();
+        let cached = cache.path().join(pin.file());
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::copy(checked_in_index(), &cached).unwrap();
+        // A corrupt copy in one snapshot does not hide a good one in another.
+        let corrupt = cache.path().join("corrupt.json");
+        std::fs::write(&corrupt, "corrupt").unwrap();
         // No runtime and a fetch that must not run: the cache alone serves.
-        refresh_cached_dflash_pairing_index(&cached, "test/index", async {
-            unreachable!("a cached index is never fetched")
-        });
+        assert!(matches!(
+            refresh_cached_dflash_pairing_index(
+                pin,
+                vec![corrupt.clone(), cached.clone()],
+                async { unreachable!("a cached index is never fetched") }
+            ),
+            IndexRefresh::Installed
+        ));
         assert!(dflash_pairing_index_installed());
+        assert!(!corrupt.exists());
+        assert!(cached.exists());
+    }
+
+    #[test]
+    fn a_cached_index_that_fails_its_hash_falls_back_to_the_bootstrap_table() {
+        let cache = tempfile::tempdir().unwrap();
+        // A valid index, but not the one the pin names.
+        let cached = cache.path().join(OTHER_PIN.file());
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::copy(checked_in_index(), &cached).unwrap();
+        let error = install_cached_dflash_pairing_index(OTHER_PIN, &cached)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("expected"), "{error}");
+        // Not installed, so loads keep choosing from the bootstrap table, and
+        // removed, so a later load fetches it again.
+        assert!(matches!(
+            refresh_cached_dflash_pairing_index(OTHER_PIN, vec![cached.clone()], async {
+                unreachable!("no runtime, so no fetch")
+            }),
+            IndexRefresh::Fetching(None)
+        ));
+        assert!(!cached.exists());
+    }
+
+    #[test]
+    fn the_pairing_index_is_fetched_by_its_hash_from_main() {
+        let pin = DFlashPairingIndexPin::shipped();
+        assert_eq!(
+            pairing_index_fetch_key(pin),
+            format!(
+                "meshllm/dflash-pairings/index/{}.json@main",
+                mesh_llm_skippy_adapter::config::DFLASH_PAIRING_INDEX_SHA256
+            )
+        );
+        assert_ne!(
+            pairing_index_fetch_key(pin),
+            pairing_index_fetch_key(TEST_PIN)
+        );
+        assert_ne!(
+            pairing_index_fetch_key(TEST_PIN),
+            pairing_index_fetch_key(OTHER_PIN)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fetched_pairing_index_is_installed_only_if_it_hashes_to_the_pin() {
+        let snapshot = tempfile::tempdir().unwrap();
+
+        // A download whose bytes do not hash to the pin is discarded.
+        let wrong = snapshot.path().join(OTHER_PIN.file());
+        std::fs::create_dir_all(wrong.parent().unwrap()).unwrap();
+        std::fs::copy(checked_in_index(), &wrong).unwrap();
+        let download = wrong.clone();
+        let refresh =
+            refresh_cached_dflash_pairing_index(OTHER_PIN, Vec::new(), async move { Ok(download) });
+        assert!(!fetched(refresh).await);
+        assert!(!wrong.exists());
+
+        // The pinned download is installed: the fetch reports its install,
+        // whatever other tests did to the process-wide index.
+        let right = snapshot.path().join(TEST_PIN.file());
+        std::fs::copy(checked_in_index(), &right).unwrap();
+        let download = right.clone();
+        let refresh =
+            refresh_cached_dflash_pairing_index(TEST_PIN, Vec::new(), async move { Ok(download) });
+        assert!(fetched(refresh).await);
+        assert!(dflash_pairing_index_installed());
+        assert!(right.exists());
     }
 
     #[test]

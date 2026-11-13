@@ -88,10 +88,28 @@ impl Node {
             serving_models.clear();
             hosted_models.clear();
         }
-        let advertised_model_throughput = self
+        let mut advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
         let now_unix_ms = current_time_unix_ms();
+        // Each hinted model also carries this node's calibrated prefill rate, so
+        // a router can cost the node cold, not only when it holds a cache hit.
+        {
+            let inventory = self
+                .cache_affinity_inventory
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for hint in &mut advertised_model_throughput {
+                hint.prefill = inventory.model_prefill_measurement(&hint.model_name).map(
+                    |(micros_per_token, observed_at)| crate::network::metrics::PrefillMeasurement {
+                        micros_per_token,
+                        observed_at_unix_ms: now_unix_ms.saturating_sub(
+                            u64::try_from(observed_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        ),
+                    },
+                );
+            }
+        }
         let cache_affinity = mesh_llm_membership::local_advertisement(
             &self.cache_affinity_inventory,
             self.endpoint.id().as_bytes(),

@@ -471,6 +471,7 @@ mod tests {
                 name: Some("lab".to_string()),
                 region: Some("LAN".to_string()),
                 mesh_id: mesh_id.map(str::to_string),
+                publisher_serves: None,
             },
             publisher_npub: publisher.to_string(),
             published_at: current_unix_secs(),

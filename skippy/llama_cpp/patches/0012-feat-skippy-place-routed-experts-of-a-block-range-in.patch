@@ -1,7 +1,7 @@
-From 85bf84039958989b16f16fa0fcb407037579cc00 Mon Sep 17 00:00:00 2001
+From 3afefc726a3c5c31a2e810e744984abb3c444ac0 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 16 Oct 2026 19:21:00 +0300
-Subject: [PATCH 12/15] feat(skippy): place routed experts of a block range in
+Subject: [PATCH 12/16] feat(skippy): place routed experts of a block range in
  host memory
 
 Add host_expert_layer_start/end to skippy_runtime_config. When the range

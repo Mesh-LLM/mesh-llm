@@ -1,5 +1,5 @@
 ---
-name: MeshLLM UI Preview
+name: MeshLLM Console
 description: A compact operations console for governing distributed local AI inference.
 colors:
   background-dark: 'oklch(0.17 0.015 250)'
@@ -133,7 +133,7 @@ components:
 
 **Creative North Star: "The Control Room Ledger"**
 
-MeshLLM UI Preview is a private operations console for people turning heterogeneous local hardware into a legible inference mesh. It should feel compact, exact, and repeatable under pressure: an operator can inspect node health, model routing, VRAM allocation, API status, configuration, and chat movement without losing command of the system.
+MeshLLM Console is a private operations console for people turning heterogeneous local hardware into a legible inference mesh. It should feel compact, exact, and repeatable under pressure: an operator can inspect node health, model routing, VRAM allocation, API status, configuration, and chat movement without losing command of the system.
 
 The product is not a consumer chat app, marketing analytics dashboard, or theatrical AI surface. It earns trust by making infrastructure governable: peers, endpoints, capacities, routes, warnings, and live packets stay readable at production density. Dark and light themes are both first-class operating modes, with the same hierarchy and seriousness.
 

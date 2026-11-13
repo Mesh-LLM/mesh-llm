@@ -15,7 +15,6 @@ pub(super) fn named_model_route(
     {
         AutoRouteResolution::Continue {
             effective_model: Some(model.to_owned()),
-            classification: None,
         }
     } else {
         explicit_model_route(request, model, descriptors)
@@ -339,6 +338,7 @@ mod tests {
             affinity: &affinity,
             plugin_manager: None,
             requested_by_node_id: None,
+            automatic_retry: None,
             exchange_channel: None,
         };
         let ready = ready_targets(&ctx, "cold", "/v1/chat/completions", false, &[])

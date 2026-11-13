@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index 1bf25eacf7303f8ec891bff9e9c19b47e08b6ac3..1cfd443697321154e1f68bf136d5b872ae9501a2 100644
+index 0f4029bdbaeb1b2515462821b1e846dacbd9c220..e903e355436440a48797cc92f083b7b7954996cb 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
-@@ -188,6 +188,8 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
+@@ -191,6 +191,8 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
      const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 1bf25eacf7303f8ec891bff9e9c19b47e08b6ac3..1cfd443697321154e1f68bf136d5b872
          const int64_t n_head_il   = hparams.n_head(il);
          const int64_t n_head_kv_il = hparams.n_head_kv(il);
  
-@@ -315,6 +317,7 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
+@@ -320,6 +322,7 @@ llama_model_laguna::graph::graph(const llm_graph_params & params) : llm_graph_co
          cb(cur, "l_out", il);
  
          inpL = cur;
