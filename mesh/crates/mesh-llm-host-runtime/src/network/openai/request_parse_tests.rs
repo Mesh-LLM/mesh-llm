@@ -327,7 +327,10 @@ async fn compact_expansion_over_body_limit_is_rejected_without_plugins() {
 async fn responses_continuation_is_restored_at_ingress_before_worker_routing() {
     let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
     let first = read_loopback_responses_request(
-        serde_json::json!({"model": "m", "input": "use the weather tool"}),
+        serde_json::json!({
+            "model": "m", "input": "use the weather tool",
+            "tools": [{"type":"function","name":"weather"}]
+        }),
         "",
         store.clone(),
     )
@@ -387,6 +390,68 @@ async fn responses_continuation_is_restored_at_ingress_before_worker_routing() {
     assert_eq!(
         inference.body().error.code.as_deref(),
         Some("previous_response_not_found")
+    );
+}
+
+#[tokio::test]
+async fn mesh_ingress_keeps_full_tools_but_owns_allowed_output_policy() {
+    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let body = serde_json::to_vec(&serde_json::json!({
+        "model":"m", "input":"use safe",
+        "tools":[
+            {"type":"function","name":"safe","parameters":{"type":"object"}},
+            {"type":"function","name":"admin","description":"retained for backend"}
+        ],
+        "tool_choice":{"type":"allowed_tools","tools":[
+            {"type":"function","name":"safe"}
+        ]}
+    }))
+    .unwrap();
+    let request = rewrite_request_body_for_forwarding(
+        "/v1/responses",
+        &body,
+        None,
+        Transformer {
+            plugins: None,
+            private_hint: false,
+            node_limit: None,
+        },
+        true,
+        Some(skippy_inference_api::responses::ResponseContinuation::new(
+            Some(store.clone()),
+            Some(skippy_inference_api::responses::CallerScope::LocalHost),
+        )),
+    )
+    .await
+    .unwrap();
+    assert_eq!(request.body_json.as_ref().unwrap()["tool_choice"], "auto");
+    assert_eq!(
+        request.body_json.as_ref().unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        request.body_json.as_ref().unwrap()["tools"][1]["function"]["description"],
+        "retained for backend"
+    );
+    let turn = request.responses_turn.expect("Mesh ingress owns the turn");
+    let id = turn.id().to_string();
+    let response = turn.finish_chat_completion(&serde_json::json!({
+        "choices":[{"message":{"tool_calls":[{
+            "id":"c","type":"function","function":{"name":"admin","arguments":"{}"}
+        }]},"finish_reason":"tool_calls"}]
+    }));
+    assert_eq!(response["status"], "failed");
+    assert_eq!(response["error"]["code"], "tool_choice_violation");
+    assert!(
+        store
+            .get(
+                &skippy_inference_api::responses::CallerScope::LocalHost,
+                &id
+            )
+            .is_err()
     );
 }
 

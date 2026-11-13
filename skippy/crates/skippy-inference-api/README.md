@@ -100,7 +100,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `temperature`, `top_p`, `seed` | Supported | Stage backend passes supported sampling controls to llama.cpp sampling. |
 | penalties / `logit_bias` | Supported | Presence/frequency/repeat penalties and token-id logit bias are passed to llama.cpp. |
 | `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether logits/probability data can be produced. |
-| `tools` / `tool_choice` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether tool-call generation is available. |
+| `tools` / `tool_choice` | Responses-enforced; Chat backend-gated | Responses validates function identifiers and references at ingress. Its `allowed_tools` keeps the complete `tools` array visible to the backend, reduces only the backend choice to its effective mode, and rejects terminal calls outside the original allowed set. Chat Completions preserves tool settings; the backend decides generation support. |
 | `response_format` | Frontend-compatible | Text and structured-output shapes are parsed and preserved. Backend decides whether constrained decoding is available. |
 | OpenAI-style error envelope | Supported | Includes strict `type`, `param`, and `code` fields. |
 | OpenAI-style HTTP fallbacks | Supported | Unknown routes, unsupported methods, invalid JSON, and oversized JSON return the shared error envelope. |
@@ -123,6 +123,18 @@ output transcript for `previous_response_id`. Effective generation controls
 inherit when omitted and explicit child values override them; instructions are
 per-turn and never inherit. Failed and incomplete turns are never retained. The
 store is bounded, in-memory, and caller-scoped.
+
+Tool authorization belongs to that ingress-owned turn. Continuations inherit
+the original `allowed_tools` object, including an omitted `mode` defaulting to
+`auto`; response resources echo that effective mode while backend requests
+retain every declared schema. JSON output is validated before storage. SSE and
+WebSocket streams quarantine the bounded suffix beginning with the first tool
+fragment, assemble the complete function name, ID, and string arguments, then
+atomically replay only authorized calls. A rejection emits a gap-free failed
+terminal, exposes no executable call event, and updates neither shared nor
+connection-local continuation state. `required` is enforced on completed
+responses; an incomplete response may end without a call. `none` rejects any
+tool-call fragment.
 
 `GET /v1/responses` upgrades the standalone Axum frontend to the April 2026
 Open Responses WebSocket transport. It processes exactly one turn at a time,

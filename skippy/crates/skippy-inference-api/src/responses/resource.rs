@@ -84,6 +84,17 @@ impl ResponseEnvelope {
                 }
             }
         }
+        // Request `allowed_tools.mode` is optional, while the resource form
+        // requires the effective mode. Echo the specified default explicitly.
+        if let Some(choice) = fields
+            .get_mut("tool_choice")
+            .and_then(Value::as_object_mut)
+            .filter(|choice| choice.get("type").and_then(Value::as_str) == Some("allowed_tools"))
+        {
+            choice
+                .entry("mode")
+                .or_insert_with(|| Value::String("auto".into()));
+        }
         Self { fields }
     }
 

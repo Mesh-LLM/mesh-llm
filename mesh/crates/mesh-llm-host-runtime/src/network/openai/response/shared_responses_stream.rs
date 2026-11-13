@@ -479,6 +479,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_mesh_relay_quarantines_fragmented_unauthorized_name() {
+        let store = Arc::new(ResponseStore::default());
+        let mut request = serde_json::json!({
+            "model":"m", "input":"safe only",
+            "tools":[
+                {"type":"function","name":"safe"},
+                {"type":"function","name":"safe_admin"}
+            ],
+            "tool_choice":{"type":"allowed_tools","tools":[
+                {"type":"function","name":"safe"}
+            ]}
+        });
+        let turn = Arc::new(
+            ResponsesTurn::prepare(
+                &mut request,
+                ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost)),
+            )
+            .unwrap(),
+        );
+        let id = turn.id().to_string();
+        let upstream = concat!(
+            "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"safe\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"_admin\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (wire, result) = run(upstream, turn).await;
+        assert!(matches!(
+            result,
+            RouteAttemptResult::CommittedStreamFailure { .. }
+        ));
+        assert!(wire.contains("event: response.failed"), "{wire}");
+        assert!(wire.contains("tool_choice_violation"), "{wire}");
+        assert!(
+            !wire.contains("event: response.output_item.added"),
+            "{wire}"
+        );
+        assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+
+        let sequence_numbers: Vec<u64> = wire
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|event| event["sequence_number"].as_u64())
+            .collect();
+        assert_eq!(
+            sequence_numbers,
+            (0..sequence_numbers.len() as u64).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
     async fn premature_upstream_eof_emits_failed_terminal_and_retains_nothing() {
         let store = Arc::new(ResponseStore::default());
         let turn = turn(&store);

@@ -16,7 +16,11 @@ use super::resource::{
     ResponseError, ResponseStatus, ResponsesUsage, function_call_item, message_item, new_item_id,
     reasoning_item, responses_logprobs,
 };
+use super::tools::{MAX_TOOL_CALLS, MAX_TOOL_NAME_BYTES, ToolOutputViolation};
 use super::turn::ResponsesTurn;
+use replay::{EventBuffer, ReplayLimit, ReplayLimits};
+
+mod replay;
 
 /// Maximum reconstructed text, reasoning, tool-call and logprob state held by
 /// one active response before it fails closed.
@@ -58,8 +62,9 @@ struct CallSlot {
 #[derive(Debug, Default)]
 struct PendingCall {
     call_id: Option<String>,
-    name: Option<String>,
+    name: String,
     arguments: String,
+    arguments_seen: bool,
     output_index: Option<usize>,
 }
 
@@ -72,6 +77,10 @@ pub struct ResponsesStream {
     /// The output index of the reasoning or message item still streaming.
     open: Option<usize>,
     calls: BTreeMap<u64, PendingCall>,
+    quarantined_choices: Vec<Value>,
+    quarantined_bytes: usize,
+    max_quarantined_event_bytes: usize,
+    max_quarantined_events: usize,
     usage: Option<ResponsesUsage>,
     finish_reason: Option<String>,
     active_output_bytes: usize,
@@ -89,6 +98,10 @@ impl ResponsesStream {
             output: Vec::new(),
             open: None,
             calls: BTreeMap::new(),
+            quarantined_choices: Vec::new(),
+            quarantined_bytes: 0,
+            max_quarantined_event_bytes: replay::MAX_REPLAY_EVENT_BYTES,
+            max_quarantined_events: replay::MAX_REPLAY_EVENTS,
             usage: None,
             finish_reason: None,
             active_output_bytes: 0,
@@ -115,38 +128,32 @@ impl ResponsesStream {
 
     /// `response.created` and `response.in_progress`. Idempotent.
     pub fn start(&mut self) -> Vec<ResponsesStreamEvent> {
-        let mut events = Vec::new();
-        self.start_into(&mut events);
-        events
+        let mut events = EventBuffer::unbounded(self.sequence_number);
+        self.start_into(&mut events)
+            .expect("unbounded event buffer accepts response start");
+        self.accept(events)
     }
 
-    fn start_into(&mut self, events: &mut Vec<ResponsesStreamEvent>) {
+    fn start_into(&mut self, events: &mut EventBuffer) -> Result<(), ReplayLimit> {
         if self.started {
-            return;
+            return Ok(());
         }
         self.started = true;
         let response = self
             .turn
             .response(ResponseStatus::InProgress, &[], None, None);
-        self.emit(
-            events,
-            "response.created",
-            json!({"response": response.clone()}),
-        );
-        self.emit(
-            events,
-            "response.in_progress",
-            json!({"response": response}),
-        );
+        events.emit("response.created", json!({"response": response.clone()}))?;
+        events.emit("response.in_progress", json!({"response": response}))
     }
 
     /// Events for one parsed Chat Completions stream chunk.
     pub fn push_chunk(&mut self, chunk: &Value) -> Vec<ResponsesStreamEvent> {
-        let mut events = Vec::new();
+        let mut events = EventBuffer::unbounded(self.sequence_number);
         if self.terminated {
-            return events;
+            return events.into_events();
         }
-        self.start_into(&mut events);
+        self.start_into(&mut events)
+            .expect("unbounded event buffer accepts response start");
         if let Some(usage) = chunk.get("usage").and_then(ResponsesUsage::from_chat_value) {
             self.usage = Some(usage);
         }
@@ -155,9 +162,8 @@ impl ResponsesStream {
             .and_then(Value::as_array)
             .and_then(|choices| choices.first())
         else {
-            return events;
+            return self.accept(events);
         };
-        let delta = choice.get("delta");
         let retained_bytes = retained_chunk_bytes(choice);
         if self.active_output_bytes.saturating_add(retained_bytes) > self.max_output_bytes {
             return self.fail_into(
@@ -167,6 +173,27 @@ impl ResponsesStream {
             );
         }
         self.active_output_bytes += retained_bytes;
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            self.finish_reason = Some(reason.to_string());
+        }
+        if !self.quarantined_choices.is_empty() || has_tool_call_fragment(choice) {
+            if let Err(violation) = self.quarantine_choice(choice, retained_bytes) {
+                return self.fail_into(events, violation.code, violation.message);
+            }
+            return self.accept(events);
+        }
+        self.process_choice(&mut events, choice, false)
+            .expect("unbounded event buffer accepts choice events");
+        self.accept(events)
+    }
+
+    fn process_choice(
+        &mut self,
+        events: &mut EventBuffer,
+        choice: &Value,
+        replaying_quarantine: bool,
+    ) -> Result<(), ReplayLimit> {
+        let delta = choice.get("delta");
         let phase = delta
             .and_then(|delta| delta.get("phase"))
             .and_then(Value::as_str)
@@ -178,7 +205,7 @@ impl ResponsesStream {
                 .filter(|text| !text.is_empty())
         };
         if let Some(reasoning) = text_of("reasoning_content") {
-            self.push_reasoning(&mut events, reasoning);
+            self.push_reasoning(events, reasoning)?;
         }
         if let Some(text) = text_of("content") {
             let logprobs = choice
@@ -188,33 +215,33 @@ impl ResponsesStream {
                 .map(responses_logprobs)
                 .and_then(|value| value.as_array().cloned())
                 .unwrap_or_default();
-            self.push_text(&mut events, text, logprobs, phase);
+            self.push_text(events, text, logprobs, phase)?;
         } else if let Some(phase) = phase {
-            self.open_message(&mut events, Some(phase));
+            self.open_message(events, Some(phase))?;
         }
         if let Some(calls) = delta
             .and_then(|delta| delta.get("tool_calls"))
             .and_then(Value::as_array)
         {
             for call in calls {
-                self.push_call(&mut events, call);
+                if replaying_quarantine {
+                    self.push_call(events, call)?;
+                }
             }
         }
-        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-            self.finish_reason = Some(reason.to_string());
-        }
-        events
+        Ok(())
     }
 
     /// Close every item and emit the terminal event for a stream that ended
     /// normally. A completed response is saved for continuation here, from
     /// the same shared path for every route.
     pub fn finish(&mut self) -> Vec<ResponsesStreamEvent> {
-        let mut events = Vec::new();
+        let mut events = EventBuffer::unbounded(self.sequence_number);
         if self.terminated {
-            return events;
+            return events.into_events();
         }
-        self.start_into(&mut events);
+        self.start_into(&mut events)
+            .expect("unbounded event buffer accepts response start");
         if self.finish_reason.is_none() {
             return self.fail_into(
                 events,
@@ -230,19 +257,26 @@ impl ResponsesStream {
             );
         }
         let status = ResponseStatus::from_finish_reason(self.finish_reason.as_deref());
-        self.close_open(&mut events, status);
-        // A call the model never named cannot be announced complete.
-        let unnamed: Vec<u64> = self
-            .calls
-            .iter()
-            .filter(|(_, call)| call.output_index.is_none())
-            .map(|(index, _)| *index)
-            .collect();
-        for index in unnamed {
-            if let Some(call) = self.calls.get_mut(&index) {
-                call.name.get_or_insert_with(|| "tool".to_string());
-            }
-            self.announce_call(&mut events, index);
+        if let Err(violation) = self.validate_quarantined_calls(status) {
+            return self.fail_into(events, violation.code, violation.message);
+        }
+        let mut accepted = self.accept(events);
+        let limits = ReplayLimits {
+            max_bytes: self.max_quarantined_event_bytes,
+            max_events: self.max_quarantined_events,
+        };
+        let mut suffix = if self.quarantined_choices.is_empty() {
+            EventBuffer::unbounded(self.sequence_number)
+        } else {
+            EventBuffer::bounded(self.sequence_number, limits)
+        };
+        if self.replay_quarantine(&mut suffix).is_err() {
+            accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+            return accepted;
+        }
+        if self.close_open(&mut suffix, status).is_err() {
+            accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+            return accepted;
         }
         let call_indexes: Vec<usize> = self
             .calls
@@ -250,72 +284,200 @@ impl ResponsesStream {
             .filter_map(|call| call.output_index)
             .collect();
         for output_index in call_indexes {
-            self.close_call(&mut events, output_index, status);
+            if self.close_call(&mut suffix, output_index, status).is_err() {
+                accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+                return accepted;
+            }
         }
         if self.output.is_empty() {
             // A response always says something, even if it is empty.
-            self.open_message(&mut events, None);
-            self.close_open(&mut events, status);
+            if self.open_message(&mut suffix, None).is_err()
+                || self.close_open(&mut suffix, status).is_err()
+            {
+                accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+                return accepted;
+            }
         }
         let output = self.output_items(status);
-        let response = self.turn.finish(status, &output, self.usage);
+        let staged = match self.turn.stage_finish(status, output, self.usage) {
+            Ok(staged) => staged,
+            Err(violation) => {
+                accepted.extend(self.fail(violation.code, violation.message));
+                return accepted;
+            }
+        };
         let event = match status {
             ResponseStatus::Incomplete(_) => "response.incomplete",
             _ => "response.completed",
         };
-        self.emit(&mut events, event, json!({"response": response}));
+        if suffix
+            .emit(event, json!({"response": staged.response()}))
+            .is_err()
+        {
+            accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+            return accepted;
+        }
+        let stored = staged.commit_storage();
+        patch_response_store(suffix.events_mut(), stored);
         self.terminated = true;
-        events
+        accepted.extend(self.accept(suffix));
+        accepted
+    }
+
+    fn quarantine_choice(
+        &mut self,
+        choice: &Value,
+        retained_bytes: usize,
+    ) -> Result<(), ToolOutputViolation> {
+        if self.quarantined_choices.len() >= self.max_quarantined_events
+            || self.quarantined_bytes.saturating_add(retained_bytes)
+                > self.max_quarantined_event_bytes
+        {
+            return Err(quarantine_limit());
+        }
+        if let Some(calls) = choice
+            .get("delta")
+            .and_then(|delta| delta.get("tool_calls"))
+        {
+            let calls = calls.as_array().ok_or_else(malformed_stream_call)?;
+            let mut chunk_indexes = std::collections::BTreeSet::new();
+            for call in calls {
+                let index = call
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(malformed_stream_call)?;
+                if !chunk_indexes.insert(index) {
+                    return Err(malformed_stream_call());
+                }
+                self.accumulate_call(index, call)?;
+            }
+        }
+        self.quarantined_bytes += retained_bytes;
+        self.quarantined_choices.push(choice.clone());
+        Ok(())
+    }
+
+    fn accumulate_call(&mut self, index: u64, call: &Value) -> Result<(), ToolOutputViolation> {
+        if !self.calls.contains_key(&index) && self.calls.len() >= MAX_TOOL_CALLS {
+            return Err(ToolOutputViolation::new(
+                "tool_call_limit_exceeded",
+                "upstream response exceeded the tool-call limit",
+            ));
+        }
+        let call = call.as_object().ok_or_else(malformed_stream_call)?;
+        if call
+            .get("type")
+            .is_some_and(|kind| kind.as_str() != Some("function"))
+            || call.contains_key("name")
+            || call.contains_key("arguments")
+        {
+            return Err(malformed_stream_call());
+        }
+        let pending = self.calls.entry(index).or_default();
+        if let Some(id) = call.get("id") {
+            let id = id
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(malformed_stream_call)?;
+            if pending.call_id.is_some() {
+                return Err(malformed_stream_call());
+            }
+            pending.call_id.get_or_insert_with(|| id.to_string());
+        }
+        let Some(function) = call.get("function") else {
+            return Ok(());
+        };
+        let function = function.as_object().ok_or_else(malformed_stream_call)?;
+        if let Some(name) = function.get("name") {
+            let name = name.as_str().ok_or_else(malformed_stream_call)?;
+            pending.name.push_str(name);
+            if pending.name.len() > MAX_TOOL_NAME_BYTES {
+                return Err(malformed_stream_call());
+            }
+        }
+        if let Some(arguments) = function.get("arguments") {
+            pending.arguments_seen = true;
+            pending
+                .arguments
+                .push_str(arguments.as_str().ok_or_else(malformed_stream_call)?);
+        }
+        Ok(())
+    }
+
+    fn validate_quarantined_calls(
+        &self,
+        status: ResponseStatus,
+    ) -> Result<(), ToolOutputViolation> {
+        self.turn.validate_stream_tool_calls(
+            status,
+            !self.calls.is_empty(),
+            self.calls.values().map(|call| call.name.as_str()),
+        )?;
+        let mut call_ids = std::collections::BTreeSet::new();
+        for call in self.calls.values() {
+            if call.call_id.is_none() || call.name.is_empty() || !call.arguments_seen {
+                return Err(malformed_stream_call());
+            }
+            if !call_ids.insert(call.call_id.as_deref().expect("checked call id")) {
+                return Err(malformed_stream_call());
+            }
+        }
+        Ok(())
+    }
+
+    fn replay_quarantine(&mut self, events: &mut EventBuffer) -> Result<(), ReplayLimit> {
+        let choices = std::mem::take(&mut self.quarantined_choices);
+        for choice in &choices {
+            self.process_choice(events, choice, true)?;
+        }
+        Ok(())
     }
 
     /// `error` then `response.failed`, for a stream that broke. Nothing is
     /// saved.
     pub fn fail(&mut self, code: &str, message: &str) -> Vec<ResponsesStreamEvent> {
-        let mut events = Vec::new();
+        let mut events = EventBuffer::unbounded(self.sequence_number);
         if self.terminated {
-            return events;
+            return events.into_events();
         }
-        self.start_into(&mut events);
+        self.start_into(&mut events)
+            .expect("unbounded event buffer accepts response start");
         self.fail_into(events, code, message)
     }
 
     fn fail_into(
         &mut self,
-        mut events: Vec<ResponsesStreamEvent>,
+        mut events: EventBuffer,
         code: &str,
         message: &str,
     ) -> Vec<ResponsesStreamEvent> {
-        self.emit(
-            &mut events,
+        events
+            .emit(
             "error",
             json!({"error": {"type": "server_error", "code": code, "message": message, "param": null}}),
-        );
+        )
+            .expect("unbounded event buffer accepts error");
         let response = self
             .turn
             .fail(&[], self.usage, ResponseError { code, message });
-        self.emit(
-            &mut events,
-            "response.failed",
-            json!({"response": response}),
-        );
+        events
+            .emit("response.failed", json!({"response": response}))
+            .expect("unbounded event buffer accepts response.failed");
         self.failed = true;
         self.terminated = true;
-        events
+        self.accept(events)
     }
 
-    fn emit(&mut self, events: &mut Vec<ResponsesStreamEvent>, event: &'static str, body: Value) {
-        let mut data = body;
-        data["type"] = Value::String(event.to_string());
-        data["sequence_number"] = Value::from(self.sequence_number);
-        self.sequence_number += 1;
-        events.push(ResponsesStreamEvent { event, data });
+    fn accept(&mut self, events: EventBuffer) -> Vec<ResponsesStreamEvent> {
+        self.sequence_number = events.next_sequence();
+        events.into_events()
     }
 
-    fn push_reasoning(&mut self, events: &mut Vec<ResponsesStreamEvent>, delta: &str) {
+    fn push_reasoning(&mut self, events: &mut EventBuffer, delta: &str) -> Result<(), ReplayLimit> {
         let index = match self.open {
             Some(index) if matches!(self.output[index], OutputSlot::Reasoning { .. }) => index,
             _ => {
-                self.close_open(events, ResponseStatus::Completed);
+                self.close_open(events, ResponseStatus::Completed)?;
                 let id = new_item_id("rs");
                 let index = self.output.len();
                 self.output.push(OutputSlot::Reasoning {
@@ -324,37 +486,34 @@ impl ResponsesStream {
                 });
                 self.open = Some(index);
                 let item = json!({"id": id, "type": "reasoning", "summary": [], "content": []});
-                self.emit(
-                    events,
+                events.emit(
                     "response.output_item.added",
                     json!({"output_index": index, "item": item}),
-                );
-                self.emit(
-                    events,
+                )?;
+                events.emit(
                     "response.content_part.added",
                     json!({"item_id": id, "output_index": index, "content_index": 0, "part": {"type": "reasoning_text", "text": ""}}),
-                );
+                )?;
                 index
             }
         };
         let OutputSlot::Reasoning { id, text } = &mut self.output[index] else {
-            return;
+            return Ok(());
         };
         text.push_str(delta);
         let id = id.clone();
-        self.emit(
-            events,
+        events.emit(
             "response.reasoning.delta",
             json!({"item_id": id, "output_index": index, "content_index": 0, "delta": delta}),
-        );
+        )
     }
 
     fn open_message(
         &mut self,
-        events: &mut Vec<ResponsesStreamEvent>,
+        events: &mut EventBuffer,
         phase: Option<&str>,
-    ) -> usize {
-        self.close_open(events, ResponseStatus::Completed);
+    ) -> Result<usize, ReplayLimit> {
+        self.close_open(events, ResponseStatus::Completed)?;
         let id = new_item_id("msg");
         let index = self.output.len();
         self.output.push(OutputSlot::Message {
@@ -368,26 +527,24 @@ impl ResponsesStream {
         if let Some(phase) = phase {
             item["phase"] = Value::String(phase.to_string());
         }
-        self.emit(
-            events,
+        events.emit(
             "response.output_item.added",
             json!({"output_index": index, "item": item}),
-        );
-        self.emit(
-            events,
+        )?;
+        events.emit(
             "response.content_part.added",
             json!({"item_id": id, "output_index": index, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}),
-        );
-        index
+        )?;
+        Ok(index)
     }
 
     fn push_text(
         &mut self,
-        events: &mut Vec<ResponsesStreamEvent>,
+        events: &mut EventBuffer,
         delta: &str,
         delta_logprobs: Vec<Value>,
         phase: Option<&str>,
-    ) {
+    ) -> Result<(), ReplayLimit> {
         let index = match self.open {
             Some(index)
                 if matches!(
@@ -398,173 +555,152 @@ impl ResponsesStream {
             {
                 index
             }
-            _ => self.open_message(events, phase),
+            _ => self.open_message(events, phase)?,
         };
         let OutputSlot::Message {
             id, text, logprobs, ..
         } = &mut self.output[index]
         else {
-            return;
+            return Ok(());
         };
         text.push_str(delta);
         logprobs.extend(delta_logprobs.iter().cloned());
         let id = id.clone();
-        self.emit(
-            events,
+        events.emit(
             "response.output_text.delta",
             json!({"item_id": id, "output_index": index, "content_index": 0, "delta": delta, "logprobs": delta_logprobs}),
-        );
+        )
     }
 
-    fn push_call(&mut self, events: &mut Vec<ResponsesStreamEvent>, call: &Value) {
-        let index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
-        let function = call.get("function");
-        let pending = self.calls.entry(index).or_default();
-        if let Some(id) = call
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-        {
-            pending.call_id.get_or_insert_with(|| id.to_string());
-        }
-        if let Some(name) = function
-            .and_then(|function| function.get("name"))
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-        {
-            pending.name.get_or_insert_with(|| name.to_string());
-        }
-        let fragment = function
+    fn push_call(&mut self, events: &mut EventBuffer, call: &Value) -> Result<(), ReplayLimit> {
+        let Some(index) = call.get("index").and_then(Value::as_u64) else {
+            return Ok(());
+        };
+        let fragment = call
+            .get("function")
             .and_then(|function| function.get("arguments"))
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        match pending.output_index {
-            Some(output_index) => self.push_arguments(events, output_index, &fragment),
+        let output_index = self.calls.get(&index).and_then(|call| call.output_index);
+        match output_index {
+            Some(output_index) => self.push_arguments(events, output_index, &fragment)?,
             None => {
-                pending.arguments.push_str(&fragment);
-                if pending.name.is_some() {
-                    self.announce_call(events, index);
+                self.announce_call(events, index)?;
+                if let Some(output_index) =
+                    self.calls.get(&index).and_then(|call| call.output_index)
+                {
+                    self.push_arguments(events, output_index, &fragment)?;
                 }
             }
         }
+        Ok(())
     }
 
-    /// Give a named call its output item and flush the arguments buffered
-    /// before its name arrived.
-    fn announce_call(&mut self, events: &mut Vec<ResponsesStreamEvent>, index: u64) {
-        self.close_open(events, ResponseStatus::Completed);
+    /// Announce a fully assembled and authorized call at its first fragment.
+    fn announce_call(&mut self, events: &mut EventBuffer, index: u64) -> Result<(), ReplayLimit> {
+        self.close_open(events, ResponseStatus::Completed)?;
         let output_index = self.output.len();
         let Some(pending) = self.calls.get_mut(&index) else {
-            return;
+            return Ok(());
         };
         pending.output_index = Some(output_index);
         let slot = CallSlot {
             id: new_item_id("fc"),
-            call_id: pending
-                .call_id
-                .clone()
-                .unwrap_or_else(|| new_item_id("call")),
-            name: pending.name.clone().unwrap_or_default(),
+            call_id: pending.call_id.clone().expect("validated call id"),
+            name: pending.name.clone(),
             arguments: String::new(),
         };
-        let buffered = std::mem::take(&mut pending.arguments);
         let item = function_call_item(&slot.id, "in_progress", &slot.call_id, &slot.name, "");
         self.output.push(OutputSlot::Call(slot));
-        self.emit(
-            events,
+        events.emit(
             "response.output_item.added",
             json!({"output_index": output_index, "item": item}),
-        );
-        self.push_arguments(events, output_index, &buffered);
+        )
     }
 
     fn push_arguments(
         &mut self,
-        events: &mut Vec<ResponsesStreamEvent>,
+        events: &mut EventBuffer,
         index: usize,
         fragment: &str,
-    ) {
+    ) -> Result<(), ReplayLimit> {
         if fragment.is_empty() {
-            return;
+            return Ok(());
         }
         let OutputSlot::Call(slot) = &mut self.output[index] else {
-            return;
+            return Ok(());
         };
         slot.arguments.push_str(fragment);
         let id = slot.id.clone();
-        self.emit(
-            events,
+        events.emit(
             "response.function_call_arguments.delta",
             json!({"item_id": id, "output_index": index, "delta": fragment}),
-        );
+        )
     }
 
     /// Finish the streaming reasoning or message item.
-    fn close_open(&mut self, events: &mut Vec<ResponsesStreamEvent>, status: ResponseStatus) {
+    fn close_open(
+        &mut self,
+        events: &mut EventBuffer,
+        status: ResponseStatus,
+    ) -> Result<(), ReplayLimit> {
         let Some(index) = self.open.take() else {
-            return;
+            return Ok(());
         };
         let item = self.item(index, status);
         match &self.output[index] {
             OutputSlot::Reasoning { id, text } => {
                 let (id, text) = (id.clone(), text.clone());
-                self.emit(
-                    events,
+                events.emit(
                     "response.reasoning.done",
                     json!({"item_id": id, "output_index": index, "content_index": 0, "text": text}),
-                );
-                self.emit(
-                    events,
+                )?;
+                events.emit(
                     "response.content_part.done",
                     json!({"item_id": id, "output_index": index, "content_index": 0, "part": {"type": "reasoning_text", "text": text}}),
-                );
+                )?;
             }
             OutputSlot::Message {
                 id, text, logprobs, ..
             } => {
                 let (id, text, logprobs) = (id.clone(), text.clone(), logprobs.clone());
-                self.emit(
-                    events,
+                events.emit(
                     "response.output_text.done",
                     json!({"item_id": id, "output_index": index, "content_index": 0, "text": text, "logprobs": logprobs}),
-                );
-                self.emit(
-                    events,
+                )?;
+                events.emit(
                     "response.content_part.done",
                     json!({"item_id": id, "output_index": index, "content_index": 0, "part": {"type": "output_text", "text": text, "annotations": []}}),
-                );
+                )?;
             }
             OutputSlot::Call(_) => {}
         }
-        self.emit(
-            events,
+        events.emit(
             "response.output_item.done",
             json!({"output_index": index, "item": item}),
-        );
+        )
     }
 
     fn close_call(
         &mut self,
-        events: &mut Vec<ResponsesStreamEvent>,
+        events: &mut EventBuffer,
         index: usize,
         status: ResponseStatus,
-    ) {
+    ) -> Result<(), ReplayLimit> {
         let OutputSlot::Call(slot) = &self.output[index] else {
-            return;
+            return Ok(());
         };
         let (id, arguments) = (slot.id.clone(), slot.arguments.clone());
         let item = self.item(index, status);
-        self.emit(
-            events,
+        events.emit(
             "response.function_call_arguments.done",
             json!({"item_id": id, "output_index": index, "arguments": arguments}),
-        );
-        self.emit(
-            events,
+        )?;
+        events.emit(
             "response.output_item.done",
             json!({"output_index": index, "item": item}),
-        );
+        )
     }
 
     /// The finished form of one output item. Only the items that were still
@@ -614,112 +750,50 @@ fn retained_chunk_bytes(choice: &Value) -> usize {
     serde_json::to_vec(choice).map_or(usize::MAX, |bytes| bytes.len())
 }
 
+fn has_tool_call_fragment(choice: &Value) -> bool {
+    choice
+        .get("delta")
+        .and_then(|delta| delta.get("tool_calls"))
+        .is_some_and(|calls| {
+            !calls.is_null() && calls.as_array().is_none_or(|calls| !calls.is_empty())
+        })
+}
+
+fn malformed_stream_call() -> ToolOutputViolation {
+    ToolOutputViolation::new(
+        "upstream_tool_call_invalid",
+        "upstream stream contained a malformed function call",
+    )
+}
+
+fn quarantine_limit() -> ToolOutputViolation {
+    ToolOutputViolation::new(
+        "response_output_too_large",
+        "upstream response exceeded the tool-call quarantine limit",
+    )
+}
+
 /// Replay a complete response as the events that would have streamed it,
 /// for answers that are only available whole (such as a virtual model's).
 pub fn stream_events_for_response(response: &Value) -> Vec<ResponsesStreamEvent> {
-    let mut sequence_number = 0u64;
-    let mut events = Vec::new();
-    let mut emit = |event: &'static str, body: Value| {
-        let mut data = body;
-        data["type"] = Value::String(event.to_string());
-        data["sequence_number"] = Value::from(sequence_number);
-        sequence_number += 1;
-        events.push(ResponsesStreamEvent { event, data });
-    };
-    let mut in_progress = response.clone();
-    in_progress["status"] = Value::String("in_progress".into());
-    in_progress["output"] = Value::Array(Vec::new());
-    in_progress["completed_at"] = Value::Null;
-    in_progress["usage"] = Value::Null;
-    in_progress["output_text"] = Value::String(String::new());
-    emit("response.created", json!({"response": in_progress.clone()}));
-    emit("response.in_progress", json!({"response": in_progress}));
-    let output = response
-        .get("output")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    for (index, item) in output.iter().enumerate() {
-        replay_item(&mut emit, index, item);
-    }
-    let terminal = match response.get("status").and_then(Value::as_str) {
-        Some("incomplete") => "response.incomplete",
-        Some("failed") => "response.failed",
-        _ => "response.completed",
-    };
-    emit(terminal, json!({"response": response}));
-    events
+    replay::stream_events_for_response(response)
 }
 
-fn replay_item(emit: &mut impl FnMut(&'static str, Value), index: usize, item: &Value) {
-    let id = item.get("id").cloned().unwrap_or(Value::Null);
-    let kind = item.get("type").and_then(Value::as_str);
-    let mut added = item.clone();
-    match kind {
-        Some("message") | Some("reasoning") => {
-            added["content"] = Value::Array(Vec::new());
-            if kind == Some("message") {
-                added["status"] = Value::String("in_progress".into());
-            }
+/// Translate and replay a complete Chat Completions body for `turn`. The turn
+/// commits only after the full replay has passed incremental admission.
+pub fn stream_events_for_chat_completion(
+    turn: &ResponsesTurn,
+    chat: &Value,
+) -> Vec<ResponsesStreamEvent> {
+    replay::stream_events_for_chat_completion(turn, chat)
+}
+
+fn patch_response_store(events: &mut [ResponsesStreamEvent], stored: bool) {
+    for event in events {
+        if let Some(response) = event.data.get_mut("response") {
+            response["store"] = Value::Bool(stored);
         }
-        Some("function_call") => {
-            added["status"] = Value::String("in_progress".into());
-            added["arguments"] = Value::String(String::new());
-        }
-        _ => {}
     }
-    emit(
-        "response.output_item.added",
-        json!({"output_index": index, "item": added}),
-    );
-    let parts = item
-        .get("content")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    for (content_index, part) in parts.iter().enumerate() {
-        let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-        let (delta, done) = match part.get("type").and_then(Value::as_str) {
-            Some("reasoning_text") => ("response.reasoning.delta", "response.reasoning.done"),
-            Some("output_text") => ("response.output_text.delta", "response.output_text.done"),
-            _ => continue,
-        };
-        let mut empty = part.clone();
-        empty["text"] = Value::String(String::new());
-        let at = json!({"item_id": id, "output_index": index, "content_index": content_index});
-        let with = |extra: Value| {
-            let mut body = at.clone();
-            for (key, value) in extra.as_object().into_iter().flatten() {
-                body[key] = value.clone();
-            }
-            body
-        };
-        emit("response.content_part.added", with(json!({"part": empty})));
-        if !text.is_empty() {
-            emit(delta, with(json!({"delta": text})));
-        }
-        emit(done, with(json!({"text": text})));
-        emit("response.content_part.done", with(json!({"part": part})));
-    }
-    if kind == Some("function_call") {
-        let arguments = item.get("arguments").cloned().unwrap_or(Value::from(""));
-        let at = json!({"item_id": id, "output_index": index});
-        if arguments
-            .as_str()
-            .is_some_and(|arguments| !arguments.is_empty())
-        {
-            let mut body = at.clone();
-            body["delta"] = arguments.clone();
-            emit("response.function_call_arguments.delta", body);
-        }
-        let mut body = at;
-        body["arguments"] = arguments;
-        emit("response.function_call_arguments.done", body);
-    }
-    emit(
-        "response.output_item.done",
-        json!({"output_index": index, "item": item}),
-    );
 }
 
 #[cfg(test)]

@@ -7,12 +7,26 @@ use super::{
 };
 use crate::responses::{
     ResponseContinuation,
-    store::{CallerScope, ResponseStore},
+    store::{CallerScope, ResponseSessionCache, ResponseStore},
     turn::ResponsesTurn,
 };
 
 fn stream_with(continuation: ResponseContinuation) -> ResponsesStream {
-    let mut body = json!({"model": "m", "input": "hi"});
+    stream_for(
+        json!({
+        "model": "m",
+        "input": "hi",
+        "tools": [
+            {"type":"function","name":"weather"},
+            {"type":"function","name":"time"},
+            {"type":"function","name":"f"}
+        ]
+        }),
+        continuation,
+    )
+}
+
+fn stream_for(mut body: Value, continuation: ResponseContinuation) -> ResponsesStream {
     ResponsesStream::new(Arc::new(
         ResponsesTurn::prepare(&mut body, continuation).unwrap(),
     ))
@@ -296,7 +310,11 @@ fn an_empty_stream_still_reports_one_message() {
 
 #[test]
 fn replayed_responses_follow_the_same_lifecycle() {
-    let turn = ResponsesTurn::detached("m");
+    let mut body = json!({
+        "model":"m", "input":"hi",
+        "tools":[{"type":"function","name":"f"}]
+    });
+    let turn = ResponsesTurn::prepare(&mut body, ResponseContinuation::disabled()).unwrap();
     let response = turn.finish_chat_completion(&json!({
         "choices": [{"message": {
             "reasoning_content": "r",
@@ -312,4 +330,224 @@ fn replayed_responses_follow_the_same_lifecycle() {
     assert!(names.contains(&"response.reasoning.delta"));
     assert!(names.contains(&"response.function_call_arguments.done"));
     assert_eq!(events[0].data["response"]["status"], "in_progress");
+}
+
+#[test]
+fn malformed_buffered_calls_fail_before_executable_replay() {
+    let response = json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [{
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "",
+            "arguments": {}
+        }]
+    });
+    let events = stream_events_for_response(&response);
+    assert_well_formed(&events);
+    assert_eq!(
+        names(&events),
+        ["response.created", "error", "response.failed"]
+    );
+    assert_eq!(
+        events.last().unwrap().data["response"]["error"]["code"],
+        "upstream_response_invalid"
+    );
+}
+
+#[test]
+fn fragmented_names_are_authorized_only_after_exact_terminal_assembly() {
+    let store = Arc::new(ResponseStore::default());
+    let continuation = ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost));
+    let mut stream = stream_for(
+        json!({
+            "model":"m", "input":"hi",
+            "tools":[
+                {"type":"function","name":"safe"},
+                {"type":"function","name":"safe_admin"}
+            ],
+            "tool_choice":{"type":"allowed_tools","tools":[
+                {"type":"function","name":"safe"}
+            ]}
+        }),
+        continuation,
+    );
+    let id = stream.turn().id().to_string();
+    let mut events = stream.start();
+    events.extend(
+        stream.push_chunk(&json!({"choices":[{"delta":{"tool_calls":[{
+            "index":0,"id":"call_1","function":{"name":"safe","arguments":"{}"}
+        }]}}]})),
+    );
+    events.extend(
+        stream.push_chunk(&json!({"choices":[{"delta":{"tool_calls":[{
+        "index":0,"function":{"name":"_admin"}
+    }]},"finish_reason":"tool_calls"}]})),
+    );
+    events.extend(stream.finish());
+
+    assert_well_formed(&events);
+    assert_eq!(events.last().unwrap().event, "response.failed");
+    assert_eq!(
+        events.last().unwrap().data["response"]["error"]["code"],
+        "tool_choice_violation"
+    );
+    assert!(!names(&events).contains(&"response.output_item.added"));
+    assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+}
+
+#[test]
+fn allowed_fragmented_name_replays_one_complete_executable_call() {
+    let mut stream = stream_for(
+        json!({
+            "model":"m", "input":"hi",
+            "tools":[{"type":"function","name":"weather"}],
+            "tool_choice":{"type":"allowed_tools","tools":[
+                {"type":"function","name":"weather"}
+            ],"mode":"required"}
+        }),
+        ResponseContinuation::disabled(),
+    );
+    let mut events = stream.start();
+    for chunk in [
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"wea","arguments":"{"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"ther","arguments":"}"}}]},"finish_reason":"tool_calls"}]}),
+    ] {
+        assert!(stream.push_chunk(&chunk).is_empty());
+    }
+    events.extend(stream.finish());
+    assert_well_formed(&events);
+    let response = &events.last().unwrap().data["response"];
+    assert_eq!(response["output"][0]["name"], "weather");
+    assert_eq!(response["output"][0]["arguments"], "{}");
+}
+
+#[test]
+fn none_and_required_modes_follow_completed_vs_incomplete_semantics() {
+    let mut none = stream_for(
+        json!({
+            "model":"m", "input":"hi", "tool_choice":"none",
+            "tools":[{"type":"function","name":"safe"}]
+        }),
+        ResponseContinuation::disabled(),
+    );
+    let events = none.push_chunk(&json!({"choices":[{"delta":{"tool_calls":[{
+        "index":0,"id":"c","function":{"arguments":"{}"}
+    }]},"finish_reason":"length"}]}));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event != "response.output_item.added")
+    );
+    let failed = none.finish();
+    assert_eq!(failed.last().unwrap().event, "response.failed");
+    assert_eq!(
+        failed.last().unwrap().data["response"]["error"]["code"],
+        "tool_choice_violation"
+    );
+
+    for (reason, terminal) in [
+        ("stop", "response.failed"),
+        ("length", "response.incomplete"),
+    ] {
+        let mut required = stream_for(
+            json!({
+                "model":"m", "input":"hi", "tool_choice":"required",
+                "tools":[{"type":"function","name":"safe"}]
+            }),
+            ResponseContinuation::disabled(),
+        );
+        required.push_chunk(&finish(reason));
+        assert_eq!(required.finish().last().unwrap().event, terminal);
+    }
+}
+
+#[test]
+fn malformed_calls_and_quarantine_bounds_fail_without_sequence_gaps() {
+    let malformed = json!({"choices":[{"delta":{"tool_calls":[{
+        "id":"c","function":{"name":"weather","arguments":"{}"}
+    }]}}]});
+    let mut malformed_stream = stream();
+    let events = malformed_stream.push_chunk(&malformed);
+    assert_well_formed(&events);
+    assert_eq!(events.last().unwrap().event, "response.failed");
+
+    let mut bounded = stream();
+    // The two replay events fit; the first closing event must still be
+    // admitted before any executable suffix can escape.
+    bounded.max_quarantined_events = 2;
+    let mut events = bounded.push_chunk(&json!({"choices":[{"delta":{"tool_calls":[{
+        "index":0,"id":"c","function":{"name":"weather","arguments":"{}"}
+    }]}}]}));
+    events.extend(bounded.push_chunk(&finish("tool_calls")));
+    events.extend(bounded.finish());
+    assert_well_formed(&events);
+    assert_eq!(events.last().unwrap().event, "response.failed");
+    assert_eq!(
+        events.last().unwrap().data["response"]["error"]["code"],
+        "response_output_too_large"
+    );
+    assert!(!names(&events).contains(&"response.output_item.added"));
+}
+
+#[test]
+fn quarantine_terminal_event_is_inside_the_byte_budget_and_precedes_commit() {
+    let chunk = json!({"choices":[{
+        "delta":{"tool_calls":[{
+            "index":0,"id":"c","function":{"name":"weather","arguments":"{}"}
+        }]},
+        "finish_reason":"tool_calls"
+    }]});
+
+    let mut baseline = stream();
+    baseline.push_chunk(&chunk);
+    let suffix = baseline.finish();
+    let before_terminal = suffix[..suffix.len() - 1]
+        .iter()
+        .map(|event| serde_json::to_vec(&event.data).unwrap().len())
+        .sum();
+
+    let store = Arc::new(ResponseStore::default());
+    let session = Arc::new(ResponseSessionCache::new(1024 * 1024));
+    let continuation = ResponseContinuation::for_session(
+        Some(store.clone()),
+        Some(CallerScope::LocalHost),
+        session.clone(),
+        true,
+    );
+    let mut bounded = stream_with(continuation);
+    let id = bounded.turn().id().to_string();
+    let mut events = bounded.push_chunk(&chunk);
+    bounded.max_quarantined_event_bytes = before_terminal;
+    events.extend(bounded.finish());
+
+    assert_well_formed(&events);
+    assert_eq!(events.last().unwrap().event, "response.failed");
+    assert!(!names(&events).contains(&"response.output_item.added"));
+    assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+    assert!(session.get(&id).is_none());
+}
+
+#[test]
+fn rejected_stream_does_not_replace_websocket_session_state() {
+    let session = Arc::new(ResponseSessionCache::new(1024 * 1024));
+    let continuation = ResponseContinuation::for_session(None, None, session.clone(), false);
+    let mut stream = stream_for(
+        json!({
+            "model":"m", "input":"hi",
+            "tools":[{"type":"function","name":"safe"}],
+            "tool_choice":{"type":"allowed_tools","tools":[
+                {"type":"function","name":"safe"}
+            ]}
+        }),
+        continuation,
+    );
+    let id = stream.turn().id().to_string();
+    stream.push_chunk(&json!({"choices":[{"delta":{"tool_calls":[{
+        "index":0,"id":"c","function":{"name":"other","arguments":"{}"}
+    }]},"finish_reason":"tool_calls"}]}));
+    assert_eq!(stream.finish().last().unwrap().event, "response.failed");
+    assert!(session.get(&id).is_none());
 }

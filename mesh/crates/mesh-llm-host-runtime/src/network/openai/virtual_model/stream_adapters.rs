@@ -219,11 +219,15 @@ fn responses_stream_events(
     continuation: Option<ProgressContinuation>,
     turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> Vec<Value> {
-    let responses = match turn {
-        Some(turn) => turn.finish_chat_completion(response),
-        None => chat_completion_to_responses_json(response),
+    let mut events = match turn {
+        Some(turn) => {
+            skippy_inference_api::responses_stream_events_for_chat_completion(turn, response)
+        }
+        None => {
+            let responses = chat_completion_to_responses_json(response);
+            skippy_inference_api::responses_stream_events_for_response(&responses)
+        }
     };
-    let mut events = skippy_inference_api::responses_stream_events_for_response(&responses);
     let Some(continuation) = continuation else {
         return events;
     };

@@ -9,14 +9,16 @@
 //! The ingress then builds every JSON body and stream event from the same
 //! turn, and commits the snapshot only from a completed terminal response.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use serde_json::{Map, Value, json};
 
 use super::resource::{
     ResponseEnvelope, ResponseError, ResponseSnapshot, ResponseStatus, ResponsesUsage,
-    function_call_item, message_item, new_item_id, new_response_id, reasoning_item,
+    new_response_id,
 };
+use super::terminal::{chat_completion_output, malformed_tool_call};
+use super::tools::{ToolOutputViolation, ToolPolicy};
 use super::{continuation::ResponseContinuation, store::StoredResponse};
 use crate::errors::InferenceError;
 
@@ -38,10 +40,40 @@ pub struct ResponsesTurn {
     envelope: ResponseEnvelope,
     instructions: Option<String>,
     configuration: Map<String, Value>,
+    tool_policy: ToolPolicy,
     input: Vec<Value>,
     parent: Option<Arc<StoredResponse>>,
     continuation: ResponseContinuation,
     kind: TurnKind,
+}
+
+/// A validated terminal response that has not changed continuation state yet.
+///
+/// Buffered SSE replay and quarantined tool streams use this staging point so
+/// their entire terminal event sequence can be admitted before either the
+/// shared store or a connection-local session observes the response.
+pub(super) struct StagedTurnFinish<'a> {
+    turn: &'a ResponsesTurn,
+    status: ResponseStatus,
+    output: Vec<Value>,
+    response: Value,
+}
+
+impl StagedTurnFinish<'_> {
+    pub(super) fn response(&self) -> &Value {
+        &self.response
+    }
+
+    /// Commit a completed response and report the value the resource's
+    /// `store` field must expose. Incomplete and failed responses never commit.
+    pub(super) fn commit_storage(&self) -> bool {
+        self.status == ResponseStatus::Completed && self.turn.commit(&self.output)
+    }
+
+    fn finalize(mut self) -> Value {
+        self.response["store"] = Value::Bool(self.commit_storage());
+        self.response
+    }
 }
 
 impl ResponsesTurn {
@@ -79,6 +111,10 @@ impl ResponsesTurn {
                 object.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
+        // The original ingress owns authorization. Capture the effective
+        // policy after continuation inheritance and before Chat normalization
+        // reduces an allowed-tools choice to its backend selection mode.
+        let tool_policy = ToolPolicy::capture(object)?;
         let mut echoed = object.clone();
         if let Some(id) = &previous_response_id {
             echoed.insert("previous_response_id".into(), Value::String(id.clone()));
@@ -119,6 +155,7 @@ impl ResponsesTurn {
             envelope,
             instructions,
             configuration,
+            tool_policy,
             input,
             parent,
             continuation,
@@ -141,6 +178,8 @@ impl ResponsesTurn {
             envelope: ResponseEnvelope::default(),
             instructions: None,
             configuration: Map::new(),
+            tool_policy: ToolPolicy::capture(&Map::new())
+                .expect("the default tool policy is valid"),
             input: prepared.input,
             parent: prepared.parent,
             continuation: ResponseContinuation::disabled(),
@@ -149,23 +188,6 @@ impl ResponsesTurn {
                 pending_calls: prepared.pending_calls,
             },
         })
-    }
-
-    /// A turn for a chat completion translated without its request, such as
-    /// a virtual model's buffered answer: default configuration, no storage.
-    pub fn detached(model: &str) -> Self {
-        Self {
-            id: new_response_id(),
-            created_at: crate::responses::now_unix_secs_i64(),
-            model: model.to_string(),
-            envelope: ResponseEnvelope::default(),
-            instructions: None,
-            configuration: Map::new(),
-            input: Vec::new(),
-            parent: None,
-            continuation: ResponseContinuation::disabled(),
-            kind: TurnKind::Response,
-        }
     }
 
     pub fn id(&self) -> &str {
@@ -199,25 +221,34 @@ impl ResponsesTurn {
         })
     }
 
-    /// Finish the turn from its terminal state, saving it for continuation
-    /// when it completed and the client asked for it to be stored.
-    pub fn finish(
+    /// Validate and build a terminal response without changing continuation
+    /// state. The caller admits any required output before committing it.
+    pub(super) fn stage_finish(
         &self,
         status: ResponseStatus,
-        output: &[Value],
+        output: Vec<Value>,
         usage: Option<ResponsesUsage>,
-    ) -> Value {
-        let stored = status == ResponseStatus::Completed && self.commit(output);
+    ) -> Result<StagedTurnFinish<'_>, ToolOutputViolation> {
+        self.validate_output(status, &output)?;
         let mut envelope = self.envelope.clone();
-        envelope.set_store(stored);
-        envelope.response(ResponseSnapshot {
+        // `false` is conservative for replay admission (`false` serializes one
+        // byte larger than `true`) and prevents a candidate from claiming it
+        // was stored before the admission boundary has accepted every event.
+        envelope.set_store(false);
+        let response = envelope.response(ResponseSnapshot {
             id: &self.id,
             created_at: self.created_at,
             model: &self.model,
             status,
-            output,
+            output: &output,
             usage,
             error: None,
+        });
+        Ok(StagedTurnFinish {
+            turn: self,
+            status,
+            output,
+            response,
         })
     }
 
@@ -263,9 +294,12 @@ impl ResponsesTurn {
         {
             return self.finish_compaction(chat, user_messages, pending_calls);
         }
+        Ok(self.stage_chat_completion(chat).finalize())
+    }
+
+    pub(super) fn stage_chat_completion(&self, chat: &Value) -> StagedTurnFinish<'_> {
         if let Some(error) = chat.get("error") {
-            return Ok(self.fail(
-                &[],
+            return self.stage_failure(
                 None,
                 ResponseError {
                     code: error
@@ -278,7 +312,7 @@ impl ResponsesTurn {
                         .or_else(|| error.as_str())
                         .unwrap_or("upstream response failed"),
                 },
-            ));
+            );
         }
         let choice = chat
             .get("choices")
@@ -288,18 +322,50 @@ impl ResponsesTurn {
             .and_then(|choice| choice.get("finish_reason"))
             .and_then(Value::as_str);
         if choice.is_none() || finish_reason.is_none() || finish_reason == Some("error") {
-            return Ok(self.fail(
-                &[],
+            return self.stage_failure(
                 chat.get("usage").and_then(ResponsesUsage::from_chat_value),
                 ResponseError {
                     code: "upstream_response_invalid",
                     message: "upstream response did not contain a successful terminal choice",
                 },
-            ));
+            );
         }
-        let (output, status) = chat_completion_output(chat);
+        let (output, status) = match chat_completion_output(chat) {
+            Ok(output) => output,
+            Err(violation) => {
+                return self.stage_failure(
+                    chat.get("usage").and_then(ResponsesUsage::from_chat_value),
+                    ResponseError {
+                        code: violation.code,
+                        message: violation.message,
+                    },
+                );
+            }
+        };
         let usage = chat.get("usage").and_then(ResponsesUsage::from_chat_value);
-        Ok(self.finish(status, &output, usage))
+        match self.stage_finish(status, output, usage) {
+            Ok(staged) => staged,
+            Err(violation) => self.stage_failure(
+                usage,
+                ResponseError {
+                    code: violation.code,
+                    message: violation.message,
+                },
+            ),
+        }
+    }
+
+    fn stage_failure(
+        &self,
+        usage: Option<ResponsesUsage>,
+        error: ResponseError<'_>,
+    ) -> StagedTurnFinish<'_> {
+        StagedTurnFinish {
+            turn: self,
+            status: ResponseStatus::Failed,
+            output: Vec::new(),
+            response: self.fail(&[], usage, error),
+        }
     }
 
     fn finish_compaction(
@@ -341,6 +407,59 @@ impl ResponsesTurn {
         };
         store.insert(scope.clone(), snapshot())
     }
+
+    fn validate_output(
+        &self,
+        status: ResponseStatus,
+        output: &[Value],
+    ) -> Result<(), ToolOutputViolation> {
+        let calls = output
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+            .map(validated_output_call)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut call_ids = BTreeSet::new();
+        if calls.iter().any(|(id, _)| !call_ids.insert(*id)) {
+            return Err(malformed_tool_call());
+        }
+        let names = calls.iter().map(|(_, name)| *name).collect::<Vec<_>>();
+        self.tool_policy
+            .validate_calls(status, !names.is_empty(), names.iter().copied())
+    }
+
+    pub(super) fn validate_stream_tool_calls<'a>(
+        &self,
+        status: ResponseStatus,
+        had_call_fragments: bool,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), ToolOutputViolation> {
+        self.tool_policy
+            .validate_calls(status, had_call_fragments, names)
+    }
+}
+
+fn validated_output_call(item: &Value) -> Result<(&str, &str), ToolOutputViolation> {
+    let valid_string = |field: &str| {
+        item.get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ToolOutputViolation::new(
+                    "upstream_tool_call_invalid",
+                    "upstream response contained a malformed function call",
+                )
+            })
+    };
+    let call_id = valid_string("call_id")?;
+    item.get("arguments")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ToolOutputViolation::new(
+                "upstream_tool_call_invalid",
+                "upstream response contained non-string function arguments",
+            )
+        })?;
+    Ok((call_id, valid_string("name")?))
 }
 
 /// Request controls that remain effective on a continuation unless the child
@@ -467,98 +586,6 @@ fn is_conversation_item(item: &Value) -> bool {
             item.get("type").and_then(Value::as_str),
             Some("message" | "function_call" | "function_call_output" | "reasoning" | "compaction")
         )
-}
-
-/// The output items and status of a whole Chat Completions body.
-pub(crate) fn chat_completion_output(chat: &Value) -> (Vec<Value>, ResponseStatus) {
-    let choice = chat
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first());
-    let message = choice.and_then(|choice| choice.get("message"));
-    let status = ResponseStatus::from_finish_reason(
-        choice
-            .and_then(|choice| choice.get("finish_reason"))
-            .and_then(Value::as_str),
-    );
-    let mut output = Vec::new();
-    let reasoning = message
-        .and_then(|message| message.get("reasoning_content"))
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty());
-    if let Some(reasoning) = reasoning {
-        output.push(reasoning_item(&new_item_id("rs"), reasoning));
-    }
-    let text = message.map(chat_message_text).unwrap_or_default();
-    let calls = message
-        .and_then(|message| message.get("tool_calls"))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    if !text.is_empty() || calls.is_empty() {
-        let logprobs = choice
-            .and_then(|choice| choice.get("logprobs"))
-            .filter(|logprobs| !logprobs.is_null())
-            .cloned();
-        // Text followed by calls was finished before them.
-        let text_status = if calls.is_empty() {
-            status.item_status()
-        } else {
-            "completed"
-        };
-        output.push(message_item(
-            &new_item_id("msg"),
-            text_status,
-            &text,
-            logprobs,
-            message
-                .and_then(|message| message.get("phase"))
-                .and_then(Value::as_str),
-        ));
-    }
-    for (position, call) in calls.iter().enumerate() {
-        // Only the call still being generated when the response ended is cut.
-        let call_status = if position + 1 == calls.len() {
-            status.item_status()
-        } else {
-            "completed"
-        };
-        let function = call.get("function");
-        let field = |key: &str| {
-            function
-                .and_then(|function| function.get(key))
-                .or_else(|| call.get(key))
-        };
-        let arguments = match field("arguments") {
-            Some(Value::String(arguments)) => arguments.clone(),
-            Some(Value::Null) | None => String::new(),
-            Some(other) => other.to_string(),
-        };
-        let call_id = call
-            .get("id")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| new_item_id("call"));
-        output.push(function_call_item(
-            &new_item_id("fc"),
-            call_status,
-            &call_id,
-            field("name").and_then(Value::as_str).unwrap_or("tool"),
-            &arguments,
-        ));
-    }
-    (output, status)
-}
-
-fn chat_message_text(message: &Value) -> String {
-    match message.get("content") {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect(),
-        _ => String::new(),
-    }
 }
 
 #[cfg(test)]
@@ -920,28 +947,89 @@ mod tests {
     }
 
     #[test]
-    fn chat_output_orders_reasoning_text_and_calls() {
-        let (output, status) = chat_completion_output(&json!({
-            "choices": [{"message": {
-                "reasoning_content": "think",
-                "content": "say",
-                "tool_calls": [{"id": "c1", "function": {"name": "f", "arguments": "{}"}}],
-            }, "finish_reason": "tool_calls"}],
+    fn json_allowed_tools_rejects_unauthorized_calls_without_storage() {
+        let store = store();
+        let mut body = json!({
+            "model":"m", "input":"hi",
+            "tools":[
+                {"type":"function","name":"safe","parameters":{"type":"object"}},
+                {"type":"function","name":"admin","description":"must stay visible"}
+            ],
+            "tool_choice":{"type":"allowed_tools","tools":[
+                {"type":"function","name":"safe"}
+            ]}
+        });
+        let turn = ResponsesTurn::prepare(&mut body, local(&store)).unwrap();
+        let id = turn.id().to_string();
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+        assert_eq!(body["tool_choice"], "auto");
+        assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            body["tools"][1]["function"]["description"],
+            "must stay visible"
+        );
+        let response = turn.finish_chat_completion(&json!({
+            "choices":[{"message":{"content":null,"tool_calls":[{
+                "id":"call_admin","type":"function",
+                "function":{"name":"admin","arguments":"{}"}
+            }]},"finish_reason":"tool_calls"}]
         }));
-        assert_eq!(status, ResponseStatus::Completed);
-        let kinds: Vec<_> = output.iter().map(|item| item["type"].clone()).collect();
-        assert_eq!(kinds, ["reasoning", "message", "function_call"]);
-        assert_eq!(output[0]["content"][0]["type"], "reasoning_text");
+        assert_eq!(response["status"], "failed");
+        assert_eq!(response["error"]["code"], "tool_choice_violation");
+        assert_eq!(response["output"], json!([]));
+        assert_eq!(response["store"], false);
+        assert_eq!(response["tool_choice"]["mode"], "auto");
+        assert_eq!(response["tools"].as_array().unwrap().len(), 2);
+        assert!(store.get(&CallerScope::LocalHost, &id).is_err());
     }
 
     #[test]
-    fn chat_output_preserves_valid_assistant_phase() {
-        let (output, _) = chat_completion_output(&json!({
-            "choices": [{"message": {
-                "content": "done",
-                "phase": "final_answer"
-            }, "finish_reason": "stop"}],
+    fn inherited_original_allowed_policy_remains_authoritative() {
+        let store = store();
+        let mut parent = json!({
+            "model":"m", "input":"hi",
+            "tools":[
+                {"type":"function","name":"safe"},
+                {"type":"function","name":"admin"}
+            ],
+            "tool_choice":{"type":"allowed_tools","tools":[
+                {"type":"function","name":"safe"}
+            ],"mode":"required"}
+        });
+        let parent_turn = ResponsesTurn::prepare(&mut parent, local(&store)).unwrap();
+        let parent_response = parent_turn.finish_chat_completion(&json!({
+            "choices":[{"message":{"content":null,"tool_calls":[{
+                "id":"c1","type":"function","function":{"name":"safe","arguments":"{}"}
+            }]},"finish_reason":"tool_calls"}]
         }));
-        assert_eq!(output[0]["phase"], "final_answer");
+        assert_eq!(parent_response["status"], "completed");
+
+        let mut child = json!({
+            "previous_response_id":parent_response["id"], "input":"again"
+        });
+        let child_turn = ResponsesTurn::prepare(&mut child, local(&store)).unwrap();
+        assert_eq!(child["tool_choice"]["type"], "allowed_tools");
+        let rejected = child_turn.finish_chat_completion(&json!({
+            "choices":[{"message":{"content":null,"tool_calls":[{
+                "id":"c2","type":"function","function":{"name":"admin","arguments":"{}"}
+            }]},"finish_reason":"tool_calls"}]
+        }));
+        assert_eq!(rejected["status"], "failed");
+        assert_eq!(rejected["error"]["code"], "tool_choice_violation");
+    }
+
+    #[test]
+    fn json_required_allows_incomplete_without_a_call_but_not_completed() {
+        for (finish_reason, status) in [("length", "incomplete"), ("stop", "failed")] {
+            let mut body = json!({
+                "model":"m", "input":"hi", "tool_choice":"required",
+                "tools":[{"type":"function","name":"safe"}]
+            });
+            let turn = ResponsesTurn::prepare(&mut body, ResponseContinuation::disabled()).unwrap();
+            let response = turn.finish_chat_completion(&json!({
+                "choices":[{"message":{"content":"partial"},"finish_reason":finish_reason}]
+            }));
+            assert_eq!(response["status"], status);
+        }
     }
 }

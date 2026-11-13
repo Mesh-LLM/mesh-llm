@@ -34,3 +34,10 @@ uses that commit's diagnostic. These two adjustments were checked against the
 upstream translator and its passing unit tests in an unrefactored API checkout;
 the other 36 cases are unchanged. The fixture was not regenerated from the
 migrated backend.
+
+The Responses tool-policy checkpoint intentionally changes only the
+`responses-tools` case: its request declares `alpha`, while the scripted worker
+also calls undeclared `beta`. The original ingress now rejects that entire
+terminal output with `tool_choice_violation` instead of exposing an executable
+undeclared call. The backend request, usage, headers, and other 37 cases are
+unchanged. This is an enforcement fix, not a compatibility-neutral migration.

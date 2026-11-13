@@ -3114,9 +3114,12 @@
     ],
     "body": {
       "background": false,
-      "completed_at": "<frontend-time>",
+      "completed_at": null,
       "created_at": "<frontend-time>",
-      "error": null,
+      "error": {
+        "code": "tool_choice_violation",
+        "message": "upstream response called a tool that was not allowed by the request"
+      },
       "frequency_penalty": 0.0,
       "id": "<resp-frontend-id>",
       "incomplete_details": null,
@@ -3126,35 +3129,7 @@
       "metadata": {},
       "model": "fixture-model",
       "object": "response",
-      "output": [
-        {
-          "content": [
-            {
-              "text": "reason",
-              "type": "reasoning_text"
-            }
-          ],
-          "id": "<rs-frontend-id>",
-          "summary": [],
-          "type": "reasoning"
-        },
-        {
-          "arguments": "{\"x\":1}",
-          "call_id": "call_alpha",
-          "id": "<fc-frontend-id>",
-          "name": "alpha",
-          "status": "completed",
-          "type": "function_call"
-        },
-        {
-          "arguments": "{}",
-          "call_id": "call_beta",
-          "id": "<fc-frontend-id>",
-          "name": "beta",
-          "status": "completed",
-          "type": "function_call"
-        }
-      ],
+      "output": [],
       "output_text": "",
       "parallel_tool_calls": true,
       "presence_penalty": 0.0,
@@ -3166,7 +3141,7 @@
       },
       "safety_identifier": null,
       "service_tier": "default",
-      "status": "completed",
+      "status": "failed",
       "store": false,
       "temperature": 1.0,
       "text": {

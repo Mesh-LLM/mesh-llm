@@ -816,6 +816,7 @@ pub(crate) async fn start_in_process_plugin_manager(
 }
 
 include!("basic.rs");
+include!("virtual_models.rs");
 include!("nested_single_model.rs");
 include!("automatic_spill.rs");
 include!("builtin_moa.rs");

@@ -127,6 +127,37 @@ host-local trust scope. A reverse proxy or multi-user deployment must disable
 storage unless it supplies a separately authenticated ingress identity; a
 body field or caller-provided header cannot select another caller's scope.
 
+### Tool choice and allowed tools
+
+Responses function tools support `auto`, `none`, `required`, a specific
+function choice, and an `allowed_tools` subset:
+
+```json
+{
+  "tool_choice": {
+    "type": "allowed_tools",
+    "tools": [{"type": "function", "name": "get_weather"}],
+    "mode": "auto"
+  }
+}
+```
+
+Declare every referenced function in the request's `tools` array. Mesh keeps
+that complete array visible to the selected backend; it does not remove
+schemas outside the executable subset. The original ingress checks every
+returned function call against the effective choice, even when a peer or
+plugin generated it. The default allowed-tools mode is `auto`; `none` forbids
+calls, and a completed `required` response must contain a permitted call.
+An incomplete response may end without a required call.
+
+For SSE and WebSocket turns, output from the first tool-call fragment onward
+is buffered within bounded limits until the full function names can be
+validated. This delays tool-call events until generation finishes. A forbidden
+or malformed call fails the turn without exposing executable call events or
+retaining that turn for continuation. Tool-generation quality still depends
+on the selected model; hard enforcement does not make an incapable model
+follow the requested choice.
+
 ### WebSocket
 
 Upgrade `GET /v1/responses` (`ws://localhost:9337/v1/responses`) and send JSON
