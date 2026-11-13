@@ -129,7 +129,7 @@ impl LocalRuntimeModelHandle {
     ) -> Option<Arc<dyn skippy_inference_api::InferenceBackend>> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => Some(model.backend()),
-            LocalRuntimeBackendHandle::Dedicated { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { http, .. } => http.native_backend(),
         }
     }
 

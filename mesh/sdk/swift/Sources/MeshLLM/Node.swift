@@ -187,6 +187,7 @@ public final class Node: @unchecked Sendable {
         try await runBlocking { try handle.joinToken(token: token) }
     }
 
+    /// Transcribe in process with a locally loaded speech model. Close the session to cancel inference.
     public func startLiveTranscription(_ options: LiveTranscriptionOptions = LiveTranscriptionOptions()) async throws -> LiveTranscription {
         let handle = self.handle
         let optionsJSON = try options.json()

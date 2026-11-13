@@ -152,6 +152,12 @@ its client default and Swift argument names.
 
 ## Live transcription
 
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.
+
 ```swift
 let session = try await node.startLiveTranscription(LiveTranscriptionOptions(
     model: "speech-model", sampleRate: 16000, turnDetection: nil,

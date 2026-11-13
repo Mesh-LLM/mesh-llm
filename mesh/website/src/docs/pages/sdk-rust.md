@@ -108,6 +108,13 @@ provider status, content type and body for application status handling.
 
 ## Memberships and live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 `add_membership`, `remove_membership`, and `memberships` manage additional meshes
 without loading local models again. Each membership has its own identity,
 allowlist, peers and API port. The native model catalog above remains scoped to
