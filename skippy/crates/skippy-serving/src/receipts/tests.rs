@@ -1072,3 +1072,68 @@ fn a_runtime_says_whether_its_receipts_keep_recurrent_state() {
     receipts.reports.recorder().set_recurrent(true);
     assert!(super::keeps_recurrent_state(&runtime));
 }
+
+/// A replayer whose first pin waits, once it has begun, until it is let go.
+struct GatedPins {
+    entered: Mutex<std::sync::mpsc::Sender<()>>,
+    go: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Replayer for GatedPins {
+    fn replay(
+        &self,
+        _seq: i32,
+        _layers: &[u32],
+        _scope: ReplayScope<'_>,
+        _seed: Option<&ReplaySeed>,
+        _steps: &[ReplayStep],
+    ) -> Result<Vec<ReplayedPosition>> {
+        Ok(Vec::new())
+    }
+
+    fn read_rows(&self, _layer: u32, _cells: &[PrefixCell]) -> Result<Vec<StoredRows>> {
+        Ok(Vec::new())
+    }
+
+    fn pin_cells(&self, _cells: &[KvCell]) -> Result<()> {
+        let _ = lock(&self.entered).send(());
+        let _ = lock(&self.go).recv_timeout(GENEROUS);
+        Ok(())
+    }
+}
+
+impl StageReplayer for GatedPins {}
+
+// Each pin replaces the whole native pin set, so a snapshot of the pins is
+// not taken while an older one is still being published: the older one
+// would land last and unpin the turn the newer one covers.
+#[test]
+fn a_pin_is_published_before_the_next_is_taken() {
+    let receipts = Arc::new(StageReceipts::new(
+        0,
+        0..2,
+        "test".into(),
+        None,
+        "model.gguf".into(),
+        ed25519_dalek::SigningKey::from_bytes(&[1; 32]),
+        ReplyLimits::for_width(Some(2)),
+    ));
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (go, go_rx) = std::sync::mpsc::channel();
+    receipts.set_replayer(Box::new(GatedPins {
+        entered: Mutex::new(entered),
+        go: Mutex::new(go_rx),
+    }));
+    let first = {
+        let receipts = receipts.clone();
+        std::thread::spawn(move || receipts.pin_turns(Instant::now()))
+    };
+    entered_rx
+        .recv_timeout(GENEROUS)
+        .expect("the first pin began");
+    // the lock every pin takes for its snapshot is held until it is published
+    assert!(receipts.pins_due.try_lock().is_err());
+    go.send(()).unwrap();
+    first.join().unwrap();
+    assert!(receipts.pins_due.try_lock().is_ok());
+}

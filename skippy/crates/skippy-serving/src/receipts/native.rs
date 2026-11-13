@@ -362,17 +362,38 @@ fn append_rows(
 
 impl StageReplayer for NativeReplayer {
     fn release_idle(&self, now: Instant) -> Option<Instant> {
-        match self.scratch.due(now) {
-            ScratchDue::Unused => None,
-            ScratchDue::At(at) => Some(at),
-            ScratchDue::Free => {
-                // a running replay keeps the context, and marks it used
-                // again when it ends
-                if let Err(error) = self.replayer.release_scratch() {
-                    tracing::warn!("receipts: cannot free the replay context: {error:#}");
-                }
-                None
+        release_between_replays(&self.serial, &self.scratch, now, || {
+            self.replayer.release_scratch()
+        })
+    }
+}
+
+/// Frees the scratch context once it has been idle, never during a replay.
+///
+/// A replay holds `serial` from its seed to its end, and marks the context
+/// used only at those two points, so a replay longer than [`SCRATCH_IDLE`]
+/// would otherwise see the context freed between its seed and its replay.
+/// The idle time is checked under `serial`; while a replay holds it, the
+/// context is left alone and looked at again later.
+fn release_between_replays(
+    serial: &Mutex<()>,
+    scratch: &ScratchUse,
+    now: Instant,
+    release: impl FnOnce() -> Result<()>,
+) -> Option<Instant> {
+    let _serial = match serial.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Some(now + SCRATCH_IDLE),
+    };
+    match scratch.due(now) {
+        ScratchDue::Unused => None,
+        ScratchDue::At(at) => Some(at),
+        ScratchDue::Free => {
+            if let Err(error) = release() {
+                tracing::warn!("receipts: cannot free the replay context: {error:#}");
             }
+            None
         }
     }
 }
@@ -562,5 +583,37 @@ mod tests {
         );
         assert_eq!(scratch.due(early + SCRATCH_IDLE), ScratchDue::Free);
         assert_eq!(scratch.due(early + SCRATCH_IDLE), ScratchDue::Unused);
+    }
+
+    // A replay that outlasts the idle time keeps the context it seeded:
+    // the upkeep does not free it until the replay lets go.
+    #[test]
+    fn a_running_replay_keeps_its_scratch_context() {
+        let (serial, scratch) = (Mutex::new(()), ScratchUse::default());
+        let start = Instant::now();
+        scratch.used(start);
+        let late = start + SCRATCH_IDLE * 2;
+        let freed = std::cell::Cell::new(0);
+        let release = || {
+            freed.set(freed.get() + 1);
+            Ok(())
+        };
+        {
+            let _replay = serial.lock().unwrap();
+            let next = release_between_replays(&serial, &scratch, late, release);
+            assert_eq!(next, Some(late + SCRATCH_IDLE));
+            assert_eq!(freed.get(), 0);
+        }
+        // once it ends, the idle context is freed
+        assert_eq!(
+            release_between_replays(&serial, &scratch, late, release),
+            None
+        );
+        assert_eq!(freed.get(), 1);
+        assert_eq!(
+            release_between_replays(&serial, &scratch, late, release),
+            None
+        );
+        assert_eq!(freed.get(), 1);
     }
 }

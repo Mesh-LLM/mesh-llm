@@ -262,10 +262,11 @@ pub fn start(
     runtime: Arc<Mutex<RuntimeState>>,
 ) -> Result<()> {
     check_listen(&options)?;
-    let backend = skippy_runtime::backend_devices()
-        .ok()
-        .and_then(|devices| devices.into_iter().next())
-        .map_or_else(|| "unknown".to_string(), |device| device.name);
+    // a registry that cannot be read leaves the placement unknown
+    let backend = skippy_runtime::backend_devices().map_or_else(
+        |_| "unknown".to_string(),
+        |devices| audited_backend::stage_backend(config, &devices),
+    );
     let unaudited = kv_cache::unaudited(config)
         .or_else(|| audited_backend::unaudited(&backend))
         .or_else(|| audited_weights::unaudited(config, &backend));
@@ -534,10 +535,16 @@ impl StageReceipts {
     /// in place of those pinned before, and notes when the next pin runs
     /// out. A stage that cannot pin still opens a turn whose cells nothing
     /// wrote since.
+    ///
+    /// The upkeep and the commit and open handlers pin concurrently, and
+    /// each pin replaces the whole native pin set, so the snapshot and its
+    /// publication run under one lock: an older snapshot published after a
+    /// newer one would unpin a turn just committed.
     fn pin_turns(&self, now: Instant) {
         let Some(replayer) = self.replayer.get() else {
             return;
         };
+        let mut pins_due = lock(&self.pins_due);
         let recorder = self.reports.recorder();
         let cells = recorder.pinned_cells(now);
         match replayer.pin_cells(&cells) {
@@ -547,7 +554,7 @@ impl StageReceipts {
                 tracing::debug!("receipts: cannot pin the cells of recent turns: {error:#}");
             }
         }
-        *lock(&self.pins_due) = recorder.next_pin_expiry(now);
+        *pins_due = recorder.next_pin_expiry(now);
     }
 
     /// Pins the cells of this stage's recent turns after a pin was made or
