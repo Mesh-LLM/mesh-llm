@@ -1,7 +1,10 @@
 use super::*;
 
 #[test]
+// The default key guards the catalog test hooks; the engine key keeps the
+// native-runtime tests from installing a different engine mid-test.
 #[serial_test::serial]
+#[serial_test::serial(runtime_event_engine_state)]
 fn unresolved_layer_package_ref_surfaces_actionable_diagnostic() {
     use crate::runtime_event_api::state_projection;
     use crate::runtime_events::engine::RuntimeEventEngine;
@@ -76,7 +79,10 @@ fn unresolved_layer_package_ref_surfaces_actionable_diagnostic() {
 }
 
 #[test]
+// The default key guards the catalog test hooks; the engine key keeps the
+// native-runtime tests from installing a different engine mid-test.
 #[serial_test::serial]
+#[serial_test::serial(runtime_event_engine_state)]
 fn monolithic_hf_ref_without_layer_package_stays_silent() {
     use crate::runtime_event_api::state_projection;
     use crate::runtime_events::engine::RuntimeEventEngine;

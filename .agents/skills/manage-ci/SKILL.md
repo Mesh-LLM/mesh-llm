@@ -584,6 +584,19 @@ checked-in expiry are the maintainer-controlled approval boundary.
   they stay cargo-free. `tools/xtask` rejects a cargo caller without
   initialization and any cargo call inside a composition-only job, because a
   canary cannot exercise the canary-skipped jobs.
+- Windows jobs that install sccache through `mozilla-actions/sccache-action`
+  pin `version: v0.16.0`. sccache 0.17 and later expand Cargo's rustc argfile,
+  and with Rust 1.100's build-dir layout the expanded command exceeds the
+  Windows command-line limit (os error 206, mozilla/sccache#2787). This matches
+  the 0.16.0 developer bootstrap. `tools/xtask` rejects an unpinned or
+  different version in a managed Windows compilation job and in
+  `prepare-automation`. 0.16.0 doesn't cache a rustc call that uses an argfile;
+  it hands it to rustc. Cargo uses an argfile only for over-long command lines,
+  so the largest crates (`skippy-commands`, `skippy-api`,
+  `mesh-llm-skippy-adapter`, likely `mesh-llm`) recompile on every Windows run,
+  warm or cold. A slow warm Windows lane is expected while the pin holds, not a
+  cache regression. Lift the pin once an upstream fix is released and a Windows
+  lane passes with it.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
