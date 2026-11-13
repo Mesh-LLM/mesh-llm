@@ -22,6 +22,9 @@ pub(crate) struct PrivateNodes {
     ids: Arc<RwLock<Arc<HashSet<EndpointId>>>>,
     /// The config file the list is kept current from, when there is one.
     file: Option<Arc<PathBuf>>,
+    /// Held across each read of the file and the swap that follows, so an
+    /// older read cannot replace a newer one.
+    reload: Arc<std::sync::Mutex<()>>,
 }
 
 impl PrivateNodes {
@@ -29,6 +32,7 @@ impl PrivateNodes {
         Self {
             ids: Arc::new(RwLock::new(Arc::new(ids.into_iter().collect()))),
             file: None,
+            reload: Arc::default(),
         }
     }
 
@@ -52,8 +56,17 @@ impl PrivateNodes {
     /// a config apply does this before it reports the new list as live.
     pub(crate) fn reload_now(&self) {
         if let Some(path) = &self.file {
-            self.replace(load_private_nodes(path));
+            self.reload_from(path);
         }
+    }
+
+    /// Read the list from `path` and install it; true when it changed.
+    fn reload_from(&self, path: &Path) -> bool {
+        let _reload = self
+            .reload
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.replace(load_private_nodes(path))
     }
 
     pub(crate) fn contains(&self, id: &EndpointId) -> bool {
@@ -130,14 +143,14 @@ pub(crate) fn spawn_private_nodes_reload(nodes: PrivateNodes, path: PathBuf) {
                 continue;
             }
             seen = Some(version);
-            let reload_path = path.clone();
-            let Ok(ids) =
-                tokio::task::spawn_blocking(move || load_private_nodes(&reload_path)).await
+            let (reloading, reload_path) = (nodes.clone(), path.clone());
+            let Ok(changed) =
+                tokio::task::spawn_blocking(move || reloading.reload_from(&reload_path)).await
             else {
                 continue;
             };
-            let count = ids.len();
-            if nodes.replace(ids) {
+            if changed {
+                let count = nodes.current().len();
                 tracing::info!(count, "private node list reloaded from the config file");
             }
         }
