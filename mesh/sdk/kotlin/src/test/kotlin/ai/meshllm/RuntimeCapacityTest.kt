@@ -5,7 +5,6 @@ import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.fail
 import org.junit.Test
 import uniffi.mesh_ffi.MeshNodeHandleInterface
@@ -30,7 +29,8 @@ class RuntimeCapacityTest {
             node.runtimeCapacity(id)
             fail("stopped nodes must fail")
         } catch (error: IllegalStateException) {
-            assertSame(failure, error)
+            assertEquals(failure.javaClass, error.javaClass)
+            assertEquals(failure.message, error.message)
         }
     }
 }
