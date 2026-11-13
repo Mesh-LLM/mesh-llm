@@ -191,6 +191,16 @@ fn a_live_log_past_the_window_is_shed_before_its_commit() {
         let held = recorder.lock().held_bytes();
         assert!(held <= window, "ubatch {chunk}: {held} of {window}");
     }
+    {
+        // a shed log keeps nothing per position, also for the ubatches
+        // after it was shed, and its prefix only as a stand-in
+        let state = recorder.lock();
+        let log = &state.seqs[&1].live;
+        assert!(log.shed);
+        assert!(log.leaves.is_empty() && log.events.is_empty());
+        assert!(matches!(log.prefix, Some(Err(_))));
+        assert_eq!(log.live_bytes(), 0);
+    }
     let error = recorder
         .commit("long", 1, TurnId::default(), 0..12)
         .unwrap_err();
@@ -201,4 +211,23 @@ fn a_live_log_past_the_window_is_shed_before_its_commit() {
     record(&recorder, wide(&[(1, 12)], &[12], true));
     recorder.commit("next", 1, TurnId(1), 12..13).unwrap();
     assert!(recorder.holds_turn("next"));
+}
+
+// The window counts the hashes a live log keeps per position and its
+// prefix, not only its ubatches: a turn of decode tokens, whose ubatches
+// carry no input rows, still counts what it holds.
+#[test]
+fn a_live_log_counts_its_positions_and_prefix() {
+    let recorder = Recorder::new(1, STAGES[1].clone(), "cpu");
+    record(&recorder, ubatch(&[(1, 0), (1, 1)], &[0, 1], true));
+    let state = recorder.lock();
+    let log = &state.seqs[&1].live;
+    let positions: usize = log.leaves.values().map(leaves::PositionLeaves::bytes).sum();
+    assert_eq!(log.leaves.len(), 2);
+    assert!(positions > 0);
+    assert_eq!(
+        log.live_bytes(),
+        log.event_bytes + positions + log.prefix_bytes()
+    );
+    assert_eq!(log.live_bytes(), log.bytes());
 }

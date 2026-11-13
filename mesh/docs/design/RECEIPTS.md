@@ -859,7 +859,7 @@ drops a turn that a client can still challenge.
 
 | Limit | Value | When it is reached |
 |---|---|---|
-| Records of committed turns and logs of uncommitted turns | 1 GiB per stage | A turn that does not fit beside the turns inside their challenge window gets no receipt. Only turns past their window are dropped for room |
+| Records of committed turns and logs of uncommitted turns, with their ubatches, position hashes, prefix cells and recurrent state | 1 GiB per stage | A turn that does not fit beside the turns inside their challenge window gets no receipt. Only turns past their window are dropped for room. A live log that outgrows the window is shed: its turn gets no receipt, and it keeps nothing more for that turn |
 | Input rows for prefix replays | 1 GiB per stage after the first | The rows of a turn inside its window are kept. Newer traffic loses its rows first, and a later turn whose prefix needs them gets no receipt |
 | Pinned cells | Half of a KV stream per client key, three quarters in total | The oldest pins give way. The new bound turn keeps its receipt |
 | Openings and rows requests at work | 1 per stage | The others wait |

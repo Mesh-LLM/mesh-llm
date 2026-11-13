@@ -176,7 +176,12 @@ fn uncovered(entry: &SeqState, seq: i32, turn: TurnId, positions: &Range<u32>) -
     let log = std::iter::once(&entry.live)
         .chain(entry.retired.iter().map(|r| &r.log))
         .find(|log| log.turn == turn);
-    if let Some(log) = log {
+    if let Some(log) = log
+        && log.shed
+    {
+        let reason = log.tainted.as_deref().unwrap_or("its log was shed");
+        format!("turn {turn} of sequence {seq} gets no receipt: {reason}")
+    } else if let Some(log) = log {
         let missed = if log.missed {
             ", and a ubatch the stage could not record ran during the turn, so a receipt must \
              start where the turn did"
@@ -219,8 +224,10 @@ fn take_turn(
     let state = log.state.take();
     let events = log.take_events();
     // the log covers the positions ([`SeqLog::covers`]): what fails from
-    // here fails for any commit of the turn
+    // here fails for any commit of the turn. No later commit can cover a
+    // position recorded so far, so the log keeps none of them.
     log.pending_start = None;
+    let recorded = std::mem::take(&mut log.leaves);
     log.missed = false;
     if let Some(reason) = log.tainted.take() {
         bail!("the turn cannot be replayed: {reason}");
@@ -259,8 +266,7 @@ fn take_turn(
     let mut leaves = Vec::with_capacity(positions.len() * usize::try_from(slots)?);
     let mut cells = Vec::with_capacity(positions.len());
     for position in positions.clone() {
-        let committed = log
-            .leaves
+        let committed = recorded
             .get(&position)
             .with_context(|| format!("computed nothing at position {position}"))?;
         leaves.extend_from_slice(&committed.leaves);
