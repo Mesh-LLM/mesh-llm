@@ -220,8 +220,10 @@ impl HttpExchangePolicy for NodeExchangePolicy {
                     .flatten()
             })
             .collect();
+        // The exchange id is node-made, like the other paths'; the client's
+        // request id stays its own field.
         let mut event = super::request_event(
-            request_id.as_uuid().to_string(),
+            crate::network::openai::request_parse::new_node_exchange_id(),
             endpoint,
             method,
             path,
@@ -229,6 +231,7 @@ impl HttpExchangePolicy for NodeExchangePolicy {
             sanitized,
             false,
         );
+        event["request_id"] = json!(request_id.as_uuid().to_string());
         event["node_endpoint_id"] = json!(self.node.id().to_string());
         event["emission_boundary"] = json!("http_body_poll");
         event["dispatch_path"] = json!("typed_frontend");

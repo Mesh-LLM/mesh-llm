@@ -220,6 +220,28 @@ fn next_exchange_seq() -> u64 {
     SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// A node-made exchange id for a request that has no [`BufferedHttpRequest`]
+/// (the typed frontend): the id of its first dispatch, from the same
+/// per-process state as [`BufferedHttpRequest::exchange_id`].
+pub(crate) fn new_node_exchange_id() -> String {
+    exchange_id_for(next_exchange_seq(), 0)
+}
+
+fn exchange_id_for(seq: u64, dispatch: u32) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"mesh-llm.openai.exchange-id.v1");
+    hasher.update(process_boot_id().as_bytes());
+    hasher.update(seq.to_be_bytes());
+    hasher.update(dispatch.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
 impl BufferedHttpRequest {
     /// The exchange id of this dispatch on the raw-proxy / remote-mesh paths.
     ///
@@ -231,18 +253,7 @@ impl BufferedHttpRequest {
     /// id from the request; a model re-pick re-dispatches the same request and
     /// gets its own.
     pub(crate) fn exchange_id(&self) -> String {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(b"mesh-llm.openai.exchange-id.v1");
-        hasher.update(process_boot_id().as_bytes());
-        hasher.update(self.exchange_seq.to_be_bytes());
-        hasher.update(self.automatic_repick.to_be_bytes());
-        let digest = hasher.finalize();
-        let mut bytes = [0u8; 16];
-        bytes.copy_from_slice(&digest[..16]);
-        uuid::Builder::from_custom_bytes(bytes)
-            .into_uuid()
-            .to_string()
+        exchange_id_for(self.exchange_seq, self.automatic_repick)
     }
 
     /// Whether this is the product tokenizer capability route.

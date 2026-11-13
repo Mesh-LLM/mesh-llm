@@ -277,6 +277,7 @@ impl PluginManager {
         if state.attempt_history.len() < 16 {
             let mut attempt = serde_json::Map::new();
             for key in [
+                "exchange_id",
                 "model",
                 "provider",
                 "target",
@@ -873,7 +874,10 @@ impl ExchangeSession {
         );
         event["response_wire_commitment"] = json!(emission.commitment);
         if let Some(selected) = &emission.selected {
+            // The served dispatch's own id: after a re-pick the terminal must
+            // join the dispatch that served, not dispatch 0.
             for key in [
+                "exchange_id",
                 "effective_request_wire_digest",
                 "effective_request_encoding",
                 "model",
