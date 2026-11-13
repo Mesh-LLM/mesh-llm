@@ -20,6 +20,9 @@ use crate::{
     ModelStateKind, RuntimeConfig, Status,
 };
 
+#[cfg(all(test, not(feature = "dynamic-native-runtime")))]
+mod model_open_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelWorkload {
     CausalGeneration,
@@ -226,12 +229,9 @@ impl StageModel {
             return Err(anyhow!(null_handle_message));
         }
         let capability = loaded_model_capability(raw);
-        let media = config
-            .projector_path
-            .as_deref()
-            .map(|projector_path| MediaProjector::open(projector_path, raw, config))
-            .transpose()?;
-        Ok(Self {
+        // Own the native model before projector loading can fail; otherwise a
+        // rejected projector leaks the model's host and accelerator allocations.
+        let mut model = Self {
             inner: Arc::new(StageModelInner {
                 raw,
                 terminal_stage: config.is_terminal_stage(),
@@ -239,8 +239,14 @@ impl StageModel {
                 dflash: None,
                 dflash_capture: None,
             }),
-            media,
-        })
+            media: None,
+        };
+        model.media = config
+            .projector_path
+            .as_deref()
+            .map(|projector_path| MediaProjector::open(projector_path, raw, config))
+            .transpose()?;
+        Ok(model)
     }
 
     fn open_path_with_optional_event_queue(
