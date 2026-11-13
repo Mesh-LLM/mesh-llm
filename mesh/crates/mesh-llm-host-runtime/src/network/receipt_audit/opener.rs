@@ -170,7 +170,9 @@ impl<'a> WindowedOpener<'a> {
             let Some(pause) = busy_pause(&answer) else {
                 bail!(refusal);
             };
-            if (self.clock)() + pause > until {
+            // compared as durations: a peer-supplied pause can be too large
+            // to add to an Instant, and must still count as unanswered
+            if pause > until.saturating_duration_since((self.clock)()) {
                 bail!("{refusal}; the peer was still busy when the time to ask it ended");
             }
             self.transport.pause(pause);
@@ -487,6 +489,20 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(peer.asked.borrow().len(), 1);
         assert_eq!(peer.now.get(), started);
+    }
+
+    #[test]
+    fn a_pause_too_long_to_add_to_the_clock_is_still_no_answer() {
+        // Retry-After: 18446744073709551615 must not panic, which would
+        // turn the unanswered challenge into no audit and no strike
+        let mut peer = Scripted::new(Duration::ZERO);
+        peer.retry_after = Duration::from_secs(u64::MAX);
+        peer.busy.set(1);
+        let (result, late) = opened(&peer, Duration::ZERO);
+        let error = format!("{:#}", result.err().expect("no answer"));
+        assert!(error.contains("still busy"), "{error}");
+        assert_eq!(late, None);
+        assert_eq!(peer.asked.borrow().len(), 1);
     }
 
     #[test]
