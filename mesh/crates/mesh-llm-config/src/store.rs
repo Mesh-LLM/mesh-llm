@@ -89,7 +89,7 @@ pub fn lock_config_file(path: &Path) -> Result<ConfigFileLock> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        std::fs::create_dir_all(parent)
+        crate::private_file::create_private_dirs(parent)
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
     }
     let file = std::fs::OpenOptions::new()
@@ -248,4 +248,35 @@ fn normalize_model_ref(model_ref: &str) -> Result<&str> {
         bail!("model ref cannot be empty");
     }
     Ok(model_ref)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn edits_create_missing_config_directories_owner_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let updated = temp.path().join("a").join("b").join("config.toml");
+        ConfigStore::open(&updated).update(|_| Ok(())).unwrap();
+        assert_eq!(mode(&temp.path().join("a")), 0o700);
+        assert_eq!(mode(&temp.path().join("a").join("b")), 0o700);
+        assert_eq!(mode(&updated), 0o600);
+
+        let edited = temp.path().join("c").join("config.toml");
+        ConfigStore::open(&edited)
+            .edit_preserving(|_| Ok(()))
+            .unwrap();
+        assert_eq!(mode(&temp.path().join("c")), 0o700);
+        assert_eq!(mode(&edited), 0o600);
+        // A parent that already existed is not ours to tighten.
+        assert_eq!(mode(temp.path()), 0o755);
+    }
 }

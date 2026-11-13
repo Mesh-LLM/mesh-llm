@@ -156,10 +156,6 @@ fn listed_nodes(config_override: Option<&Path>) -> Result<Vec<String>> {
 /// file holds it and no other edit lands before it is written; nothing is
 /// written when it fails.
 fn update_nodes<T>(path: &Path, change: impl FnOnce(&mut Vec<String>) -> Result<T>) -> Result<T> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
-    }
     let mut outcome = None;
     ConfigStore::open(path)
         .edit_preserving(|document| {
