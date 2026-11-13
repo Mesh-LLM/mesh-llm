@@ -384,6 +384,13 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Dependencies, summaries, and cancellation
 
+- Quality candidate-source consistency runs in a required hosted peer job,
+  independent of protected authority production and the full contract suite.
+  Check crate lists, publishing, release targets, client dependency purity,
+  console output and environment mutation on `inputs.source_sha`. Keep the
+  full automation and legacy contract suite in the existing Quality slice,
+  with its authority dependencies intact. Consistency failure must not gate
+  that suite on main or manual-full; PR sibling cancellation remains unchanged.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.

@@ -637,6 +637,17 @@ runner-contract update is active.
 
 ## Reusable workflows and slices
 
+The Quality lane's required `consistency` job checks the immutable candidate
+`source_sha` on GitHub-hosted Linux, alongside authority production and runner
+contracts. It prepares candidate xtask with the existing hosted-bare exact
+executable cache and runs crate-list, publish-chain, release-target, embedded
+client dependency, console-print and environment-mutation checks. It has no
+authority or full-contract dependency. The lane summary and validator require
+it whenever `quality` is selected. The original Quality slice retains both
+automation and legacy contracts and its protected authority dependency, so
+main/manual-full contracts still run after a consistency failure. This adds
+one hosted worker and checkout/bootstrap overhead; live timing is unmeasured.
+
 | Workflow | Contract |
 | --- | --- |
 | `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
