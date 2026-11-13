@@ -742,7 +742,7 @@ jobs:
         pair: [1, 2, 3]
         arm: [cold, warm]
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     env:
       LLAMA_STAGE_BACKEND: cpu
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-dynamic-cpu
@@ -768,7 +768,7 @@ jobs:
         run: verify-runner-image public cpu
       - uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
+          pinned_epoch: mesh-llm-cuda-runner-sha256-fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
       - name: Prepare isolated automation before measurement
         shell: bash
         env:
@@ -784,7 +784,7 @@ jobs:
         id: seed_key
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-fa696b3c-epoch-fa696b3c-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
         run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed preflight runtime-seed-evidence'
       - name: Start restore timer
         run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed restore_start runtime-seed-evidence'

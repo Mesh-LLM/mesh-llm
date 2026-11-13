@@ -3,9 +3,9 @@ use serde_json::{Value, json};
 use std::{error::Error, fs, path::Path, process::Command};
 
 type TestResult = Result<(), Box<dyn Error>>;
-const IMAGE: &str = "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60";
+const IMAGE: &str = "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338";
 const EPOCH: &str =
-    "mesh-llm-cuda-runner-sha256-aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60";
+    "mesh-llm-cuda-runner-sha256-fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338";
 
 fn samples(root: &Path, benefit: bool) -> TestResult {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))

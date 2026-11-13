@@ -29,30 +29,38 @@ loader variables. It restores the
 existing protected Linux automation artifact for model resolution and publishes
 only one-day CTest diagnostics. No new producer, remote model-cache publisher,
 runner authority, required entrypoint or production ABI dependency is added.
-The CPU image binding is recorded as consumer role `skippy-cpp-api`, using only
-the dedicated `public-cpp-api` image ID. Its new immutable CPU index
+The CPU image binding is recorded as consumer role `skippy-cpp-api`. Its former
+dedicated `public-cpp-api` image index
 `sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`
 was staged and verified on AMD64/ARM64 in runner-images main run `41127631709`,
 attempt 1, producer `2ca51592535c29ddbed768b75481451d3fa5a49e`. Trusted producer
 admission and native binding retain the complete cohort as evidence hash
 `189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8`.
-Existing CPU consumer, runtime and compiler-seed identities are unchanged.
+That admission preceded the shared CPU cohort described below.
 The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
 and real-model CI qualification remains pending protected-main execution.
 The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
 are required after Rust header generation; missing lint tools fail preflight.
 
-A second CPU image entry, `public-cpu-libclang` (immutable index
+A former CPU image entry, `public-cpu-libclang` (immutable index
 `sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`,
 evidence hash `032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153`,
 runner-images main run `41541864277` attempt 3, producer
-`45e0c35a191cc7026fb1b9a24700cc1b40be7ca6`), carries the reviewed `libclang-dev`
+`45e0c35a191cc7026fb1b9a24700cc1b40be7ca6`), carried the reviewed `libclang-dev`
 toolchain addition so the skippy-ffi bindgen freshness gate runs without a
-job-time install. It binds the compiler-seed cohort (rust-tests, rust-clippy,
+job-time install. It bound the compiler-seed cohort (rust-tests, rust-clippy,
 linux-host, safetensors-runtime-smoke, compiler-seed-publisher,
 runtime-seed-canary), the linux-cpu runtime row, and the rolled-forward
-compiler seed (`img-aaa36843-epoch-aaa36843-v3-`); the previous `public-cpu`
-image remains admitted for consumers that stay on it.
+compiler seed (`img-aaa36843-epoch-aaa36843-v3-`).
+
+Runner-images run `43392701387` attempt 1 staged the current complete cohort
+at producer `c2a825a5f38a0ff8b3a87843d933ec3f89c1195a` and Mesh source
+`2c2051a4084ed8dcd8f93c0f7f1b14fd01ca9a5c`. The catalog now uses its
+`public-cpu` image for all CPU roles, including C++ and libclang consumers,
+and retains the cohort under evidence hash
+`88ea93ca4b1d70c4787cfe1ddf7857a25aa0d95112dbfaf34a23e2ab7e38e0ef`.
+The compiler seed uses `img-fa696b3c-epoch-fa696b3c-v3-`. Producer admission
+and offline binding do not themselves establish workload or GPU qualification.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 

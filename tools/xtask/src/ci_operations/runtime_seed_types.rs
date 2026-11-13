@@ -2,11 +2,11 @@ use crate::command::DynResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub(super) const IMAGE: &str = "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60";
+pub(super) const IMAGE: &str = "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338";
 pub(super) const EPOCH: &str =
-    "mesh-llm-cuda-runner-sha256-aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60";
+    "mesh-llm-cuda-runner-sha256-fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338";
 pub(super) const PREFIX: &str =
-    "mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-";
+    "mesh-llm-sccache-seed-linux-x86_64-img-fa696b3c-epoch-fa696b3c-v3-";
 pub(super) const BUILD: &str = ".deps/llama.cpp/build-stage-abi-dynamic-cpu";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
