@@ -217,6 +217,15 @@ impl OutputHead {
         {
             bail!("output.bias does not match {}", head.weight);
         }
+        if let Some(bias) = &head.norm.bias
+            && bias.len() != head.norm.weight.len()
+        {
+            bail!(
+                "output_norm.bias has {} values, the output norm {}",
+                bias.len(),
+                head.norm.weight.len()
+            );
+        }
         Ok(head)
     }
 
@@ -857,6 +866,24 @@ mod tests {
             .logits(&untied, &[vec![3.0, 0.0, 4.0]])
             .unwrap();
         assert!((logits[0][0] + normed[0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_norm_bias_shorter_than_the_norm_is_refused_not_a_panic() {
+        let embd = vec![1.0; 12];
+        let weights = test_gguf::open(
+            &[
+                ("general.architecture", MetaValue::Str("toy".into())),
+                ("toy.attention.layer_norm_epsilon", MetaValue::Float(1e-6)),
+            ],
+            &[
+                ("output_norm.weight", vec![3], vec![1.0, 2.0, 0.5]),
+                ("output_norm.bias", vec![2], vec![0.0, 0.0]),
+                ("token_embd.weight", vec![3, 4], embd),
+            ],
+        );
+        let error = OutputHead::from_weights(&weights).err().expect("refused");
+        assert!(error.to_string().contains("output_norm.bias"), "{error}");
     }
 
     #[test]
