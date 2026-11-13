@@ -135,7 +135,7 @@ index 269028f5ffb74000917014fb41a886653fc11ee3..d3879f2cbd401cb437a7e764effe9a41
  
      cur = inpL;
 diff --git a/src/models/clef.cpp b/src/models/clef.cpp
-index 3ac5782a8e8b392886cc22d0af1e46dab1af8274..68a845ee3b643bae7905512f766e878e75a867f6 100644
+index 86fed4e874a8ed7bd77fbe676fc8926119ac8aea..3501f5f87fdb7bf6c82c79edebd1d407eb94599a 100644
 --- a/src/models/clef.cpp
 +++ b/src/models/clef.cpp
 @@ -263,6 +263,8 @@ llama_model_clef::graph::graph(const llm_graph_params & params) :
@@ -156,7 +156,7 @@ index 3ac5782a8e8b392886cc22d0af1e46dab1af8274..68a845ee3b643bae7905512f766e878e
  
      cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 diff --git a/src/models/clover-moe.cpp b/src/models/clover-moe.cpp
-index 9caaa56309a245b46983bb26f9421deef3f0abeb..09baa2726389952ac08127adca234f92954284ad 100644
+index 8892521eee35e0a1f675e75d68fbcdeb6fc7717b..fcdaace7b6cea7e4efcbc23e1a8e05d056ec660e 100644
 --- a/src/models/clover-moe.cpp
 +++ b/src/models/clover-moe.cpp
 @@ -135,6 +135,8 @@ llama_model_clover_moe::graph::graph(const llm_graph_params & params) :
@@ -1109,7 +1109,7 @@ index 10348f291e005490f40bf717ce32e9049d6ea7e4..374542bf9483a05491cd81a34898db8a
      cur = inpL;
  
 diff --git a/src/models/plamo2.cpp b/src/models/plamo2.cpp
-index 2d9edf56e398934a3a0c9787142bee5595284145..19d8226c4750ff4add090b62107de6d255c6fbb6 100644
+index f019bd0b6955e18d350c09b9a667e41859bf7241..1385dc7ced57ea627f5d7e621e405cb15cfe2a9d 100644
 --- a/src/models/plamo2.cpp
 +++ b/src/models/plamo2.cpp
 @@ -123,6 +123,8 @@ llama_model_plamo2::graph::graph(const llm_graph_params & params) :

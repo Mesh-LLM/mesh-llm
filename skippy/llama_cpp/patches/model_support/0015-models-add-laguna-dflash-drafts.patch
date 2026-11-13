@@ -1,7 +1,7 @@
-From 0aa5d8250686c5f980d5136d5ff21214966b033a Mon Sep 17 00:00:00 2001
+From f417278f2f47e52f3a1bb88bc1e7d49e1ac51c84 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Mon, 9 Nov 2026 15:52:17 +1100
-Subject: [PATCH 15/15] models: add Laguna DFlash drafts
+Subject: [PATCH 31/32] models: add Laguna DFlash drafts
 
 Laguna drafters (poolside/Laguna-XS-2.1-DFlash, Laguna-S-2.1-DFlash) read
 the target's layer inputs, including layer n_layer: the last layer's
@@ -46,7 +46,7 @@ of the Laguna contract fixture keep the draft's target layers 2, 14,
  10 files changed, 230 insertions(+), 7 deletions(-)
 
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index f9dabf4f2..a8b2d7a9c 100644
+index 6800093ae..330de9ee6 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
 @@ -66,6 +66,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
@@ -147,7 +147,7 @@ index 29e0b3d6b..3510a0489 100644
 +
 +        yield from super().modify_tensors(data_torch, name, bid)
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 7ed746229..f39c71e18 100644
+index 4bca32f0c..6773c748e 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
 @@ -173,6 +173,7 @@ class Keys:
@@ -191,10 +191,10 @@ index 7ed746229..f39c71e18 100644
          # optional DSpark heads
          MODEL_TENSOR.DSPARK_MARKOV_W1,
 diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index 21b354ca4..6b62f430b 100644
+index 364eeaa75..7ae1ce046 100644
 --- a/gguf-py/gguf/gguf_writer.py
 +++ b/gguf-py/gguf/gguf_writer.py
-@@ -1077,6 +1077,9 @@ class GGUFWriter:
+@@ -1082,6 +1082,9 @@ class GGUFWriter:
      def add_selector_top_k(self, value: int) -> None:
          self.add_uint32(Keys.LLM.SELECTOR_TOP_K.format(arch=self.arch), value)
  
@@ -464,10 +464,10 @@ index 1bf25eacf..0f4029bdb 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/models/models.h b/src/models/models.h
-index 8c92196cd..276ae1c48 100644
+index 7adc95719..6f6d44bf5 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1618,6 +1618,14 @@ struct llama_model_dflash : public llama_model_base {
+@@ -1587,6 +1587,14 @@ struct llama_model_dflash : public llama_model_base {
      void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
  
@@ -513,6 +513,3 @@ index fdcdc631f..725b75ad2 100644
 +    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-laguna/graph-contract.gguf" 2,14,26,34,40)
 +set_tests_properties(skippy_laguna_stage_layer_inputs PROPERTIES
 +    FIXTURES_REQUIRED contract-laguna TIMEOUT 900)
--- 
-2.54.0 (Apple Git-157)
-
