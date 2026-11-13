@@ -161,6 +161,7 @@ impl Package {
             "aarch64-unknown-linux-gnu" | "aarch64-linux-android" => ("linux", "aarch64"),
             "armv7-unknown-linux-gnueabihf" | "armv7-linux-androideabi" => ("linux", "arm"),
             "x86_64-pc-windows-msvc" => ("windows", "x86_64"),
+            "aarch64-pc-windows-msvc" => ("windows", "aarch64"),
             _ => return Err(format!("unsupported runtime platform target: {target}")),
         };
         if (os, arch) != pair {

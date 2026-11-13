@@ -49,6 +49,16 @@ sudo apt-get install -y mold lld
 `rustup component add llvm-tools-preview`, or install LLVM with `winget install
 LLVM.LLVM`.
 
+**Windows ARM64**: `scripts\build-windows.ps1 -Backend cpu -TargetArch arm64`
+builds the host, the Skippy CLI and the CPU runtime for
+`aarch64-pc-windows-msvc`, cross-compiling from an x64 machine or natively on
+Windows on ARM. It needs `rustup target add aarch64-pc-windows-msvc` and two
+Visual Studio components: the ARM64 MSVC tools
+(`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) and the C++ Clang compiler
+(`Microsoft.VisualStudio.Component.VC.Llvm.Clang`), which builds llama.cpp and
+the `ring` crate for ARM64. Only the CPU backend is supported, and releases do
+not publish a Windows ARM64 archive yet.
+
 ## Build from source
 
 Build both debug products in order: patched llama.cpp and the standalone

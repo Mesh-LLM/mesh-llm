@@ -8,6 +8,7 @@ pub(crate) fn verify(target: &str, os: &str, arch: &str) -> DynResult<()> {
         "x86_64-unknown-linux-gnu" | "x86_64-linux-android" => ("linux", "x86_64"),
         "armv7-unknown-linux-gnueabihf" | "armv7-linux-androideabi" => ("linux", "arm"),
         "x86_64-pc-windows-msvc" => ("windows", "x86_64"),
+        "aarch64-pc-windows-msvc" => ("windows", "aarch64"),
         _ => return Err(format!("unsupported native target: {target}").into()),
     };
     if pair != (os, arch) {
