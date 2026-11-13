@@ -276,7 +276,7 @@ pub(crate) async fn route_virtual_model_or_passthrough(
         request.response_adapter,
         route_observer,
         request.exchange_observation_id.as_deref(),
-        request.request_id.as_uuid().to_string(),
+        request.exchange_id(),
     )
     .await
     {

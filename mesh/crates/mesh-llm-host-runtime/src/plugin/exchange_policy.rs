@@ -54,9 +54,6 @@ impl NodeExchangePolicy {
         event["observation_point"] = json!("backend_dispatch");
         event["dispatch_path"] = json!("typed_frontend");
         event["backend_exchange_id"] = json!(exchange_id);
-        // The typed backend's id is `backend_exchange_id`; the event's
-        // `exchange_id` is the enclosing session's, which the session fills in.
-        event.as_object_mut().unwrap().remove("exchange_id");
         event["model"] = json!(model);
         event["provider"] = json!("native_runtime");
         event["target"] = json!("local");
@@ -66,7 +63,13 @@ impl NodeExchangePolicy {
         event.as_object_mut().unwrap().remove("request_wire_digest");
         let result =
             match skippy_inference_api::http_exchange::current_http_exchange_observation_id() {
-                Some(id) => manager.selected_exchange_phase(&id, event).await,
+                // The typed backend's id is `backend_exchange_id`; inside a
+                // session the event's `exchange_id` is the session's, which
+                // the session fills in once the typed one is dropped.
+                Some(id) => {
+                    event.as_object_mut().unwrap().remove("exchange_id");
+                    manager.selected_exchange_phase(&id, event).await
+                }
                 None => manager.exchange_phase(event).await,
             };
         match result.error_status() {

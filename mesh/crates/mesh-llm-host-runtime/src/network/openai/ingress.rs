@@ -33,8 +33,8 @@ mod rejection_telemetry;
 use buffered_exchange::handle_buffered_api_request;
 pub(super) use exchange_events::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use exchange_events::{
-    RemoteDeliveredFacts, client_nonce_source, local_route_delivered_by_peer,
-    mint_and_publish_effective_raw_proxy, publish_local_route_terminal, remote_delivered_terminal,
+    RemoteDeliveredFacts, client_nonce_source, derive_and_publish_effective_raw_proxy,
+    local_route_delivered_by_peer, publish_local_route_terminal, remote_delivered_terminal,
     request_client_nonce,
 };
 #[cfg(test)]
@@ -811,7 +811,7 @@ async fn try_route_plugin_model(
     {
         Ok(Some(endpoint)) => {
             let exchange_id =
-                mint_and_publish_effective_raw_proxy(plugin_manager, request, model_name).await;
+                derive_and_publish_effective_raw_proxy(plugin_manager, request, model_name).await;
             let outcome = proxy::route_http_endpoint_request(
                 ctx.node,
                 Some(model_name),
@@ -1029,7 +1029,7 @@ async fn route_prepared_request(
         // together. Tokenize requests are not chat exchanges, so they are not
         // announced. `plugin_manager` is `None` when no plugin is loaded, and
         // even with one loaded nothing may declare `openai.exchange.v1` — in
-        // either case there is no subscriber, so skip minting an exchange id
+        // either case there is no subscriber, so skip deriving an exchange id
         // and, below, the body digest and served-model provenance lookup
         // that only exist to build an event nobody would receive.
         let channel = ctx.exchange_events_channel();
@@ -1519,7 +1519,7 @@ async fn try_handle_virtual_model_intercept(
         request.response_adapter,
         route_observer,
         request.exchange_observation_id.as_deref(),
-        request.request_id.as_uuid().to_string(),
+        request.exchange_id(),
     )
     .await
     {
