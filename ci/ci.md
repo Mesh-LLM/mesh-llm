@@ -2451,8 +2451,10 @@ checks that manifest and exact source roster before consumers run. Dependency
 preparation uses the component's checked-in lock files. Runtime calls stay
 offline and do not compile a missing native bridge or install SDK dependencies.
 
-`setup-canary-python` admits the in-tree component before compatibility or
-embedding dependency preparation. The bare macOS Swift SDK smoke restores the
+The `prepare-python-sdk-source` action admits the in-tree component and exports
+`MESH_PYTHON_SDK_SOURCE`. The Quality contract lane and shared smoke-input
+restoration call it directly; `setup-canary-python` calls it before compatibility
+or embedding dependency preparation. The bare macOS Swift SDK smoke restores the
 lane's `product_automation_macos_arm64` executable through `restore-automation`
 before admission and never compiles xtask. Required SDK cadence is unchanged.
 For local `just ci-automation-contracts` or `just ci-validate`, set

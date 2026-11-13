@@ -8,6 +8,8 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Admit Python SDK source
+      uses: ./.github/actions/prepare-python-sdk-source
     - name: Prepare locked SDK environment
       shell: bash
       env:
@@ -16,11 +18,10 @@ runs:
         HUGGING_FACE_HUB_TOKEN: ''
       run: |
         set -euo pipefail
-        export MESH_PYTHON_SDK_SOURCE="$PWD/mesh/sdk/python"
         automation=(cargo xtool)
         if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then automation=("$MESH_LLM_AUTOMATION_BIN"); fi
-        sdk_root="$("${automation[@]}" automation smoke-observation sdk-source --kind root)"
         sdk_project="$("${automation[@]}" automation smoke-observation sdk-source --kind "$SDK_KIND")"
+        sdk_root="${MESH_PYTHON_SDK_SOURCE:?SDK source admission did not export its root}"
         host_python="$(command -v python3)"
         case "$SDK_KIND" in
           embedding)
@@ -53,6 +54,4 @@ runs:
           *) echo "unsupported SDK environment class" >&2; exit 1 ;;
         esac
         [[ "$sdk_python" == /* && -f "$sdk_python" && -x "$sdk_python" ]] || exit 1
-        "${automation[@]}" automation smoke-observation sdk-source --kind root >/dev/null
-        printf 'MESH_PYTHON_SDK_SOURCE=%s\n' "$sdk_root" >> "$GITHUB_ENV"
         printf '%s=%s\n' "$sdk_variable" "$sdk_python" >> "$GITHUB_ENV"

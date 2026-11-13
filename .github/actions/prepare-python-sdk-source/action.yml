@@ -1,0 +1,14 @@
+name: Admit in-tree Python SDK source
+description: Admit the checked-in Python SDK component before contracts or smoke clients consume it.
+runs:
+  using: composite
+  steps:
+    - name: Admit in-tree Python SDK source
+      shell: bash
+      run: |
+        set -euo pipefail
+        export MESH_PYTHON_SDK_SOURCE="$PWD/mesh/sdk/python"
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then automation=("$MESH_LLM_AUTOMATION_BIN"); fi
+        sdk_root="$("${automation[@]}" automation smoke-observation sdk-source --kind root)"
+        printf 'MESH_PYTHON_SDK_SOURCE=%s\n' "$sdk_root" >> "$GITHUB_ENV"

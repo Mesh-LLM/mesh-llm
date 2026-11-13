@@ -83,6 +83,10 @@ runs:
       with:
         runner-profile: hosted-bare
 
+    - name: Admit in-tree Python SDK source
+      if: runner.os != 'Windows' && env.MESH_PYTHON_SDK_SOURCE == ''
+      uses: ./.github/actions/prepare-python-sdk-source
+
     # Some smoke callers share the in-tree SDK setup action.
     - name: Prepare required SDK clients
       if: runner.os != 'Windows' && inputs.model_artifact_id == 'smollm2-q8-inference' && env.MESH_REQUIRED_SDK_PYTHON == ''
