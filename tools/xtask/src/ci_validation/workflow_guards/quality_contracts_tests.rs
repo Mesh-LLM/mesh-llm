@@ -279,6 +279,10 @@ fn component_contracts_cannot_be_omitted_filtered_or_moved() {
             "    just with-lld cargo test --locked -p process-supervision -- --test-threads=1\n",
             "    just with-lld cargo test --locked -p process-supervision --lib -- --test-threads=1\n",
         ),
+        (
+            "    just with-lld cargo test --locked -p runner-cleanup -- --test-threads=1\n",
+            "    just with-lld cargo test --locked -p runner-cleanup --lib -- --test-threads=1\n",
+        ),
     ] {
         assert!(source.contains(line), "{line}");
         for changed in [

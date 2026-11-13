@@ -680,6 +680,9 @@ setup reserve). The three hardware-backed Linux Laya jobs have a 100-minute
 floor while preserving a larger caller input; their 20-minute controller
 preparation precedes the 70-minute artifact/fixture/read composite and
 five-minute cleanup. Startup and each of eight reads remain 300 seconds.
+The trusted runner-image job builds only the narrow `runner-cleanup` executable
+(`just runner-cleanup-bootstrap`); the Laya jobs keep full xtask
+(`just automation-bootstrap`) because they run other xtask commands.
 Each persistent phase copies the source-built controller to an owned private
 `RUNNER_TEMP` directory, records its SHA-256 and selected source, and admits
 both before managed work and cleanup. Cleanup invokes that controller without
@@ -1101,7 +1104,14 @@ statistics are retained in the job log. The nightly KV workflow no longer
 clears the repository Rust wrapper. Every managed Windows compile job uses
 sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
 asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
-boundary.
+boundary. Every Windows `mozilla-actions/sccache-action` install, in the managed
+jobs and in `prepare-automation`, pins `version: v0.16.0`; the
+`windows_build_paths` guard rejects any other version. sccache 0.17 and later
+expand Cargo's rustc argfile past the Windows command-line limit under Rust
+1.100's build-dir layout (os error 206, mozilla/sccache#2787). 0.16.0 passes an
+argfile call to rustc uncached, so the largest crates recompile on every Windows
+run. Lift the pin once an upstream fix is released and a Windows lane passes
+with it.
 
 - `restore-release-ui` / `prepared-input ui-distribution`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
@@ -2003,11 +2013,13 @@ workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
 `.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
-`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/trajectory-reader/**`,
+`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/runner-cleanup/**`,
+`tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/authority-automation/**`, `tools/ci-controller/**`, and
-`tools/process-supervision/**` because xtask compiles those libraries. Only the
+`tools/authority-automation/**`, `tools/ci-controller/**`,
+`tools/process-supervision/**`, and `tools/runner-cleanup/**` because xtask
+compiles those libraries. Only the
 default `tool: xtask` restores or saves that entry. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the

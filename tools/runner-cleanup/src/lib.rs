@@ -1,6 +1,11 @@
+//! `ci-ops runner-cleanup`: bounded deletion of a persistent job's own outputs,
+//! plus this executable's bootstrap identity. Full xtask delegates the same
+//! command here, so it has one implementation.
+
 mod admission;
+pub mod bootstrap;
 mod boundary;
-pub(super) mod command;
+pub mod command;
 mod deletion;
 mod error;
 mod finalization;
@@ -39,7 +44,8 @@ pub(crate) fn run(
     let (git, output) = adapter;
     let plan = boundary::from_environment(options, environment)?;
     let admitted = admission::admit(&plan)?;
-    let interrupt = crate::command_interrupt::Interrupt::install().map_err(Error::Interrupt)?;
+    let interrupt =
+        process_supervision::interrupt::Interrupt::install().map_err(Error::Interrupt)?;
     let result = deletion::execute(admitted, git, (&interrupt, output));
     finalization::finalize(result, interrupt.finish())
 }
