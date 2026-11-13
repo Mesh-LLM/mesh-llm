@@ -33,6 +33,7 @@ pub(crate) fn text(bytes: &[u8]) -> String {
 pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
     match lane {
         "quality" => &[
+            "consistency",
             "authority_source",
             "authority_linux_x64",
             "quality",

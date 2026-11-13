@@ -26,6 +26,7 @@ mod laya;
 mod nightly_stability;
 mod permissions;
 mod pr_canary;
+mod quality_consistency;
 mod quality_contracts;
 mod registry_canary;
 mod rolling_preview;
@@ -80,6 +81,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     }
     cancellation::check(&workflows)?;
     quality_contracts::check(root, &workflows)?;
+    quality_consistency::check(&workflows)?;
     selected_ref::check(&workflows)?;
     claude_clients::check(&workflows)?;
     pr_canary::check(&workflows)?;

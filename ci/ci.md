@@ -1034,6 +1034,23 @@ parallelism.
 
 ## Native contract execution
 
+Quality consistency now runs as a required lane peer on the candidate
+`source_sha`, without waiting for protected authority production or the full
+contract suite. It checks crate lists, publish order, release targets, embedded
+client dependency purity, console output and process environment ownership.
+The existing hosted-bare preparation reuses an exact cached candidate xtask or
+builds it on a miss. The lane summary directly needs `consistency`, and the
+validator requires success whenever the `quality` slice is selected.
+
+The graph is `plan -> consistency` alongside
+`plan -> authority_source -> authority_linux_x64 -> quality -> contracts`.
+There is no consistency-to-contract edge, so an early consistency failure
+does not suppress main/manual-full contracts. Existing authority edges, PR
+sibling cancellation, format, convention and Clippy behavior remain intact.
+This removes the observed 27-minute contract wait from consistency reporting,
+but does not establish a measured hosted duration. It adds one possible
+concurrent hosted worker plus checkout and cold/cached automation setup.
+
 Quality runs both `just ci-automation-contracts` and `just ci-legacy-contracts`,
 with pinned external SDK and research source preparation. Model-resolution
 steps call the native resolver directly. The compatibility changes merged in
