@@ -535,6 +535,42 @@ async fn an_offline_node_serves_a_receipts_request_itself_or_not_at_all() {
     assert_eq!(receipted.served_here(), 1);
 }
 
+/// An audit runs on the native runtime. A node without one loaded (a
+/// `client` started without `[receipts] audit` or `require`) audits no
+/// peer, so a receipted peer does not qualify for a request that requires
+/// receipts, by header or by a `require` set after startup: the request
+/// fails closed instead of reaching a peer whose turn goes unaudited.
+#[tokio::test]
+async fn a_node_that_cannot_audit_sends_no_receipts_request_to_a_peer() {
+    for (config, header) in [("", RECEIPTS), ("require = true", "")] {
+        let mut ingress = Ingress::without_a_runtime().await;
+        ingress.receipts_config(config).await;
+        let receipted = ingress.add_peer(chat_peer(0x73, true)).await;
+        let request = parsed(chat(header)).await;
+        let ready = crate::network::request_trust::decide(&ingress.node, &request.raw)
+            .await
+            .unwrap();
+        assert_eq!(ready, RequestTrust::Receipts { audit: true });
+        let peer = election::InferenceTarget::Remote(receipted);
+        assert!(
+            crate::network::request_trust::permits(&ingress.node, ready, MODEL, CHAT, &peer).await
+        );
+
+        ingress.node.receipt_audits.set_auditor_unavailable();
+        let unready = crate::network::request_trust::decide(&ingress.node, &request.raw)
+            .await
+            .unwrap();
+        assert_eq!(unready, RequestTrust::Receipts { audit: false });
+        assert!(
+            !crate::network::request_trust::permits(&ingress.node, unready, MODEL, CHAT, &peer)
+                .await
+        );
+        let answer = ingress.send(chat(header)).await;
+        assert_unsatisfied(&answer);
+        assert!(answer.contains("no native runtime is loaded"), "{answer}");
+    }
+}
+
 /// A request a peer assigned to this node is executed here, whatever
 /// policy its headers or this node's settings name: the policy was the
 /// sender's to apply, and nothing is routed.
