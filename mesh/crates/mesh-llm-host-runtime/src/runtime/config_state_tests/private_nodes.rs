@@ -127,3 +127,37 @@ fn an_apply_is_refused_when_the_file_cannot_be_read() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_hand_edit_made_while_an_apply_is_pending_is_not_written_over() {
+    let dir = test_dir();
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        format!("[private]\nnodes = [\"{}\"]\n", "ab".repeat(32)),
+    )
+    .unwrap();
+    let mut state = ConfigState::load(&path).expect("load");
+    let mut unrelated = state.config().clone();
+    unrelated.gpu.assignment = GpuAssignment::Pinned;
+    let pending = match state.prepare_apply(unrelated, 0) {
+        ConfigApplyPreparation::Pending(pending) => pending,
+        other => panic!("expected a pending apply, got {other:?}"),
+    };
+
+    // A text editor removes the node without taking the config lock.
+    let hand_edit = "[private]\nnodes = []\n";
+    std::fs::write(&path, hand_edit).unwrap();
+
+    let persistence = pending.persist();
+    match state.finish_apply(*pending, persistence) {
+        ApplyResult::PersistError(error) => {
+            assert!(error.contains("changed while this apply"), "{error}");
+        }
+        other => panic!("expected the apply to be refused, got {other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), hand_edit);
+    assert_eq!(state.revision(), 0);
+
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -110,10 +110,25 @@ pub(crate) struct PendingConfigApply {
     /// Held until this apply is written and done, so no other writer of the
     /// file edits it between the read in `prepare_apply` and that write.
     _file_lock: mesh_llm_config::ConfigFileLock,
+    /// The file as `prepare_apply` read it (`None`: missing). A hand edit does
+    /// not take the lock, so `persist` refuses to write over a file that has
+    /// changed since.
+    file_on_read: Option<Vec<u8>>,
+}
+
+/// The config file's bytes, or `None` when it cannot be read (missing).
+fn read_config_file(path: &Path) -> Option<Vec<u8>> {
+    std::fs::read(path).ok()
 }
 
 impl PendingConfigApply {
     pub(crate) fn persist(&self) -> ConfigPersistence {
+        if read_config_file(&self.config_path) != self.file_on_read {
+            return ConfigPersistence::PersistError(
+                "the config file changed while this apply was prepared; reload and apply again"
+                    .into(),
+            );
+        }
         if let Err(error) = ConfigStore::open(self.config_path.clone()).save(&self.config) {
             return ConfigPersistence::PersistError(format!("failed to write config: {error}"));
         }
@@ -586,6 +601,7 @@ impl ConfigState {
                 )));
             }
         };
+        let file_on_read = read_config_file(&self.config_path);
         // An apply that leaves the list as this state knew it keeps the file's
         // current list, so a stale snapshot cannot bring back a removed node.
         // A file that cannot be read gives no current list to keep, and
@@ -688,6 +704,7 @@ impl ConfigState {
             live_request_defaults: std::sync::Arc::clone(&self.live_request_defaults),
             request_defaults_undo: std::sync::Mutex::new(None),
             _file_lock: file_lock,
+            file_on_read,
         }))
     }
 
