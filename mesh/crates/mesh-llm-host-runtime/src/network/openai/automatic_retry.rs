@@ -27,6 +27,12 @@ impl AutomaticRetryHandoff {
         self.repick
     }
 
+    /// Whether this dispatch is a model re-pick of a request an earlier
+    /// dispatch already tried.
+    pub(crate) fn is_repick(&self) -> bool {
+        self.repick
+    }
+
     pub(crate) fn retain(&self, stream: ClientStream) {
         *self.stream.lock().unwrap() = Some(stream);
     }
