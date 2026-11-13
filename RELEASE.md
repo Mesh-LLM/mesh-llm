@@ -69,9 +69,12 @@ bundle validation.
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
   token or GitHub App token with Contents write and Actions read access to
   `Mesh-LLM/mesh-packaging`. These permissions allow the workflow to dispatch
-  packaging and read its readiness artifact. The workflow checks access without printing
-  the credential before it sends the event. The legacy secret name is retained
-  so existing release environments do not require a coordinated secret rename.
+  packaging and read its readiness artifact. Before dispatch, the workflow
+  checks repository push permission and probes the run-list endpoint without
+  printing the credential. Public run-list access does not prove that the token
+  can download an artifact; a denied artifact download fails the wait. The
+  legacy secret name is retained so existing release environments do not
+  require a coordinated secret rename.
 
 ## Release Attestation Signing Keys
 

@@ -870,7 +870,9 @@ days.
 After a stable release with the full GPU matrix succeeds, the downstream
 `mesh-packaging` dispatch job first checks that its
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository
-and read its Actions runs.
+and probes the Actions run-list endpoint. Because that endpoint is public,
+the probe does not prove that the credential can download an artifact. A denied
+artifact download fails the wait job.
 That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
