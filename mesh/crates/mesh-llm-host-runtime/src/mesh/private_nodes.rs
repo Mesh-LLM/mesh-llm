@@ -249,4 +249,36 @@ mod tests {
         unwatched.reload_now();
         assert_eq!(*unwatched.current(), [id(1), id(2)].into());
     }
+
+    #[test]
+    fn an_older_background_read_cannot_win_over_reload_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        write_config(&path, &[id(1), id(2)]);
+        let config = mesh_llm_config::load_config(Some(&path)).unwrap();
+        let mut nodes = PrivateNodes::kept_current(&config, Some(&path), false);
+        nodes.file = Some(Arc::new(path.clone()));
+
+        // The background check has read the old list and not yet swapped it in.
+        let background = nodes.reload.lock().unwrap();
+        let old_read = load_private_nodes(&path);
+
+        // An apply removes node 1 and reloads before reporting it live.
+        write_config(&path, &[id(2)]);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let applying = nodes.clone();
+        let apply = std::thread::spawn(move || {
+            applying.reload_now();
+            done_tx.send(()).unwrap();
+        });
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "reload_now must wait for the read in progress"
+        );
+
+        nodes.replace(old_read);
+        drop(background);
+        apply.join().unwrap();
+        assert_eq!(*nodes.current(), [id(2)].into());
+    }
 }
