@@ -452,7 +452,7 @@ impl StageOpenAiBackend {
     ///
     /// The cap and window come from the ungated plan, so a stood-down request
     /// still says what it would have run with; the run-ahead budget is the one
-    /// the search settled on for this request.
+    /// the search settled on for this request, and zero when it stood down.
     fn speculation_summary(
         &self,
         after_search: &crate::frontend::SpeculativeDecodeConfig,
@@ -483,7 +483,12 @@ impl StageOpenAiBackend {
                 self.draft.as_ref().map(|_| self.speculative_window),
             ),
             verify_window_max_tokens: self.speculative.verify_window.max_tokens,
-            runahead_budget_tokens: after_search.verify_window.runahead_max_tokens,
+            // A request that ran without speculation spent no run-ahead budget.
+            runahead_budget_tokens: if stand_down.is_some() {
+                0
+            } else {
+                after_search.verify_window.runahead_max_tokens
+            },
         }
     }
 

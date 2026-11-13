@@ -63,10 +63,28 @@ impl GenerationStatsObserver for AnalyticsObserver {
         let mut properties =
             request_properties(stats, &model_identity::lookup(&stats.model_id), weight);
         if let Some(hardware) = mesh_llm_analytics::serving_hardware() {
-            properties = hardware.apply(properties);
+            properties = hardware.apply(properties, loaded_backend());
         }
         mesh_llm_analytics::capture(Event::InferenceRequest, properties);
     }
+}
+
+/// The backend of the native runtime this process serves on, read once from
+/// its devices on the first reported request. By then a runtime is loaded,
+/// so this is what ran, whatever the hardware survey saw at startup. A
+/// runtime with only CPU devices is `cpu`; `None` if the devices cannot be
+/// read.
+fn loaded_backend() -> Option<&'static str> {
+    static LOADED_BACKEND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *LOADED_BACKEND.get_or_init(|| {
+        let devices = skippy_runtime::backend_devices().ok()?;
+        Some(
+            devices
+                .iter()
+                .find_map(|device| mesh_llm_analytics::backend_of_device(&device.name))
+                .unwrap_or("cpu"),
+        )
+    })
 }
 
 /// Throughput in tokens per second, or `None` when it would be noise.
