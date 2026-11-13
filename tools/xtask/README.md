@@ -15,6 +15,10 @@ their output and exit codes are unchanged.
 [authority-automation](../authority-automation/README.md), the executable the
 protected authority producers publish. xtask delegates them the same way.
 
+`ci-ops runner-cleanup` lives in [runner-cleanup](../runner-cleanup/README.md), the
+executable the trusted runner-image job freezes for cleanup. xtask delegates it
+the same way.
+
 From the workspace root, run the repository checks through `just`:
 
 ```bash

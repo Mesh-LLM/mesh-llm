@@ -14,6 +14,7 @@ pub(crate) const XTASK: BootstrapTool = BootstrapTool {
         "authority-automation",
         "ci-controller",
         "process-supervision",
+        "runner-cleanup",
         "mesh-llm-release-footer",
         "trajectory-reader",
     ],

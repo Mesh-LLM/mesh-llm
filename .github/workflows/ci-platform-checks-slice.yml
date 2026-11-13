@@ -143,6 +143,11 @@ jobs:
         uses: ./.github/actions/setup-macos-lld
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: ${{ matrix.check.platform == 'windows' }}
+        # sccache 0.17+ expands Cargo's rustc argfile and exceeds the Windows
+        # command-line limit with Rust 1.100's build-dir layout (os error 206,
+        # mozilla/sccache#2787). 0.16.0 passes the argfile through.
+        with:
+          version: v0.16.0
       - uses: ./.github/actions/configure-sccache-gha
         if: ${{ matrix.check.platform == 'windows' }}
         with:

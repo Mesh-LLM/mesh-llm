@@ -156,7 +156,9 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
             worker: Mutex::new(None),
         }),
     };
-    let deadline = Instant::now() + Duration::from_millis(10);
+    // The caller checks the deadline before it enqueues, so a short deadline can
+    // expire while its thread starts on a busy machine, and nothing is sent.
+    let deadline = Instant::now() + Duration::from_secs(1);
     let caller = thread::spawn(move || {
         let channel = scheduler.direct_iteration_channel();
         scheduler.execute_iteration_on(

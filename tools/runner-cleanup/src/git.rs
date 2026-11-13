@@ -1,7 +1,7 @@
 use super::Error;
-use crate::{
-    command_interrupt::Interrupt,
-    process::{self, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value},
+use process_supervision::{
+    self as process, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
+    interrupt::Interrupt,
 };
 use std::{
     collections::BTreeMap,

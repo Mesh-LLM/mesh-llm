@@ -136,6 +136,7 @@ pub const CONTRACT_TESTED_CRATES: &[&str] = &[
     "authority-automation",
     "ci-controller",
     "process-supervision",
+    "runner-cleanup",
     "xtask",
 ];
 
