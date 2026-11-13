@@ -331,6 +331,12 @@ async fn official_basic_sequential_and_same_socket_store_false_cases() {
     let first_completed = completed(&first);
     assert_eq!(first[0]["sequence_number"], 0);
     assert_eq!(first_completed["response"]["store"], false);
+    let delta = first
+        .iter()
+        .find(|event| event["type"] == "response.output_text.delta")
+        .expect("default WebSocket turn emits a text delta");
+    assert!(delta["obfuscation"].as_str().is_some());
+    assert_eq!(serde_json::to_vec(delta).unwrap().len() % 256, 0);
     let second = terminal(&mut socket).await;
     assert_eq!(second[0]["type"], "response.created");
     assert_eq!(second[0]["sequence_number"], 0);

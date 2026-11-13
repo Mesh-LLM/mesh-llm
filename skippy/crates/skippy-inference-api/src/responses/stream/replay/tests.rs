@@ -33,6 +33,24 @@ fn turn_with_both_continuations() -> (ResponsesTurn, Arc<ResponseStore>, Arc<Res
     (turn, store, session)
 }
 
+fn turn_with_obfuscation() -> (ResponsesTurn, Arc<ResponseStore>, Arc<ResponseSessionCache>) {
+    let store = Arc::new(ResponseStore::default());
+    let session = Arc::new(ResponseSessionCache::new(1024 * 1024));
+    let continuation = ResponseContinuation::for_session(
+        Some(store.clone()),
+        Some(CallerScope::LocalHost),
+        session.clone(),
+        true,
+    );
+    let mut request = json!({
+        "model":"m",
+        "input":"hello",
+        "stream_options":{"include_obfuscation":true},
+    });
+    let turn = ResponsesTurn::prepare(&mut request, continuation).unwrap();
+    (turn, store, session)
+}
+
 fn assert_failed_lifecycle(events: &[ResponsesStreamEvent]) {
     assert_eq!(
         events.iter().map(|event| event.event).collect::<Vec<_>>(),
@@ -71,6 +89,92 @@ fn event_or_byte_rejection_commits_neither_shared_nor_session_state() {
         assert!(store.get(&CallerScope::LocalHost, &id).is_err());
         assert!(session.get(&id).is_none());
     }
+}
+
+fn replay_bytes(turn: &ResponsesTurn, chat: &Value) -> usize {
+    let staged = turn.stage_chat_completion(chat);
+    let events = try_stream_events_for_response(
+        staged.response(),
+        ReplayLimits::default(),
+        turn.obfuscation_policy(),
+        0,
+        true,
+    )
+    .expect("valid response fits default replay limits");
+    assert!(events.iter().any(|event| {
+        event.event == "response.output_text.delta" && event.data["obfuscation"].as_str().is_some()
+    }));
+    let padded_bytes = events
+        .iter()
+        .map(|event| serde_json::to_vec(&event.data).unwrap().len())
+        .sum();
+    let unpadded_bytes = events
+        .iter()
+        .map(|event| {
+            let mut data = event.data.clone();
+            data.as_object_mut().unwrap().remove("obfuscation");
+            serde_json::to_vec(&data).unwrap().len()
+        })
+        .sum();
+    assert!(padded_bytes > unpadded_bytes);
+    padded_bytes
+}
+
+#[test]
+fn exact_padding_bytes_are_admitted_before_any_continuation_commit() {
+    let chat = completed_chat("padding changes this replay budget");
+    let (accepted_turn, accepted_store, accepted_session) = turn_with_obfuscation();
+    let accepted_id = accepted_turn.id().to_string();
+    assert!(
+        accepted_store
+            .get(&CallerScope::LocalHost, &accepted_id)
+            .is_err()
+    );
+    assert!(accepted_session.get(&accepted_id).is_none());
+    let exact_padded_bytes = replay_bytes(&accepted_turn, &chat);
+    let accepted = stream_events_for_chat_completion_with_limits(
+        &accepted_turn,
+        &chat,
+        ReplayLimits {
+            max_bytes: exact_padded_bytes,
+            max_events: usize::MAX,
+        },
+    );
+
+    assert_eq!(accepted.last().unwrap().event, "response.completed");
+    assert!(
+        accepted_store
+            .get(&CallerScope::LocalHost, &accepted_id)
+            .is_ok()
+    );
+    assert!(accepted_session.get(&accepted_id).is_some());
+
+    let (rejected_turn, rejected_store, rejected_session) = turn_with_obfuscation();
+    let rejected_id = rejected_turn.id().to_string();
+    assert!(
+        rejected_store
+            .get(&CallerScope::LocalHost, &rejected_id)
+            .is_err()
+    );
+    assert!(rejected_session.get(&rejected_id).is_none());
+    let rejected_padded_bytes = replay_bytes(&rejected_turn, &chat);
+    assert_eq!(rejected_padded_bytes, exact_padded_bytes);
+    let rejected = stream_events_for_chat_completion_with_limits(
+        &rejected_turn,
+        &chat,
+        ReplayLimits {
+            max_bytes: rejected_padded_bytes - 1,
+            max_events: usize::MAX,
+        },
+    );
+
+    assert_failed_lifecycle(&rejected);
+    assert!(
+        rejected_store
+            .get(&CallerScope::LocalHost, &rejected_id)
+            .is_err()
+    );
+    assert!(rejected_session.get(&rejected_id).is_none());
 }
 
 #[test]

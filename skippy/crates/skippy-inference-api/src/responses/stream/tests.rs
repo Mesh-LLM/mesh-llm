@@ -3,7 +3,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{
-    ResponsesStream, ResponsesStreamEvent, retained_chunk_bytes, stream_events_for_response,
+    ResponsesStream, ResponsesStreamEvent, obfuscation, retained_chunk_bytes,
+    stream_events_for_response,
 };
 use crate::responses::{
     ResponseContinuation,
@@ -84,6 +85,19 @@ fn assert_well_formed(events: &[ResponsesStreamEvent]) {
     assert!(events.last().unwrap().event.starts_with("response."));
 }
 
+fn assert_profiled(event: &ResponsesStreamEvent) {
+    let padding = event.data["obfuscation"]
+        .as_str()
+        .expect("eligible delta has obfuscation");
+    assert!((1..=256).contains(&padding.len()));
+    assert!(
+        padding
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    );
+    assert_eq!(serde_json::to_vec(&event.data).unwrap().len() % 256, 0);
+}
+
 #[test]
 fn text_stream_follows_the_item_lifecycle() {
     let events = run(&[text("Hel"), text("lo"), finish("stop")]);
@@ -109,6 +123,123 @@ fn text_stream_follows_the_item_lifecycle() {
     assert_eq!(completed["usage"]["total_tokens"], 6);
     assert_eq!(events[6].data["text"], "Hello");
     assert!(events[0].data["response"]["completed_at"].is_null());
+    for event in events
+        .iter()
+        .filter(|event| event.event == "response.output_text.delta")
+    {
+        assert_profiled(event);
+    }
+    assert!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event,
+                    "response.output_text.done" | "response.completed"
+                )
+            })
+            .all(|event| event.data.get("obfuscation").is_none())
+    );
+}
+
+#[test]
+fn explicit_false_disables_padding_without_changing_output() {
+    let mut stream = stream_for(
+        json!({
+            "model":"m",
+            "input":"hi",
+            "stream":true,
+            "stream_options":{"include_obfuscation":false},
+        }),
+        ResponseContinuation::disabled(),
+    );
+    let mut events = stream.start();
+    events.extend(stream.push_chunk(&text("plain")));
+    events.extend(stream.push_chunk(&finish("stop")));
+    events.extend(stream.finish());
+
+    let delta = events
+        .iter()
+        .find(|event| event.event == "response.output_text.delta")
+        .unwrap();
+    assert!(delta.data.get("obfuscation").is_none());
+    let completed = &events.last().unwrap().data["response"];
+    assert_eq!(completed["output_text"], "plain");
+    assert!(!completed.to_string().contains("obfuscation"));
+}
+
+#[test]
+fn omitted_null_empty_and_true_stream_options_enable_padding() {
+    for stream_options in [
+        None,
+        Some(Value::Null),
+        Some(json!({})),
+        Some(json!({
+            "include_obfuscation":true,
+        })),
+    ] {
+        let mut body = json!({"model":"m","input":"hi","stream":true});
+        if let Some(stream_options) = stream_options {
+            body["stream_options"] = stream_options;
+        }
+        let delta = stream_for(body, ResponseContinuation::disabled())
+            .push_chunk(&text("padded"))
+            .into_iter()
+            .find(|event| event.event == "response.output_text.delta")
+            .unwrap();
+        assert_profiled(&delta);
+    }
+}
+
+#[test]
+fn original_turn_policy_survives_backend_mutation_and_does_not_inherit() {
+    let store = Arc::new(ResponseStore::default());
+    let continuation = ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost));
+    let mut parent_body = json!({
+        "model":"m",
+        "input":"parent",
+        "stream":true,
+        "stream_options":{"include_obfuscation":false},
+    });
+    let parent = ResponsesTurn::prepare(&mut parent_body, continuation.clone()).unwrap();
+    let parent_id = parent.id().to_string();
+    parent.finish_chat_completion(&json!({
+        "choices":[{"message":{"content":"saved"},"finish_reason":"stop"}],
+    }));
+
+    let mut child_body = json!({"previous_response_id":parent_id,"input":"child","stream":true});
+    let child = Arc::new(ResponsesTurn::prepare(&mut child_body, continuation).unwrap());
+    child
+        .normalize_backend_request("/v1/responses", &mut child_body)
+        .unwrap();
+    child_body["stream_options"]["include_obfuscation"] = Value::Bool(false);
+    let mut child_stream = ResponsesStream::new(child);
+    let delta = child_stream
+        .push_chunk(&text("padded"))
+        .into_iter()
+        .find(|event| event.event == "response.output_text.delta")
+        .unwrap();
+    assert_profiled(&delta);
+
+    let mut disabled_body = json!({
+        "model":"m",
+        "input":"disabled",
+        "stream":true,
+        "stream_options":{"include_obfuscation":false},
+    });
+    let disabled = Arc::new(
+        ResponsesTurn::prepare(&mut disabled_body, ResponseContinuation::disabled()).unwrap(),
+    );
+    disabled
+        .normalize_backend_request("/v1/responses", &mut disabled_body)
+        .unwrap();
+    disabled_body["stream_options"]["include_obfuscation"] = Value::Bool(true);
+    let delta = ResponsesStream::new(disabled)
+        .push_chunk(&text("plain"))
+        .into_iter()
+        .find(|event| event.event == "response.output_text.delta")
+        .unwrap();
+    assert!(delta.data.get("obfuscation").is_none());
 }
 
 #[test]
@@ -138,6 +269,7 @@ fn reasoning_streams_as_its_own_item_before_the_message() {
     assert_eq!(output[0]["content"][0]["text"], "think");
     assert_eq!(output[1]["type"], "message");
     assert_eq!(events[delta].data["output_index"], 0);
+    assert_profiled(&events[delta]);
 }
 
 #[test]
@@ -193,6 +325,13 @@ fn tool_calls_buffer_arguments_until_named_and_keep_call_ids() {
         .unwrap()
         .0;
     assert!(message_done < call_added);
+    for event in events
+        .iter()
+        .filter(|event| event.event == "response.function_call_arguments.delta")
+    {
+        assert_profiled(event);
+    }
+    assert!(!response.to_string().contains("obfuscation"));
 }
 
 #[test]
@@ -526,6 +665,55 @@ fn quarantine_terminal_event_is_inside_the_byte_budget_and_precedes_commit() {
     assert_well_formed(&events);
     assert_eq!(events.last().unwrap().event, "response.failed");
     assert!(!names(&events).contains(&"response.output_item.added"));
+    assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+    assert!(session.get(&id).is_none());
+}
+
+#[test]
+fn quarantine_obfuscation_failure_emits_only_a_contiguous_failed_lifecycle() {
+    fn failing_random_source() -> Result<[u8; 256], obfuscation::ObfuscationError> {
+        Err(obfuscation::ObfuscationError)
+    }
+
+    let store = Arc::new(ResponseStore::default());
+    let session = Arc::new(ResponseSessionCache::new(1024 * 1024));
+    let continuation = ResponseContinuation::for_session(
+        Some(store.clone()),
+        Some(CallerScope::LocalHost),
+        session.clone(),
+        true,
+    );
+    let mut stream = stream_with(continuation);
+    let id = stream.turn().id().to_string();
+    stream.set_quarantine_random_source(failing_random_source);
+
+    let mut events = stream.start();
+    events.extend(stream.push_chunk(&json!({"choices":[{
+        "delta":{"tool_calls":[{
+            "index":0,
+            "id":"call_rng_failure",
+            "function":{"name":"weather","arguments":"{}"}
+        }]},
+        "finish_reason":"tool_calls"
+    }]})));
+    events.extend(stream.finish());
+
+    assert_well_formed(&events);
+    assert_eq!(
+        names(&events),
+        [
+            "response.created",
+            "response.in_progress",
+            "error",
+            "response.failed"
+        ]
+    );
+    assert_eq!(events[2].data["error"]["code"], "stream_obfuscation_failed");
+    assert_eq!(
+        events[3].data["response"]["error"]["code"],
+        "stream_obfuscation_failed"
+    );
+    assert_eq!(events[3].data["response"]["output"], json!([]));
     assert!(store.get(&CallerScope::LocalHost, &id).is_err());
     assert!(session.get(&id).is_none());
 }

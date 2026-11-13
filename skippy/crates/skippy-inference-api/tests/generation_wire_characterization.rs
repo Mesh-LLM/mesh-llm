@@ -1,8 +1,9 @@
 //! HTTP characterization captured on main before the #2232 boundary migration.
 //! Keep the golden file unchanged while migrating backend implementations.
 //! Independent upstream fixes are recorded in fixtures/README.md.
-//! Only frontend-generated IDs/timestamps are normalized; scripted backend IDs,
-//! tool IDs, payloads, errors, optional fields and SSE ordering remain exact.
+//! Frontend-generated IDs/timestamps and validated random Responses padding are
+//! normalized; scripted backend IDs, tool IDs, payloads, errors, other optional
+//! fields and SSE ordering remain exact.
 
 use skippy_inference_api::generation::{
     GeneratedMessage, GenerationChoice, GenerationEvent, GenerationEventStream, GenerationRequest,
@@ -378,6 +379,35 @@ fn frontend_id(id: &str) -> bool {
         })
 }
 
+// Check the original serialized payload before identity normalization changes its
+// size, then remove only the random padding from the historical semantic golden.
+fn normalize_responses_padding(data: &str, value: &mut Value) {
+    let eligible = matches!(
+        value["type"].as_str(),
+        Some(
+            "response.output_text.delta"
+                | "response.reasoning.delta"
+                | "response.reasoning_summary_text.delta"
+                | "response.function_call_arguments.delta"
+        )
+    );
+    if eligible {
+        let padding = value["obfuscation"]
+            .as_str()
+            .expect("default Responses delta must carry padding");
+        assert!((1..=256).contains(&padding.len()));
+        assert!(
+            padding
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        );
+        assert_eq!(data.len() % 256, 0, "raw Responses payload is padded");
+        value.as_object_mut().unwrap().remove("obfuscation");
+    } else {
+        assert!(value.get("obfuscation").is_none());
+    }
+}
+
 fn wire_body(body: &str) -> Value {
     if let Ok(mut value) = serde_json::from_str::<Value>(body) {
         normalize(&mut value);
@@ -394,6 +424,7 @@ fn wire_body(body: &str) -> Value {
                             if let Some(data) = line.strip_prefix("data: ")
                                 && let Ok(mut value) = serde_json::from_str::<Value>(data)
                             {
+                                normalize_responses_padding(data, &mut value);
                                 normalize(&mut value);
                                 return json!({"data":value});
                             }

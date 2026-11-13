@@ -295,6 +295,12 @@ async fn official_basic_sequential_and_same_socket_store_false_cases_use_mesh_pr
     let first = terminal(&mut socket).await;
     assert_eq!(first[0]["type"], "response.created");
     assert_eq!(first[0]["sequence_number"], 0);
+    let delta = first
+        .iter()
+        .find(|event| event["type"] == "response.output_text.delta")
+        .expect("Mesh WebSocket turn emits a text delta");
+    assert!(delta["obfuscation"].as_str().is_some());
+    assert_eq!(serde_json::to_vec(delta).unwrap().len() % 256, 0);
     let second = terminal(&mut socket).await;
     assert_eq!(second[0]["sequence_number"], 0);
     let second_id = completed(&second)["response"]["id"]

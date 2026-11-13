@@ -17,6 +17,7 @@ use super::resource::{
     ResponseEnvelope, ResponseError, ResponseSnapshot, ResponseStatus, ResponsesUsage,
     new_response_id,
 };
+use super::stream::obfuscation::ObfuscationPolicy;
 use super::terminal::{chat_completion_output, malformed_tool_call};
 use super::tools::{ToolOutputViolation, ToolPolicy};
 use super::{continuation::ResponseContinuation, store::StoredResponse};
@@ -41,6 +42,7 @@ pub struct ResponsesTurn {
     instructions: Option<String>,
     configuration: Map<String, Value>,
     tool_policy: ToolPolicy,
+    obfuscation_policy: ObfuscationPolicy,
     input: Vec<Value>,
     parent: Option<Arc<StoredResponse>>,
     continuation: ResponseContinuation,
@@ -88,6 +90,7 @@ impl ResponsesTurn {
             .as_object_mut()
             .ok_or_else(|| InferenceError::invalid_request("request body must be a JSON object"))?;
         super::request_validation::validate_request_fields(object)?;
+        let obfuscation_policy = ObfuscationPolicy::capture_and_strip(object)?;
         let explicit_model = object
             .get("model")
             .and_then(Value::as_str)
@@ -160,6 +163,7 @@ impl ResponsesTurn {
             instructions,
             configuration,
             tool_policy,
+            obfuscation_policy,
             input,
             parent,
             continuation,
@@ -184,6 +188,7 @@ impl ResponsesTurn {
             configuration: Map::new(),
             tool_policy: ToolPolicy::capture(&Map::new())
                 .expect("the default tool policy is valid"),
+            obfuscation_policy: ObfuscationPolicy::enabled(),
             input: prepared.input,
             parent: prepared.parent,
             continuation: ResponseContinuation::disabled(),
@@ -204,6 +209,10 @@ impl ResponsesTurn {
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    pub(super) const fn obfuscation_policy(&self) -> ObfuscationPolicy {
+        self.obfuscation_policy
     }
 
     /// Normalize this turn's backend request while retaining the policy

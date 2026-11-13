@@ -219,29 +219,30 @@ fn responses_stream_events(
     continuation: Option<ProgressContinuation>,
     turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
 ) -> Vec<Value> {
-    let mut events = match turn {
-        Some(turn) => {
+    match (turn, continuation) {
+        (Some(turn), Some(continuation)) => {
+            skippy_inference_api::responses::responses_stream_events_for_chat_completion_after_progress(
+                turn,
+                response,
+                continuation.next_sequence_number as u64,
+            )
+        }
+        (Some(turn), None) => {
             skippy_inference_api::responses_stream_events_for_chat_completion(turn, response)
         }
-        None => {
+        (None, continuation) => {
             let responses = chat_completion_to_responses_json(response);
-            skippy_inference_api::responses_stream_events_for_response(&responses)
+            match continuation {
+                Some(continuation) => {
+                    skippy_inference_api::responses::responses_stream_events_for_response_after_progress(
+                        &responses,
+                        continuation.next_sequence_number as u64,
+                    )
+                }
+                None => skippy_inference_api::responses_stream_events_for_response(&responses),
+            }
         }
-    };
-    let Some(continuation) = continuation else {
-        return events;
-    };
-    events.retain(|event| {
-        event.get("type").and_then(serde_json::Value::as_str) != Some("response.created")
-    });
-    let mut next = continuation.next_sequence_number;
-    for event in events.iter_mut() {
-        if let Some(object) = event.as_object_mut() {
-            object.insert("sequence_number".into(), json!(next));
-        }
-        next = next.saturating_add(1);
     }
-    events
 }
 
 pub(super) fn chat_completion_to_responses_json(chat: &serde_json::Value) -> serde_json::Value {
@@ -352,6 +353,12 @@ mod tests {
                 .all(|pair| pair[1] > pair[0]),
             "sequence numbers must increase: {events:?}"
         );
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("buffered virtual response emits a text delta");
+        assert!(delta["obfuscation"].as_str().is_some());
+        assert_eq!(serde_json::to_vec(delta).unwrap().len() % 256, 0);
     }
 
     #[test]
@@ -381,6 +388,37 @@ mod tests {
             (4..4 + numbers.len() as i64).collect::<Vec<_>>(),
             "the replay must continue the progress sequence without gaps"
         );
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("continued buffered response emits a text delta");
+        assert_eq!(serde_json::to_vec(delta).unwrap().len() % 256, 0);
+    }
+
+    #[test]
+    fn buffered_virtual_response_honors_the_original_disabled_policy() {
+        let mut request = json!({
+            "model":"mesh",
+            "input":"hi",
+            "stream":true,
+            "stream_options":{"include_obfuscation":false},
+        });
+        let turn = skippy_inference_api::responses::ResponsesTurn::prepare(
+            &mut request,
+            skippy_inference_api::responses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        turn.normalize_backend_request("/v1/responses", &mut request)
+            .unwrap();
+        request["stream_options"]["include_obfuscation"] = json!(true);
+
+        let events = responses_stream_events(&chat_completion(), None, Some(&turn));
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("buffered virtual response emits a text delta");
+        assert_eq!(delta["delta"], "committee answer");
+        assert!(delta.get("obfuscation").is_none());
     }
 
     #[test]

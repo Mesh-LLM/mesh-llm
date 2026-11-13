@@ -18,8 +18,9 @@ use super::resource::{
 };
 use super::tools::{MAX_TOOL_CALLS, MAX_TOOL_NAME_BYTES, ToolOutputViolation};
 use super::turn::ResponsesTurn;
-use replay::{EventBuffer, ReplayLimit, ReplayLimits};
+use replay::{EventBuffer, ReplayError, ReplayLimits};
 
+pub(super) mod obfuscation;
 mod replay;
 
 /// Maximum reconstructed text, reasoning, tool-call and logprob state held by
@@ -88,6 +89,8 @@ pub struct ResponsesStream {
     started: bool,
     terminated: bool,
     failed: bool,
+    #[cfg(test)]
+    quarantine_random_source: Option<obfuscation::RandomSource>,
 }
 
 impl ResponsesStream {
@@ -109,6 +112,8 @@ impl ResponsesStream {
             started: false,
             terminated: false,
             failed: false,
+            #[cfg(test)]
+            quarantine_random_source: None,
         }
     }
 
@@ -126,15 +131,21 @@ impl ResponsesStream {
         self.failed
     }
 
+    #[cfg(test)]
+    fn set_quarantine_random_source(&mut self, random_source: obfuscation::RandomSource) {
+        self.quarantine_random_source = Some(random_source);
+    }
+
     /// `response.created` and `response.in_progress`. Idempotent.
     pub fn start(&mut self) -> Vec<ResponsesStreamEvent> {
-        let mut events = EventBuffer::unbounded(self.sequence_number);
+        let mut events =
+            EventBuffer::unbounded(self.sequence_number, self.turn.obfuscation_policy());
         self.start_into(&mut events)
             .expect("unbounded event buffer accepts response start");
         self.accept(events)
     }
 
-    fn start_into(&mut self, events: &mut EventBuffer) -> Result<(), ReplayLimit> {
+    fn start_into(&mut self, events: &mut EventBuffer) -> Result<(), ReplayError> {
         if self.started {
             return Ok(());
         }
@@ -148,7 +159,8 @@ impl ResponsesStream {
 
     /// Events for one parsed Chat Completions stream chunk.
     pub fn push_chunk(&mut self, chunk: &Value) -> Vec<ResponsesStreamEvent> {
-        let mut events = EventBuffer::unbounded(self.sequence_number);
+        let mut events =
+            EventBuffer::unbounded(self.sequence_number, self.turn.obfuscation_policy());
         if self.terminated {
             return events.into_events();
         }
@@ -182,8 +194,9 @@ impl ResponsesStream {
             }
             return self.accept(events);
         }
-        self.process_choice(&mut events, choice, false)
-            .expect("unbounded event buffer accepts choice events");
+        if let Err(error) = self.process_choice(&mut events, choice, false) {
+            return self.fail_into(events, error.code(), error.message());
+        }
         self.accept(events)
     }
 
@@ -192,7 +205,7 @@ impl ResponsesStream {
         events: &mut EventBuffer,
         choice: &Value,
         replaying_quarantine: bool,
-    ) -> Result<(), ReplayLimit> {
+    ) -> Result<(), ReplayError> {
         let delta = choice.get("delta");
         let phase = delta
             .and_then(|delta| delta.get("phase"))
@@ -236,7 +249,8 @@ impl ResponsesStream {
     /// normally. A completed response is saved for continuation here, from
     /// the same shared path for every route.
     pub fn finish(&mut self) -> Vec<ResponsesStreamEvent> {
-        let mut events = EventBuffer::unbounded(self.sequence_number);
+        let mut events =
+            EventBuffer::unbounded(self.sequence_number, self.turn.obfuscation_policy());
         if self.terminated {
             return events.into_events();
         }
@@ -266,16 +280,20 @@ impl ResponsesStream {
             max_events: self.max_quarantined_events,
         };
         let mut suffix = if self.quarantined_choices.is_empty() {
-            EventBuffer::unbounded(self.sequence_number)
+            EventBuffer::unbounded(self.sequence_number, self.turn.obfuscation_policy())
         } else {
-            EventBuffer::bounded(self.sequence_number, limits)
+            EventBuffer::bounded(self.sequence_number, limits, self.turn.obfuscation_policy())
         };
-        if self.replay_quarantine(&mut suffix).is_err() {
-            accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+        #[cfg(test)]
+        if let Some(random_source) = self.quarantine_random_source {
+            suffix.set_random_source(random_source);
+        }
+        if let Err(error) = self.replay_quarantine(&mut suffix) {
+            accepted.extend(self.fail(error.code(), error.message()));
             return accepted;
         }
-        if self.close_open(&mut suffix, status).is_err() {
-            accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+        if let Err(error) = self.close_open(&mut suffix, status) {
+            accepted.extend(self.fail(error.code(), error.message()));
             return accepted;
         }
         let call_indexes: Vec<usize> = self
@@ -284,17 +302,18 @@ impl ResponsesStream {
             .filter_map(|call| call.output_index)
             .collect();
         for output_index in call_indexes {
-            if self.close_call(&mut suffix, output_index, status).is_err() {
-                accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+            if let Err(error) = self.close_call(&mut suffix, output_index, status) {
+                accepted.extend(self.fail(error.code(), error.message()));
                 return accepted;
             }
         }
         if self.output.is_empty() {
             // A response always says something, even if it is empty.
-            if self.open_message(&mut suffix, None).is_err()
-                || self.close_open(&mut suffix, status).is_err()
-            {
-                accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+            let empty_message = self
+                .open_message(&mut suffix, None)
+                .and_then(|_| self.close_open(&mut suffix, status));
+            if let Err(error) = empty_message {
+                accepted.extend(self.fail(error.code(), error.message()));
                 return accepted;
             }
         }
@@ -310,11 +329,8 @@ impl ResponsesStream {
             ResponseStatus::Incomplete(_) => "response.incomplete",
             _ => "response.completed",
         };
-        if suffix
-            .emit(event, json!({"response": staged.response()}))
-            .is_err()
-        {
-            accepted.extend(self.fail("response_output_too_large", quarantine_limit().message));
+        if let Err(error) = suffix.emit(event, json!({"response": staged.response()})) {
+            accepted.extend(self.fail(error.code(), error.message()));
             return accepted;
         }
         let stored = staged.commit_storage();
@@ -425,7 +441,7 @@ impl ResponsesStream {
         Ok(())
     }
 
-    fn replay_quarantine(&mut self, events: &mut EventBuffer) -> Result<(), ReplayLimit> {
+    fn replay_quarantine(&mut self, events: &mut EventBuffer) -> Result<(), ReplayError> {
         let choices = std::mem::take(&mut self.quarantined_choices);
         for choice in &choices {
             self.process_choice(events, choice, true)?;
@@ -436,7 +452,8 @@ impl ResponsesStream {
     /// `error` then `response.failed`, for a stream that broke. Nothing is
     /// saved.
     pub fn fail(&mut self, code: &str, message: &str) -> Vec<ResponsesStreamEvent> {
-        let mut events = EventBuffer::unbounded(self.sequence_number);
+        let mut events =
+            EventBuffer::unbounded(self.sequence_number, self.turn.obfuscation_policy());
         if self.terminated {
             return events.into_events();
         }
@@ -473,7 +490,7 @@ impl ResponsesStream {
         events.into_events()
     }
 
-    fn push_reasoning(&mut self, events: &mut EventBuffer, delta: &str) -> Result<(), ReplayLimit> {
+    fn push_reasoning(&mut self, events: &mut EventBuffer, delta: &str) -> Result<(), ReplayError> {
         let index = match self.open {
             Some(index) if matches!(self.output[index], OutputSlot::Reasoning { .. }) => index,
             _ => {
@@ -512,7 +529,7 @@ impl ResponsesStream {
         &mut self,
         events: &mut EventBuffer,
         phase: Option<&str>,
-    ) -> Result<usize, ReplayLimit> {
+    ) -> Result<usize, ReplayError> {
         self.close_open(events, ResponseStatus::Completed)?;
         let id = new_item_id("msg");
         let index = self.output.len();
@@ -544,7 +561,7 @@ impl ResponsesStream {
         delta: &str,
         delta_logprobs: Vec<Value>,
         phase: Option<&str>,
-    ) -> Result<(), ReplayLimit> {
+    ) -> Result<(), ReplayError> {
         let index = match self.open {
             Some(index)
                 if matches!(
@@ -572,7 +589,7 @@ impl ResponsesStream {
         )
     }
 
-    fn push_call(&mut self, events: &mut EventBuffer, call: &Value) -> Result<(), ReplayLimit> {
+    fn push_call(&mut self, events: &mut EventBuffer, call: &Value) -> Result<(), ReplayError> {
         let Some(index) = call.get("index").and_then(Value::as_u64) else {
             return Ok(());
         };
@@ -598,7 +615,7 @@ impl ResponsesStream {
     }
 
     /// Announce a fully assembled and authorized call at its first fragment.
-    fn announce_call(&mut self, events: &mut EventBuffer, index: u64) -> Result<(), ReplayLimit> {
+    fn announce_call(&mut self, events: &mut EventBuffer, index: u64) -> Result<(), ReplayError> {
         self.close_open(events, ResponseStatus::Completed)?;
         let output_index = self.output.len();
         let Some(pending) = self.calls.get_mut(&index) else {
@@ -624,7 +641,7 @@ impl ResponsesStream {
         events: &mut EventBuffer,
         index: usize,
         fragment: &str,
-    ) -> Result<(), ReplayLimit> {
+    ) -> Result<(), ReplayError> {
         if fragment.is_empty() {
             return Ok(());
         }
@@ -644,7 +661,7 @@ impl ResponsesStream {
         &mut self,
         events: &mut EventBuffer,
         status: ResponseStatus,
-    ) -> Result<(), ReplayLimit> {
+    ) -> Result<(), ReplayError> {
         let Some(index) = self.open.take() else {
             return Ok(());
         };
@@ -687,7 +704,7 @@ impl ResponsesStream {
         events: &mut EventBuffer,
         index: usize,
         status: ResponseStatus,
-    ) -> Result<(), ReplayLimit> {
+    ) -> Result<(), ReplayError> {
         let OutputSlot::Call(slot) = &self.output[index] else {
             return Ok(());
         };
@@ -779,6 +796,15 @@ pub fn stream_events_for_response(response: &Value) -> Vec<ResponsesStreamEvent>
     replay::stream_events_for_response(response)
 }
 
+/// Replay a complete Responses resource after an already committed progress
+/// prelude, using the prelude's next final sequence number for padding.
+pub fn stream_events_for_response_after_progress(
+    response: &Value,
+    next_sequence: u64,
+) -> Vec<ResponsesStreamEvent> {
+    replay::stream_events_for_response_after_progress(response, next_sequence)
+}
+
 /// Translate and replay a complete Chat Completions body for `turn`. The turn
 /// commits only after the full replay has passed incremental admission.
 pub fn stream_events_for_chat_completion(
@@ -786,6 +812,16 @@ pub fn stream_events_for_chat_completion(
     chat: &Value,
 ) -> Vec<ResponsesStreamEvent> {
     replay::stream_events_for_chat_completion(turn, chat)
+}
+
+/// Replay a buffered completion after a virtual-model progress prelude has
+/// already emitted `response.created` and consumed earlier sequence numbers.
+pub fn stream_events_for_chat_completion_after_progress(
+    turn: &ResponsesTurn,
+    chat: &Value,
+    next_sequence: u64,
+) -> Vec<ResponsesStreamEvent> {
+    replay::stream_events_for_chat_completion_after_progress(turn, chat, next_sequence)
 }
 
 fn patch_response_store(events: &mut [ResponsesStreamEvent], stored: bool) {

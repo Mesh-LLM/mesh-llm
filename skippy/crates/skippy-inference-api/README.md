@@ -127,6 +127,25 @@ inherit when omitted and explicit child values override them; instructions are
 per-turn and never inherit. Failed and incomplete turns are never retained. The
 store is bounded, in-memory, and caller-scoped.
 
+Streamed Responses use provider-profile payload padding by default. Omitted or
+`null` `stream_options`, and an empty object, enable it;
+`stream_options.include_obfuscation: false` disables it for HTTP/SSE. The
+recognized member is captured by the ingress turn and removed before Chat
+backend passthrough, while `include_usage` and unknown stream-option extensions
+retain their existing behavior. WebSocket `response.create` continues to reject
+`stream_options` by presence and therefore always uses the enabled default.
+
+The implemented profile adds an `obfuscation` string only to output-text,
+reasoning-text, reasoning-summary-text, and function-call-argument delta events.
+It uses 1–256 operating-system-random URL-safe Base64-alphabet characters so
+each event's compact JSON body is a multiple of 256 bytes; an already aligned
+placeholder receives a full 256-character block. Padding is applied after the
+final event type and sequence number are assigned and before bounded replay or
+quarantine admission and storage commit. Response resources and stored output
+remain unchanged. This 256-byte profile is an implementation choice, not a
+mandatory Open Responses algorithm, and it provides no redaction, encryption,
+privacy, or traffic-analysis guarantee.
+
 Responses input is never silently compacted. An omitted or `null` `truncation`
 field and explicit `"disabled"` all normalize to the internal
 `mesh_compact: false` backend marker, overriding a conflicting caller extension;

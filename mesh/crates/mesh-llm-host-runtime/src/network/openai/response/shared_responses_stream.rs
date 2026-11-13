@@ -399,6 +399,21 @@ mod tests {
         )
     }
 
+    fn turn_without_obfuscation(store: &Arc<ResponseStore>) -> Arc<ResponsesTurn> {
+        let mut request = serde_json::json!({
+            "model":"m",
+            "input":"plain",
+            "stream_options":{"include_obfuscation":false},
+        });
+        Arc::new(
+            ResponsesTurn::prepare(
+                &mut request,
+                ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost)),
+            )
+            .unwrap(),
+        )
+    }
+
     async fn run(upstream: &str, turn: Arc<ResponsesTurn>) -> (String, RouteAttemptResult) {
         run_with_framing(upstream, turn, false).await
     }
@@ -473,9 +488,42 @@ mod tests {
         ] {
             assert!(wire.contains(expected), "missing {expected}: {wire}");
         }
+        for event_type in [
+            "response.reasoning.delta",
+            "response.function_call_arguments.delta",
+        ] {
+            let event: Value = wire
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .filter_map(|data| serde_json::from_str(data).ok())
+                .find(|event: &Value| event["type"] == event_type)
+                .unwrap_or_else(|| panic!("missing {event_type}"));
+            assert!(event["obfuscation"].as_str().is_some());
+            assert_eq!(serde_json::to_vec(&event).unwrap().len() % 256, 0);
+        }
         let stored = store.get(&CallerScope::LocalHost, &id).unwrap();
         assert_eq!(stored.output[1]["call_id"], "call_a");
         assert_eq!(stored.output[1]["arguments"], "{\"city\":\"Oslo\"}");
+    }
+
+    #[tokio::test]
+    async fn shared_mesh_relay_honors_explicit_obfuscation_false() {
+        let store = Arc::new(ResponseStore::default());
+        let upstream = concat!(
+            "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"plain\"}}]}\n\n",
+            "data: {\"model\":\"m\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (wire, result) = run(upstream, turn_without_obfuscation(&store)).await;
+        assert!(matches!(result, RouteAttemptResult::Delivered { .. }));
+        let delta: Value = wire
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str(data).ok())
+            .find(|event: &Value| event["type"] == "response.output_text.delta")
+            .expect("output text delta");
+        assert_eq!(delta["delta"], "plain");
+        assert!(delta.get("obfuscation").is_none());
     }
 
     #[tokio::test]

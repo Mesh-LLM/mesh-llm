@@ -2141,6 +2141,50 @@ async fn responses_stream_route_returns_responses_sse() {
     assert!(body.contains(r#""sequence_number":1"#));
     assert!(body.contains(r#""output_text":"hello""#));
     assert!(body.contains("data: [DONE]"));
+    let delta: Value = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .find(|event: &Value| event["type"] == "response.output_text.delta")
+        .expect("output text delta");
+    assert!(delta["obfuscation"].as_str().is_some());
+    assert_eq!(serde_json::to_vec(&delta).unwrap().len() % 256, 0);
+}
+
+#[tokio::test]
+async fn responses_stream_can_disable_obfuscation_without_changing_text() {
+    let response = post_json(
+        "/v1/responses",
+        json!({
+            "model":"test-model",
+            "input":"hi",
+            "stream":true,
+            "stream_options":{"include_obfuscation":false},
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_body_text(response).await;
+    let deltas: Vec<Value> = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .filter(|event: &Value| event["type"] == "response.output_text.delta")
+        .collect();
+    assert!(!deltas.is_empty());
+    assert!(
+        deltas
+            .iter()
+            .all(|delta| delta.get("obfuscation").is_none())
+    );
+    assert_eq!(
+        deltas
+            .iter()
+            .filter_map(|delta| delta["delta"].as_str())
+            .collect::<String>(),
+        "hello"
+    );
+    assert!(body.contains(r#""output_text":"hello""#));
 }
 
 #[tokio::test]

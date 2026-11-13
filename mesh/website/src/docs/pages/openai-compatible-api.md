@@ -108,6 +108,27 @@ structured-output/reasoning controls, sampling controls, and output limits are
 inherited when the follow-up omits them; explicit child values replace them.
 Instructions never inherit, matching the protocol's conversation-state rule.
 
+Streamed Responses add coarse payload padding by default. Omitted or `null`
+`stream_options`, and `{}`, enable it; set
+`stream_options.include_obfuscation: false` on an HTTP/SSE request to disable
+it. Mesh removes that recognized Responses-only member before forwarding the
+normalized Chat request, while preserving `include_usage` and unknown
+stream-option extensions. WebSocket `response.create` messages still forbid
+`stream_options`, so WebSocket streams always use the enabled default.
+
+The Mesh provider profile adds an `obfuscation` string only to output-text,
+reasoning-text, reasoning-summary-text, and function-call-argument delta event
+objects. It chooses 1–256 operating-system-random characters from the URL-safe
+Base64 alphabet so the compact JSON body of each eligible event is a multiple
+of 256 bytes; an already aligned placeholder gets 256 characters. Padding is
+applied after the final event type and sequence number are assigned and before
+bounded replay/quarantine admission or response storage. It never changes the
+model text, completed response resource, or stored continuation output.
+
+This 256-byte profile is a Mesh implementation choice, not a required Open
+Responses padding algorithm. The field is padding only: it does not redact or
+encrypt content and provides no privacy or traffic-analysis guarantee.
+
 Responses defaults to `truncation: "disabled"`. It disables the serving
 wrapper's automatic history compaction, including after request-transform
 plugins, so tool results and earlier input are not silently dropped to fit.

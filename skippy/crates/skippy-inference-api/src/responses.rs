@@ -1,3 +1,4 @@
+mod buffered_stream;
 mod compaction;
 mod content_items;
 mod continuation;
@@ -19,6 +20,12 @@ mod tools;
 mod truncation_tests;
 mod turn;
 
+pub use buffered_stream::{
+    events_for_chat_completion as responses_stream_events_for_chat_completion,
+    events_for_chat_completion_after_progress as responses_stream_events_for_chat_completion_after_progress,
+    events_for_response as responses_stream_events_for_response,
+    events_for_response_after_progress as responses_stream_events_for_response_after_progress,
+};
 pub use continuation::ResponseContinuation;
 pub use execution::{ResponsesSessionExecutor, ResponsesTurnEventStream};
 pub use resource::{ResponseStatus, ResponsesUsage};
@@ -283,7 +290,13 @@ fn translate_openai_responses_input(
     object: &mut Map<String, Value>,
     policy_enforced: bool,
 ) -> Result<bool, InferenceError> {
-    let mut changed = tools::normalize(object, policy_enforced)?;
+    let stripped_obfuscation = object
+        .get("stream_options")
+        .and_then(Value::as_object)
+        .is_some_and(|options| options.contains_key("include_obfuscation"));
+    stream::obfuscation::ObfuscationPolicy::capture_and_strip(object)?;
+    let normalized_tools = tools::normalize(object, policy_enforced)?;
+    let mut changed = stripped_obfuscation || normalized_tools;
     let mut messages = Vec::new();
     let mut state_cache_key = None;
 
@@ -366,6 +379,9 @@ fn translate_openai_responses_input(
         let options = object
             .entry("stream_options".to_string())
             .or_insert_with(|| Value::Object(Map::new()));
+        if options.is_null() {
+            *options = Value::Object(Map::new());
+        }
         if let Some(options) = options.as_object_mut() {
             options.insert("include_usage".to_string(), Value::Bool(true));
         }
@@ -1028,33 +1044,6 @@ pub fn responses_stream_completed_event_with_sequence(
         apply_agent_compat_response_defaults(response, created_at);
     }
     event
-}
-
-/// Expand a complete `/v1/responses` body into the SSE events that stream it.
-///
-/// This is the buffered→stream adapter for producers that answer with a
-/// finished response body instead of a live upstream stream (a virtual model
-/// served by a plugin). Walking `output` keeps every item the buffered
-/// translation produced — in particular the `function_call` items it derives
-/// from `message.tool_calls`, which projecting `choices[0].message.content`
-/// alone would drop.
-pub fn responses_stream_events_for_response(response: &Value) -> Vec<Value> {
-    stream::stream_events_for_response(response)
-        .into_iter()
-        .map(|event| event.data)
-        .collect()
-}
-
-/// Translate a whole Chat Completions body and expand it into Responses SSE
-/// events, committing `turn` only after the complete replay is admitted.
-pub fn responses_stream_events_for_chat_completion(
-    turn: &ResponsesTurn,
-    chat: &Value,
-) -> Vec<Value> {
-    stream::stream_events_for_chat_completion(turn, chat)
-        .into_iter()
-        .map(|event| event.data)
-        .collect()
 }
 
 pub fn chat_usage_to_responses_usage(usage: &Value) -> Value {

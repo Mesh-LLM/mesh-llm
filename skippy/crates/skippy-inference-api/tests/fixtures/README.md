@@ -7,10 +7,10 @@ Messages and token counting, Responses, and the separate SystemOne operation.
 
 The fixture records backend inputs/context, HTTP status/headers, JSON bodies and
 the ordered SSE event sequence, including tool argument fragments, usage after
-finish, and errors. Client nonce and request ID are fixed. Only frontend-created
-IDs and wall-clock timestamps are normalized; scripted IDs, tool IDs and payloads
-remain exact. Content-Length is omitted because it describes the unnormalized
-serialization. Existing lifecycle and wrapper tests cover cancellation and
+finish, and errors. Client nonce and request ID are fixed. Frontend-created
+IDs, wall-clock timestamps, and validated Responses profile padding are
+normalized; scripted IDs, tool IDs and semantic payloads remain exact.
+Content-Length is omitted because it describes the unnormalized serialization. Existing lifecycle and wrapper tests cover cancellation and
 terminal-event ownership separately.
 
 Run the contract with:
@@ -47,3 +47,13 @@ request in `responses`, `responses-stream`, and `responses-tools`: each now
 contains `mesh_compact: false`. That frontend-owned marker prevents the shared
 backend compactor from silently shortening accepted Responses input. No other
 fixture field or case changed for this correction.
+
+The Responses stream-obfuscation checkpoint retains the default-enabled request
+in `responses-stream` and leaves the historical golden unchanged. Before
+normalizing IDs or timestamps, the characterization checks that each eligible
+Responses delta carries 1–256 URL-safe ASCII padding characters and that its raw
+JSON payload length is a multiple of 256 bytes. Only that validated profile
+`obfuscation` field is then removed for semantic comparison. Non-delta events
+must not contain the field. This is the provider's padding profile, not a
+specification-mandated algorithm or a privacy guarantee; dedicated stream tests
+also cover disabling padding, byte-budget admission, and randomness failures.

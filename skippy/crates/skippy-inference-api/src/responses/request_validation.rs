@@ -417,6 +417,64 @@ mod tests {
     }
 
     #[test]
+    fn stream_obfuscation_control_is_validated_and_stripped_only_for_responses() {
+        for stream_options in [
+            Value::Null,
+            json!({}),
+            json!({"include_obfuscation":true,"include_usage":false,"extension":"kept"}),
+            json!({"include_obfuscation":false,"include_usage":true}),
+        ] {
+            let mut responses = json!({
+                "model":"m",
+                "input":"hi",
+                "stream":true,
+                "stream_options":stream_options,
+            });
+            normalize_openai_compat_request("/v1/responses", &mut responses).unwrap();
+            let options = responses["stream_options"].as_object().unwrap();
+            assert!(!options.contains_key("include_obfuscation"));
+            assert_eq!(options.get("include_usage"), Some(&Value::Bool(true)));
+            if options.get("extension").is_some() {
+                assert_eq!(options["extension"], "kept");
+            }
+        }
+
+        for (stream_options, param) in [
+            (json!(false), "stream_options"),
+            (json!([]), "stream_options"),
+            (
+                json!({"include_obfuscation":null}),
+                "stream_options.include_obfuscation",
+            ),
+            (
+                json!({"include_obfuscation":"false"}),
+                "stream_options.include_obfuscation",
+            ),
+        ] {
+            let mut responses = json!({
+                "model":"m",
+                "input":"hi",
+                "previous_response_id":"resp_missing",
+                "stream_options":stream_options,
+            });
+            let response_store = Arc::new(ResponseStore::default());
+            let error =
+                ResponsesTurn::prepare(&mut responses, continuation(&response_store)).unwrap_err();
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(error.body().error.param.as_deref(), Some(param));
+        }
+
+        let original = json!({"include_obfuscation":false,"extension":"chat"});
+        let mut chat = json!({
+            "model":"m",
+            "messages":[{"role":"user","content":"hi"}],
+            "stream_options":original,
+        });
+        normalize_openai_compat_request("/v1/chat/completions", &mut chat).unwrap();
+        assert_eq!(chat["stream_options"], original);
+    }
+
+    #[test]
     fn inherited_configuration_is_revalidated_and_an_explicit_null_can_clear_it() {
         let store = Arc::new(ResponseStore::default());
         let configuration = Map::from_iter([("reasoning".to_string(), json!({"summary":"auto"}))]);
