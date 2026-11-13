@@ -212,7 +212,7 @@ fn open_hf_copy(
     token: Option<String>,
     cache_root: &Path,
 ) -> Result<(SparseCopy, HfFile)> {
-    let remote = HfRemote::new(file, endpoint, token)?;
+    let mut remote = HfRemote::new(file, endpoint, token)?;
     let resolved = remote.resolve()?;
     let commit = match resolved.commit {
         Some(commit) if file.is_pinned() && commit != file.revision => bail!(
@@ -234,6 +234,7 @@ fn open_hf_copy(
     };
     remote.set_url(resolved.url)?;
     let pinned = file.at(&commit);
+    remote.pin(&pinned, endpoint)?;
     let path = cache_path::sparse_copy_path(cache_root, &pinned)?;
     evict(cache_root, MAX_CACHED_COPY_BYTES, &path).with_context(|| {
         format!(
