@@ -150,7 +150,7 @@ pub struct DiscoverArgs {
     /// Nostr relay URLs (default: see DEFAULT_RELAYS)
     #[arg(long)]
     pub relay: Vec<String>,
-    /// Discovery provider for this command (overrides a top-level --mesh-discovery-mode).
+    /// Discovery provider for this command, defaulting to the top-level value (nostr).
     #[arg(long, value_enum)]
     pub mesh_discovery_mode: Option<MeshDiscoveryMode>,
 }

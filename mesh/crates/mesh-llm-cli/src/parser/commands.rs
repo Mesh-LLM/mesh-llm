@@ -553,27 +553,6 @@ pub struct Cli {
     pub nostr_discovery: bool,
 }
 
-impl Cli {
-    /// The discovery provider this invocation runs with.
-    ///
-    /// `discover` accepts `--mesh-discovery-mode` after the subcommand token
-    /// too; that copy wins over the top-level one. For the runtime surfaces
-    /// (serve/client, no subcommand) this equals the top-level value by
-    /// construction, so `runtime_options_from_cli` may keep reading the field
-    /// directly.
-    #[must_use]
-    pub fn effective_mesh_discovery_mode(&self) -> MeshDiscoveryMode {
-        if let Some(Command::Discover(DiscoverArgs {
-            mesh_discovery_mode: Some(mode),
-            ..
-        })) = self.command.as_ref()
-        {
-            return *mode;
-        }
-        self.joining.mesh_discovery_mode
-    }
-}
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Serve local models and join or publish a mesh.

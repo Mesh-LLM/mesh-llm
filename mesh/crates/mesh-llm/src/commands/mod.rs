@@ -226,9 +226,8 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             // resolved through cli.effective_mesh_discovery_mode()
             mesh_discovery_mode: _,
         }) => {
-            // The runtime surfaces enforce their own relay/mode constraint at
-            // startup; the one-shot discover path has no runtime options, so
-            // the CLI-level check is enforced here.
+            // The runtime surfaces enforce their own relay constraint at
+            // startup; only discover's own relay rule applies here.
             mesh_llm_cli::validate_discovery_mode_args(cli)?;
             run_discover(DiscoverOptions {
                 name: name.clone(),
@@ -409,8 +408,16 @@ mod discovery_mode_dispatch_tests {
         let command = cli.command.as_ref().expect("discover subcommand");
         assert!(matches!(command, Command::Discover { .. }));
 
-        let err = dispatch_general_command(&cli, command)
-            .await
+        // Guards the failure mode, not the happy path: an unwired validator
+        // falls through to a real LAN mDNS browse (~seconds) before failing.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            dispatch_general_command(&cli, command),
+        )
+        .await
+        .expect("dispatch must return quickly; a timeout means the validator was unwired and discovery ran");
+
+        let err = outcome
             .expect_err("dispatch must enforce the relay/mode constraint before discovering");
         assert!(
             err.to_string().contains("discover --relay"),
