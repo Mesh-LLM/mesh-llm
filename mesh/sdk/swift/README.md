@@ -1,5 +1,20 @@
 # MeshLLM Swift SDK
 
+## Local runtime capacity
+
+```swift
+if let capacity = try await node.runtimeCapacity("exact-serving-id") {
+    print(capacity.executionLanes, capacity.contextTokensPerLane,
+          capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+`RuntimeCapacity` fields are `UInt64`. This reads the latest native observation,
+including busy lanes, without HTTP or a reservation. Unknown, unsupported,
+unavailable or incomplete capacity returns `nil`; stopped nodes throw. The
+timestamp is the oldest observation in Unix milliseconds; callers choose the
+freshness policy. The total pool is not a per-request context limit.
+
 The package exposes one real embedded `Node` with client, serve-only, and
 combined roles. The legacy thin `Client` is removed. See the
 [swift usage guide](../../docs/sdk/swift.md) for current constructors,

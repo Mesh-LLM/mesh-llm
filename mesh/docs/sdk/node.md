@@ -1,5 +1,24 @@
 # Node.js SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```js
+const capacity = await node.runtimeCapacity('exact-serving-id')
+if (capacity !== null) {
+  console.log(capacity.executionLanes, capacity.contextTokensPerLane,
+    capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+All fields are `bigint` to preserve unsigned native precision. Each call reads
+the latest published observation without HTTP. Busy lanes count toward capacity;
+this does not reserve resources. `null` means unknown, unsupported, unavailable,
+or incomplete capacity. Stopped nodes reject the promise. The timestamp is the
+oldest observation in Unix milliseconds; callers choose a freshness policy for
+long-running inference. Do not use the total pool as a per-request context limit.
+
 Install the package with `npm install @mesh-llm/sdk`. When developing from this
 checkout, run `npm run build:native` in `mesh/sdk/node` before using the SDK.
 

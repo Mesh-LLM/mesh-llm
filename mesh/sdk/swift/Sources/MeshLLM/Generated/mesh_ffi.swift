@@ -853,6 +853,11 @@ public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
 
     func stop() throws
 
+    /**
+     * Current local capacity for an exact serving ID; unavailable is not zero.
+     */
+    func runtimeCapacity(model: String) throws  -> RuntimeCapacityNative?
+
 }
 open class MeshNodeHandle: MeshNodeHandleProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1062,6 +1067,19 @@ open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
+}
+
+    /**
+     * Current local capacity for an exact serving ID; unavailable is not zero.
+     */
+open func runtimeCapacity(model: String)throws  -> RuntimeCapacityNative?  {
+    return try  FfiConverterOptionTypeRuntimeCapacityNative.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_runtime_capacity(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(model),uniffiCallStatus
+    )
+})
 }
 
 
@@ -1631,6 +1649,68 @@ public func FfiConverterTypeOpenAiResponseNative_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeOpenAiResponseNative_lower(_ value: OpenAiResponseNative) -> RustBuffer {
     return FfiConverterTypeOpenAiResponseNative.lower(value)
+}
+
+
+public struct RuntimeCapacityNative: Equatable, Hashable {
+    public var executionLanes: UInt64
+    public var contextTokensPerLane: UInt64
+    public var contextPoolTokens: UInt64
+    public var capturedAtUnixMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(executionLanes: UInt64, contextTokensPerLane: UInt64, contextPoolTokens: UInt64, capturedAtUnixMs: UInt64) {
+        self.executionLanes = executionLanes
+        self.contextTokensPerLane = contextTokensPerLane
+        self.contextPoolTokens = contextPoolTokens
+        self.capturedAtUnixMs = capturedAtUnixMs
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RuntimeCapacityNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRuntimeCapacityNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RuntimeCapacityNative {
+        return
+            try RuntimeCapacityNative(
+                executionLanes: FfiConverterUInt64.read(from: &buf),
+                contextTokensPerLane: FfiConverterUInt64.read(from: &buf),
+                contextPoolTokens: FfiConverterUInt64.read(from: &buf),
+                capturedAtUnixMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RuntimeCapacityNative, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.executionLanes, into: &buf)
+        FfiConverterUInt64.write(value.contextTokensPerLane, into: &buf)
+        FfiConverterUInt64.write(value.contextPoolTokens, into: &buf)
+        FfiConverterUInt64.write(value.capturedAtUnixMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeCapacityNative_lift(_ buf: RustBuffer) throws -> RuntimeCapacityNative {
+    return try FfiConverterTypeRuntimeCapacityNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeCapacityNative_lower(_ value: RuntimeCapacityNative) -> RustBuffer {
+    return FfiConverterTypeRuntimeCapacityNative.lower(value)
 }
 
 
@@ -2379,6 +2459,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeRuntimeCapacityNative: FfiConverterRustBuffer {
+    typealias SwiftType = RuntimeCapacityNative?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeRuntimeCapacityNative.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeRuntimeCapacityNative.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListener: FfiConverterRustBuffer {
     typealias SwiftType = NativeRuntimeProgressListener?
 
@@ -2708,6 +2812,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_runtime_capacity() != 26263) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_close_audio() != 32045) {

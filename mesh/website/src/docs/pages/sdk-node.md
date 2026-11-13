@@ -4,6 +4,25 @@ title: Node.js and Electron SDK
 
 # Node.js and Electron SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```js
+const capacity = await node.runtimeCapacity('exact-serving-id')
+if (capacity !== null) {
+  console.log(capacity.executionLanes, capacity.contextTokensPerLane,
+    capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+Fields are `bigint` to preserve unsigned native precision. Each call reads the
+latest published observation without HTTP. Busy lanes count toward capacity;
+this does not reserve resources. Unknown, unsupported, unavailable or incomplete
+capacity returns `null`; stopped nodes reject. The timestamp is the oldest
+observation in Unix milliseconds; callers choose a freshness policy for long
+inference. The total pool is not a per-request context limit.
+
 Install `@mesh-llm/sdk` with `npm install @mesh-llm/sdk`. The SDK uses a native
 N-API addon and one embedded `Node` with `client`, `serve`, and `combined`
 roles. `serve` is serve-only; `combined` also permits inference.

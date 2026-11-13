@@ -36,25 +36,37 @@ impl EmbeddedServeHandle {
 
 fn snapshot(collector: &RuntimeDataCollector, model: &str) -> Option<RuntimeCapacity> {
     let status = collector.runtime_status_snapshot();
-    let instances: Vec<_> = if status.llama_runtime_by_instance.is_empty() {
-        vec![&status.llama_runtime.slots]
-    } else {
-        status
-            .llama_runtime_by_instance
+    let legacy = status.llama_runtime.slots.instance_id.is_none()
+        && status.llama_runtime_by_instance.is_empty()
+        && status
+            .active_runtime_instances
             .values()
-            .map(|instance| &instance.slots)
-            .collect()
-    };
+            .filter(|name| name.as_str() == model)
+            .count()
+            == 1;
     let mut capacity = RuntimeCapacity {
         execution_lanes: 0,
         context_tokens_per_lane: u64::MAX,
         context_pool_tokens: 0,
         captured_at_unix_ms: u64::MAX,
     };
-    for slots in instances
-        .into_iter()
-        .filter(|slots| slots.model.as_deref() == Some(model))
+    // Slot history outlives unload and may receive a late unavailable update.
+    // Require every active instance, excluding all retired observations.
+    for (instance, _) in status
+        .active_runtime_instances
+        .iter()
+        .filter(|(_, name)| *name == model)
     {
+        let slots = status
+            .llama_runtime_by_instance
+            .get(instance)
+            .map(|runtime| &runtime.slots)
+            .or(legacy.then_some(&status.llama_runtime.slots))?;
+        if slots.model.as_deref() != Some(model)
+            || slots.instance_id.as_ref().is_some_and(|id| id != instance)
+        {
+            return None;
+        }
         if slots.status != RuntimeLlamaEndpointStatus::Ready || slots.slots.is_empty() {
             return None;
         }
@@ -102,6 +114,9 @@ mod tests {
     #[test]
     fn capacity_tracks_instance_changes_and_keeps_model_budgets_separate() {
         let collector = RuntimeDataCollector::new();
+        collector.register_runtime_instance("chat", "a");
+        collector.register_runtime_instance("chat", "b");
+        collector.register_runtime_instance("other", "c");
         collector.replace_llama_slots_snapshot(observation("chat", "a", &[8192, 16384], 100));
         collector.replace_llama_slots_snapshot(observation("chat", "b", &[4096], 200));
         collector.replace_llama_slots_snapshot(observation("other", "c", &[32768], 300));
@@ -147,15 +162,61 @@ mod tests {
         invalid.push(observation("chat", "a", &[u64::MAX, 1], 100));
         for slots in invalid {
             let collector = RuntimeDataCollector::new();
+            collector.register_runtime_instance("chat", "a");
             collector.replace_llama_slots_snapshot(slots);
             assert_eq!(snapshot(&collector, "chat"), None);
         }
         let collector = RuntimeDataCollector::new();
+        collector.register_runtime_instance("chat", "a");
         let mut legacy = valid;
         legacy.instance_id = None;
         collector.replace_llama_slots_snapshot(legacy);
         assert_eq!(snapshot(&collector, "chat").unwrap().execution_lanes, 1);
         assert_eq!(snapshot(&collector, "unknown"), None);
+        collector.register_runtime_instance("chat", "b");
+        assert_eq!(snapshot(&collector, "chat"), None);
+    }
+
+    #[test]
+    fn retired_instances_do_not_count_or_block_a_later_load() {
+        let collector = RuntimeDataCollector::new();
+        collector.register_runtime_instance("chat", "a");
+        collector.register_runtime_instance("chat", "b");
+        collector.replace_llama_slots_snapshot(observation("chat", "a", &[8192], 100));
+        collector.replace_llama_slots_snapshot(observation("chat", "b", &[4096], 200));
+        collector.unregister_runtime_instance("a");
+        assert_eq!(
+            snapshot(&collector, "chat"),
+            Some(RuntimeCapacity {
+                execution_lanes: 1,
+                context_tokens_per_lane: 4096,
+                context_pool_tokens: 4096,
+                captured_at_unix_ms: 200,
+            })
+        );
+        collector.unregister_runtime_instance("b");
+        assert_eq!(snapshot(&collector, "chat"), None);
+        collector.register_runtime_instance("chat", "new");
+        assert_eq!(snapshot(&collector, "chat"), None);
+        collector.replace_llama_slots_snapshot(observation("chat", "new", &[16384], 300));
+        let mut late_unavailable = observation("chat", "b", &[], 400);
+        late_unavailable.status = RuntimeLlamaEndpointStatus::Unavailable;
+        collector.replace_llama_slots_snapshot(late_unavailable);
+        assert_eq!(
+            snapshot(&collector, "chat"),
+            Some(RuntimeCapacity {
+                execution_lanes: 1,
+                context_tokens_per_lane: 16384,
+                context_pool_tokens: 16384,
+                captured_at_unix_ms: 300,
+            })
+        );
+        collector.register_runtime_instance("chat", "pending");
+        assert_eq!(snapshot(&collector, "chat"), None);
+        collector.unregister_runtime_instance("pending");
+        collector.unregister_runtime_instance("new");
+        collector.register_runtime_instance("chat", "new");
+        assert_eq!(snapshot(&collector, "chat"), None);
     }
 
     #[test]

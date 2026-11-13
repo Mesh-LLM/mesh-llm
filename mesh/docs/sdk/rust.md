@@ -1,5 +1,24 @@
 # Rust SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```rust,no_run
+use mesh_llm_sdk::{MeshNode, capacity::RuntimeCapacity};
+
+fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<RuntimeCapacity>> {
+    node.runtime_capacity(model)
+}
+```
+
+The result reports `execution_lanes`, `context_tokens_per_lane`,
+`context_pool_tokens`, and `captured_at_unix_ms`. Each call reads the latest
+published native observation without HTTP. Busy lanes count toward capacity;
+this does not reserve resources. `None` means unknown, unsupported, unavailable,
+or incomplete capacity. Stopped nodes return an error. The timestamp is the
+oldest observation; callers choose a freshness policy for long-running inference.
+
 `mesh-llm-sdk` exposes one embedded `MeshNode`. Choose its role with the builder:
 
 | Builder | Consumes mesh inference | Serves local models |

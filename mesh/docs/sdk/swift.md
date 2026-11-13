@@ -1,5 +1,23 @@
 # Swift SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```swift
+if let capacity = try await node.runtimeCapacity("exact-serving-id") {
+    print(capacity.executionLanes, capacity.contextTokensPerLane,
+          capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+`RuntimeCapacity` fields use `UInt64`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. `nil` means unknown, unsupported, unavailable, or incomplete capacity.
+Stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long-running inference. Do not use the total
+pool as a per-request context limit.
+
 Add the tagged Swift package to `Package.swift`:
 
 ```swift

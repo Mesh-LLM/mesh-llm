@@ -62,6 +62,32 @@ times out after fifteen seconds. See the
 
 ## Common SDK capabilities
 
+### Local runtime capacity
+
+Rust, Node.js, Swift, and Kotlin can read the latest published local runtime
+capacity in process, without a console listener or an inference request.
+Python support is deferred; this capability is not yet available in the
+separate Python SDK.
+
+Use an exact local serving ID. Results contain execution lanes (including busy
+lanes), the smallest per-lane context budget, the total context pool, and the
+oldest observation's Unix timestamp in milliseconds. Each call reads shared
+state again. Unknown or unsupported models, unavailable instances, or incomplete
+observations return an absent value (`None`, `null`, or `nil`). A stopped node
+returns an error. The timestamp can lag during long inference; the caller
+chooses its freshness policy. Capacity observations do not reserve resources.
+Retired instances are excluded; newly registered instances require an observation
+before their model has complete capacity.
+
+| SDK | Call | Unsigned fields |
+|---|---|---|
+| Rust | `node.runtime_capacity(model)?` | `usize` lanes, `u64` context and timestamp |
+| Node.js | `await node.runtimeCapacity(model)` | `bigint` |
+| Swift | `try await node.runtimeCapacity(model)` | `UInt64` |
+| Kotlin | `node.runtimeCapacity(model)` | `ULong` |
+
+### Shared operations
+
 | Capability | Contract across Rust, Node.js, Python, Swift and Kotlin |
 |---|---|
 | Lifecycle | Start, stop, status and join by invite token in client, serve-only or combined mode |
