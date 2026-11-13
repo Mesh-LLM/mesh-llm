@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use crate::wire::{Challenge, LeafOpening, StageOpening};
+use crate::wire::{Challenge, LeafOpening, StageOpening, TensorOpening};
 
 /// Bytes of openings kept, across turns.
 const DEFAULT_OPENING_CACHE_BYTES: usize = 128 << 20;
@@ -123,7 +123,22 @@ fn opening_bytes(opening: &StageOpening) -> usize {
         .map(|p| paths(&p.leaves) + paths(&p.stored) + paths(&p.path))
         .sum();
     let tokens = opening.prefix_tokens.len() * size_of::<i32>();
-    layers + anchors + boundaries + head + prefix + tokens
+    // grow with the context and with every position of a recurrent ubatch
+    let attention: usize = opening.attention.iter().map(|a| a.partials.len()).sum();
+    let recurrent: usize = opening
+        .recurrent
+        .iter()
+        .flat_map(|r| &r.leaves)
+        .map(|leaf| tensors_bytes(&leaf.mixing) + paths(&leaf.path))
+        .sum();
+    layers + anchors + boundaries + head + prefix + tokens + attention + recurrent
+}
+
+fn tensors_bytes(tensors: &[TensorOpening]) -> usize {
+    tensors
+        .iter()
+        .map(|t| t.values.as_ref().map_or(0, String::len))
+        .sum()
 }
 
 fn leaf_bytes(leaf: &LeafOpening) -> usize {
@@ -133,11 +148,7 @@ fn leaf_bytes(leaf: &LeafOpening) -> usize {
         + paths(&leaf.residual_in_path)
         + paths(&leaf.mixing_path)
         + paths(&leaf.residual_out_path)
-        + leaf
-            .mixing
-            .iter()
-            .map(|t| t.values.as_ref().map_or(0, String::len))
-            .sum::<usize>()
+        + tensors_bytes(&leaf.mixing)
         + leaf
             .matrices
             .iter()
@@ -224,6 +235,43 @@ mod tests {
         assert!(cache.get(&challenge("a", 1)).is_none());
         assert!(cache.get(&challenge("b", 1)).is_some());
         assert_eq!(cache.bytes, 10);
+    }
+
+    #[test]
+    fn attention_and_recurrent_payloads_count_against_the_budget() {
+        use crate::attention::opening::AttentionPartials;
+        use crate::wire::{MixingKind, MixingLeafOpening, RecurrentOpening};
+
+        let mut heavy = (*opening(0)).clone();
+        heavy.attention.push(AttentionPartials {
+            position: 1,
+            layer: 0,
+            head: 0,
+            partials: "0".repeat(40),
+        });
+        heavy.recurrent.push(RecurrentOpening {
+            position: 1,
+            layer: 0,
+            start: 0,
+            end: 2,
+            leaves: vec![MixingLeafOpening {
+                position: 0,
+                mixing: vec![TensorOpening {
+                    kind: MixingKind::State,
+                    index: 0,
+                    ggml_type: 0,
+                    values: Some("0".repeat(30)),
+                }],
+                path: vec!["0".repeat(10)],
+            }],
+        });
+        assert_eq!(opening_bytes(&heavy), 80);
+        let mut cache = OpeningCache::new(50);
+        cache.insert(challenge("a", 1), Arc::new(heavy.clone()));
+        assert!(cache.get(&challenge("a", 1)).is_none(), "over the budget");
+        let mut cache = OpeningCache::new(100);
+        cache.insert(challenge("a", 1), Arc::new(heavy));
+        assert_eq!(cache.bytes, 80);
     }
 
     #[test]
