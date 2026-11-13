@@ -29,20 +29,20 @@ loader variables. It restores the
 existing protected Linux automation artifact for model resolution and publishes
 only one-day CTest diagnostics. No new producer, remote model-cache publisher,
 runner authority, required entrypoint or production ABI dependency is added.
-The CPU image binding is recorded as consumer role `skippy-cpp-api`, using only
-the dedicated `public-cpp-api` image ID. Its new immutable CPU index
+The CPU image binding is recorded as consumer role `skippy-cpp-api`. Its former
+dedicated `public-cpp-api` image index
 `sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`
 was staged and verified on AMD64/ARM64 in runner-images main run `41127631709`,
 attempt 1, producer `2ca51592535c29ddbed768b75481451d3fa5a49e`. Trusted producer
 admission and native binding retain the complete cohort as evidence hash
 `189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8`.
-Existing CPU consumer, runtime and compiler-seed identities are unchanged.
+That admission preceded the shared CPU cohort described below.
 The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
 and real-model CI qualification remains pending protected-main execution.
 The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
 are required after Rust header generation; missing lint tools fail preflight.
 
-A second CPU image entry, `public-cpu-libclang` (immutable index
+The CPU image entry `public-cpu-libclang` (immutable index
 `sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`,
 evidence hash `032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153`,
 runner-images main run `41541864277` attempt 3, producer
@@ -51,8 +51,17 @@ toolchain addition so the skippy-ffi bindgen freshness gate runs without a
 job-time install. It binds the compiler-seed cohort (rust-tests, rust-clippy,
 linux-host, safetensors-runtime-smoke, compiler-seed-publisher,
 runtime-seed-canary), the linux-cpu runtime row, and the rolled-forward
-compiler seed (`img-aaa36843-epoch-aaa36843-v3-`); the previous `public-cpu`
-image remains admitted for consumers that stay on it.
+compiler seed (`img-aaa36843-epoch-aaa36843-v3-`).
+
+Runner-images run `43392701387` attempt 1 staged the current complete cohort
+at producer `c2a825a5f38a0ff8b3a87843d933ec3f89c1195a` and Mesh source
+`2c2051a4084ed8dcd8f93c0f7f1b14fd01ca9a5c`. The catalog now uses its
+`public-cpu` image for the C++ role and ordinary CPU consumers,
+and retains the cohort under evidence hash
+`88ea93ca4b1d70c4787cfe1ddf7857a25aa0d95112dbfaf34a23e2ab7e38e0ef`.
+The compiler seed, libclang roles, and protected runtime rows retain their
+previous images and epochs. Producer admission and offline binding do not
+themselves establish workload or GPU qualification.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
@@ -647,6 +656,20 @@ it whenever `quality` is selected. The original Quality slice retains both
 automation and legacy contracts and its protected authority dependency, so
 main/manual-full contracts still run after a consistency failure. This adds
 one hosted worker and checkout/bootstrap overhead; live timing is unmeasured.
+
+Linux calls runtime and product slices separately for CPU, CUDA, ROCm and
+Vulkan. All four runtimes retain their automation-only start dependencies,
+independent of the shared host. Products join that host and their own runtime;
+each smoke joins its consumed backend product. Rust SDK needs CPU only, while
+Kotlin SDK additionally needs its existing native SDK producer. Every call is
+included in the unchanged exhaustive lane summary policy. A failed backend
+fails that result while other same-lane backends may finish; the existing
+protected monitor cancels other PR lanes without new executor permissions.
+Each runtime/product call has one selected catalog row and max-parallel 1,
+so four calls stay within the existing Linux 7/12 matrix limits. Windows keeps
+its 1/2 shared native budget and matrix barriers pending bounded row admission.
+macOS has one Metal row. Release is deferred because its static extraction
+requires runner-image catalog changes. Slice IDs and catalog rows are unchanged.
 
 | Workflow | Contract |
 | --- | --- |
@@ -1958,7 +1981,7 @@ source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
 Seven root workflows freeze one protected source commit per run, then provision
-11 topic/native producer instances across those workflows. All 28 reusable calls
+11 topic/native producer instances across those workflows. All 34 reusable calls
 into the 17 audit workflows forward dependency-provided identities; lane summaries
 require the selected producer jobs to succeed. These metadata inputs are not yet
 consumed by the 27 existing audit steps, which retain their published immutable

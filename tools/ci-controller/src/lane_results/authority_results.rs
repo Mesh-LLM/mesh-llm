@@ -10,18 +10,21 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
     let linux = match lane {
         Lane::Quality => includes(jobs, &["quality"]),
         Lane::Website => includes(jobs, &["web"]),
-        Lane::Linux => includes(
-            jobs,
-            &[
-                "ui_artifact",
-                "static_abi",
-                "rust_tests",
-                "hosts",
-                "native_runtimes",
-                "runtime_product",
-                "kotlin_sdk_input",
-            ],
-        ),
+        Lane::Linux => {
+            super::linux_backends::consumes_automation(jobs)
+                || includes(
+                    jobs,
+                    &[
+                        "ui_artifact",
+                        "static_abi",
+                        "rust_tests",
+                        "hosts",
+                        "native_runtimes",
+                        "runtime_product",
+                        "kotlin_sdk_input",
+                    ],
+                )
+        }
         Lane::Macos | Lane::Windows => includes(jobs, &["ui_artifact"]),
     };
     let macos = lane == Lane::Macos
@@ -46,16 +49,17 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
             ],
         );
     let product_linux = lane == Lane::Linux
-        && includes(
-            jobs,
-            &[
-                "static_abi",
-                "rust_tests",
-                "hosts",
-                "native_runtimes",
-                "runtime_product",
-            ],
-        );
+        && (super::linux_backends::consumes_automation(jobs)
+            || includes(
+                jobs,
+                &[
+                    "static_abi",
+                    "rust_tests",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                ],
+            ));
     let product_native = (matches!(lane, Lane::Macos | Lane::Windows)
         && includes(jobs, &["hosts", "native_runtimes", "runtime_product"]))
         || (lane == Lane::Macos && includes(jobs, &["sdk"]));

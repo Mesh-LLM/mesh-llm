@@ -6,6 +6,7 @@
 mod authority_results;
 mod digest;
 mod lane_graph;
+mod linux_backends;
 pub mod results;
 pub mod workflow_yaml;
 

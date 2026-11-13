@@ -17,7 +17,7 @@ fn steps(node: &Node) -> &[Node] {
 fn wiring(lane: &Node, workflow: &Node, action: &Node) -> bool {
     let product = lane
         .get("jobs")
-        .and_then(|jobs| jobs.get("runtime_product"))
+        .and_then(|jobs| jobs.get("product_cpu"))
         .unwrap();
     let mut needs = product.get("needs").unwrap().list();
     needs.sort_unstable();
@@ -26,7 +26,7 @@ fn wiring(lane: &Node, workflow: &Node, action: &Node) -> bool {
         == [
             "authority_linux_x64",
             "hosts",
-            "native_runtimes",
+            "native_runtime_cpu",
             "product_automation_linux_x64",
         ]
         && product
@@ -140,11 +140,12 @@ fn sdk_json_consumer_cli_changes_route_producers_and_default_required_consumer()
     assert!(wiring(&lane, &workflow, &action));
     let lane_source =
         fs::read_to_string(repository().join(".github/workflows/ci-linux-lane.yml")).unwrap();
-    let edge = "needs: [hosts, native_runtimes, authority_linux_x64, product_automation_linux_x64]";
+    let edge =
+        "needs: [hosts, native_runtime_cpu, authority_linux_x64, product_automation_linux_x64]";
     assert!(lane_source.contains(edge));
     let edges = [
         "hosts",
-        "native_runtimes",
+        "native_runtime_cpu",
         "authority_linux_x64",
         "product_automation_linux_x64",
     ];

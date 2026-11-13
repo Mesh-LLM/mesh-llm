@@ -2,6 +2,54 @@ use super::{assert_mutation_rejected, document, input, job, named, steps, suppor
 use std::{fs, process::Command};
 
 #[test]
+fn backend_projection_preserves_exact_catalog_rows_and_native_capacity() {
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(support::root().join("ci/slices.yml")).unwrap()).unwrap();
+    let rows = catalog["runtime_rows"]
+        .as_array()
+        .expect("runtime catalog rows");
+    let rows = rows
+        .iter()
+        .filter(|row| row["platform"] == "linux")
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 4);
+    for component in ["runtime", "product"] {
+        let doc = document(&format!("ci-linux-{component}-slice.yml"));
+        let select = named(job(&doc, "runner_policy"), "Select requested backend rows");
+        for backend in ["", "cpu", "cuda", "rocm", "vulkan", "unknown"] {
+            let fixture = support::Fixture::new();
+            let output_path = fixture.path().join("outputs");
+            let mut command = Command::new("bash");
+            command
+                .args(["-c", text(select, "run").unwrap()])
+                .current_dir(fixture.path())
+                .env("BACKEND", backend)
+                .env("RUNTIME_MATRIX", serde_json::to_string(&rows).unwrap())
+                .env("GITHUB_OUTPUT", &output_path);
+            let output = fixture.run(command);
+            assert_eq!(
+                output.status.success(),
+                backend != "unknown",
+                "{backend}: {output:?}"
+            );
+            if backend == "unknown" {
+                continue;
+            }
+            let contents = fs::read_to_string(output_path).unwrap();
+            let selected: serde_json::Value =
+                serde_json::from_str(contents.trim().strip_prefix("runtime_matrix=").unwrap())
+                    .unwrap();
+            let expected = rows
+                .iter()
+                .filter(|row| backend.is_empty() || row["backend"] == backend)
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(selected, serde_json::to_value(expected).unwrap());
+        }
+    }
+}
+
+#[test]
 fn artifact_runtime_image_verification_preserves_each_backend_argument() {
     let document = document("ci-linux-runtime-slice.yml");
     let step = named(

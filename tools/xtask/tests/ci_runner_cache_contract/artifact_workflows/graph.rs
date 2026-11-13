@@ -3,11 +3,7 @@ use std::collections::BTreeSet;
 
 #[test]
 fn artifact_platform_products_depend_only_on_matching_host_and_runtime_producers() {
-    for (platform, authority) in [
-        ("linux", "linux_x64"),
-        ("macos", "macos_arm64"),
-        ("windows", "windows_x64"),
-    ] {
+    for (platform, authority) in [("macos", "macos_arm64"), ("windows", "windows_x64")] {
         let document = document(&format!("ci-{platform}-lane.yml"));
         let product = job(&document, "runtime_product");
         let needs = product
@@ -51,8 +47,8 @@ fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
         ["static_abi", "authority_linux_x64"]
     );
     assert_eq!(
-        job(&linux, "sdk").get("needs").unwrap().list(),
-        ["runtime_product", "kotlin_sdk_input"]
+        job(&linux, "sdk_kotlin").get("needs").unwrap().list(),
+        ["product_cpu", "kotlin_sdk_input"]
     );
     let macos = document("ci-macos-lane.yml");
     let swift = job(&macos, "swift_sdk_input");

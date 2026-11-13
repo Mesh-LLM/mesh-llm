@@ -92,20 +92,16 @@ fn api_source_admission_rejects_symlinked_sources_and_manifests() -> TestResult 
 }
 
 #[test]
-fn api_qualified_cpu_image_is_scoped_to_its_own_consumer() -> TestResult {
+fn api_qualified_cpu_image_is_bound_to_the_api_consumer() -> TestResult {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .ok_or("repository root")?;
     let catalog: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(root.join("ci/runner-images.json"))?)?;
-    let image = &catalog["images"]["public-cpp-api"];
+    let image = &catalog["images"]["public-cpu"];
     assert_eq!(image["environment"], "public");
     assert_eq!(image["backend"], "cpu");
-    assert_ne!(
-        image["reference"],
-        catalog["images"]["public-cpu"]["reference"]
-    );
     assert_eq!(
         image["receipt"]["index_candidate_key"],
         "candidate-index-public-cpu"
@@ -115,14 +111,10 @@ fn api_qualified_cpu_image_is_scoped_to_its_own_consumer() -> TestResult {
         image["receipt"]["cohort_sha256"],
         image["provenance"]["cohort_sha256"]
     );
-    let consumers = catalog["consumer_roles"]
-        .as_object()
-        .ok_or("consumer roles")?
-        .iter()
-        .filter(|(_, role)| role["image_id"] == "public-cpp-api")
-        .map(|(name, _)| name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(consumers, ["skippy-cpp-api"]);
+    assert_eq!(
+        catalog["consumer_roles"]["skippy-cpp-api"]["image_id"],
+        "public-cpu"
+    );
     assert_eq!(
         catalog["runtime_rows"]["linux-cpu"]["image_id"],
         catalog["compiler_seed"]["image_id"]

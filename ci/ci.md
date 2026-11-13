@@ -52,11 +52,11 @@ and finite source-admission contracts do not qualify the pinned Linux image's
 C++23/clang toolchain or model behavior. Activate the executor on protected
 main, update the four feature branches with the admitted catalogs and owning
 recipes, then retain successful PR-associated execution at their final heads.
-The dedicated `public-cpp-api` image entry binds only the `skippy-cpp-api`
-consumer role. Its immutable multi-architecture CPU index is
+The former dedicated `public-cpp-api` image entry bound the `skippy-cpp-api`
+consumer role. Its immutable multi-architecture CPU index was
 `sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`;
-the existing `public-cpu` image, consumers, runtime rows and compiler seed keep
-their previous identities. Runner-images main run `41127631709`, attempt 1,
+the existing `public-cpu` image, consumers, runtime rows and compiler seed kept
+their previous identities at that time. Runner-images main run `41127631709`, attempt 1,
 successfully staged and verified AMD64/ARM64 CPU candidates at producer
 `2ca51592535c29ddbed768b75481451d3fa5a49e` and Mesh source
 `5e2fdddf6a6ea10d16e3689741483574f1274103`. The exact producer's
@@ -72,7 +72,7 @@ which still requires the protected-main executor rollout and real PR runs.
 
 ### Libclang-capable CPU image
 
-The dedicated `public-cpu-libclang` image entry binds the compiler-seed
+The `public-cpu-libclang` image entry binds the compiler-seed
 cohort: the `rust-tests`, `rust-clippy`, `linux-host`,
 `safetensors-runtime-smoke`, `compiler-seed-publisher` and
 `runtime-seed-canary` consumer roles, the `linux-cpu` runtime row, and the
@@ -83,13 +83,24 @@ exists so `skippy-ffi`'s bindgen freshness gate (which dlopens libclang through
 clang-sys) runs with the tool baked in instead of a job-time install. Its
 immutable multi-architecture CPU index is
 `sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`;
-the previous `public-cpu` image remains admitted for the consumers that stay
+the previous `public-cpu` image remained admitted for the consumers that stayed
 on it (including release-compose and SDK roles). Runner-images main run
 `41541864277`, attempt 3, successfully staged and verified AMD64/ARM64 CPU
 candidates at producer `45e0c35a191cc7026fb1b9a24700cc1b40be7ca6` and Mesh
 source `06f6347323552d07bdeffdb1bc1aba2808c26519`. Native
 `runner-identity bind` retained the complete cohort bytes under
 `ci/runner-image-evidence/032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153.json`.
+
+Runner-images run `43392701387`, attempt 1, staged the current cohort from
+producer `c2a825a5f38a0ff8b3a87843d933ec3f89c1195a` and Mesh source
+`2c2051a4084ed8dcd8f93c0f7f1b14fd01ca9a5c`. The exact-attempt producer
+admission and native bindings retain its bytes at
+`ci/runner-image-evidence/88ea93ca4b1d70c4787cfe1ddf7857a25aa0d95112dbfaf34a23e2ab7e38e0ef.json`.
+The C++ role now uses `public-cpu` alongside ordinary CPU consumers. The
+libclang roles, compiler seed, and protected runtime rows retain their previous
+images and epochs; changing those runtime rows requires a separate protected
+catalog rollout. Admission and offline binding do not establish workload or GPU
+qualification.
 
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that
@@ -1334,6 +1345,38 @@ lifecycle execution, and does not remove another lane's interpreter setup.
 
 ## Fan-out and timing controls
 
+Linux advances each backend independently. Before, every runtime joined before
+any product, and every product joined before smoke or SDK consumption. Now:
+
+```mermaid
+flowchart LR
+    automation --> runtimes[Independent CPU CUDA ROCm Vulkan runtimes]
+    automation --> host[Shared host via UI]
+    runtimes --> own[Matching backend product]
+    host --> own
+    own --> smoke[Matching backend smoke]
+    cpu[CPU product] --> rust[Rust SDK smoke]
+    cpu --> kotlin[Kotlin SDK smoke]
+    native[Kotlin native SDK input] --> kotlin
+    runtimes --> final[Exhaustive lane summary]
+    own --> final
+    smoke --> final
+    rust --> final
+    kotlin --> final
+```
+
+Runtimes never wait for the host. Four singleton runtime calls and four
+singleton composition calls each fit the existing Linux 7-worker PR and
+12-worker main/manual matrix budgets. Existing smoke row concurrency is
+unchanged; earlier eligibility does not add smoke rows. Failed backend work
+fails the lane, while unrelated backend work may finish. The protected PR
+sibling monitor alone cancels other lanes. Main/manual keep exhaustive results.
+Windows retains its shared 1-worker PR/2-worker main/manual matrices, because
+splitting independent runtime calls would multiply that budget. macOS needs
+no change for its single Metal row. Release is deferred pending runner-image
+catalog changes. Catalog membership, slice IDs and immutable artifacts remain
+unchanged. Hosted timing and peak-worker evidence for this graph are pending.
+
 The planner records profile budgets: PR drafts/ready runs allow at most
 7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;
 main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
@@ -1382,7 +1425,7 @@ not cancellation targets. The monitor costs one GitHub-hosted Linux slot while
 the PR runs; this bounded overhead replaces five per-lane polling jobs and is
 expected to recover more capacity whenever a lane fails early.
 
-Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
+Inside remaining macOS and Windows matrices, PR-only `fail_fast` inputs are enabled for
 Rust-test, host, native-runtime, product, platform-check, and full Swift target
 matrices. The
 first required failure cancels queued and in-progress siblings in that matrix.
@@ -2312,7 +2355,7 @@ source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
 Seven root workflows freeze one protected source commit per run, then provision
-11 topic/native producer instances across those workflows. All 28 reusable calls
+11 topic/native producer instances across those workflows. All 34 reusable calls
 into the 17 audit workflows forward dependency-provided identities; lane summaries
 require the selected producer jobs to succeed. These metadata inputs are not yet
 consumed by the 27 existing audit steps, which retain their published immutable
