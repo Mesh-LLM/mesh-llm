@@ -6,6 +6,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::Model as RawModel;
 
+use crate::decision::bighead_gguf::load_bighead_backend;
+use crate::decision::bighead_serve::BigHeadModel;
 use crate::dflash::SharedDFlashDraft;
 use crate::error::{ensure_ok, free_error};
 use crate::logging::write_native_log_note;
@@ -102,6 +104,8 @@ struct StageModelInner {
     raw: *mut RawModel,
     terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
+    /// Optional pointer-head artifact embedded in this model's GGUF.
+    bighead: Option<BigHeadModel>,
     /// External DFlash draft that borrows this model's context. Freed before
     /// the native model.
     dflash: Option<SharedDFlashDraft>,
@@ -133,6 +137,27 @@ fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> Model
     } else {
         ModelStateKind::Dense
     }
+}
+
+fn load_bighead_for_path(path: &Path) -> Result<Option<BigHeadModel>> {
+    if path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+    {
+        load_bighead_backend(path)
+            .with_context(|| format!("load BigHead backend from GGUF {}", path.display()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn install_bighead_for_path(model: &mut StageModel, path: &Path) -> Result<()> {
+    let bighead = load_bighead_for_path(path)?;
+    let inner = Arc::get_mut(&mut model.inner)
+        .ok_or_else(|| anyhow!("cannot attach BigHead while model readers are active"))?;
+    inner.bighead = bighead;
+    Ok(())
 }
 
 fn capability_from_state_probes(
@@ -167,6 +192,7 @@ impl StageModel {
                 raw: std::ptr::null_mut(),
                 terminal_stage: true,
                 capability: None,
+                bighead: None,
                 dflash: None,
             }),
             media: None,
@@ -232,6 +258,7 @@ impl StageModel {
                 raw,
                 terminal_stage: config.is_terminal_stage(),
                 capability,
+                bighead: None,
                 dflash: None,
             }),
             media,
@@ -252,6 +279,7 @@ impl StageModel {
             }
             return Self::open_safetensors(path, config.checkpoint_quantization, config);
         }
+        let raw_config = config.as_raw()?;
         let use_events = event_queue.is_some() && runtime_events::model_open_events_supported();
         let begin_label = if use_events {
             "skippy_model_open_with_events begin"
@@ -273,8 +301,8 @@ impl StageModel {
             path.display(),
             config.native_log_summary()
         ));
-        let path = path_to_cstring(path, "model path")?;
-        let raw_config = config.as_raw()?;
+        let model_path = path;
+        let path = path_to_cstring(model_path, "model path")?;
         #[cfg(not(test))]
         let (raw, status, error) = runtime_events::run_model_open(
             |out_model, out_error| unsafe {
@@ -321,7 +349,9 @@ impl StageModel {
             }
         }
         open_result?;
-        Self::from_opened_raw(raw, config, null_handle_message)
+        let mut model = Self::from_opened_raw(raw, config, null_handle_message)?;
+        install_bighead_for_path(&mut model, model_path)?;
+        Ok(model)
     }
 
     fn open_parts_with_optional_event_queue(
@@ -332,6 +362,9 @@ impl StageModel {
         if paths.is_empty() {
             return Err(anyhow!("at least one GGUF part path is required"));
         }
+        let raw_config = config.as_raw()?;
+        // GGUF split files store metadata and the model-wide head on part 1.
+        let model_path = paths[0].as_ref();
         let use_events = event_queue.is_some() && runtime_events::model_open_events_supported();
         let begin_label = if use_events {
             "skippy_model_open_from_parts_with_events begin"
@@ -363,7 +396,6 @@ impl StageModel {
             .map(|path| path_to_cstring(path.as_ref(), "part path"))
             .collect::<Result<Vec<_>>>()?;
         let path_ptrs = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
-        let raw_config = config.as_raw()?;
         #[cfg(not(test))]
         let (raw, status, error) = runtime_events::run_model_open(
             |out_model, out_error| unsafe {
@@ -421,7 +453,9 @@ impl StageModel {
             }
         }
         open_result?;
-        Self::from_opened_raw(raw, config, null_handle_message)
+        let mut model = Self::from_opened_raw(raw, config, null_handle_message)?;
+        install_bighead_for_path(&mut model, model_path)?;
+        Ok(model)
     }
 
     pub fn open(path: impl AsRef<Path>, config: &RuntimeConfig) -> Result<Self> {
@@ -581,6 +615,10 @@ impl StageModel {
 
     pub(crate) fn raw_model(&self) -> *mut RawModel {
         self.inner.raw
+    }
+
+    pub(crate) fn bighead_backend(&self) -> Option<&BigHeadModel> {
+        self.inner.bighead.as_ref()
     }
 
     pub(crate) fn dflash_draft(&self) -> Option<&SharedDFlashDraft> {

@@ -13,8 +13,8 @@
 //! tokenization is an injected closure, so the position-resolution and
 //! batching math run against synthetic callbacks in tests.
 
-use super::bighead_serve::{HiddenStateProvider, RenderedQuestion};
 use super::DecisionError;
+use super::bighead_serve::{HiddenStateProvider, RenderedQuestion};
 use crate::native;
 use crate::{StageModel, StageSession};
 
@@ -48,7 +48,7 @@ pub trait EmbeddingsSource {
 /// standalone.
 ///
 /// Positions are found by exact subsequence match: the full prompt is
-/// tokenized with specials; each `- {label}\n` line is tokenized without
+/// tokenized with specials; each numbered option line is tokenized without
 /// specials and located after the previous option's match. The `<answer>`
 /// marker closes the prompt, so the query position is simply the final prompt
 /// token. A line whose tokens never appear (tokenizer boundary effects) is an
@@ -61,41 +61,41 @@ fn resolve_one(
     question: &RenderedQuestion,
     tokenize: &mut TokenizeFn<'_>,
 ) -> QuestionPositionsResult {
-            let full = tokenize(&question.prompt, true)?;
-            if full.is_empty() {
-                return Err(DecisionError::InvalidRequest(
-                    "BigHead prompt produced no tokens".into(),
-                ));
-            }
-            if !question.prompt.ends_with(ANSWER_MARKER) {
-                return Err(DecisionError::Backend(anyhow::anyhow!(
-                    "rendered BigHead prompt is missing the {ANSWER_MARKER} marker"
-                )));
-            }
-            if question.option_labels.len() != question.n_options {
-                return Err(DecisionError::Backend(anyhow::anyhow!(
-                    "rendered question {:?} has {} labels for {} options",
-                    question.kind,
-                    question.option_labels.len(),
-                    question.n_options
-                )));
-            }
-            let answer = full.len() - 1;
-            let mut options = Vec::with_capacity(question.option_labels.len());
-            let mut cursor = 0usize;
-            for label in &question.option_labels {
-                let line = format!("- {label}\n");
-                let line_tokens = tokenize(&line, false)?;
-                let Some(start) = find_subsequence(&full[cursor..], &line_tokens) else {
-                    return Err(DecisionError::InvalidRequest(format!(
-                        "tokenizer could not place the option line {line:?} in the BigHead prompt"
-                    )));
-                };
-                let base = cursor + start;
-                options.push(base + line_tokens.len() - 1);
-                cursor = base + line_tokens.len();
-            }
-            Ok(QuestionPositions { answer, options })
+    let full = tokenize(&question.prompt, true)?;
+    if full.is_empty() {
+        return Err(DecisionError::InvalidRequest(
+            "BigHead prompt produced no tokens".into(),
+        ));
+    }
+    if !question.prompt.ends_with(ANSWER_MARKER) {
+        return Err(DecisionError::Backend(anyhow::anyhow!(
+            "rendered BigHead prompt is missing the {ANSWER_MARKER} marker"
+        )));
+    }
+    if question.option_lines.len() != question.n_options {
+        return Err(DecisionError::Backend(anyhow::anyhow!(
+            "rendered question {:?} has {} labels for {} options",
+            question.kind,
+            question.option_lines.len(),
+            question.n_options
+        )));
+    }
+    let answer = full.len() - 1;
+    let mut options = Vec::with_capacity(question.option_lines.len());
+    let mut cursor = 0usize;
+    for option_line in &question.option_lines {
+        let line = format!("{option_line}\n");
+        let line_tokens = tokenize(&line, false)?;
+        let Some(start) = find_subsequence(&full[cursor..], &line_tokens) else {
+            return Err(DecisionError::InvalidRequest(format!(
+                "tokenizer could not place the option line {line:?} in the BigHead prompt"
+            )));
+        };
+        let base = cursor + start;
+        options.push(base + line_tokens.len() - 1);
+        cursor = base + line_tokens.len();
+    }
+    Ok(QuestionPositions { answer, options })
 }
 
 pub fn resolve_positions(
@@ -155,8 +155,9 @@ pub fn collect_hidden_states(
             // Positions are sorted, so anything before `offset` was consumed
             // by an earlier chunk; a position at or past the prompt length is
             // caught by the unfinished-targets check below.
-            let row_index = i32::try_from(position - offset)
-                .map_err(|_| DecisionError::Backend(anyhow::anyhow!("token position overflows i32")))?;
+            let row_index = i32::try_from(position - offset).map_err(|_| {
+                DecisionError::Backend(anyhow::anyhow!("token position overflows i32"))
+            })?;
             let row = source.row(row_index)?;
             if row.len() != n_embd {
                 return Err(DecisionError::Backend(anyhow::anyhow!(
@@ -229,20 +230,23 @@ impl Drop for EmbeddingsGuard {
 /// per-token hidden states after a chunked prefill. Construction validates
 /// that the session exposes a llama context and the model a positive embedding
 /// width, so a mismatched runtime fails at attach time rather than mid-read.
-pub struct LlamaHiddenStateProvider {
-    model: *mut skippy_ffi::Model,
-    session: *mut StageSession,
+pub struct LlamaHiddenStateProvider<'a> {
+    model: &'a StageModel,
+    session: &'a mut StageSession,
     context: *mut skippy_ffi::Opaque,
     n_embd: usize,
 }
 
-impl LlamaHiddenStateProvider {
-    /// Captures the handles backing `model`/`session`. The caller must hold
-    /// exclusive access to the session for as long as the returned provider is
-    /// used — the same contract as the media.rs speech path.
-    pub fn capture(model: &StageModel, session: &mut StageSession) -> Result<Self, DecisionError> {
-        // SAFETY: reads handles owned by the borrowed model/session; both
-        // outlive the returned provider under the exclusivity contract above.
+impl<'a> LlamaHiddenStateProvider<'a> {
+    /// Borrows the model and exclusively borrows the session for the lifetime
+    /// of the provider, tying every native handle to its owner.
+    pub fn capture(
+        model: &'a StageModel,
+        session: &'a mut StageSession,
+        expected_hidden_size: usize,
+    ) -> Result<Self, DecisionError> {
+        // SAFETY: the borrowed session owns its raw handle until this provider
+        // is dropped; the lifetime ties the context to that borrow.
         let context = unsafe { skippy_ffi::skippy_session_llama_context(session.raw) };
         if context.is_null() {
             return Err(DecisionError::Backend(anyhow::anyhow!(
@@ -264,8 +268,14 @@ impl LlamaHiddenStateProvider {
                 "llama model reported a non-positive embedding width: {n_embd}"
             )));
         }
+        if n_embd as usize != expected_hidden_size {
+            return Err(DecisionError::Backend(anyhow::anyhow!(
+                "BigHead hidden size {} does not match model embedding width {n_embd}",
+                expected_hidden_size
+            )));
+        }
         Ok(Self {
-            model: model.raw_model(),
+            model,
             session,
             context,
             n_embd: n_embd as usize,
@@ -273,35 +283,25 @@ impl LlamaHiddenStateProvider {
     }
 }
 
-// SAFETY: the provider is used under the StageSession's exclusive-access
-// contract (one serving call at a time), exactly like the raw-pointer media
-// paths; the pointed-to handles are not otherwise shared.
-unsafe impl Send for LlamaHiddenStateProvider {}
-unsafe impl Sync for LlamaHiddenStateProvider {}
-
-impl HiddenStateProvider for LlamaHiddenStateProvider {
+impl HiddenStateProvider for LlamaHiddenStateProvider<'_> {
     fn hidden_states(
-        &self,
+        &mut self,
         rendered: &mut [RenderedQuestion],
     ) -> Result<Vec<Vec<Vec<f32>>>, DecisionError> {
         if rendered.is_empty() {
             return Ok(Vec::new());
         }
-        // SAFETY: exclusive session access per the capture contract; the
-        // session borrow is reassembled only for the duration of this call.
-        let session = unsafe { &mut *self.session };
-        let batch_size = session.batch_size().map_err(DecisionError::Backend)?;
-        session.reset().map_err(DecisionError::Backend)?;
-        // SAFETY: `context` belongs to the exclusively held session.
+        let batch_size = self.session.batch_size().map_err(DecisionError::Backend)?;
+        self.session.reset().map_err(DecisionError::Backend)?;
+        // SAFETY: `context` belongs to the session exclusively borrowed by self.
         unsafe { skippy_ffi::llama_set_embeddings(self.context, true) };
         let _guard = EmbeddingsGuard {
             context: self.context,
         };
 
+        let raw_model = self.model.raw_model();
         let mut tokenize = |text: &str, add_special: bool| {
-            // SAFETY: `self.model` outlives the closure call under the
-            // capture contract; the native call copies out the tokens.
-            native::tokenize(self.model, text, add_special).map_err(DecisionError::Backend)
+            native::tokenize(raw_model, text, add_special).map_err(DecisionError::Backend)
         };
         let positions = resolve_positions(rendered, &mut tokenize)?;
         let source = LlamaEmbeddingsSource {
@@ -312,14 +312,19 @@ impl HiddenStateProvider for LlamaHiddenStateProvider {
         for (question, positions) in rendered.iter_mut().zip(positions) {
             // Each question prefills independently: reset clears the previous
             // question's KV so its hidden states never bleed into this read.
-            session.reset().map_err(DecisionError::Backend)?;
+            self.session.reset().map_err(DecisionError::Backend)?;
             let prompt_tokens = tokenize(&question.prompt, true)?;
+            question.prompt_token_count = prompt_tokens.len();
             states.push(collect_hidden_states(
                 &source,
                 &prompt_tokens,
                 &positions,
                 batch_size,
-                |chunk| session.prefill_chunk(chunk).map_err(DecisionError::Backend),
+                |chunk| {
+                    self.session
+                        .prefill_chunk(chunk)
+                        .map_err(DecisionError::Backend)
+                },
             )?);
             question.answer_pos = positions.answer;
             question.option_positions = positions.options;
@@ -353,38 +358,57 @@ mod tests {
             prompt: String::new(),
             answer_pos: usize::MAX,
             option_positions: vec![usize::MAX; n_options],
+            prompt_token_count: 0,
             kind: "choice".into(),
-            option_labels: labels.iter().map(|label| (*label).to_string()).collect(),
+            option_lines: labels
+                .iter()
+                .enumerate()
+                .map(|(index, label)| format!("{}. {label}", index + 1))
+                .collect(),
             n_options,
         }
     }
 
     #[test]
     fn resolves_option_lines_and_answer_marker() {
-        // Whitespace tokenizer: one token per word. The prompt layout renders
-        // state, instructions, one "- label" line per option, then <answer>.
+        // Stable token IDs avoid collisions between unrelated words of equal length.
+        let mut vocab = std::collections::HashMap::new();
         let mut tokens = |text: &str, _add_special: bool| {
-            Ok(text.split_whitespace().map(|word| word.len() as i32).collect())
+            Ok(text
+                .split_whitespace()
+                .map(|word| {
+                    if let Some(id) = vocab.get(word) {
+                        *id
+                    } else {
+                        let id = i32::try_from(vocab.len()).unwrap();
+                        vocab.insert(word.to_string(), id);
+                        id
+                    }
+                })
+                .collect())
         };
         let mut q = question(2, &["true", "false"]);
-        q.prompt = "sky is blue\n\ncolor?\n- true\n- false\n<answer>".into();
+        q.prompt = "<state>\nsky is blue\n</state>\n<question type=\"choice\">\nSelect exactly one option.\ncolor?\n<options>\n1. true\n2. false\n</options>\n</question>\n<answer>".into();
         let positions = resolve_positions(&[q], &mut tokens).unwrap();
-        // Tokens: [sky, is, blue, color?, -, true, -, false, <answer>]
-        assert_eq!(positions[0].options, vec![5, 7]);
-        assert_eq!(positions[0].answer, 8);
+        // The question has options at tokens 14 and 16, followed by `<answer>`.
+        assert_eq!(positions[0].options, vec![14, 16]);
+        assert_eq!(positions[0].answer, 19);
     }
 
     #[test]
     fn unplaceable_option_line_is_invalid_request() {
         // Tokenizer that never emits the "- x" line as written.
         let mut tokens = |text: &str, _add_special: bool| {
-            if text.starts_with("- ") {
+            if text.starts_with("1. ") {
                 return Ok(vec![-1]); // never matches the prompt's tokens
             }
-            Ok(text.split_whitespace().map(|word| word.len() as i32).collect())
+            Ok(text
+                .split_whitespace()
+                .map(|word| word.len() as i32)
+                .collect())
         };
         let mut q = question(1, &["true"]);
-        q.prompt = "state\n- true\n<answer>".into();
+        q.prompt = "state\n1. true\n<answer>".into();
         let error = resolve_positions(&[q], &mut tokens).unwrap_err();
         assert!(matches!(error, DecisionError::InvalidRequest(_)));
     }

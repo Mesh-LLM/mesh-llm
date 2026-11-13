@@ -3,6 +3,7 @@
 
 use serde_json::Value;
 
+use super::bighead_hidden::LlamaHiddenStateProvider;
 use super::{
     DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
     DecisionRequest, DecisionValue, check_output,
@@ -53,6 +54,13 @@ enum AnswerFormat {
 
 impl DecisionModel for StageModel {
     fn decide(&self, request: &DecisionRequest) -> Result<DecisionOutput, DecisionError> {
+        if let Some(bighead) = self.bighead_backend() {
+            let mut session = self.create_session().map_err(DecisionError::from)?;
+            let mut provider =
+                LlamaHiddenStateProvider::capture(self, &mut session, bighead.hidden_size())?;
+            return bighead.decide_with_provider(request, &mut provider);
+        }
+
         let questions = canvas_questions(&request.questions)?;
         let format = if questions.len() <= LINE_FORMAT_MAX_QUESTIONS {
             AnswerFormat::Lines

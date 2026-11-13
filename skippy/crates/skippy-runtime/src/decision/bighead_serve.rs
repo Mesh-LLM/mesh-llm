@@ -7,13 +7,9 @@
 //!
 //! ## Hidden-state source
 //!
-//! Per-token final hidden states are the only torso output BigHead needs, and
-//! `llama_get_embeddings_ith` is already bound in skippy-ffi. The provider is
-//! injected as a closure so this layer is testable without a loaded model, and
-//! so the llama plumbing lands as one focused change: prefill the rendered
-//! prompt, then call the provider for the hidden states at the recorded
-//! positions. Until that plumbing lands, [`BigHeadModel::unavailable`]
-//! describes the gap and `decide` fails closed with a clear error.
+//! Per-token final hidden states come from a scoped llama session. The runtime
+//! loader attaches a BigHead artifact to `StageModel`; its decision dispatch
+//! creates the session and provides the hidden-state reader for one call.
 
 use super::bighead::{BigHeadConfig, BigHeadWeights, kind_probabilities, pointer_logits};
 use super::{DecisionError, DecisionModel, DecisionOutput, DecisionRequest};
@@ -26,68 +22,139 @@ pub struct RenderedQuestion {
     pub answer_pos: usize,
     /// Token index of the last token of each option's line, in option order.
     pub option_positions: Vec<usize>,
+    /// Token count with model-added special tokens, filled by the provider.
+    pub prompt_token_count: usize,
     /// Question kind ("noul" | "choice" | "score").
     pub kind: String,
-    /// Option labels in request order, exactly as rendered on their lines.
-    /// The hidden-state provider tokenizes `- {label}\n` to locate each
-    /// option line's final token.
-    pub option_labels: Vec<String>,
+    /// Exact option lines, including labels and descriptions from training.
+    pub option_lines: Vec<String>,
     /// Number of offered options.
     pub n_options: usize,
 }
 
-/// Renders the BigHead prompt layout for a whole request. The layout follows
-/// the reference implementation (strands-decider `prompting.py`): the shared
-/// state, then the question with each offered answer on its own line, closed by
-/// the `<answer>` marker. Option lines appear in request order — the head is
-/// permutation-generic by construction, so no canonical reordering here.
+/// Renders the reference implementation's state/question/options layout so the
+/// hidden states are read at the same token positions used during training.
 pub fn render(
     request: &DecisionRequest,
     answer_marker: &str,
 ) -> Result<Vec<RenderedQuestion>, DecisionError> {
-    let state = request.state.to_json().to_string();
+    let state = format!("<state>\n{}\n</state>\n", render_content(&request.state));
     let mut out = Vec::new();
     for question in &request.questions {
-        let (kind, options) = match &question.kind {
-            super::DecisionQuestionKind::Noul { .. } => {
-                ("noul", vec!["true".to_string(), "false".to_string()])
-            }
+        let (kind, header, options) = match &question.kind {
+            super::DecisionQuestionKind::Noul {
+                when_true,
+                when_false,
+            } => (
+                "noul",
+                "Decide whether the statement is true of the state.",
+                vec![
+                    (
+                        "false".to_string(),
+                        when_false.as_ref().map_or_else(
+                            || "the statement does not hold for this state".to_string(),
+                            render_content,
+                        ),
+                    ),
+                    (
+                        "true".to_string(),
+                        when_true.as_ref().map_or_else(
+                            || "the statement holds for this state".to_string(),
+                            render_content,
+                        ),
+                    ),
+                ],
+            ),
             super::DecisionQuestionKind::Choice { options } => (
                 "choice",
-                options.iter().map(|(name, _)| name.clone()).collect(),
+                "Select exactly one option.",
+                options
+                    .iter()
+                    .map(|(name, description)| (name.clone(), render_content(description)))
+                    .collect(),
             ),
             super::DecisionQuestionKind::Score { levels } => (
                 "score",
+                "Rate the state against the ordered levels below (lowest first).",
                 levels
                     .iter()
                     .enumerate()
-                    .map(|(i, _)| i.to_string())
+                    .map(|(index, description)| (index.to_string(), render_content(description)))
                     .collect(),
             ),
         };
         let instructions = question
             .instructions
             .as_ref()
-            .map(|i| i.to_json().as_str().unwrap_or_default().to_string())
-            .unwrap_or_default();
-        let mut prompt = format!("{state}\n\n{instructions}\n");
-        for opt in &options {
-            prompt.push_str(&format!("- {opt}\n"));
+            .map_or_else(String::new, render_content);
+        let mut prompt =
+            format!("{state}<question type=\"{kind}\">\n{header}\n{instructions}\n<options>\n");
+        let mut option_lines = Vec::with_capacity(options.len());
+        for (index, (name, description)) in options.iter().enumerate() {
+            let description = description.split_whitespace().collect::<Vec<_>>().join(" ");
+            let line = if description.is_empty() {
+                format!("{}. {name}", index + 1)
+            } else {
+                format!("{}. {name} — {description}", index + 1)
+            };
+            prompt.push_str(&line);
+            prompt.push('\n');
+            option_lines.push(line);
         }
+        prompt.push_str("</options>\n</question>\n");
         prompt.push_str(answer_marker);
-        // Token positions are resolved by the hidden-state provider after
-        // tokenization; here we carry order, and the provider maps it.
-        let n = options.len();
         out.push(RenderedQuestion {
             prompt,
-            answer_pos: usize::MAX, // filled by the provider
-            option_positions: (0..n).map(|_| usize::MAX).collect(),
+            answer_pos: usize::MAX,
+            option_positions: (0..options.len()).map(|_| usize::MAX).collect(),
+            prompt_token_count: 0,
             kind: kind.to_string(),
-            option_labels: options,
-            n_options: n,
+            option_lines,
+            n_options: options.len(),
         });
     }
     Ok(out)
+}
+
+fn render_content(value: &super::DecisionValue) -> String {
+    match value {
+        super::DecisionValue::Null => String::new(),
+        super::DecisionValue::String(text) => text.trim().to_string(),
+        _ => render_json(value, 0),
+    }
+}
+
+fn render_json(value: &super::DecisionValue, depth: usize) -> String {
+    let indent = |level: usize| " ".repeat(level * 2);
+    match value {
+        super::DecisionValue::Object(entries) if !entries.is_empty() => {
+            let rendered = entries
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}{}: {}",
+                        indent(depth + 1),
+                        serde_json::to_string(key).unwrap_or_default(),
+                        render_json(value, depth + 1)
+                    )
+                })
+                .collect::<Vec<_>>();
+            format!("{{\n{}\n{}}}", rendered.join(",\n"), indent(depth))
+        }
+        super::DecisionValue::Array(values) if !values.is_empty() => {
+            let rendered = values
+                .iter()
+                .map(|value| format!("{}{}", indent(depth + 1), render_json(value, depth + 1)))
+                .collect::<Vec<_>>();
+            format!("[\n{}\n{}]", rendered.join(",\n"), indent(depth))
+        }
+        super::DecisionValue::Object(_) => "{}".into(),
+        super::DecisionValue::Array(_) => "[]".into(),
+        super::DecisionValue::Null => "null".into(),
+        super::DecisionValue::Bool(value) => value.to_string(),
+        super::DecisionValue::Number(value) => value.to_string(),
+        super::DecisionValue::String(value) => serde_json::to_string(value).unwrap_or_default(),
+    }
 }
 
 /// Supplies hidden states for a rendered prompt. Implementations tokenize,
@@ -95,7 +162,7 @@ pub fn render(
 /// [`RenderedQuestion`] are filled from this side.
 pub trait HiddenStateProvider {
     fn hidden_states(
-        &self,
+        &mut self,
         rendered: &mut [RenderedQuestion],
     ) -> Result<Vec<Vec<Vec<f32>>>, DecisionError>;
 }
@@ -104,7 +171,7 @@ impl HiddenStateProvider
     for fn(&mut [RenderedQuestion]) -> Result<Vec<Vec<Vec<f32>>>, DecisionError>
 {
     fn hidden_states(
-        &self,
+        &mut self,
         rendered: &mut [RenderedQuestion],
     ) -> Result<Vec<Vec<Vec<f32>>>, DecisionError> {
         (*self)(rendered)
@@ -115,7 +182,7 @@ impl HiddenStateProvider
 pub struct BigHeadModel {
     config: BigHeadConfig,
     weights: BigHeadWeights,
-    states: Option<Box<dyn HiddenStateProvider + Send + Sync>>,
+    states: Option<std::sync::Mutex<Box<dyn HiddenStateProvider + Send>>>,
     /// Probability mass semantics reported alongside readouts.
     pub semantics: &'static str,
 }
@@ -132,25 +199,23 @@ impl BigHeadModel {
         }
     }
 
-    pub fn with_provider(mut self, provider: Box<dyn HiddenStateProvider + Send + Sync>) -> Self {
-        self.states = Some(provider);
+    pub fn with_provider(mut self, provider: Box<dyn HiddenStateProvider + Send>) -> Self {
+        self.states = Some(std::sync::Mutex::new(provider));
         self
     }
 
-    /// Serving without a hidden-state provider (the llama plumbing is the
-    /// remaining seam): construct the description of what is missing.
-    pub fn unavailable(&self) -> DecisionError {
-        DecisionError::Unsupported(
-            "BigHead serving needs the hidden-state provider (llama_get_embeddings_ith \
-             plumbing); math, schema, and dispatch are in place"
-                .into(),
-        )
+    pub fn hidden_size(&self) -> usize {
+        self.config.hidden_size
     }
-}
 
-impl DecisionModel for BigHeadModel {
-    fn decide(&self, request: &DecisionRequest) -> Result<DecisionOutput, DecisionError> {
-        let provider = self.states.as_ref().ok_or_else(|| self.unavailable())?;
+    /// Scores the request with a provider whose model/session borrow is scoped
+    /// to this call. Production uses this path so raw llama handles cannot
+    /// outlive their owning `StageModel` or `StageSession`.
+    pub fn decide_with_provider(
+        &self,
+        request: &DecisionRequest,
+        provider: &mut dyn HiddenStateProvider,
+    ) -> Result<DecisionOutput, DecisionError> {
         let mut rendered = render(request, "<answer>")?;
         let states = provider.hidden_states(&mut rendered)?;
         let mut probabilities = Vec::with_capacity(rendered.len());
@@ -167,12 +232,32 @@ impl DecisionModel for BigHeadModel {
             let option_refs: Vec<&[f32]> = options.iter().map(|v| v.as_slice()).collect();
             let logits = pointer_logits(&self.config, &self.weights, answer, &option_refs);
             probabilities.push(kind_probabilities(&self.config, &q.kind, &logits));
-            input_tokens += q.prompt.split_whitespace().count();
+            input_tokens += q.prompt_token_count;
         }
+        super::check_output(request, &probabilities)?;
         Ok(DecisionOutput {
             probabilities,
             input_tokens,
         })
+    }
+
+    /// Serving without a hidden-state provider (the llama plumbing is the
+    /// remaining seam): construct the description of what is missing.
+    pub fn unavailable(&self) -> DecisionError {
+        DecisionError::Unsupported(
+            "a standalone BigHead model needs the hidden-state provider supplied by a loaded StageModel"
+                .into(),
+        )
+    }
+}
+
+impl DecisionModel for BigHeadModel {
+    fn decide(&self, request: &DecisionRequest) -> Result<DecisionOutput, DecisionError> {
+        let state = self.states.as_ref().ok_or_else(|| self.unavailable())?;
+        let mut provider = state.lock().map_err(|_| {
+            DecisionError::Backend(anyhow::anyhow!("BigHead provider lock poisoned"))
+        })?;
+        self.decide_with_provider(request, provider.as_mut())
     }
 }
 
@@ -188,8 +273,9 @@ mod tests {
         // state has a 1 in component k, the answer state is all-ones — with the
         // identity head the highest logit lands on the last option.
         Ok(rendered
-            .iter()
+            .iter_mut()
             .map(|q| {
+                q.prompt_token_count = q.prompt.split_whitespace().count();
                 let mut rows: Vec<Vec<f32>> = (0..q.n_options)
                     .map(|k| {
                         let mut v = vec![0.0f32; 4];
@@ -235,6 +321,34 @@ mod tests {
     }
 
     #[test]
+    fn render_matches_training_prompt_and_keeps_option_descriptions() {
+        let dv = |value: &str| super::super::DecisionValue::String(value.into());
+        let request = super::super::DecisionRequest {
+            state: dv("the state"),
+            questions: vec![super::super::DecisionQuestion {
+                key: "choice".into(),
+                instructions: Some(dv("Pick one")),
+                kind: super::super::DecisionQuestionKind::Choice {
+                    options: vec![
+                        ("a".into(), dv("first option")),
+                        ("b".into(), dv("second option")),
+                    ],
+                },
+            }],
+            seed: [0; 32],
+        };
+        let rendered = render(&request, "<answer>").unwrap();
+        assert_eq!(
+            rendered[0].prompt,
+            "<state>\nthe state\n</state>\n<question type=\"choice\">\nSelect exactly one option.\nPick one\n<options>\n1. a — first option\n2. b — second option\n</options>\n</question>\n<answer>"
+        );
+        assert_eq!(
+            rendered[0].option_lines,
+            ["1. a — first option", "2. b — second option"]
+        );
+    }
+
+    #[test]
     fn serves_all_question_kinds() {
         let dv = |s: &str| super::super::DecisionValue::String(s.into());
         let request = super::super::DecisionRequest {
@@ -267,6 +381,12 @@ mod tests {
         };
         let out = model().decide(&request).unwrap();
         assert_eq!(out.probabilities.len(), 3);
+        let expected_tokens = render(&request, "<answer>")
+            .unwrap()
+            .iter()
+            .map(|q| q.prompt.split_whitespace().count())
+            .sum::<usize>();
+        assert_eq!(out.input_tokens, expected_tokens);
         for (dist, n) in out.probabilities.iter().zip([2, 2, 3]) {
             assert_eq!(dist.len(), n);
             assert!((dist.iter().sum::<f32>() - 1.0).abs() < 1e-5);
