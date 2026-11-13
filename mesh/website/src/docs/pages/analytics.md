@@ -94,8 +94,10 @@ case when a catalog model's file is loaded from the Hugging Face cache, when
 a layer package's name is exactly a catalog name, and when a split package
 comes from a catalog entry's published package. Everything else is
 `redacted`: a `--gguf` file anywhere else, a Hugging Face repository the
-catalog does not list (private or not), a configured alias such as
-`server.alias`, and a model name a client typed.
+catalog does not list (private or not), and a model name a client typed. A
+configured alias such as `server.alias` is never reported either: a package
+served under an alias is `redacted`, or carries the catalog's own name when
+its package repository is one the catalog publishes.
 
 A `redacted` model is described instead, by properties read from the GGUF
 header that say what kind of model it is without saying which one:
@@ -119,9 +121,9 @@ carries a `weight` saying how many requests it stands for. It carries:
 |---|---|---|
 | `model`, `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` | `Qwen3-8B-Q4_K_M`, `redacted` | As `model_loaded` reported them; see [Model names](#model-names) |
 | `weight` | `1`, `12` | Requests this event represents |
-| `backend` | `cuda`, `metal`, `rocm`, `vulkan`, `cpu` | The backend serving runs on |
+| `backend` | `cuda`, `metal`, `rocm`, `vulkan`, `cpu` | The backend of the loaded runtime that served, read from its device names |
 | `gpu_family` | `apple-m4`, `rtx-4090`, `gb10`, `none` | `hardware_profile`'s `gpu_model` reduced to its family: vendor words, form factor (`laptop`) and Apple tiers (`pro`, `max`) dropped, so it has fewer values than `gpu_model` |
-| `vram_gb` | `24`, `128` | As on `hardware_profile` |
+| `vram_gb` | `24`, `128` | GPU memory in whole GiB. Unlike `hardware_profile`, it leaves out the system RAM that extends the budget on discrete-GPU hosts, and is absent with no GPU |
 | `request_kind` | `agentic`, `chat`, `completion` | `agentic` when tools were offered or the history carries tool results, `chat` for other message requests, `completion` for a raw prompt |
 | `tools_offered`, `tool_results`, `system_prompt` | `true` | Whether tools were offered (and not turned off by `tool_choice`), whether the history carries tool results, and whether a system or developer message was present. Never the tools, their names, or any message text |
 | `user_turns` | `1`, `3-4`, `33+` | User messages in the history, bucketed |

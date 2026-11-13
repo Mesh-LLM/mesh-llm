@@ -282,16 +282,25 @@ fn serving_hardware(
     mesh_llm_analytics::ServingHardware {
         backend: serving_backend(survey, flavors),
         gpu_family,
-        vram_gb: (survey.vram_bytes > 0).then(|| mesh_llm_analytics::gigabytes(survey.vram_bytes)),
+        vram_gb: accelerator_memory_gb(survey),
     }
 }
 
-/// The backend serving runs on.
+/// GPU memory in whole GiB, without the RAM-offload credit that
+/// `vram_bytes` carries on discrete-GPU and CPU-only hosts. `None` when no
+/// accelerator memory is left, so a GPU-less host reports no `vram_gb`.
+fn accelerator_memory_gb(survey: &mesh_llm_system::hardware::HardwareSurvey) -> Option<u64> {
+    let bytes = survey.vram_bytes.saturating_sub(survey.ram_offload_bytes);
+    (bytes > 0).then(|| mesh_llm_analytics::gigabytes(bytes))
+}
+
+/// The backend this machine serves on, as known when the survey ran.
 ///
 /// The loaded runtime names its devices (`CUDA0`, `MTL0`, `Vulkan0`,
-/// `ROCm0`), which is the backend actually in use. When the survey ran before
-/// a runtime loaded, the best backend this machine can run stands in: the
-/// runtime selection prefers the same order.
+/// `ROCm0`). When the survey ran before a runtime loaded, the best backend
+/// this machine can run stands in. `inference_request` replaces this with the
+/// loaded runtime's own devices once it is serving, so a configured selection
+/// such as Vulkan on a CUDA host is reported as what ran.
 fn serving_backend(
     survey: &mesh_llm_system::hardware::HardwareSurvey,
     flavors: &std::collections::BTreeSet<skippy_native_runtime::NativeRuntimeBackendKind>,
@@ -302,7 +311,7 @@ fn serving_backend(
         .gpus
         .iter()
         .filter_map(|gpu| gpu.backend_device.as_deref())
-        .find_map(backend_of_device);
+        .find_map(mesh_llm_analytics::backend_of_device);
     if let Some(backend) = device_backend {
         return backend;
     }
@@ -315,21 +324,6 @@ fn serving_backend(
     .into_iter()
     .find(|(kind, _)| flavors.contains(kind))
     .map_or("cpu", |(_, name)| name)
-}
-
-fn backend_of_device(device: &str) -> Option<&'static str> {
-    let device = device.to_ascii_lowercase();
-    [
-        ("cuda", "cuda"),
-        ("rocm", "rocm"),
-        ("hip", "rocm"),
-        ("mtl", "metal"),
-        ("metal", "metal"),
-        ("vulkan", "vulkan"),
-    ]
-    .into_iter()
-    .find(|(prefix, _)| device.starts_with(prefix))
-    .map(|(_, backend)| backend)
 }
 
 /// Words in a device slug that name a vendor or a form factor, not a part.
@@ -558,6 +552,19 @@ mod tests {
         let none = serving_hardware(&survey, &metal_only());
         assert_eq!(none.gpu_family, mesh_llm_analytics::Value::from("none"));
         assert_eq!(none.vram_gb, None);
+    }
+
+    #[test]
+    fn serving_hardware_vram_leaves_out_the_ram_offload_credit() {
+        // A GPU-less host's whole budget is RAM credit: no GPU memory at all.
+        let mut cpu_only = survey(None, 0, 12 << 30, false);
+        cpu_only.ram_offload_bytes = 12 << 30;
+        assert_eq!(serving_hardware(&cpu_only, &metal_only()).vram_gb, None);
+
+        // A discrete GPU reports its own memory, not the budget RAM extends.
+        let mut discrete = survey(Some("NVIDIA GeForce RTX 4090"), 1, 40 << 30, false);
+        discrete.ram_offload_bytes = 16 << 30;
+        assert_eq!(serving_hardware(&discrete, &metal_only()).vram_gb, Some(24));
     }
 
     #[test]

@@ -45,7 +45,9 @@ pub use event::{Event, Label, Properties, Value, bucket_count, bucket_duration_s
 pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
 pub use notice::{NOTICE, NOTICE_MARKER_FILE};
 pub use properties::{BuildChannel, LIB_NAME, base_properties, exec_env};
-pub use serving_hardware::{ServingHardware, serving_hardware, set_serving_hardware};
+pub use serving_hardware::{
+    ServingHardware, backend_of_device, serving_hardware, set_serving_hardware,
+};
 pub use version_state::{PendingVersion, VERSION_FILE, VersionTransition};
 
 /// Environment variable the self-updater sets on the binary it `exec`s.
