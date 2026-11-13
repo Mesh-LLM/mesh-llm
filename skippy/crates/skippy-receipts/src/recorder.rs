@@ -127,7 +127,9 @@ struct SeqLog {
     /// a log before its turn commits ([`RecorderState::shed_live`]).
     event_bytes: usize,
     /// The log outgrew the window and its turn gets no receipt: it records
-    /// no more ubatches until the sequence's next turn.
+    /// no more ubatches or positions until the sequence's next turn, and
+    /// keeps only its taint and a stand-in for its prefix
+    /// ([`RecorderState::shed_live`]).
     shed: bool,
     /// What the stage committed per position.
     leaves: BTreeMap<u32, PositionLeaves>,
@@ -173,14 +175,26 @@ impl SeqLog {
         std::mem::take(&mut self.events)
     }
 
-    /// Bytes a live log holds that a commit moves into its committed turn:
-    /// its ubatches, with their input rows, and its recurrent state.
+    /// Bytes a live log holds for its turn: its ubatches, with their input
+    /// rows, its recurrent state, the hashes it committed per position and
+    /// the cells of its prefix. Counted without a walk of the log, as every
+    /// ubatch asks it.
     fn live_bytes(&self) -> usize {
         let state = match &self.state {
             Some(Ok(state)) => state.bytes_held(),
             _ => 0,
         };
-        self.event_bytes + state
+        // every position of a stage holds as many hashes
+        let leaves =
+            self.leaves.values().next().map_or(0, PositionLeaves::bytes) * self.leaves.len();
+        self.event_bytes + state + leaves + self.prefix_bytes()
+    }
+
+    fn prefix_bytes(&self) -> usize {
+        match &self.prefix {
+            Some(Ok(prefix)) => prefix.bytes(),
+            _ => 0,
+        }
     }
 
     fn pending(&self) -> Option<Range<u32>> {
@@ -212,7 +226,7 @@ impl SeqLog {
             Some(Ok(state)) => state.bytes_held(),
             _ => 0,
         };
-        events + leaves + state
+        events + leaves + state + self.prefix_bytes()
     }
 }
 
@@ -408,6 +422,11 @@ impl RecorderState {
             log.take_events();
             log.shed = true;
             log.state = None;
+            // the turn gets no receipt, so its positions and prefix are
+            // not needed; the stand-in keeps its later ubatches in the turn
+            log.leaves.clear();
+            log.pending_start = None;
+            log.prefix = Some(Err("the turn's log was shed".to_owned()));
         }
     }
 
@@ -645,9 +664,11 @@ impl Recorder {
                         position: hashes.position,
                     };
                     let log = &mut seq.live;
-                    log.leaves.insert(position, hashes);
-                    log.pending_start =
-                        Some(log.pending_start.map_or(position, |p| p.min(position)));
+                    if !log.shed {
+                        log.leaves.insert(position, hashes);
+                        log.pending_start =
+                            Some(log.pending_start.map_or(position, |p| p.min(position)));
+                    }
                     Some(column)
                 }
                 Err(error) => {
