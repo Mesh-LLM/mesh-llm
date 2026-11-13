@@ -126,6 +126,17 @@ pub use rejected::MediaRejected;
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for MediaProjector {}
 
+/// Resolve the projector image token floor against the decode cap.
+///
+/// The decode budget exposes only the effective maximum, so an unset floor
+/// (`-1`) cannot be read back here: native loading would fall back to the
+/// projector's own default floor, which can sit above the capped maximum and
+/// make a small image resolve to more tokens than one decode microbatch. Give
+/// an unset floor the smallest positive value so the cap bounds every floor.
+fn clamp_image_min_tokens(min: i32, decode_batch: i32) -> i32 {
+    min.max(1).min(decode_batch)
+}
+
 impl MediaProjector {
     pub(crate) fn open(
         path: &str,
@@ -179,7 +190,7 @@ impl MediaProjector {
                 budget.image_max_tokens, decode_batch, decode_batch
             ));
             params.image_max_tokens = decode_batch;
-            params.image_min_tokens = params.image_min_tokens.min(decode_batch);
+            params.image_min_tokens = clamp_image_min_tokens(params.image_min_tokens, decode_batch);
         }
         let raw = unsafe { skippy_ffi::mtmd_init_from_file(path.as_ptr(), raw_model, params) };
         if raw.is_null() {
@@ -1022,7 +1033,26 @@ fn pcm_f32_to_s16le(bytes: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpeechOutputFormat, pcm_f32_to_s16le, validated_speech_metadata};
+    use super::{
+        SpeechOutputFormat, clamp_image_min_tokens, pcm_f32_to_s16le, validated_speech_metadata,
+    };
+
+    #[test]
+    /// An unset image token floor must resolve inside the decode cap: the
+    /// projector's hidden default floor can exceed one decode microbatch.
+    fn image_min_tokens_unset_resolves_inside_the_decode_cap() {
+        // A projector default floor of 64 exceeds the 32-token microbatch.
+        let resolved = clamp_image_min_tokens(-1, 32);
+        assert!(resolved >= 1, "floor stays positive: {resolved}");
+        assert!(resolved <= 32, "floor stays inside the cap: {resolved}");
+    }
+
+    #[test]
+    /// Configured floors are preserved up to the decode cap.
+    fn image_min_tokens_configured_floor_follows_the_decode_cap() {
+        assert_eq!(clamp_image_min_tokens(64, 128), 64);
+        assert_eq!(clamp_image_min_tokens(64, 32), 32);
+    }
 
     #[test]
     /// Reject native speech metadata that cannot describe its payload.
