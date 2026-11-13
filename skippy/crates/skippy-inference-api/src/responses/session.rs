@@ -90,6 +90,7 @@ impl Default for ResponsesSessionConfig {
 pub struct PreparedResponsesTurn {
     turn: Arc<ResponsesTurn>,
     request: GenerationRequest,
+    ingress_body: Value,
     trusted_agent_session: bool,
     previous_response_id: Option<String>,
     response_adapter: ResponseAdapterMode,
@@ -102,6 +103,12 @@ impl PreparedResponsesTurn {
 
     pub fn request(&self) -> &GenerationRequest {
         &self.request
+    }
+
+    /// The Responses-shaped body before continuation expansion and protocol
+    /// normalization, for an embedding ingress's admission and audit path.
+    pub fn ingress_body(&self) -> &Value {
+        &self.ingress_body
     }
 
     pub fn previous_response_id(&self) -> Option<&str> {
@@ -247,6 +254,7 @@ pub(crate) fn prepare_request(
     header_session: Option<AgentSessionIdentity>,
     previous_response_id: Option<String>,
 ) -> Result<PreparedResponsesTurn, InferenceError> {
+    let ingress_body = value.clone();
     let turn = Arc::new(ResponsesTurn::prepare(&mut value, continuation)?);
     let normalization = normalize_openai_compat_request("/v1/responses", &mut value)?;
     let request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
@@ -263,6 +271,7 @@ pub(crate) fn prepare_request(
     Ok(PreparedResponsesTurn {
         turn,
         request,
+        ingress_body,
         trusted_agent_session,
         previous_response_id,
         response_adapter: normalization.response_adapter,

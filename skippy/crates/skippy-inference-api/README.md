@@ -161,10 +161,10 @@ This is not a claim of full Open Responses conformance. Background execution,
 automatic truncation, `max_tool_calls`, hosted tools, encrypted reasoning,
 non-default service tiers, and verbosity are unsupported and are rejected.
 Compaction is limited to the process-local contract above; it is not portable
-provider state. The WebSocket route is currently standalone Skippy only: the
-Mesh public ingress has not yet been adapted to upgrade and route persistent
-Responses connections, so this documentation does not promise the feature on a
-Mesh endpoint.
+provider state. Mesh reuses this session at its full public ingress and routes
+each turn independently; the startup bootstrap proxy deliberately refuses the
+upgrade until full ingress is ready, and peer HTTP ingress never accepts an
+already-upgraded Responses session.
 
 ## Shape
 

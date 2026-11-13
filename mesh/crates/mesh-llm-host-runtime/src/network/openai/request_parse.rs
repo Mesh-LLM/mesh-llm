@@ -19,9 +19,11 @@ mod body_rewrite;
 mod chunked;
 mod effective_entity;
 mod plugin_transform;
+mod responses_websocket;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
 pub(crate) use plugin_transform::RequestTransforms;
+pub(super) use responses_websocket::buffer_prepared_responses_turn;
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
@@ -110,10 +112,9 @@ struct ParsedHeaders {
     content_type: Option<String>,
     is_chunked: bool,
     expects_continue: bool,
-    /// A live transcription handshake (`GET /v1/realtime` with an upgrade):
-    /// bytes after the head are its first websocket frames, not a body, and
-    /// are kept for the relay. Every other request drops them.
-    is_realtime_upgrade: bool,
+    /// A supported WebSocket handshake: bytes after the head are its first
+    /// frames, not an HTTP body, and are kept for the owning adapter.
+    is_websocket_upgrade: bool,
     correlation_id: Option<String>,
     /// The client used the `/private/v1` base URL; `path` has it removed.
     private_base: bool,
@@ -570,11 +571,17 @@ where
     let raw = finalize_forwarded_request(
         raw,
         header_end,
-        parsed.expects_continue,
-        Some(&rewrite.request_path),
-        rewrite.rewritten_body.as_deref(),
-        parsed.request_id,
-        parsed.private_base,
+        ForwardedRequestRewrite {
+            strip_expect: parsed.expects_continue,
+            rewritten_method: None,
+            rewritten_path: Some(&rewrite.request_path),
+            rewritten_body: rewrite.rewritten_body.as_deref(),
+            request_id: parsed.request_id,
+            private_base: parsed.private_base,
+            websocket_upgrade: parsed.is_websocket_upgrade,
+            strip_websocket_headers: false,
+            ensure_json_content_type: false,
+        },
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     // Context budgets follow what reaches the model: a transform may replace
@@ -636,7 +643,7 @@ where
     }
     // A client may send its first websocket frames together with the
     // handshake; they stay in `raw` behind the head for the relay.
-    if !parsed.is_realtime_upgrade {
+    if !parsed.is_websocket_upgrade {
         raw.truncate(header_end);
     }
     Ok(Vec::new())
@@ -867,22 +874,41 @@ fn is_document_ocr_path(path: &str) -> bool {
     )
 }
 
+struct ForwardedRequestRewrite<'a> {
+    strip_expect: bool,
+    rewritten_method: Option<&'a str>,
+    rewritten_path: Option<&'a str>,
+    rewritten_body: Option<&'a [u8]>,
+    request_id: RequestId,
+    private_base: bool,
+    websocket_upgrade: bool,
+    strip_websocket_headers: bool,
+    ensure_json_content_type: bool,
+}
+
 fn finalize_forwarded_request(
     mut raw: Vec<u8>,
     header_end: usize,
-    strip_expect: bool,
-    rewritten_path: Option<&str>,
-    rewritten_body: Option<&[u8]>,
-    request_id: RequestId,
-    private_base: bool,
+    rewrite: ForwardedRequestRewrite<'_>,
 ) -> Result<Vec<u8>> {
+    let ForwardedRequestRewrite {
+        strip_expect,
+        rewritten_method,
+        rewritten_path,
+        rewritten_body,
+        request_id,
+        private_base,
+        websocket_upgrade,
+        strip_websocket_headers,
+        ensure_json_content_type,
+    } = rewrite;
     let original_body = raw.split_off(header_end);
     // Re-parse with httparse so we iterate over validated header structs.
     let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut req = httparse::Request::new(&mut headers_buf);
     let _ = req.parse(&raw).context("re-parse headers for forwarding")?;
 
-    let method = req.method.unwrap_or("GET");
+    let method = rewritten_method.unwrap_or_else(|| req.method.unwrap_or("GET"));
     let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
     let version = req.version.unwrap_or(1);
 
@@ -898,6 +924,15 @@ fn finalize_forwarded_request(
     for header in req.headers.iter() {
         let name = header.name;
         if name.eq_ignore_ascii_case("connection") {
+            continue;
+        }
+        if strip_websocket_headers
+            && (name.eq_ignore_ascii_case("upgrade")
+                || name.to_ascii_lowercase().starts_with("sec-websocket-"))
+        {
+            continue;
+        }
+        if ensure_json_content_type && name.eq_ignore_ascii_case("content-type") {
             continue;
         }
         if name.eq_ignore_ascii_case("x-request-id") {
@@ -937,6 +972,9 @@ fn finalize_forwarded_request(
     if let Some(body) = rewritten_body {
         rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
+    if ensure_json_content_type {
+        rebuilt.push_str("Content-Type: application/json\r\n");
+    }
     rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
     if private_base {
         rebuilt.push_str(&super::routing_scope::private_scope_header_line());
@@ -955,7 +993,11 @@ fn finalize_forwarded_request(
 
     // The proxy buffers exactly one request for routing, so force a single-request
     // connection contract upstream instead of reusing the client connection blindly.
-    rebuilt.push_str("Connection: close\r\n\r\n");
+    if websocket_upgrade {
+        rebuilt.push_str("Connection: Upgrade\r\n\r\n");
+    } else {
+        rebuilt.push_str("Connection: close\r\n\r\n");
+    }
 
     let mut forwarded = rebuilt.into_bytes();
     forwarded.extend_from_slice(rewritten_body.unwrap_or(&original_body));
@@ -1040,10 +1082,13 @@ where
                     content_length = None;
                 }
 
-                let is_realtime_upgrade = upgrade_requested
+                let is_websocket_upgrade = upgrade_requested
                     && connection_upgrade
                     && method.eq_ignore_ascii_case("GET")
-                    && path.split('?').next() == Some("/v1/realtime");
+                    && matches!(
+                        path.split('?').next(),
+                        Some("/v1/realtime" | "/v1/responses")
+                    );
                 return Ok(ParsedHeaders {
                     header_end,
                     method,
@@ -1053,7 +1098,7 @@ where
                     content_type,
                     is_chunked,
                     expects_continue,
-                    is_realtime_upgrade,
+                    is_websocket_upgrade,
                     correlation_id,
                     private_base,
                 });

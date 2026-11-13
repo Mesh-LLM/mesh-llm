@@ -127,6 +127,20 @@ async fn tunnel_from_peer(host: &Node, targets: ModelTargets, opening: &[u8]) ->
     response
 }
 
+#[tokio::test]
+async fn a_peer_cannot_assign_a_responses_websocket_across_the_quic_boundary() {
+    let host = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let opening = b"GET /v1/responses HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    let response = tunnel_from_peer(&host, ModelTargets::default(), opening).await;
+    let response = String::from_utf8_lossy(&response);
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(
+        response.contains("accepted only at local Mesh ingress"),
+        "{response}"
+    );
+    host.close_endpoint().await;
+}
+
 fn opening(model: &str) -> Vec<u8> {
     let mut bytes = format!(
         "GET /v1/realtime?model={model} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"

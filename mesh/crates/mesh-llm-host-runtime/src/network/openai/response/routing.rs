@@ -142,7 +142,8 @@ async fn route_local_attempt_after_forward_with_responses<U: AsyncRead + Unpin +
             // records its own model as a peer's, and a paid seller's headers
             // read here never reach this node's client.
             set_served_model_headers(&mut probe, served_model);
-            let result = Box::pin(relay_attempted_response(
+            let disconnect = tcp_stream.captured_response_disconnect();
+            let relay = Box::pin(relay_attempted_response(
                 tcp_stream,
                 upstream,
                 probe,
@@ -156,8 +157,8 @@ async fn route_local_attempt_after_forward_with_responses<U: AsyncRead + Unpin +
                 },
                 retry_policy,
                 response_adapter,
-            ))
-            .await;
+            ));
+            let result = relay_with_capture_disconnect(relay, disconnect).await;
             cancel_upstream_if_client_disconnected(result, upstream).await
         }
         ProbeOutcome::Response(Err(err)) => {
@@ -220,7 +221,8 @@ async fn route_remote_attempt_after_forward_with_responses<
             // The peer's served-model headers are for this node's own exchange
             // events; they are never relayed on to this node's client.
             set_served_model_headers(&mut probe, None);
-            let result = Box::pin(relay_attempted_response(
+            let disconnect = tcp_stream.captured_response_disconnect();
+            let relay = Box::pin(relay_attempted_response(
                 tcp_stream,
                 quic_recv,
                 probe,
@@ -234,8 +236,8 @@ async fn route_remote_attempt_after_forward_with_responses<
                 },
                 retry_policy,
                 response_adapter,
-            ))
-            .await;
+            ));
+            let result = relay_with_capture_disconnect(relay, disconnect).await;
             cancel_upstream_if_client_disconnected(result, quic_recv).await
         }
         ProbeOutcome::Response(Err(err)) => {
@@ -246,6 +248,30 @@ async fn route_remote_attempt_after_forward_with_responses<
             retryable_route_result_from_error(&err)
         }
     }
+}
+
+async fn relay_with_capture_disconnect<F>(
+    relay: std::pin::Pin<Box<F>>,
+    disconnect: Option<tokio::sync::watch::Receiver<bool>>,
+) -> RouteAttemptResult
+where
+    F: Future<Output = RouteAttemptResult> + ?Sized,
+{
+    let Some(mut disconnect) = disconnect else {
+        return relay.await;
+    };
+    tokio::select! {
+        biased;
+        result = relay => result,
+        _ = wait_for_capture_disconnect(&mut disconnect) => RouteAttemptResult::ClientDisconnected,
+    }
+}
+
+async fn wait_for_capture_disconnect(disconnect: &mut tokio::sync::watch::Receiver<bool>) {
+    if *disconnect.borrow() {
+        return;
+    }
+    let _ = disconnect.changed().await;
 }
 
 pub(in crate::network::openai) async fn route_remote_attempt(
@@ -577,6 +603,55 @@ mod tests {
             .expect("remote route must notice a reset promptly")
             .unwrap();
 
+        assert_eq!(result, RouteAttemptResult::ClientDisconnected);
+        assert_eq!(cancels.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn capture_disconnect_cancels_a_blocked_upstream_after_response_started() {
+        let (mut upstream_writer, upstream_reader) = tokio::io::duplex(64 * 1024);
+        upstream_writer
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let cancels = Arc::new(AtomicUsize::new(0));
+        let route_cancels = Arc::clone(&cancels);
+        let (mut downstream, mut capture) = ClientStream::capture_pair(64 * 1024);
+        let route = tokio::spawn(async move {
+            let mut upstream = DuplexUpstream {
+                inner: upstream_reader,
+                cancels: route_cancels,
+            };
+            route_remote_attempt_after_forward(
+                &mut downstream,
+                &mut upstream,
+                iroh::SecretKey::generate().public(),
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                None,
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+
+        let mut response_head = vec![0; 16];
+        timeout(
+            Duration::from_secs(2),
+            capture.read_exact(&mut response_head),
+        )
+        .await
+        .expect("the response must start before capture disconnects")
+        .unwrap();
+        drop(capture);
+
+        let result = timeout(Duration::from_secs(2), route)
+            .await
+            .expect("capture disconnect must interrupt the blocked upstream body")
+            .unwrap();
         assert_eq!(result, RouteAttemptResult::ClientDisconnected);
         assert_eq!(cancels.load(Ordering::SeqCst), 1);
     }

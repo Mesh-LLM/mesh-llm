@@ -127,6 +127,24 @@ host-local trust scope. A reverse proxy or multi-user deployment must disable
 storage unless it supplies a separately authenticated ingress identity; a
 body field or caller-provided header cannot select another caller's scope.
 
+### WebSocket
+
+Upgrade `GET /v1/responses` (`ws://localhost:9337/v1/responses`) and send JSON
+`response.create` messages for persistent sequential turns. Streaming event
+objects are sent directly as WebSocket text messages, without SSE framing or
+`[DONE]`. The connection keeps its latest completed response even when that
+turn used `store: false`; a `store: true` turn may also use the same bounded
+caller-scoped process store as HTTP after reconnect.
+
+Mesh retains the session at the original ingress and independently applies
+request transforms, admission, private scope, target selection, routing, and
+retry to every turn. The pending-turn queue, frames, outbound queue, and
+retained transcript are bounded, and the absolute connection lifetime is 60
+minutes including active work. Disconnecting cancels the active downstream
+request. The startup bootstrap proxy does not support this upgrade, and a
+serving peer never receives the whole WebSocket; it receives an ordinary
+expanded HTTP request for a routed turn.
+
 ### Compaction
 
 `POST /v1/responses/compact` summarizes a Responses transcript into an opaque
@@ -174,10 +192,9 @@ it:
 Unsupported semantics fail explicitly. Mesh does not currently implement
 background responses, automatic truncation, `max_tool_calls`, non-default
 service tiers, text verbosity, hosted tools, or encrypted reasoning
-continuation. The optional Responses WebSocket transport is not implemented.
-The existing `/v1/realtime` WebSocket is a transcription protocol and is not a
-Responses transport. Compaction items are the one opaque provider-state item
-described above; Mesh does not create encrypted reasoning state.
+continuation. The existing `/v1/realtime` WebSocket is a separate transcription
+protocol. Compaction items are the one opaque provider-state item described
+above; Mesh does not create encrypted reasoning state.
 
 ## Streaming
 

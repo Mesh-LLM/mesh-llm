@@ -452,6 +452,14 @@ pub async fn handle_mesh_request(
     else {
         return;
     };
+    if super::ingress::responses_websocket::is_upgrade(&request) {
+        let _ = super::response::send_503(
+            tcp_stream,
+            "Responses WebSocket ingress is unavailable while the Mesh proxy is starting",
+        )
+        .await;
+        return;
+    }
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
     let mut lifecycle = attach_request_logging(&mut request, source_addr);

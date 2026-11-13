@@ -28,7 +28,7 @@ use super::stream_translation::{StreamedChatAssembly, write_captured_sse_event};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
 
-const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
+pub(super) const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 struct Progress {
@@ -226,12 +226,7 @@ async fn process_available_frames(
             }
         };
         processed = end + 2;
-        let data = frame
-            .lines()
-            .filter_map(|line| line.strip_prefix("data:"))
-            .map(str::trim_start)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let data = sse_frame_data(frame);
         if data.is_empty() {
             continue;
         }
@@ -254,14 +249,14 @@ async fn process_available_frames(
     Ok(())
 }
 
-fn frame_end(carry: &[u8], start: usize) -> Option<usize> {
+pub(super) fn frame_end(carry: &[u8], start: usize) -> Option<usize> {
     carry[start..]
         .windows(2)
         .position(|window| window == b"\n\n")
         .map(|relative| start + relative)
 }
 
-fn normalize_crlf(bytes: &mut Vec<u8>) {
+pub(super) fn normalize_crlf(bytes: &mut Vec<u8>) {
     if !bytes.contains(&b'\r') {
         return;
     }
@@ -278,6 +273,15 @@ fn normalize_crlf(bytes: &mut Vec<u8>) {
         write += 1;
     }
     bytes.truncate(write);
+}
+
+pub(super) fn sse_frame_data(frame: &str) -> String {
+    frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn process_frame(

@@ -13,7 +13,7 @@ by both products.
 |---|---|---|
 | `skippy` CLI | `skippy-cli`, `skippy-commands` | Operators running model management, local OpenAI serving, or explicit stage workers. |
 | HTTP inference frontend | `skippy-inference-api` | OpenAI-compatible, Anthropic Messages, and SystemOne routes share a backend and lifecycle contract between standalone Skippy and Mesh. Mesh adds discovery, routing, and proxy policy around it. |
-| Responses session state | `skippy-inference-api::responses` | Prepares transport-neutral sequential turns, bounded connection-local continuation, and shared Responses stream events. Standalone Skippy exposes it at `GET /v1/responses`; Mesh WebSocket ingress is not wired yet. |
+| Responses session state | `skippy-inference-api::responses` | Prepares transport-neutral sequential turns, bounded connection-local continuation, and shared Responses stream events. Standalone Skippy and the full Mesh public ingress expose it at `GET /v1/responses`. |
 | Rust model lifecycle | `skippy-api::serving` | Embedding hosts load a model with `ModelLoadRequest` and retain `LoadedModelBackend` while serving. The options are currently a low-level integration contract, not a small stable SDK facade. |
 | Native runtime selection | `skippy-api::native_runtime` | The caller supplies bundle and cache locations. The API neither chooses a product home directory nor downloads implicitly. |
 | Package-v2 format | `skippy-package-format` | Producers and consumers share validated manifests and content identities. Format compatibility is separate from the native ABI. |
@@ -42,11 +42,11 @@ model reference -> artifact/HF adapter -> package format and admission
 
 The standalone Responses WebSocket adapter terminates the socket at
 `skippy-inference-api` and sends each prepared turn through the ordinary
-backend boundary. It does not tunnel a persistent connection to a stage worker.
-`ResponsesSession` deliberately exposes prepared request/session state so a
-future Mesh ingress can run every turn through Mesh admission, routing, retry,
-and cancellation while retaining continuation at the original ingress. That
-future adapter is outside the current standalone checkpoint.
+backend boundary. Mesh terminates the same protocol at the original public
+ingress and sends each prepared turn through its existing buffered admission,
+transform, routing, retry, and response-adaptation path. Neither product
+tunnels a persistent connection to a stage worker. `ResponsesSession` owns the
+shared preparation and bounded connection-local continuation behavior.
 
 Mesh owns its peer discovery, eligibility, identity, routing, plugins, console,
 and management APIs. It translates those decisions into Skippy lifecycle,

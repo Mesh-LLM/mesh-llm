@@ -30,6 +30,7 @@ mod missing_model;
 mod private_scope_tests;
 mod realtime_relay;
 mod rejection_telemetry;
+pub(in crate::network::openai) mod responses_websocket;
 use buffered_exchange::handle_buffered_api_request;
 pub(super) use exchange_events::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use exchange_events::{
@@ -1550,9 +1551,28 @@ fn handle_api_proxy_connection(
         node,
         tcp_stream,
         targets,
+        None,
         affinity,
         ingress_type,
         requested_by,
+    ))
+}
+
+fn handle_api_proxy_connection_with_target_refresh(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    targets: election::ModelTargets,
+    target_rx: tokio::sync::watch::Receiver<election::ModelTargets>,
+    affinity: affinity::AffinityRouter,
+) -> impl std::future::Future<Output = ()> + Send {
+    Box::pin(handle_api_proxy_connection_inner(
+        node,
+        tcp_stream,
+        targets,
+        Some(target_rx),
+        affinity,
+        crate::runtime::IngressType::LocalOpenAi,
+        None,
     ))
 }
 
@@ -1560,6 +1580,7 @@ async fn handle_api_proxy_connection_inner(
     node: mesh::Node,
     mut tcp_stream: ClientStream,
     targets: election::ModelTargets,
+    target_rx: Option<tokio::sync::watch::Receiver<election::ModelTargets>>,
     affinity: affinity::AffinityRouter,
     ingress_type: crate::runtime::IngressType,
     requested_by: Option<iroh::EndpointId>,
@@ -1606,9 +1627,35 @@ async fn handle_api_proxy_connection_inner(
         Some(scope) => node.targets_in_private_scope(scope, &targets).await,
         None => targets,
     };
+    let responses_scope = scope.clone();
     // Boxed: the dispatch future is large, and the scope wrapper would
     // otherwise move it across another stack frame.
     let dispatch = Box::pin(async move {
+        if responses_websocket::is_upgrade(&request) {
+            if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
+                let _ = crate::network::openai::response::send_400(
+                    tcp_stream,
+                    "Responses WebSocket upgrades are accepted only at local Mesh ingress",
+                )
+                .await;
+                return;
+            }
+            let target_rx = target_rx.unwrap_or_else(|| {
+                let (_, receiver) = tokio::sync::watch::channel(targets.clone());
+                receiver
+            });
+            responses_websocket::serve(
+                node,
+                tcp_stream,
+                request,
+                affinity,
+                target_rx,
+                responses_scope,
+                source_addr,
+            )
+            .await;
+            return;
+        }
         if realtime_relay::is_realtime_upgrade(&request) {
             realtime_relay::relay(
                 &node,
@@ -1697,17 +1744,17 @@ pub(crate) async fn api_proxy(
         let _ = tcp_stream.set_nodelay(true);
 
         let targets = target_rx.borrow().clone();
+        let connection_target_rx = target_rx.clone();
         let node = node.clone();
         let affinity = affinity.clone();
         tokio::spawn(async move {
             let _slot = slot;
-            handle_api_proxy_connection(
+            handle_api_proxy_connection_with_target_refresh(
                 node,
                 tcp_stream.into(),
                 targets,
+                connection_target_rx,
                 affinity,
-                crate::runtime::IngressType::LocalOpenAi,
-                None, // local API: no requesting mesh node
             )
             .await;
         });

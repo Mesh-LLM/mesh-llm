@@ -106,6 +106,7 @@ httparse = "1"
 http = "1"
 http-body-util = "0.1"
 tokio-stream = "0.1"
+tokio-tungstenite.workspace = true
 crossterm = "0.29"
 url = "2"
 urlencoding = "2"
