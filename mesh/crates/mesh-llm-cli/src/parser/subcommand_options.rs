@@ -114,6 +114,21 @@ pub struct SetupArgs {
     /// Run without prompting for interactive input.
     #[arg(long = "no-interactive")]
     pub no_interactive: bool,
+    /// Explicitly install this catalog plugin set instead of offering the
+    /// recommended one. Suppresses the plugin-set prompt.
+    #[arg(
+        long = "plugin-set",
+        value_name = "NAME",
+        conflicts_with_all = ["skip_plugin_install", "no_default_plugins"]
+    )]
+    pub plugin_set: Option<String>,
+    /// Skip optional plugin installation and its prompt.
+    #[arg(long = "skip-plugin-install")]
+    pub skip_plugin_install: bool,
+    /// Deprecated alias for --skip-plugin-install. Bundled default
+    /// plugins were replaced by catalog plugin sets.
+    #[arg(long, hide = true, conflicts_with = "plugin_set")]
+    pub no_default_plugins: bool,
     /// Install and enable the mesh-llm service.
     #[arg(long, conflicts_with = "no_service")]
     pub service: bool,

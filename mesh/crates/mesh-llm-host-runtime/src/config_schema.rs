@@ -1009,6 +1009,10 @@ mod tests {
                 downloaded_asset_name: "blackboard.tar.gz".into(),
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
+                default_managed: false,
+                host_compatibility: None,
+                allowed_surfaces: None,
+
                 manifest: Some(InstalledPluginManifestMetadata {
                     openai_exchange_hook: None,
                     config_schema: None,
@@ -1267,6 +1271,10 @@ mod tests {
                 downloaded_asset_name: "blackboard.tar.gz".into(),
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
+                default_managed: false,
+                host_compatibility: None,
+                allowed_surfaces: None,
+
                 manifest: Some(InstalledPluginManifestMetadata {
                     openai_exchange_hook: None,
                     config_schema: Some(InstalledPluginConfigSchema {
@@ -1344,6 +1352,10 @@ mod tests {
             downloaded_asset_name: format!("{plugin_name}.tar.gz"),
             install_path: PathBuf::from(format!("/tmp/{plugin_name}")),
             enabled: true,
+            default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
+
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {

@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SetupOptions {
     pub yes: bool,
     pub no_interactive: bool,
@@ -6,6 +6,13 @@ pub struct SetupOptions {
     pub no_service: bool,
     pub skip_runtime: bool,
     pub verbose: bool,
+    /// Explicitly install this catalog plugin set; suppresses the offer.
+    pub plugin_set: Option<String>,
+    /// Skip optional plugin installation (`--skip-plugin-install`).
+    pub skip_plugin_install: bool,
+    /// The legacy `MESH_LLM_NO_DEFAULT_PLUGINS` setting, honored as an
+    /// installation-skip default.
+    pub legacy_no_default_plugins: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,7 +29,7 @@ pub enum SetupPlatform {
 }
 
 impl SetupEnvironment {
-    pub const fn prompts_visible(self, options: SetupOptions) -> bool {
+    pub const fn prompts_visible(&self, options: &SetupOptions) -> bool {
         self.interactive && !options.no_interactive && !options.yes
     }
 }

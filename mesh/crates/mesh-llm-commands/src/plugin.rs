@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin_manager::InstalledPluginMetadata;
 use mesh_llm_plugin_manager::install::install_plugin_archive;
@@ -8,9 +6,13 @@ use mesh_llm_plugin_manager::{
     default_store_root, install_plugin, update_plugin,
 };
 use reqwest::Client;
+use std::io::Write;
 
+use crate::plugin_sets::{
+    RECOMMENDED_SET, fetch_catalog, install_set_command, render_set_show, render_sets_list,
+};
 use crate::runtime_native::human_bytes;
-use mesh_llm_cli::PluginCommand;
+use mesh_llm_cli::{PluginCommand, PluginSetsCommand};
 use mesh_llm_tui::terminal_progress::{
     SpinnerHandle, clear_stderr_line, ratio_complete_u64, render_inline_gauge, start_spinner,
 };
@@ -162,6 +164,8 @@ pub async fn run_plugin_command(
     runtime_rows: Option<&PluginListRows>,
 ) -> Result<bool> {
     match command {
+        PluginCommand::InstallDefaults { .. } => install_defaults_stub()?,
+        PluginCommand::Sets { command } => run_sets_command(command).await?,
         PluginCommand::Install {
             reference,
             archive,
@@ -208,6 +212,66 @@ pub async fn run_plugin_command(
     Ok(true)
 }
 
+/// `plugins install-defaults`: a transitional stub. Bundled default plugins
+/// were replaced by catalog plugin sets; explain that and install nothing.
+fn install_defaults_stub() -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
+        "ℹ️  Bundled default plugins were replaced by catalog plugin sets. Install one with:"
+    )?;
+    writeln!(err, "  mesh-llm plugins sets install {RECOMMENDED_SET}")?;
+    writeln!(err, "List available sets with: mesh-llm plugins sets list")?;
+    Ok(())
+}
+
+/// Migrate legacy default-managed records before a plugin command, without
+/// letting one unrelated corrupt record block the command: `plugins disable`
+/// is the way out of a misbehaving plugin, so it must keep working. A failed
+/// migration leaves the records as they are; the runtime still applies the
+/// retained legacy grants at launch.
+pub(crate) fn migrate_legacy_records_best_effort(store_root: &std::path::Path) {
+    if let Err(error) = PluginStore::new(store_root).migrate_legacy_defaults() {
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(
+            err,
+            "⚠️  Legacy default plugin records were not migrated: {error:#}"
+        );
+    }
+}
+
+/// `mesh-llm plugins sets list|show|install`.
+async fn run_sets_command(command: &PluginSetsCommand) -> Result<()> {
+    let options = PluginInstallOptions::from_env()?;
+    match command {
+        PluginSetsCommand::List => {
+            let catalog = fetch_catalog(&options).await?;
+            let mut err = mesh_llm_events::console_err();
+            for line in render_sets_list(&catalog) {
+                writeln!(err, "{line}")?;
+            }
+        }
+        PluginSetsCommand::Show { name } => {
+            let catalog = fetch_catalog(&options).await?;
+            let lines = render_set_show(
+                &catalog,
+                name,
+                options.target.triple(),
+                &options.host_version,
+            )?;
+            let mut err = mesh_llm_events::console_err();
+            for line in lines {
+                writeln!(err, "{line}")?;
+            }
+        }
+        PluginSetsCommand::Install { name } => {
+            let catalog = fetch_catalog(&options).await?;
+            install_set_command(&catalog, name, &options).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn install_references<'a, F, Fut>(references: &'a [String], mut install_one: F) -> Result<()>
 where
     F: FnMut(&'a str) -> Fut,
@@ -252,6 +316,7 @@ async fn install(
 
 async fn update(name: &str) -> Result<()> {
     let options = PluginInstallOptions::from_env()?;
+    migrate_legacy_records_best_effort(&options.store_root);
     let mut progress = CliPluginProgress::default();
     let outcome = update_plugin(name, &options, &mut progress).await?;
     progress.finish();
@@ -272,6 +337,7 @@ async fn update(name: &str) -> Result<()> {
 
 fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
+    migrate_legacy_records_best_effort(store.root());
     set_enabled_in(&store, name, enabled, &mut mesh_llm_events::console_err())
 }
 
@@ -520,7 +586,7 @@ fn list(runtime_rows: &PluginListRows) -> Result<()> {
 }
 
 #[derive(Default)]
-struct CliPluginProgress {
+pub struct CliPluginProgress {
     spinner: Option<SpinnerHandle>,
     active_download: Option<String>,
     last_percent: Option<u64>,
@@ -650,6 +716,11 @@ impl PluginProgressReporter for CliPluginProgress {
                 let mut err = mesh_llm_events::console_err();
                 let _ = writeln!(err, "✅ {name} is up to date ({version})");
             }
+            PluginProgressEvent::Warning { message } => {
+                self.finish();
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(err, "⚠️  {message}");
+            }
         }
     }
 }
@@ -739,6 +810,28 @@ mod tests {
         );
     }
 
+    fn installed_default(store: &PluginStore, enabled: bool) {
+        store
+            .save(&mesh_llm_plugin_manager::InstalledPluginMetadata {
+                name: "capsules".into(),
+                source_repository: "https://github.com/Mesh-LLM/capsules".into(),
+                installed_version: "v0.1.3".into(),
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                downloaded_asset_name: "capsules-0.1.3-x86_64-unknown-linux-gnu.tar.gz".into(),
+                install_path: store.root().join("installed").join("capsules"),
+                enabled,
+                default_managed: false,
+                host_compatibility: None,
+                allowed_surfaces: None,
+                manifest: None,
+                last_protocol_version: None,
+                last_status: None,
+                last_error: None,
+                verified_sha256: None,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn disabling_a_plugin_that_is_not_installed_fails() {
         let temp = tempfile::tempdir().unwrap();
@@ -751,11 +844,63 @@ mod tests {
     fn disabling_an_installed_plugin_keeps_the_install_record() {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        installed_plugin(&store, "mine");
+        installed_default(&store, true);
+        set_enabled_in(&store, "capsules", false, &mut Vec::new()).unwrap();
+        assert!(!store.load("capsules").unwrap().enabled);
+    }
+
+    #[test]
+    fn deleting_an_installed_plugin_removes_the_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        installed_default(&store, true);
         let mut err = Vec::new();
-        set_enabled_in(&store, "mine", false, &mut err).unwrap();
-        assert!(!store.load("mine").unwrap().enabled);
-        assert_eq!(String::from_utf8(err).unwrap(), "⏸️  Disabled mine\n");
+        delete_in(&store, "capsules", &mut err).unwrap();
+        assert!(store.load_optional("capsules").unwrap().is_none());
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(err, "🗑️  Deleted capsules\n");
+    }
+
+    #[test]
+    fn legacy_default_records_migrate_without_losing_settings_or_grants() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut legacy = mesh_llm_plugin_manager::InstalledPluginMetadata {
+            name: "capsules".into(),
+            source_repository: "bundled:/opt/plugins/capsules-0.1.4.tar.gz".into(),
+            installed_version: "0.1.4".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            downloaded_asset_name: "capsules-0.1.4-x86_64-unknown-linux-gnu.tar.gz".into(),
+            install_path: store.root().join("installed").join("capsules"),
+            enabled: false,
+            default_managed: true,
+            host_compatibility: None,
+            allowed_surfaces: None,
+            manifest: None,
+            last_protocol_version: Some(3),
+            last_status: None,
+            last_error: None,
+            verified_sha256: Some("ab".repeat(32)),
+        };
+        store.save(&legacy).unwrap();
+        let migrated = store.migrate_legacy_defaults().unwrap();
+        assert_eq!(migrated, ["capsules"]);
+        legacy = store.load("capsules").unwrap();
+        assert!(!legacy.default_managed, "now a normal managed record");
+        assert!(!legacy.enabled, "enabled state is preserved");
+        assert_eq!(legacy.verified_sha256, Some("ab".repeat(32)));
+        assert_eq!(
+            legacy.allowed_surfaces,
+            Some(mesh_llm_plugin_manager::legacy_defaults::migrated_allows_keys("capsules")),
+            "capsules keeps exactly its reviewed grants"
+        );
+        // Idempotent: nothing left to migrate.
+        assert!(store.migrate_legacy_defaults().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_install_defaults_invocation_explains_sets_instead_of_installing() {
+        install_defaults_stub().unwrap();
     }
 
     fn installed_plugin(
@@ -770,6 +915,9 @@ mod tests {
             downloaded_asset_name: format!("{name}-0.1.0-x86_64-unknown-linux-gnu.tar.gz"),
             install_path: store.root().join("installed").join(name),
             enabled: true,
+            default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
             verified_sha256: None,
             manifest: None,
             last_protocol_version: None,
@@ -817,5 +965,72 @@ mod tests {
             landed_lines("📦 Installed needed v0.1.0".to_string(), &plain),
             vec!["📦 Installed needed v0.1.0".to_string()]
         );
+    }
+
+    #[test]
+    fn update_rejects_a_plugin_set_combined_with_skipping_optional_plugins() {
+        use clap::Parser;
+        let error = mesh_llm_cli::Cli::try_parse_from([
+            "mesh-llm",
+            "update",
+            "--plugin-set",
+            "recommended",
+            "--skip-plugin-install",
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("cannot be used with"), "{error}");
+    }
+
+    #[test]
+    fn update_parses_the_plugin_set_surface() {
+        use clap::Parser;
+        let cli = mesh_llm_cli::Cli::try_parse_from([
+            "mesh-llm",
+            "update",
+            "--plugin-set",
+            "extra",
+            "--no-interactive",
+        ])
+        .unwrap();
+        let Some(mesh_llm_cli::Command::Update {
+            plugin_set,
+            skip_plugin_install,
+            no_interactive,
+            ..
+        }) = cli.command
+        else {
+            panic!("update command");
+        };
+        assert_eq!(plugin_set.as_deref(), Some("extra"));
+        assert!(!skip_plugin_install);
+        assert!(no_interactive);
+    }
+
+    #[test]
+    fn setup_rejects_a_plugin_set_combined_with_skipping_optional_plugins() {
+        use clap::Parser;
+        let error = mesh_llm_cli::Cli::try_parse_from([
+            "mesh-llm",
+            "setup",
+            "--plugin-set",
+            "recommended",
+            "--skip-plugin-install",
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("cannot be used with"), "{error}");
+    }
+
+    #[test]
+    fn setup_keeps_the_deprecated_no_default_plugins_as_a_skip_alias() {
+        use clap::Parser;
+        let cli = mesh_llm_cli::Cli::try_parse_from(["mesh-llm", "setup", "--no-default-plugins"])
+            .unwrap();
+        let Some(mesh_llm_cli::Command::Setup(mesh_llm_cli::SetupArgs {
+            no_default_plugins, ..
+        })) = cli.command
+        else {
+            panic!("setup command");
+        };
+        assert!(no_default_plugins);
     }
 }

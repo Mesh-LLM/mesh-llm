@@ -1414,7 +1414,9 @@ Every product has three immutable layers:
 
 `compose-product-input` verifies checksums, manifests and host import policy,
 then composes exact producer bytes without compiling or substituting inputs.
-Nothing builds those plugins in this repository.
+Release bundles carry no plugin binaries: plugins install from the
+catalog's named plugin sets at `mesh-llm setup`/`update` time (see
+`RELEASE.md`). Nothing builds plugins in this repository.
 Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.

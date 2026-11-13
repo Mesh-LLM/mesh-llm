@@ -396,7 +396,7 @@ This phase should include:
 
 Target behavior:
 
-- installed plugins are registered by the host
+- plugin installation flows through catalog sets
 - core mesh logic becomes plugin-agnostic
 
 ### Phase 8: Validation Plugins

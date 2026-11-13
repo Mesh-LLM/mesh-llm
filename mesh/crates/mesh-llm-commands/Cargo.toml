@@ -32,6 +32,7 @@ skippy-hardware-profile = { path = "../../../skippy/crates/skippy-hardware-profi
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.79.0" }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.79.0" }
 skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime", version = "0.79.0" }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.79.0" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.79.0" }
 mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.79.0", features = ["host-io"] }
 skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.79.0" }

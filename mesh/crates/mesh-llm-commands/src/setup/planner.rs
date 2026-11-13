@@ -1,8 +1,9 @@
 use super::{
     SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupGitHubStarSkipReason,
-    SetupOptions, SetupPlan, SetupPlatform, SetupPromptDefault, SetupPromptKind, SetupPrompter,
-    SetupRuntimePlan, SetupServicePlan,
+    SetupOptions, SetupPlan, SetupPlatform, SetupPluginPlan, SetupPluginSkipReason,
+    SetupPromptDefault, SetupPromptKind, SetupPrompter, SetupRuntimePlan, SetupServicePlan,
 };
+use crate::plugin_sets::{OptionalPluginPlan, optional_plugin_plan};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
@@ -30,8 +31,8 @@ impl Display for SetupPlanError {
 impl Error for SetupPlanError {}
 
 pub fn plan_setup<P: SetupPrompter>(
-    options: SetupOptions,
-    environment: SetupEnvironment,
+    options: &SetupOptions,
+    environment: &SetupEnvironment,
     prompter: &mut P,
 ) -> Result<SetupPlan, SetupPlanError> {
     if options.service && options.no_service {
@@ -50,13 +51,34 @@ pub fn plan_setup<P: SetupPrompter>(
         SetupRuntimePlan::InstallAndPrune
     };
     let service = plan_service(options, environment, prompter);
+    let plugins = plan_plugins(options, environment);
     let github_star = plan_github_star(options, environment);
-    Ok(SetupPlan::new(runtime, service, github_star))
+    Ok(SetupPlan::new(runtime, service, plugins, github_star))
+}
+
+/// Optional plugins: an explicit set installs without prompting, an explicit
+/// skip (or the legacy default) skips and says so, and only an attended run
+/// is offered the recommended set — defaulting to No, because `--yes` accepts
+/// core defaults, not additional plugins.
+fn plan_plugins(options: &SetupOptions, environment: &SetupEnvironment) -> SetupPluginPlan {
+    match optional_plugin_plan(
+        options.plugin_set.as_deref(),
+        options.skip_plugin_install,
+        options.legacy_no_default_plugins,
+        environment.prompts_visible(options),
+    ) {
+        OptionalPluginPlan::InstallSet(name) => SetupPluginPlan::Install(name),
+        OptionalPluginPlan::Offer(_) => SetupPluginPlan::Offer,
+        OptionalPluginPlan::Skip(reason) => match reason {
+            Some(_) => SetupPluginPlan::Skip(SetupPluginSkipReason::ExplicitSkip),
+            None => SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
+        },
+    }
 }
 
 fn plan_service<P: SetupPrompter>(
-    options: SetupOptions,
-    environment: SetupEnvironment,
+    options: &SetupOptions,
+    environment: &SetupEnvironment,
     prompter: &mut P,
 ) -> SetupServicePlan {
     if !environment.platform.supports_service() {
@@ -88,7 +110,7 @@ fn plan_service<P: SetupPrompter>(
     }
 }
 
-fn plan_github_star(options: SetupOptions, environment: SetupEnvironment) -> SetupGitHubStarPlan {
+fn plan_github_star(options: &SetupOptions, environment: &SetupEnvironment) -> SetupGitHubStarPlan {
     if options.yes {
         return SetupGitHubStarPlan::Skip(SetupGitHubStarSkipReason::AutomaticYes);
     }

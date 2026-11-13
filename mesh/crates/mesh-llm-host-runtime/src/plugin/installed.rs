@@ -105,6 +105,14 @@ pub(crate) fn configured_external_plugin_spec(
         )));
     }
 
+    if let Some(metadata) = installed_metadata.as_ref()
+        && let Some(reason) = incompatible_with_host(metadata)
+    {
+        return Ok(ConfiguredExternalPlugin::Inactive(
+            incompatible_installed_plugin_summary(metadata, &reason),
+        ));
+    }
+
     let command = match command {
         Some(command) => command,
         None => match installed_plugin_command_for_name(&entry.name) {
@@ -183,6 +191,15 @@ pub(crate) fn append_installed_plugins(
         return;
     };
     let store = PluginStore::new(root);
+    // Rewrite surviving legacy default-managed records to normal managed ones
+    // so their recorded surface grants carry forward. A failed migration is
+    // reported and leaves the records as they are; startup installs nothing.
+    if let Err(error) = store.migrate_legacy_defaults() {
+        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+            message: format!("Legacy default plugin records were not migrated: {error:#}"),
+            context: Some("plugins".to_string()),
+        });
+    }
     let installed = match store.list() {
         Ok(installed) => installed,
         Err(error) => {
@@ -197,6 +214,10 @@ pub(crate) fn append_installed_plugins(
         names.insert(metadata.name.clone(), ());
         if !metadata.enabled {
             inactive.push(disabled_installed_plugin_summary(&metadata));
+            continue;
+        }
+        if let Some(reason) = incompatible_with_host(&metadata) {
+            inactive.push(incompatible_installed_plugin_summary(&metadata, &reason));
             continue;
         }
         let command = installed_plugin_command(&metadata);
@@ -233,7 +254,17 @@ pub(super) fn installed_plugin_metadata_for_name(
     name: &str,
 ) -> Result<Option<InstalledPluginMetadata>> {
     let root = default_store_root().context("Cannot determine plugin install root")?;
-    PluginStore::new(root).load_optional(name)
+    let mut metadata = PluginStore::new(root).load_optional(name)?;
+    // Configured specs resolve before persistent migration, which can also fail.
+    if let Some(metadata) = metadata.as_mut()
+        && metadata.default_managed
+        && metadata.allowed_surfaces.is_none()
+    {
+        metadata.allowed_surfaces = Some(mesh_llm_plugin_manager::migrated_allows_keys(
+            &metadata.name,
+        ));
+    }
+    Ok(metadata)
 }
 
 /// Grants an installed package carries. `plugins install` printed what the
@@ -371,6 +402,48 @@ fn missing_installed_plugin_summary(
         Some(format!(
             "installed plugin executable is missing: {}",
             command.display()
+        )),
+    )
+}
+
+/// Why this installed release cannot run on this host, when that is known:
+/// either its recorded host compatibility excludes this host version, or the
+/// plugin protocol it last spoke is not the one this host speaks. Unknown
+/// metadata never blocks an install: a legacy record keeps starting.
+fn incompatible_with_host(metadata: &InstalledPluginMetadata) -> Option<String> {
+    if let mesh_llm_plugin_manager::compatibility::Verdict::Incompatible(reason) =
+        mesh_llm_plugin_manager::compatibility::evaluate(
+            metadata.host_compatibility.as_ref(),
+            mesh_llm_build_info::RELEASE_VERSION,
+        )
+    {
+        return Some(reason);
+    }
+    if metadata
+        .last_protocol_version
+        .is_some_and(|version| version != mesh_llm_plugin::PROTOCOL_VERSION)
+    {
+        return Some(format!(
+            "speaks plugin protocol {}, this host speaks {}",
+            metadata.last_protocol_version.unwrap_or_default(),
+            mesh_llm_plugin::PROTOCOL_VERSION
+        ));
+    }
+    None
+}
+
+fn incompatible_installed_plugin_summary(
+    metadata: &InstalledPluginMetadata,
+    reason: &str,
+) -> PluginSummary {
+    installed_plugin_summary(
+        metadata,
+        "error",
+        Some(format!(
+            "incompatible with MeshLLM {}: {}; run mesh-llm plugins update {}",
+            mesh_llm_build_info::RELEASE_VERSION,
+            reason,
+            metadata.name
         )),
     )
 }

@@ -165,22 +165,76 @@ pub async fn check_for_update(current_version: &str) -> Option<UpdateNotice> {
     })
 }
 
-pub async fn maybe_auto_update(options: AutoUpdateOptions) -> Result<bool> {
+/// Apply a newer release at node startup, when enabled.
+///
+/// `plugin_gate` is the plugin compatibility check and repair every host
+/// upgrade owes the installed plugins (the same one `mesh-llm update` runs).
+/// It receives the release version and runs after every other preflight and
+/// before the host is replaced; an `Err` keeps the running host and leaves
+/// startup to continue on it. The caller reports why through its own output,
+/// because it knows what it printed.
+pub async fn maybe_auto_update(
+    options: AutoUpdateOptions,
+    plugin_gate: impl AsyncFnOnce(&str) -> Result<()>,
+) -> Result<bool> {
     if !should_attempt_auto_update(options) {
         return Ok(false);
     }
     let Some(target) = discover_update_target(options.llama_flavor) else {
         return Ok(false);
     };
-    apply_update_if_available(
+    let Some(release) = latest_release_info().await else {
+        return Ok(true);
+    };
+    apply_release_if_newer(
+        release,
         target,
         PostInstallAction::RestartCurrentProcess,
         options.current_version,
+        plugin_gate,
+        async |target, release, asset_name, action| {
+            install_latest_bundle(
+                &target.exe,
+                &target.install_dir,
+                release,
+                asset_name,
+                target.bundle_flavor,
+                action,
+            )
+            .await
+        },
     )
     .await
 }
 
-pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()> {
+/// An update whose every pre-mutating check has passed: the install target,
+/// the release to move to, and the bundle asset that serves it. Preparing
+/// makes no changes to the machine, so a caller can run its own work
+/// (plugin compatibility repairs, for example) between preparation and
+/// [`apply_prepared_update`] knowing the host install itself will not fail
+/// on a condition that was already checked.
+pub struct PreparedUpdate {
+    target: UpdateTarget,
+    release: crate::autoupdate::release_fetch::ReleaseInfo,
+    asset_name: String,
+    requested_version: Option<String>,
+}
+
+impl PreparedUpdate {
+    /// The host version this update moves to: what plugin compatibility is
+    /// judged against.
+    pub fn release_version(&self) -> &str {
+        &self.release.version
+    }
+}
+
+/// Resolve and preflight an update: the install target, the release, the
+/// bundle asset for this platform, and install-dir writability. `Ok(None)`
+/// means there is nothing to do (already up to date); that case prints its
+/// own line. Every other failure is an `Err` before anything is touched.
+pub async fn prepare_update_command(
+    options: UpdateCommandOptions<'_>,
+) -> Result<Option<PreparedUpdate>> {
     let mut console = mesh_llm_events::console_err();
     let target = require_update_target(options.flavor, options.detect_flavor)?;
     let requested_version = options.requested_version;
@@ -193,7 +247,7 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
             "mesh-llm is already up to date (v{}).",
             options.current_version
         )?;
-        return Ok(());
+        return Ok(None);
     }
     let asset_preference = if requested_version.is_some() {
         ReleaseAssetPreference::VersionedFirst
@@ -222,24 +276,43 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
     if !target.install_dir_is_writable() {
         bail!("{} is not writable.", target.install_dir.display());
     }
+    Ok(Some(PreparedUpdate {
+        target,
+        release,
+        asset_name,
+        requested_version: requested_version.map(str::to_string),
+    }))
+}
+
+/// Download and install a prepared update. Only failures that could not be
+/// preflighted (the download, staging verification) can fail here.
+pub async fn apply_prepared_update(
+    prepared: &PreparedUpdate,
+    current_version: &'static str,
+) -> Result<()> {
+    let mut console = mesh_llm_events::console_err();
+    let target = &prepared.target;
+    let release = &prepared.release;
+    let asset_name = &prepared.asset_name;
+    let requested_version = prepared.requested_version.as_deref();
 
     writeln!(
         console,
         "⬇️ {} mesh-llm v{} -> v{} ({})...",
         describe_requested_update(
             &release.version,
-            options.current_version,
+            current_version,
             requested_version.is_some()
         ),
-        options.current_version,
+        current_version,
         release.version,
         target.bundle_flavor.suffix()
     )?;
     match install_latest_bundle(
         &target.exe,
         &target.install_dir,
-        &release,
-        &asset_name,
+        release,
+        asset_name,
         target.bundle_flavor,
         PostInstallAction::ExitAfterInstall,
     )
@@ -328,14 +401,19 @@ fn require_update_target(
     })
 }
 
-async fn apply_update_if_available(
+async fn apply_release_if_newer(
+    release: release_fetch::ReleaseInfo,
     target: UpdateTarget,
     action: PostInstallAction,
     current_version: &str,
+    plugin_gate: impl AsyncFnOnce(&str) -> Result<()>,
+    install: impl AsyncFnOnce(
+        &UpdateTarget,
+        &release_fetch::ReleaseInfo,
+        &str,
+        PostInstallAction,
+    ) -> Result<InstallOutcome>,
 ) -> Result<bool> {
-    let Some(release) = latest_release_info().await else {
-        return Ok(true);
-    };
     if !version_newer(&release.version, current_version) {
         return Ok(true);
     }
@@ -358,6 +436,19 @@ async fn apply_update_if_available(
         return Ok(true);
     }
 
+    // Same plugin checks and repairs as `mesh-llm update`, before the host
+    // is touched: a refusal keeps this running host.
+    if let Err(error) = plugin_gate(&release.version).await {
+        let _ = emit_event(OutputEvent::AutoUpdate {
+            message: format!(
+                "⚠️  Auto-update to v{} not applied; staying on v{current_version}: {error:#}",
+                release.version
+            ),
+            version: None,
+        });
+        return Ok(true);
+    }
+
     let _ = emit_event(OutputEvent::AutoUpdate {
         message: format!(
             "⬇️ Updating mesh-llm v{current_version} -> v{} ({})...",
@@ -366,16 +457,7 @@ async fn apply_update_if_available(
         ),
         version: Some(release.version.clone()),
     });
-    match install_latest_bundle(
-        &target.exe,
-        &target.install_dir,
-        &release,
-        &asset_name,
-        target.bundle_flavor,
-        action,
-    )
-    .await
-    {
+    match install(&target, &release, &asset_name, action).await {
         Ok(InstallOutcome::RestartNow) => {
             let _ = emit_event(OutputEvent::AutoUpdate {
                 message: format!("✅ Updated to v{}; restarting", release.version),
@@ -589,5 +671,92 @@ mod tests {
         let message = notice_message("0.1.0", "9.9.9", NoticeGuidance::RunUpdateCommand);
         let UpdateNotice { message: carried } = UpdateNotice { message };
         assert!(carried.starts_with("✨ New version: v0.1.0 -> v9.9.9."));
+    }
+
+    // The automatic update must run the same plugin gate as `mesh-llm update`
+    // and must not replace the host when the gate refuses.
+    /// Poll a future that never waits on I/O to completion, so the flow runs
+    /// without an async runtime; a pending future is a test bug.
+    fn ready_now<T>(future: impl Future<Output = T>) -> T {
+        let mut future = std::pin::pin!(future);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => panic!("future was not immediately ready"),
+        }
+    }
+
+    fn auto_update_fixture(dir: &Path) -> Option<(UpdateTarget, release_fetch::ReleaseInfo)> {
+        let tag = "v99.0.0";
+        let (flavor, release_target, assets) =
+            backend::BinaryFlavor::ALL.into_iter().find_map(|flavor| {
+                let release_target = current_release_target(flavor)?;
+                let assets = release_asset_candidates(
+                    release_target,
+                    tag,
+                    ReleaseAssetPreference::StableFirst,
+                    host_cuda_bundle_order(release_target),
+                );
+                (!assets.is_empty()).then_some((flavor, release_target, assets))
+            })?;
+        let release = release_fetch::ReleaseInfo::with_assets(tag, "99.0.0", &assets);
+        let target = UpdateTarget {
+            exe: dir.join("mesh-llm"),
+            install_dir: dir.to_path_buf(),
+            release_target,
+            bundle_flavor: flavor,
+        };
+        Some((target, release))
+    }
+
+    #[test]
+    fn auto_update_runs_the_plugin_gate_before_installing() {
+        let dir = temp_dir("auto-update-gate-order");
+        let Some((target, release)) = auto_update_fixture(&dir) else {
+            return;
+        };
+        let log = std::cell::RefCell::new(Vec::<String>::new());
+        let applied = ready_now(apply_release_if_newer(
+            release,
+            target,
+            PostInstallAction::ExitAfterInstall,
+            "0.1.0",
+            async |version| {
+                log.borrow_mut().push(format!("gate {version}"));
+                Ok(())
+            },
+            async |_, _, _, _| {
+                log.borrow_mut().push("install".to_string());
+                Ok(InstallOutcome::ExitNow)
+            },
+        ))
+        .unwrap();
+        assert!(applied);
+        assert_eq!(*log.borrow(), ["gate 99.0.0", "install"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn auto_update_keeps_the_running_host_when_the_plugin_gate_refuses() {
+        let dir = temp_dir("auto-update-gate-refuses");
+        let Some((target, release)) = auto_update_fixture(&dir) else {
+            return;
+        };
+        let installed = std::cell::Cell::new(false);
+        let applied = ready_now(apply_release_if_newer(
+            release,
+            target,
+            PostInstallAction::ExitAfterInstall,
+            "0.1.0",
+            async |_| bail!("plugin lexe is incompatible"),
+            async |_, _, _, _| {
+                installed.set(true);
+                Ok(InstallOutcome::ExitNow)
+            },
+        ))
+        .unwrap();
+        assert!(applied, "a refused update is not an error");
+        assert!(!installed.get(), "host was replaced despite a refused gate");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

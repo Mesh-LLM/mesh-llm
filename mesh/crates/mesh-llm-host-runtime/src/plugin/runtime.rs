@@ -1,4 +1,5 @@
 mod bound_operation;
+mod default_plugin_policy;
 mod request;
 mod request_dispatch;
 
@@ -16,6 +17,7 @@ use super::{
 use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
+use mesh_llm_plugin_manager::legacy_defaults::{self, UNLISTED_DEFAULT_ALLOWS};
 use rmcp::model::{InitializeRequestParams, ServerConfig};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -43,6 +45,7 @@ mod start_announce;
 mod start_announce_tests;
 pub(crate) mod status_publication;
 
+use self::default_plugin_policy::restrict_default_plugin;
 use self::status_publication::StatusDeclaration;
 
 /// How long a stopping plugin waits to tell the node to withdraw its key.
@@ -405,7 +408,7 @@ impl ExternalPlugin {
         generation: u64,
         response: proto::Envelope,
     ) -> Result<proto::InitializeResponse> {
-        let init = match response.payload {
+        let mut init = match response.payload {
             Some(proto::envelope::Payload::InitializeResponse(resp)) => resp,
             Some(proto::envelope::Payload::ErrorResponse(err))
                 if err.code == STARTUP_DISABLED_ERROR_CODE =>
@@ -425,6 +428,50 @@ impl ExternalPlugin {
                 self.spec.name
             ),
         };
+        // A legacy default-managed install keeps only the surfaces it was
+        // reviewed with. The grants normally travel in the record's
+        // `allowed_surfaces`, written when the legacy record was migrated; a
+        // record still carrying `default_managed` with no grants (its
+        // migration failed, or a start raced one) falls back to the retained
+        // legacy grants for its name rather than widening to everything.
+        let legacy_grants = match self
+            .spec
+            .installed_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.allowed_surfaces.as_deref())
+        {
+            Some(keys) => {
+                let mut allows = legacy_defaults::parse_allows(keys);
+                if allows.is_empty() {
+                    allows = UNLISTED_DEFAULT_ALLOWS.to_vec();
+                }
+                allows
+            }
+            None if self
+                .spec
+                .installed_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.default_managed) =>
+            {
+                let name = self
+                    .spec
+                    .installed_metadata
+                    .as_ref()
+                    .map_or(self.spec.name.as_str(), |metadata| metadata.name.as_str());
+                legacy_defaults::migrated_allows(name).to_vec()
+            }
+            None => Vec::new(),
+        };
+        if !legacy_grants.is_empty() {
+            let removed = restrict_default_plugin(&mut init, &legacy_grants, &[]);
+            if !removed.is_empty() {
+                tracing::warn!(
+                    plugin = %self.spec.name,
+                    removed = %removed.join(", "),
+                    "Removed what this plugin's recorded surface grants do not allow"
+                );
+            }
+        }
         self.validate_initialize_response(&init)?;
         Ok(init)
     }

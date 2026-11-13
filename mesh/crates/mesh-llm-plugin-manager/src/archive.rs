@@ -8,7 +8,7 @@ use flate2::read::GzDecoder;
 
 use crate::{
     placement::{reject_escaping_links, replace_plugin_dir},
-    plugin_toml::read_plugin_toml,
+    plugin_toml::{PluginToml, read_plugin_toml},
     source_ref::is_valid_name,
     store::{
         InstalledPluginManifestMetadata, InstalledPluginWebUiMetadata,
@@ -26,6 +26,9 @@ const WEB_UI_CONTRIBUTION_SLOTS: [&str; 2] = ["chat_message", "logs_request"];
 pub struct ExtractedPluginArchive {
     pub install_path: PathBuf,
     pub manifest: Option<InstalledPluginManifestMetadata>,
+    /// The packaging metadata the archive itself declares, including any
+    /// host-compatibility bounds.
+    pub plugin_toml: PluginToml,
 }
 
 /// A plugin archive extracted and validated in a staging directory, not yet
@@ -38,9 +41,15 @@ pub struct StagedPluginArchive {
     install_dir: PathBuf,
     plugin_name: String,
     pub manifest: Option<InstalledPluginManifestMetadata>,
+    plugin_toml: PluginToml,
 }
 
 impl StagedPluginArchive {
+    /// Package declarations available before any installed files are replaced.
+    pub fn plugin_toml(&self) -> &PluginToml {
+        &self.plugin_toml
+    }
+
     /// Put the staged package in place of any installed one.
     pub fn commit(self) -> Result<ExtractedPluginArchive> {
         let final_dir = self.install_dir.join(&self.plugin_name);
@@ -51,6 +60,7 @@ impl StagedPluginArchive {
         Ok(ExtractedPluginArchive {
             install_path: final_dir,
             manifest: self.manifest,
+            plugin_toml: self.plugin_toml,
         })
     }
 }
@@ -84,19 +94,20 @@ pub fn stage_plugin_archive(
     reject_escaping_links(&extracted_root)?;
     validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
-    read_plugin_toml(&extracted_root, plugin_name)?;
+    let plugin_toml = read_plugin_toml(&extracted_root, plugin_name)?;
     Ok(StagedPluginArchive {
         staging,
         extracted_root,
         install_dir: install_dir.to_path_buf(),
         plugin_name: plugin_name.to_string(),
         manifest,
+        plugin_toml,
     })
 }
 
 /// Stage and commit in one step: extract, validate, and put in place. Product
-/// code goes through `install::extract_for_install`, which checks the staged
-/// package against the installed plugins before committing it.
+/// code goes through `install::package::extract_for_install`, which checks
+/// the staged package's host compatibility before committing it.
 #[cfg(test)]
 pub fn extract_plugin_archive(
     archive_path: &Path,

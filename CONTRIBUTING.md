@@ -108,7 +108,8 @@ MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$runtime_cache" \
 
 The resolver validates version, Skippy ABI, OS, architecture, and backend. It
 does not search the current working directory or copy a matching bundled
-runtime into the user cache.
+runtime into the user cache. Plugin packages install from the catalog's named
+plugin sets, never from a directory beside the host.
 
 Create a portable product bundle after building both layers:
 

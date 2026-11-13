@@ -55,13 +55,40 @@ orchestration in `mesh/crates/mesh-llm-commands`.
 
 Supported flags:
 
-- `--yes`: accept recommended core setup defaults without prompting.
+- `--yes`: accept recommended core setup defaults without prompting. This
+  accepts the core defaults only: it does not opt in to optional plugins.
 - `--no-interactive`: never prompt; use non-interactive defaults.
+- `--plugin-set NAME`: explicitly install this catalog plugin set, skipping
+  the recommendation prompt. Conflicts with `--skip-plugin-install`.
+- `--skip-plugin-install`: skip optional plugin installation and its prompt.
+  `--no-default-plugins` is kept as a deprecated alias, and the legacy
+  `MESH_LLM_NO_DEFAULT_PLUGINS=1` setting is honored as an installation-skip
+  default.
 - `--service`: request background service setup where supported.
 - `--no-service`: skip background service setup.
 - `--skip-runtime`: skip native-runtime install and prune.
 - `--verbose`: print detailed setup paths, commands, log locations, and
   status. Default setup output is concise and formatted for interactive use.
+
+### Installed-plugin check
+
+Bootstrap replaces the host before setup runs, so setup owes installed plugins
+the same compatibility check and repairs `mesh-llm update` runs, against the
+host now installed. It runs after the core steps and before the optional
+plugin phase, on every setup, whatever the plugin flags. Because the host is
+already replaced, a refusal warns and shows the retry command
+(`mesh-llm update`) and never fails core setup.
+
+### Optional plugin set offer
+
+After the core steps succeed, and only when prompts are visible, setup offers
+the catalog's `recommended` plugin set, defaulting to No. The offer shows the
+set's members and their resolvable versions and is skipped without a prompt
+when the set is absent or empty. An accepted or explicitly selected
+installation is best-effort: it never fails core setup — a failure warns,
+shows the retry command (`mesh-llm plugins sets install recommended`), and
+reports the installation as incomplete in the summary. Bootstrap reaches this
+flow exactly once, with no duplicate prompt.
 
 Unsupported in v1:
 

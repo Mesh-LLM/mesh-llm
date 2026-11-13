@@ -157,6 +157,13 @@ release archives contain `mesh-llm`, `host-imports.json`,
 `native-runtimes/<runtime-id>` directory. Backend-flavored archive names select
 different runtimes while retaining byte-identical host input for an OS/arch.
 
+Release archives carry no plugin binaries. Plugins install from the
+catalog's named plugin sets (`recommended` is offered by `mesh-llm setup` and
+`mesh-llm update`); see `mesh/docs/plugins/README.md`. A catalog install is
+verified against the entry's pinned version and per-platform SHA-256; a
+direct GitHub reference is verified against the digest GitHub reports, and a
+local `--archive` install carries no catalog pin.
+
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
 means an unstamped build, and `invalid` means the bytes changed after packaging.

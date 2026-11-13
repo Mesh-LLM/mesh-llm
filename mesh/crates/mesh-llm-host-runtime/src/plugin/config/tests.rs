@@ -348,6 +348,10 @@ fn installed_plugin_metadata(
         downloaded_asset_name: format!("{name}.tar.gz"),
         install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
         enabled: true,
+        default_managed: false,
+        host_compatibility: None,
+        allowed_surfaces: None,
+
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: schema,

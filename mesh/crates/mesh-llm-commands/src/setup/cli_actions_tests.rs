@@ -90,3 +90,35 @@ async fn run_setup_with_cli_actions_records_nonfatal_github_failure() {
         ]
     );
 }
+
+// The real setup action must reach the real gate: a plugin that cannot run on
+// the installed host is refused (warned, not fatal), a compatible one passes.
+#[test]
+#[serial_test::serial]
+fn cli_setup_actions_run_the_real_plugin_gate() {
+    use crate::plugin_upgrade_test_support::{with_plugin_store, write_plugin};
+
+    let check = |min: &str, max: Option<&str>| {
+        with_plugin_store(|store| {
+            write_plugin(store, min, max);
+            let mut actions = CliSetupActions::new(
+                SetupEnvironment {
+                    platform: SetupPlatform::Linux,
+                    interactive: false,
+                },
+                NativeRuntimeConfigSelection::default(),
+                false,
+            );
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(actions.check_installed_plugins())
+                .expect("a refused plugin check never fails setup");
+            actions.plugin_check_refused
+        })
+    };
+    assert!(
+        check("0.1.0", Some("0.5.0")),
+        "incompatible plugin not refused"
+    );
+    assert!(!check("0.1.0", None), "compatible plugin was refused");
+}

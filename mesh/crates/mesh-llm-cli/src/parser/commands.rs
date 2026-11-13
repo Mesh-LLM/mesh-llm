@@ -551,6 +551,12 @@ pub struct Cli {
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub nostr_discovery: bool,
+
+    /// Deprecated, hidden, and inert: bundled default plugins were replaced
+    /// by catalog plugin sets, and a node start installs nothing. Kept so
+    /// existing `serve` and `client` invocations still parse.
+    #[arg(long, hide = true)]
+    pub no_default_plugins: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -583,6 +589,26 @@ pub enum Command {
         /// Re-detect the best host backend flavor before selecting the release bundle.
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
+        /// Explicitly install this catalog plugin set after the upgrade.
+        /// Suppresses the attended recommendation prompt.
+        #[arg(
+            long = "plugin-set",
+            value_name = "NAME",
+            conflicts_with_all = ["skip_plugin_install", "no_default_plugins"]
+        )]
+        plugin_set: Option<String>,
+        /// Skip optional plugin installation and its prompt. Required plugin
+        /// repairs still run.
+        #[arg(long = "skip-plugin-install")]
+        skip_plugin_install: bool,
+        /// Never prompt. Installs no optional plugins unless `--plugin-set`
+        /// names one. Required plugin repairs still run.
+        #[arg(long = "no-interactive")]
+        no_interactive: bool,
+        /// Deprecated alias for --skip-plugin-install. Bundled default
+        /// plugins were replaced by catalog plugin sets.
+        #[arg(long, hide = true, conflicts_with = "plugin_set")]
+        no_default_plugins: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
@@ -853,8 +879,18 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PluginCommand {
-    /// Install the default plugins from this release's bundled copy (no download).
-    /// A node also does this when it starts.
+    /// Transitional stub: bundled default plugins were replaced by catalog
+    /// plugin sets. Prints how to install a set; installs nothing.
+    InstallDefaults {
+        /// Kept for compatibility; there are no default plugins to turn off.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Discover and install catalog-defined plugin sets.
+    Sets {
+        #[command(subcommand)]
+        command: PluginSetsCommand,
+    },
     /// Install native plugins in order, or install one local release archive.
     Install {
         /// Plugin catalog names, GitHub owner/repo references, or GitHub URLs.
@@ -916,6 +952,24 @@ pub enum PluginCommand {
         /// Local node API port.
         #[arg(long, default_value_t = 3131)]
         port: u16,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PluginSetsCommand {
+    /// List the catalog's named plugin sets. Read-only; needs no running node.
+    List,
+    /// Show one set: membership, descriptions, versions, and platform
+    /// availability. Read-only; needs no running node.
+    Show {
+        /// Set name (see `mesh-llm plugins sets list`).
+        name: String,
+    },
+    /// Install the current eligible members of a named set. Idempotent;
+    /// never updates or enables an installed plugin.
+    Install {
+        /// Set name (see `mesh-llm plugins sets list`).
+        name: String,
     },
 }
 

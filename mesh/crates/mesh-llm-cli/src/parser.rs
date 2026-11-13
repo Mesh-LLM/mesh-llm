@@ -10,7 +10,8 @@ mod validation;
 pub use commands::{
     AnalyticsCommand, AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope,
     DoctorCommand, GpuCommand, KvCacheCommand, MeshDiscoveryMode, MeshGuardrailCliMode,
-    PluginCommand, ServingStrategyCli, SkillAgentArg, SkillCommand, TrustCommand, TrustPolicy,
+    PluginCommand, PluginSetsCommand, ServingStrategyCli, SkillAgentArg, SkillCommand,
+    TrustCommand, TrustPolicy,
 };
 pub use logging_help::logging_help;
 pub use normalization::{

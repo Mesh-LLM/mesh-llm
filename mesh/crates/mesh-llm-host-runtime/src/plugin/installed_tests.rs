@@ -11,8 +11,8 @@ fn with_plugin_dir<T>(store: &Path, test: impl FnOnce() -> T) -> T {
     mesh_llm_config::with_env_override_for_test("MESH_LLM_PLUGIN_DIR", store, test)
 }
 
-/// An installed `capsules` whose executable exists, as `mesh-llm plugins
-/// install` leaves it.
+/// A managed `capsules` install whose executable exists, as
+/// `mesh-llm plugins install` leaves it.
 fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetadata {
     let metadata = InstalledPluginMetadata {
         name: "capsules".to_string(),
@@ -22,6 +22,9 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         downloaded_asset_name: "capsules.tar.gz".to_string(),
         install_path: store_root.join("installs").join("capsules"),
         enabled,
+        default_managed: false,
+        host_compatibility: None,
+        allowed_surfaces: None,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: None,
@@ -29,7 +32,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
             operation_bindings: Vec::new(),
             peer_blocks: false,
         }),
-        last_protocol_version: Some(1),
+        last_protocol_version: Some(mesh_llm_plugin::PROTOCOL_VERSION),
         last_status: Some("installed".to_string()),
         last_error: None,
         verified_sha256: None,
@@ -176,7 +179,80 @@ fn settings_only_entry_runs_the_enabled_store_copy() {
         spec.command,
         metadata.executable_path().display().to_string()
     );
+    // A bare entry runs the store's copy, which the operator did not choose
+    // by path, so it starts optional: a broken plugin install never stops
+    // the node.
     assert!(spec.startup.optional);
+    assert!(
+        spec.installed_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.allowed_surfaces.is_none()),
+        "a managed install carries no legacy surface record"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn configured_store_copies_cannot_bypass_host_compatibility() {
+    let root = tempfile::TempDir::new().unwrap();
+    for protocol_mismatch in [false, true] {
+        let mut metadata = installed_capsules(root.path(), true);
+        if protocol_mismatch {
+            metadata.last_protocol_version = Some(mesh_llm_plugin::PROTOCOL_VERSION + 1);
+        } else {
+            metadata.host_compatibility =
+                Some(mesh_llm_plugin_manager::compatibility::HostCompatibility {
+                    min: None,
+                    max: Some("0.0.0".into()),
+                });
+        }
+        PluginStore::new(root.path()).save(&metadata).unwrap();
+        let command = metadata.executable_path().display().to_string();
+        for configured_command in [None, Some(command.as_str())] {
+            let resolved = with_plugin_dir(root.path(), || {
+                configured_external_plugin_spec(&capsules_entry(configured_command))
+            })
+            .unwrap();
+            let ConfiguredExternalPlugin::Inactive(summary) = resolved else {
+                panic!("configured store copies must receive the same compatibility check");
+            };
+            assert!(summary.error.unwrap().contains("incompatible with MeshLLM"));
+        }
+        let unrelated = with_plugin_dir(root.path(), || {
+            configured_external_plugin_spec(&capsules_entry(Some("operator-command")))
+        })
+        .unwrap();
+        assert!(matches!(unrelated, ConfiguredExternalPlugin::Active(_)));
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn configured_legacy_grants_apply_before_persistent_migration() {
+    let root = tempfile::TempDir::new().unwrap();
+    for allowed in [None, Some(Vec::new()), Some(vec!["web_ui".to_string()])] {
+        let mut old = installed_capsules(root.path(), true);
+        old.default_managed = true;
+        old.allowed_surfaces = allowed.clone();
+        let store = PluginStore::new(root.path());
+        store.save(&old).unwrap();
+
+        let resolved = with_plugin_dir(root.path(), || {
+            configured_external_plugin_spec(&capsules_entry(None))
+        })
+        .unwrap();
+        let ConfiguredExternalPlugin::Active(spec) = resolved else {
+            panic!("the installed plugin must resolve");
+        };
+        assert_eq!(
+            spec.installed_metadata.unwrap().allowed_surfaces,
+            allowed.or_else(|| Some(mesh_llm_plugin_manager::migrated_allows_keys("capsules")))
+        );
+        assert!(
+            store.load("capsules").unwrap().default_managed,
+            "the first configured spec must not depend on a persistent migration"
+        );
+    }
 }
 
 #[test]
@@ -188,49 +264,52 @@ fn explicit_installed_command_keeps_its_packaged_web_ui() {
     };
 
     let store = tempfile::TempDir::new().expect("plugin store");
-    let mut metadata = installed_capsules(store.path(), true);
-    let asset_root = metadata.install_path.join("web");
-    std::fs::create_dir_all(&asset_root).unwrap();
-    metadata.manifest.as_mut().unwrap().web_ui = Some(InstalledPluginWebUiMetadata {
-        pages: Vec::new(),
-        config_sections: Vec::new(),
-        contributions: Vec::new(),
-        bundles: Vec::new(),
-        asset_root: Some("web".into()),
-        validation: InstalledPluginWebUiValidation {
-            status: InstalledPluginWebUiValidationStatus::Valid,
-            reason: None,
-        },
-    });
-    PluginStore::new(store.path()).save(&metadata).unwrap();
-    let command = metadata.executable_path().display().to_string();
-    let resolved = with_plugin_dir(store.path(), || {
-        configured_external_plugin_spec(&capsules_entry(Some(&command)))
-    })
-    .expect("entry resolves");
-    let ConfiguredExternalPlugin::Active(spec) = resolved else {
-        panic!("the explicit installed executable must start");
-    };
+    for allowed_surfaces in [None, Some(vec!["web_ui".to_string()])] {
+        let mut metadata = installed_capsules(store.path(), true);
+        metadata.allowed_surfaces = allowed_surfaces;
+        let asset_root = metadata.install_path.join("web");
+        std::fs::create_dir_all(&asset_root).unwrap();
+        metadata.manifest.as_mut().unwrap().web_ui = Some(InstalledPluginWebUiMetadata {
+            pages: Vec::new(),
+            config_sections: Vec::new(),
+            contributions: Vec::new(),
+            bundles: Vec::new(),
+            asset_root: Some("web".into()),
+            validation: InstalledPluginWebUiValidation {
+                status: InstalledPluginWebUiValidationStatus::Valid,
+                reason: None,
+            },
+        });
+        PluginStore::new(store.path()).save(&metadata).unwrap();
+        let command = metadata.executable_path().display().to_string();
+        let resolved = with_plugin_dir(store.path(), || {
+            configured_external_plugin_spec(&capsules_entry(Some(&command)))
+        })
+        .expect("entry resolves");
+        let ConfiguredExternalPlugin::Active(spec) = resolved else {
+            panic!("the explicit installed executable must start");
+        };
 
-    let web_ui = derive_plugin_web_ui_state(super::super::PluginWebUiStateInput {
-        plugin_name: &spec.name,
-        live_manifest: None,
-        installed_metadata: spec.installed_metadata.as_ref(),
-        web_ui_enabled: spec.web_ui_enabled,
-        web_ui_primary_tab: false,
-        runtime_available: true,
-        runtime_unavailable_reason: None,
-    });
-    assert!(
-        web_ui.available,
-        "the matching package must retain its web UI"
-    );
-    assert_eq!(
-        web_ui.asset_base_url.as_deref(),
-        Some("/api/plugins/capsules/web-ui/assets/")
-    );
-    assert!(!spec.startup.optional, "explicit commands remain required");
-    assert_eq!(spec.installed_metadata, Some(metadata));
+        let web_ui = derive_plugin_web_ui_state(super::super::PluginWebUiStateInput {
+            plugin_name: &spec.name,
+            live_manifest: None,
+            installed_metadata: spec.installed_metadata.as_ref(),
+            web_ui_enabled: spec.web_ui_enabled,
+            web_ui_primary_tab: false,
+            runtime_available: true,
+            runtime_unavailable_reason: None,
+        });
+        assert!(
+            web_ui.available,
+            "the matching package must retain its web UI"
+        );
+        assert_eq!(
+            web_ui.asset_base_url.as_deref(),
+            Some("/api/plugins/capsules/web-ui/assets/")
+        );
+        assert!(!spec.startup.optional, "explicit commands remain required");
+        assert_eq!(spec.installed_metadata, Some(metadata));
+    }
 }
 
 #[test]

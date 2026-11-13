@@ -93,6 +93,13 @@ pub(super) fn format_skills(command: &mesh_llm_cli::SkillCommand, assembly: &mut
 pub(super) fn format_plugin(command: &mesh_llm_cli::PluginCommand, assembly: &mut SummaryAssembly) {
     use mesh_llm_cli::PluginCommand;
     match command {
+        PluginCommand::InstallDefaults { .. } => {
+            assembly.command.push_str(" plugins install-defaults");
+        }
+        PluginCommand::Sets { command } => {
+            assembly.command.push_str(" plugins sets");
+            format_plugin_sets(command, assembly);
+        }
         PluginCommand::Install {
             reference,
             archive,
@@ -124,4 +131,19 @@ fn format_plugin_name(name: &str, assembly: &mut SummaryAssembly) {
     assembly.command.push_str(" plugins ");
     assembly.command.push_str(name);
     assembly.redact("name", true);
+}
+
+fn format_plugin_sets(command: &mesh_llm_cli::PluginSetsCommand, assembly: &mut SummaryAssembly) {
+    use mesh_llm_cli::PluginSetsCommand;
+    match command {
+        PluginSetsCommand::List => assembly.command.push_str(" list"),
+        PluginSetsCommand::Show { name } => {
+            assembly.command.push_str(" show");
+            assembly.redact("name", !name.is_empty());
+        }
+        PluginSetsCommand::Install { name } => {
+            assembly.command.push_str(" install");
+            assembly.redact("name", !name.is_empty());
+        }
+    }
 }

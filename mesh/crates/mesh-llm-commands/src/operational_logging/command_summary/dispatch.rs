@@ -46,11 +46,21 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             version,
             flavor,
             detect_flavor,
+            plugin_set,
+            skip_plugin_install,
+            no_interactive,
+            no_default_plugins,
         } => {
             assembly.command.push_str(" update");
             assembly.redact("--version", version.is_some());
             assembly.redact("--flavor", flavor.is_some());
             assembly.flag("detect-flavor", *detect_flavor);
+            assembly.redact("--plugin-set", plugin_set.is_some());
+            assembly.flag(
+                "skip-plugin-install",
+                *skip_plugin_install || *no_default_plugins,
+            );
+            assembly.flag("no-interactive", *no_interactive);
         }
         Command::Gpus { json, command } => {
             administration::format_gpus(*json, command.as_ref(), assembly);
@@ -58,6 +68,9 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
         Command::Setup(SetupArgs {
             yes,
             no_interactive,
+            plugin_set,
+            skip_plugin_install,
+            no_default_plugins,
             service,
             no_service,
             skip_runtime,
@@ -66,6 +79,11 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             assembly.command.push_str(" setup");
             assembly.flag("yes", *yes);
             assembly.flag("no-interactive", *no_interactive);
+            assembly.redact("--plugin-set", plugin_set.is_some());
+            assembly.flag(
+                "skip-plugin-install",
+                *skip_plugin_install || *no_default_plugins,
+            );
             assembly.flag("service", *service);
             assembly.flag("no-service", *no_service);
             assembly.flag("skip-runtime", *skip_runtime);
