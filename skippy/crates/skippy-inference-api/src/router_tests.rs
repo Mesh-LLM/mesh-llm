@@ -1762,6 +1762,7 @@ async fn responses_stream_frames_backend_errors_without_completed_tail() {
     assert!(body.contains(r#""code":"service_unavailable""#));
     assert!(!body.contains("event: response.completed"));
     assert!(body.contains("event: response.failed"));
+    assert!(!body.contains("data: [DONE]"));
 }
 
 #[tokio::test]

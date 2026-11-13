@@ -205,6 +205,55 @@ pub fn previous_response_not_found(id: &str) -> InferenceError {
     .with_param("previous_response_id")
 }
 
+/// The one completed response retained by a live Responses transport.
+///
+/// A latest-only cache still retains the response's ancestor chain, so the
+/// whole transcript is charged against `max_transcript_bytes`. Completing an
+/// oversized turn clears the prior entry instead of leaving stale state
+/// available after the client has advanced the conversation.
+#[derive(Debug)]
+pub(super) struct ResponseSessionCache {
+    latest: Mutex<Option<Arc<StoredResponse>>>,
+    max_transcript_bytes: usize,
+}
+
+impl ResponseSessionCache {
+    pub(super) fn new(max_transcript_bytes: usize) -> Self {
+        Self {
+            latest: Mutex::new(None),
+            max_transcript_bytes,
+        }
+    }
+
+    pub(super) fn get(&self, id: &str) -> Option<Arc<StoredResponse>> {
+        self.latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|response| response.id == id)
+            .cloned()
+    }
+
+    pub(super) fn replace(&self, response: StoredResponse) {
+        let mut latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *latest =
+            (response.transcript_bytes <= self.max_transcript_bytes).then(|| Arc::new(response));
+    }
+
+    pub(super) fn evict(&self, id: &str) {
+        let mut latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if latest.as_ref().is_some_and(|response| response.id == id) {
+            *latest = None;
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Entry {
     response: Arc<StoredResponse>,

@@ -1,16 +1,17 @@
 # skippy-inference-api
 
-Reusable inference HTTP frontend primitives for mesh and staged runtime entry
-points. The router serves OpenAI-compatible routes, Anthropic Messages, and
-SystemOne through one backend and lifecycle contract.
+Reusable inference HTTP and WebSocket frontend primitives for standalone
+Skippy and embedding runtimes. The router serves OpenAI-compatible routes,
+Anthropic Messages, and SystemOne through one backend and lifecycle contract.
 
 This crate owns the public API shapes and route machinery that should not be
 duplicated inside `skippy-serving`. Stage server code should provide a thin
 backend adapter that implements the frontend trait, while this crate handles
 request/response JSON, OpenAI-style errors, model discovery, generation,
-embedding, rerank, audio, and streaming Server-Sent Events framing. Mesh uses
-this as the shared inference frontend for embedded single-stage and stage-split
-serving.
+embedding, rerank, audio, streaming Server-Sent Events framing, and the direct
+Responses WebSocket adapter. Mesh uses the HTTP portions as the shared
+inference frontend for embedded single-stage and stage-split serving; its
+public ingress does not yet expose the Responses WebSocket adapter.
 
 Mesh-local compatibility wrappers should stay thin. Request normalization,
 Responses API translation, stream-chunk parsing, stream usage conversion, and
@@ -77,6 +78,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `POST /v1/chat/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/responses` | HTTP/SSE subset | Uses the shared Responses state machine described below; unsupported capabilities fail explicitly. |
+| `GET /v1/responses` | Standalone WebSocket subset | Accepts sequential `response.create` turns and emits the same JSON event objects as Responses SSE, without SSE framing or `[DONE]`. |
 | `POST /v1/responses/compact` | Supported subset | Produces process-local, model-bound encrypted compaction items for a later Responses request. |
 | `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared generation backend and returns Anthropic JSON or SSE. |
 | `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
@@ -120,9 +122,24 @@ objects, and terminal status mapping. A caller that supplies a
 output transcript for `previous_response_id`. Effective generation controls
 inherit when omitted and explicit child values override them; instructions are
 per-turn and never inherit. Failed and incomplete turns are never retained. The
-store is bounded, in-memory, and caller-scoped. Mesh creates and owns that store
-at localhost ingress so worker selection and retries cannot lose the
-conversation.
+store is bounded, in-memory, and caller-scoped.
+
+`GET /v1/responses` upgrades the standalone Axum frontend to the April 2026
+Open Responses WebSocket transport. It processes exactly one turn at a time,
+keeps a bounded pending queue, applies the ordinary request-body limit to both
+messages and frames, and closes after an absolute 60-minute lifetime including
+active generation. Each turn uses the same `ResponsesTurn`, backend request,
+`ResponsesStream`, cancellation, usage, and lifecycle machinery as HTTP/SSE.
+The wire carries the streaming JSON objects directly; it does not carry SSE
+`event:`/`data:` lines or `[DONE]`.
+
+The connection retains only its latest completed response, including
+`store:false`, and charges the entire ancestor transcript against a byte cap.
+A `store:true` turn may fall back to the caller-scoped process-memory store;
+`store:false` never does. Failed continuations evict only the referenced local
+entry. The reusable `ResponsesSession` prepares expanded, transport-neutral
+turns so another ingress can route each turn independently rather than pinning
+or tunnelling the socket to a worker.
 
 `POST /v1/responses/compact` runs a non-streaming summary pass over explicit
 input and, optionally, the transcript resolved from `previous_response_id`.
@@ -142,9 +159,12 @@ request may still consume a previously stored response ID as source history.
 
 This is not a claim of full Open Responses conformance. Background execution,
 automatic truncation, `max_tool_calls`, hosted tools, encrypted reasoning,
-non-default service tiers, verbosity, and the optional Responses WebSocket
-transport are unsupported and are either rejected or not routed. Compaction is
-limited to the process-local contract above; it is not portable provider state.
+non-default service tiers, and verbosity are unsupported and are rejected.
+Compaction is limited to the process-local contract above; it is not portable
+provider state. The WebSocket route is currently standalone Skippy only: the
+Mesh public ingress has not yet been adapted to upgrade and route persistent
+Responses connections, so this documentation does not promise the feature on a
+Mesh endpoint.
 
 ## Shape
 
@@ -222,7 +242,7 @@ chain remains backend-owned.
 | `/v1/models` | Route shape and model-object serialization | Advertise exact full model refs accepted by the runtime | Supported |
 | `/v1/chat/completions` | Parse common and advanced fields, stream/non-stream envelopes | Tokenization, sampling, stop handling, usage, feature execution | Supported with backend feature guards |
 | `/v1/completions` | Prompt parsing and response envelopes | Token prompts, sampling, stop handling, usage | Supported with backend feature guards |
-| `/v1/responses` | Own the supported HTTP/SSE lifecycle and continuation state | Execute the resulting chat/completion request | Partial; explicit gaps above |
+| `/v1/responses` | Own the supported HTTP/SSE and standalone WebSocket lifecycle and continuation state | Execute the resulting chat/completion request | Partial; explicit gaps above; Mesh WebSocket ingress not yet wired |
 | `/v1/responses/compact` | Resolve history, validate terminal summary/usage, and seal process-local state | Produce one complete summary with usage | Supported subset; non-streaming and ingress-bound |
 | `/v1/embeddings` | Parse OpenAI input/encoding shapes and serialize vectors | Tokenize or accept token IDs, pool, normalize, and report usage | Supported for compatible local full models |
 | `/v1/rerank` | Parse query/documents and serialize ranked results | Execute classifier scoring and report usage | Supported for compatible local full models |

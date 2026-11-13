@@ -1,19 +1,28 @@
 mod compaction;
 mod content_items;
+mod continuation;
 mod conversation;
+mod execution;
 mod resource;
+mod session;
 mod store;
 mod stream;
 mod tools;
 mod turn;
 
+pub use continuation::ResponseContinuation;
+pub use execution::{ResponsesSessionExecutor, ResponsesTurnEventStream};
 pub use resource::{ResponseStatus, ResponsesUsage};
+pub(crate) use session::prepare_request;
+pub use session::{
+    PreparedResponsesTurn, ResponsesSession, ResponsesSessionConfig, WebSocketErrorEvent,
+};
 pub use store::{
     CallerScope, FORWARDING_HEADERS, RESPONSE_STORAGE_ENV, ResponseStore, ResponseStoreLimits,
     caller_scope_for_http_peer, configured_response_storage,
 };
 pub use stream::{ResponsesStream, ResponsesStreamEvent, stream_events_for_response};
-pub use turn::{ResponseContinuation, ResponsesTurn};
+pub use turn::ResponsesTurn;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

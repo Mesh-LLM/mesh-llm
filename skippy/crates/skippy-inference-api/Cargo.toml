@@ -3,7 +3,7 @@ name = "skippy-inference-api"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
-description = "OpenAI-compatible HTTP frontend shared by mesh-llm runtimes"
+description = "OpenAI-compatible HTTP and WebSocket inference frontend"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
@@ -26,6 +26,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
-tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "test-util", "time"] }
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }

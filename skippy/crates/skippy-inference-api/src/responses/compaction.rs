@@ -17,9 +17,10 @@ use serde_json::{Map, Value, json};
 use crate::errors::InferenceError;
 
 use super::{
+    continuation::ResponseContinuation,
     resource::{ResponsesUsage, new_item_id, new_response_id},
     store::StoredResponse,
-    turn::{ResponseContinuation, input_items, take_previous_response_id},
+    turn::{input_items, take_previous_response_id},
 };
 
 const PREFIX: &str = "skippy.compaction.v1.";

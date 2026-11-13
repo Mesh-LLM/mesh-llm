@@ -17,7 +17,7 @@ use super::resource::{
     ResponseEnvelope, ResponseError, ResponseSnapshot, ResponseStatus, ResponsesUsage,
     function_call_item, message_item, new_item_id, new_response_id, reasoning_item,
 };
-use super::store::{CallerScope, ResponseStore, StoredResponse, previous_response_not_found};
+use super::{continuation::ResponseContinuation, store::StoredResponse};
 use crate::errors::InferenceError;
 
 #[derive(Debug, Clone)]
@@ -27,40 +27,6 @@ enum TurnKind {
         user_messages: Vec<Value>,
         pending_calls: Vec<Value>,
     },
-}
-
-/// Where a request may look up and save earlier responses.
-///
-/// Storage is a startup setting: when it is off no store exists, nothing is
-/// saved, and every `previous_response_id` is not found. A request without a
-/// caller scope (for example one a reverse proxy relayed) is treated the
-/// same way, so continuation fails closed.
-#[derive(Debug, Clone, Default)]
-pub struct ResponseContinuation {
-    store: Option<Arc<ResponseStore>>,
-    scope: Option<CallerScope>,
-}
-
-impl ResponseContinuation {
-    pub fn new(store: Option<Arc<ResponseStore>>, scope: Option<CallerScope>) -> Self {
-        Self { store, scope }
-    }
-
-    /// No lookup and no save.
-    pub fn disabled() -> Self {
-        Self::default()
-    }
-
-    fn available(&self) -> Option<(&ResponseStore, &CallerScope)> {
-        Some((self.store.as_deref()?, self.scope.as_ref()?))
-    }
-
-    pub(super) fn lookup(&self, id: &str) -> Result<Arc<StoredResponse>, InferenceError> {
-        let (store, scope) = self
-            .available()
-            .ok_or_else(|| previous_response_not_found(id))?;
-        store.get(scope, id)
-    }
 }
 
 /// A Responses request being served.
@@ -353,14 +319,7 @@ impl ResponsesTurn {
     }
 
     fn commit(&self, output: &[Value]) -> bool {
-        if !self.envelope.store() {
-            return false;
-        }
-        let Some((store, scope)) = self.continuation.available() else {
-            return false;
-        };
-        store.insert(
-            scope.clone(),
+        let snapshot = || {
             StoredResponse::new(
                 self.id.clone(),
                 self.model.clone(),
@@ -369,8 +328,18 @@ impl ResponsesTurn {
                 self.configuration.clone(),
                 self.input.clone(),
                 output.to_vec(),
-            ),
-        )
+            )
+        };
+        if let Some(session) = &self.continuation.session {
+            session.replace(snapshot());
+        }
+        if !self.envelope.store() {
+            return false;
+        }
+        let Some((store, scope)) = self.continuation.available() else {
+            return false;
+        };
+        store.insert(scope.clone(), snapshot())
     }
 }
 
@@ -595,7 +564,7 @@ fn chat_message_text(message: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::responses::store::ResponseStoreLimits;
+    use crate::responses::store::{CallerScope, ResponseStore, ResponseStoreLimits};
 
     fn store() -> Arc<ResponseStore> {
         Arc::new(ResponseStore::new(ResponseStoreLimits::default()))

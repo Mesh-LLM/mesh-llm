@@ -100,14 +100,14 @@ impl StreamLifecycle {
         });
     }
 
-    fn finish_natural(&self) {
+    pub(crate) fn finish_natural(&self) {
         if self.backend_error.load(Ordering::Acquire) {
             return;
         }
         self.finish_success();
     }
 
-    fn finish_drop(&self, cancellation_already_requested: bool) {
+    pub(crate) fn finish_drop(&self, cancellation_already_requested: bool) {
         match self.drop_outcome(cancellation_already_requested) {
             StreamDropOutcome::BackendError => {}
             StreamDropOutcome::Completed => self.finish_success(),

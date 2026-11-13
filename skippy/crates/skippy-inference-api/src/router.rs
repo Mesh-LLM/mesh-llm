@@ -1,8 +1,4 @@
-use std::{
-    convert::Infallible,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
@@ -57,9 +53,11 @@ const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
 mod audio_upload;
 mod generation;
 mod responses;
+mod responses_websocket;
 use audio_upload::parse_audio_multipart;
 use generation::chat_completions;
 use responses::{responses, responses_compact};
+use responses_websocket::responses_websocket;
 const BACKEND_TIMEOUT_SECS_ENV: &str = "MESH_OPENAI_BACKEND_TIMEOUT_SECS";
 const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 
@@ -184,6 +182,8 @@ pub struct InferenceFrontendConfig {
     /// Completed responses kept for `previous_response_id`. `None` turns
     /// response storage and continuation off for this frontend's lifetime.
     pub response_store: Option<Arc<ResponseStore>>,
+    /// Bounds and absolute lifetime for direct Responses WebSockets.
+    pub responses_websocket: crate::responses::ResponsesSessionConfig,
 }
 
 impl std::fmt::Debug for InferenceFrontendConfig {
@@ -199,6 +199,7 @@ impl std::fmt::Debug for InferenceFrontendConfig {
                 &self.http_exchange_policy.is_some(),
             )
             .field("response_storage", &self.response_store.is_some())
+            .field("responses_websocket", &self.responses_websocket)
             .finish()
     }
 }
@@ -256,6 +257,14 @@ impl InferenceFrontendConfig {
         self
     }
 
+    pub fn with_responses_websocket_config(
+        mut self,
+        responses_websocket: crate::responses::ResponsesSessionConfig,
+    ) -> Self {
+        self.responses_websocket = responses_websocket;
+        self
+    }
+
     pub fn with_http_exchange_policy(
         mut self,
         policy: Arc<dyn crate::http_exchange::HttpExchangePolicy>,
@@ -276,6 +285,7 @@ impl Default for InferenceFrontendConfig {
             http_exchange_policy: None,
             response_store: crate::responses::configured_response_storage()
                 .then(|| Arc::new(ResponseStore::default())),
+            responses_websocket: crate::responses::ResponsesSessionConfig::default(),
         }
     }
 }
@@ -325,7 +335,7 @@ pub fn router_for_with_config(
         )
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
-        .route("/v1/responses", post(responses))
+        .route("/v1/responses", post(responses).get(responses_websocket))
         .route("/v1/responses/compact", post(responses_compact))
         .route("/v1/decisions", post(decisions))
         .route("/v1/messages", post(crate::anthropic::messages))
@@ -784,21 +794,6 @@ pub(crate) fn agent_session_from_header(
         AgentSessionSource::TrustedHeader(name.as_str().to_owned()),
     )
     .map(Some)
-}
-
-fn resolve_agent_session(
-    header: Option<AgentSessionIdentity>,
-    protocol: Option<AgentSessionIdentity>,
-) -> InferenceResult<Option<AgentSessionIdentity>> {
-    match (header, protocol) {
-        (Some(header), Some(protocol)) if header.id() != protocol.id() => {
-            Err(InferenceError::invalid_request(
-                "trusted agent-session header conflicts with Responses conversation identity",
-            ))
-        }
-        (Some(header), _) => Ok(Some(header)),
-        (None, protocol) => Ok(protocol),
-    }
 }
 
 pub(crate) fn request_context(

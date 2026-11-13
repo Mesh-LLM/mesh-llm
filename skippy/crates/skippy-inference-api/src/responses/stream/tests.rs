@@ -5,8 +5,11 @@ use serde_json::{Value, json};
 use super::{
     ResponsesStream, ResponsesStreamEvent, retained_chunk_bytes, stream_events_for_response,
 };
-use crate::responses::store::{CallerScope, ResponseStore};
-use crate::responses::turn::{ResponseContinuation, ResponsesTurn};
+use crate::responses::{
+    ResponseContinuation,
+    store::{CallerScope, ResponseStore},
+    turn::ResponsesTurn,
+};
 
 fn stream_with(continuation: ResponseContinuation) -> ResponsesStream {
     let mut body = json!({"model": "m", "input": "hi"});
