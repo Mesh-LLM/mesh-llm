@@ -161,3 +161,44 @@ fn a_turn_past_a_share_alone_is_pinned_alone() {
     assert!(pinned(&recorder, "second", now) && !pinned(&recorder, "first", now));
     assert!(recorder.holds_turn("first") && recorder.holds_turn("second"));
 }
+
+// A turn's log counts against the window as its ubatches arrive: a long
+// prefill that outgrows it is shed before it commits, and gets no receipt,
+// rather than holding past the window until the commit's check.
+#[test]
+fn a_live_log_past_the_window_is_shed_before_its_commit() {
+    // a later stage's ubatch keeps its input rows: 4 KiB a token here
+    let wide = |columns: &[(i32, i32)], cells: &[u32], last: bool| {
+        let mut record = ubatch(columns, cells, last);
+        record.input = Some(StageInput {
+            rows: vec![7; columns.len() * 4096],
+            row_bytes: 4096,
+            ggml_type: 0,
+        });
+        record
+    };
+    let measure = Recorder::new(1, STAGES[1].clone(), "cpu");
+    record(&measure, wide(&[(1, 0)], &[0], true));
+    measure.commit("one", 1, TurnId::default(), 0..1).unwrap();
+    let one = measure.lock().committed_bytes;
+    let window = one + 2 * 3 * 4096;
+
+    let recorder = Recorder::new(1, STAGES[1].clone(), "cpu").with_window_bytes(window);
+    for chunk in 0..4 {
+        let columns: Vec<(i32, i32)> = (0..3).map(|p| (1, 3 * chunk + p)).collect();
+        let cells: Vec<u32> = (0..3).map(|p| (3 * chunk + p) as u32).collect();
+        record(&recorder, wide(&columns, &cells, chunk == 3));
+        let held = recorder.lock().held_bytes();
+        assert!(held <= window, "ubatch {chunk}: {held} of {window}");
+    }
+    let error = recorder
+        .commit("long", 1, TurnId::default(), 0..12)
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("outgrew"), "{error:#}");
+
+    // the sequence's next turn records and commits again
+    recorder.begin_turn(1, TurnId(1));
+    record(&recorder, wide(&[(1, 12)], &[12], true));
+    recorder.commit("next", 1, TurnId(1), 12..13).unwrap();
+    assert!(recorder.holds_turn("next"));
+}

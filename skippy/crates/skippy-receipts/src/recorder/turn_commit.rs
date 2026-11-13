@@ -217,7 +217,7 @@ fn take_turn(
 ) -> Result<TakenTurn> {
     let prefix = log.prefix.take();
     let state = log.state.take();
-    let events = std::mem::take(&mut log.events);
+    let events = log.take_events();
     // the log covers the positions ([`SeqLog::covers`]): what fails from
     // here fails for any commit of the turn
     log.pending_start = None;
