@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::{
     CallerScope, ResponseAdapterMode, ResponseContinuation, ResponseStore, ResponsesTurn,
-    normalize_openai_compat_request, store::ResponseSessionCache,
+    store::ResponseSessionCache,
 };
 use crate::{
     AgentSessionIdentity, AgentSessionSource, ChatCompletionRequest, InferenceError,
@@ -256,7 +256,7 @@ pub(crate) fn prepare_request(
 ) -> Result<PreparedResponsesTurn, InferenceError> {
     let ingress_body = value.clone();
     let turn = Arc::new(ResponsesTurn::prepare(&mut value, continuation)?);
-    let normalization = normalize_openai_compat_request("/v1/responses", &mut value)?;
+    let normalization = turn.normalize_backend_request("/v1/responses", &mut value)?;
     let request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
         InferenceError::invalid_request(format!("invalid Responses request: {error}"))
     })?;

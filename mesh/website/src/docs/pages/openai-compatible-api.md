@@ -171,8 +171,21 @@ wire nor forwarded to Chat Completions backends. Values above 128 are accepted
 and echoed without clamping, while Mesh retains a separate internal 128-call
 safety ceiling. Parsing is exact through `u64::MAX`; still-larger JSON integers
 are rejected. Mesh itself executes no developer-hosted tools, so rejection has
-no hidden execution side effects in this layer. `parallel_tool_calls` keeps its
-existing behavior.
+no hidden execution side effects in this layer.
+
+`parallel_tool_calls: false` permits at most one function call generated for
+the current response. Calls already present in input history do not count, and
+the count resets for every response. Normalization keeps the raw `false` hint
+in the Chat backend request. The original ingress independently fails a
+backend, peer, virtual model, or plugin result containing two or more calls
+with `tool_call_limit_exceeded`, empty output, and no stored continuation, even
+if a later request transform changed the backend hint.
+Omitted and `true` values permit multiple calls. `null` resets the effective
+resource value to `true`; continuations inherit the prior raw configuration
+only when the child omits the field. The legacy mesh-client compatibility path,
+which has no ingress policy object, rejects `false` instead of silently
+claiming enforcement. This control does not change ordinary Chat Completions
+tool parsing or candidate truncation.
 
 For SSE and WebSocket turns, output from the first tool-call fragment onward
 is buffered within bounded limits until the full function names can be

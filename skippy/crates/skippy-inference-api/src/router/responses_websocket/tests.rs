@@ -266,6 +266,49 @@ async fn websocket_quarantines_calls_over_max_tool_calls() {
 }
 
 #[tokio::test]
+async fn websocket_quarantines_calls_when_parallel_tools_are_disabled() {
+    let server = serve(
+        Arc::new(SocketBackend::default()),
+        config(ResponsesSessionConfig::default()),
+    )
+    .await;
+    let mut socket = connect(server.address).await;
+    send(
+        &mut socket,
+        json!({
+            "type":"response.create",
+            "model":"tool-call-pair",
+            "input":"hi",
+            "parallel_tool_calls":false,
+            "tools":[{"type":"function","name":"same"}]
+        }),
+    )
+    .await;
+
+    let events = terminal(&mut socket).await;
+    for (sequence, event) in events.iter().enumerate() {
+        assert_eq!(event["sequence_number"], sequence as u64);
+    }
+    let failed = events.last().unwrap();
+    assert_eq!(failed["type"], "response.failed");
+    assert_eq!(
+        failed["response"]["error"]["code"],
+        "tool_call_limit_exceeded"
+    );
+    assert_eq!(failed["response"]["output"], json!([]));
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event["type"].as_str(),
+            Some(
+                "response.output_item.added"
+                    | "response.function_call_arguments.delta"
+                    | "response.function_call_arguments.done"
+            )
+        )
+    }));
+}
+
+#[tokio::test]
 async fn official_basic_sequential_and_same_socket_store_false_cases() {
     let server = serve(
         Arc::new(SocketBackend::default()),

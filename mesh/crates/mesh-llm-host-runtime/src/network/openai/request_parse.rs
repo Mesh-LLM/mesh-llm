@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
-    ResponseAdapter, normalize_openai_compat_request, release_request_objects_with,
-    resolve_request_object_references,
+    ResponseAdapter, normalize_openai_compat_request, normalize_prepared_responses_request,
+    release_request_objects_with, resolve_request_object_references,
 };
 use super::routing_rank::descriptor_for_model;
 
@@ -775,7 +775,10 @@ async fn rewrite_request_body_for_forwarding(
             _ => None,
         };
     }
-    let normalization = normalize_openai_compat_request(path, body_json)?;
+    let normalization = match outcome.responses_turn.as_deref() {
+        Some(turn) => normalize_prepared_responses_request(turn, path, body_json)?,
+        None => normalize_openai_compat_request(path, body_json)?,
+    };
     let mut changed = normalization.changed;
     if let Some(rewritten_path) = normalization.rewritten_path {
         outcome.request_path = rewritten_path;

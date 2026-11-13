@@ -6,6 +6,8 @@ mod execution;
 mod lineage;
 #[cfg(test)]
 mod max_tool_calls_tests;
+#[cfg(test)]
+mod parallel_tool_calls_tests;
 mod request_validation;
 mod resource;
 mod session;
@@ -279,8 +281,9 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, In
 
 fn translate_openai_responses_input(
     object: &mut Map<String, Value>,
+    policy_enforced: bool,
 ) -> Result<bool, InferenceError> {
-    let mut changed = tools::normalize(object)?;
+    let mut changed = tools::normalize(object, policy_enforced)?;
     let mut messages = Vec::new();
     let mut state_cache_key = None;
 
@@ -472,6 +475,14 @@ pub fn normalize_openai_compat_request(
     path: &str,
     body: &mut Value,
 ) -> Result<NormalizationOutcome, InferenceError> {
+    normalize_openai_compat_request_with_policy(path, body, false)
+}
+
+fn normalize_openai_compat_request_with_policy(
+    path: &str,
+    body: &mut Value,
+    responses_policy_enforced: bool,
+) -> Result<NormalizationOutcome, InferenceError> {
     if path_only(path) == "/v1/messages" {
         crate::anthropic::normalize_messages_request(body)?;
         let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -514,7 +525,7 @@ pub fn normalize_openai_compat_request(
             .get("stream")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        changed |= translate_openai_responses_input(object)?;
+        changed |= translate_openai_responses_input(object, responses_policy_enforced)?;
         rewritten_path = Some(rewrite_path_preserving_query(path, "/v1/chat/completions"));
         response_adapter = if is_stream {
             ResponseAdapterMode::OpenAiResponsesStream

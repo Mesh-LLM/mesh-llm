@@ -202,6 +202,20 @@ impl ResponsesTurn {
         &self.model
     }
 
+    /// Normalize this turn's backend request while retaining the policy
+    /// captured from its original Responses ingress.
+    pub fn normalize_backend_request(
+        &self,
+        path: &str,
+        body: &mut Value,
+    ) -> Result<super::NormalizationOutcome, InferenceError> {
+        super::normalize_openai_compat_request_with_policy(
+            path,
+            body,
+            self.tool_policy.enforces_serial_calls(),
+        )
+    }
+
     /// The `ResponseResource` for this turn in the given state.
     pub fn response(
         &self,

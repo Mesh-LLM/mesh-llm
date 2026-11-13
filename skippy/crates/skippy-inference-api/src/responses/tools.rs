@@ -50,6 +50,7 @@ pub(super) struct ToolPolicy {
     defined: BTreeSet<String>,
     allowed: BTreeSet<String>,
     max_calls: Option<u64>,
+    parallel_calls: bool,
 }
 
 impl ToolPolicy {
@@ -57,6 +58,7 @@ impl ToolPolicy {
         let defined = declared_tool_names(request.get("tools"))?;
         let (mode, allowed) = choice_policy(request.get("tool_choice"), &defined)?;
         let max_calls = max_tool_calls(request.get("max_tool_calls"))?;
+        let parallel_calls = parallel_tool_calls(request.get("parallel_tool_calls"))?;
         if mode == ToolMode::Required && allowed.is_empty() {
             return Err(InferenceError::invalid_request(
                 "required tool_choice needs at least one declared tool",
@@ -68,7 +70,12 @@ impl ToolPolicy {
             defined,
             allowed,
             max_calls,
+            parallel_calls,
         })
+    }
+
+    pub(super) fn enforces_serial_calls(&self) -> bool {
+        !self.parallel_calls
     }
 
     pub(super) fn validate_calls<'a>(
@@ -91,6 +98,12 @@ impl ToolPolicy {
             return Err(ToolOutputViolation::new(
                 "tool_call_limit_exceeded",
                 "upstream response exceeded max_tool_calls",
+            ));
+        }
+        if !self.parallel_calls && names.len() > 1 {
+            return Err(ToolOutputViolation::new(
+                "tool_call_limit_exceeded",
+                "upstream response exceeded parallel_tool_calls",
             ));
         }
         if self.mode == ToolMode::None && had_call_fragments {
@@ -133,7 +146,10 @@ impl ToolOutputViolation {
     }
 }
 
-pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, InferenceError> {
+pub(super) fn normalize(
+    request: &mut Map<String, Value>,
+    policy_enforced: bool,
+) -> Result<bool, InferenceError> {
     // Revalidate at this public normalization boundary as well as when a turn
     // captures its policy. Some compatibility callers normalize without a turn.
     let policy = ToolPolicy::capture(request)?;
@@ -145,6 +161,12 @@ pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, Infere
             "max_tool_calls requires a prepared Responses turn",
         )
         .with_param("max_tool_calls"));
+    }
+    if !policy_enforced && !policy.parallel_calls {
+        return Err(InferenceError::unsupported(
+            "parallel_tool_calls=false requires a prepared Responses turn",
+        )
+        .with_param("parallel_tool_calls"));
     }
     let mut changed = false;
     if let Some(tools) = request.get_mut("tools")
@@ -186,6 +208,17 @@ fn max_tool_calls(value: Option<&Value>) -> Result<Option<u64>, InferenceError> 
             InferenceError::invalid_request("max_tool_calls must be a positive integer")
                 .with_param("max_tool_calls")
         })
+}
+
+fn parallel_tool_calls(value: Option<&Value>) -> Result<bool, InferenceError> {
+    match value {
+        None | Some(Value::Null) => Ok(true),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(InferenceError::invalid_request(
+            "parallel_tool_calls must be true, false, or null",
+        )
+        .with_param("parallel_tool_calls")),
+    }
 }
 
 fn declared_tool_names(value: Option<&Value>) -> Result<BTreeSet<String>, InferenceError> {
@@ -411,7 +444,7 @@ mod tests {
             "type": "function", "name": "weather", "description": null,
             "parameters": null, "strict": null
         }]});
-        normalize(request.as_object_mut().unwrap()).unwrap();
+        normalize(request.as_object_mut().unwrap(), false).unwrap();
         assert_eq!(
             request["tools"][0],
             json!({
@@ -432,7 +465,7 @@ mod tests {
             ]}
         });
         let policy = ToolPolicy::capture(request.as_object().unwrap()).unwrap();
-        normalize(request.as_object_mut().unwrap()).unwrap();
+        normalize(request.as_object_mut().unwrap(), false).unwrap();
         assert_eq!(request["tool_choice"], "auto");
         assert_eq!(request["tools"].as_array().unwrap().len(), 2);
         assert_eq!(request["tools"][1]["function"]["description"], "retained");
@@ -456,7 +489,7 @@ mod tests {
             json!({"tools":[{"type":"function","name":"same"},{"type":"function","name":"same"}]}),
             json!({"tools":[{"type":"function","name":"safe"}],"tool_choice":{"type":"allowed_tools","tools":[{"type":"function","name":"missing"}]}}),
         ] {
-            assert!(normalize(request.as_object_mut().unwrap()).is_err());
+            assert!(normalize(request.as_object_mut().unwrap(), false).is_err());
         }
     }
 
@@ -546,5 +579,51 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(violation.code, "tool_call_limit_exceeded");
+    }
+
+    #[test]
+    fn parallel_tool_calls_is_strict_and_limits_only_current_output() {
+        for value in [json!(true), json!(null)] {
+            let request = json!({
+                "tools": [{"type": "function", "name": "same"}],
+                "parallel_tool_calls": value,
+            });
+            let policy = ToolPolicy::capture(request.as_object().unwrap()).unwrap();
+            assert!(
+                policy
+                    .validate_calls(ResponseStatus::Completed, true, ["same", "same"])
+                    .is_ok()
+            );
+        }
+
+        let request = json!({
+            "tools": [{"type": "function", "name": "same"}],
+            "parallel_tool_calls": false,
+        });
+        let policy = ToolPolicy::capture(request.as_object().unwrap()).unwrap();
+        assert!(
+            policy
+                .validate_calls(ResponseStatus::Completed, false, [])
+                .is_ok()
+        );
+        assert!(
+            policy
+                .validate_calls(ResponseStatus::Completed, true, ["same"])
+                .is_ok()
+        );
+        let violation = policy
+            .validate_calls(ResponseStatus::Completed, true, ["same", "same"])
+            .unwrap_err();
+        assert_eq!(violation.code, "tool_call_limit_exceeded");
+
+        for value in [json!(0), json!("false"), json!([]), json!({})] {
+            let request = json!({"parallel_tool_calls": value});
+            let error = ToolPolicy::capture(request.as_object().unwrap()).unwrap_err();
+            assert_eq!(
+                error.body().error.param.as_deref(),
+                Some("parallel_tool_calls")
+            );
+            assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
+        }
     }
 }

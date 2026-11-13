@@ -26,6 +26,21 @@ pub(super) fn normalize_openai_compat_request(
     body: &mut serde_json::Value,
 ) -> Result<RequestNormalization> {
     let normalized = skippy_inference_api::normalize_openai_compat_request(path, body)?;
+    Ok(map_normalization(normalized))
+}
+
+pub(super) fn normalize_prepared_responses_request(
+    turn: &skippy_inference_api::responses::ResponsesTurn,
+    path: &str,
+    body: &mut serde_json::Value,
+) -> Result<RequestNormalization> {
+    let normalized = turn.normalize_backend_request(path, body)?;
+    Ok(map_normalization(normalized))
+}
+
+fn map_normalization(
+    normalized: skippy_inference_api::NormalizationOutcome,
+) -> RequestNormalization {
     let response_adapter = match normalized.response_adapter {
         skippy_inference_api::ResponseAdapterMode::AnthropicMessagesJson => {
             ResponseAdapter::AnthropicMessagesJson
@@ -41,11 +56,11 @@ pub(super) fn normalize_openai_compat_request(
             ResponseAdapter::OpenAiResponsesStream
         }
     };
-    Ok(RequestNormalization {
+    RequestNormalization {
         changed: normalized.changed,
         rewritten_path: normalized.rewritten_path,
         response_adapter,
-    })
+    }
 }
 
 fn request_id_from_body(body: &serde_json::Value) -> Option<String> {

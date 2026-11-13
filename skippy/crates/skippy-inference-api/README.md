@@ -102,6 +102,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether logits/probability data can be produced. |
 | `tools` / `tool_choice` | Responses-enforced; Chat backend-gated | Responses validates function identifiers and references at ingress. Its `allowed_tools` keeps the complete `tools` array visible to the backend, reduces only the backend choice to its effective mode, and rejects terminal calls outside the original allowed set. Chat Completions preserves tool settings; the backend decides generation support. |
 | `max_tool_calls` | Responses-enforced | Accepts positive JSON integers through `u64::MAX` or `null`, inherits across continuations, and fails the whole response with `tool_call_limit_exceeded` when generated calls exceed the effective cap. The field is never forwarded to Chat backends. |
+| `parallel_tool_calls` | Responses-enforced | `false` permits at most one function call generated for the current response. The backend still receives the hint, while the ingress rejects a backend that returns multiple calls. Omitted, `true`, and `null` permit multiple calls. |
 | `response_format` | Frontend-compatible | Text and structured-output shapes are parsed and preserved. Backend decides whether constrained decoding is available. |
 | OpenAI-style error envelope | Supported | Includes strict `type`, `param`, and `code` fields. |
 | OpenAI-style HTTP fallbacks | Supported | Unknown routes, unsupported methods, invalid JSON, and oversized JSON return the shared error envelope. |
@@ -154,7 +155,16 @@ backends. Values above 128 are accepted and echoed without clamping, but the
 independent internal 128-call safety ceiling still applies. Parsing is exact
 for positive JSON integers through `u64::MAX`; larger mathematical integers
 are rejected. This layer executes no tools, so rejection creates no hidden tool
-side effects here. This checkpoint does not change `parallel_tool_calls`.
+side effects here. `parallel_tool_calls: false` uses the same original-ingress
+policy and quarantine boundary: it permits zero or one generated call for the
+current response, does not count calls restored in input history, and fails a
+two-call result with `tool_call_limit_exceeded`. The raw `false` hint remains in
+the normalized Chat backend request, while ingress validation remains
+authoritative if a backend or later transform returns multiple calls. Omitted
+and `true` values permit multiple calls; `null` resets the effective value to
+`true`. Continuations
+inherit a prior raw value when omitted, while each response starts a fresh
+count.
 
 `GET /v1/responses` upgrades the standalone Axum frontend to the April 2026
 Open Responses WebSocket transport. It processes exactly one turn at a time,

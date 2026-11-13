@@ -634,6 +634,15 @@ fn translate_openai_responses_input(
     {
         bail!("max_tool_calls is unsupported by the legacy mesh client Responses path");
     }
+    match object.get("parallel_tool_calls") {
+        None | Some(serde_json::Value::Null | serde_json::Value::Bool(true)) => {}
+        Some(serde_json::Value::Bool(false)) => {
+            bail!(
+                "parallel_tool_calls=false is unsupported by the legacy mesh client Responses path"
+            );
+        }
+        Some(_) => bail!("parallel_tool_calls must be true, false, or null"),
+    }
     let mut changed = false;
     let mut messages = Vec::new();
 
@@ -697,6 +706,49 @@ mod tests {
         let mut nullable = json!({"model": "m", "input": "hi", "max_tool_calls": null});
         normalize_openai_compat_request("/v1/responses", &mut nullable).unwrap();
         assert!(nullable.get("max_tool_calls").is_none());
+    }
+
+    #[test]
+    fn legacy_responses_path_rejects_serial_policy_and_strips_safe_values() {
+        let mut serial = json!({
+            "model": "m",
+            "input": "hi",
+            "parallel_tool_calls": false,
+        });
+        let Err(error) = normalize_openai_compat_request("/v1/responses", &mut serial) else {
+            panic!("legacy Responses normalization must reject serial tool policy");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("parallel_tool_calls=false is unsupported")
+        );
+
+        for value in [json!(true), json!(null)] {
+            let mut safe = json!({
+                "model": "m",
+                "input": "hi",
+                "parallel_tool_calls": value,
+            });
+            normalize_openai_compat_request("/v1/responses", &mut safe).unwrap();
+            assert!(safe.get("parallel_tool_calls").is_none());
+        }
+
+        for invalid in [json!(0), json!("false"), json!([]), json!({})] {
+            let mut body = json!({
+                "model": "m",
+                "input": "hi",
+                "parallel_tool_calls": invalid,
+            });
+            let Err(error) = normalize_openai_compat_request("/v1/responses", &mut body) else {
+                panic!("legacy Responses normalization must reject invalid parallel policy");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("parallel_tool_calls must be true, false, or null")
+            );
+        }
     }
 
     #[test]

@@ -147,6 +147,9 @@ mod tests {
                     "inject-max-tool-calls" => {
                         body["max_tool_calls"] = json!(999);
                     }
+                    "weaken-parallel" => {
+                        body["parallel_tool_calls"] = json!(true);
+                    }
                     _ => {}
                 }
                 let content = if original_content == "bloat" {
@@ -295,6 +298,42 @@ mod tests {
             serde_json::to_vec(&body).unwrap().len()
         );
         assert_eq!(request.body_json.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn responses_transform_cannot_weaken_captured_serial_policy() {
+        let manager = stamping_manager().await;
+        let request = read(
+            "/v1/responses",
+            json!({
+                "model": "m",
+                "input": "weaken-parallel",
+                "parallel_tool_calls": false,
+                "tools": [{"type": "function", "name": "same"}],
+            }),
+            &manager,
+            RequestTransforms::Apply,
+        )
+        .await;
+        let body = forwarded_body(&request);
+        assert_eq!(body["parallel_tool_calls"], true);
+
+        let response = request
+            .responses_turn
+            .as_ref()
+            .unwrap()
+            .finish_chat_completion(&json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": null, "tool_calls": [
+                        {"id":"c0","type":"function","function":{"name":"same","arguments":"{}"}},
+                        {"id":"c1","type":"function","function":{"name":"same","arguments":"{}"}}
+                    ]},
+                    "finish_reason": "tool_calls"
+                }]
+            }));
+        assert_eq!(response["status"], "failed");
+        assert_eq!(response["error"]["code"], "tool_call_limit_exceeded");
+        assert_eq!(response["parallel_tool_calls"], false);
     }
 
     #[tokio::test]

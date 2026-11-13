@@ -578,6 +578,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_mesh_relay_quarantines_calls_when_parallel_tools_are_disabled() {
+        let store = Arc::new(ResponseStore::default());
+        let mut request = serde_json::json!({
+            "model":"m", "input":"one call only", "parallel_tool_calls":false,
+            "tools":[{"type":"function","name":"same"}]
+        });
+        let turn = Arc::new(
+            ResponsesTurn::prepare(
+                &mut request,
+                ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost)),
+            )
+            .unwrap(),
+        );
+        let id = turn.id().to_string();
+        let upstream = concat!(
+            "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"same\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"same\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (wire, result) = run(upstream, turn).await;
+        assert!(matches!(
+            result,
+            RouteAttemptResult::CommittedStreamFailure { .. }
+        ));
+        assert!(wire.contains("event: response.failed"), "{wire}");
+        assert!(wire.contains("tool_call_limit_exceeded"), "{wire}");
+        assert!(
+            !wire.contains("event: response.output_item.added"),
+            "{wire}"
+        );
+        assert!(
+            !wire.contains("event: response.function_call_arguments"),
+            "{wire}"
+        );
+        assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+    }
+
+    #[tokio::test]
     async fn premature_upstream_eof_emits_failed_terminal_and_retains_nothing() {
         let store = Arc::new(ResponseStore::default());
         let turn = turn(&store);

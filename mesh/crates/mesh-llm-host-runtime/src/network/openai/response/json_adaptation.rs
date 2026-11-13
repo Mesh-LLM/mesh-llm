@@ -410,6 +410,37 @@ mod tests {
         assert_eq!(response["store"], false);
     }
 
+    #[test]
+    fn shared_responses_adapter_enforces_ingress_parallel_tool_calls() {
+        let mut request = serde_json::json!({
+            "model":"qwen", "input":"one call only", "parallel_tool_calls":false,
+            "tools":[{"type":"function","name":"same"}]
+        });
+        let turn = skippy_inference_api::responses::ResponsesTurn::prepare(
+            &mut request,
+            skippy_inference_api::responses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let chat = serde_json::json!({
+            "choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"call_a","type":"function","function":{"name":"same","arguments":"{}"}},
+                {"id":"call_b","type":"function","function":{"name":"same","arguments":"{}"}}
+            ]},"finish_reason":"tool_calls"}]
+        });
+        let response = crate::network::openai::virtual_model::translated_json_body(
+            &chat,
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap();
+        assert_eq!(response["status"], "failed");
+        assert_eq!(response["error"]["code"], "tool_call_limit_exceeded");
+        assert_eq!(response["output"], serde_json::json!([]));
+        assert_eq!(response["store"], false);
+        assert_eq!(response["parallel_tool_calls"], false);
+    }
+
     #[tokio::test]
     async fn relay_normalized_chat_completion_json_adds_missing_tool_call_id() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

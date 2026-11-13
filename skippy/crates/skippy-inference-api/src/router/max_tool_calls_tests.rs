@@ -167,3 +167,57 @@ async fn responses_sse_quarantines_calls_over_max_tool_calls() {
     assert!(!body.contains("event: response.output_item.added"));
     assert!(!body.contains("event: response.function_call_arguments"));
 }
+
+#[tokio::test]
+async fn responses_json_enforces_parallel_tool_calls_at_the_http_ingress() {
+    for (parallel, status, output_len) in [(true, "completed", 2), (false, "failed", 0)] {
+        let response = post(json!({
+            "model": "tool-call-pair",
+            "input": "hi",
+            "parallel_tool_calls": parallel,
+            "tools": [{"type": "function", "name": "same"}],
+        }))
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["status"], status);
+        assert_eq!(body["output"].as_array().unwrap().len(), output_len);
+        assert_eq!(body["parallel_tool_calls"], parallel);
+        if !parallel {
+            assert_eq!(body["error"]["code"], "tool_call_limit_exceeded");
+            assert_eq!(body["store"], false);
+        }
+    }
+}
+
+#[tokio::test]
+async fn responses_sse_quarantines_calls_when_parallel_tools_are_disabled() {
+    let response = post(json!({
+        "model": "tool-call-pair",
+        "input": "hi",
+        "stream": true,
+        "parallel_tool_calls": false,
+        "tools": [{"type": "function", "name": "same"}],
+    }))
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = body_text(response).await;
+    assert!(body.contains("event: response.failed"));
+    assert!(body.contains(r#""code":"tool_call_limit_exceeded""#));
+    assert!(!body.contains("event: response.output_item.added"));
+    assert!(!body.contains("event: response.function_call_arguments"));
+}
+
+#[tokio::test]
+async fn responses_rejects_malformed_parallel_tool_calls_with_parameter() {
+    let response = post(json!({
+        "model": "tool-call-pair",
+        "input": "hi",
+        "parallel_tool_calls": "false",
+        "tools": [{"type": "function", "name": "same"}],
+    }))
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["param"], "parallel_tool_calls");
+}
