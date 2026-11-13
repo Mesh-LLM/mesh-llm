@@ -58,6 +58,9 @@ pub enum WireMessageKind {
     TryRestorePrefillDecode = 18,
     TrimSession = 19,
     PredictionReturnOpen = 20,
+    /// A receipts commit or open for this stage and every later one; the
+    /// body is in `raw_bytes`, and the reply is a [`WireReplyKind::Receipts`].
+    Receipts = 25,
 }
 
 impl WireMessageKind {
@@ -83,6 +86,16 @@ impl WireMessageKind {
                 | Self::PrefillFinalEmbd
                 | Self::DecodeReplayFinalEmbd
         )
+    }
+
+    pub fn is_receipts(self) -> bool {
+        matches!(self, Self::Receipts)
+    }
+
+    /// Kinds whose body is opaque bytes in `raw_bytes`, counted by
+    /// `token_count`.
+    pub fn carries_raw_bytes(self) -> bool {
+        matches!(self, Self::StateImport | Self::Receipts)
     }
 
     pub fn is_session_control(self) -> bool {
@@ -150,6 +163,7 @@ impl TryFrom<i32> for WireMessageKind {
             22 => Ok(Self::RetireVerifyWindow),
             23 => Ok(Self::DiscardStaleWindows),
             24 => Ok(Self::PrefillReadout),
+            25 => Ok(Self::Receipts),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -162,6 +176,8 @@ pub enum WireReplyKind {
     PredictedToken = 2,
     PredictedTokens = 3,
     TokenScores = 4,
+    /// The body of a receipts reply ([`super::send_receipts_reply`]).
+    Receipts = 5,
 }
 
 impl TryFrom<i32> for WireReplyKind {
@@ -174,6 +190,7 @@ impl TryFrom<i32> for WireReplyKind {
             2 => Ok(Self::PredictedToken),
             3 => Ok(Self::PredictedTokens),
             4 => Ok(Self::TokenScores),
+            5 => Ok(Self::Receipts),
             _ => Err(invalid_data("unknown stage reply kind")),
         }
     }
@@ -323,6 +340,9 @@ pub struct StageSamplingConfig {
 pub mod sampling_flags {
     pub const ENABLED: u32 = 1 << 0;
     pub const IGNORE_EOS: u32 = 1 << 1;
+    /// The final stage draws each sampled token with the indexed draw of a
+    /// receipted turn, which a client can replay.
+    pub const INDEXED_DRAW: u32 = 1 << 3;
 }
 
 impl Default for StageSamplingConfig {
@@ -481,6 +501,7 @@ impl StageStateHeader {
             || kind.is_verify_retirement()
             || kind.is_stale_window_discard()
             || kind.is_generation_control()
+            || kind.is_receipts()
         {
             return true;
         }
@@ -615,7 +636,7 @@ impl StageWireMessage {
     }
 
     fn payload_wire_bytes(&self) -> usize {
-        if self.kind == WireMessageKind::StateImport {
+        if self.kind.carries_raw_bytes() {
             return self.raw_bytes.len();
         }
         self.tokens
@@ -975,6 +996,7 @@ fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
         || kind.is_verify_retirement()
         || kind.is_generation_control()
         || kind.is_prefix_cache_control()
+        || kind.is_receipts()
     {
         WireStagePhase::Prefill
     } else if kind.is_decode_replay() {

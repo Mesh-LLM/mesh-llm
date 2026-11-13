@@ -434,6 +434,7 @@ async fn peer_incompatible_local_workload_does_not_discover_capable_remote() {
         INTERNAL,
         "/v1/embeddings",
         &targets,
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
     )
     .await;
     assert_eq!(

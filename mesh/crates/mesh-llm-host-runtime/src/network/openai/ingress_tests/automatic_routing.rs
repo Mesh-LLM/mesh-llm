@@ -129,6 +129,7 @@ fn request_with_body(model: Option<&str>, body: &serde_json::Value) -> proxy::Bu
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 

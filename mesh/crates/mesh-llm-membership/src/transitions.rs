@@ -53,6 +53,17 @@ fn bridge_may_rewrite_peer_record(peer: &PeerInfo) -> bool {
     !peer.is_admitted() || peer.last_seen.elapsed() >= Duration::from_secs(PEER_STALE_SECS)
 }
 
+/// Whether a peer issues inference receipts is the peer's own word. A
+/// bridge that says so for another peer would make this node send that peer
+/// turns that require receipts, and count the receipts it does not send as
+/// strikes against it. So a relayed descriptor never says it; the peer's
+/// own announcement does once it arrives.
+fn forget_relayed_receipts(peer: &mut PeerInfo) {
+    for descriptor in &mut peer.served_model_descriptors {
+        descriptor.receipts = false;
+    }
+}
+
 impl MembershipState {
     pub fn admitted_peer_count(&self) -> usize {
         self.peers
@@ -147,7 +158,10 @@ impl MembershipState {
             let old_peer = existing.clone();
             let serving_changed = if bridge_may_rewrite_peer_record(existing) {
                 existing.owner_summary = owner_summary;
-                apply_transitive_ann(existing, addr, ann, bridge_id, now_unix_ms)
+                let serving_changed =
+                    apply_transitive_ann(existing, addr, ann, bridge_id, now_unix_ms);
+                forget_relayed_receipts(existing);
+                serving_changed
             } else {
                 // Direct state wins. A relay of a live direct peer buys only
                 // the mention-age refresh below.
@@ -169,6 +183,7 @@ impl MembershipState {
             peer.plugin_origin_signature_supported = false;
             peer.private_routing_supported = false;
             peer.persistent_lane_marker_supported = false;
+            forget_relayed_receipts(&mut peer);
             peer.stage_protocol_generation_supported = false;
             peer.admitted = false;
             peer.last_seen = Instant::now() - Duration::from_secs(PEER_STALE_SECS * 2);

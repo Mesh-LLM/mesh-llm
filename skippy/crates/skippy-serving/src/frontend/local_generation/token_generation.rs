@@ -13,6 +13,7 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation_receipt::GenerationLifecycleState;
 use crate::frontend::generation_receipt::complete_generation_before_cleanup;
+use crate::frontend::inference_receipts::SampledTokens;
 use crate::frontend::iteration_scheduler::CacheRuntimeContext;
 use crate::frontend::iteration_scheduler::DirectIterationChannel;
 use crate::frontend::iteration_scheduler::ScheduledGenerationRequest;
@@ -429,7 +430,9 @@ impl StageOpenAiBackend {
             receipt_request_id,
             receipt_session_id,
         );
+        let inference_receipt_tokens = SampledTokens::default();
         let mut emit_token = |token_id| {
+            inference_receipt_tokens.note(token_id);
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
@@ -510,6 +513,10 @@ impl StageOpenAiBackend {
             Ok(())
         });
         let generation_succeeded = result.is_ok();
+        if generation_succeeded {
+            cache_stats.receipt =
+                self.finish_local_receipt_turn(&request, &session_id, &inference_receipt_tokens);
+        }
         if receipt_cancelled {
             lifecycle.mark_cancelled();
         }
@@ -554,7 +561,10 @@ impl StageOpenAiBackend {
         )
             // The built-in driver drops (and resets) the session as the sequence
             // ends, before the recorded logprobs can be taken.
-            && request.sampling.top_logprobs.is_none();
+            && request.sampling.top_logprobs.is_none()
+            // Likewise before the turn's inference receipt can be committed:
+            // the freed lane would serve another request first.
+            && !self.commits_local_receipt(request);
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert("skippy.scheduler.eligible".to_string(), json!(eligible));
         attrs.insert(

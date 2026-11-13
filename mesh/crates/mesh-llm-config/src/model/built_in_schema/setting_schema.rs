@@ -144,6 +144,21 @@ fn logging_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetting
     setting
 }
 
+/// A `[receipts]` switch the node reads again for every request, so a
+/// change takes effect at once; it must not be labelled as needing a
+/// restart. (`receipts.enabled` is read when a runtime starts.)
+fn receipts_request_setting(path: &str) -> ConfigSettingSchema {
+    receipts_dynamic_setting(path, ConfigValueSchema::Boolean)
+}
+
+/// A `[receipts]` setting read for every request.
+fn receipts_dynamic_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = top_level_setting(path, value_schema);
+    setting.apply_mode = ConfigApplyMode::DynamicApply;
+    setting.restart_scope = ConfigRestartScope::None;
+    setting
+}
+
 fn logging_dynamic_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile];

@@ -887,6 +887,7 @@ pub(crate) fn local_ann_to_proto_ann(
                     terms: r.terms.clone(),
                 })
                 .collect(),
+            receipts: descriptor.receipts.then_some(true),
             capabilities: Some(crate::proto::node::ModelCapabilities {
                 vision: local_capability_level_to_proto(descriptor.capabilities.vision),
                 reasoning: local_capability_level_to_proto(descriptor.capabilities.reasoning),
@@ -1522,6 +1523,7 @@ fn legacy_proto_config_to_mesh(
         models,
         plugins,
         logging: Default::default(),
+        receipts: Default::default(),
         extra: Default::default(),
     };
     if let Some(mode) = snapshot

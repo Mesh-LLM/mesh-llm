@@ -14,6 +14,23 @@ use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::vocabulary::{ensure_in_vocabulary, vocabulary_size};
+mod receipt_attention;
+mod receipt_glue;
+mod receipts;
+
+pub use receipt_attention::{
+    ReceiptAttention, ReceiptAttentionOp, ReceiptAttentionWindow, ReceiptStoredRows,
+};
+pub use receipt_glue::{
+    ReceiptGlueInput, ReceiptGlueRequestRef, ReceiptGlueResult, ReceiptGlueTensor,
+    ReceiptGlueValues, StoredRowError, receipt_stored_row_error,
+};
+pub use receipts::{
+    ReceiptAnchorRef, ReceiptFlusher, ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayScope,
+    ReceiptReplayStepRef, ReceiptReplayer, ReceiptTensorView, ReceiptUbatchView, RecordedUbatch,
+    StageIdle, receipt_runtime_source,
+};
+
 use crate::{
     ActivationBoundaryDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
     ChatTemplateMessage, ChatTemplateOptions, LoadedModelCapability, ModelOpenEventQueue,
@@ -107,6 +124,7 @@ struct StageModelInner {
     dflash: Option<SharedDFlashDraft>,
     /// Target-layer capture for a split DFlash draft on a later stage.
     dflash_capture: Option<SharedDFlashCapture>,
+    receipt_recorder: receipts::InstalledRecorder,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -172,6 +190,7 @@ impl StageModel {
                 capability: None,
                 dflash: None,
                 dflash_capture: None,
+                receipt_recorder: Default::default(),
             }),
             media: None,
         }
@@ -211,6 +230,26 @@ impl StageModel {
         raw.try_into()
     }
 
+    /// The model's `<arch>.block_count`, the layer count llama.cpp counts
+    /// `n_gpu_layers` against, also on a stage that loads only some of the
+    /// layers. `None` when the model does not name one.
+    pub fn block_count(&self) -> Option<u32> {
+        if self.inner.raw.is_null() {
+            return None;
+        }
+        let model: *const skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_model_llama_model(self.inner.raw) }.cast();
+        if model.is_null() {
+            return None;
+        }
+        let architecture =
+            unsafe { skippy_ffi::llama_model_meta_val_str(model, "general.architecture") }?;
+        let key = format!("{architecture}.block_count");
+        unsafe { skippy_ffi::llama_model_meta_val_str(model, &key) }?
+            .parse()
+            .ok()
+    }
+
     /// A loaded causal graph can read next-token scores without sampling.
     /// This is independent of whether this worker owns the terminal head.
     pub fn supports_causal_readout(&self) -> bool {
@@ -238,6 +277,7 @@ impl StageModel {
                 capability,
                 dflash: None,
                 dflash_capture: None,
+                receipt_recorder: Default::default(),
             }),
             media,
         })

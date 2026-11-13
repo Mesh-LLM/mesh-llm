@@ -1,6 +1,7 @@
 pub(crate) mod affinity;
 pub(crate) mod discovery;
 pub(crate) mod exclusive_listener;
+pub(crate) mod http_framing;
 pub(crate) mod lan_beacon;
 pub(crate) mod lan_bootstrap;
 pub(crate) mod local_http;
@@ -11,6 +12,8 @@ pub(crate) mod nostr;
 pub(crate) mod openai;
 pub(crate) mod peer_blocks;
 pub(crate) mod proxy;
+pub(crate) mod receipt_audit;
+pub(crate) mod request_trust;
 pub(crate) mod reservations;
 pub(crate) mod router;
 pub(crate) mod target_health;

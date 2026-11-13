@@ -459,3 +459,7 @@ async fn passive_body_parse_error_persists_a_response_only_after_complete_header
 pub(super) mod duplicate_alias_repro;
 #[path = "membership_ingress.rs"]
 mod membership_ingress;
+#[path = "receipt_audits.rs"]
+mod receipt_audits;
+#[path = "trust_policy.rs"]
+mod trust_policy;

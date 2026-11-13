@@ -59,6 +59,8 @@ mesh-llm-node = { path = "../mesh-llm-node", version = "0.79.0"  }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.79.0", features = ["host-io"]  }
 skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.79.0"  }
 skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.79.0" }
+skippy-receipts = { path = "../../../skippy/crates/skippy-receipts", version = "0.79.0" }
+skippy-receipt-audit = { path = "../../../skippy/crates/skippy-receipt-audit", version = "0.79.0" }
 skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.79.0"  }
 skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.79.0"  }
 skippy-model-resolver = { path = "../../../skippy/crates/skippy-model-resolver", version = "0.79.0"  }
@@ -144,6 +146,8 @@ tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
 serial_test = "4"
 skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.79.0", features = ["test-support"] }
+# The toy model and its honest turn, for the receipt audit's policy tests.
+skippy-receipts = { path = "../../../skippy/crates/skippy-receipts", version = "0.79.0", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.79.0"  }
 # Enables the membership crate's `test-support` home override during the host's

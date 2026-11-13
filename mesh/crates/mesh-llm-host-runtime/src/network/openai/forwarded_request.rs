@@ -203,8 +203,32 @@ pub(super) fn is_ingress_credential_header(name: &str) -> bool {
 /// itself -- and since nothing here carries a hop count or visited-peer
 /// list, a stale advertisement can bounce a request between peers with no
 /// bound (CodeRabbit / erlich, PR #1671 round 2).
-pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
+///
+/// The receipt id a peer issues its receipt under is this node's to choose
+/// for an attempt it audits (`network::receipt_audit`): the caller's own
+/// `x-receipt-id` is never forwarded, and `receipt_id`, when given, is sent
+/// in its place.
+pub(super) fn prepare_peer_forwarded_request(
+    raw: &[u8],
+    receipt_id: Option<&str>,
+) -> Result<Vec<u8>> {
+    let mut forwarded = finalize_peer_forwarded_request(raw)?;
+    if let Some(id) = receipt_id {
+        // the rebuilt head ends with the first empty line; the id goes before it
+        let head_end = forwarded
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .context("the rebuilt request has no end of head")?;
+        let header = format!("{}: {id}\r\n", skippy_inference_api::RECEIPT_ID_HEADER);
+        forwarded.splice(head_end + 2..head_end + 2, header.into_bytes());
+    }
+    Ok(forwarded)
+}
+
+fn finalize_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
     const OMITTED_ON_PEER_FORWARD: &[&str] = &[
+        // The receipt id is the auditing node's to choose.
+        "x-receipt-id",
         super::request_parse::MESH_TARGET_HEADER,
         super::request_parse::MESH_EXCLUDE_HEADER,
         // The pairing is the client's and the routing node's business: a peer
@@ -213,6 +237,8 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         // A client's scope headers never pass through as is; see below.
         super::routing_scope::MESH_SCOPE_HEADER,
         super::routing_scope::MESH_SCOPE_NODES_HEADER,
+        // The trust policy is the routing node's to apply.
+        crate::network::request_trust::MESH_TRUST_HEADER,
     ];
     let omitted = INGRESS_CREDENTIAL_HEADERS
         .iter()
@@ -251,7 +277,7 @@ mod tests {
         .into_bytes();
         raw.extend_from_slice(body);
 
-        let forwarded = prepare_peer_forwarded_request(&raw).unwrap();
+        let forwarded = prepare_peer_forwarded_request(&raw, None).unwrap();
 
         let mut expected = format!(
             "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nX-Trace-Id: trace-123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -271,7 +297,7 @@ mod tests {
         let raw = format!(
             "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{header}: pair-7\r\nContent-Length: 2\r\n\r\n{{}}"
         );
-        let forwarded = prepare_peer_forwarded_request(raw.as_bytes()).unwrap();
+        let forwarded = prepare_peer_forwarded_request(raw.as_bytes(), None).unwrap();
         let forwarded = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
         assert!(!forwarded.contains(header), "{forwarded}");
         assert!(!forwarded.contains("pair-7"), "{forwarded}");
@@ -290,7 +316,7 @@ mod tests {
         let raw = format!(
             "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{header}: private\r\nContent-Length: 2\r\n\r\n{{}}"
         );
-        let forwarded = prepare_peer_forwarded_request(raw.as_bytes()).unwrap();
+        let forwarded = prepare_peer_forwarded_request(raw.as_bytes(), None).unwrap();
         let forwarded = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
         assert!(!forwarded.contains(header), "{forwarded}");
         assert!(forwarded.ends_with("\r\n\r\n{}"), "{forwarded}");
@@ -303,10 +329,11 @@ mod tests {
             "me".to_string(),
             "friend".to_string(),
         ]));
-        let forwarded =
-            crate::mesh::with_private_scope(scope, async { prepare_peer_forwarded_request(raw) })
-                .await
-                .unwrap();
+        let forwarded = crate::mesh::with_private_scope(scope, async {
+            prepare_peer_forwarded_request(raw, None)
+        })
+        .await
+        .unwrap();
         let text = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
         assert_eq!(text.matches("x-mesh-scope").count(), 2, "{text}");
         assert!(
@@ -326,13 +353,13 @@ mod tests {
     fn peer_forwarding_strips_mesh_routing_headers() {
         let body = b"{}";
         let raw = format!(
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-target: aabbcc\r\nx-mesh-exclude: ddeeff,001122\r\nx-mesh-twin-bracket: pair-7\r\nX-Keep: yes\r\nContent-Length: {}\r\n\r\n",
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-target: aabbcc\r\nx-mesh-exclude: ddeeff,001122\r\nx-mesh-twin-bracket: pair-7\r\nx-mesh-trust: receipts\r\nX-Keep: yes\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
         let mut raw = raw.into_bytes();
         raw.extend_from_slice(body);
 
-        let forwarded = prepare_peer_forwarded_request(&raw).unwrap();
+        let forwarded = prepare_peer_forwarded_request(&raw, None).unwrap();
         let text = String::from_utf8_lossy(&forwarded);
 
         assert!(
@@ -348,16 +375,48 @@ mod tests {
             "a peer must not learn it is one half of a pair: {text}"
         );
         assert!(
+            !text.to_ascii_lowercase().contains("x-mesh-trust"),
+            "the trust policy is the routing node's to apply: {text}"
+        );
+        assert!(
             text.contains("X-Keep: yes"),
             "unrelated headers must survive: {text}"
         );
+    }
+
+    /// A caller's receipt id never reaches a peer; the auditing node's does.
+    #[test]
+    fn the_receipt_id_sent_to_a_peer_is_this_nodes_own() {
+        let body = "{}";
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nX-Receipt-Id: 11111111-1111-4111-8111-111111111111\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let plain = prepare_peer_forwarded_request(raw.as_bytes(), None).unwrap();
+        let plain = String::from_utf8(plain).unwrap();
+        assert!(
+            !plain.to_ascii_lowercase().contains("x-receipt-id"),
+            "{plain}"
+        );
+        let ours = "22222222-2222-4222-8222-222222222222";
+        let watched = prepare_peer_forwarded_request(raw.as_bytes(), Some(ours)).unwrap();
+        let watched = String::from_utf8(watched).unwrap();
+        assert_eq!(watched.matches("x-receipt-id").count(), 1, "{watched}");
+        assert!(
+            watched.contains(&format!("x-receipt-id: {ours}\r\n")),
+            "{watched}"
+        );
+        assert!(watched.ends_with("\r\n\r\n{}"), "{watched}");
+        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut parsed = httparse::Request::new(&mut headers);
+        assert!(parsed.parse(watched.as_bytes()).unwrap().is_complete());
     }
 
     #[test]
     fn peer_forwarding_rejects_incomplete_headers() {
         let raw = b"GET /v1/models HTTP/1.1\r\nAuthorization: Bearer caller-secret\r\n";
 
-        assert!(prepare_peer_forwarded_request(raw).is_err());
+        assert!(prepare_peer_forwarded_request(raw, None).is_err());
     }
 
     #[test]

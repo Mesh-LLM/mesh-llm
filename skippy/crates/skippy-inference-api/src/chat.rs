@@ -103,6 +103,10 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Value>,
     /// Rung-ladder response-leg marker, minted by
     /// [`crate::hooks::InferenceHookPolicy::capsule_marker_for_response`]. Never
     /// serialized into the OpenAI-shaped JSON body — a real `X-Capsule-Id`
@@ -204,6 +208,10 @@ pub struct ChatCompletionChunk {
     pub usage: Option<Usage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Value>,
 }
 
 impl ChatCompletionChunk {

@@ -331,6 +331,7 @@ impl InferenceBackend for GuardrailRescueBackend {
             }],
             usage: Usage::new(3, 2),
             timings: None,
+            receipt: None,
             capsule_marker: None,
             exchange_id: None,
         })
@@ -596,6 +597,7 @@ impl InferenceBackend for FakeBackend {
                 }],
                 usage: Usage::new(3, 2),
                 timings: None,
+                receipt: None,
                 capsule_marker: None,
                 exchange_id: None,
             });
@@ -659,6 +661,7 @@ impl InferenceBackend for FakeBackend {
                     }],
                     usage: None,
                     timings: None,
+                    receipt: None,
                 }),
                 Ok(GenerationEvent::done(model)),
             ])));

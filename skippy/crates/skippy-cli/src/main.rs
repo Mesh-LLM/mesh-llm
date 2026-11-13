@@ -4,6 +4,7 @@ mod disk_cache;
 mod local_model;
 mod local_resource_planning;
 mod native_logging;
+mod receipts;
 mod runtime;
 mod serve;
 mod serve_settings;
@@ -65,7 +66,8 @@ fn run_application(cli: Cli, startup_warnings: Vec<String>) -> std::process::Exi
         Err(error) => {
             native_logs.flush_on_error();
             let _ = skippy_commands::console::failure(&error);
-            std::process::ExitCode::FAILURE
+            // a receipt audit that did not pass names its own exit code
+            receipts::audit_exit_code(&error).unwrap_or(std::process::ExitCode::FAILURE)
         }
     }
 }
@@ -124,7 +126,10 @@ async fn run_main(
     let native_options = runtime::resolve_options(cli.native_runtime)?;
     #[cfg(feature = "dynamic-native-runtime")]
     if matches!(&cli.command, Command::Serve(args) if !args.print_effective_config || args.public.config.is_none())
-        || matches!(&cli.command, Command::PlanSplit(_))
+        || matches!(
+            &cli.command,
+            Command::PlanSplit(_) | Command::AuditReceipt(_) | Command::RecheckReceipt(_)
+        )
     {
         runtime::prepare_native_runtime(&native_options, automatic_runtime).await?;
     }
@@ -147,6 +152,8 @@ async fn run_main(
         Command::Serve(args) => serve::run(*args).await,
         Command::Models { command } => skippy_commands::models::run_standalone(&command).await,
         Command::PlanSplit(args) => skippy_commands::split::run(args.into()),
+        Command::AuditReceipt(args) => receipts::audit(args).await,
+        Command::RecheckReceipt(args) => receipts::recheck(args).await,
         Command::Runtime { command } => {
             skippy_commands::runtime::run(
                 command.into(),

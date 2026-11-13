@@ -521,6 +521,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
             thinking: handle.thinking().cloned(),
+            receipts: super::receipts::advertised(spec, &handle),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,
@@ -669,6 +670,7 @@ pub(super) async fn stage0_runtime_options(
         stage_index: downstream.stage_index,
         endpoint: downstream_endpoint.to_string(),
     });
+    runtime_options.receipts = super::receipts::stage0_receipts(spec);
     Ok(runtime_options)
 }
 
@@ -978,6 +980,7 @@ pub(super) fn split_runtime_stage_load_request(
             }
             plan
         }),
+        issue_receipts: super::receipts::split_issues_receipts(spec),
         shutdown_generation: spec.generation.generation,
         coordinator_term: spec.generation.coordinator_term,
         coordinator_id: Some(spec.node.id()),

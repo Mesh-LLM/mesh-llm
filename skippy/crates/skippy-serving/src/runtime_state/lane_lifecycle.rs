@@ -215,6 +215,7 @@ impl RuntimeState {
         // clear any stray resident-prefix entry under that id.
         self.session_token_counts.remove(session_id);
         self.session_resident_prefixes.remove(session_id);
+        self.release_receipt_turn(session_id);
 
         let reset_ms = reset_started.elapsed().as_secs_f64() * 1000.0;
         // The real decision this function already made: a reset() failure
@@ -355,6 +356,7 @@ impl RuntimeState {
         idle.resident_prefix = None;
         self.abandon_session_end_kv_exports(session_id);
         self.sessions.insert(session_id.to_string(), idle);
+        self.note_receipt_sequence(session_id);
         self.session_token_counts
             .insert(session_id.to_string(), token_count);
         self.session_resident_prefixes.insert(
@@ -523,6 +525,7 @@ impl RuntimeState {
         self.sessions.insert(session_id.to_string(), lane_session);
         self.session_token_counts
             .insert(session_id.to_string(), token_ids.len() as u64);
+        self.note_receipt_sequence(session_id);
         Ok(())
     }
 

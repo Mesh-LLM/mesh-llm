@@ -20,6 +20,7 @@ impl ServeSettings {
             let section = super::section(name);
             if args.stage_transport.is_none()
                 && (section == "network"
+                    || crate::receipts::is_serve_setting(name)
                     || matches!(
                         name.as_str(),
                         "activation-codec"
