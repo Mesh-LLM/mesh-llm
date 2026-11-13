@@ -67,9 +67,9 @@ bundle validation.
 - Node/npm installed for the UI build
 - `gh` CLI authenticated if publishing manually
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
-  token or GitHub App token with Contents write access to
-  `Mesh-LLM/mesh-packaging`, which is the permission required to create a
-  repository dispatch event. The workflow checks this access without printing
+  token or GitHub App token with Contents write and Actions read access to
+  `Mesh-LLM/mesh-packaging`. These permissions allow the workflow to dispatch
+  packaging and read its readiness artifact. The workflow checks access without printing
   the credential before it sends the event. The legacy secret name is retained
   so existing release environments do not require a coordinated secret rename.
 
@@ -271,13 +271,14 @@ have published successfully. Prereleases never dispatch it. The upstream
 distribution channel.
 
 The dispatch binds the published tag commit and native runtime manifest digest
-to an upstream run-attempt correlation ID. The release operator must verify the
-matching downstream packaging readiness receipt and requested publication
-results; the upstream job does not wait for packaging.
+to an upstream run-attempt correlation ID. A separate job waits up to two hours
+for the matching downstream run and successful readiness receipt. It checks
+every requested publication result and fails on ambiguous or stale evidence.
+Retrying the wait job does not dispatch packaging again.
 
 If the downstream dispatch preflight fails, update the repository Actions secret
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
-that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
+that has Contents write and Actions read access to `Mesh-LLM/mesh-packaging`, then retry the
 failed dispatch job. A repository secret's presence does not prove that its
 credential can write the target repository. Do not put the token in workflow
 logs or command output.

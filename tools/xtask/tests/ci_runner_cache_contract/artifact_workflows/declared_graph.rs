@@ -444,6 +444,7 @@ fn packaging_dispatch_binds_the_complete_identity_and_rejects_invalid_values() {
                 ),
             )
             .env("CAPTURE", &capture)
+            .env("GITHUB_OUTPUT", fixture.path().join("dispatch-output"))
             .env("GH_TOKEN", "test")
             .env("TARGET_REPOSITORY", "Mesh-LLM/mesh-packaging")
             .env("GITHUB_REPOSITORY", "Mesh-LLM/mesh-llm")
@@ -464,10 +465,45 @@ fn packaging_dispatch_binds_the_complete_identity_and_rejects_invalid_values() {
                 digest
             );
             assert_eq!(payload["client_payload"]["correlation_id"], "mesh-123-2");
+            assert_eq!(
+                fs::read_to_string(fixture.path().join("dispatch-output")).unwrap(),
+                "correlation_id=mesh-123-2\n"
+            );
         } else {
             assert!(!capture.exists());
         }
     }
+}
+
+#[test]
+fn packaging_wait_keeps_dispatch_identity_and_retry_boundary() {
+    let doc = document("release.yml");
+    let dispatch = job(&doc, "dispatch_packaging_release");
+    assert_eq!(
+        text(dispatch.get("outputs").unwrap(), "correlation_id").unwrap(),
+        "${{ steps.dispatch.outputs.correlation_id }}"
+    );
+    let waiter = job(&doc, "await_packaging_release");
+    requires(
+        text(waiter, "if").unwrap(),
+        &["needs.dispatch_packaging_release.result == 'success'"],
+    );
+    let step = named(waiter, "Wait for matching successful packaging receipt");
+    requires(
+        text(step, "run").unwrap(),
+        &[
+            "release packaging-receipt",
+            "--tag",
+            "--sha",
+            "--manifest",
+            "--correlation",
+            "--since",
+        ],
+    );
+    assert_eq!(
+        text(step.get("env").unwrap(), "CORRELATION_ID").unwrap(),
+        "${{ needs.dispatch_packaging_release.outputs.correlation_id }}"
+    );
 }
 
 #[test]
