@@ -27,6 +27,7 @@ fn native_chat_requires_peer_admission_under_every_trust_policy() {
 
 #[derive(Default)]
 struct RecordingBackend {
+    failure: Option<skippy_inference_api::errors::InferenceError>,
     requests: Mutex<Vec<GenerationRequest>>,
     stream_tokens: Mutex<Vec<skippy_inference_api::CancellationToken>>,
     generated_chunks: Arc<AtomicUsize>,
@@ -63,6 +64,9 @@ impl InferenceBackend for RecordingBackend {
         request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationEventStream> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
         self.stream_tokens
             .lock()
             .unwrap()
@@ -469,6 +473,26 @@ async fn native_stream_preserves_wire_chunks_and_effort_locally_and_over_real_me
             "native_extension".into(),
             serde_json::json!({"nested": ["preserved", 42]}),
         );
+        request.request.extra.extend([
+            ("id_slot".into(), serde_json::json!(2)),
+            ("cache_prompt".into(), serde_json::json!(true)),
+            (
+                "chat_template_kwargs".into(),
+                serde_json::json!({
+                    "enable_thinking": true, "preserve_thinking": true,
+                }),
+            ),
+        ]);
+        request.request.messages = serde_json::from_value(serde_json::json!([
+            {"role":"user", "content":[{"type":"image_url", "image_url":{"url":"data:image/png;base64,aW1hZ2U="}}]},
+            {"role":"assistant", "tool_calls":[{"id":"call", "type":"function", "function":{"name":"read", "arguments":"{}"}}]},
+            {"role":"tool", "tool_call_id":"call", "content":"result"},
+        ])).unwrap();
+        request.request.tools = Some(serde_json::json!([
+            {"type":"function", "function":{"name":"read", "parameters":{"type":"object"}}},
+        ]));
+        request.request.stream_options =
+            Some(serde_json::from_value(serde_json::json!({"include_usage":true})).unwrap());
         let mut stream = caller.native_chat_completion_stream(request).await.unwrap();
         let mut text = String::new();
         let mut finished = false;
@@ -496,6 +520,23 @@ async fn native_stream_preserves_wire_chunks_and_effort_locally_and_over_real_me
         for request in requests.iter() {
             assert!(request.stream);
             assert_eq!(request.reasoning_effort, Some(ReasoningEffort::High));
+            assert_eq!(request.extra["id_slot"], 2);
+            assert_eq!(request.extra["cache_prompt"], true);
+            assert_eq!(
+                request.extra["chat_template_kwargs"]["preserve_thinking"],
+                true
+            );
+            assert!(request.include_usage());
+            assert_eq!(
+                request.tools.as_ref().unwrap()[0]["function"]["name"],
+                "read"
+            );
+            let messages = serde_json::to_value(&request.messages).unwrap();
+            assert_eq!(
+                messages[0]["content"][0]["image_url"]["url"],
+                "data:image/png;base64,aW1hZ2U="
+            );
+            assert_eq!(messages[2]["tool_call_id"], "call");
             assert_eq!(
                 request.extra["native_extension"],
                 serde_json::json!({"nested": ["preserved", 42]}),
@@ -503,6 +544,41 @@ async fn native_stream_preserves_wire_chunks_and_effort_locally_and_over_real_me
         }
     }
     client.endpoint.close().await;
+    provider.endpoint.close().await;
+}
+
+#[tokio::test]
+async fn local_native_stream_retains_typed_backend_errors() {
+    use crate::sdk::native::InferenceError;
+
+    let (provider, _, _) = serving_node(None).await;
+    let backend = Arc::new(RecordingBackend {
+        failure: Some(InferenceError::context_length_exceeded(
+            "request exceeds context",
+        )),
+        ..Default::default()
+    });
+    provider
+        .register_native_backend("native-test", "instance-1", 31337, Some(backend), None)
+        .await;
+    let mut stream = provider
+        .native_chat_completion_stream(call(&provider, None))
+        .await
+        .unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(5), stream.next_chunk())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    let typed = error
+        .downcast_ref::<InferenceError>()
+        .expect("preserve native error type");
+    assert_eq!(
+        typed.body().error.code.as_deref(),
+        Some("context_length_exceeded")
+    );
+    assert_eq!(typed.message(), "request exceeds context");
+    assert!(stream.next_chunk().await.is_none());
     provider.endpoint.close().await;
 }
 

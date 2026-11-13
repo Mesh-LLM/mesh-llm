@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub use skippy_inference_api::common::ReasoningEffort;
+pub use skippy_inference_api::errors::{InferenceError, InferenceErrorKind};
 pub use skippy_inference_api::{ChatCompletionRequest, ChatMessage, MessageContent};
 
 /// One provider's exact serving ID, returned by native model discovery.

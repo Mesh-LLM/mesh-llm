@@ -76,6 +76,21 @@ is reported as an error on a retained stream. Native remote inference cannot
 consume a provider that requires payment. Older peers that do not implement
 native inference return an error, with no HTTP fallback.
 
+Local native backend failures preserve `mesh_llm_sdk::inference::InferenceError` in the
+`anyhow::Error` chain. Use `downcast_ref::<InferenceError>()` and its `body()` or
+`status()` to distinguish context exhaustion, invalid requests and retryable
+backend failures without parsing display text. Remote failures retain the peer's
+error message; they do not carry a local backend error type. This Rust re-export
+does not change the native request, chunk or cross-language error representation.
+
+Backend-specific request options are retained in `ChatCompletionRequest::extra`.
+For a local llama-compatible provider, `id_slot` selects a lane, `cache_prompt`
+controls prompt reuse, and `chat_template_kwargs` preserves `enable_thinking` and
+`preserve_thinking`. These are explicit extensions, not aliases for
+`reasoning_effort`; bind them to the selected provider and check its support.
+Image content parts, tool definitions/results and usage options use the existing
+typed request fields. Native transport does not rename or discard extensions.
+
 Streaming deadlines bound progress, not total duration: `chat_completion()` must
 finish within five minutes, while `chat_completion_stream()` fails only after
 five minutes without a chunk, so a generation that keeps producing is never cut
