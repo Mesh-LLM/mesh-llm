@@ -54,6 +54,9 @@ impl NodeExchangePolicy {
         event["observation_point"] = json!("backend_dispatch");
         event["dispatch_path"] = json!("typed_frontend");
         event["backend_exchange_id"] = json!(exchange_id);
+        // The typed backend's id is `backend_exchange_id`; the event's
+        // `exchange_id` is the enclosing session's, which the session fills in.
+        event.as_object_mut().unwrap().remove("exchange_id");
         event["model"] = json!(model);
         event["provider"] = json!("native_runtime");
         event["target"] = json!("local");
