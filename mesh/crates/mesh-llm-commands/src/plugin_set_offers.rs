@@ -50,6 +50,19 @@ impl SetOffers {
         self.sets.get(set).map(Vec::as_slice)
     }
 
+    /// Take the record lock and reload the latest record under it. A default
+    /// install holds the guard from this check through its own `record_held`,
+    /// so a refusal another command records meanwhile is seen before the
+    /// install starts, and a later command waits for this one's answer. A
+    /// damaged file is an error, as in `load`.
+    pub fn lock_and_reload(store_root: &Path) -> Result<(RecordLock, Self)> {
+        std::fs::create_dir_all(store_root)
+            .with_context(|| format!("create {}", store_root.display()))?;
+        let guard = RecordLock::acquire(store_root)?;
+        let latest = Self::load(store_root)?;
+        Ok((guard, latest))
+    }
+
     /// Record `members` as offered for `set` and write the file. The write
     /// holds a cross-process lock, reloads what other commands recorded since
     /// this record was loaded, and merges it in, so an overlapping setup can
@@ -57,7 +70,18 @@ impl SetOffers {
     pub fn record(&mut self, store_root: &Path, set: &str, members: &[String]) -> Result<()> {
         std::fs::create_dir_all(store_root)
             .with_context(|| format!("create {}", store_root.display()))?;
-        let _lock = RecordLock::acquire(store_root)?;
+        let guard = RecordLock::acquire(store_root)?;
+        self.record_held(&guard, store_root, set, members)
+    }
+
+    /// `record` for a caller that already holds the lock (`lock_and_reload`).
+    pub fn record_held(
+        &mut self,
+        _guard: &RecordLock,
+        store_root: &Path,
+        set: &str,
+        members: &[String],
+    ) -> Result<()> {
         // A damaged file under the lock is replaced: callers that must not
         // reinstall already declined to get here (see `load`).
         let latest = Self::load(store_root).unwrap_or_default();
@@ -94,9 +118,10 @@ fn record_path(store_root: &Path) -> PathBuf {
     store_root.join(RECORD_FILE)
 }
 
-/// An exclusive advisory lock on `set-offers.lock`, released on drop. The
+/// An exclusive advisory lock on `set-offers.lock`, released on drop; holding
+/// one proves the caller may write the record. The
 /// lock file is a file in the store root, so the store listing ignores it.
-struct RecordLock {
+pub struct RecordLock {
     file: std::fs::File,
 }
 

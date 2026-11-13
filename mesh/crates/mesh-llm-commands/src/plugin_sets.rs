@@ -15,7 +15,7 @@ use mesh_llm_plugin_manager::{
 };
 
 use crate::plugin::CliPluginProgress;
-use crate::plugin_set_offers::{SetOffers, added_members_notice, members_added_since};
+use crate::plugin_set_offers::{RecordLock, SetOffers, added_members_notice, members_added_since};
 
 /// The catalog set setup and update offer by name.
 pub const RECOMMENDED_SET: &str = "recommended";
@@ -176,7 +176,7 @@ pub async fn install_set_command(
     // machine must not offer or install the set again. A damaged record is
     // replaced here, since the operator just chose the set.
     let mut offers = SetOffers::load(&options.store_root).unwrap_or_default();
-    record_offer(&mut offers, options, catalog, set_name);
+    record_offer(&mut offers, None, options, catalog, set_name);
     Ok(result)
 }
 
@@ -396,24 +396,62 @@ async fn run_phase_with(
             "ℹ️  Plugin set '{name}' skipped: {member} was turned off or removed under the \
              previous installer. `mesh-llm plugins sets install {name}` installs it anyway."
         );
-        record_offer(&mut offers, options, &catalog, name);
+        record_offer(&mut offers, None, options, &catalog, name);
         return Ok(OptionalPluginResult::Skipped);
     }
-    let result = match offer_gate(plan, &catalog, name, options, prompt) {
-        OfferGate::Absent => return Ok(OptionalPluginResult::Skipped),
+    match offer_gate(plan, &catalog, name, options, prompt) {
+        OfferGate::Absent => Ok(OptionalPluginResult::Skipped),
         OfferGate::Declined => {
             // Declining is an answer: this machine was offered the set.
-            record_offer(&mut offers, options, &catalog, name);
-            return Ok(OptionalPluginResult::Skipped);
+            record_offer(&mut offers, None, options, &catalog, name);
+            Ok(OptionalPluginResult::Skipped)
         }
-        OfferGate::Proceed => install_and_report(&catalog, name, options).await,
+        OfferGate::Proceed => {
+            Ok(install_and_settle(defaulted, offers, &catalog, name, options).await)
+        }
+    }
+}
+
+/// Install the set and settle the offer. A default install is only valid
+/// while nobody has recorded an answer: it takes the record lock, reloads, and
+/// keeps the lock through the install and its record, so a refusal recorded
+/// while this run waited for the catalog is honored and a concurrent run
+/// waits for this one's answer. An explicit install needs no such check.
+async fn install_and_settle(
+    defaulted: bool,
+    mut offers: SetOffers,
+    catalog: &PluginCatalog,
+    name: &str,
+    options: &PluginInstallOptions,
+) -> OptionalPluginResult {
+    let guard = if defaulted {
+        match SetOffers::lock_and_reload(&options.store_root) {
+            Ok((_, latest)) if latest.offered(name).is_some() => {
+                return OptionalPluginResult::Skipped;
+            }
+            Ok((guard, latest)) => {
+                offers = latest;
+                Some(guard)
+            }
+            Err(error) => {
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(
+                    err,
+                    "⚠️  Could not read the plugin set record ({error:#}); not installing plugin sets."
+                );
+                return OptionalPluginResult::Skipped;
+            }
+        }
+    } else {
+        None
     };
+    let result = install_and_report(catalog, name, options).await;
     // A complete install (or one with nothing left to install) settles the
     // offer; an incomplete one stays unrecorded so a later run retries.
     if settles_offer(&result) {
-        record_offer(&mut offers, options, &catalog, name);
+        record_offer(&mut offers, guard.as_ref(), options, catalog, name);
     }
-    Ok(result)
+    result
 }
 
 /// A member of `set` the operator turned off or removed under the retired
@@ -456,22 +494,24 @@ async fn notify_added_members(
     for line in added_members_notice(name, &added) {
         let _ = writeln!(err, "{line}");
     }
-    record_offer(offers, options, &catalog, name);
+    record_offer(offers, None, options, &catalog, name);
 }
 
 /// Record every current member of `set` as offered; a failed write only warns,
 /// because the install itself already happened.
 pub(crate) fn record_offer(
     offers: &mut SetOffers,
+    guard: Option<&RecordLock>,
     options: &PluginInstallOptions,
     catalog: &PluginCatalog,
     set: &str,
 ) {
-    if let Err(error) = offers.record(
-        &options.store_root,
-        set,
-        &installable_members(options, catalog, set),
-    ) {
+    let members = installable_members(options, catalog, set);
+    let written = match guard {
+        Some(guard) => offers.record_held(guard, &options.store_root, set, &members),
+        None => offers.record(&options.store_root, set, &members),
+    };
+    if let Err(error) = written {
         let mut err = mesh_llm_events::console_err();
         let _ = writeln!(
             err,
@@ -1024,6 +1064,37 @@ mod tests {
         let catalog = phase_catalog(&["capsules"]);
         run_phase(&default_plan(), temp.path(), &catalog, &fetches, true).await;
         assert_eq!(offered(temp.path()), Some(vec!["capsules".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn a_refusal_recorded_while_a_default_run_waits_for_the_catalog_wins() {
+        let temp = tempfile::tempdir().unwrap();
+        let catalog = phase_catalog(&["capsules"]);
+        let root = temp.path().to_path_buf();
+        // The unattended run loaded an empty record; while it waits for the
+        // catalog, an attended setup declines the set and records the refusal.
+        let result = run_phase_with(
+            &default_plan(),
+            "recommended",
+            &phase_options(temp.path()),
+            async || {
+                SetOffers::default()
+                    .record(&root, "recommended", &["capsules".to_string()])
+                    .unwrap();
+                Ok(catalog.clone())
+            },
+            &mut |_| true,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, OptionalPluginResult::Skipped),
+            "the recorded refusal must stop the install, got {result:?}"
+        );
+        assert!(
+            PluginStore::new(temp.path()).load("capsules").is_err(),
+            "nothing may be installed after a refusal"
+        );
     }
 
     #[tokio::test]
