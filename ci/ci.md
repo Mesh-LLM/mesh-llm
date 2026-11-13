@@ -72,7 +72,7 @@ which still requires the protected-main executor rollout and real PR runs.
 
 ### Libclang-capable CPU image
 
-The former `public-cpu-libclang` image entry bound the compiler-seed
+The `public-cpu-libclang` image entry binds the compiler-seed
 cohort: the `rust-tests`, `rust-clippy`, `linux-host`,
 `safetensors-runtime-smoke`, `compiler-seed-publisher` and
 `runtime-seed-canary` consumer roles, the `linux-cpu` runtime row, and the
@@ -96,10 +96,11 @@ producer `c2a825a5f38a0ff8b3a87843d933ec3f89c1195a` and Mesh source
 `2c2051a4084ed8dcd8f93c0f7f1b14fd01ca9a5c`. The exact-attempt producer
 admission and native bindings retain its bytes at
 `ci/runner-image-evidence/88ea93ca4b1d70c4787cfe1ddf7857a25aa0d95112dbfaf34a23e2ab7e38e0ef.json`.
-All CPU roles now share `public-cpu`, including C++ and libclang consumers.
-Its compiler seed uses `img-fa696b3c-epoch-fa696b3c-v3-`; the new namespace
-cannot reuse the earlier seed. Admission and offline binding do not establish
-workload or GPU qualification.
+The C++ role now uses `public-cpu` alongside ordinary CPU consumers. The
+libclang roles, compiler seed, and protected runtime rows retain their previous
+images and epochs; changing those runtime rows requires a separate protected
+catalog rollout. Admission and offline binding do not establish workload or GPU
+qualification.
 
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that

@@ -705,8 +705,8 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:b70b5bf466e6d399a137f1e153db9f8a00e7b4847c2b08642c8b65d4c9698580
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-b70b5bf466e6d399a137f1e153db9f8a00e7b4847c2b08642c8b65d4c9698580
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
           - cuda_version: '13.1.2'
             cuda_major: '13'
             runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c8f292d963298509f086a88c877613bf51a7224c9128699d65785571a026ddce
@@ -770,8 +770,8 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:b70b5bf466e6d399a137f1e153db9f8a00e7b4847c2b08642c8b65d4c9698580
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-b70b5bf466e6d399a137f1e153db9f8a00e7b4847c2b08642c8b65d4c9698580
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
             cuda_architectures: '61;75;80;86;87;89;90'
             cuda_architectures_cache: '61_75_80_86_87_89_90'
           - cuda_version: '13.1.2'
@@ -918,7 +918,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_16 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:a6e8b1bc7b8cb9dcc3e73e194b6ba4d24d9710a586f3d92021637a40b0f464cc
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:08439af08af125c82c25c32cbcd385e07a783ba8d9b7c19157e93089e349156e
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -940,7 +940,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-a6e8b1bc7b8cb9dcc3e73e194b6ba4d24d9710a586f3d92021637a40b0f464cc
+          pinned_epoch: mesh-llm-cuda-runner-sha256-08439af08af125c82c25c32cbcd385e07a783ba8d9b7c19157e93089e349156e
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}

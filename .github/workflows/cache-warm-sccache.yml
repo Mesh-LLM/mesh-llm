@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
     env:
       CARGO_INCREMENTAL: "0"
       MESH_LLM_SKIP_UI: "1"
@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          key="mesh-llm-sccache-seed-linux-x86_64-img-fa696b3c-epoch-fa696b3c-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}"
+          key="mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}"
           echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Check for an existing exact seed
         id: restore

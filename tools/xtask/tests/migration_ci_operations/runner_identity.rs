@@ -232,7 +232,7 @@ fn workflow_and_planner_drift_fail_check() -> TestResult {
         ("drift_ordinary_image", |s| {
             s.replace(
                 ".github/workflows/ci-quality-slice.yml",
-                &s.image("public-cpu")?,
+                &s.image("public-cpu-libclang")?,
                 &s.image("public-web")?,
             )
         }),
@@ -377,7 +377,7 @@ fn additional_platform_seed_and_conditional_drift_is_rejected() -> TestResult {
         ("runtime-epoch", |s| {
             s.replace(
                 "ci/slices.yml",
-                s.catalog()?["images"]["public-cpu"]["native_toolchain_epoch"]
+                s.catalog()?["images"]["public-cpu-libclang"]["native_toolchain_epoch"]
                     .as_str()
                     .ok_or("epoch")?,
                 "changed-native-epoch",
