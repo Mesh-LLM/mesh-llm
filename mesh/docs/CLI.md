@@ -183,6 +183,10 @@ Switches:
 - `--gguf <GGUF>`: serve a specific local GGUF file directly (repeatable).
 - `--port <PORT>`: API port (default `9337`).
 - `--client`: API-only mode (no GPU/model serving).
+- `--no-peer-model-downloads`: refuse peer split-stage requests that need model
+  files this node does not already have. Local and configured models still
+  load and serve. Same as `runtime.peer_model_downloads = false`; see
+  [USAGE.md](USAGE.md#peer-model-downloads).
 - `--console <CONSOLE>`: console/API management port (default `3131`).
 - `--headless`: disable the embedded web UI; keep the management API on the `--console` port.
 - `--bind-ip <IP>`: bind mesh QUIC to a specific local IP address. In default

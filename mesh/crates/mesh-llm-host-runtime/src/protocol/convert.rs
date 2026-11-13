@@ -1012,6 +1012,8 @@ pub(crate) fn local_ann_to_proto_ann(
             subprotocols
         },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
+        // Sent only when set, so the bytes of a default node do not change.
+        refuses_peer_model_downloads: ann.refuses_peer_model_downloads.then_some(true),
         cache_affinity: ann
             .cache_affinity
             .as_ref()
@@ -1281,6 +1283,8 @@ pub(crate) fn proto_ann_to_local(
             &pa.subprotocols,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
         ),
+        // Absent on older peers, which accept peer model downloads.
+        refuses_peer_model_downloads: pa.refuses_peer_model_downloads.unwrap_or(false),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

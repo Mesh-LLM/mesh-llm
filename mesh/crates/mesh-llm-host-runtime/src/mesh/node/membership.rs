@@ -430,6 +430,7 @@ impl Node {
             activity_policy_guard: self.activity_policy_guard.clone(),
             drain_timeout_secs: self.drain_timeout_secs,
             drain_timeout_max_secs: self.drain_timeout_max_secs,
+            peer_stage_source_fetch: self.peer_stage_source_fetch,
             runtime_intents: self.runtime_intents.clone(),
             runtime_instance_lifecycles: self.runtime_instance_lifecycles.clone(),
         };

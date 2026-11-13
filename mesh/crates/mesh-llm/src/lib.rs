@@ -543,6 +543,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         kv_cache_disk: cli.kv_cache.kv_cache_disk,
         kv_cache_disk_dir: cli.kv_cache.kv_cache_disk_dir,
         kv_cache_min_free: cli.kv_cache.kv_cache_min_free,
+        no_peer_model_downloads: cli.no_peer_model_downloads,
         owner_key: cli.owner.owner_key,
         control_bind: cli.owner.control_bind,
         control_advertise_addr: cli.owner.control_advertise_addr,

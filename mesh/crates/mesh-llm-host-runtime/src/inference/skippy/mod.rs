@@ -29,6 +29,7 @@ pub(crate) use dflash_draft::{
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
 pub(crate) mod runtime_events;
+mod source_fetch;
 mod split_certification;
 mod stage;
 mod topology;
@@ -86,8 +87,8 @@ pub use materialization::{
     materialized_stage_cache_dir, materialized_stages_for_sources,
     prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
     resolve_hf_package_to_local, resolve_package_v2_full_model_to_local,
-    resolve_stage_load_package,
 };
+pub(crate) use materialization::{package_metadata_is_local, resolve_stage_load_package};
 pub(crate) use mesh_llm_skippy_adapter::{
     KvCachePolicy, SkippyDeviceDescriptor, SkippyModelLoadOptions, SkippyTelemetryOptions,
     single_stage_config,
@@ -112,6 +113,7 @@ pub(crate) use resolver::{
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;
 pub(crate) use skippy_serving::InferenceGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
+pub(crate) use source_fetch::StageSourceFetch;
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;

@@ -63,6 +63,7 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -111,4 +112,10 @@ mod signed_records {
     use super::*;
 
     include!("gossip/signed_records.rs");
+}
+
+mod peer_model_downloads {
+    use super::*;
+
+    include!("gossip/peer_model_downloads.rs");
 }

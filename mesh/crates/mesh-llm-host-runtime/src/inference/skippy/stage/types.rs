@@ -11,6 +11,8 @@ pub(crate) enum StageControlCommand {
         /// control channel. Stage transitions bind terms and shutdown to it
         /// (#2217).
         requester: iroh::EndpointId,
+        /// `LocalOnly` for a peer's request when peer model downloads are off.
+        source_fetch: crate::inference::skippy::StageSourceFetch,
         resp: oneshot::Sender<Result<StageControlResponse>>,
     },
     ValidateLoad {

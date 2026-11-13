@@ -124,6 +124,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| kv_disk_presentation(rendered))
         .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
+        .or_else(|| runtime_policy_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
@@ -292,36 +293,6 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .unit("events")
         .hint("number")),
-        "runtime.reconcile_model_targets" => Some(sp(
-            "Reconcile model targets",
-            "Allow the runtime loop to reconcile configured model targets against current mesh demand.",
-            RUNTIME_POLICY_CATEGORY,
-            10,
-        )
-        .hint("toggle")),
-        "runtime.reconcile_model_target_demand_upgrades" => Some(sp(
-            "Demand upgrades",
-            "Allow model-target reconciliation to upgrade targets when repeated demand is observed.",
-            RUNTIME_POLICY_CATEGORY,
-            20,
-        )
-        .hint("toggle")),
-        "runtime.model_target_demand_upgrade_min_requests" => Some(sp(
-            "Demand upgrade request floor",
-            "Minimum request count before model-target reconciliation considers a demand upgrade.",
-            RUNTIME_POLICY_CATEGORY,
-            30,
-        )
-        .unit("requests")
-        .hint("number")),
-        "runtime.model_target_demand_upgrade_max_age_secs" => Some(sp(
-            "Demand upgrade max age",
-            "Maximum age in seconds for requests that count toward demand upgrades.",
-            RUNTIME_POLICY_CATEGORY,
-            40,
-        )
-        .unit("sec")
-        .hint("number")),
         "runtime.debug" => Some(
             sp(
                 "Debug output",
@@ -417,6 +388,50 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .placeholder("ed25519:<64 hex characters>")
         .hint("text")),
+        _ => None,
+    }
+}
+
+/// Model target reconciliation and what peers may make this node fetch.
+fn runtime_policy_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
+        "runtime.reconcile_model_targets" => Some(sp(
+            "Reconcile model targets",
+            "Allow the runtime loop to reconcile configured model targets against current mesh demand.",
+            RUNTIME_POLICY_CATEGORY,
+            10,
+        )
+        .hint("toggle")),
+        "runtime.reconcile_model_target_demand_upgrades" => Some(sp(
+            "Demand upgrades",
+            "Allow model-target reconciliation to upgrade targets when repeated demand is observed.",
+            RUNTIME_POLICY_CATEGORY,
+            20,
+        )
+        .hint("toggle")),
+        "runtime.model_target_demand_upgrade_min_requests" => Some(sp(
+            "Demand upgrade request floor",
+            "Minimum request count before model-target reconciliation considers a demand upgrade.",
+            RUNTIME_POLICY_CATEGORY,
+            30,
+        )
+        .unit("requests")
+        .hint("number")),
+        "runtime.model_target_demand_upgrade_max_age_secs" => Some(sp(
+            "Demand upgrade max age",
+            "Maximum age in seconds for requests that count toward demand upgrades.",
+            RUNTIME_POLICY_CATEGORY,
+            40,
+        )
+        .unit("sec")
+        .hint("number")),
+        "runtime.peer_model_downloads" => Some(sp(
+            "Peer model downloads",
+            "Let a peer's split-stage request make this node download model files it does not already have. Off, peers may only use model files already on local disk; local loads and configured models are unaffected. This matches --no-peer-model-downloads.",
+            RUNTIME_POLICY_CATEGORY,
+            50,
+        )
+        .hint("toggle")),
         _ => None,
     }
 }

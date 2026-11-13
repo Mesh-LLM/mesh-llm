@@ -570,6 +570,19 @@ fn canonicalize_interest_model_ref_normalizes_huggingface_file_refs() {
 }
 
 #[test]
+fn canonicalize_interest_model_ref_keeps_bare_repo_refs_without_a_trailing_slash() {
+    assert_eq!(
+        canonicalize_interest_model_ref("meshllm/Llama-3.2-1B-Instruct-Q4_K_M-layers").unwrap(),
+        "meshllm/Llama-3.2-1B-Instruct-Q4_K_M-layers"
+    );
+    assert_eq!(
+        canonicalize_interest_model_ref("meshllm/Llama-3.2-1B-Instruct-Q4_K_M-layers@main")
+            .unwrap(),
+        "meshllm/Llama-3.2-1B-Instruct-Q4_K_M-layers@main"
+    );
+}
+
+#[test]
 fn canonicalize_interest_model_ref_normalizes_legacy_selector_revision_order() {
     let canonical =
         canonicalize_interest_model_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL@main").unwrap();

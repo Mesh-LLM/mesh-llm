@@ -9,7 +9,7 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 use skippy_protocol::LoadMode;
 
-use super::StageLoadRequest;
+use super::{StageLoadRequest, StageSourceFetch};
 
 mod cache_management;
 mod package_download;
@@ -21,7 +21,10 @@ pub use cache_management::{
 pub use package_download::{
     StagePackageRef, download_package_v2_to_local, is_layer_package_ref,
     resolve_hf_package_to_local, resolve_hf_package_upstream_to_local,
-    resolve_package_v2_full_model_to_local, resolve_package_v2_stage_to_local,
+    resolve_package_v2_full_model_to_local,
+};
+pub(crate) use package_download::{
+    package_metadata_is_local, package_v2_local_layers, resolve_package_v2_stage_to_local,
 };
 
 pub fn configure_materialized_stage_cache() {
@@ -54,11 +57,14 @@ pub fn inspect_stage_package(package_ref: &str) -> Result<StagePackageInfo> {
 /// Resolve an `hf://` package ref in a stage load request to a local directory.
 /// Returns the resolved local path if the package ref needed resolution, or `None`
 /// if it was already local / not a layer package.
-pub fn resolve_stage_load_package(load: &StageLoadRequest) -> Result<Option<ResolvedStagePackage>> {
+pub(crate) fn resolve_stage_load_package(
+    load: &StageLoadRequest,
+    fetch: StageSourceFetch,
+) -> Result<Option<ResolvedStagePackage>> {
     if load.load_mode == LoadMode::RuntimeSlice && is_layer_package_ref(&load.package_ref) {
         let descriptor = skippy_api::materialization::package_admission_descriptor(&load.admission);
         let (local_ref, model_part_paths, projector_path) =
-            resolve_package_v2_stage_to_local(&load.package_ref, &descriptor)?;
+            resolve_package_v2_stage_to_local(&load.package_ref, &descriptor, fetch)?;
         return skippy_api::materialization::stage_package_from_verified_parts(
             local_ref,
             &load.manifest_sha256,
@@ -293,7 +299,9 @@ mod tests {
     fn resolve_stage_load_package_rejects_legacy_package_mode() {
         let dir = tempfile::tempdir().unwrap();
         let load = stage_load_request_for_package(dir.path(), "0".repeat(64));
-        let error = resolve_stage_load_package(&load).unwrap_err().to_string();
+        let error = resolve_stage_load_package(&load, StageSourceFetch::Allowed)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("package-v2 graph admission"), "{error}");
     }
 
@@ -306,7 +314,9 @@ mod tests {
         load.admission.package_id = package_id;
         load.admission.resident_tensor_ids = vec!["resident-tensor".to_string()];
 
-        let resolved = resolve_stage_load_package(&load).unwrap().unwrap();
+        let resolved = resolve_stage_load_package(&load, StageSourceFetch::Allowed)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             resolved.model_part_paths,
             vec![
@@ -385,7 +395,7 @@ mod tests {
             downstream: None,
         };
 
-        let error = resolve_stage_load_package(&load)
+        let error = resolve_stage_load_package(&load, StageSourceFetch::Allowed)
             .expect_err("v1 package selection must not remain reachable from serving");
         assert!(error.to_string().contains("package-v2 graph admission"));
     }

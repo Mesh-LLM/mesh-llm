@@ -123,6 +123,9 @@ pub struct PeerAnnouncement {
     pub decode_batch_policy_supported: bool,
     pub plugin_origin_signature_supported: bool,
     pub persistent_lane_marker_supported: bool,
+    /// The peer refuses split-stage requests that would make it fetch model
+    /// files it does not already have. False for peers that predate the field.
+    pub refuses_peer_model_downloads: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     pub cache_affinity: Option<CacheAffinityAdvertisement>,
     pub latency_ms: Option<u32>,
@@ -376,6 +379,7 @@ pub struct PeerInfo {
     pub decode_batch_policy_supported: bool,
     pub plugin_origin_signature_supported: bool,
     pub persistent_lane_marker_supported: bool,
+    pub refuses_peer_model_downloads: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     pub cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
@@ -443,6 +447,7 @@ impl PeerInfo {
             decode_batch_policy_supported: ann.decode_batch_policy_supported,
             plugin_origin_signature_supported: ann.plugin_origin_signature_supported,
             persistent_lane_marker_supported: ann.persistent_lane_marker_supported,
+            refuses_peer_model_downloads: ann.refuses_peer_model_downloads,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,

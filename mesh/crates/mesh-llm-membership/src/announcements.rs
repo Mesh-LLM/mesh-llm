@@ -147,6 +147,7 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.decode_batch_policy_supported != new.decode_batch_policy_supported
         || old.plugin_origin_signature_supported != new.plugin_origin_signature_supported
         || old.persistent_lane_marker_supported != new.persistent_lane_marker_supported
+        || old.refuses_peer_model_downloads != new.refuses_peer_model_downloads
         || crate::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
         || old.owner_summary != new.owner_summary
@@ -243,7 +244,9 @@ pub fn apply_transitive_ann(
     // `local_gguf_content_id_supported` require capability provenance from the
     // peer itself. A transitive announcer is not authoritative in either
     // direction, so it may neither promote nor clear them. Direct announcements
-    // update both fields authoritatively.
+    // update both fields authoritatively. `refuses_peer_model_downloads` is the
+    // same: an older relay drops the field, so a relayed copy must not clear
+    // what the peer said directly.
     // A relay may not make the peer's throughput evidence older, undated,
     // shorter-lived, or spoil a still-fresh hint with one no receiver would
     // accept.
@@ -333,6 +336,7 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         decode_batch_policy_supported: peer.decode_batch_policy_supported,
         plugin_origin_signature_supported: peer.plugin_origin_signature_supported,
         persistent_lane_marker_supported: peer.persistent_lane_marker_supported,
+        refuses_peer_model_downloads: peer.refuses_peer_model_downloads,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
         cache_affinity: peer.cache_affinity.clone(),
         latency_ms: latency.latency_ms,
@@ -419,6 +423,7 @@ pub fn update_existing_direct_peer(
     existing.decode_batch_policy_supported = ann.decode_batch_policy_supported;
     existing.plugin_origin_signature_supported = ann.plugin_origin_signature_supported;
     existing.persistent_lane_marker_supported = ann.persistent_lane_marker_supported;
+    existing.refuses_peer_model_downloads = ann.refuses_peer_model_downloads;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     crate::merge_advertisement(
         &mut existing.cache_affinity,

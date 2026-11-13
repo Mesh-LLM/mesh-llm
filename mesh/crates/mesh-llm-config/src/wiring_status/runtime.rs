@@ -8,6 +8,13 @@ pub(super) const KV_CACHE_DISK_BUDGET_MIB: WiringEntry =
 pub(super) const KV_CACHE_DISK_MINIMUM_FREE_MIB: WiringEntry =
     wired_kv_cache("runtime.kv_cache.disk.minimum_free_mib");
 pub(super) const KV_CACHE_DISK_CODEC: WiringEntry = wired_kv_cache("runtime.kv_cache.disk.codec");
+pub(super) const PEER_MODEL_DOWNLOADS: WiringEntry = WiringEntry {
+    path: "runtime.peer_model_downloads",
+    status: WiringStatus::Wired,
+    owner: "n/a",
+    reason: "",
+    behavior: WiringBehavior::None,
+};
 
 const fn wired_kv_cache(path: &'static str) -> WiringEntry {
     WiringEntry {

@@ -4,9 +4,23 @@ pub use mesh_llm_skippy_adapter::package::acquisition::{StagePackageRef, is_laye
 use skippy_package_format::stage_admission::StageAdmissionDescriptor as PackageV2StageAdmissionDescriptor;
 use std::path::PathBuf;
 
+use crate::inference::skippy::StageSourceFetch;
+
 fn acquisition() -> skippy_api::package::acquisition::remote::PackageAcquisition {
-    mesh_llm_skippy_adapter::package::acquisition::with_client(|| {
-        crate::models::build_hf_api(false)
+    acquisition_for(StageSourceFetch::Allowed)
+}
+
+/// Skippy builds the Hugging Face client only on a cache miss, so a factory
+/// that refuses keeps a `LocalOnly` resolution to cached files.
+fn acquisition_for(
+    fetch: StageSourceFetch,
+) -> skippy_api::package::acquisition::remote::PackageAcquisition {
+    mesh_llm_skippy_adapter::package::acquisition::with_client(move || {
+        if fetch.allows_fetch() {
+            crate::models::build_hf_api(false)
+        } else {
+            Err(StageSourceFetch::refusal("layer package"))
+        }
     })
 }
 
@@ -30,11 +44,111 @@ pub fn resolve_hf_package_to_local(
 pub fn resolve_hf_package_upstream_to_local(package_ref: &str) -> Result<String> {
     acquisition().resolve_hf_package_upstream_to_local(package_ref)
 }
-pub fn resolve_package_v2_stage_to_local(
+
+/// Whether a package-v2 manifest and its shared metadata are already cached.
+///
+/// A cached schema-v1 package does not count: inspecting one asks the hub for
+/// a newer package-v2 revision.
+pub(crate) fn package_metadata_is_local(package_ref: &str) -> bool {
+    acquisition_for(StageSourceFetch::LocalOnly)
+        .resolve_hf_package_to_local(package_ref, 0, 0, false, false)
+        .is_ok_and(|local_ref| mesh_llm_skippy_adapter::package::is_package_v2_ref(&local_ref))
+}
+
+/// Which layers of a cached package-v2 have their artifacts on local disk,
+/// without any network access.
+///
+/// Artifacts are checked by path and size, not hashed: a stage load verifies
+/// them. Artifacts that no layer owns (embeddings, output) count toward the
+/// first and last layer, the layers of the stages that load them.
+pub(crate) fn package_v2_local_layers(package_ref: &str) -> Result<Vec<bool>> {
+    let local_ref = acquisition_for(StageSourceFetch::LocalOnly).resolve_hf_package_to_local(
+        package_ref,
+        0,
+        0,
+        false,
+        false,
+    )?;
+    let package_dir = std::path::Path::new(&local_ref);
+    let manifest_path = package_dir.join("model-package.json");
+    let manifest: skippy_package_format::PackageManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    let manifest =
+        skippy_model::package_carrier::resolve_package_carrier_from_dir(manifest, package_dir)?;
+    Ok(layers_with_local_artifacts(&manifest, package_dir))
+}
+
+fn layers_with_local_artifacts(
+    manifest: &skippy_package_format::PackageManifest,
+    package_dir: &std::path::Path,
+) -> Vec<bool> {
+    use skippy_package_format::TensorStorage;
+    use std::collections::HashMap;
+
+    let on_disk = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.id.as_str(),
+                artifact_on_disk(package_dir, &artifact.path, artifact.byte_size),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let owners = manifest
+        .tensor_catalog
+        .entries
+        .iter()
+        .filter_map(|tensor| match &tensor.storage {
+            TensorStorage::Owned { artifact_id, .. } => {
+                Some((tensor.id.as_str(), artifact_id.as_str()))
+            }
+            TensorStorage::Alias { .. } => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let mut layers = vec![true; manifest.layer_count as usize];
+    let mut shared = true;
+    for tensor in &manifest.tensor_catalog.entries {
+        let artifact = match &tensor.storage {
+            TensorStorage::Owned { artifact_id, .. } => Some(artifact_id.as_str()),
+            TensorStorage::Alias { target_tensor_id } => {
+                owners.get(target_tensor_id.as_str()).copied()
+            }
+        };
+        let present = artifact.is_some_and(|id| on_disk.get(id).copied().unwrap_or(false));
+        match tensor
+            .layer_ordinal
+            .and_then(|ordinal| layers.get_mut(ordinal as usize))
+        {
+            Some(layer) => *layer &= present,
+            None => shared &= present,
+        }
+    }
+    if !shared {
+        if let Some(first) = layers.first_mut() {
+            *first = false;
+        }
+        if let Some(last) = layers.last_mut() {
+            *last = false;
+        }
+    }
+    layers
+}
+
+fn artifact_on_disk(package_dir: &std::path::Path, path: &str, byte_size: u64) -> bool {
+    skippy_api::materialization::safe_manifest_file_path(path)
+        .ok()
+        .and_then(|relative| std::fs::metadata(package_dir.join(relative)).ok())
+        .is_some_and(|metadata| metadata.is_file() && metadata.len() == byte_size)
+}
+
+pub(crate) fn resolve_package_v2_stage_to_local(
     package_ref: &str,
     admission: &PackageV2StageAdmissionDescriptor,
+    fetch: StageSourceFetch,
 ) -> Result<(String, Vec<PathBuf>, Option<PathBuf>)> {
-    acquisition().resolve_package_v2_stage_to_local(package_ref, admission)
+    acquisition_for(fetch).resolve_package_v2_stage_to_local(package_ref, admission)
 }
 pub fn resolve_package_v2_full_model_to_local(
     package_ref: &str,
@@ -793,6 +907,57 @@ mod tests {
 
         crate::inference::skippy::identity_from_layer_package("hf://meshllm/demo").unwrap();
 
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[serial]
+    fn only_a_cached_v2_package_counts_as_local_package_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = temp.path().join("upstream");
+        write_upstream_v2(&upstream);
+        let (endpoint, hits) = spawn_fake_hub(upstream, UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        let repo = cache_stale_v1_main(temp.path());
+
+        // Inspecting the stale v1 snapshot would ask the hub for package-v2.
+        assert!(!package_metadata_is_local("hf://meshllm/demo"));
+
+        write_upstream_v2(&repo.join("snapshots").join(UPSTREAM_COMMIT));
+        fs::write(repo.join("refs/main"), UPSTREAM_COMMIT).unwrap();
+        assert!(package_metadata_is_local("hf://meshllm/demo"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[serial]
+    fn local_layers_are_the_ones_whose_files_are_cached() {
+        let temp = tempfile::tempdir().unwrap();
+        let (endpoint, hits) = spawn_fake_hub(temp.path().join("empty"), UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        let repo = temp.path().join("hf/hub/models--meshllm--demo");
+        let snapshot = repo.join("snapshots").join(UPSTREAM_COMMIT);
+        write_upstream_v2(&snapshot);
+        fs::create_dir_all(repo.join("refs")).unwrap();
+        fs::write(repo.join("refs/main"), UPSTREAM_COMMIT).unwrap();
+
+        assert_eq!(
+            package_v2_local_layers("hf://meshllm/demo").unwrap(),
+            [true, true]
+        );
+
+        // Metadata cached, one layer file not: only the other layer is local.
+        fs::remove_file(snapshot.join("layers/layer-00001.gguf")).unwrap();
+        assert_eq!(
+            package_v2_local_layers("hf://meshllm/demo").unwrap(),
+            [true, false]
+        );
+        // A truncated file is not the artifact either.
+        fs::write(snapshot.join("layers/layer-00000.gguf"), b"partial").unwrap();
+        assert_eq!(
+            package_v2_local_layers("hf://meshllm/demo").unwrap(),
+            [false, false]
+        );
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
