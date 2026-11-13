@@ -1966,6 +1966,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      tag_commit: ${{ steps.packaging_identity.outputs.tag_commit }}
+      manifest_sha256: ${{ steps.packaging_identity.outputs.manifest_sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -2181,6 +2184,21 @@ jobs:
           gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false \
             --title "Rolling preview $RELEASE_TAG (source $SOURCE_SHA)"
 
+      - name: Record downstream packaging identity
+        id: packaging_identity
+        if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          manifest_sha256="$(sha256sum release-artifacts/native-runtimes.json | cut -d ' ' -f 1)"
+          if [[ ! "$tag_commit" =~ ^[0-9a-f]{40}$ || ! "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid published tag commit or native manifest digest" >&2
+            exit 1
+          fi
+          printf 'tag_commit=%s\nmanifest_sha256=%s\n' "$tag_commit" "$manifest_sha256" >> "$GITHUB_OUTPUT"
+
   release_notes:
     name: Regroup release notes
     needs: [metadata, publish]
@@ -2248,6 +2266,8 @@ jobs:
           TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_TAG_COMMIT: ${{ needs.publish.outputs.tag_commit }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.publish.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
           [[ -n "${GH_TOKEN:-}" ]] || {
@@ -2262,16 +2282,27 @@ jobs:
             echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
             exit 1
           }
+          [[ "$RELEASE_TAG_COMMIT" =~ ^[0-9a-f]{40}$ && "$RELEASE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Missing or invalid published release identity" >&2
+            exit 1
+          }
+          correlation_id="mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg ref "$RELEASE_TAG" \
             --arg version "$RELEASE_VERSION" \
+            --arg expected_mesh_sha "$RELEASE_TAG_COMMIT" \
+            --arg expected_manifest_sha256 "$RELEASE_MANIFEST_SHA256" \
+            --arg correlation_id "$correlation_id" \
             '{
               event_type: "mesh-llm-release",
               client_payload: {
                 repository: $repository,
                 ref: $ref,
                 version: $version,
+                expected_mesh_sha: $expected_mesh_sha,
+                expected_manifest_sha256: $expected_manifest_sha256,
+                correlation_id: $correlation_id,
                 dry_run: false,
                 publish_images: true,
                 publish_release_assets: true,

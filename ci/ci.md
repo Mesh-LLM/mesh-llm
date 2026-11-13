@@ -873,6 +873,10 @@ After a stable release with the full GPU matrix succeeds, the downstream
 That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
+The dispatch binds the published tag commit, native runtime manifest SHA-256,
+and upstream run-attempt correlation ID. It does not wait for packaging: the
+operator verifies the matching downstream readiness receipt and every requested
+channel before reporting distribution complete.
 
 The non-canary path below assumes the version-preparation PR has merged.
 
