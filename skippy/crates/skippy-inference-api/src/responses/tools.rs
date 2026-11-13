@@ -53,6 +53,13 @@ fn normalize_function(value: &mut Value, param: &str) -> Result<bool, InferenceE
     };
     let mut function = std::mem::take(object);
     function.remove("type");
+    // Responses resources require nullable fields; Chat template consumers
+    // expect absent optional settings rather than explicit null values.
+    for field in ["description", "parameters", "strict"] {
+        if function.get(field).is_some_and(Value::is_null) {
+            function.remove(field);
+        }
+    }
     function.insert("name".into(), Value::String(name));
     object.insert("type".into(), Value::String("function".into()));
     object.insert("function".into(), Value::Object(function));
@@ -64,5 +71,42 @@ fn missing_function_name(param: &str) -> &'static str {
         "tool_choice must reference a function by name"
     } else {
         "function name must be a non-empty string"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nullable_resource_fields_can_be_reused_as_request_tools() {
+        let mut request = json!({"tools": [{
+            "type": "function", "name": "weather", "description": null,
+            "parameters": null, "strict": null
+        }]});
+        normalize(request.as_object_mut().unwrap()).unwrap();
+        assert_eq!(
+            request["tools"][0],
+            json!({
+                "type": "function", "function": {"name": "weather"}
+            })
+        );
+    }
+
+    #[test]
+    fn nonnull_function_settings_are_preserved() {
+        let mut request = json!({"tools": [{
+            "type": "function", "name": "weather", "description": "Forecast",
+            "parameters": {"type": "object"}, "strict": false
+        }]});
+        normalize(request.as_object_mut().unwrap()).unwrap();
+        assert_eq!(
+            request["tools"][0]["function"],
+            json!({
+                "name": "weather", "description": "Forecast",
+                "parameters": {"type": "object"}, "strict": false
+            })
+        );
     }
 }

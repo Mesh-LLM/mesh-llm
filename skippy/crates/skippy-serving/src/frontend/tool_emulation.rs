@@ -89,15 +89,14 @@ const FORCE_EMULATION_ENV: &str = "MESH_FORCE_TOOL_EMULATION";
 /// Decides whether a tools request should be served via emulation rather than
 /// the native template path. Emulation is used when the template does not
 /// natively support tool calling, or when the force-emulation override is set.
-pub(super) fn should_emulate_tool_calls(metadata_json: &str) -> bool {
-    should_emulate_tool_calls_with_override(metadata_json, force_emulation_enabled())
-}
-
-fn should_emulate_tool_calls_with_override(metadata_json: &str, force_emulation: bool) -> bool {
+pub(super) fn should_emulate_tool_calls_with_override(
+    metadata_json: &str,
+    force_emulation: bool,
+) -> bool {
     force_emulation || !template_supports_native_tool_calls(metadata_json)
 }
 
-fn force_emulation_enabled() -> bool {
+pub(super) fn force_emulation_enabled() -> bool {
     let value = std::env::var(FORCE_EMULATION_ENV).ok();
     force_emulation_value_enabled(value.as_deref())
 }

@@ -18,9 +18,11 @@ use skippy_inference_api::GenerationHookSignals;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceRequestContext;
 use skippy_inference_api::InferenceResult;
+use skippy_inference_api::MessageContent;
 use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
+use skippy_inference_api::generation::GenerationMessage;
 use skippy_inference_api::generation::GenerationRequest;
 use skippy_runtime::ChatTemplateJsonOptions;
 use skippy_runtime::ChatTemplateOptions;
@@ -30,10 +32,17 @@ use skippy_runtime::TokenSignal;
 
 /// Output of a single chat-template application, before it is folded into a
 /// [`PreparedGenerationPrompt`].
-struct RenderedChatPrompt {
-    prompt: String,
-    media: Vec<MediaInput>,
-    metadata_json: String,
+#[derive(Debug)]
+pub(in crate::frontend) struct RenderedChatPrompt {
+    pub(in crate::frontend) prompt: String,
+    pub(in crate::frontend) media: Vec<MediaInput>,
+    pub(in crate::frontend) metadata_json: String,
+}
+
+#[derive(Debug)]
+pub(in crate::frontend) enum PromptRenderSelection {
+    Native(RenderedChatPrompt),
+    Emulated,
 }
 
 impl StageOpenAiBackend {
@@ -68,28 +77,47 @@ impl StageOpenAiBackend {
         request: &GenerationRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
-        let marker = {
+        // Clone one immutable reader so the native render, capability probe,
+        // and any selected emulation render all observe the same template.
+        let (marker, reader) = {
             let runtime = lock_runtime(&self.runtime);
-            runtime.media_marker()
+            (runtime.media_marker(), runtime.model.reader())
         };
 
-        // Native path: render with tools and use the template's own metadata.
-        let native = self.render_chat_prompt(request, &options, &marker, None, true)?;
+        let instruction = request
+            .tools
+            .as_ref()
+            .and_then(tool_emulation::build_emulation_instruction);
+        let force_emulation = instruction.is_some()
+            && tool_calls_requested(request)
+            && tool_emulation::force_emulation_enabled();
+        let selection = select_tool_prompt_render(
+            request,
+            instruction.is_some(),
+            force_emulation,
+            |messages| {
+                self.render_chat_prompt(&reader, request, &options, &marker, Some(messages), true)
+            },
+        )?;
 
         // If the request carries tools but the template does not support native
         // tool calling, re-render with server-side tool-call emulation: strip
         // tools, inject a text-convention instruction, and rewrite history so
         // the template never sees tool roles. Tool-capable templates keep the
         // native prompt unchanged.
-        if tool_calls_requested(request)
-            && tool_emulation::should_emulate_tool_calls(&native.metadata_json)
-            && let Some(tools) = request.tools.as_ref()
-            && let Some(instruction) = tool_emulation::build_emulation_instruction(tools)
+        if matches!(&selection, PromptRenderSelection::Emulated)
+            && let Some(instruction) = instruction
         {
             let rewritten =
                 tool_emulation::rewrite_history_for_emulation(&request.messages, &instruction);
-            let emulated =
-                self.render_chat_prompt(request, &options, &marker, Some(&rewritten), false)?;
+            let emulated = self.render_chat_prompt(
+                &reader,
+                request,
+                &options,
+                &marker,
+                Some(&rewritten),
+                false,
+            )?;
             let recurrent_cache_prefix_text = if self
                 .kv
                 .as_ref()
@@ -99,9 +127,16 @@ impl StageOpenAiBackend {
             {
                 let mut prefix_options = options.clone();
                 prefix_options.add_assistant = false;
-                self.render_chat_prompt(request, &prefix_options, &marker, Some(&rewritten), false)
-                    .ok()
-                    .map(|rendered| rendered.prompt)
+                self.render_chat_prompt(
+                    &reader,
+                    request,
+                    &prefix_options,
+                    &marker,
+                    Some(&rewritten),
+                    false,
+                )
+                .ok()
+                .map(|rendered| rendered.prompt)
             } else {
                 None
             };
@@ -113,6 +148,10 @@ impl StageOpenAiBackend {
             });
         }
 
+        let PromptRenderSelection::Native(native) = selection else {
+            unreachable!("emulation selection requires an instruction")
+        };
+
         let recurrent_cache_prefix_text = if self
             .kv
             .as_ref()
@@ -122,7 +161,7 @@ impl StageOpenAiBackend {
         {
             let mut prefix_options = options.clone();
             prefix_options.add_assistant = false;
-            self.render_chat_prompt(request, &prefix_options, &marker, None, true)
+            self.render_chat_prompt(&reader, request, &prefix_options, &marker, None, true)
                 .ok()
                 .map(|rendered| rendered.prompt)
         } else {
@@ -141,6 +180,7 @@ impl StageOpenAiBackend {
     /// false, `tools`/`tool_choice` are omitted (used by the emulation path).
     fn render_chat_prompt(
         &self,
+        reader: &skippy_runtime::StageModelReader,
         request: &GenerationRequest,
         options: &ChatTemplateOptions,
         marker: &str,
@@ -178,10 +218,6 @@ impl StageOpenAiBackend {
         } else {
             None
         };
-        // Short-lock reader pattern: clone the immutable reader and run the
-        // template FFI on it, so template rendering never waits behind
-        // decode's hold of the runtime mutex (and vice versa).
-        let reader = lock_runtime(&self.runtime).model.reader();
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -376,6 +412,68 @@ impl StageOpenAiBackend {
             && hook_runtime.is_some()
             && hook_request.as_ref().is_some_and(chat_skippy_hooks_enabled)
     }
+}
+
+pub(in crate::frontend) fn select_tool_prompt_render(
+    request: &GenerationRequest,
+    emulation_available: bool,
+    force_emulation: bool,
+    mut render: impl FnMut(&[GenerationMessage]) -> InferenceResult<RenderedChatPrompt>,
+) -> InferenceResult<PromptRenderSelection> {
+    match render(&request.messages) {
+        Ok(native) => {
+            if emulation_available
+                && tool_calls_requested(request)
+                && tool_emulation::should_emulate_tool_calls_with_override(
+                    &native.metadata_json,
+                    force_emulation,
+                )
+            {
+                Ok(PromptRenderSelection::Emulated)
+            } else {
+                Ok(PromptRenderSelection::Native(native))
+            }
+        }
+        Err(native_error) => {
+            if !emulation_available
+                || !tool_calls_requested(request)
+                || !history_contains_tool_protocol(&request.messages)
+            {
+                return Err(native_error);
+            }
+            if force_emulation {
+                return Ok(PromptRenderSelection::Emulated);
+            }
+
+            let probe = [GenerationMessage {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text("Hello".to_string())),
+                extra: Default::default(),
+            }];
+            match render(&probe) {
+                Ok(probe)
+                    if !tool_emulation::template_supports_native_tool_calls(
+                        &probe.metadata_json,
+                    ) =>
+                {
+                    Ok(PromptRenderSelection::Emulated)
+                }
+                Ok(_) | Err(_) => Err(native_error),
+            }
+        }
+    }
+}
+
+fn history_contains_tool_protocol(messages: &[GenerationMessage]) -> bool {
+    messages.iter().any(|message| {
+        message.role == "tool"
+            || (message.role == "assistant"
+                && message
+                    .extra
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .is_some_and(|calls| !calls.is_empty()))
+    })
 }
 
 /// Parses generated text produced under tool-call emulation into a

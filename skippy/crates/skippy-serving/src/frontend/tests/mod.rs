@@ -65,5 +65,6 @@ mod prefix_cache_lifecycle;
 mod prompting;
 mod request;
 mod support;
+mod tool_emulation_selection;
 mod tts_oracle;
 mod wire_messages;
