@@ -7887,6 +7887,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "runner-cleanup"
+version = "0.79.0"
+dependencies = [
+ "ci-controller",
+ "process-supervision",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11783,6 +11793,7 @@ dependencies = [
  "process-supervision",
  "rcgen",
  "regex",
+ "runner-cleanup",
  "rustix",
  "rustls",
  "semver",

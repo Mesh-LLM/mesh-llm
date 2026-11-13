@@ -86,6 +86,7 @@ WORKSPACE_MEMBERS=(
   "authority-automation"
   "ci-controller"
   "process-supervision"
+  "runner-cleanup"
   "trajectory-reader"
   "xtask"
 )

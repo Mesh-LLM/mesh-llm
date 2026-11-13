@@ -1,5 +1,5 @@
 use super::{Options, Plan, Profile, boundary};
-#[path = "../../../tests/migration_lifecycle/cleanup_owner.rs"]
+#[path = "../../xtask/tests/migration_lifecycle/cleanup_owner.rs"]
 pub(super) mod ownership;
 use std::{
     collections::BTreeMap,
@@ -94,8 +94,8 @@ impl Fixture {
 // Signal registration is process-global; parallel fixtures must wait for the
 // preceding fixture to release it. Production still rejects overlapping owners.
 pub(super) fn interrupt()
--> Result<crate::command_interrupt::Interrupt, crate::command_interrupt::Reason> {
-    use crate::command_interrupt::{Interrupt, Reason};
+-> Result<process_supervision::interrupt::Interrupt, process_supervision::interrupt::Reason> {
+    use process_supervision::interrupt::{Interrupt, Reason};
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         match Interrupt::install() {
