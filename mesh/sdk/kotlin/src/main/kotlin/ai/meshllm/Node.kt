@@ -58,7 +58,9 @@ data class OpenAIResponse(
 }
 
 class OpenAIRequestException(val statusCode: UShort, val body: String) :
-    RuntimeException("OpenAI-compatible request failed with HTTP $statusCode: $body")
+    RuntimeException("OpenAI-compatible request failed with HTTP $statusCode: $body") {
+    val details: InferenceErrorDetails? get() = InferenceErrorDetails.decode(body)
+}
 
 sealed class OpenAIStreamEvent {
     data class Started(
@@ -83,7 +85,9 @@ class OpenAIStreamException(
     val statusCode: UShort?,
     val responseBody: String?,
     message: String,
-) : RuntimeException(message)
+) : RuntimeException(message) {
+    val details: InferenceErrorDetails? get() = InferenceErrorDetails.decode(responseBody)
+}
 
 /** A real embedded Mesh LLM node with mesh inference and optional local serving. */
 class Node internal constructor(private val handle: MeshNodeHandleInterface) {

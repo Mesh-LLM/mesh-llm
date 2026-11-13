@@ -80,8 +80,11 @@ Local native backend failures preserve `mesh_llm_sdk::inference::InferenceError`
 `anyhow::Error` chain. Use `downcast_ref::<InferenceError>()` and its `body()` or
 `status()` to distinguish context exhaustion, invalid requests and retryable
 backend failures without parsing display text. Remote failures retain the peer's
-error message; they do not carry a local backend error type. This Rust re-export
-does not change the native request, chunk or cross-language error representation.
+error message; they do not carry a local backend error type. Node.js, Swift and
+Kotlin expose the structured fields of request and stream failures through
+`details`, preserving status and raw bodies through their existing native bridges.
+There is no native ABI or wire change. Python parity is deferred to a separate
+change in its external SDK repository.
 
 Backend-specific request options are retained in `ChatCompletionRequest::extra`.
 For a local llama-compatible provider, `id_slot` selects a lane, `cache_prompt`

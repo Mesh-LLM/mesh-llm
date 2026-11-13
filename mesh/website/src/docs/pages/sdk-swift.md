@@ -215,3 +215,24 @@ apply to omitted fields and unknown keys are rejected. Full-config `mode`
 values are `client`, `serve_only` and `serve` (combined); its default is
 combined, matching Rust. The existing `Node(...)` convenience constructor keeps
 its client default and Swift argument names.
+
+## Structured inference failures
+
+`OpenAIRequestFailure.details` and `OpenAIStreamFailure.details` expose typed
+`InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```swift
+do {
+    _ = try await node.inference.chatCompletions(request)
+} catch let error as OpenAIRequestFailure {
+    if error.details?.code == "context_length_exceeded" {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `nil` for transport failures or an unstructured body;
+missing optional fields stay `nil`. Unknown codes are preserved.

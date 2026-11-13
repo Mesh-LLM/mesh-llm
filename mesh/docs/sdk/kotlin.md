@@ -189,3 +189,23 @@ concurrently with microphone input. `stop()` finishes the turn and returns
 unread events; `close()` abandons the session.
 Cancelling `events()` also closes the session without waiting for a pending
 native read; native cleanup finishes in the background.
+## Structured inference failures
+
+`OpenAIRequestException.details` and `OpenAIStreamException.details` expose
+typed `InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```kotlin
+try {
+    node.inference.chatCompletions(request)
+} catch (error: OpenAIRequestException) {
+    if (error.details?.code == "context_length_exceeded") {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `null` for transport failures or an unstructured body;
+missing optional fields stay `null`. Unknown codes are preserved.
