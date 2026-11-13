@@ -277,6 +277,7 @@ pub(crate) async fn route_virtual_model_or_passthrough(
         route_observer,
         request.exchange_observation_id.as_deref(),
         request.exchange_id(),
+        request.request_id.as_uuid().to_string(),
     )
     .await
     {
@@ -375,6 +376,7 @@ pub(crate) async fn try_handle_virtual_model(
     route_observer: OpenAiRouteObserver<'_>,
     observation_id: Option<&str>,
     exchange_id: String,
+    request_id: String,
 ) -> VirtualModelDispatchResult {
     let route = match plugins.virtual_model_for_model(model_id).await {
         Ok(Some(route)) => route,
@@ -424,6 +426,7 @@ pub(crate) async fn try_handle_virtual_model(
         super::response::prepared_dispatch::PreparedSubdispatch {
             observation_id,
             exchange_id,
+            request_id,
             bytes: input_json.as_bytes(),
             client_path,
             encoding: "plugin_invocation_json",
