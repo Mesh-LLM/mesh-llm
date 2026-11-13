@@ -1377,12 +1377,14 @@ fn split_rejoined_stage_nodes_leave_out_a_node_the_split_replaced() {
         vec![participant(1), participant(4)],
         vec![stage(1, 0, 0, 20), stage(4, 1, 20, 40)],
     );
-    assert!(split_rejoined_stage_nodes(
-        &active,
-        &[make_id(2)],
-        &[make_id(1), make_id(2), make_id(4)]
-    )
-    .is_empty());
+    assert!(
+        split_rejoined_stage_nodes(
+            &active,
+            &[make_id(2)],
+            &[make_id(1), make_id(2), make_id(4)]
+        )
+        .is_empty()
+    );
 }
 
 #[test]
