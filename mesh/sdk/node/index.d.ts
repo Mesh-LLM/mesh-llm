@@ -215,6 +215,14 @@ export type NativeRuntimePruneResult = {
 
 export type NodeMode = 'client' | 'serve' | 'combined'
 
+/** Local capacity, including busy lanes. BigInt preserves native u64 values. */
+export type RuntimeCapacity = {
+  executionLanes: bigint
+  contextTokensPerLane: bigint
+  contextPoolTokens: bigint
+  capturedAtUnixMs: bigint
+}
+
 /** Known values are listed for completion; newer peers may advertise other workloads. */
 export type ModelWorkloadClass =
   | 'causal_generation' | 'embedding' | 'rerank' | 'encoder_decoder'
@@ -363,6 +371,8 @@ export type EmbeddedMeshNodeConfig = {
 }
 
 export declare class Node {
+  /** Reads the latest observation; null for unknown, unsupported or incomplete capacity. */
+  runtimeCapacity(model: string): Promise<RuntimeCapacity | null>
   static create(options?: NodeOptions): Node
   static fromConfig(config: EmbeddedMeshNodeConfig): Node
   readonly inference: Inference

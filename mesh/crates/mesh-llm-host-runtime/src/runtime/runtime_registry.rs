@@ -169,6 +169,8 @@ pub(super) async fn register_runtime_instance(
             },
         );
         let next_context = runtime_registry_model_context(instances);
+        node.runtime_data_collector()
+            .register_runtime_instance(model_name, instance_id);
         (
             was_empty,
             previous_context != next_context,
@@ -210,6 +212,10 @@ pub(super) async fn unregister_runtime_instance(
         };
         let previous_context = runtime_registry_model_context(instances);
         let removed = instances.remove(instance_id).is_some();
+        if removed {
+            node.runtime_data_collector()
+                .unregister_runtime_instance(instance_id);
+        }
         let next_context = runtime_registry_model_context(instances);
         let next_efforts = model_thinking_efforts(instances);
         let became_empty = instances.is_empty();
@@ -355,14 +361,44 @@ mod tests {
         );
         register(&registry, &node, "two", &["max"]).await;
         assert_eq!(advertised_efforts(&node).await, None);
+        let collector = node.runtime_data_collector();
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .active_runtime_instances
+                .len(),
+            2
+        );
         assert!(!unregister_runtime_instance(&registry, &node, "test-model", "two").await);
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .active_runtime_instances
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["one"]
+        );
         assert_eq!(
             advertised_efforts(&node).await,
             Some(vec!["high".into(), "low".into()])
         );
         assert!(unregister_runtime_instance(&registry, &node, "test-model", "one").await);
+        assert!(
+            collector
+                .runtime_status_snapshot()
+                .active_runtime_instances
+                .is_empty()
+        );
         assert!(node.served_model_descriptors().await.is_empty());
         register(&registry, &node, "three", &[]).await;
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .active_runtime_instances
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["three"]
+        );
         assert_eq!(advertised_efforts(&node).await, Some(vec![]));
     }
 

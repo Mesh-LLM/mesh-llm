@@ -182,6 +182,12 @@ public final class Node: @unchecked Sendable {
         )
     }
 
+    /// Latest local observation, including busy lanes; nil means unavailable or incomplete.
+    public func runtimeCapacity(_ model: String) async throws -> RuntimeCapacity? {
+        let handle = self.handle
+        return try await runBlocking { try handle.runtimeCapacity(model: model) }.map(RuntimeCapacity.init)
+    }
+
     public func joinToken(_ token: String) async throws {
         let handle = self.handle
         try await runBlocking { try handle.joinToken(token: token) }

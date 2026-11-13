@@ -15,6 +15,7 @@ mod plugin_tests;
 mod plugins;
 mod processes;
 mod producers;
+mod runtime_instances;
 mod runtime_status;
 mod snapshots;
 mod subscriptions;

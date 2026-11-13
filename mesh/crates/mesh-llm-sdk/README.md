@@ -105,7 +105,7 @@ transport, plugins or owner control, and it shares the node's payment
 settings. Its allowlist is its own, but owner and certificate revocations in
 the node's trust store apply to it too.
 
-## Local runtime capacity (Rust embedding)
+## Local runtime capacity
 
 `node.runtime_capacity("exact-serving-id")?` reads current host-owned runtime
 observations in process, without a console listener or inference request. It
@@ -120,6 +120,11 @@ overflowing totals return `None`. Stopping/stopped runtimes return an error.
 The timestamp advances when the runtime publishes an observation, which can
 be delayed by long inference; callers choose their own freshness threshold.
 These are local host observations, never remote peers' advertised capacity.
+
+The Node.js, Swift, and Kotlin SDKs expose the same observation through
+`node.runtimeCapacity(model)`. Node.js fields are `bigint`; Swift uses `UInt64`
+and Kotlin uses `ULong`. Python support is deferred; this API is not yet
+available in the separate Python SDK.
 
 ## Native model discovery and inference
 

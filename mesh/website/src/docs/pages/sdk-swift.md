@@ -4,6 +4,24 @@ title: Swift and Apple SDK
 
 # Swift and Apple SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```swift
+if let capacity = try await node.runtimeCapacity("exact-serving-id") {
+    print(capacity.executionLanes, capacity.contextTokensPerLane,
+          capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+`RuntimeCapacity` fields are `UInt64`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. Unknown, unsupported, unavailable or incomplete capacity returns `nil`;
+stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long inference. The total pool is not a
+per-request context limit.
+
 Use the `MeshLLM` SwiftPM product in macOS, Mac Catalyst and iOS applications.
 Tagged packages resolve a prebuilt XCFramework. Add the package dependency:
 
