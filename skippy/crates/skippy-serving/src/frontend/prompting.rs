@@ -88,14 +88,19 @@ impl StageOpenAiBackend {
                 ..options.clone()
             };
             let mut prepared = self.prepare_chat_prompt(&history, continuation_options)?;
-            let mut whole = request.clone();
-            whole.extra.remove("prefill_assistant");
-            let whole_options = ChatTemplateOptions {
+            // Probe where the template puts content with a marker no template
+            // writes, so a prefill that starts like a template tag can't pass.
+            let mut probe = request.clone();
+            probe.extra.remove("prefill_assistant");
+            if let Some(last) = probe.messages.last_mut() {
+                last.content = Some(MessageContent::Text(CONTENT_PROBE.to_string()));
+            }
+            let probe_options = ChatTemplateOptions {
                 add_assistant: false,
                 ..options.clone()
             };
-            let whole = self.prepare_chat_prompt(&whole, whole_options)?;
-            if prefill_at_content_boundary(&prepared.text, &whole.text, &continued)
+            let probe = self.prepare_chat_prompt(&probe, probe_options)?;
+            if prefill_at_content_boundary(&prepared.text, &probe.text)
                 && !generation_prompt_opens_reasoning(prepared.chat_parse_metadata.as_deref())
             {
                 prepared.text.push_str(&continued);
@@ -491,13 +496,18 @@ fn continued_prefill(request: &GenerationRequest, options: &ChatTemplateOptions)
     assistant_continuation(request)
 }
 
-/// Whether the template puts the prefill text right after the generation
-/// prompt: the whole conversation, rendered with the prefill as an ordinary
-/// turn, must start with the history's generation prompt and then that text.
-fn prefill_at_content_boundary(with_generation_prompt: &str, whole: &str, continued: &str) -> bool {
-    whole
+/// Content for the probe turn: private-use characters, so it can't be read
+/// as, or collide with, anything a template writes.
+const CONTENT_PROBE: &str = "\u{E000}skippy-prefill-content-probe\u{E001}";
+
+/// Whether the template puts message content right after the generation
+/// prompt: the conversation rendered with [`CONTENT_PROBE`] as the last
+/// assistant turn must read as the history's generation prompt followed by
+/// the probe. Judged on the probe, never on the prefill's own bytes.
+fn prefill_at_content_boundary(with_generation_prompt: &str, probe_render: &str) -> bool {
+    probe_render
         .strip_prefix(with_generation_prompt)
-        .is_some_and(|rest| rest.starts_with(continued))
+        .is_some_and(|rest| rest.starts_with(CONTENT_PROBE))
 }
 
 /// Whether the rendered generation prompt ends inside a reasoning block: it
@@ -634,28 +644,42 @@ mod continuation_tests {
         let chatml = "<|im_start|>user\nCount.<|im_end|>\n<|im_start|>assistant\n";
         assert!(prefill_at_content_boundary(
             chatml,
-            &format!("{chatml}1\n2\n<|im_end|>\n"),
-            "1\n2\n"
+            &format!("{chatml}{CONTENT_PROBE}<|im_end|>\n")
         ));
         // Harmony (GPT-OSS): the generation prompt stops inside the header,
         // and the template writes a channel and a message tag before content.
         let harmony = "<|start|>user<|message|>Hi<|end|><|start|>assistant";
         assert!(!prefill_at_content_boundary(
             harmony,
-            &format!("{harmony}<|channel|>final<|message|>Hello<|end|>"),
-            "Hello"
+            &format!("{harmony}<|channel|>final<|message|>{CONTENT_PROBE}<|end|>")
         ));
         // A template that writes anything else before the content.
         assert!(!prefill_at_content_boundary(
             chatml,
-            &format!("{chatml}<think>\n\n</think>\n\n1\n2\n<|im_end|>\n"),
-            "1\n2\n"
+            &format!("{chatml}<think>\n\n</think>\n\n{CONTENT_PROBE}<|im_end|>\n")
         ));
-        // History rendered differently once the prefill is a turn.
+        // History rendered differently once the probe is a turn.
         assert!(!prefill_at_content_boundary(
             chatml,
-            "<|im_start|>user\nCount!<|im_end|>\n<|im_start|>assistant\n1\n2\n",
-            "1\n2\n"
+            &format!("<|im_start|>user\nCount!<|im_end|>\n<|im_start|>assistant\n{CONTENT_PROBE}")
+        ));
+    }
+
+    #[test]
+    fn a_short_prefill_that_starts_like_a_template_tag_is_not_taken_for_content() {
+        // Judged on the prefill's bytes, "<" would match the start of
+        // Harmony's `<|channel|>` and land inside the header. The probe can't.
+        let harmony = "<|start|>user<|message|>Hi<|end|><|start|>assistant";
+        let rendered_with_prefill = format!("{harmony}<|channel|>final<|message|><<|end|>");
+        assert!(
+            rendered_with_prefill
+                .strip_prefix(harmony)
+                .is_some_and(|rest| rest.starts_with('<')),
+            "the collision this guards against"
+        );
+        assert!(!prefill_at_content_boundary(
+            harmony,
+            &format!("{harmony}<|channel|>final<|message|>{CONTENT_PROBE}<|end|>")
         ));
     }
 
