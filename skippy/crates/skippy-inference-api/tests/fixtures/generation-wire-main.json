@@ -2485,6 +2485,7 @@
           "logprobs": null,
           "max_completion_tokens": null,
           "max_tokens": null,
+          "mesh_compact": false,
           "mesh_internal_agent_session_id": "fixture-session",
           "mesh_internal_agent_session_source": "x-agent-session",
           "messages": [
@@ -2615,6 +2616,7 @@
           "logprobs": null,
           "max_completion_tokens": null,
           "max_tokens": null,
+          "mesh_compact": false,
           "mesh_internal_agent_session_id": "fixture-session",
           "mesh_internal_agent_session_source": "x-agent-session",
           "messages": [
@@ -3072,6 +3074,7 @@
           "logprobs": null,
           "max_completion_tokens": null,
           "max_tokens": null,
+          "mesh_compact": false,
           "mesh_internal_agent_session_id": "fixture-session",
           "mesh_internal_agent_session_source": "x-agent-session",
           "messages": [

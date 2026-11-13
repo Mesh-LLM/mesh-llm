@@ -30,6 +30,8 @@ use super::{
     validation::{ClassifiedGuardrailResponse, GuardrailResponseCategory},
 };
 
+mod responses_truncation;
+
 #[derive(Default)]
 struct RecordingBackend {
     seen_chat: Mutex<Option<GenerationRequest>>,

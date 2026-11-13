@@ -108,6 +108,13 @@ structured-output/reasoning controls, sampling controls, and output limits are
 inherited when the follow-up omits them; explicit child values replace them.
 Instructions never inherit, matching the protocol's conversation-state rule.
 
+Responses defaults to `truncation: "disabled"`. It disables the serving
+wrapper's automatic history compaction, including after request-transform
+plugins, so tool results and earlier input are not silently dropped to fit.
+If the resulting prompt exceeds the selected runtime's context window, that
+runtime returns `context_length_exceeded`. Automatic truncation is not yet
+supported; explicit `/v1/responses/compact` remains a separate opt-in operation.
+
 ```sh
 curl -s http://localhost:9337/v1/responses \
   -H 'Content-Type: application/json' \

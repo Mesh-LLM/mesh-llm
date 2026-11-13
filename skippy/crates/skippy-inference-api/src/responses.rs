@@ -9,6 +9,8 @@ mod store;
 mod stream;
 mod terminal;
 mod tools;
+#[cfg(test)]
+mod truncation_tests;
 mod turn;
 
 pub use continuation::ResponseContinuation;
@@ -27,6 +29,7 @@ pub use turn::ResponsesTurn;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use skippy_guardrails::MESH_COMPACT_FIELD;
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
@@ -307,6 +310,9 @@ fn translate_openai_responses_input(
         ));
     }
     turn::reject_unsupported_request_fields(object)?;
+    if object.insert(MESH_COMPACT_FIELD.into(), Value::Bool(false)) != Some(Value::Bool(false)) {
+        changed = true;
+    }
     if let Some(value) = object.get("conversation") {
         state_cache_key = responses_conversation_id(value);
     }

@@ -146,7 +146,12 @@ in `skippy-guardrails`; the OpenAI-facing decorator is
 `CompactingInferenceBackend`. Requests can force the behavior with the
 `mesh_compact` extra field, while Skippy-hosted backends fill the runtime
 context limit from the loaded stage config before composing compaction with the
-tool-call guardrail wrapper.
+tool-call guardrail wrapper. That override remains available to ordinary Chat
+Completions. Accepted `/v1/responses` turns instead force `mesh_compact: false`
+after validating `truncation`, because absent, `null`, and `"disabled"`
+Responses truncation must preserve the complete input; `"auto"` is rejected.
+The separate `/v1/responses/compact` operation is explicit and does not inherit
+that marker.
 
 The intended composition is still middleware-style and model-adjacent:
 compaction sits next to the guardrail wrapper, not inside OpenAI ingress routes

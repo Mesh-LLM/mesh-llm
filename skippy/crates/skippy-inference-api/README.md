@@ -124,6 +124,14 @@ inherit when omitted and explicit child values override them; instructions are
 per-turn and never inherit. Failed and incomplete turns are never retained. The
 store is bounded, in-memory, and caller-scoped.
 
+Responses input is never silently compacted. An omitted or `null` `truncation`
+field and explicit `"disabled"` all normalize to the internal
+`mesh_compact: false` backend marker, overriding a conflicting caller extension;
+`"auto"` remains unsupported and is rejected. This guarantee applies to HTTP,
+SSE, and WebSocket turns. Ordinary Chat Completions keeps its existing
+`mesh_compact` behavior, and `/v1/responses/compact` remains the separate,
+explicit compaction operation.
+
 Tool authorization belongs to that ingress-owned turn. Continuations inherit
 the original `allowed_tools` object, including an omitted `mode` defaulting to
 `auto`; response resources echo that effective mode while backend requests

@@ -70,6 +70,13 @@ requests the plugin was installed to rewrite.
   `model`, `stream` and output budget (`max_tokens`, `max_completion_tokens`,
   `max_output_tokens`, `n_predict`) as the request. Routing, the context check
   and the response format were already chosen from them.
+- **Responses do not truncate input:** after all plugins run, the host
+  reasserts the normalized `mesh_compact: false` marker for a client path of
+  `/v1/responses` (with or without a query string). A replacement cannot remove
+  it or set it to `true`. HTTP and WebSocket turns share this seam, and the host
+  serializes the protected body before recording its forwarded byte length.
+  Ordinary Chat Completions and the explicit `/v1/responses/compact` operation
+  keep their existing compaction behavior.
 - **Size:** the replacement may be at most 8 MiB once serialized, the limit a
   peer applies to a forwarded request.
 - A plugin that declared a transform and is restarting or has failed is

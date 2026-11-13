@@ -41,3 +41,9 @@ also calls undeclared `beta`. The original ingress now rejects that entire
 terminal output with `tool_choice_violation` instead of exposing an executable
 undeclared call. The backend request, usage, headers, and other 37 cases are
 unchanged. This is an enforcement fix, not a compatibility-neutral migration.
+
+The Responses no-truncation correction deliberately changes only the backend
+request in `responses`, `responses-stream`, and `responses-tools`: each now
+contains `mesh_compact: false`. That frontend-owned marker prevents the shared
+backend compactor from silently shortening accepted Responses input. No other
+fixture field or case changed for this correction.

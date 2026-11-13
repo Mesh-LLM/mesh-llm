@@ -8,7 +8,7 @@
 
 use crate::plugin;
 use anyhow::{Result, bail};
-use skippy_inference_api::REQUIRES_TRANSFORM_KEY;
+use skippy_inference_api::{MESH_COMPACT_FIELD, REQUIRES_TRANSFORM_KEY};
 
 /// Whether this ingress runs plugin request transforms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +48,7 @@ pub(super) async fn apply_request_transforms(
     client_path: &str,
     body: &mut serde_json::Value,
 ) -> Result<bool> {
-    match transformer {
+    let transformed = match transformer {
         Some(plugin_manager)
             if request_path.split('?').next() == Some("/v1/chat/completions")
                 && is_transformable_path(client_path) =>
@@ -69,7 +69,20 @@ pub(super) async fn apply_request_transforms(
                 .await
         }
         _ => Ok(false),
+    }?;
+    let reasserted = reassert_responses_no_compaction(client_path, body);
+    Ok(transformed || reasserted)
+}
+
+fn reassert_responses_no_compaction(client_path: &str, body: &mut serde_json::Value) -> bool {
+    if client_path.split('?').next() != Some("/v1/responses") {
+        return false;
     }
+    let Some(object) = body.as_object_mut() else {
+        return false;
+    };
+    object.insert(MESH_COMPACT_FIELD.into(), serde_json::Value::Bool(false))
+        != Some(serde_json::Value::Bool(false))
 }
 
 /// Reject a request that still holds an attachment only a transform can use
@@ -118,7 +131,20 @@ mod tests {
             Box::pin(async move {
                 let input: RequestTransformInput = serde_json::from_str(&params_json).unwrap();
                 let mut body = input.body;
-                let content = if body["messages"][0]["content"] == "bloat" {
+                let original_content = body["messages"][0]["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                match original_content.as_str() {
+                    "remove-compact" => {
+                        body.as_object_mut().unwrap().remove(MESH_COMPACT_FIELD);
+                    }
+                    "enable-compact" => {
+                        body[MESH_COMPACT_FIELD] = json!(true);
+                    }
+                    _ => {}
+                }
+                let content = if original_content == "bloat" {
                     "x".repeat(super::super::MAX_BODY_BYTES)
                 } else {
                     format!("{} via {}", input.client_path, input.path)
@@ -212,6 +238,107 @@ mod tests {
             forwarded_body(&request)["messages"][0]["content"],
             "/v1/chat/completions via /v1/chat/completions"
         );
+    }
+
+    #[tokio::test]
+    async fn responses_transform_cannot_remove_or_enable_compaction() {
+        let manager = stamping_manager().await;
+        for attack in ["remove-compact", "enable-compact"] {
+            let path = format!("/v1/responses?attack={attack}");
+            let request = read(
+                &path,
+                json!({"model": "m", "input": attack}),
+                &manager,
+                RequestTransforms::Apply,
+            )
+            .await;
+            let body = forwarded_body(&request);
+            assert_eq!(body[MESH_COMPACT_FIELD], false, "attack: {attack}");
+            assert_eq!(
+                request.body_len_bytes,
+                serde_json::to_vec(&body).unwrap().len()
+            );
+            assert_eq!(request.body_json.unwrap(), body);
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_transform_compaction_override_is_unchanged() {
+        let manager = stamping_manager().await;
+        let request = read(
+            "/v1/chat/completions",
+            json!({
+                "model": "m",
+                "messages": [{"role": "user", "content": "enable-compact"}]
+            }),
+            &manager,
+            RequestTransforms::Apply,
+        )
+        .await;
+
+        assert_eq!(forwarded_body(&request)[MESH_COMPACT_FIELD], true);
+    }
+
+    fn responses_handshake(path: &str) -> super::super::BufferedHttpRequest {
+        super::super::BufferedHttpRequest {
+            raw: format!(
+                "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+            )
+            .into_bytes(),
+            method: "GET".into(),
+            path: path.into(),
+            client_path: path.into(),
+            request_id: super::super::RequestId::new(),
+            body_json: None,
+            body_json_attempted: true,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: super::super::ResponseAdapter::None,
+            responses_turn: None,
+            correlation_id: None,
+            exchange_observation_id: None,
+            automatic_route: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_websocket_turn_reasserts_marker_and_wire_length() {
+        let manager = stamping_manager().await;
+        let session = skippy_inference_api::responses::ResponsesSession::new(
+            skippy_inference_api::responses::ResponsesSessionConfig::default(),
+            None,
+            None,
+        );
+        let prepared = session
+            .prepare_create(
+                json!({
+                    "type": "response.create",
+                    "model": "m",
+                    "input": "enable-compact"
+                }),
+                None,
+            )
+            .unwrap();
+        let handshake = responses_handshake("/v1/responses?transport=websocket");
+        let request = super::super::responses_websocket::buffer_prepared_responses_turn(
+            &handshake,
+            prepared,
+            Some(&manager),
+        )
+        .await
+        .unwrap();
+        let body = forwarded_body(&request);
+
+        assert_eq!(body[MESH_COMPACT_FIELD], false);
+        assert_eq!(
+            request.body_len_bytes,
+            serde_json::to_vec(&body).unwrap().len()
+        );
+        assert_eq!(request.body_json.unwrap(), body);
     }
 
     #[tokio::test]
