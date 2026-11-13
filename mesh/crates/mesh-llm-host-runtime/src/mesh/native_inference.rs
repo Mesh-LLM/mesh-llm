@@ -14,6 +14,7 @@ use std::time::Duration;
 mod streaming;
 #[cfg(test)]
 mod tests;
+mod transcription;
 
 /// Bound for a request that has no progress signal of its own: one unary
 /// response, or the request frame that opens a stream.

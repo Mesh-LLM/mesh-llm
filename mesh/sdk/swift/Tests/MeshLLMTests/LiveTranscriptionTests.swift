@@ -5,8 +5,11 @@ import XCTest
 final class LiveTranscriptionTests: XCTestCase {
     /// Explicit sample-rate and push-to-talk options survive the round trip.
     func testOptionsPreserveSampleRateAndExplicitPushToTalk() throws {
-        let options = LiveTranscriptionOptions(sampleRate: 48000, turnDetection: nil)
+        let options = LiveTranscriptionOptions(model: "speech#fast", language: "de", prompt: "jargon", sampleRate: 48000, turnDetection: nil)
         let value = try JSONSerialization.jsonObject(with: Data(options.json().utf8)) as! [String: Any]
+        XCTAssertEqual(value["model"] as? String, "speech#fast")
+        XCTAssertEqual(value["language"] as? String, "de")
+        XCTAssertEqual(value["prompt"] as? String, "jargon")
         XCTAssertEqual(value["sample_rate"] as? Int, 48000)
         XCTAssertTrue(value["turn_detection"] is NSNull)
         let defaults = try JSONSerialization.jsonObject(with: Data(LiveTranscriptionOptions().json().utf8)) as! [String: Any]

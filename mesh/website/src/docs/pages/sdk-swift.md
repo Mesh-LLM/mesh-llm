@@ -145,6 +145,13 @@ catalog queries the primary mesh and does not merge separate memberships.
 
 ## Live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 Supply signed 16-bit mono PCM samples recorded at 16 kHz. With turn detection
 disabled, call `commit()` to end the turn explicitly:
 

@@ -200,15 +200,21 @@ stream reports shutdown as an error rather than successful truncated output.
 Native remote inference cannot consume a model requiring payment; use a provider
 that permits unpaid inference or a separate supported payment integration.
 
-The legacy `status()`, `openai_client()` and live-transcription APIs still use
-HTTP. They are not used by the native discovery/inference path above.
+The legacy `status()` and `openai_client()` APIs still use HTTP. They are not
+used by the native discovery/inference path above.
 
 ## Live transcription
 
 A node serving a speech-recognition model (Whisper) transcribes live audio.
-The caller supplies 16-bit mono PCM at any sample rate, for example from a
-microphone, and reads transcript events while the speaker talks. Any node can
-host the session; the mesh relays it to the node serving the model.
+The caller supplies 16-bit mono PCM at 8000 to 96000 Hz, for example from a
+microphone, and reads transcript events while the speaker talks.
+
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
 
 ```rust,no_run
 use mesh_llm_sdk::MeshNode;

@@ -133,6 +133,7 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
 
     suspend fun joinToken(token: String): Unit = withContext(Dispatchers.IO) { handle.joinToken(token) }
 
+    /** Transcribe in process with a locally loaded speech model. Close the session to cancel inference. */
     suspend fun startLiveTranscription(options: LiveTranscriptionOptions = LiveTranscriptionOptions()): LiveTranscription {
         val live = withContext(Dispatchers.IO) { handle.startLiveTranscriptionJson(options.json()) }
         return LiveTranscription(

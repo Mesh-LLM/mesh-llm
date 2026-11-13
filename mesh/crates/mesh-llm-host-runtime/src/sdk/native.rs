@@ -1,6 +1,7 @@
 //! Native model discovery and provider-specific inference.
 
 use super::EmbeddedServeHandle;
+pub mod transcription;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -112,7 +113,7 @@ impl Drop for ChatCompletionStream {
 }
 
 impl EmbeddedServeHandle {
-    fn native_node(&self) -> Result<&crate::mesh::Node> {
+    pub(super) fn native_node(&self) -> Result<&crate::mesh::Node> {
         anyhow::ensure!(
             !*self.shutdown.borrow(),
             "embedded runtime is shutting down"
