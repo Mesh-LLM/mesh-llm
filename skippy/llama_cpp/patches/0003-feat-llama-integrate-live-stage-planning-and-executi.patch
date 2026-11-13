@@ -4,6 +4,23 @@ Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 03/32] feat(llama): integrate live stage planning and
  execution
 
+Graph node-budget migration debt:
+
+The shape-based fallback below does not replace upstream's architecture-specific
+graph_max_nodes() budgets, including the 64-nodes-per-tensor allowance for
+Kimi K3/K31, GLM5-Next and HRM-Text. Keep those allowances while rebasing: tensor
+count and reserved token shape alone do not describe graph expansion, and the
+model-builder contract does not yet expose a conservative graph-node bound.
+Skippy's stage/dependency capabilities describe the graph after construction;
+they cannot size the allocation needed to construct that graph safely.
+
+Migrate by adding a builder-owned node-budget capability available before graph
+construction, covering ordinary, recurrent/looped and staged graph shapes. Have
+the owning model builders supply that bound, retain the shared LoRA and sampler
+additions, and test reserved ubatch sizes and stage boundaries against actual
+node counts on CPU, Metal and CUDA. Remove the architecture branches only after
+those bounds cover their current allowances and parity/reservation tests pass.
+
 ---
  include/llama.h                |    7 +
  src/llama-arch.cpp             |   22 +
