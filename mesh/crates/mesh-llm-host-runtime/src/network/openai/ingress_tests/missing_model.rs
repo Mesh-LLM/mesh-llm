@@ -73,6 +73,7 @@ async fn missing_local_model_response_with_targets(
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_repick: 0,
         automatic_route: false,
     };
     let ctx = IngressRouteContext {
