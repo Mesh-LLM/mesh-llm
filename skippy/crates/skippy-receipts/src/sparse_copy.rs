@@ -300,10 +300,12 @@ impl ByteSource for SparseCopy {
         Ok(bytes)
     }
 
+    /// What fetching `ranges` downloads: the plan [`Self::fetch`] issues,
+    /// so the small gaps it joins across are charged as well.
     fn missing_bytes(&self, ranges: &[(u64, u64)]) -> Result<u64> {
         let held = self.lock()?;
-        let missing = missing(&held, ranges, self.identity.size)?;
-        Ok(missing.iter().map(|(start, end)| end - start).sum())
+        let plan = fetch_plan(&held, ranges, self.identity.size)?;
+        Ok(plan.iter().map(|(start, end)| end - start).sum())
     }
 }
 

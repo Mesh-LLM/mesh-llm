@@ -210,6 +210,18 @@ fn missing_bytes_count_each_byte_once() {
 }
 
 #[test]
+fn missing_bytes_charge_the_gap_a_fetch_joins() {
+    let f = Fixture::new(1 << 20);
+    let copy = f.open("repo@abc/model.gguf");
+    // two one-byte ranges a gap apart fetch as one request across the gap
+    let ranges = [(0, 1), (MERGE_GAP, 1)];
+    let charged = copy.missing_bytes(&ranges).unwrap();
+    copy.prefetch(&ranges).unwrap();
+    assert_eq!(charged, MERGE_GAP + 1);
+    assert_eq!(f.served() as u64, charged);
+}
+
+#[test]
 fn an_opener_never_truncates_a_copy_another_has_open() {
     let f = Fixture::new(4096);
     let first = f.open("repo@abc/model.gguf");
