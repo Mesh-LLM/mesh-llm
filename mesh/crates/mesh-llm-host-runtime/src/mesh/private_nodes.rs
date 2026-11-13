@@ -18,11 +18,18 @@ const RELOAD_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The nodes besides this one that may serve its private requests.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct PrivateNodes(Arc<RwLock<Arc<HashSet<EndpointId>>>>);
+pub(crate) struct PrivateNodes {
+    ids: Arc<RwLock<Arc<HashSet<EndpointId>>>>,
+    /// The config file the list is kept current from, when there is one.
+    file: Option<Arc<PathBuf>>,
+}
 
 impl PrivateNodes {
     pub(crate) fn of(ids: impl IntoIterator<Item = EndpointId>) -> Self {
-        Self(Arc::new(RwLock::new(Arc::new(ids.into_iter().collect()))))
+        Self {
+            ids: Arc::new(RwLock::new(Arc::new(ids.into_iter().collect()))),
+            file: None,
+        }
     }
 
     /// The list in `config`, kept current from the config file it came from
@@ -33,11 +40,20 @@ impl PrivateNodes {
         config_path: Option<&Path>,
         reload: bool,
     ) -> Self {
-        let nodes = Self::of(private_nodes_in(config));
+        let mut nodes = Self::of(private_nodes_in(config));
         if reload && let Ok(path) = crate::plugin::config_path(config_path) {
+            nodes.file = Some(Arc::new(path.clone()));
             spawn_private_nodes_reload(nodes.clone(), path);
         }
         nodes
+    }
+
+    /// Read the list from the config file now, rather than at the next check:
+    /// a config apply does this before it reports the new list as live.
+    pub(crate) fn reload_now(&self) {
+        if let Some(path) = &self.file {
+            self.replace(load_private_nodes(path));
+        }
     }
 
     pub(crate) fn contains(&self, id: &EndpointId) -> bool {
@@ -45,7 +61,7 @@ impl PrivateNodes {
     }
 
     pub(crate) fn current(&self) -> Arc<HashSet<EndpointId>> {
-        self.0
+        self.ids
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -54,7 +70,7 @@ impl PrivateNodes {
     /// Replace the list; true when it changed.
     fn replace(&self, ids: HashSet<EndpointId>) -> bool {
         let mut current = self
-            .0
+            .ids
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if **current == ids {
@@ -103,16 +119,17 @@ fn file_version(path: &Path) -> Option<(SystemTime, u64)> {
 /// Read the list again whenever the config file at `path` changes.
 pub(crate) fn spawn_private_nodes_reload(nodes: PrivateNodes, path: PathBuf) {
     tokio::spawn(async move {
-        // Nothing seen yet, so the first check reads the file again: an edit
-        // made between the node's first read and this task starting counts.
-        let mut seen = None;
+        // Nothing seen yet, so the first check reads the file again, even a
+        // missing one: an edit or removal made between the node's first read
+        // and this task starting counts.
+        let mut seen: Option<Option<(SystemTime, u64)>> = None;
         loop {
             tokio::time::sleep(RELOAD_INTERVAL).await;
             let version = file_version(&path);
-            if version == seen {
+            if seen == Some(version) {
                 continue;
             }
-            seen = version;
+            seen = Some(version);
             let reload_path = path.clone();
             let Ok(ids) =
                 tokio::task::spawn_blocking(move || load_private_nodes(&reload_path)).await
@@ -182,5 +199,41 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         assert!(nodes.current().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_file_removed_before_the_first_check_empties_the_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        write_config(&path, &[id(1)]);
+        let nodes = PrivateNodes::of(load_private_nodes(&path));
+        std::fs::remove_file(&path).unwrap();
+        spawn_private_nodes_reload(nodes.clone(), path.clone());
+
+        for _ in 0..300 {
+            if nodes.current().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(nodes.current().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reload_now_reads_the_file_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        write_config(&path, &[id(1), id(2)]);
+        let config = mesh_llm_config::load_config(Some(&path)).unwrap();
+        let nodes = PrivateNodes::kept_current(&config, Some(&path), true);
+        assert_eq!(*nodes.current(), [id(1), id(2)].into());
+
+        write_config(&path, &[id(2)]);
+        nodes.reload_now();
+        assert_eq!(*nodes.current(), [id(2)].into());
+
+        let unwatched = PrivateNodes::kept_current(&config, Some(&path), false);
+        unwatched.reload_now();
+        assert_eq!(*unwatched.current(), [id(1), id(2)].into());
     }
 }

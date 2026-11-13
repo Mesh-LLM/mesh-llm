@@ -98,6 +98,8 @@ fn connected_nodes_in(status: &serde_json::Value) -> Vec<ConnectedNode> {
         .as_array()
         .into_iter()
         .flatten()
+        // `peers` also holds nodes this one knows of but has no connection to.
+        .filter(|peer| peer["connected"].as_bool() == Some(true))
         .filter_map(|peer| {
             Some(ConnectedNode {
                 // Older nodes report only a short id, which cannot be listed.
@@ -148,14 +150,20 @@ fn listed_nodes(config_override: Option<&Path>) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Replace `[private] nodes` with `nodes`, keeping the rest of the file.
-fn write_nodes(path: &Path, nodes: &[String]) -> Result<()> {
+/// Change `[private] nodes` in the file at `path`, keeping the rest of the
+/// file. `change` gets the list as the file holds it when it is rewritten, so
+/// an edit made since this command started is not lost; nothing is written
+/// when it fails.
+fn update_nodes<T>(path: &Path, change: impl FnOnce(&mut Vec<String>) -> Result<T>) -> Result<T> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
     }
+    let mut outcome = None;
     ConfigStore::open(path)
         .edit_preserving(|document| {
+            let mut nodes = nodes_in(document);
+            outcome = Some(change(&mut nodes)?);
             let private = document
                 .entry("private")
                 .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
@@ -166,7 +174,20 @@ fn write_nodes(path: &Path, nodes: &[String]) -> Result<()> {
             Ok(())
         })
         .with_context(|| format!("failed to update {}", path.display()))?;
-    Ok(())
+    outcome.context("the config edit did not run")
+}
+
+/// `[private] nodes` as `document` holds it, normalized.
+fn nodes_in(document: &toml_edit::DocumentMut) -> Vec<String> {
+    document
+        .get("private")
+        .and_then(|private| private.get("nodes"))
+        .and_then(toml_edit::Item::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str())
+        .map(|id| id.trim().to_ascii_lowercase())
+        .collect()
 }
 
 fn described(id: &str, peers: Option<&[ConnectedNode]>) -> String {
@@ -189,9 +210,15 @@ fn add(
 ) -> Result<()> {
     let id = resolve(node, peers, port)?;
     let path = config_path(config_override)?;
-    let mut nodes = listed_nodes(config_override)?;
+    let added = update_nodes(&path, |nodes| {
+        let added = !nodes.contains(&id);
+        if added {
+            nodes.push(id.clone());
+        }
+        Ok(added)
+    })?;
     let mut out = console_out();
-    if nodes.contains(&id) {
+    if !added {
         writeln!(
             out,
             "{} is already a private node in {}",
@@ -200,8 +227,6 @@ fn add(
         )?;
         return Ok(());
     }
-    nodes.push(id.clone());
-    write_nodes(&path, &nodes)?;
     writeln!(
         out,
         "Private requests may now go to {}. Written to {}",
@@ -219,23 +244,19 @@ fn listed_match(nodes: &[String], node: &str, peers: Option<&[ConnectedNode]>) -
     if nodes.contains(&wanted) {
         return Ok(wanted);
     }
-    let mut matches: Vec<&String> =
-        if !wanted.is_empty() && wanted.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            nodes.iter().filter(|id| id.starts_with(&wanted)).collect()
-        } else {
-            Vec::new()
-        };
-    if matches.is_empty() {
-        matches = nodes
-            .iter()
-            .filter(|id| {
-                peers
+    // A prefix and a name can both match: take every listed node named
+    // either way, so two different nodes are refused rather than guessed.
+    let is_prefix = !wanted.is_empty() && wanted.chars().all(|ch| ch.is_ascii_hexdigit());
+    let matches: Vec<&String> = nodes
+        .iter()
+        .filter(|id| {
+            (is_prefix && id.starts_with(&wanted))
+                || peers
                     .into_iter()
                     .flatten()
                     .any(|peer| &peer.node_id == *id && peer.is_called(node))
-            })
-            .collect();
-    }
+        })
+        .collect();
     match matches.as_slice() {
         [id] => Ok((*id).clone()),
         [] => bail!(
@@ -252,18 +273,19 @@ fn remove(
     port: u16,
 ) -> Result<()> {
     let path = config_path(config_override)?;
-    let mut nodes = listed_nodes(config_override)?;
-    let id = match listed_match(&nodes, node, peers) {
-        Ok(id) => id,
-        Err(error) if peers.is_none() && !is_node_id(node) => {
-            return Err(error.context(format!(
-                "no mesh-llm is answering on port {port} to look up connected node names"
-            )));
-        }
-        Err(error) => return Err(error),
-    };
-    nodes.retain(|listed| listed != &id);
-    write_nodes(&path, &nodes)?;
+    let (id, left) = update_nodes(&path, |nodes| {
+        let id = match listed_match(nodes, node, peers) {
+            Ok(id) => id,
+            Err(error) if peers.is_none() && !is_node_id(node) => {
+                return Err(error.context(format!(
+                    "no mesh-llm is answering on port {port} to look up connected node names"
+                )));
+            }
+            Err(error) => return Err(error),
+        };
+        nodes.retain(|listed| listed != &id);
+        Ok((id, nodes.len()))
+    })?;
     let mut out = console_out();
     writeln!(
         out,
@@ -271,7 +293,7 @@ fn remove(
         described(&id, peers),
         path.display()
     )?;
-    if nodes.is_empty() {
+    if left == 0 {
         writeln!(
             out,
             "No private nodes are left: private requests stay on this node."

@@ -522,6 +522,8 @@ pub(crate) struct PeerPayload {
     pub(crate) id: String,
     /// The full node id, as `[private] nodes` and `mesh-llm private add` take it.
     pub(crate) node_id: String,
+    /// Whether this node has a live connection to the peer now.
+    pub(crate) connected: bool,
     pub(crate) owner: OwnershipPayload,
     pub(crate) release_attestation: ReleaseAttestationSummary,
     pub(crate) role: String,
@@ -968,6 +970,7 @@ mod tests {
             memory: None,
             id: "test-id".to_string(),
             node_id: "test-id".to_string(),
+            connected: true,
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
             role: "Worker".to_string(),
@@ -1003,6 +1006,7 @@ mod tests {
             memory: None,
             id: "test-id".to_string(),
             node_id: "test-id".to_string(),
+            connected: true,
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
             role: "Worker".to_string(),
@@ -1336,6 +1340,7 @@ mod tests {
             memory: None,
             id: "test-id".to_string(),
             node_id: "test-id".to_string(),
+            connected: true,
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
             role: "Host".to_string(),

@@ -1228,6 +1228,7 @@ fn build_peer_payload(peer: &mesh::PeerInfo, has_connection: bool) -> PeerPayloa
     PeerPayload {
         id: peer.id.fmt_short().to_string(),
         node_id: peer.id.to_string(),
+        connected: has_connection,
         owner: build_ownership_payload(&peer.owner_summary),
         release_attestation: peer.release_attestation_summary.clone(),
         role: match peer.role {

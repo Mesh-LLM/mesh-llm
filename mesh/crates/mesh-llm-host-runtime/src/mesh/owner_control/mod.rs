@@ -171,6 +171,25 @@ where
     (result, current_revision, current_hash)
 }
 
+impl Node {
+    /// Put back what an applied snapshot does not carry: redacted telemetry
+    /// headers, and the `[private]` list a legacy snapshot has no field for.
+    async fn restore_unsent_settings(
+        &self,
+        mesh_config: &mut crate::plugin::MeshConfig,
+        snapshot: &crate::proto::node::NodeConfigSnapshot,
+    ) {
+        let state = self.config_state.lock().await;
+        crate::protocol::config_redaction::restore_redacted_telemetry_headers(
+            mesh_config,
+            &state.config().telemetry.headers,
+        );
+        if snapshot.config_toml.is_none() {
+            mesh_config.private = state.config().private.clone();
+        }
+    }
+}
+
 async fn await_owner_control_terminal_completion<F, E, T>(future: F) -> anyhow::Result<()>
 where
     F: Future<Output = Result<Option<T>, E>>,
@@ -805,18 +824,8 @@ impl Node {
                         .await;
                 }
             };
-        let current_headers = self
-            .config_state
-            .lock()
-            .await
-            .config()
-            .telemetry
-            .headers
-            .clone();
-        crate::protocol::config_redaction::restore_redacted_telemetry_headers(
-            &mut mesh_config,
-            &current_headers,
-        );
+        self.restore_unsent_settings(&mut mesh_config, &config_snapshot)
+            .await;
         let current_plugins = self.config_state.lock().await.config().plugins.clone();
         if let Some(error) = plugin_command_approval::plugin_command_approval_error(
             &current_plugins,
@@ -841,14 +850,17 @@ impl Node {
         let expected_revision = apply.expected_revision;
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             preflight_pushed_config_for_current_node(&mesh_config)?;
-            Ok(exchange_grants::apply_with_exchange_grants(
+            let applied = exchange_grants::apply_with_exchange_grants(
                 config_state,
                 mesh_config,
                 expected_revision,
                 crate::runtime::config_state::PendingConfigApply::persist,
                 || runtime.block_on(node.plugin_manager()),
                 runtime.clone(),
-            ))
+            );
+            // The written `[private]` list is live before the reply says so.
+            node.private_nodes.reload_now();
+            Ok(applied)
         })
         .await
         .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;

@@ -570,6 +570,15 @@ impl ConfigState {
         expected_revision: u64,
     ) -> ConfigApplyPreparation {
         record_config_operational_event(ConfigOperationalEvent::ApplyStarted);
+        // `mesh-llm private` and hand edits change `[private]` in the file
+        // without telling this state. An apply that leaves the list as this
+        // state knew it keeps the file's current list, so a stale snapshot
+        // cannot bring back a removed node.
+        if new_config.private == self.config.private
+            && let Ok(on_disk) = mesh_llm_config::load_config(Some(&self.config_path))
+        {
+            new_config.private = on_disk.private;
+        }
         new_config.source_directory = self.config.source_directory.clone().or_else(|| {
             std::path::absolute(&self.config_path)
                 .ok()

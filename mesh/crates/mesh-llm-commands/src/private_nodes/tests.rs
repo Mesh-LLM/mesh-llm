@@ -8,6 +8,13 @@ fn config_in(dir: &TempDir) -> std::path::PathBuf {
     dir.path().join("config.toml")
 }
 
+fn write_nodes(path: &std::path::Path, nodes: &[String]) -> Result<()> {
+    update_nodes(path, |listed| {
+        *listed = nodes.to_vec();
+        Ok(())
+    })
+}
+
 fn peers() -> Vec<ConnectedNode> {
     vec![
         ConnectedNode {
@@ -113,10 +120,11 @@ fn removing_an_unlisted_node_fails_without_writing() {
 fn status_peers_without_a_full_node_id_are_skipped() {
     let status = serde_json::json!({
         "peers": [
-            {"id": "111111", "node_id": STUDIO, "hostname": "studio.local",
-             "owner": {"node_label": "studio"}},
+            {"id": "111111", "node_id": STUDIO, "connected": true,
+             "hostname": "studio.local", "owner": {"node_label": "studio"}},
+            {"id": "222222", "node_id": MINI, "connected": false, "hostname": "mini.local"},
             {"id": "333333", "hostname": "old-node"},
-            {"id": "444444", "node_id": "444444", "owner": {}},
+            {"id": "444444", "node_id": "444444", "connected": true, "owner": {}},
         ]
     });
     assert_eq!(
@@ -136,4 +144,24 @@ fn list_works_without_a_running_node() {
     list(Some(&path), None, 3131, false).expect("empty list");
     write_nodes(&path, &[STUDIO.to_string()]).expect("seed");
     list(Some(&path), Some(&peers()), 3131, true).expect("json list");
+}
+
+#[test]
+fn a_prefix_and_a_name_that_name_different_nodes_are_refused() {
+    let cafe = format!("cafe{}", "0".repeat(60));
+    let peers = vec![ConnectedNode {
+        node_id: MINI.to_string(),
+        label: Some("cafe".to_string()),
+        hostname: None,
+    }];
+    let nodes = vec![cafe.clone(), MINI.to_string()];
+
+    let error = listed_match(&nodes, "cafe", Some(&peers))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("more than one"), "{error}");
+    assert_eq!(
+        listed_match(&nodes, "cafe", None).expect("prefix only"),
+        cafe
+    );
 }
