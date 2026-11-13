@@ -178,6 +178,45 @@ mod tests {
     }
 
     #[test]
+    fn replacement_requires_a_new_anonymous_observation() {
+        let collector = RuntimeDataCollector::new();
+        collector.update_runtime_status(crate::runtime_data::RuntimeDataDirty::RUNTIME, |status| {
+            status.primary_model = Some("chat".into());
+            true
+        });
+        collector.register_runtime_instance("chat", "a");
+        let mut anonymous = observation("chat", "a", &[8192], 100);
+        anonymous.instance_id = None;
+        collector.replace_llama_slots_snapshot(anonymous.clone());
+        assert_eq!(
+            snapshot(&collector, "chat").unwrap().context_pool_tokens,
+            8192
+        );
+
+        collector.unregister_runtime_instance("a");
+        collector.register_runtime_instance("chat", "b");
+        assert_eq!(snapshot(&collector, "chat"), None);
+        // Publishing another model reselects the legacy model projection.
+        let mut other = observation("other", "c", &[4096], 200);
+        other.instance_id = None;
+        collector.replace_llama_slots_snapshot(other);
+        assert_eq!(snapshot(&collector, "chat"), None);
+
+        anonymous.slots[0].n_ctx = Some(16384);
+        anonymous.last_success_unix_ms = Some(300);
+        collector.replace_llama_slots_snapshot(anonymous);
+        assert_eq!(
+            snapshot(&collector, "chat"),
+            Some(RuntimeCapacity {
+                execution_lanes: 1,
+                context_tokens_per_lane: 16384,
+                context_pool_tokens: 16384,
+                captured_at_unix_ms: 300,
+            })
+        );
+    }
+
+    #[test]
     fn retired_instances_do_not_count_or_block_a_later_load() {
         let collector = RuntimeDataCollector::new();
         collector.register_runtime_instance("chat", "a");
