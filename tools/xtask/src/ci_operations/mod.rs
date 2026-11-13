@@ -49,7 +49,6 @@ pub(crate) mod json_decode;
 mod performance_history;
 mod prepared_images;
 mod registry_pulls;
-mod runner_cleanup;
 mod runner_identity;
 pub(crate) mod runner_identity_argv;
 mod runner_identity_check;

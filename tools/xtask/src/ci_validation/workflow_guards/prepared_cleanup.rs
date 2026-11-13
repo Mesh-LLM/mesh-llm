@@ -56,8 +56,17 @@ pub(super) fn check(job: &Node) -> DynResult<()> {
             return Err("prepared managed phases must not mask errors or skip admission".into());
         }
     }
+    let work = &steps[work_index];
+    let runner_contract = field(work, "name") == Some("Check trusted runner package");
+    // Only the runner-image job needs nothing beyond cleanup; Laya jobs run other xtask commands.
+    let recipe = if runner_contract {
+        "just runner-cleanup-bootstrap"
+    } else {
+        "just automation-bootstrap"
+    };
+    let expected = PREPARE.replace("{bootstrap}", recipe);
     if field(prepare, "timeout-minutes") != Some("20")
-        || field(prepare, "run").map(lines) != Some(lines(PREPARE))
+        || field(prepare, "run").map(lines) != Some(lines(&expected))
         || prepare.get("env").and_then(|env| field(env, "SOURCE_SHA"))
             != Some("${{ inputs.source_sha || github.sha }}")
         || field(admit, "run").map(lines) != Some(lines(ADMIT))
@@ -67,9 +76,8 @@ pub(super) fn check(job: &Node) -> DynResult<()> {
                 .into(),
         );
     }
-    let work = &steps[work_index];
     let cleanup = field(&steps[cleanup_index], "run").ok_or("cleanup run missing")?;
-    let valid = if field(work, "name") == Some("Check trusted runner package") {
+    let valid = if runner_contract {
         field(job, "timeout-minutes") == Some("45")
             && field(work, "timeout-minutes") == Some("15")
             && field(work, "run") == Some("cargo check --locked -p mesh-llm-config")
@@ -96,7 +104,7 @@ pub(super) fn check(job: &Node) -> DynResult<()> {
 const PREPARE: &str = r#"set -euo pipefail
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
 test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-report="$(just automation-bootstrap)"
+report="$({bootstrap})"
 binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
 [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
 sha="$(sha256sum "$binary" | awk '{print $1}')"

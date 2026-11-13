@@ -94,6 +94,7 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "authority-automation",
     "ci-controller",
     "process-supervision",
+    "runner-cleanup",
     "trajectory-reader",
     "xtask",
 ];
