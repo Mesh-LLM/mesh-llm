@@ -101,7 +101,8 @@ fn d05_each_malformed_or_mismatched_status_fails_cli() {
         let output = command(&case).output().unwrap();
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains(reason));
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostics.contains(reason), "{body}: {diagnostics}");
         assert!(!case.native.join("models.count").exists());
         assert!(sentinel.0.try_wait().unwrap().is_none());
         case.assert_removed();
