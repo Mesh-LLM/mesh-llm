@@ -20,6 +20,7 @@ pub(crate) use membership::{
 
 pub(crate) use local_request_metrics::LocalRequestMetricsSampler;
 pub use local_request_metrics::LocalRequestMetricsSnapshot;
+pub(crate) use routing_telemetry::InferenceAttemptReport;
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;

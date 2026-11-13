@@ -173,6 +173,7 @@ pub fn report_hardware_profile() {
             Metric::IsSoc,
         ]);
         let flavors = skippy_hardware_profile::host_runtime_profile().available_flavors;
+        mesh_llm_analytics::set_serving_hardware(serving_hardware(&survey, &flavors));
         mesh_llm_analytics::capture(
             Event::HardwareProfile,
             hardware_properties(&survey, &flavors),
@@ -265,6 +266,115 @@ fn gpu_model(survey: &mesh_llm_system::hardware::HardwareSurvey) -> mesh_llm_ana
     } else {
         mesh_llm_analytics::Value::from("none")
     }
+}
+
+/// The machine class `inference_request` carries: backend, GPU family, and
+/// VRAM, from the same survey `hardware_profile` reports.
+fn serving_hardware(
+    survey: &mesh_llm_system::hardware::HardwareSurvey,
+    flavors: &std::collections::BTreeSet<skippy_native_runtime::NativeRuntimeBackendKind>,
+) -> mesh_llm_analytics::ServingHardware {
+    let gpu_family = match gpu_model(survey) {
+        mesh_llm_analytics::Value::Text(label) => gpu_family(label.as_str())
+            .map_or_else(|| mesh_llm_analytics::Value::from("unreported"), Into::into),
+        other => other,
+    };
+    mesh_llm_analytics::ServingHardware {
+        backend: serving_backend(survey, flavors),
+        gpu_family,
+        vram_gb: (survey.vram_bytes > 0).then(|| mesh_llm_analytics::gigabytes(survey.vram_bytes)),
+    }
+}
+
+/// The backend serving runs on.
+///
+/// The loaded runtime names its devices (`CUDA0`, `MTL0`, `Vulkan0`,
+/// `ROCm0`), which is the backend actually in use. When the survey ran before
+/// a runtime loaded, the best backend this machine can run stands in: the
+/// runtime selection prefers the same order.
+fn serving_backend(
+    survey: &mesh_llm_system::hardware::HardwareSurvey,
+    flavors: &std::collections::BTreeSet<skippy_native_runtime::NativeRuntimeBackendKind>,
+) -> &'static str {
+    use skippy_native_runtime::NativeRuntimeBackendKind as Backend;
+
+    let device_backend = survey
+        .gpus
+        .iter()
+        .filter_map(|gpu| gpu.backend_device.as_deref())
+        .find_map(backend_of_device);
+    if let Some(backend) = device_backend {
+        return backend;
+    }
+    [
+        (Backend::Cuda, "cuda"),
+        (Backend::Rocm, "rocm"),
+        (Backend::Metal, "metal"),
+        (Backend::Vulkan, "vulkan"),
+    ]
+    .into_iter()
+    .find(|(kind, _)| flavors.contains(kind))
+    .map_or("cpu", |(_, name)| name)
+}
+
+fn backend_of_device(device: &str) -> Option<&'static str> {
+    let device = device.to_ascii_lowercase();
+    [
+        ("cuda", "cuda"),
+        ("rocm", "rocm"),
+        ("hip", "rocm"),
+        ("mtl", "metal"),
+        ("metal", "metal"),
+        ("vulkan", "vulkan"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| device.starts_with(prefix))
+    .map(|(_, backend)| backend)
+}
+
+/// Words in a device slug that name a vendor or a form factor, not a part.
+const GPU_FAMILY_NOISE: &[&str] = &[
+    "nvidia",
+    "geforce",
+    "amd",
+    "intel",
+    "r",
+    "tm",
+    "gpu",
+    "graphics",
+    "laptop",
+    "generation",
+];
+
+/// Reduce a `gpu_model` slug to its family: `apple-m4-max` and `apple-m4-pro`
+/// are `apple-m4`, `nvidia-geforce-rtx-4090-laptop-gpu` is `rtx-4090`,
+/// `nvidia-gb10` is `gb10`.
+///
+/// A leading device count (`2-nvidia-…`) is dropped, a second device in a
+/// mixed-GPU name is cut off, and the result is at most three segments, so
+/// the family has fewer values than `gpu_model` and never more.
+fn gpu_family(slug: &str) -> Option<mesh_llm_analytics::Label> {
+    let mut segments = slug
+        .split('-')
+        .skip_while(|segment| segment.chars().all(|c| c.is_ascii_digit()))
+        .peekable();
+    let first = *segments.peek()?;
+    if first == "apple" {
+        let family = segments.take(2).collect::<Vec<_>>().join("-");
+        return mesh_llm_analytics::Label::sanitize(&family);
+    }
+    let mut kept = Vec::new();
+    for (index, segment) in segments.enumerate() {
+        if index > 0 && segment == first {
+            // A second device's vendor prefix: `rtx-5090-nvidia-geforce-…`.
+            break;
+        }
+        if !GPU_FAMILY_NOISE.contains(&segment) {
+            kept.push(segment);
+        }
+    }
+    kept.truncate(3);
+    mesh_llm_analytics::Label::sanitize(&kept.join("-"))
 }
 
 /// Record a model download attempt, which is the clearest signal of what
@@ -391,6 +501,63 @@ mod tests {
             !rendered.contains(&(36 * GB + GB / 10).to_string()),
             "exact byte count leaked: {rendered}"
         );
+    }
+
+    #[test]
+    fn gpu_families_collapse_variants_and_vendor_words() {
+        for (slug, family) in [
+            ("apple-m4-max", "apple-m4"),
+            ("apple-m5-pro", "apple-m5"),
+            ("apple-m4", "apple-m4"),
+            ("nvidia-gb10", "gb10"),
+            ("nvidia-geforce-rtx-4090", "rtx-4090"),
+            ("nvidia-geforce-rtx-4090-laptop-gpu", "rtx-4090"),
+            ("nvidia-geforce-rtx-3060-ti", "rtx-3060-ti"),
+            ("2-nvidia-geforce-rtx-4090", "rtx-4090"),
+            (
+                "nvidia-geforce-rtx-5090-nvidia-geforce-rtx-3080",
+                "rtx-5090",
+            ),
+            ("nvidia-rtx-2000-ada-generation-laptop-gpu", "rtx-2000-ada"),
+            ("intel-r-iris-r-xe-graphics", "iris-xe"),
+            ("tesla-t4", "tesla-t4"),
+        ] {
+            assert_eq!(
+                gpu_family(slug).map(|label| label.as_str().to_owned()),
+                Some(family.to_owned()),
+                "{slug}"
+            );
+        }
+    }
+
+    #[test]
+    fn serving_hardware_names_the_backend_in_use() {
+        let mut survey = survey(Some("NVIDIA GB10"), 1, 120 << 30, true);
+        survey.gpus = vec![mesh_llm_system::hardware::GpuFacts {
+            backend_device: Some("CUDA0".to_string()),
+            ..Default::default()
+        }];
+        let hardware = serving_hardware(&survey, &metal_only());
+
+        assert_eq!(hardware.backend, "cuda");
+        assert_eq!(
+            hardware.gpu_family,
+            mesh_llm_analytics::Value::from(mesh_llm_analytics::Label::sanitize("gb10").unwrap())
+        );
+        assert_eq!(hardware.vram_gb, Some(120));
+    }
+
+    #[test]
+    fn serving_hardware_falls_back_to_the_best_available_backend() {
+        let survey = survey(None, 0, 0, false);
+        assert_eq!(serving_hardware(&survey, &metal_only()).backend, "metal");
+        assert_eq!(
+            serving_hardware(&survey, &std::collections::BTreeSet::new()).backend,
+            "cpu"
+        );
+        let none = serving_hardware(&survey, &metal_only());
+        assert_eq!(none.gpu_family, mesh_llm_analytics::Value::from("none"));
+        assert_eq!(none.vram_gb, None);
     }
 
     #[test]
