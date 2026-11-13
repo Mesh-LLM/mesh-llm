@@ -10,15 +10,16 @@ use std::path::Path;
 
 use super::LocalOpenAiModelStartSpec;
 
-/// What the runtime of `model_name` needs to issue receipts, or `None` when
-/// the node issues none.
+/// What the runtime of `model_name`, loaded from the GGUF at `model_path`,
+/// needs to issue receipts, or `None` when the node issues none.
 pub(super) fn receipts_options(
     spec: &LocalOpenAiModelStartSpec<'_>,
+    model_path: &Path,
     model_name: &str,
 ) -> Option<skippy_serving::receipts::ReceiptsOptions> {
     spec.mesh_config.receipts.enabled.then(|| {
         skippy_serving::receipts::ReceiptsOptions::embedded(
-            receipt_model(spec.model_path, model_name),
+            receipt_model(model_path, model_name),
             spec.receipts_signing_key,
         )
     })
@@ -177,9 +178,11 @@ pub(in crate::runtime) fn model_issues_receipts(instances: impl IntoIterator<Ite
     instances.peek().is_some() && instances.all(|issues| issues)
 }
 
-/// Whether the node advertises receipts for the model it just loaded.
+/// Whether the node advertises receipts for the model it just loaded from
+/// the GGUF at `model_path`.
 pub(super) fn advertised(
     spec: &LocalOpenAiModelStartSpec<'_>,
+    model_path: &Path,
     model_name: &str,
     model: &crate::inference::skippy::SkippyModelHandle,
     workload_class: crate::mesh::ModelWorkloadClass,
@@ -190,7 +193,7 @@ pub(super) fn advertised(
             spec.mesh_config.receipts.enabled,
             RuntimeReceipts::of(model),
             workload_class,
-            &receipt_model(spec.model_path, model_name),
+            &receipt_model(model_path, model_name),
         ),
     )
 }
