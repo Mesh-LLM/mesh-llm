@@ -380,7 +380,7 @@ pub(super) fn exchange_output_digests_from_outcome(
 /// model. Returns `None` — no id derived, no publish
 /// — when nobody declares `openai.exchange.v1`: nothing downstream would
 /// ever see it.
-pub(super) async fn mint_and_publish_effective_raw_proxy(
+pub(super) async fn derive_and_publish_effective_raw_proxy(
     plugin_manager: &crate::plugin::PluginManager,
     request: &proxy::BufferedHttpRequest,
     model_name: &str,
