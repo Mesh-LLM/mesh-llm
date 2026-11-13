@@ -18,7 +18,6 @@ use skippy_inference_api::GenerationHookSignals;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceRequestContext;
 use skippy_inference_api::InferenceResult;
-use skippy_inference_api::MessageContent;
 use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
@@ -43,6 +42,14 @@ pub(in crate::frontend) struct RenderedChatPrompt {
 pub(in crate::frontend) enum PromptRenderSelection {
     Native(RenderedChatPrompt),
     Emulated,
+    ProjectedHistory(RenderedChatPrompt),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::frontend) enum ToolTemplateView {
+    Request,
+    CapabilityProbe,
+    WithoutTools,
 }
 
 impl StageOpenAiBackend {
@@ -95,61 +102,48 @@ impl StageOpenAiBackend {
             request,
             instruction.is_some(),
             force_emulation,
-            |messages| {
-                self.render_chat_prompt(&reader, request, &options, &marker, Some(messages), true)
-            },
-        )?;
-
-        // If the request carries tools but the template does not support native
-        // tool calling, re-render with server-side tool-call emulation: strip
-        // tools, inject a text-convention instruction, and rewrite history so
-        // the template never sees tool roles. Tool-capable templates keep the
-        // native prompt unchanged.
-        if matches!(&selection, PromptRenderSelection::Emulated)
-            && let Some(instruction) = instruction
-        {
-            let rewritten =
-                tool_emulation::rewrite_history_for_emulation(&request.messages, &instruction);
-            let emulated = self.render_chat_prompt(
-                &reader,
-                request,
-                &options,
-                &marker,
-                Some(&rewritten),
-                false,
-            )?;
-            let recurrent_cache_prefix_text = if self
-                .kv
-                .as_ref()
-                .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
-                && emulated.media.is_empty()
-                && options.add_assistant
-            {
-                let mut prefix_options = options.clone();
-                prefix_options.add_assistant = false;
+            |messages, tool_view| {
                 self.render_chat_prompt(
                     &reader,
                     request,
-                    &prefix_options,
+                    &options,
+                    &marker,
+                    Some(messages),
+                    tool_view,
+                )
+            },
+        )?;
+
+        // A non-native template gets a temporary model-view projection. Active
+        // tool requests also receive the emulation instruction; history-only
+        // continuations do not expose schemas or enable new calls.
+        let native = match selection {
+            PromptRenderSelection::Native(native) => native,
+            PromptRenderSelection::Emulated => {
+                let instruction = instruction
+                    .as_deref()
+                    .expect("emulation selection requires an instruction");
+                let rewritten =
+                    tool_emulation::rewrite_history_for_emulation(&request.messages, instruction);
+                let rendered = self.render_chat_prompt(
+                    &reader,
+                    request,
+                    &options,
                     &marker,
                     Some(&rewritten),
-                    false,
-                )
-                .ok()
-                .map(|rendered| rendered.prompt)
-            } else {
-                None
-            };
-            return Ok(PreparedGenerationPrompt {
-                text: emulated.prompt,
-                media: emulated.media,
-                chat_parse_metadata: Some(emulated.metadata_json),
-                recurrent_cache_prefix_text,
-            });
-        }
-
-        let PromptRenderSelection::Native(native) = selection else {
-            unreachable!("emulation selection requires an instruction")
+                    ToolTemplateView::WithoutTools,
+                )?;
+                return Ok(self.prepared_projected_chat_prompt(
+                    &reader, request, &options, &marker, &rewritten, rendered,
+                ));
+            }
+            PromptRenderSelection::ProjectedHistory(rendered) => {
+                let rewritten =
+                    tool_emulation::project_tool_history_for_template(&request.messages);
+                return Ok(self.prepared_projected_chat_prompt(
+                    &reader, request, &options, &marker, &rewritten, rendered,
+                ));
+            }
         };
 
         let recurrent_cache_prefix_text = if self
@@ -161,9 +155,16 @@ impl StageOpenAiBackend {
         {
             let mut prefix_options = options.clone();
             prefix_options.add_assistant = false;
-            self.render_chat_prompt(&reader, request, &prefix_options, &marker, None, true)
-                .ok()
-                .map(|rendered| rendered.prompt)
+            self.render_chat_prompt(
+                &reader,
+                request,
+                &prefix_options,
+                &marker,
+                None,
+                ToolTemplateView::Request,
+            )
+            .ok()
+            .map(|rendered| rendered.prompt)
         } else {
             None
         };
@@ -175,9 +176,49 @@ impl StageOpenAiBackend {
         })
     }
 
+    fn prepared_projected_chat_prompt(
+        &self,
+        reader: &skippy_runtime::StageModelReader,
+        request: &GenerationRequest,
+        options: &ChatTemplateOptions,
+        marker: &str,
+        messages: &[GenerationMessage],
+        rendered: RenderedChatPrompt,
+    ) -> PreparedGenerationPrompt {
+        let recurrent_cache_prefix_text = if self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
+            && rendered.media.is_empty()
+            && options.add_assistant
+        {
+            let mut prefix_options = options.clone();
+            prefix_options.add_assistant = false;
+            self.render_chat_prompt(
+                reader,
+                request,
+                &prefix_options,
+                marker,
+                Some(messages),
+                ToolTemplateView::WithoutTools,
+            )
+            .ok()
+            .map(|rendered| rendered.prompt)
+        } else {
+            None
+        };
+        PreparedGenerationPrompt {
+            text: rendered.prompt,
+            media: rendered.media,
+            chat_parse_metadata: Some(rendered.metadata_json),
+            recurrent_cache_prefix_text,
+        }
+    }
+
     /// Applies the chat template for the given messages. When `messages` is
-    /// `None`, the request's own messages are used. When `include_tools` is
-    /// false, `tools`/`tool_choice` are omitted (used by the emulation path).
+    /// `None`, the request's own messages are used. `tool_view` controls whether
+    /// the request's tool controls, probe-only enabled controls, or no tool
+    /// controls are exposed to the template.
     fn render_chat_prompt(
         &self,
         reader: &skippy_runtime::StageModelReader,
@@ -185,7 +226,7 @@ impl StageOpenAiBackend {
         options: &ChatTemplateOptions,
         marker: &str,
         messages: Option<&[skippy_inference_api::generation::GenerationMessage]>,
-        include_tools: bool,
+        tool_view: ToolTemplateView,
     ) -> InferenceResult<RenderedChatPrompt> {
         let source_messages = messages.unwrap_or(&request.messages);
         let mut media = Vec::new();
@@ -196,28 +237,7 @@ impl StageOpenAiBackend {
         let messages_json = serde_json::to_string(&template_messages).map_err(|error| {
             InferenceError::invalid_request(format!("serialize messages: {error}"))
         })?;
-        let tools_json = if include_tools {
-            effective_tools_for_choice(request.tools.as_ref(), request.tool_choice.as_ref())
-                .map(|value| serde_json::to_string(&value))
-                .transpose()
-                .map_err(|error| {
-                    InferenceError::invalid_request(format!("serialize tools: {error}"))
-                })?
-        } else {
-            None
-        };
-        let tool_choice_json = if include_tools {
-            request
-                .tool_choice
-                .as_ref()
-                .map(serde_json::to_string)
-                .transpose()
-                .map_err(|error| {
-                    InferenceError::invalid_request(format!("serialize tool_choice: {error}"))
-                })?
-        } else {
-            None
-        };
+        let (tools_json, tool_choice_json) = template_tool_controls(request, tool_view)?;
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -414,13 +434,104 @@ impl StageOpenAiBackend {
     }
 }
 
+pub(in crate::frontend) fn template_tool_controls(
+    request: &GenerationRequest,
+    tool_view: ToolTemplateView,
+) -> InferenceResult<(Option<String>, Option<String>)> {
+    if tool_view == ToolTemplateView::WithoutTools {
+        return Ok((None, None));
+    }
+    let tools = match tool_view {
+        ToolTemplateView::Request => {
+            effective_tools_for_choice(request.tools.as_ref(), request.tool_choice.as_ref())
+        }
+        ToolTemplateView::CapabilityProbe => capability_probe_tools(request),
+        ToolTemplateView::WithoutTools => unreachable!("handled above"),
+    };
+    let tools_json = tools
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(|error| InferenceError::invalid_request(format!("serialize tools: {error}")))?;
+    let tool_choice_json = match tool_view {
+        ToolTemplateView::Request => request
+            .tool_choice
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| {
+                InferenceError::invalid_request(format!("serialize tool_choice: {error}"))
+            })?,
+        ToolTemplateView::CapabilityProbe => tools_json.as_ref().map(|_| "\"auto\"".to_string()),
+        ToolTemplateView::WithoutTools => unreachable!("handled above"),
+    };
+    Ok((tools_json, tool_choice_json))
+}
+
+/// Supplies definitions only while asking the immutable template reader whether
+/// it has native tool support. The probe never reaches generation or the final
+/// prompt. Without current definitions, historical call names are enough for
+/// the native renderer; the empty object schemas deliberately claim no stored
+/// argument semantics.
+fn capability_probe_tools(request: &GenerationRequest) -> Option<Value> {
+    if request
+        .tools
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|tools| !tools.is_empty())
+    {
+        return request.tools.clone();
+    }
+
+    let mut names = Vec::new();
+    for message in &request.messages {
+        if message.role != "assistant" {
+            continue;
+        }
+        let Some(calls) = message.extra.get("tool_calls").and_then(Value::as_array) else {
+            continue;
+        };
+        for call in calls {
+            let name = call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .or_else(|| call.get("name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty());
+            if let Some(name) = name
+                && !names.contains(&name)
+            {
+                names.push(name);
+            }
+        }
+    }
+    (!names.is_empty()).then(|| {
+        Value::Array(
+            names
+                .into_iter()
+                .map(|name| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "parameters": {"type": "object", "properties": {}}
+                        }
+                    })
+                })
+                .collect(),
+        )
+    })
+}
+
 pub(in crate::frontend) fn select_tool_prompt_render(
     request: &GenerationRequest,
     emulation_available: bool,
     force_emulation: bool,
-    mut render: impl FnMut(&[GenerationMessage]) -> InferenceResult<RenderedChatPrompt>,
+    mut render: impl FnMut(
+        &[GenerationMessage],
+        ToolTemplateView,
+    ) -> InferenceResult<RenderedChatPrompt>,
 ) -> InferenceResult<PromptRenderSelection> {
-    match render(&request.messages) {
+    match render(&request.messages, ToolTemplateView::Request) {
         Ok(native) => {
             if emulation_available
                 && tool_calls_requested(request)
@@ -435,28 +546,31 @@ pub(in crate::frontend) fn select_tool_prompt_render(
             }
         }
         Err(native_error) => {
-            if !emulation_available
-                || !tool_calls_requested(request)
-                || !history_contains_tool_protocol(&request.messages)
-            {
+            if !history_contains_tool_protocol(&request.messages) {
                 return Err(native_error);
             }
             if force_emulation {
                 return Ok(PromptRenderSelection::Emulated);
             }
+            if capability_probe_tools(request).is_none() {
+                return Err(native_error);
+            }
 
-            let probe = [GenerationMessage {
-                role: "user".to_string(),
-                content: Some(MessageContent::Text("Hello".to_string())),
-                extra: Default::default(),
-            }];
-            match render(&probe) {
-                Ok(probe)
+            let probe = tool_emulation::project_tool_history_for_template(&request.messages);
+            match render(&probe, ToolTemplateView::CapabilityProbe) {
+                Ok(probe_rendered)
                     if !tool_emulation::template_supports_native_tool_calls(
-                        &probe.metadata_json,
+                        &probe_rendered.metadata_json,
                     ) =>
                 {
-                    Ok(PromptRenderSelection::Emulated)
+                    if tool_calls_requested(request) {
+                        Ok(PromptRenderSelection::Emulated)
+                    } else {
+                        match render(&probe, ToolTemplateView::WithoutTools) {
+                            Ok(rendered) => Ok(PromptRenderSelection::ProjectedHistory(rendered)),
+                            Err(_) => Err(native_error),
+                        }
+                    }
                 }
                 Ok(_) | Err(_) => Err(native_error),
             }
