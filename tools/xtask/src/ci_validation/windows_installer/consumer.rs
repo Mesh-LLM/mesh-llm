@@ -227,6 +227,9 @@ fn native_windows_consumer_noninteractive_prints_setup_and_installs_runtime() {
             .path("bin/native-runtimes/test-runtime/manifest.json")
             .is_file()
     );
+    assert!(result.path("start-menu/MeshLLM.lnk").is_file());
+    assert!(result.path("bin/mesh-llm-console.ps1").is_file());
+    assert!(result.output().contains("Added MeshLLM to the Start menu"));
     result.finish();
 }
 #[test]
@@ -268,6 +271,8 @@ fn native_windows_consumer_tampered_host_digest_preserves_existing_install() {
         b"{\"existing\":true}\n"
     );
     assert!(result.calls().is_empty());
+    // A rejected install adds no Start menu entry.
+    assert!(!result.path("start-menu/MeshLLM.lnk").exists());
     result.finish();
 }
 #[test]
