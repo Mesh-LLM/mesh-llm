@@ -307,6 +307,27 @@ fn a_turn_no_client_can_challenge_pins_nothing() {
     assert!(recorder.pinned_cells(now).is_empty());
 }
 
+// Each challenge holds the turn for its own opening: a duplicate that is
+// turned away, and ends first, does not release the cells one being
+// replayed still needs.
+#[test]
+fn a_challenge_turned_away_keeps_the_pin_of_one_being_opened() {
+    let recorder = Recorder::new(1, STAGES[1].clone(), "cpu");
+    record(&recorder, ubatch(&[(1, 0), (1, 1)], &[4, 5], true));
+    recorder.commit("r1", 1, TurnId::default(), 0..2).unwrap();
+    let now = std::time::Instant::now();
+    let past_window = now + CHALLENGE_PIN;
+    let arrived = now + std::time::Duration::from_secs(10);
+    // the first is being replayed when a duplicate arrives and is refused
+    recorder.hold_for_opening("r1", arrived);
+    recorder.hold_for_opening("r1", arrived);
+    recorder.end_opening("r1");
+    assert_eq!(cells(&recorder, past_window), vec![4, 5]);
+    // once the replayed one ends, the pin it held is gone
+    recorder.end_opening("r1");
+    assert!(recorder.pinned_cells(past_window).is_empty());
+}
+
 // A challenge that arrives while its turn is pinned keeps the turn's cells
 // pinned until the opening ends, also past the challenge pin: the opening
 // reads them after the replay, which takes seconds for a long prompt.
