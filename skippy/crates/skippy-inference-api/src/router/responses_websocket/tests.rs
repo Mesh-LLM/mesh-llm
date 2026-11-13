@@ -655,3 +655,36 @@ async fn live_post(address: SocketAddr, path: &str, body: Value) -> Value {
         + 4;
     serde_json::from_slice(&response[body_start..]).unwrap()
 }
+
+#[tokio::test]
+async fn orphan_tool_output_rejects_continuation_and_evicts_local_parent() {
+    let server = serve(
+        Arc::new(SocketBackend::default()),
+        config(ResponsesSessionConfig::default()),
+    )
+    .await;
+    let mut socket = connect(server.address).await;
+    send(
+        &mut socket,
+        json!({"type":"response.create","model":"echo","store":false,"input":"remember slate"}),
+    )
+    .await;
+    let first = terminal(&mut socket).await;
+    let id = completed(&first)["response"]["id"].clone();
+    send(
+        &mut socket,
+        json!({
+            "type":"response.create", "store":false, "previous_response_id":id,
+            "input":[{"type":"function_call_output","call_id":"missing","output":"orphan"}]
+        }),
+    )
+    .await;
+    let failed = terminal(&mut socket).await;
+    assert_eq!(failed[0]["type"], "error");
+    assert_eq!(failed[0]["status"], 400);
+    send(&mut socket, json!({
+        "type":"response.create","model":"echo","store":false,"previous_response_id":id,"input":"retry"
+    })).await;
+    let retry = terminal(&mut socket).await;
+    assert_eq!(retry[0]["error"]["code"], "previous_response_not_found");
+}

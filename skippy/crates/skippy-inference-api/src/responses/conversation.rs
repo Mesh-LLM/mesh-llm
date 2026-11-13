@@ -4,6 +4,7 @@
 use super::{translate_responses_input_message, translate_responses_message_content};
 use crate::InferenceError;
 use serde_json::Value;
+use std::collections::HashSet;
 
 fn responses_item_type(item: &Value) -> Option<&str> {
     item.get("type").and_then(Value::as_str)
@@ -18,19 +19,38 @@ pub(super) fn is_responses_tool_item(item: &Value) -> bool {
 
 /// Translate a typed Responses conversation into chat messages: consecutive
 /// `function_call` items become one assistant message's `tool_calls`, each
-/// `function_call_output` a `tool` message. Reasoning items carry no chat
-/// equivalent and are dropped.
+/// `function_call_output` a `tool` message matched to an unresolved call.
+/// Reasoning text is attached to the next assistant message.
 pub(super) fn translate_responses_conversation_items(
     items: &[Value],
 ) -> Result<Vec<Value>, InferenceError> {
     let mut messages: Vec<Value> = Vec::new();
     let mut pending_reasoning = String::new();
+    let mut pending_calls = HashSet::new();
     for item in items {
         match responses_item_type(item) {
             Some("function_call") => {
-                push_responses_function_call(&mut messages, item, &mut pending_reasoning)
+                if let Some(id) = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                {
+                    pending_calls.insert(id);
+                }
+                push_responses_function_call(&mut messages, item, &mut pending_reasoning);
             }
             Some("function_call_output") => {
+                let id = item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !pending_calls.remove(id) {
+                    return Err(InferenceError::invalid_request(
+                        "function_call_output must match a preceding unresolved function_call",
+                    )
+                    .with_param("input"));
+                }
                 flush_reasoning(&mut messages, &mut pending_reasoning);
                 messages.push(responses_function_call_output_message(item)?);
             }
@@ -218,6 +238,27 @@ mod tests {
         assert_eq!(messages[0]["reasoning_content"], "checking");
         assert_eq!(messages[0]["phase"], "commentary");
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_a");
+    }
+
+    #[test]
+    fn tool_results_require_a_preceding_unresolved_call() {
+        let call = serde_json::json!({"type":"function_call", "call_id":"call_a", "name":"lookup", "arguments":"{}"});
+        let output = serde_json::json!({"type":"function_call_output", "call_id":"call_a", "output":"result"});
+        for input in [
+            serde_json::json!([output, call]),
+            serde_json::json!([call, output, output]),
+            serde_json::json!([
+                {"type":"function_call", "call_id":"", "name":"lookup"},
+                {"type":"function_call_output", "call_id":"", "output":"result"}
+            ]),
+        ] {
+            let error = translate_responses_input_to_messages(&input).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("preceding unresolved function_call")
+            );
+        }
     }
 
     #[test]
