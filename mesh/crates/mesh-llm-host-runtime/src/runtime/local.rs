@@ -1214,7 +1214,13 @@ async fn start_local_skippy_model(
     });
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-    let receipts = receipts::advertised(&spec, &model_name, &skippy_model, workload_class);
+    let receipts = receipts::advertised(
+        &spec,
+        spec.model_path,
+        &model_name,
+        &skippy_model,
+        workload_class,
+    );
     Ok((
         model_name,
         LocalRuntimeModelHandle {
@@ -1286,7 +1292,11 @@ async fn load_direct_skippy_model(
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
         ))
-        .with_receipts(receipts::receipts_options(spec, &model_name));
+        .with_receipts(receipts::receipts_options(
+            spec,
+            spec.model_path,
+            &model_name,
+        ));
     if spec.device_override.is_none()
         && let Some(gpu) = spec.pinned_gpu
     {
@@ -1434,6 +1444,9 @@ async fn start_local_package_v2_model(
     runtime_options.config.bind_addr = "127.0.0.1:0".to_string();
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = None;
+    // the receipts name the package's source GGUF, as a split's do
+    runtime_options.receipts =
+        receipts::receipts_options(&spec, &package.source_model_path, &model_name);
     let hook_policy = spec.hook_policy.clone();
     let model_ref = model_name.clone();
     let reporter_model_ref = model_ref.clone();
@@ -1441,6 +1454,7 @@ async fn start_local_package_v2_model(
     let guardrail_telemetry = spec.survey_telemetry.clone();
     let openai_guardrails =
         skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
+    let serving_hooks_factory = spec.serving_hooks_factory.clone();
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_ref.clone(),
         source: None,
@@ -1456,7 +1470,7 @@ async fn start_local_package_v2_model(
                 progress_ingress,
             )),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
-            spec.serving_hooks_factory,
+            serving_hooks_factory,
         )
     })
     .await
@@ -1476,19 +1490,14 @@ async fn start_local_package_v2_model(
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     }
     let workload_class = handle.workload_class()?;
-    report_loaded_model_analytics(LoadedModel {
-        served_name: &model_ref,
-        source: ModelLoadSource::LayerPackage,
-        metadata: compact_meta,
-        path: None,
-        package_ref: Some(&package.package_ref),
-        dflash: None,
-        device: selected_device(
-            spec.pinned_gpu,
-            spec.device_override.as_deref(),
-            resolved.hardware.device.as_deref(),
-        ),
-    });
+    let receipts = receipts::advertised(
+        &spec,
+        &package.source_model_path,
+        &model_name,
+        &handle,
+        workload_class,
+    );
+    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1506,7 +1515,7 @@ async fn start_local_package_v2_model(
             capabilities,
             workload_class,
             thinking: handle.thinking().cloned(),
-            receipts: false,
+            receipts,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,
