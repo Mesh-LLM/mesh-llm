@@ -64,6 +64,7 @@ pub(super) fn prepare(
         .map_or_else(Vec::new, |parent| parent.transcript());
     transcript.extend(input.iter().cloned());
     restore_items(&mut transcript, &model)?;
+    super::lineage::validate(&transcript)?;
     let pending_calls = unresolved_function_calls(&transcript);
     let user_messages = transcript
         .iter()
@@ -192,16 +193,34 @@ pub(super) fn restore_input(
     model: &str,
     explicit_model: bool,
 ) -> Result<(), InferenceError> {
-    let Some(items) = object.get_mut("input").and_then(Value::as_array_mut) else {
+    let input = if object.contains_key("input") {
+        object.get_mut("input")
+    } else {
+        object.get_mut("messages")
+    };
+    let Some(input) = input else {
         return Ok(());
     };
-    if items.iter().any(is_item) && !explicit_model {
+    let contains_compaction = match &*input {
+        Value::Array(items) => items.iter().any(is_item),
+        item => is_item(item),
+    };
+    if contains_compaction && !explicit_model {
         return Err(InferenceError::invalid_request(
             "model is required when input contains a compaction item",
         )
         .with_param("model"));
     }
-    restore_items(items, model)
+    match input {
+        Value::Array(items) => restore_items(items, model),
+        item if is_item(item) => {
+            let mut items = vec![std::mem::take(item)];
+            restore_items(&mut items, model)?;
+            *item = Value::Array(items);
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn restore_items(items: &mut Vec<Value>, model: &str) -> Result<(), InferenceError> {
@@ -498,14 +517,49 @@ fn decrypt(model: &str, encoded: &str) -> Result<OwnedPlaintext, InferenceError>
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use crate::responses::{ResponseContinuation, ResponsesTurn};
+    use crate::responses::{
+        ResponseContinuation, ResponsesTurn,
+        store::{CallerScope, ResponseStore},
+    };
 
     fn chat(text: &str) -> Value {
         json!({
             "choices":[{"message":{"content":text},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
         })
+    }
+
+    fn pending_compaction_item() -> Value {
+        let mut body = json!({
+            "model":"m",
+            "input":[{
+                "type":"function_call",
+                "call_id":"pending",
+                "name":"lookup",
+                "arguments":"{}"
+            }]
+        });
+        let compact = ResponsesTurn::prepare_compact(&mut body, ResponseContinuation::disabled())
+            .unwrap()
+            .try_finish_chat_completion(&chat("lookup is still pending"))
+            .unwrap();
+        compact["output"][0].clone()
+    }
+
+    fn pending_output() -> Value {
+        json!({
+            "type":"function_call_output",
+            "call_id":"pending",
+            "output":"found"
+        })
+    }
+
+    fn assert_input_error(error: &InferenceError) {
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(error.body().error.param.as_deref(), Some("input"));
     }
 
     #[test]
@@ -596,6 +650,149 @@ mod tests {
                 .iter()
                 .any(|item| item["type"] == "function_call" && item["call_id"] == "done")
         );
+    }
+
+    #[test]
+    fn restores_messages_compaction_before_lineage_and_normalization() {
+        let item = pending_compaction_item();
+        let mut body = json!({
+            "model":"m",
+            "messages":[item, pending_output()]
+        });
+        ResponsesTurn::prepare(&mut body, ResponseContinuation::disabled()).unwrap();
+        assert_eq!(body["messages"][1]["type"], "function_call");
+        assert_eq!(body["messages"][2]["type"], "function_call_output");
+
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+        assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "pending");
+        assert_eq!(body["messages"][1]["role"], "tool");
+        assert_eq!(body["messages"][1]["tool_call_id"], "pending");
+    }
+
+    #[test]
+    fn restores_singleton_compaction_and_keeps_model_errors() {
+        let item = pending_compaction_item();
+        let mut missing = json!({"messages":item.clone()});
+        let error =
+            ResponsesTurn::prepare(&mut missing, ResponseContinuation::disabled()).unwrap_err();
+        assert_eq!(error.body().error.param.as_deref(), Some("model"));
+
+        let mut wrong = json!({"model":"other","input":item.clone()});
+        let error =
+            ResponsesTurn::prepare(&mut wrong, ResponseContinuation::disabled()).unwrap_err();
+        assert_input_error(&error);
+        assert!(
+            error
+                .message()
+                .contains("invalid for this process or model")
+        );
+
+        let mut valid = json!({"model":"m","input":item});
+        ResponsesTurn::prepare(&mut valid, ResponseContinuation::disabled()).unwrap();
+        assert_eq!(valid["input"][1]["type"], "function_call");
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut valid).unwrap();
+        assert_eq!(valid["messages"][0]["tool_calls"][0]["id"], "pending");
+    }
+
+    #[test]
+    fn input_presence_controls_restore_without_mutating_shadowed_aliases() {
+        let item = pending_compaction_item();
+        let mut null_input = json!({"input":null,"messages":item.clone()});
+        ResponsesTurn::prepare(&mut null_input, ResponseContinuation::disabled()).unwrap();
+        assert!(null_input["input"].is_null());
+        assert_eq!(null_input["messages"], item);
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut null_input)
+            .unwrap();
+        assert!(null_input.get("messages").is_none());
+
+        let malformed_alias = json!({"legacy":true});
+        let mut explicit_input = json!({
+            "input":"input wins",
+            "messages":malformed_alias.clone()
+        });
+        ResponsesTurn::prepare(&mut explicit_input, ResponseContinuation::disabled()).unwrap();
+        assert_eq!(explicit_input["messages"], malformed_alias);
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut explicit_input)
+            .unwrap();
+        assert_eq!(explicit_input["messages"][0]["content"], "input wins");
+    }
+
+    #[test]
+    fn parent_linked_alias_expands_only_working_body_and_keeps_child_snapshot() {
+        let store = Arc::new(ResponseStore::default());
+        let continuation =
+            || ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost));
+        let mut parent_body = json!({"model":"m","input":"parent context"});
+        let parent = ResponsesTurn::prepare(&mut parent_body, continuation())
+            .unwrap()
+            .finish_chat_completion(&chat("parent answer"));
+
+        let original_messages = json!([pending_compaction_item(), pending_output()]);
+        let mut child_body = json!({
+            "model":"m",
+            "previous_response_id":parent["id"],
+            "messages":original_messages.clone()
+        });
+        let child_turn = ResponsesTurn::prepare(&mut child_body, continuation()).unwrap();
+        assert_eq!(child_body["messages"], original_messages);
+        assert!(
+            child_body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| { item["type"] == "function_call" && item["call_id"] == "pending" })
+        );
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut child_body)
+            .unwrap();
+        let child = child_turn.finish_chat_completion(&chat("child answer"));
+
+        let stored = store
+            .get(&CallerScope::LocalHost, child["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(stored.parent.as_ref().unwrap().id, parent["id"]);
+        assert_eq!(stored.input, original_messages.as_array().unwrap().clone());
+        assert_eq!(stored.input[0]["type"], "compaction");
+        assert!(stored.input[0]["encrypted_content"].is_string());
+    }
+
+    #[test]
+    fn restored_compaction_still_rejects_invalid_lineage() {
+        let mut body = json!({
+            "model":"m",
+            "messages":[pending_compaction_item(), pending_output(), pending_output()]
+        });
+        let error =
+            ResponsesTurn::prepare(&mut body, ResponseContinuation::disabled()).unwrap_err();
+        assert_input_error(&error);
+        assert!(error.message().contains("duplicates output"));
+    }
+
+    #[test]
+    fn compaction_rejects_invalid_function_call_lineage_before_summarizing() {
+        for input in [
+            json!([
+                {"type":"function_call_output","call_id":"orphan","output":"x"}
+            ]),
+            json!({"type":"function_call_output","call_id":"orphan","output":"x"}),
+            json!([
+                {"type":"function_call","call_id":"call_a","name":"same","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_a","output":"first"},
+                {"type":"function_call_output","call_id":"call_a","output":"second"}
+            ]),
+        ] {
+            let mut body = json!({"model":"m","input":input});
+            let error = ResponsesTurn::prepare_compact(&mut body, ResponseContinuation::disabled())
+                .unwrap_err();
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(error.body().error.param.as_deref(), Some("input"));
+        }
+
+        let mut valid_singleton = json!({
+            "model":"m",
+            "input":{"type":"function_call","call_id":"pending","name":"same","arguments":"{}"}
+        });
+        ResponsesTurn::prepare_compact(&mut valid_singleton, ResponseContinuation::disabled())
+            .expect("a valid singleton typed item remains an accepted compaction shape");
     }
 
     #[test]

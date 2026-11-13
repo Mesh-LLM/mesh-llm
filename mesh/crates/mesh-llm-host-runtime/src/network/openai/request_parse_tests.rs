@@ -394,6 +394,49 @@ async fn responses_continuation_is_restored_at_ingress_before_worker_routing() {
 }
 
 #[tokio::test]
+async fn mesh_http_and_sse_reject_orphan_outputs_before_forwarding() {
+    let orphan = serde_json::json!({
+        "type":"function_call_output","call_id":"orphan","output":"x"
+    });
+    let mut bodies = Vec::new();
+    for stream in [false, true] {
+        bodies.extend([
+            serde_json::json!({"model":"m","stream":stream,"input":[orphan.clone()]}),
+            serde_json::json!({"model":"m","stream":stream,"messages":[orphan.clone()]}),
+            serde_json::json!({"model":"m","stream":stream,"input":orphan.clone()}),
+        ]);
+    }
+    for body in bodies {
+        let body = serde_json::to_vec(&body).unwrap();
+        let error = match rewrite_request_body_for_forwarding(
+            "/v1/responses",
+            &body,
+            None,
+            Transformer {
+                plugins: None,
+                private_hint: false,
+                node_limit: None,
+            },
+            true,
+            Some(skippy_inference_api::responses::ResponseContinuation::disabled()),
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("orphan output should be rejected before forwarding"),
+        };
+        let inference = error
+            .downcast_ref::<skippy_inference_api::InferenceError>()
+            .expect("typed lineage error");
+        assert_eq!(inference.status(), http::StatusCode::BAD_REQUEST);
+        let body = inference.body().error;
+        assert_eq!(body.error_type, "invalid_request_error");
+        assert_eq!(body.code.as_deref(), Some("invalid_value"));
+        assert_eq!(body.param.as_deref(), Some("input"));
+    }
+}
+
+#[tokio::test]
 async fn mesh_ingress_keeps_full_tools_but_owns_allowed_output_policy() {
     let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
     let body = serde_json::to_vec(&serde_json::json!({

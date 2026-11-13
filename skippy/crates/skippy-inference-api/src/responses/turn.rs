@@ -132,11 +132,7 @@ impl ResponsesTurn {
         // authoritative after the backend body is normalized or transformed.
         object.remove("max_tool_calls");
 
-        let input = object
-            .get("input")
-            .map(input_items)
-            .transpose()?
-            .unwrap_or_default();
+        let input = effective_input_items(object)?;
         if let Some(parent) = &parent {
             let mut history = parent.transcript();
             history.extend(input.iter().cloned());
@@ -147,6 +143,7 @@ impl ResponsesTurn {
                 .or_insert_with(|| Value::String(parent.root_id().to_string()));
         }
         super::compaction::restore_input(object, &model, explicit_model)?;
+        super::lineage::validate(&effective_input_items(object)?)?;
         let instructions = object
             .get("instructions")
             .and_then(Value::as_str)
@@ -575,6 +572,25 @@ pub(super) fn input_items(input: &Value) -> Result<Vec<Value>, InferenceError> {
     }
 }
 
+fn effective_input_items(object: &Map<String, Value>) -> Result<Vec<Value>, InferenceError> {
+    object
+        .get("input")
+        .or_else(|| object.get("messages"))
+        .map(input_items)
+        .transpose()
+        .map(|items| items.unwrap_or_default())
+}
+
+pub(super) fn take_effective_input(object: &mut Map<String, Value>) -> Option<Value> {
+    if object.contains_key("input") {
+        let input = object.remove("input");
+        object.remove("messages");
+        input
+    } else {
+        object.remove("messages")
+    }
+}
+
 fn is_conversation_item(item: &Value) -> bool {
     item.get("role").is_some()
         || matches!(
@@ -665,6 +681,49 @@ mod tests {
         let input = body["input"].as_array().unwrap();
         assert_eq!(input[1]["call_id"], "call_7");
         assert_eq!(input[2]["call_id"], "call_7");
+    }
+
+    #[test]
+    fn continuation_restores_typed_messages_alias_and_keeps_only_child_snapshot() {
+        let store = store();
+        let mut parent_body = json!({
+            "model":"m",
+            "input":"weather?",
+            "tools":[{"type":"function","name":"weather"}]
+        });
+        let parent_turn = ResponsesTurn::prepare(&mut parent_body, local(&store)).unwrap();
+        let parent = parent_turn.finish_chat_completion(&json!({
+            "choices":[{"message":{"content":null,"tool_calls":[{
+                "id":"call_weather","type":"function",
+                "function":{"name":"weather","arguments":"{}"}
+            }]},"finish_reason":"tool_calls"}]
+        }));
+
+        let mut child_body = json!({
+            "previous_response_id":parent["id"],
+            "messages":{"type":"function_call_output","call_id":"call_weather","output":"sunny"}
+        });
+        let child_turn = ResponsesTurn::prepare(&mut child_body, local(&store)).unwrap();
+        crate::responses::normalize_openai_compat_request("/v1/responses", &mut child_body)
+            .unwrap();
+        assert_eq!(child_body["messages"][2]["role"], "tool");
+        assert_eq!(child_body["messages"][2]["tool_call_id"], "call_weather");
+        let child = child_turn.finish_chat_completion(&chat("done"));
+
+        let mut grandchild = json!({
+            "previous_response_id":child["id"],
+            "input":"next"
+        });
+        ResponsesTurn::prepare(&mut grandchild, local(&store)).unwrap();
+        let transcript = grandchild["input"].as_array().unwrap();
+        assert_eq!(
+            transcript
+                .iter()
+                .filter(|item| item["call_id"] == "call_weather")
+                .count(),
+            2,
+            "the child stores only its original output item, not expanded parent history"
+        );
     }
 
     #[test]

@@ -1933,6 +1933,49 @@ async fn responses_route_translates_to_chat_and_back() {
 }
 
 #[tokio::test]
+async fn responses_http_sse_and_compaction_reject_orphans_before_backend_execution() {
+    let backend = Arc::new(SessionCaptureBackend::default());
+    let app = router_for(backend.clone());
+    let orphan = json!({"type":"function_call_output","call_id":"orphan","output":"x"});
+    let mut cases = Vec::new();
+    for stream in [false, true] {
+        cases.extend([
+            (
+                "/v1/responses",
+                json!({"model":"capture-model","stream":stream,"input":[orphan.clone()]}),
+            ),
+            (
+                "/v1/responses",
+                json!({"model":"capture-model","stream":stream,"messages":[orphan.clone()]}),
+            ),
+            (
+                "/v1/responses",
+                json!({"model":"capture-model","stream":stream,"input":orphan.clone()}),
+            ),
+        ]);
+    }
+    cases.extend([
+        (
+            "/v1/responses/compact",
+            json!({"model":"capture-model","input":[orphan.clone()]}),
+        ),
+        (
+            "/v1/responses/compact",
+            json!({"model":"capture-model","input":orphan}),
+        ),
+    ]);
+    for (path, body) in cases {
+        let response = post_json_with_app_and_request_id(app.clone(), path, body, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_body_json(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "invalid_value");
+        assert_eq!(body["error"]["param"], "input");
+    }
+    assert!(backend.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn responses_route_preserves_tool_calls_and_logprobs() {
     let response = post_json(
         "/v1/responses",

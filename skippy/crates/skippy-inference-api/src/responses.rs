@@ -3,6 +3,7 @@ mod content_items;
 mod continuation;
 mod conversation;
 mod execution;
+mod lineage;
 #[cfg(test)]
 mod max_tool_calls_tests;
 mod resource;
@@ -229,6 +230,7 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, In
             "content": text,
         })]),
         Value::Array(items) if items.iter().any(is_responses_tool_item) => {
+            lineage::validate(items)?;
             translate_responses_conversation_items(items)
         }
         Value::Array(items) => {
@@ -250,6 +252,10 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, In
                     "content": content,
                 })])
             }
+        }
+        Value::Object(_) if is_responses_tool_item(input) => {
+            lineage::validate(std::slice::from_ref(input))?;
+            translate_responses_conversation_items(std::slice::from_ref(input))
         }
         Value::Object(object) => {
             if object.contains_key("role") || object.contains_key("content") {
@@ -289,11 +295,8 @@ fn translate_openai_responses_input(
         changed = true;
     }
 
-    if let Some(input) = object.remove("input") {
+    if let Some(input) = turn::take_effective_input(object) {
         messages.extend(translate_responses_input_to_messages(&input)?);
-        changed = true;
-    } else if let Some(existing_messages) = object.remove("messages") {
-        messages.extend(translate_responses_input_to_messages(&existing_messages)?);
         changed = true;
     }
 
@@ -1289,6 +1292,59 @@ mod tests {
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["logprobs"], true);
         assert_eq!(body["top_logprobs"], 3);
+    }
+
+    #[test]
+    fn normalize_responses_validates_effective_typed_input_and_preserves_legacy_messages() {
+        for mut body in [
+            json!({
+                "model":"qwen",
+                "messages":[{"type":"function_call_output","call_id":"orphan","output":"x"}]
+            }),
+            json!({
+                "model":"qwen",
+                "input":{"type":"function_call_output","call_id":"orphan","output":"x"}
+            }),
+            json!({
+                "model":"qwen",
+                "messages":[{"type":"function_call","name":"missing_call_id","arguments":"{}"}]
+            }),
+            json!({
+                "model":"qwen",
+                "input":{"type":"function_call_output","call_id":"","output":"x"}
+            }),
+        ] {
+            let error = normalize_openai_compat_request("/v1/responses", &mut body).unwrap_err();
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(error.body().error.param.as_deref(), Some("input"));
+        }
+
+        let legacy = json!([
+            {"role":"user","content":"hello"},
+            {"role":"assistant","content":"hi"}
+        ]);
+        let mut body = json!({"model":"qwen","messages":legacy});
+        normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+        assert_eq!(body["messages"], legacy);
+
+        let mut explicit_input = json!({
+            "model":"qwen",
+            "input":[{"role":"user","content":"input wins"}],
+            "messages":[{"type":"function_call_output","call_id":"ignored","output":"x"}]
+        });
+        normalize_openai_compat_request("/v1/responses", &mut explicit_input).unwrap();
+        assert_eq!(
+            explicit_input["messages"],
+            json!([{"role":"user","content":"input wins"}])
+        );
+
+        let mut null_input = json!({
+            "model":"qwen",
+            "input":null,
+            "messages":[{"type":"function_call_output","call_id":"ignored","output":"x"}]
+        });
+        normalize_openai_compat_request("/v1/responses", &mut null_input).unwrap();
+        assert!(null_input.get("messages").is_none());
     }
 
     #[test]

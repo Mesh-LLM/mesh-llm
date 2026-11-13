@@ -376,6 +376,61 @@ async fn official_reconnect_missing_and_failed_eviction_cases_use_mesh_proxy() {
 }
 
 #[tokio::test]
+async fn orphan_output_evicts_the_store_false_mesh_websocket_parent() {
+    let harness = Harness::start(&["mesh"]).await;
+    let mut socket = harness.connect().await;
+    send(
+        &mut socket,
+        json!({
+            "type":"response.create",
+            "model":MODEL,
+            "store":false,
+            "input":[
+                {"type":"message","role":"user","content":"use the tool"},
+                {"type":"function_call","call_id":"call_parent","name":"same","arguments":"{}"}
+            ]
+        }),
+    )
+    .await;
+    let parent = completed(&terminal(&mut socket).await)["response"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    send(
+        &mut socket,
+        json!({
+            "type":"response.create",
+            "store":false,
+            "previous_response_id":parent,
+            "input":[{"type":"function_call_output","call_id":"call_orphan","output":"x"}]
+        }),
+    )
+    .await;
+    let orphan = terminal(&mut socket).await;
+    assert_eq!(orphan[0]["type"], "error");
+    assert_eq!(orphan[0]["status"], 400);
+    assert_eq!(orphan[0]["error"]["type"], "invalid_request_error");
+    assert_eq!(orphan[0]["error"]["code"], "invalid_value");
+    assert_eq!(orphan[0]["error"]["param"], "input");
+
+    send(
+        &mut socket,
+        json!({
+            "type":"response.create",
+            "store":false,
+            "previous_response_id":parent,
+            "input":[{"type":"function_call_output","call_id":"call_parent","output":"ok"}]
+        }),
+    )
+    .await;
+    assert_eq!(
+        terminal(&mut socket).await[0]["error"]["code"],
+        "previous_response_not_found"
+    );
+}
+
+#[tokio::test]
 async fn official_compacted_output_starts_a_new_mesh_websocket_chain() {
     let harness = Harness::start(&["mesh"]).await;
     let compacted = post_json(

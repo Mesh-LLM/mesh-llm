@@ -11,11 +11,11 @@ fn continuation(store: &Arc<ResponseStore>) -> ResponseContinuation {
     ResponseContinuation::new(Some(store.clone()), Some(CallerScope::LocalHost))
 }
 
-fn tool_chat(call_count: usize) -> Value {
+fn tool_chat(turn: &str, call_count: usize) -> Value {
     let calls = (0..call_count)
         .map(|index| {
             json!({
-                "id": format!("call_{index}"),
+                "id": format!("call_{turn}_{index}"),
                 "type": "function",
                 "function": {"name": "same", "arguments": "{}"},
             })
@@ -55,7 +55,7 @@ fn json_exact_cap_completes_but_excess_fails_without_output_or_storage() {
 
     let mut exact_body = request(json!(2));
     let exact = ResponsesTurn::prepare(&mut exact_body, continuation(&store)).unwrap();
-    let exact_response = exact.finish_chat_completion(&tool_chat(2));
+    let exact_response = exact.finish_chat_completion(&tool_chat("exact", 2));
     assert_eq!(exact_response["status"], "completed");
     assert_eq!(exact_response["output"].as_array().unwrap().len(), 2);
     assert_eq!(exact_response["max_tool_calls"], 2);
@@ -63,7 +63,7 @@ fn json_exact_cap_completes_but_excess_fails_without_output_or_storage() {
     let mut excess_body = request(json!(1));
     let excess = ResponsesTurn::prepare(&mut excess_body, continuation(&store)).unwrap();
     let excess_id = excess.id().to_string();
-    let excess_response = excess.finish_chat_completion(&tool_chat(2));
+    let excess_response = excess.finish_chat_completion(&tool_chat("excess", 2));
     assert_eq!(excess_response["status"], "failed");
     assert_eq!(excess_response["error"]["code"], "tool_call_limit_exceeded");
     assert_eq!(excess_response["output"], json!([]));
@@ -76,7 +76,7 @@ fn continuation_inherits_cap_null_clears_it_and_each_turn_resets_the_count() {
     let store = Arc::new(ResponseStore::default());
     let mut parent_body = request(json!(1));
     let parent = ResponsesTurn::prepare(&mut parent_body, continuation(&store)).unwrap();
-    let parent_response = parent.finish_chat_completion(&tool_chat(1));
+    let parent_response = parent.finish_chat_completion(&tool_chat("parent", 1));
     assert_eq!(parent_response["status"], "completed");
 
     let mut inherited_body = json!({
@@ -85,7 +85,7 @@ fn continuation_inherits_cap_null_clears_it_and_each_turn_resets_the_count() {
     });
     let inherited = ResponsesTurn::prepare(&mut inherited_body, continuation(&store)).unwrap();
     assert!(inherited_body.get("max_tool_calls").is_none());
-    let inherited_response = inherited.finish_chat_completion(&tool_chat(1));
+    let inherited_response = inherited.finish_chat_completion(&tool_chat("inherited", 1));
     assert_eq!(inherited_response["status"], "completed");
     assert_eq!(inherited_response["max_tool_calls"], 1);
 
@@ -95,7 +95,7 @@ fn continuation_inherits_cap_null_clears_it_and_each_turn_resets_the_count() {
         "max_tool_calls": null,
     });
     let cleared = ResponsesTurn::prepare(&mut cleared_body, continuation(&store)).unwrap();
-    let cleared_response = cleared.finish_chat_completion(&tool_chat(2));
+    let cleared_response = cleared.finish_chat_completion(&tool_chat("cleared", 2));
     assert_eq!(cleared_response["status"], "completed");
     assert!(cleared_response["max_tool_calls"].is_null());
 
@@ -105,7 +105,8 @@ fn continuation_inherits_cap_null_clears_it_and_each_turn_resets_the_count() {
     });
     let null_inherited =
         ResponsesTurn::prepare(&mut null_inherited_body, continuation(&store)).unwrap();
-    let null_inherited_response = null_inherited.finish_chat_completion(&tool_chat(2));
+    let null_inherited_response =
+        null_inherited.finish_chat_completion(&tool_chat("null_inherited", 2));
     assert_eq!(null_inherited_response["status"], "completed");
     assert!(null_inherited_response["max_tool_calls"].is_null());
 }
