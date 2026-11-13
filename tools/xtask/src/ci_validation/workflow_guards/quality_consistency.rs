@@ -35,7 +35,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "\"$MESH_LLM_AUTOMATION_BIN\" repo-consistency ci-crate-lists",
         "\"$MESH_LLM_AUTOMATION_BIN\" repo-consistency publish-crates",
         "\"$MESH_LLM_AUTOMATION_BIN\" repo-consistency release-targets",
-        "cargo tree -p mesh-llm-client --prefix=none --no-dedupe > \"$RUNNER_TEMP/mesh-client-deps.txt\"",
+        "RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER='' cargo tree -p mesh-llm-client --prefix=none --no-dedupe > \"$RUNNER_TEMP/mesh-client-deps.txt\"",
         "\"$MESH_LLM_AUTOMATION_BIN\" repo-consistency no-console-print",
         "\"$MESH_LLM_AUTOMATION_BIN\" repository env-mutation-census",
     ] {
@@ -88,6 +88,10 @@ mod tests {
             (
                 "ref: ${{ inputs.source_sha }}",
                 "ref: ${{ github.event.repository.default_branch }}",
+            ),
+            (
+                "RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER='' cargo tree -p mesh-llm-client",
+                "cargo tree -p mesh-llm-client",
             ),
             (
                 "  consistency:\n",

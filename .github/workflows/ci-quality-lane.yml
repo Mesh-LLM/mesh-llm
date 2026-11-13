@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" repo-consistency release-targets
-          cargo tree -p mesh-llm-client --prefix=none --no-dedupe > "$RUNNER_TEMP/mesh-client-deps.txt"
+          RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER='' cargo tree -p mesh-llm-client --prefix=none --no-dedupe > "$RUNNER_TEMP/mesh-client-deps.txt"
           forbidden='keyring|rpassword|hf-hub|dirs|clap|include_dir|rmcp|keyring-core'
           if grep -E "^[[:space:]│├└─-]*($forbidden)([[:space:]]|$)" "$RUNNER_TEMP/mesh-client-deps.txt"; then
             echo "Forbidden dependency found in mesh-client" >&2
