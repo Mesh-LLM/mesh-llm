@@ -70,6 +70,8 @@ fn follow_redirect(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::redirect
 }
 
 pub(super) struct HfRemote {
+    /// The resolver of the file at its revision, and once the copy is
+    /// pinned ([`Self::pin`]), at the commit the copy holds.
     resolver: reqwest::Url,
     token: Option<String>,
     clients: Clients,
@@ -117,6 +119,15 @@ impl HfRemote {
             clients: Clients::shared()?,
             url: Mutex::new(None),
         })
+    }
+
+    /// Resolves the file at `pinned`, the commit its sparse copy is keyed
+    /// by, from now on. A branch can move while the copy is open: a range
+    /// request resolved again after its URL expires must never take the
+    /// bytes of another commit into this copy.
+    pub(super) fn pin(&mut self, pinned: &HfFile, endpoint: &str) -> Result<()> {
+        self.resolver = resolve_url(endpoint, pinned)?;
+        Ok(())
     }
 
     /// Follows the resolver's redirects on its own origin and stops at the
@@ -376,6 +387,20 @@ mod tests {
         let mut other_host = file("main", "m.gguf");
         other_host.repo = "owner@evil.test/model".into();
         assert!(resolve_url("https://huggingface.co", &other_host).is_err());
+    }
+
+    #[test]
+    fn a_pinned_copy_resolves_its_commit_and_not_the_branch_again() {
+        let endpoint = "https://huggingface.co";
+        let branch = file("main", "m.gguf");
+        let mut remote = HfRemote::new(&branch, endpoint, None).unwrap();
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        remote.pin(&branch.at(commit), endpoint).unwrap();
+        // a retry after the signed URL expires asks for the copy's commit
+        assert_eq!(
+            remote.resolver.as_str(),
+            format!("{endpoint}/owner/model/resolve/{commit}/m.gguf")
+        );
     }
 
     #[test]
