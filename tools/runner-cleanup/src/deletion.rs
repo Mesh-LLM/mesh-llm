@@ -1,5 +1,5 @@
 use super::{Error, Git, admission::Admitted, replay};
-use crate::command_interrupt::Interrupt;
+use process_supervision::interrupt::Interrupt;
 use std::{io::Write, path::Path};
 
 pub(super) fn execute(

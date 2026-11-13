@@ -54,6 +54,13 @@ authority-automation-bootstrap:
     just with-lld cargo build --locked -p authority-automation --bin authority-automation
     just with-lld cargo run --locked -p authority-automation --bin authority-automation -- automation bootstrap
 
+# Build only the narrow runner-cleanup executable the trusted runner-image job
+# freezes for cleanup, then prove only the controller and supervision libraries
+# were compiled in.
+runner-cleanup-bootstrap:
+    just with-lld cargo build --locked -p runner-cleanup --bin runner-cleanup
+    just with-lld cargo run --locked -p runner-cleanup --bin runner-cleanup -- automation bootstrap
+
 [private]
 [unix]
 [positional-arguments]
@@ -234,11 +241,13 @@ ci-automation-contracts:
     just with-lld cargo build --locked -p trajectory-reader --features corpus-input --bin trajectory-reader
     just with-lld cargo test --locked -p trajectory-reader --features corpus-input --lib -- --test-threads=1
     MESH_LLM_TEST_XTASK_BIN="$binary" just with-lld cargo test --locked -p trajectory-reader --features corpus-input --test prompt_command native_prompt_command_ -- --test-threads=1
-    # The narrow controller, authority, and supervision crates are contract-tested here,
-    # not in the Rust test matrix. Supervision tests keep xtask's single-threaded harness.
+    # The narrow controller, authority, supervision, and cleanup crates are contract-tested
+    # here, not in the Rust test matrix. Supervision and cleanup tests keep xtask's
+    # single-threaded harness.
     just with-lld cargo test --locked -p ci-controller
     just with-lld cargo test --locked -p authority-automation
     just with-lld cargo test --locked -p process-supervision -- --test-threads=1
+    just with-lld cargo test --locked -p runner-cleanup -- --test-threads=1
     fixture_suffix=""
     case "$binary" in *.exe) fixture_suffix=".exe" ;; esac
     # Examples sit beside the bootstrap binary in its profile directory, which is
