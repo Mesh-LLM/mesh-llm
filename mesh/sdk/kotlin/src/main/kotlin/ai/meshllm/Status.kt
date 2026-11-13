@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -75,7 +76,20 @@ class StatusEvents internal constructor(
     private val nextJson: suspend () -> String?,
     private val closeNative: () -> Unit,
 ) {
-    suspend fun nextEvent(): NativeNodeStatus? = nextJson()?.let { NativeNodeStatus.decode(it) }
+    suspend fun nextEvent(): NativeNodeStatus? = suspendCancellableCoroutine { continuation ->
+        val readerScope = CoroutineScope(Dispatchers.IO)
+        continuation.invokeOnCancellation {
+            // Closing must run independently of the synchronous FFI reader's cancellation join.
+            CoroutineScope(Dispatchers.IO).launch {
+                try { closeNative() } finally { readerScope.cancel() }
+            }
+        }
+        readerScope.launch {
+            try {
+                continuation.resumeWith(runCatching { nextJson()?.let { NativeNodeStatus.decode(it) } })
+            } finally { readerScope.cancel() }
+        }
+    }
     suspend fun close(): Unit = withContext(Dispatchers.IO + NonCancellable) { closeNative() }
 
     fun events(): Flow<NativeNodeStatus> = callbackFlow {

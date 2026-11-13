@@ -43,8 +43,9 @@ pub struct NativeNodeStatus {
 }
 
 /// Initial snapshot followed by changed snapshots; intermediate progress may coalesce.
-/// Each subscription belongs to one node generation. After a terminal snapshot it
-/// closes; restarting requires subscribing to the new handle. No HTTP or timer is used.
+/// Each subscription belongs to one node generation. After a runtime exit snapshot it
+/// closes; model-load failures can recover without closing the stream. Restarting
+/// requires subscribing to the new handle. No HTTP or timer is used.
 pub struct StatusEvents {
     source: Option<Box<dyn SnapshotSource>>,
     changes: watch::Receiver<crate::runtime_data::subscriptions::RuntimeDataSubscriptionState>,
@@ -79,6 +80,7 @@ impl StatusEvents {
         self.initial = false;
         self.changes.borrow_and_update();
         let terminal = self.exit.borrow_and_update().clone();
+        let exiting = terminal.is_some();
         let result = self
             .source
             .as_ref()
@@ -92,10 +94,7 @@ impl StatusEvents {
                 return Err(error);
             }
         };
-        if matches!(
-            status.state,
-            NodeLifecycle::Failed(_) | NodeLifecycle::Stopped
-        ) {
+        if exiting {
             self.finish();
         }
         Ok(Some(status))
@@ -211,13 +210,6 @@ async fn snapshot(
     let collector: RuntimeDataCollector = node.runtime_data_collector();
     let runtime = collector.runtime_status_snapshot();
     let serving_models = node.serving_models().await;
-    let error = node
-        .runtime_intents
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .rev()
-        .find_map(|intent| intent.last_error.clone());
     let instances: Vec<_> = if runtime.llama_runtime_by_instance.is_empty() {
         vec![&runtime.llama_runtime]
     } else {
@@ -247,7 +239,7 @@ async fn snapshot(
         node.role().await == crate::mesh::NodeRole::Client
             || serving_ready(runtime.llama_ready, &serving_models, &capacities),
         runtime.download.is_some(),
-        error,
+        runtime.model_intent_error,
     );
     Ok(NativeNodeStatus {
         state,
@@ -352,6 +344,18 @@ mod tests {
             *state.lock().unwrap() = phase;
             collector.mark_dirty(crate::runtime_data::RuntimeDataDirty::STATUS);
         }
+        assert_eq!(
+            events.next().await.unwrap().unwrap().state,
+            NodeLifecycle::Ready
+        );
+        *state.lock().unwrap() = NodeLifecycle::Failed("retryable load failure".into());
+        collector.mark_dirty(crate::runtime_data::RuntimeDataDirty::STATUS);
+        assert!(matches!(
+            events.next().await.unwrap().unwrap().state,
+            NodeLifecycle::Failed(_)
+        ));
+        *state.lock().unwrap() = NodeLifecycle::Ready;
+        collector.mark_dirty(crate::runtime_data::RuntimeDataDirty::STATUS);
         assert_eq!(
             events.next().await.unwrap().unwrap().state,
             NodeLifecycle::Ready

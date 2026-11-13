@@ -1,5 +1,8 @@
 package ai.meshllm
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -46,6 +49,29 @@ class StatusTest {
             events.events().toList()
             throw AssertionError("expected native failure")
         } catch (error: IllegalStateException) { assertEquals(failure.message, error.message) }
+    }
+
+    @Test
+    fun timeoutClosesADirectBlockingNativeRead() = runBlocking {
+        val reading = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
+        val closed = CompletableDeferred<Unit>()
+        val events = StatusEvents(nextJson = {
+            reading.complete(Unit)
+            check(release.await(15, TimeUnit.SECONDS)) { "native reader was not closed" }
+            null
+        }, closeNative = { release.countDown(); closed.complete(Unit) })
+        try {
+            val reader = launch(Dispatchers.Default) {
+                try {
+                    withTimeout(5000) { events.nextEvent() }
+                    throw AssertionError("expected timeout")
+                } catch (_: TimeoutCancellationException) { }
+            }
+            withTimeout(5000) { reading.await() }
+            withTimeout(10000) { reader.join(); closed.await() }
+        } finally { release.countDown() }
+        assertTrue(closed.isCompleted)
     }
 
     @Test

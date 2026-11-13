@@ -105,7 +105,7 @@ mode, ready means the node has started; it does not guarantee a reachable remote
 provider.
 
 Use a separate subscription for each consumer. Subscriptions coalesce
-intermediate progress to the newest state. A runtime
+intermediate progress to the newest state. Recoverable model-load failures keep the stream open for retries. A runtime
 failure or stop ends the stream after its terminal snapshot; a lost native
 publisher raises an error. Explicit close or node stop cancels pending reads and
 releases the subscription. A restart needs a new subscription on the restarted

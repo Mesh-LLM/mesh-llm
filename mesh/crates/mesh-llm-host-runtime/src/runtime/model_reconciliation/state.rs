@@ -287,6 +287,7 @@ impl ModelTargetReconciliationState {
                 && !intent.source.is_maintained()
         }) {
             self.retired_intents.insert(intent_id.to_string());
+            self.publish_history();
         }
     }
 
@@ -338,7 +339,22 @@ impl ModelTargetReconciliationState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             self.intent_history.iter().cloned().collect();
         if let Some(collector) = &self.collector {
-            collector.mark_dirty(crate::runtime_data::RuntimeDataDirty::STATUS);
+            let error = self.intent_history.iter().rev().find_map(|intent| {
+                self.is_effective_intent(
+                    &intent.intent_id,
+                    &intent.canonical_model_ref,
+                    &intent.profile,
+                )
+                .then(|| intent.last_error.clone())
+                .flatten()
+            });
+            collector.update_runtime_status(
+                crate::runtime_data::RuntimeDataDirty::STATUS,
+                |status| {
+                    status.model_intent_error = error;
+                    true
+                },
+            );
         }
     }
 
@@ -354,6 +370,15 @@ impl ModelTargetReconciliationState {
             .remove(&(model_ref.to_string(), profile.to_string()));
         self.failed_models
             .remove(&(model_ref.to_string(), profile.to_string()));
+        for intent in &mut self.intent_history {
+            if model_identity_matches(&intent.canonical_model_ref, model_ref)
+                && intent.profile == profile
+                && intent.desired_state == DesiredModelState::Present
+            {
+                intent.last_error = None;
+            }
+        }
+        self.publish_history();
     }
 
     pub(crate) fn record_load_failure(
@@ -575,6 +600,67 @@ mod desired_intent_tests {
     use super::*;
 
     const MODEL: &str = "org/model@main:model.gguf";
+
+    #[test]
+    fn native_status_only_reports_current_unresolved_intent_errors() {
+        let collector = crate::runtime_data::RuntimeDataCollector::new();
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let mut state =
+            ModelTargetReconciliationState::with_shared_history(history.clone(), collector.clone());
+        let startup = state.add_desired(MODEL, "", IntentSource::StartupConfig);
+        state.set_intent_error(&startup, "startup failed");
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .model_intent_error
+                .as_deref(),
+            Some("startup failed")
+        );
+        let owner = state.add_desired(MODEL, "", IntentSource::OwnerEnsure);
+        assert_eq!(collector.runtime_status_snapshot().model_intent_error, None);
+        assert_eq!(
+            history.lock().unwrap()[0].last_error.as_deref(),
+            Some("startup failed")
+        );
+        state.set_intent_error(&owner, "retry failed");
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .model_intent_error
+                .as_deref(),
+            Some("retry failed")
+        );
+        state.record_load_success(MODEL, "");
+        assert_eq!(collector.runtime_status_snapshot().model_intent_error, None);
+        assert!(
+            history
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|intent| intent.last_error.is_none())
+        );
+        let one_shot = state.add_desired(MODEL, "", IntentSource::ApiLoad);
+        state.set_intent_error(&one_shot, "one-shot failed");
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .model_intent_error
+                .as_deref(),
+            Some("one-shot failed")
+        );
+        state.retire_one_shot_present(&one_shot);
+        assert_eq!(collector.runtime_status_snapshot().model_intent_error, None);
+        let unload = state.suppress_desired(MODEL, "", None, IntentSource::ApiUnload, false);
+        state.set_intent_error(&unload, "unload failed");
+        state.record_load_success(MODEL, "");
+        assert_eq!(
+            collector
+                .runtime_status_snapshot()
+                .model_intent_error
+                .as_deref(),
+            Some("unload failed")
+        );
+    }
 
     #[test]
     fn intent_reconciliation_converges_duplicate_present_sources() {

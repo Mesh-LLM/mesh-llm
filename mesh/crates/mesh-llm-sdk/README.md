@@ -20,7 +20,8 @@ node is ready once started; this does not promise a reachable remote provider.
 
 Updates are coalesced: slow subscribers receive current state rather than replaying
 every progress tick. Subscribe before reading when an atomic initial handoff is
-needed. A runtime failure or normal exit produces a terminal snapshot followed by
+needed. Recoverable model-load failures keep the stream open for retries.
+A runtime failure or normal exit produces a terminal snapshot followed by
 stream closure; a lost publisher returns an error. Subscriptions belong to one
 node generation and must be recreated after restarting. Drop subscriptions before
 awaiting node shutdown so their native transport references can be released.
