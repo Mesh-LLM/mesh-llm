@@ -234,8 +234,15 @@ impl AuditRunner {
             audit(turn, &mut self.models, transport, &Instant::now)
         }));
         audited.unwrap_or_else(|_| {
-            tracing::error!("receipt audit: the audit of a turn panicked; the turn is not audited");
             self.models.release_all();
+            if !skippy_runtime::native_runtime_loaded() {
+                // a `client` started without `[receipts] audit` or `require`
+                tracing::error!(
+                    "receipt audit: the turn is not audited: this node has no native runtime loaded, which an audit runs on; set [receipts] audit = true so it loads at startup"
+                );
+                return Verdict::no_audit("this node has no native runtime loaded");
+            }
+            tracing::error!("receipt audit: the audit of a turn panicked; the turn is not audited");
             Verdict::no_audit("the audit panicked on this node")
         })
     }
