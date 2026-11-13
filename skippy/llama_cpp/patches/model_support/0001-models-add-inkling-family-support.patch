@@ -1,7 +1,7 @@
-From 3045935c7f7c45c10419a7420cd483d97b9f4f7c Mon Sep 17 00:00:00 2001
+From b50c61ac8677a96dc1cf76e2cd398c75916d8816 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 6 Nov 2026 10:32:22 -0800
-Subject: [PATCH 17/32] models: add inkling family support
+Subject: [PATCH] models: add inkling family support
 
 ---
  common/chat.cpp                      |   8 +
@@ -28,6 +28,7 @@ Subject: [PATCH 17/32] models: add inkling family support
  src/skippy/speculative_decoding.cpp  |  93 +++-
  tests/test-chat.cpp                  | 115 +++++
  tests/test-llama-archs.cpp           |   4 +
+ tests/test-mtmd-impl.cpp             |  52 ++
  tests/test-skippy-kv-page-export.cpp |  58 +++
  tools/mtmd/CMakeLists.txt            |   1 +
  tools/mtmd/models/inkling.cpp        | 105 ++++
@@ -38,11 +39,11 @@ Subject: [PATCH 17/32] models: add inkling family support
  tools/mtmd/mtmd-image.cpp            |  72 +++
  tools/mtmd/mtmd-image.h              |  20 +
  tools/mtmd/mtmd-impl.h               |   9 +
- tools/mtmd/mtmd-model.cpp            |  49 +-
+ tools/mtmd/mtmd-model.cpp            |  52 +-
  tools/mtmd/mtmd-model.h              |  12 +
  tools/mtmd/mtmd-subcontext.cpp       |   9 +
  tools/mtmd/mtmd.cpp                  |  37 +-
- 38 files changed, 2152 insertions(+), 32 deletions(-)
+ 39 files changed, 2206 insertions(+), 33 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
@@ -2173,6 +2174,84 @@ index 4f5fb29d6..0b3812728 100644
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
+diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
+index 3fd720088..0e019bfc7 100644
+--- a/tests/test-mtmd-impl.cpp
++++ b/tests/test-mtmd-impl.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "ggml-backend.h"
+ #include "ggml-cpp.h"
++#include "gguf.h"
+ #include "mtmd-audio.h"
+ #include "mtmd-subcontext.h"
+ #include "mtmd-helper.h"
+@@ -12,7 +13,9 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdlib>
++#include <filesystem>
+ #include <iostream>
++#include <random>
+ #include <stdexcept>
+ #include <string>
+ #include <tuple>
+@@ -52,6 +55,55 @@ struct test_registry {
+ // mtmd_image
+ //
+ 
++MAKE_TEST(test_inkling_projector_without_patch_embedding) {
++    // Inkling's hierarchical MLP consumes raw RGB patches; requiring a ViT
++    // patch-embedding tensor rejects an otherwise complete projector.
++    const auto path = std::filesystem::temp_directory_path() /
++        ("mtmd-inkling-" + std::to_string(std::random_device{}()) + ".gguf");
++    gguf_context_ptr meta(gguf_init_empty());
++    gguf_set_val_str(meta.get(), "general.architecture", "clip");
++    gguf_set_val_str(meta.get(), "clip.projector_type", "inkling");
++    gguf_set_val_bool(meta.get(), "clip.has_vision_encoder", true);
++    gguf_set_val_u32(meta.get(), "clip.vision.embedding_length", 3);
++    gguf_set_val_u32(meta.get(), "clip.vision.attention.head_count", 1);
++    gguf_set_val_u32(meta.get(), "clip.vision.feed_forward_length", 0);
++    gguf_set_val_u32(meta.get(), "clip.vision.block_count", 4);
++    gguf_set_val_u32(meta.get(), "clip.vision.projection_dim", 4);
++    gguf_set_val_f32(meta.get(), "clip.vision.attention.layer_norm_epsilon", 1e-6f);
++    gguf_set_val_u32(meta.get(), "clip.vision.image_size", 40);
++    gguf_set_val_u32(meta.get(), "clip.vision.patch_size", 40);
++    const float mean[] = { 0.0f, 0.0f, 0.0f };
++    const float std[] = { 1.0f, 1.0f, 1.0f };
++    gguf_set_arr_data(meta.get(), "clip.vision.image_mean", GGUF_TYPE_FLOAT32, mean, 3);
++    gguf_set_arr_data(meta.get(), "clip.vision.image_std", GGUF_TYPE_FLOAT32, std, 3);
++
++    ggml_context_ptr tensors(ggml_init({ 65536, nullptr, false }));
++    auto add = [&](const char * name, int64_t inputs, int64_t outputs) {
++        ggml_tensor * value = outputs == 0
++            ? ggml_new_tensor_1d(tensors.get(), GGML_TYPE_F32, inputs)
++            : ggml_new_tensor_2d(tensors.get(), GGML_TYPE_F32, inputs, outputs);
++        ggml_set_name(value, name);
++        ggml_set_zero(value);
++        gguf_add_tensor(meta.get(), value);
++    };
++    add("v.hmlp.0.linear.weight", 75, 1);
++    add("v.hmlp.0.norm.weight", 1, 0);
++    add("v.hmlp.1.linear.weight", 4, 1);
++    add("v.hmlp.1.norm.weight", 1, 0);
++    add("v.hmlp.2.linear.weight", 16, 1);
++    add("v.hmlp.2.norm.weight", 1, 0);
++    add("v.hmlp.3.linear.weight", 2, 4);
++    add("v.hmlp.final_norm.weight", 4, 0);
++    if (!gguf_write_to_file(meta.get(), path.string().c_str(), false)) {
++        throw std::runtime_error("cannot write Inkling projector fixture");
++    }
++    auto params = mtmd_context_params_default();
++    params.use_gpu = false;
++    const auto usage = mtmd_get_memory_usage(path.string().c_str(), params);
++    std::filesystem::remove(path);
++    t.assert_equal("Inkling projector admits its own stem", false, usage.backend_mem_usage.empty());
++}
++
+ MAKE_TEST(test_image_preprocessor_longest_edge) {
+     mtmd_hparams hparams;
+     hparams.image_longest_edge = 1540;
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 index 30c88b490..0fb9f036a 100644
 --- a/tests/test-skippy-kv-page-export.cpp
@@ -2670,7 +2749,7 @@ index 9d447a05e..69f88f81e 100644
      { PROJECTOR_TYPE_LDP,               "ldp" },
      { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
 diff --git a/tools/mtmd/mtmd-model.cpp b/tools/mtmd/mtmd-model.cpp
-index da74ed383..46d05ae98 100644
+index da74ed383..b8576e6c9 100644
 --- a/tools/mtmd/mtmd-model.cpp
 +++ b/tools/mtmd/mtmd-model.cpp
 @@ -293,6 +293,21 @@ struct mtmd_model_loader {
@@ -2695,7 +2774,17 @@ index da74ed383..46d05ae98 100644
                  case PROJECTOR_TYPE_MLP:
                  case PROJECTOR_TYPE_MLP_NORM:
                  case PROJECTOR_TYPE_LDP:
-@@ -1474,7 +1489,8 @@ struct mtmd_model_loader {
+@@ -1453,7 +1468,8 @@ struct mtmd_model_loader {
+             model.modality  == MTMD_MODALITY_VISION &&
+             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+             model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
+-            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2);
++            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2 &&
++            model.proj_type != PROJECTOR_TYPE_INKLING);
+ 
+         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
+         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   has_patch_embd);
+@@ -1474,7 +1490,8 @@ struct mtmd_model_loader {
              model.proj_type != PROJECTOR_TYPE_SOPRANO &&
              model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
              model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
@@ -2705,7 +2794,7 @@ index da74ed383..46d05ae98 100644
  
          // layers
          const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -1664,6 +1680,23 @@ struct mtmd_model_loader {
+@@ -1664,6 +1681,23 @@ struct mtmd_model_loader {
          };
  
          switch (model.proj_type) {
@@ -2729,7 +2818,7 @@ index da74ed383..46d05ae98 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
                  {
-@@ -3857,6 +3890,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
+@@ -3857,6 +3891,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
      projector_type proj = proj_type;
  
      switch (proj) {
@@ -2746,7 +2835,7 @@ index da74ed383..46d05ae98 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -4222,6 +4265,10 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
+@@ -4222,6 +4266,10 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
  
  int mtmd_model::n_mmproj_embd() const {
      switch (proj_type) {
@@ -2887,3 +2976,6 @@ index 9b45d3de3..a5289cf63 100644
                  } else {
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
+-- 
+2.56.0
+
