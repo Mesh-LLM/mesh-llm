@@ -1,7 +1,7 @@
-From 90cd3297774d1ea878c6ed437ac25dfdfd30a0b2 Mon Sep 17 00:00:00 2001
+From 0ef4c0f78a98397a20e77548b47ee9fb1e8abfbf Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 6 Nov 2026 10:32:22 -0800
-Subject: [PATCH] models: add inkling family support
+Subject: [PATCH 01/15] models: add inkling family support
 
 ---
  common/chat.cpp                      |   8 +
@@ -30,17 +30,19 @@ Subject: [PATCH] models: add inkling family support
  tests/test-llama-archs.cpp           |   4 +
  tests/test-skippy-kv-page-export.cpp |  58 +++
  tools/mtmd/CMakeLists.txt            |   1 +
- tools/mtmd/clip-impl.h               |   9 +
- tools/mtmd/clip-model.h              |  12 +
- tools/mtmd/clip.cpp                  |  62 ++-
  tools/mtmd/models/inkling.cpp        | 105 ++++
  tools/mtmd/models/models.h           |  11 +
  tools/mtmd/mtmd-audio.cpp            |  72 +++
  tools/mtmd/mtmd-audio.h              |  12 +
+ tools/mtmd/mtmd-graph.cpp            |   4 +
  tools/mtmd/mtmd-image.cpp            |  72 +++
  tools/mtmd/mtmd-image.h              |  20 +
+ tools/mtmd/mtmd-impl.h               |   9 +
+ tools/mtmd/mtmd-model.cpp            |  49 +-
+ tools/mtmd/mtmd-model.h              |  12 +
+ tools/mtmd/mtmd-subcontext.cpp       |   9 +
  tools/mtmd/mtmd.cpp                  |  37 +-
- 36 files changed, 2152 insertions(+), 32 deletions(-)
+ 38 files changed, 2152 insertions(+), 32 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
@@ -837,10 +839,10 @@ index cd34e36a9..4ee49d708 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 3257d7f2c..b5bb1cac5 100644
+index ed0f70470..ba345d3d2 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -290,6 +290,12 @@ llama_context::llama_context(
+@@ -293,6 +293,12 @@ llama_context::llama_context(
          }
      }
  
@@ -854,10 +856,10 @@ index 3257d7f2c..b5bb1cac5 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 4ed2b669f..ca460424b 100644
+index 17081e041..846cd0f82 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3578,10 +3578,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3612,10 +3612,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -887,7 +889,7 @@ index 4ed2b669f..ca460424b 100644
  
          if (v_trans) {
              v = ggml_transpose(ctx0, v);
-@@ -3597,10 +3614,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3631,10 +3648,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          }
  
          if (kv_rows) {
@@ -1015,7 +1017,7 @@ index 874c3739d..7189c4447 100644
      // see llama_kv_cache::get_prev_tokens()
      void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 8ded67e17..5716c04f6 100644
+index 7cbfe1d03..4c811362e 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -385,6 +385,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -1047,7 +1049,7 @@ index 8ded67e17..5716c04f6 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -3812,6 +3825,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3814,6 +3827,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_KIMI_K31:
          case LLM_ARCH_GLM5_NEXT:
          case LLM_ARCH_STARCODER:
@@ -1857,7 +1859,7 @@ index 2752afc6b..8f6c3160d 100644
      llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/nemotron-h-moe.cpp b/src/models/nemotron-h-moe.cpp
-index 35145e26d..2c51ebb7c 100644
+index 26b0ba7cf..1d5da2af1 100644
 --- a/src/models/nemotron-h-moe.cpp
 +++ b/src/models/nemotron-h-moe.cpp
 @@ -23,7 +23,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llm_graph_params & params
@@ -2157,10 +2159,10 @@ index 4cc533f10..98dfc4b65 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index dde1b03f0..d12706299 100644
+index fee4d8fdb..f4c89ba66 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1258,6 +1258,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -1267,6 +1267,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2247,10 +2249,10 @@ index 30c88b490..0fb9f036a 100644
          fprintf(stderr, "graph cache capabilities do not cover complete state\n");
          return 1;
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index fd8b24efd..7bf7efd9d 100644
+index c19815d67..3fa9f0cbe 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
-@@ -49,6 +49,7 @@ add_library(mtmd
+@@ -51,6 +51,7 @@ add_library(mtmd
              models/granite4-vision.cpp
              models/hunyuanvl.cpp
              models/internvl.cpp
@@ -2258,201 +2260,15 @@ index fd8b24efd..7bf7efd9d 100644
              models/kimivl.cpp
              models/kimik25.cpp
              models/nemotron-v2-vl.cpp
-diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
-index 8a4098da8..8d00d23bc 100644
---- a/tools/mtmd/clip-impl.h
-+++ b/tools/mtmd/clip-impl.h
-@@ -422,6 +422,13 @@
- #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
- #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
- 
-+// Inkling hMLP vision and dMel audio towers.
-+#define TN_INKLING_HMLP_LINEAR     "v.hmlp.%d.linear.weight"
-+#define TN_INKLING_HMLP_NORM       "v.hmlp.%d.norm.weight"
-+#define TN_INKLING_HMLP_FINAL_NORM "v.hmlp.final_norm.weight"
-+#define TN_INKLING_DMEL_EMBD       "a.dmel.embedding.weight"
-+#define TN_INKLING_DMEL_FINAL_NORM "a.dmel.final_norm.weight"
-+
- // mobilenetv5 (gemma3n) definitions
- #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
- #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
-@@ -528,6 +535,7 @@ struct clip_gen_state {
- struct clip_ctx;
- 
- enum projector_type {
-+    PROJECTOR_TYPE_INKLING,
-     PROJECTOR_TYPE_MLP,
-     PROJECTOR_TYPE_MLP_NORM,
-     PROJECTOR_TYPE_LDP,
-@@ -615,6 +623,7 @@ enum projector_type {
- };
- 
- static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
-+    { PROJECTOR_TYPE_INKLING,           "inkling" },
-     { PROJECTOR_TYPE_MLP,               "mlp" },
-     { PROJECTOR_TYPE_LDP,               "ldp" },
-     { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
-diff --git a/tools/mtmd/clip-model.h b/tools/mtmd/clip-model.h
-index f50fc40b9..68200a705 100644
---- a/tools/mtmd/clip-model.h
-+++ b/tools/mtmd/clip-model.h
-@@ -610,6 +610,12 @@ struct clip_code2wav {
-     ggml_tensor * dac_post_snake_beta  = nullptr;
-     ggml_tensor * dac_post_conv_w      = nullptr;
-     ggml_tensor * dac_post_conv_b      = nullptr;
-+
-+};
-+
-+struct inkling_hmlp_layer {
-+    ggml_tensor * linear_w = nullptr;
-+    ggml_tensor * norm_w   = nullptr;
- };
- 
- struct clip_chatterbox {
-@@ -877,6 +883,12 @@ struct clip_model {
-     ggml_tensor * norm_embd_w = nullptr;
-     ggml_tensor * norm_embd_b = nullptr;
- 
-+    // Inkling towers (neither uses standard transformer blocks).
-+    std::vector<inkling_hmlp_layer> inkling_hmlp_layers;
-+    ggml_tensor * inkling_hmlp_final_norm_w = nullptr;
-+    ggml_tensor * inkling_dmel_embd_w        = nullptr;
-+    ggml_tensor * inkling_dmel_final_norm_w  = nullptr;
-+
-     // "indexed" patch embedding norms
-     ggml_tensor * patch_norm_1_w = nullptr;
-     ggml_tensor * patch_norm_1_b = nullptr;
-diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index e91305f56..50672be9a 100644
---- a/tools/mtmd/clip.cpp
-+++ b/tools/mtmd/clip.cpp
-@@ -1026,6 +1026,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
-     std::unique_ptr<clip_graph> builder;
- 
-     switch (ctx->proj_type()) {
-+        case PROJECTOR_TYPE_INKLING:
-+            {
-+                builder = std::make_unique<clip_graph_inkling>(ctx, img);
-+            } break;
-         case PROJECTOR_TYPE_GEMMA3:
-         case PROJECTOR_TYPE_IDEFICS3:
-         case PROJECTOR_TYPE_COHERE2V:
-@@ -1606,6 +1610,21 @@ struct clip_model_loader {
- 
-             // model-specific params
-             switch (model.proj_type) {
-+                case PROJECTOR_TYPE_INKLING:
-+                    {
-+                        if (is_vision) {
-+                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
-+                            hparams.image_resize_pad  = PAD_NONE;
-+                            hparams.warmup_image_size = hparams.patch_size;
-+                        } else {
-+                            hparams.audio_chunk_len   = 0;
-+                            hparams.audio_sample_rate = 16000;
-+                            hparams.audio_n_fft       = 1600;
-+                            hparams.audio_window_len  = 1600;
-+                            hparams.audio_hop_len     = 800;
-+                            hparams.warmup_audio_size = 4;
-+                        }
-+                    } break;
-                 case PROJECTOR_TYPE_MLP:
-                 case PROJECTOR_TYPE_MLP_NORM:
-                 case PROJECTOR_TYPE_LDP:
-@@ -2767,7 +2786,8 @@ struct clip_model_loader {
-             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
-             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
-             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
--            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC);
-+            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC &&
-+            model.proj_type != PROJECTOR_TYPE_INKLING);
- 
-         // layers
-         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2957,6 +2977,23 @@ struct clip_model_loader {
-         };
- 
-         switch (model.proj_type) {
-+            case PROJECTOR_TYPE_INKLING:
-+                {
-+                    if (model.modality == CLIP_MODALITY_VISION) {
-+                        model.inkling_hmlp_layers.resize(hparams.n_layer);
-+                        for (int il = 0; il < hparams.n_layer; ++il) {
-+                            auto & layer = model.inkling_hmlp_layers[il];
-+                            layer.linear_w = get_tensor(string_format(TN_INKLING_HMLP_LINEAR, il));
-+                            layer.norm_w = il + 1 < hparams.n_layer
-+                                ? get_tensor(string_format(TN_INKLING_HMLP_NORM, il))
-+                                : nullptr;
-+                        }
-+                        model.inkling_hmlp_final_norm_w = get_tensor(TN_INKLING_HMLP_FINAL_NORM);
-+                    } else {
-+                        model.inkling_dmel_embd_w       = get_tensor(TN_INKLING_DMEL_EMBD);
-+                        model.inkling_dmel_final_norm_w = get_tensor(TN_INKLING_DMEL_FINAL_NORM);
-+                    }
-+                } break;
-             case PROJECTOR_TYPE_MLP:
-             case PROJECTOR_TYPE_MLP_NORM:
-                 {
-@@ -4890,6 +4927,11 @@ struct clip_model_loader {
-             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
-         }
-         batch.entries.push_back(img);
-+        // One logical Inkling vision patch always contains two adjacent temporal slices (including warmup reserve).
-+        if (ctx_clip.model.modality == CLIP_MODALITY_VISION &&
-+                ctx_clip.model.proj_type == PROJECTOR_TYPE_INKLING) {
-+            batch.entries.push_back(img);
-+        }
-         return batch;
-     }
- 
-@@ -5354,6 +5396,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
-     projector_type proj = ctx->proj_type();
- 
-     switch (proj) {
-+        case PROJECTOR_TYPE_INKLING:
-+            {
-+                if (ctx->model.modality == CLIP_MODALITY_AUDIO) {
-+                    // One dMel row is one soft audio token.
-+                    n_patches = img->nx();
-+                } else {
-+                    // Batch entries are temporal slices; each pair emits one token.
-+                    n_patches = 1;
-+                }
-+            } break;
-         case PROJECTOR_TYPE_MLP:
-         case PROJECTOR_TYPE_MLP_NORM:
-         case PROJECTOR_TYPE_JANUS_PRO:
-@@ -6278,6 +6330,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
-                 tail.resize(hparams.n_embd, 0.0f);
-                 set_input_f32("inp_stem_tail", tail);
-             } break;
-+        case PROJECTOR_TYPE_INKLING:
-+            {
-+                // inp_raw is the only graph input.
-+            } break;
-         case PROJECTOR_TYPE_MUSE_GLIMMER:
-             {
-                 const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -8165,6 +8221,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
- 
- int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
-     switch (ctx->model.proj_type) {
-+        case PROJECTOR_TYPE_INKLING:
-+            return ctx->model.modality == CLIP_MODALITY_AUDIO
-+                ? ctx->model.inkling_dmel_final_norm_w->ne[0]
-+                : ctx->model.inkling_hmlp_final_norm_w->ne[0];
-         case PROJECTOR_TYPE_LDP:
-             return ctx->model.mm_model_block_1_block_2_1_b->ne[0];
-         case PROJECTOR_TYPE_LDPV2:
 diff --git a/tools/mtmd/models/inkling.cpp b/tools/mtmd/models/inkling.cpp
 new file mode 100644
-index 000000000..c04a8c989
+index 000000000..71041023a
 --- /dev/null
 +++ b/tools/mtmd/models/inkling.cpp
 @@ -0,0 +1,105 @@
 +#include "models.h"
 +
-+ggml_tensor * clip_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
++ggml_tensor * mtmd_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
 +    ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
 +    ggml_prec_set_acc(cur, GGML_PREC_F32);
 +    return cur;
@@ -2479,11 +2295,11 @@ index 000000000..c04a8c989
 +    return cur;
 +}
 +
-+ggml_cgraph * clip_graph_inkling::build() {
-+    return model.modality == CLIP_MODALITY_AUDIO ? build_audio() : build_vision();
++ggml_cgraph * mtmd_graph_inkling::build() {
++    return model.modality == MTMD_MODALITY_AUDIO ? build_audio() : build_vision();
 +}
 +
-+ggml_cgraph * clip_graph_inkling::build_vision() {
++ggml_cgraph * mtmd_graph_inkling::build_vision() {
 +    static constexpr int temporal_patch_size = 2;
 +    static constexpr int spatial_folds[] = {5, 2, 4};
 +
@@ -2523,7 +2339,7 @@ index 000000000..c04a8c989
 +    return gf;
 +}
 +
-+ggml_cgraph * clip_graph_inkling::build_audio() {
++ggml_cgraph * mtmd_graph_inkling::build_audio() {
 +    static constexpr int n_mels = 80;
 +    static constexpr int mel_vocab_size = 16;
 +
@@ -2556,15 +2372,15 @@ index 000000000..c04a8c989
 +    return gf;
 +}
 diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-index 8487a0042..d5b7864fd 100644
+index 17bd57d95..f9ae5ff7a 100644
 --- a/tools/mtmd/models/models.h
 +++ b/tools/mtmd/models/models.h
-@@ -18,6 +18,17 @@ struct clip_graph_siglip : clip_graph {
+@@ -18,6 +18,17 @@ struct mtmd_graph_siglip : mtmd_graph {
      ggml_cgraph * build() override;
  };
  
-+struct clip_graph_inkling : clip_graph {
-+    clip_graph_inkling(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
++struct mtmd_graph_inkling : mtmd_graph {
++    mtmd_graph_inkling(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
 +    ggml_cgraph * build() override;
 +    ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
 +    bool support_batch() const override { return true; }
@@ -2574,14 +2390,14 @@ index 8487a0042..d5b7864fd 100644
 +    ggml_cgraph * build_audio();
 +};
 +
- struct clip_graph_gemma4v : clip_graph {
-     clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+ struct mtmd_graph_gemma4v : mtmd_graph {
+     mtmd_graph_gemma4v(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
      ggml_cgraph * build() override;
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 60087b16d..243284605 100644
+index fcf94445a..9e410b75e 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -496,6 +496,78 @@ static bool log_mel_spectrogram(
+@@ -497,6 +497,78 @@ static bool log_mel_spectrogram(
      return true;
  }
  
@@ -2661,16 +2477,16 @@ index 60087b16d..243284605 100644
  // mtmd_audio_preprocessor_whisper
  //
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index ebe4f6397..826c811c7 100644
+index b1f37748c..315d9c90c 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
-@@ -130,6 +130,18 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
+@@ -128,6 +128,18 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
      bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
  };
  
 +// Inkling dMel: 100 ms Slaney-mel magnitude windows at a 50 ms hop, quantized to 16 bins.
 +struct mtmd_audio_preprocessor_inkling : mtmd_audio_preprocessor {
-+    mtmd_audio_preprocessor_inkling(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
++    mtmd_audio_preprocessor_inkling(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
 +    void initialize() override;
 +
 +  protected:
@@ -2681,37 +2497,52 @@ index ebe4f6397..826c811c7 100644
 +};
 +
  struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
-     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
-     mtmd_audio_preprocessor_conformer(const clip_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
+     mtmd_audio_preprocessor_conformer(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+     mtmd_audio_preprocessor_conformer(const mtmd_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
+diff --git a/tools/mtmd/mtmd-graph.cpp b/tools/mtmd/mtmd-graph.cpp
+index 3242bddbb..0b91f78ab 100644
+--- a/tools/mtmd/mtmd-graph.cpp
++++ b/tools/mtmd/mtmd-graph.cpp
+@@ -752,6 +752,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
+     std::unique_ptr<mtmd_graph> builder;
+ 
+     switch (ctx->model.proj_type) {
++        case PROJECTOR_TYPE_INKLING:
++            {
++                builder = std::make_unique<mtmd_graph_inkling>(ctx, img);
++            } break;
+         case PROJECTOR_TYPE_GEMMA3:
+         case PROJECTOR_TYPE_IDEFICS3:
+         case PROJECTOR_TYPE_COHERE2V:
 diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
-index 8c0f433e3..1626e8576 100644
+index b0543aa43..9df9d49ee 100644
 --- a/tools/mtmd/mtmd-image.cpp
 +++ b/tools/mtmd/mtmd-image.cpp
 @@ -512,6 +512,78 @@ private:
  };
  
  
-+static clip_image_u8 mtmd_inkling_resize(const clip_image_u8 & img, resize_algo algo) {
++static mtmd_image_u8 mtmd_inkling_resize(const mtmd_image_u8 & img, resize_algo algo) {
 +    constexpr int patch_size = 40;
-+    const clip_image_size source_size = img.get_size();
-+    const clip_image_size target_size = {
++    const mtmd_image_size source_size = img.get_size();
++    const mtmd_image_size target_size = {
 +        std::max(patch_size, ((source_size.width + patch_size - 1) / patch_size) * patch_size),
 +        std::max(patch_size, ((source_size.height + patch_size - 1) / patch_size) * patch_size),
 +    };
 +
-+    clip_image_u8 resized;
++    mtmd_image_u8 resized;
 +    img_tool::resize(img, resized, target_size, algo, PAD_CEIL);
 +    return resized;
 +}
 +
 +mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
-+        const clip_image_u8 & img,
++        const mtmd_image_u8 & img,
 +        resize_algo algo) {
 +    constexpr int patch_size = 40;
 +    constexpr int temporal_patch_size = 2;
 +
-+    const clip_image_u8 resized = mtmd_inkling_resize(img, algo);
-+    const clip_image_size resized_size = resized.get_size();
++    const mtmd_image_u8 resized = mtmd_inkling_resize(img, algo);
++    const mtmd_image_size resized_size = resized.get_size();
 +    mtmd_inkling_image_preproc_out output;
 +    output.source_size = img.get_size();
 +    output.resized_size = resized_size;
@@ -2740,12 +2571,12 @@ index 8c0f433e3..1626e8576 100644
 +    return output;
 +}
 +
-+mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const clip_image_u8 & img) const {
++mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const mtmd_image_u8 & img) const {
 +    constexpr int patch_size = 40;
 +    constexpr int temporal_patch_size = 2;
 +
-+    const clip_image_u8 resized = mtmd_inkling_resize(img, hparams.image_resize_algo);
-+    const clip_image_size resized_size = resized.get_size();
++    const mtmd_image_u8 resized = mtmd_inkling_resize(img, hparams.image_resize_algo);
++    const mtmd_image_size resized_size = resized.get_size();
 +    const int patch_rows = resized_size.height / patch_size;
 +    const int patch_cols = resized_size.width / patch_size;
 +
@@ -2753,7 +2584,7 @@ index 8c0f433e3..1626e8576 100644
 +    output.entries.reserve((size_t) patch_rows * patch_cols * temporal_patch_size);
 +    for (int row = 0; row < patch_rows; ++row) {
 +        for (int col = 0; col < patch_cols; ++col) {
-+            clip_image_u8 patch;
++            mtmd_image_u8 patch;
 +            img_tool::crop(resized, patch, col * patch_size, row * patch_size, patch_size, patch_size);
 +            output.append(hparams, patch, true);
 +            output.append(hparams, patch, true);
@@ -2767,7 +2598,7 @@ index 8c0f433e3..1626e8576 100644
  // mtmd_image_preprocessor_llava_uhd
  //
 diff --git a/tools/mtmd/mtmd-image.h b/tools/mtmd/mtmd-image.h
-index 6eb49ca34..042ec3536 100644
+index 2cb9454f0..cd95fc00d 100644
 --- a/tools/mtmd/mtmd-image.h
 +++ b/tools/mtmd/mtmd-image.h
 @@ -26,6 +26,20 @@ struct mtmd_image_preproc_out {
@@ -2776,8 +2607,8 @@ index 6eb49ca34..042ec3536 100644
  
 +// Inkling hMLP preprocessing; pixel_values_bthwc is row-major BTHWC [n_patches, 2, 40, 40, 3].
 +struct mtmd_inkling_image_preproc_out {
-+    clip_image_size source_size;
-+    clip_image_size resized_size;
++    mtmd_image_size source_size;
++    mtmd_image_size resized_size;
 +    int patch_rows = 0;
 +    int patch_cols = 0;
 +    std::vector<uint8_t> resized_rgb;
@@ -2785,43 +2616,222 @@ index 6eb49ca34..042ec3536 100644
 +};
 +
 +mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
-+        const clip_image_u8 & img,
++        const mtmd_image_u8 & img,
 +        resize_algo algo = RESIZE_ALGO_LANCZOS);
 +
  // base class, models must inherit from this class
  struct mtmd_image_preprocessor {
-     const clip_hparams & hparams;
+     const mtmd_hparams & hparams;
 @@ -132,6 +146,12 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
-     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
  };
  
 +// Inkling: split an image into 40x40 hMLP patches, each duplicated across a fixed temporal dimension of two.
 +struct mtmd_image_preprocessor_inkling : mtmd_image_preprocessor {
-+    mtmd_image_preprocessor_inkling(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
++    mtmd_image_preprocessor_inkling(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
++    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 +};
 +
  // resize image to multiple of patch_size*n_merge, while preserving aspect ratio
  // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
  // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
+diff --git a/tools/mtmd/mtmd-impl.h b/tools/mtmd/mtmd-impl.h
+index e245f4914..169da6313 100644
+--- a/tools/mtmd/mtmd-impl.h
++++ b/tools/mtmd/mtmd-impl.h
+@@ -422,6 +422,13 @@
+ #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
+ #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
+ 
++// Inkling hMLP vision and dMel audio towers.
++#define TN_INKLING_HMLP_LINEAR     "v.hmlp.%d.linear.weight"
++#define TN_INKLING_HMLP_NORM       "v.hmlp.%d.norm.weight"
++#define TN_INKLING_HMLP_FINAL_NORM "v.hmlp.final_norm.weight"
++#define TN_INKLING_DMEL_EMBD       "a.dmel.embedding.weight"
++#define TN_INKLING_DMEL_FINAL_NORM "a.dmel.final_norm.weight"
++
+ // mobilenetv5 (gemma3n) definitions
+ #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
+ #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
+@@ -493,6 +500,7 @@
+ #define MTMD_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+ 
+ enum projector_type {
++    PROJECTOR_TYPE_INKLING,
+     PROJECTOR_TYPE_MLP,
+     PROJECTOR_TYPE_MLP_NORM,
+     PROJECTOR_TYPE_LDP,
+@@ -580,6 +588,7 @@ enum projector_type {
+ };
+ 
+ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
++    { PROJECTOR_TYPE_INKLING,           "inkling" },
+     { PROJECTOR_TYPE_MLP,               "mlp" },
+     { PROJECTOR_TYPE_LDP,               "ldp" },
+     { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
+diff --git a/tools/mtmd/mtmd-model.cpp b/tools/mtmd/mtmd-model.cpp
+index ae7a942ac..253c4591c 100644
+--- a/tools/mtmd/mtmd-model.cpp
++++ b/tools/mtmd/mtmd-model.cpp
+@@ -293,6 +293,21 @@ struct mtmd_model_loader {
+ 
+             // model-specific params
+             switch (model.proj_type) {
++                case PROJECTOR_TYPE_INKLING:
++                    {
++                        if (is_vision) {
++                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
++                            hparams.image_resize_pad  = PAD_NONE;
++                            hparams.warmup_image_size = hparams.patch_size;
++                        } else {
++                            hparams.audio_chunk_len   = 0;
++                            hparams.audio_sample_rate = 16000;
++                            hparams.audio_n_fft       = 1600;
++                            hparams.audio_window_len  = 1600;
++                            hparams.audio_hop_len     = 800;
++                            hparams.warmup_audio_size = 4;
++                        }
++                    } break;
+                 case PROJECTOR_TYPE_MLP:
+                 case PROJECTOR_TYPE_MLP_NORM:
+                 case PROJECTOR_TYPE_LDP:
+@@ -1459,7 +1474,8 @@ struct mtmd_model_loader {
+             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
+             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
+-            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC);
++            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC &&
++            model.proj_type != PROJECTOR_TYPE_INKLING);
+ 
+         // layers
+         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
+@@ -1649,6 +1665,23 @@ struct mtmd_model_loader {
+         };
+ 
+         switch (model.proj_type) {
++            case PROJECTOR_TYPE_INKLING:
++                {
++                    if (model.modality == MTMD_MODALITY_VISION) {
++                        model.inkling_hmlp_layers.resize(hparams.n_layer);
++                        for (int il = 0; il < hparams.n_layer; ++il) {
++                            auto & layer = model.inkling_hmlp_layers[il];
++                            layer.linear_w = get_tensor(string_format(TN_INKLING_HMLP_LINEAR, il));
++                            layer.norm_w = il + 1 < hparams.n_layer
++                                ? get_tensor(string_format(TN_INKLING_HMLP_NORM, il))
++                                : nullptr;
++                        }
++                        model.inkling_hmlp_final_norm_w = get_tensor(TN_INKLING_HMLP_FINAL_NORM);
++                    } else {
++                        model.inkling_dmel_embd_w       = get_tensor(TN_INKLING_DMEL_EMBD);
++                        model.inkling_dmel_final_norm_w = get_tensor(TN_INKLING_DMEL_FINAL_NORM);
++                    }
++                } break;
+             case PROJECTOR_TYPE_MLP:
+             case PROJECTOR_TYPE_MLP_NORM:
+                 {
+@@ -3834,6 +3867,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
+     projector_type proj = proj_type;
+ 
+     switch (proj) {
++        case PROJECTOR_TYPE_INKLING:
++            {
++                if (modality == MTMD_MODALITY_AUDIO) {
++                    // One dMel row is one soft audio token.
++                    n_patches = img->nx();
++                } else {
++                    // Batch entries are temporal slices; each pair emits one token.
++                    n_patches = 1;
++                }
++            } break;
+         case PROJECTOR_TYPE_MLP:
+         case PROJECTOR_TYPE_MLP_NORM:
+         case PROJECTOR_TYPE_JANUS_PRO:
+@@ -4198,6 +4241,10 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
+ 
+ int mtmd_model::n_mmproj_embd() const {
+     switch (proj_type) {
++        case PROJECTOR_TYPE_INKLING:
++            return modality == MTMD_MODALITY_AUDIO
++                ? inkling_dmel_final_norm_w->ne[0]
++                : inkling_hmlp_final_norm_w->ne[0];
+         case PROJECTOR_TYPE_LDP:
+             return mm_model_block_1_block_2_1_b->ne[0];
+         case PROJECTOR_TYPE_LDPV2:
+diff --git a/tools/mtmd/mtmd-model.h b/tools/mtmd/mtmd-model.h
+index 0d975ba36..9f8cfc8ef 100644
+--- a/tools/mtmd/mtmd-model.h
++++ b/tools/mtmd/mtmd-model.h
+@@ -629,6 +629,12 @@ struct mtmd_code2wav {
+     ggml_tensor * dac_post_snake_beta  = nullptr;
+     ggml_tensor * dac_post_conv_w      = nullptr;
+     ggml_tensor * dac_post_conv_b      = nullptr;
++
++};
++
++struct inkling_hmlp_layer {
++    ggml_tensor * linear_w = nullptr;
++    ggml_tensor * norm_w   = nullptr;
+ };
+ 
+ struct mtmd_chatterbox {
+@@ -906,6 +912,12 @@ struct mtmd_model {
+     ggml_tensor * norm_embd_w = nullptr;
+     ggml_tensor * norm_embd_b = nullptr;
+ 
++    // Inkling towers (neither uses standard transformer blocks).
++    std::vector<inkling_hmlp_layer> inkling_hmlp_layers;
++    ggml_tensor * inkling_hmlp_final_norm_w = nullptr;
++    ggml_tensor * inkling_dmel_embd_w        = nullptr;
++    ggml_tensor * inkling_dmel_final_norm_w  = nullptr;
++
+     // "indexed" patch embedding norms
+     ggml_tensor * patch_norm_1_w = nullptr;
+     ggml_tensor * patch_norm_1_b = nullptr;
+diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
+index 7f30d3949..ebf8c7fef 100644
+--- a/tools/mtmd/mtmd-subcontext.cpp
++++ b/tools/mtmd/mtmd-subcontext.cpp
+@@ -157,6 +157,11 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
+         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
+     }
+     batch.entries.push_back(img);
++    // One logical Inkling vision patch always contains two adjacent temporal slices (including warmup reserve).
++    if (model.modality == MTMD_MODALITY_VISION &&
++            model.proj_type == PROJECTOR_TYPE_INKLING) {
++        batch.entries.push_back(img);
++    }
+     return batch;
+ }
+ 
+@@ -807,6 +812,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
+                 tail.resize(hparams.n_embd, 0.0f);
+                 set_input_f32("inp_stem_tail", tail);
+             } break;
++        case PROJECTOR_TYPE_INKLING:
++            {
++                // inp_raw is the only graph input.
++            } break;
+         case PROJECTOR_TYPE_MUSE_GLIMMER:
+             {
+                 const int grid_w = pos_w;            // image_size_width  / patch_size
 diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-index 538f90013..16842c535 100644
+index 7c6bcc7be..83185a596 100644
 --- a/tools/mtmd/mtmd.cpp
 +++ b/tools/mtmd/mtmd.cpp
-@@ -752,6 +752,12 @@ struct mtmd_context {
-         projector_type proj = clip_get_projector_type(ctx_v);
+@@ -769,6 +769,12 @@ struct mtmd_context {
+         projector_type proj = ctx_v->model.proj_type;
  
          switch (proj) {
 +            case PROJECTOR_TYPE_INKLING:
 +                {
 +                    // renderer opens each image part with <|content_image|>; block framing comes from the template
 +                    img_beg = "<|content_image|>";
-+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling>(ctx_v);
++                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling>(models.v.get());
 +                } break;
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
              case PROJECTOR_TYPE_LDP:
-@@ -1116,6 +1122,13 @@ struct mtmd_context {
+@@ -1133,6 +1139,13 @@ struct mtmd_context {
  
          // set preprocessor
          switch (proj) {
@@ -2830,18 +2840,18 @@ index 538f90013..16842c535 100644
 +                    // <|content_audio_input|> ... <|audio_end|>, matching the renderer's audio framing
 +                    aud_beg = "<|content_audio_input|>";
 +                    aud_end = "<|audio_end|>";
-+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inkling>(ctx_a);
++                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inkling>(models.a.get());
 +                } break;
              case PROJECTOR_TYPE_QWEN2A:
              case PROJECTOR_TYPE_QWEN25O:
                  {
-@@ -1761,23 +1774,35 @@ struct mtmd_tokenizer {
+@@ -1773,23 +1786,35 @@ struct mtmd_tokenizer {
                  }
  
                  size_t n_tokens = 0;
 -                for (auto & e : preproc_out.entries) {
--                    n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
--                    if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
+-                    n_tokens += ctx->ctx_v->model.n_output_tokens(&e);
+-                    if (ctx->ctx_v->model.n_temporal_merge() == 2) {
 -                        // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
 -                        break;
 +                if (ctx->proj_type_v() == PROJECTOR_TYPE_INKLING) {
@@ -2849,8 +2859,8 @@ index 538f90013..16842c535 100644
 +                    n_tokens = preproc_out.entries.size() / 2;
 +                } else {
 +                    for (auto & e : preproc_out.entries) {
-+                        n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
-+                        if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
++                        n_tokens += ctx->ctx_v->model.n_output_tokens(&e);
++                        if (ctx->ctx_v->model.n_temporal_merge() == 2) {
 +                            // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
 +                            break;
 +                        }
@@ -2860,16 +2870,16 @@ index 538f90013..16842c535 100644
                  mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
  
                  // [QWEN_VIDEO] improve this in the future
--                image_tokens->n_temporal_merge = clip_model_n_temporal_merge(ctx->ctx_v);
+-                image_tokens->n_temporal_merge = ctx->ctx_v->model.n_temporal_merge();
 +                // Inkling's pair is internal to each patch; it must not merge consecutive user bitmaps as video frames.
 +                image_tokens->n_temporal_merge = ctx->proj_type_v() == PROJECTOR_TYPE_INKLING
 +                    ? 2
-+                    : clip_model_n_temporal_merge(ctx->ctx_v);
++                    : ctx->ctx_v->model.n_temporal_merge();
  
                  if (mtmd_decode_use_mrope(ctx)) {
                      // for Qwen2VL, we need this information for M-RoPE decoding positions
-                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, &preproc_out.entries[0]);
-                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, &preproc_out.entries[0]);
+                     image_tokens->nx = ctx->ctx_v->model.n_output_tokens_x(&preproc_out.entries[0]);
+                     image_tokens->ny = ctx->ctx_v->model.n_output_tokens_y(&preproc_out.entries[0]);
 +                } else if (ctx->proj_type_v() == PROJECTOR_TYPE_INKLING) {
 +                    // n_tokens() multiplies 1x1 by the number of temporal groups.
 +                    image_tokens->nx = 1;
@@ -2877,3 +2887,6 @@ index 538f90013..16842c535 100644
                  } else {
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
+-- 
+2.54.0 (Apple Git-157)
+

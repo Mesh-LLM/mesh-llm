@@ -1,7 +1,7 @@
-From fcde8e3acc2d54aa5c8b201441db534039cb49e8 Mon Sep 17 00:00:00 2001
+From e79d73c9266f31209d3ac3200c8d8f8fbb998722 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH 04/15] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 

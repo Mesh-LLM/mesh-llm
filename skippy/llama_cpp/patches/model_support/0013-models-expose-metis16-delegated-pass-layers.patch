@@ -1,7 +1,7 @@
-From fd34186574aa7b8e22e087a15db707a483f88d70 Mon Sep 17 00:00:00 2001
+From 982923d59eee72eddc1c073300ea4c2ee62c89ae Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 6 Nov 2026 10:38:07 -0800
-Subject: [PATCH] models: expose Metis16 delegated pass layers
+Subject: [PATCH 13/15] models: expose Metis16 delegated pass layers
 
 ---
  src/models/metis16.cpp | 167 +++++++++++++++++++++--------------------

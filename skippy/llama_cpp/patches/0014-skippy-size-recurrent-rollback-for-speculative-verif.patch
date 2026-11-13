@@ -1,7 +1,7 @@
-From 99891a53bd163329170b5a12f59f9b820651fa33 Mon Sep 17 00:00:00 2001
+From 859965bdf316eb22c3ffd8ab4362947c85e05b0f Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
-Subject: [PATCH 14/15] skippy: size recurrent rollback for speculative verify
+Subject: [PATCH 14/16] skippy: size recurrent rollback for speculative verify
 
 Recurrent and hybrid targets verify a speculative window in place only when
 the context keeps a rollback snapshot per window token (n_rs_seq); otherwise
@@ -38,10 +38,10 @@ index bc4da9a07..b570682ef 100644
  
  /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index c9a0a226b..3257d7f2c 100644
+index f6040f8cb..9ec707c2f 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2206,9 +2206,10 @@ int llama_context::decode(
+@@ -2356,9 +2356,10 @@ int llama_context::decode(
                  // are limited to one output row; a sampler on some other
                  // sequence of this context must not reject a multi-output
                  // batch (e.g. speculative verification) for this one.

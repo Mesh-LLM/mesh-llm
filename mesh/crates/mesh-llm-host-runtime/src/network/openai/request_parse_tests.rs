@@ -147,9 +147,13 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
     let request_id = RequestId::new();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        read_http_request_with_plugin_manager_with_context(&mut stream.into(), None)
-            .await
-            .unwrap_err()
+        read_http_request_with_plugin_manager_with_context(
+            &mut stream.into(),
+            None,
+            RequestTransforms::Apply,
+        )
+        .await
+        .unwrap_err()
     });
     let mut client = TcpStream::connect(address).await.unwrap();
     let request = format!(
@@ -166,9 +170,13 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        read_http_request_with_plugin_manager_with_context(&mut stream.into(), None)
-            .await
-            .unwrap_err()
+        read_http_request_with_plugin_manager_with_context(
+            &mut stream.into(),
+            None,
+            RequestTransforms::Apply,
+        )
+        .await
+        .unwrap_err()
     });
     let mut client = TcpStream::connect(address).await.unwrap();
     client

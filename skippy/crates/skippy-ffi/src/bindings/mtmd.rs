@@ -856,6 +856,19 @@ unsafe extern "C" {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub struct mtmd_helper_decode_budget {
+    pub image_max_tokens: i32,
+    pub use_non_causal: bool,
+}
+unsafe extern "C" {
+    #[doc = " @brief Probe a projector's vision token budget and non-causal decode requirement."]
+    pub fn mtmd_helper_get_decode_budget(
+        mmproj_fname: *const ::std::os::raw::c_char,
+        ctx_params: mtmd_context_params,
+    ) -> mtmd_helper_decode_budget;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct mtmd_helper_embd_batch {
     pub n_tokens: i32,
     pub embd: *const f32,
@@ -979,6 +992,7 @@ pub struct mtmd_helper_gen_audio_inp {
     pub lang: *const ::std::os::raw::c_char,
     pub top_k: i32,
     pub top_p: f32,
+    pub temp: f32,
     pub seed: u32,
     pub out_type: mtmd_helper_gen_audio_outtype,
 }

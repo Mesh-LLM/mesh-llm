@@ -1,7 +1,7 @@
-From fbdcfcd13bc86c8d5da140dd4229f870305bb120 Mon Sep 17 00:00:00 2001
+From ef2d1b306ec19009abb53f52f409917c9dc8a642 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH] test(skippy): cover live graph and state contracts
+Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
 
 ---
  .../tests/cast_destination_regression.h       |   27 +
@@ -8507,7 +8507,7 @@ index 000000000..c45915888
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ea9afd660..dde1b03f0 100644
+index 1f4c8a46b..fee4d8fdb 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -7,12 +7,14 @@
@@ -8525,7 +8525,7 @@ index ea9afd660..dde1b03f0 100644
  #include <cstring>
  #include <cstdint>
  #include <filesystem>
-@@ -24,6 +26,21 @@
+@@ -24,6 +26,25 @@
  #include <utility>
  #include <vector>
  
@@ -8537,17 +8537,21 @@ index ea9afd660..dde1b03f0 100644
 +    std::filesystem::remove(path, ignored);
 +}
 +
++struct fixture_write_error : std::runtime_error {
++    using std::runtime_error::runtime_error;
++};
++
 +static void require_fixture_written(const std::string & path) {
 +    std::error_code error;
 +    if (!std::filesystem::is_regular_file(path, error) || std::filesystem::file_size(path, error) == 0 || error) {
-+        throw std::runtime_error("cannot write model fixture " + path);
++        throw fixture_write_error("cannot write model fixture " + path);
 +    }
 +}
 +
  static bool arch_matches(const std::string & filter, llm_arch arch) {
      if (filter.empty()) {
          return true;
-@@ -168,6 +185,7 @@ static void usage(char ** argv) {
+@@ -177,6 +194,7 @@ static void usage(char ** argv) {
      LOG("  -v <N>                   Set log verbosity level\n");
      LOG("  -b, --backend <backend>  Run only on the given backend device\n");
      LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
@@ -8555,7 +8559,7 @@ index ea9afd660..dde1b03f0 100644
      LOG("  -h, --help               Show this help message\n\n");
      LOG("Examples:\n");
      LOG("  %s\n", argv[0]);
-@@ -238,10 +256,27 @@ struct kv_writer {
+@@ -247,10 +265,27 @@ struct kv_writer {
      }
  };
  
@@ -8585,7 +8589,7 @@ index ea9afd660..dde1b03f0 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -269,7 +304,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -278,7 +313,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
          n_embd  = 512;
          n_head  = 8;
          n_ff    = 1024;
@@ -8594,7 +8598,7 @@ index ea9afd660..dde1b03f0 100644
      } else if (arch == LLM_ARCH_DEEPSEEK41) {
          // window-only, Engram, ratio-2 and ratio-1 sources, top-k reuse and a candidate-masked index layer
          n_embd  = 512;
-@@ -319,6 +354,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -328,6 +363,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
          n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
      }
  
@@ -8611,7 +8615,7 @@ index ea9afd660..dde1b03f0 100644
      uint32_t n_head_kv = n_head;
      if (arch == LLM_ARCH_QWEN3) {
          n_head_kv = 1; // MQA coverage
-@@ -340,7 +385,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -349,7 +394,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
      ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
      ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
@@ -8623,7 +8627,7 @@ index ea9afd660..dde1b03f0 100644
  
      if (arch == LLM_ARCH_K2_HORIZON) {
          ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
-@@ -404,7 +452,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -413,7 +461,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) {
          ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
          ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
@@ -8632,7 +8636,7 @@ index ea9afd660..dde1b03f0 100644
      } else if (arch == LLM_ARCH_DEEPSEEK2
              || arch == LLM_ARCH_DEEPSEEK32
              || arch == LLM_ARCH_GLM_DSA
-@@ -555,12 +603,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -564,12 +612,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
      //       a large value makes things deterministic since all data is selected by the indexer
      //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
@@ -8679,7 +8683,7 @@ index ea9afd660..dde1b03f0 100644
      // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
      // summing to n_rot / 2 (n_rot is 64 in this fixture)
      if (arch == LLM_ARCH_BAILINGMOE3) {
-@@ -568,7 +649,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -577,7 +658,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      } else {
          ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      }
@@ -8687,7 +8691,7 @@ index ea9afd660..dde1b03f0 100644
      if (arch == LLM_ARCH_HY_V4) {
          ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
          ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
-@@ -594,13 +674,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -603,13 +683,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
      }
  
      if (arch == LLM_ARCH_DEEPSEEK4) {
@@ -8710,7 +8714,7 @@ index ea9afd660..dde1b03f0 100644
          ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
          ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
-@@ -793,6 +875,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
+@@ -802,6 +884,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const
          ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
          gguf_add_tensor(ms.gguf_ctx, &t);
      }
@@ -8727,7 +8731,7 @@ index ea9afd660..dde1b03f0 100644
      return ret;
  }
  
-@@ -800,6 +892,61 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -809,6 +901,61 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -8789,7 +8793,7 @@ index ea9afd660..dde1b03f0 100644
  static std::string get_tmp_gguf_path() {
      static size_t id = 0;
      return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
-@@ -833,7 +980,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -842,7 +989,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
          struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
          const std::vector<ggml_backend_dev_t> & devs,
          const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
@@ -8800,7 +8804,7 @@ index ea9afd660..dde1b03f0 100644
      llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
  
      llama_context_params ctx_params = llama_context_default_params();
-@@ -848,6 +997,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -857,6 +1006,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
          ctx_params.moe_cache_size = moe_cache_size;
          ctx_params.n_ubatch = 2;
      }
@@ -8810,7 +8814,7 @@ index ea9afd660..dde1b03f0 100644
  
      llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
      if (!lctx) {
-@@ -856,6 +1008,17 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -865,6 +1017,17 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -8828,7 +8832,7 @@ index ea9afd660..dde1b03f0 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -1114,7 +1277,21 @@ static bool arch_supported(const llm_arch arch) {
+@@ -1123,7 +1286,21 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -8851,7 +8855,7 @@ index ea9afd660..dde1b03f0 100644
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -1158,11 +1335,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+@@ -1167,11 +1344,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense");
                  continue;
              }
@@ -8873,7 +8877,7 @@ index ea9afd660..dde1b03f0 100644
              const std::uintmax_t size = std::filesystem::file_size(path);
              LOG_CNT(" (%.2f MB)\n", (double) size / (1024.0 * 1024.0));
          }
-@@ -1339,6 +1525,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1348,6 +1534,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                  char mixed_str[12] = {0};
  
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -8886,7 +8890,7 @@ index ea9afd660..dde1b03f0 100644
                  bool test_executed = false;
                  bool test_ok = true;
                  if (!skip) {
-@@ -1771,6 +1963,9 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
+@@ -1780,6 +1972,9 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
      return n_failed == 0 ? 0 : 1;
  }
  
@@ -8896,7 +8900,7 @@ index ea9afd660..dde1b03f0 100644
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
      common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
-@@ -1785,11 +1980,50 @@ int main(int argc, char ** argv) {
+@@ -1794,11 +1989,50 @@ int main(int argc, char ** argv) {
      std::string out;
      const char * target_backend = nullptr;
      bool kv_shift = false;
@@ -8949,7 +8953,7 @@ index ea9afd660..dde1b03f0 100644
              usage(argv);
              return 0;
          } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
-@@ -1869,8 +2103,85 @@ int main(int argc, char ** argv) {
+@@ -1878,8 +2112,89 @@ int main(int argc, char ** argv) {
      init_normal_pool(seed, stdev);
  
      try {
@@ -9027,6 +9031,10 @@ index ea9afd660..dde1b03f0 100644
 +            if (expect_invalid) {
 +                try {
 +                    save_models(arch_filter, seed, stdev, verbosity, out, text_only, glm_dsa_indexshare);
++                } catch (const fixture_write_error &) {
++                    throw;
++                } catch (const std::filesystem::filesystem_error &) {
++                    throw;
 +                } catch (const std::exception &) {
 +                    return 0;
 +                }
@@ -10919,5 +10927,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

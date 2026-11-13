@@ -219,7 +219,7 @@ index 657b7d89d1c8b95d1bfff98367ff38e20d79ce04..c19c88579c2746d77c75a8db97219289
  
      cur = inpL;
 diff --git a/src/models/cohere2moe.cpp b/src/models/cohere2moe.cpp
-index 5bb2db15ac21b6723ed38c04a2ac56b1ce2ce5c4..4c66e107ffefcb834b0ad60ad602a49a8d213b2c 100644
+index 52b959672dfa4dc3b93a31fb22c3336c9f18e173..b9dc2beb3d9a27042482e0b38cd79b44a833799f 100644
 --- a/src/models/cohere2moe.cpp
 +++ b/src/models/cohere2moe.cpp
 @@ -172,6 +172,8 @@ llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_grap
@@ -332,7 +332,7 @@ index c6a6d6a97521fa8cfee3c8073e7ccfd9ff594108..a88cb1dd2e3636258be19c27b6102b50
      cur = inpL;
  
 diff --git a/src/models/deepseek41.cpp b/src/models/deepseek41.cpp
-index ea24f6a7a3b67f770c05fec50652095861d0a898..5bc1edf3f531c91f4a653ce77015c0a09ee19cc6 100644
+index 96de9041270c515d911c2841d37fa57ad89e5a65..0d4d8b2c3d5e24f4f511491996dde12f3bc7b214 100644
 --- a/src/models/deepseek41.cpp
 +++ b/src/models/deepseek41.cpp
 @@ -831,6 +831,8 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
@@ -542,10 +542,10 @@ index 920827dc58d857cfd77b213820358850dab364aa..84110ebdb1b54232b11ea1ccdfded2e2
  
      cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
-index 901170bcbf62a6d7ed0e6608b7cdcab9f01e25dd..59b743639fe6e9191902458d61ecb1b7eafeef72 100644
+index d55b52e1fba73d41a055b288e8f201d3c271b0eb..49922c0f66fd99ee4ca6936d9089d243181fd91f 100644
 --- a/src/models/glm5-next.cpp
 +++ b/src/models/glm5-next.cpp
-@@ -704,6 +704,8 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
+@@ -702,6 +702,8 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
      ggml_tensor * prev_sel = nullptr;
  
      for (int il = 0; il < n_layer; ++il) {
@@ -554,7 +554,7 @@ index 901170bcbf62a6d7ed0e6608b7cdcab9f01e25dd..59b743639fe6e9191902458d61ecb1b7
          // Speculative drafters (DFlash, EAGLE3) read the stream-mean residual entering each layer.
          if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
              res->t_layer_inp[il] = build_hc_mean(inpL);
-@@ -777,6 +779,7 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
+@@ -775,6 +777,7 @@ llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
          inpL = build_hc_post(cur, residual, ffn_hc.post, ffn_hc.comb, il);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_out", il);
@@ -1420,10 +1420,10 @@ index 5bf18f0665e3987514746467b1158c1a9d1f2498..a643066c7f97ce9cf4b40d5506b820e1
  
      cur = inpL;
 diff --git a/src/models/xing4-0.cpp b/src/models/xing4-0.cpp
-index c95acd6b83c28127e8628b2f3c2b3a89109456c8..fce2459b1082f78759d505c2caa126eca0ab7451 100644
+index f405fcc9c9c5dd3d6803121d8730742c05d88194..2ead2e64771cb675462e406663c74fdb6d6eabed 100644
 --- a/src/models/xing4-0.cpp
 +++ b/src/models/xing4-0.cpp
-@@ -628,6 +628,8 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
+@@ -626,6 +626,8 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
      cb(inpL, "hc_init", -1);
  
      for (int il = 0; il < n_layer; ++il) {
@@ -1432,7 +1432,7 @@ index c95acd6b83c28127e8628b2f3c2b3a89109456c8..fce2459b1082f78759d505c2caa126ec
          const auto & layer = model.layers[il];
  
          ggml_tensor * residual = inpL;
-@@ -796,6 +798,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
+@@ -794,6 +796,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
          inpL = build_hc_post(cur, residual, post, comb, il);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_out", il);

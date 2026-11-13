@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mellum.cpp b/src/models/mellum.cpp
-index 83f70019d4eaf4f0c833c42e794bbaffe1865a54..26e76b82a0095fa34668b61cd57f0b9218701e60 100644
+index 57dd5b79a28e836e57b427dff38e782149652464..4382edd66ab9cfe35e7a65f69d9331258553eddd 100644
 --- a/src/models/mellum.cpp
 +++ b/src/models/mellum.cpp
 @@ -144,6 +144,8 @@ llama_model_mellum::graph<iswa>::graph(const llm_graph_params & params) : llm_gr

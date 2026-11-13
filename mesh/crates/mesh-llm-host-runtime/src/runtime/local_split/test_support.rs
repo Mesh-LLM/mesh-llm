@@ -372,6 +372,7 @@ pub(super) fn runtime_status_for_stage(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
     }
 }
 
@@ -1309,6 +1310,7 @@ pub(super) fn test_stage_status_from_load(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
         dflash_feature_encodings: Vec::new(),
@@ -1367,6 +1369,7 @@ pub(super) fn test_stage_status_from_stop(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
         dflash_feature_encodings: Vec::new(),

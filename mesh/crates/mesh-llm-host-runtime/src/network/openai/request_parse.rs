@@ -7,7 +7,8 @@ use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
-    ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
+    ResponseAdapter, normalize_openai_compat_request, release_request_objects_with,
+    resolve_request_object_references,
 };
 use super::routing_rank::descriptor_for_model;
 
@@ -16,8 +17,10 @@ use audio_multipart::multipart_model_field;
 mod body_rewrite;
 mod chunked;
 mod effective_entity;
+mod plugin_transform;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
+pub(crate) use plugin_transform::RequestTransforms;
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
@@ -374,6 +377,8 @@ struct RequestRewriteOutcome {
     request_path: String,
     response_adapter: ResponseAdapter,
     rewritten_body: Option<Vec<u8>>,
+    /// A plugin request transform replaced the body.
+    transformed: bool,
 }
 
 // ── Request parsing ──
@@ -392,12 +397,21 @@ where
 
 /// Variant for host ingress boundaries that need to bind locally generated
 /// error responses to a safely established request lifecycle.
+///
+/// `transforms` says whether plugin request transforms run here: only where
+/// the client sent the request, never on a request another node forwarded.
 pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
+    transforms: RequestTransforms,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
-    let result =
-        read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await;
+    let result = read_http_request_with_limits_with_context(
+        stream,
+        HTTP_READ_LIMITS,
+        plugin_manager,
+        transforms,
+    )
+    .await;
     match &result {
         Ok(request) => stream.set_client_path(&request.client_path),
         Err(error) => {
@@ -417,15 +431,21 @@ pub(super) async fn read_http_request_with_limits<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    read_http_request_with_limits_with_context(stream, limits, plugin_manager)
-        .await
-        .map_err(OpenAiRequestReadError::into_error)
+    read_http_request_with_limits_with_context(
+        stream,
+        limits,
+        plugin_manager,
+        RequestTransforms::Skip,
+    )
+    .await
+    .map_err(OpenAiRequestReadError::into_error)
 }
 
 async fn read_http_request_with_limits_with_context<S>(
     stream: &mut S,
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
+    transforms: RequestTransforms,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -456,12 +476,15 @@ where
     } else {
         serde_json::from_slice::<RequestMetadata>(&body).ok()
     };
+    let transformer = plugin_transform::request_transformer(plugin_manager, transforms).await;
     let requires_json_transform =
-        request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some());
+        request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some())
+            || (transformer.is_some() && plugin_transform::is_transformable_path(&parsed.path));
     let rewrite = rewrite_request_body_for_forwarding(
         &parsed.path,
         &body,
         plugin_manager,
+        transformer,
         requires_json_transform,
     )
     .await
@@ -512,7 +535,12 @@ where
         parsed.request_id,
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
-    let body_len_bytes = body.len();
+    // Context budgets follow what reaches the model: a transform may replace
+    // a large attachment with a little text, or the reverse.
+    let body_len_bytes = match rewrite.rewritten_body.as_deref() {
+        Some(forwarded) if rewrite.transformed => forwarded.len(),
+        _ => body.len(),
+    };
     let body_bytes = if body.is_empty() { None } else { Some(body) };
 
     Ok(BufferedHttpRequest {
@@ -649,6 +677,7 @@ async fn rewrite_request_body_for_forwarding(
     path: &str,
     body: &[u8],
     plugin_manager: Option<&plugin::PluginManager>,
+    transformer: Option<&plugin::PluginManager>,
     requires_json_transform: bool,
 ) -> Result<RequestRewriteOutcome> {
     let mut outcome = RequestRewriteOutcome {
@@ -657,6 +686,7 @@ async fn rewrite_request_body_for_forwarding(
         request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
+        transformed: false,
     };
     if !requires_json_transform {
         return Ok(outcome);
@@ -685,13 +715,42 @@ async fn rewrite_request_body_for_forwarding(
             changed = true;
         }
     }
-    if changed {
-        outcome.rewritten_body = Some(
-            serde_json::to_vec(body_json)
-                .context("serialize normalized OpenAI-compatible request body")?,
-        );
+    let transformed = async {
+        let transformed = plugin_transform::apply_request_transforms(
+            transformer,
+            &outcome.request_path,
+            path,
+            body_json,
+        )
+        .await?;
+        plugin_transform::reject_parts_needing_transform(body_json)?;
+        if !(changed || transformed) {
+            return Ok((transformed, None));
+        }
+        let rewritten = serde_json::to_vec(body_json)
+            .context("serialize normalized OpenAI-compatible request body")?;
+        // A peer reading the forwarded request enforces the same limit.
+        if transformed && rewritten.len() > MAX_BODY_BYTES {
+            bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+        }
+        Ok((transformed, Some(rewritten)))
     }
-    Ok(outcome)
+    .await;
+    match transformed {
+        Ok((transformed, rewritten_body)) => {
+            outcome.transformed = transformed;
+            outcome.rewritten_body = rewritten_body;
+            Ok(outcome)
+        }
+        Err(error) => {
+            // The request never starts, so nothing else releases these.
+            if let Some(plugin_manager) = plugin_manager {
+                release_request_objects_with(plugin_manager, &outcome.request_object_request_ids)
+                    .await;
+            }
+            Err(error)
+        }
+    }
 }
 
 fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {

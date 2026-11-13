@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/deepseek32.cpp b/src/models/deepseek32.cpp
-index 716e60767309cfd6c3d89ac44688b246de75a1e6..7ec3cc7d901eda72907ac0d5a381d53074579e97 100644
+index 7036af1993a6f1a24d9ecad68a051fffedd49fe3..62d37c0329c0a6522baf9edfeab39641dc17db14 100644
 --- a/src/models/deepseek32.cpp
 +++ b/src/models/deepseek32.cpp
 @@ -203,6 +203,8 @@ llama_model_deepseek32::graph::graph(const llm_graph_params & params) :

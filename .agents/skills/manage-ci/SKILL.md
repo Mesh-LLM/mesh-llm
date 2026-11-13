@@ -46,6 +46,30 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/authority-automation` owns the commands that consumers of the protected
+authority artifacts run: `models resolve`, `models restore-inputs`,
+`ci-ops authority-audit`, `ci-ops pr-authority-audit`, and
+`artifact file-projection`, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, serde_json,
+sha2, hex, and libc on Unix; it never links process supervision, HTTP, async
+runtime, archive, or product crates. Full xtask keeps every command and
+delegates these to the library. The protected authority producers compile only
+this executable and stage it under the unchanged `xtask` artifact member, so
+consumers restore and verify the same layout. A command joins it only when every
+consumer of those artifacts needs it and it fits that boundary.
+
+`tools/runner-cleanup` owns `ci-ops runner-cleanup`, the bounded deletion of a
+persistent job's own outputs, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, process
+supervision, and thiserror; it never links HTTP, async runtime, archive, or
+product crates. Full xtask keeps the command and delegates it to the library,
+so stdout, stderr, and exit codes match. A job whose only automation is that
+cleanup prepares this executable through `just runner-cleanup-bootstrap`
+instead of full xtask: today only the trusted runner-image job. Its private
+copy keeps the `xtask` name and the `ci-ops runner-cleanup` argv, so the
+cleanup and finalization guards are unchanged. Jobs that run any other xtask
+command keep `just automation-bootstrap`.
+
 `tools/process-supervision` owns bounded child-process supervision
 (`supervise*`, `retained`) and the command interruption scope (`interrupt`).
 Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
@@ -106,11 +130,14 @@ not wait on a producer and only plan or validate (the entry planners through
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
-such as authority audits, canary summaries, Docker precheck, and preview
+such as authority audits, canary summaries, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
-always compiled in-run.
+always compiled in-run. `prepare-automation` takes a closed `tool` input
+(`xtask` by default, or `authority-automation`); `upload-automation` selects
+`authority-automation` exactly for the `protected-clean` source profile, and
+only full xtask may use the hosted executable cache.
 
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
@@ -557,6 +584,19 @@ checked-in expiry are the maintainer-controlled approval boundary.
   they stay cargo-free. `tools/xtask` rejects a cargo caller without
   initialization and any cargo call inside a composition-only job, because a
   canary cannot exercise the canary-skipped jobs.
+- Windows jobs that install sccache through `mozilla-actions/sccache-action`
+  pin `version: v0.16.0`. sccache 0.17 and later expand Cargo's rustc argfile,
+  and with Rust 1.100's build-dir layout the expanded command exceeds the
+  Windows command-line limit (os error 206, mozilla/sccache#2787). This matches
+  the 0.16.0 developer bootstrap. `tools/xtask` rejects an unpinned or
+  different version in a managed Windows compilation job and in
+  `prepare-automation`. 0.16.0 doesn't cache a rustc call that uses an argfile;
+  it hands it to rustc. Cargo uses an argfile only for over-long command lines,
+  so the largest crates (`skippy-commands`, `skippy-api`,
+  `mesh-llm-skippy-adapter`, likely `mesh-llm`) recompile on every Windows run,
+  warm or cold. A slow warm Windows lane is expected while the pin holds, not a
+  cache regression. Lift the pin once an upstream fix is released and a Windows
+  lane passes with it.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
@@ -573,8 +613,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` and
-  `tools/process-supervision/**` because xtask compiles both libraries. A
+  executable, whose key also hashes `tools/authority-automation/**`,
+  `tools/ci-controller/**`, `tools/process-supervision/**`, and
+  `tools/runner-cleanup/**` because xtask compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
@@ -638,6 +679,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   device runner.
 
 ## Operational safety
+
+- Stability and KV ownership coverage are manual-only while their nightly
+  schedules are paused. Keep both manual entrypoints and their evidence gates;
+  restoring a schedule requires reviewed live qualification.
 
 - Self-hosted jobs must finish with bounded cleanup of their own generated
   files after artifact uploads and explicit cache saves. Preserve shared model,
