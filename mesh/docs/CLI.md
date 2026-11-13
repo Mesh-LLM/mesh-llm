@@ -600,6 +600,21 @@ Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
 
+### `private`
+
+Use this to choose the other nodes your private requests (`@private`, `@incognito`) may go to. It edits `[private] nodes` in the config file, and a running node picks the change up without a restart. See [private routing](specs/private-routing.md).
+
+```bash
+mesh-llm private add studio     # a connected node's label or hostname, or a node id
+mesh-llm private list           # the list, and which listed nodes are connected
+mesh-llm private remove studio  # a name, a node id or a unique prefix of one
+```
+
+Switches:
+
+- `--port <PORT>`: management/API port of the running node, used to look names up and show connection state (default `3131`).
+- `--json` (`list` only): print machine-readable JSON.
+
 ### `runtime guardrails`
 
 Use this to switch mesh guardrail mode on a running local runtime without

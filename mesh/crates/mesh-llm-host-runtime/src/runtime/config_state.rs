@@ -94,6 +94,9 @@ pub(crate) struct PendingConfigApply {
     /// This apply changes request defaults, so models are swapped (or at least
     /// tried) and a failed persist has to put them back.
     request_defaults_changed: bool,
+    /// This apply changes `[private] nodes`, which the running node rereads
+    /// from the written file, so it always takes effect live.
+    private_nodes_changed: bool,
     /// Something outside the settings this apply can take live changed, so the
     /// saved config stays staged even when every live part took effect.
     changes_staged_settings: bool,
@@ -199,7 +202,8 @@ impl PendingConfigApply {
     ) -> bool {
         let attempted = self.dynamic_logging_only
             || self.dynamic_kv_disk_changed
-            || self.request_defaults_changed;
+            || self.request_defaults_changed
+            || self.private_nodes_changed;
         attempted
             && (!self.dynamic_logging_only || logging_applied)
             && (!self.dynamic_kv_disk_changed || kv_disk_applied)
@@ -438,8 +442,11 @@ fn changes_outside_live_settings(
         }
         // A section that only holds unset values is the same as an absent one,
         // and the file-format `version` marker configures nothing at runtime.
+        // `[private] nodes` is always live: the running node rereads it from
+        // the written file (`mesh::private_nodes`).
         if let Some(root) = value.as_object_mut() {
             root.remove("version");
+            root.remove("private");
         }
         prune_unset(&mut value);
         value
@@ -629,6 +636,8 @@ impl ConfigState {
             request_defaults_changed,
         );
 
+        let private_nodes_changed = self.config.private != new_config.private;
+
         ConfigApplyPreparation::Pending(Box::new(PendingConfigApply {
             config: new_config,
             config_path: self.config_path.clone(),
@@ -642,6 +651,7 @@ impl ConfigState {
             kv_disk_requires_restart,
             dynamic_kv_disk_changed,
             request_defaults_changed,
+            private_nodes_changed,
             changes_staged_settings,
             live_request_defaults: std::sync::Arc::clone(&self.live_request_defaults),
             request_defaults_undo: std::sync::Mutex::new(None),

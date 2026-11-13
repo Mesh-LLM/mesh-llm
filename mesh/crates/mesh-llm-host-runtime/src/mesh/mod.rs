@@ -103,6 +103,7 @@ pub(crate) mod plugin_keys;
 mod plugin_mesh;
 mod plugin_streams;
 mod pre_admission;
+pub(crate) mod private_nodes;
 mod private_scope;
 pub mod requirements;
 mod signed_records;
@@ -119,7 +120,6 @@ pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use mesh_llm_membership::connection_reservation::*;
 use mesh_llm_membership::state::MembershipState;
 use model_identity::*;
-pub(crate) use plugin_streams::endpoint_id_from_hex;
 pub(crate) use private_scope::{PrivateScope, current_private_scope, with_private_scope};
 // Main's openai::model_names calls this through the mesh:: path; keep the
 // pub(crate) surface stable across the model_identity move.

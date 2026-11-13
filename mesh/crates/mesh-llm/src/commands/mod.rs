@@ -111,6 +111,13 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Analytics { command } => {
             dispatch_analytics_command(command, cli.config.as_deref())
         }
+        Command::Private { command } => {
+            mesh_llm_commands::private_nodes::dispatch_private_command(
+                command,
+                cli.config.as_deref(),
+            )
+            .await
+        }
         Command::Uninstall(UninstallArgs {
             dry_run,
             yes,

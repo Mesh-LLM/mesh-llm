@@ -520,6 +520,8 @@ pub(crate) struct WakeableNode {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct PeerPayload {
     pub(crate) id: String,
+    /// The full node id, as `[private] nodes` and `mesh-llm private add` take it.
+    pub(crate) node_id: String,
     pub(crate) owner: OwnershipPayload,
     pub(crate) release_attestation: ReleaseAttestationSummary,
     pub(crate) role: String,
@@ -965,6 +967,7 @@ mod tests {
         let peer = PeerPayload {
             memory: None,
             id: "test-id".to_string(),
+            node_id: "test-id".to_string(),
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
             role: "Worker".to_string(),
@@ -999,6 +1002,7 @@ mod tests {
         let peer = PeerPayload {
             memory: None,
             id: "test-id".to_string(),
+            node_id: "test-id".to_string(),
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
             role: "Worker".to_string(),
@@ -1331,6 +1335,7 @@ mod tests {
         let peer = PeerPayload {
             memory: None,
             id: "test-id".to_string(),
+            node_id: "test-id".to_string(),
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
             role: "Host".to_string(),
