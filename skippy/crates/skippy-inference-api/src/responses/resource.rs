@@ -73,6 +73,17 @@ impl ResponseEnvelope {
         if fields["metadata"].is_null() {
             fields.insert("metadata".into(), Value::Object(Map::new()));
         }
+        if let Some(tools) = fields.get_mut("tools").and_then(Value::as_array_mut) {
+            for tool in tools {
+                if tool.get("type").and_then(Value::as_str) == Some("function")
+                    && let Some(tool) = tool.as_object_mut()
+                {
+                    for field in ["description", "parameters", "strict"] {
+                        tool.entry(field).or_insert(Value::Null);
+                    }
+                }
+            }
+        }
         Self { fields }
     }
 
@@ -446,6 +457,9 @@ mod tests {
         assert_eq!(response["store"], false);
         assert_eq!(response["metadata"]["k"], "v");
         assert_eq!(response["tools"][0]["name"], "f");
+        for field in ["description", "parameters", "strict"] {
+            assert_eq!(response["tools"][0].get(field), Some(&Value::Null));
+        }
         assert_eq!(response["previous_response_id"], "resp_0");
         assert_eq!(response["service_tier"], "default");
         assert!(!envelope.store());

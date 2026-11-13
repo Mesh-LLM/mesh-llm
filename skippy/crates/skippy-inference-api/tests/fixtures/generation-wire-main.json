@@ -3177,10 +3177,12 @@
       "tool_choice": "auto",
       "tools": [
         {
+          "description": null,
           "name": "alpha",
           "parameters": {
             "type": "object"
           },
+          "strict": null,
           "type": "function"
         }
       ],
