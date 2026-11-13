@@ -29,18 +29,46 @@ fn by_file(store: &Store) -> (Store, Store) {
     (Store { blocks: others }, Store { blocks: receipts })
 }
 
-/// Load the store saved in `directory`. `Err` is why nothing may be saved
-/// this run: a file that cannot be read, or that cannot be decoded and then
-/// cannot be set aside, must never be overwritten.
-pub(super) fn load(directory: &Path, now_ms: u64) -> Result<Store, String> {
-    let mut store = load_file(&directory.join(FILE_NAME), now_ms)?;
-    let receipts = load_file(&directory.join(RECEIPTS_FILE_NAME), now_ms)?;
+/// The store loaded from `directory`, and why nothing may be saved this
+/// run, if anything: a file that cannot be read, or that cannot be decoded
+/// and then cannot be set aside, must never be overwritten.
+pub(super) struct Loaded {
+    pub(super) store: Store,
+    pub(super) not_saved: Option<String>,
+}
+
+/// Load the store saved in `directory`. A failure of the receipts file
+/// keeps the operator's and plugins' blocks already read: the receipts file
+/// is auxiliary, and losing it must not make operator-blocked peers
+/// routable, even on a node with receipts off.
+pub(super) fn load(directory: &Path, now_ms: u64) -> Loaded {
+    let mut store = match load_file(&directory.join(FILE_NAME), now_ms) {
+        Ok(store) => store,
+        Err(problem) => {
+            return Loaded {
+                store: Store::default(),
+                not_saved: Some(problem),
+            };
+        }
+    };
+    let receipts = match load_file(&directory.join(RECEIPTS_FILE_NAME), now_ms) {
+        Ok(receipts) => receipts,
+        Err(problem) => {
+            return Loaded {
+                store,
+                not_saved: Some(problem),
+            };
+        }
+    };
     for (peer, block) in receipts.blocks {
         // A peer has one block. The operator's file wins: it is the one the
         // operator can read and undo on any release.
         store.blocks.entry(peer).or_insert(block);
     }
-    Ok(store)
+    Loaded {
+        store,
+        not_saved: None,
+    }
 }
 
 /// One file of the store. A missing file is empty; one that cannot be
@@ -254,6 +282,36 @@ mod tests {
                     let name = entry.file_name().to_string_lossy().into_owned();
                     name.starts_with("peer_blocks_receipts") && name.contains(".corrupt-")
                 })
+        );
+    }
+
+    #[test]
+    fn a_receipts_file_that_cannot_be_read_keeps_the_operators_blocks_unsaved() {
+        let directory = tempfile::tempdir().unwrap();
+        let bad = peer();
+        PeerBlocks::load(directory.path())
+            .block(&bad, BlockLength::UntilUndone, Requester::Operator, None, 1)
+            .unwrap();
+        // a directory where the file should be: present, but not readable
+        std::fs::create_dir(directory.path().join(RECEIPTS_FILE_NAME)).unwrap();
+        let blocks = PeerBlocks::load(directory.path());
+        assert!(blocks.is_blocked(&bad, 2), "the operator's block holds");
+        assert!(blocks.not_saved().is_some(), "and nothing is saved");
+        // a change this run is kept in memory and never overwrites a file
+        let other = peer();
+        blocks
+            .block(
+                &other,
+                BlockLength::UntilUndone,
+                Requester::Operator,
+                None,
+                3,
+            )
+            .unwrap();
+        assert!(blocks.is_blocked(&other, 4));
+        assert_eq!(
+            read_by_a_release_without_receipts(directory.path()),
+            Some(vec![super::super::peer_key(&bad)])
         );
     }
 }

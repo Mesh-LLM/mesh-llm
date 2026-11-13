@@ -219,7 +219,9 @@ impl PeerBlocks {
     /// Load the store saved in `directory`.
     ///
     /// A missing file is an empty store. A bad file must never stop routing,
-    /// so any other failure starts without its blocks, but never at the cost
+    /// so any other failure starts without that file's blocks, and keeps
+    /// those of the files read before it (an unreadable receipts file keeps
+    /// the operator's and plugins' blocks), but never at the cost
     /// of the file: a file that cannot be read, or that cannot be decoded
     /// and then cannot be set aside as `<name>.corrupt-<ms>`, is left where
     /// it is and nothing is saved for the rest of the process (see
@@ -229,21 +231,24 @@ impl PeerBlocks {
     }
 
     fn load_at(directory: &Path, now_ms: u64) -> Self {
-        match persistence::load(directory, now_ms) {
-            Ok(store) => Self::with_store(store, Some(directory.to_path_buf())),
-            Err(problem) => Self::not_persisting(problem),
+        let loaded = persistence::load(directory, now_ms);
+        match loaded.not_saved {
+            None => Self::with_store(loaded.store, Some(directory.to_path_buf())),
+            Some(problem) => Self::not_persisting(loaded.store, problem),
         }
     }
 
-    /// An empty store that never saves, because the file on disk could not
-    /// be loaded or set aside and must not be overwritten.
-    fn not_persisting(problem: String) -> Self {
+    /// A store that never saves, because a file on disk could not be loaded
+    /// or set aside and must not be overwritten. It keeps whatever blocks
+    /// were read before the failure.
+    fn not_persisting(store: Store, problem: String) -> Self {
         tracing::error!(
-            "peer blocks: {problem}; starting with no blocks, and changes this run will not be saved"
+            "peer blocks: {problem}; starting with the {} block(s) read before it, and changes this run will not be saved",
+            store.blocks.len()
         );
         Self {
             not_saved: Some(Arc::from(problem)),
-            ..Self::with_store(Store::default(), None)
+            ..Self::with_store(store, None)
         }
     }
 
