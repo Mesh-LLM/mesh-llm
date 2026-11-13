@@ -365,11 +365,19 @@ impl SplitTopologyCoordinator {
         connected_node_ids: &[iroh::EndpointId],
     ) -> Vec<iroh::EndpointId> {
         let mut unanswered = Vec::new();
-        for node_id in split_rejoined_stage_nodes(&self.unconfirmed_stage_nodes, connected_node_ids)
-        {
+        for node_id in split_rejoined_stage_nodes(
+            &self.active,
+            &self.unconfirmed_stage_nodes,
+            connected_node_ids,
+        ) {
             if !self
                 .node
-                .confirm_peer_stage_runtime_statuses(node_id, Duration::from_secs(2))
+                .confirm_peer_stage_runtime_statuses(
+                    node_id,
+                    &self.active.topology_id,
+                    &self.active.run_id,
+                    Duration::from_secs(2),
+                )
                 .await
             {
                 tracing::warn!(
