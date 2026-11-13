@@ -890,7 +890,7 @@ impl Node {
         let (mut send, mut recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_GOSSIP]).await?;
 
-        let outbound = self.collect_gossip_reply(remote).await;
+        let outbound = self.collect_outbound_gossip().await;
         write_gossip_payload(
             &mut send,
             protocol,
@@ -996,7 +996,7 @@ impl Node {
         self.validate_and_capture_inbound_gossip(protocol, &their_announcements, context)
             .await?;
 
-        let outbound = self.collect_outbound_gossip().await;
+        let outbound = self.collect_gossip_reply(remote).await;
         write_gossip_payload(
             &mut send,
             protocol,

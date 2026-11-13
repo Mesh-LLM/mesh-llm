@@ -121,3 +121,49 @@ async fn oversized_snapshots_complete_real_quic_exchanges_in_both_directions() {
             .unwrap();
     }
 }
+
+#[tokio::test]
+async fn inbound_gossip_repeats_get_own_announcement_only_over_real_quic() {
+    let sender = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let receiver = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    receive(&receiver, 0xf1, vec![unsigned_worker(0xf2, "third-party")], Vec::new()).await;
+    let mut listeners = Vec::new();
+    let accepting = receiver.clone();
+    listeners.push(tokio::spawn(async move { accepting.accept_loop().await }));
+    receiver.start_accepting();
+    let socket = receiver
+        .endpoint
+        .bound_sockets()
+        .into_iter()
+        .find(|addr| addr.is_ipv4())
+        .unwrap();
+    let address = EndpointAddr::new(receiver.id()).with_ip_addr(socket);
+    let connection = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        sender.endpoint.connect(address, crate::protocol::ALPN_V1),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let mut replies = Vec::new();
+    for _ in 0..2 {
+        let ((announcements, _), _) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            sender.gossip_round_trip(&connection, receiver.id()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        replies.push(announcements.len());
+    }
+    assert!(replies[0] > 1, "first reply is the full table: {replies:?}");
+    assert_eq!(replies[1], 1, "repeat gets own announcement only: {replies:?}");
+    sender.close_endpoint().await;
+    receiver.close_endpoint().await;
+    for listener in listeners {
+        tokio::time::timeout(std::time::Duration::from_secs(2), listener)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
