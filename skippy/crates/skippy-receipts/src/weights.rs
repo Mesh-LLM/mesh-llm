@@ -33,8 +33,9 @@ pub trait ByteSource: Send + Sync {
     fn read_once(&self, offset: u64, len: u64) -> Result<Vec<u8>> {
         self.read_at(offset, len)
     }
-    /// Bytes of `ranges` that reading them would fetch from elsewhere. A
-    /// local file holds every byte already.
+    /// Bytes that reading `ranges` would fetch from elsewhere, counting
+    /// whatever the fetch joins between them. A local file holds every
+    /// byte already.
     fn missing_bytes(&self, _ranges: &[(u64, u64)]) -> Result<u64> {
         Ok(0)
     }
