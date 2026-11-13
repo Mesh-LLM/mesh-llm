@@ -38,6 +38,7 @@ fn owner_config(name: &str, seed: u8) -> OwnerRuntimeConfig {
         node_label: Some(name.into()),
         trust_store: TrustStore::default(),
         trust_policy: TrustPolicy::Off,
+        private_nodes: Vec::new(),
         activity: Default::default(),
         drain_timeout_secs: 30,
         drain_timeout_max_secs: 30,

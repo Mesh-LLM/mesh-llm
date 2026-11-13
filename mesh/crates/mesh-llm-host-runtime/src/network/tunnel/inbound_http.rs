@@ -22,8 +22,7 @@ pub(super) async fn handle_inbound_http_stream(
     let _inflight = node.begin_inflight_request();
 
     let admitted_as = node
-        .owner_admission_ingress(crate::runtime::IngressType::RemoteQuicHttp, Some(remote))
-        .await;
+        .private_node_admission_ingress(crate::runtime::IngressType::RemoteQuicHttp, Some(remote));
     match node.activity_policy_guard.check_admission(admitted_as) {
         crate::runtime::AdmissionResult::Allowed => {}
         crate::runtime::AdmissionResult::Paused { reason, .. } => {

@@ -619,11 +619,11 @@ impl Node {
         peer_id: EndpointId,
     ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
         // A private request may only leave this node for a node in its
-        // trust circle, whichever routing path chose the peer. Checked again
+        // private scope, whichever routing path chose the peer. Checked again
         // after the connection wait: a certificate can expire meanwhile.
-        self.ensure_peer_in_current_owner_scope(peer_id).await?;
+        self.ensure_peer_in_current_private_scope(peer_id).await?;
         let conn = self.connection_to_peer(peer_id).await?;
-        self.ensure_peer_in_current_owner_scope(peer_id).await?;
+        self.ensure_peer_in_current_private_scope(peer_id).await?;
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let (mut send, recv) = conn.open_bi().await?;
             send.write_all(&[STREAM_TUNNEL_HTTP]).await?;

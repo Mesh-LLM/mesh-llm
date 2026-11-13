@@ -215,6 +215,12 @@ impl Node {
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
             trust_policy: owner_runtime.trust_policy,
+            private_nodes: Arc::new(
+                owner_config
+                    .as_ref()
+                    .map(|config| config.private_nodes.iter().copied().collect())
+                    .unwrap_or_default(),
+            ),
             enumerate_host,
             gpu_name: hardware.gpu_name,
             hostname: hardware.hostname,

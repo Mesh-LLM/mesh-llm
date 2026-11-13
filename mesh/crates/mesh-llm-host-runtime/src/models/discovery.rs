@@ -151,10 +151,8 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
             .values()
             .filter(|peer| peer.is_admitted())
             .filter(|peer| {
-                // A private listing shows only what this owner's nodes serve.
-                mesh::current_owner_scope().is_none_or(|scope| {
-                    scope.admits(&peer.owner_summary, mesh::owner_scope_now_unix_ms())
-                })
+                // A private listing shows only what the scope's nodes serve.
+                mesh::current_private_scope().is_none_or(|scope| scope.admits_peer(peer))
             })
             .map(|peer| (peer.clone(), state.peer_has_observed_liveness(peer)))
             .unzip()

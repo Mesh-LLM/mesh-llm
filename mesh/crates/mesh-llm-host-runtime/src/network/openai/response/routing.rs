@@ -38,11 +38,11 @@ pub(in crate::network::openai) async fn route_local_attempt(
         peer_capsule_id,
     } = logging;
     let marked;
-    let prefetched = match mesh::current_owner_scope() {
+    let prefetched = match mesh::current_private_scope() {
         Some(scope) => {
             // Whichever route chose it: a private request runs on this node
-            // only inside its circle.
-            if !node.local_in_owner_scope(&scope).await {
+            // only inside its scope.
+            if !node.local_in_private_scope(&scope) {
                 return RouteAttemptResult::RetryableUnavailable;
             }
             marked = crate::network::openai::routing_scope::mark_private_for_local_server(

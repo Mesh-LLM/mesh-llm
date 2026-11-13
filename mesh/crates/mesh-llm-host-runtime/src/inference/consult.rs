@@ -429,9 +429,9 @@ fn spawn_second_opinion_call(
     let msgs = messages.to_vec();
     let id = peer.0;
     let model = peer.1.clone();
-    // A spawned task does not inherit the request's owner scope; carry it.
-    let scope = mesh::current_owner_scope();
-    set.spawn(mesh::with_owner_scope(scope, async move {
+    // A spawned task does not inherit the request's private scope; carry it.
+    let scope = mesh::current_private_scope();
+    set.spawn(mesh::with_private_scope(scope, async move {
         second_opinion(&node, id, &model, &msgs, timeout)
             .await
             .map(|text| (text, id, model))

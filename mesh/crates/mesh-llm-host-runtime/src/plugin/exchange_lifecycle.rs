@@ -482,7 +482,7 @@ async fn invoke_phase(
     let (phase, deadline) = phase_deadline;
     // A hook's own inference for a private request stays private, from the
     // moment it can see the request: the body stream is sent first.
-    let private_call = crate::mesh::current_owner_scope()
+    let private_call = crate::mesh::current_private_scope()
         .map(|scope| manager.begin_private_invocation(name, Some(scope)));
     if let Some(encoded) = event["body_hex"].as_str() {
         let bytes = hex::decode(encoded).map_err(|_| HookFailure::Internal)?;
@@ -680,8 +680,8 @@ pub(crate) struct ExchangeSession {
     incomplete: bool,
     finished: bool,
     response_delivery: BTreeMap<String, bool>,
-    /// A private exchange's owner scope, restored for its terminal callback.
-    scope: Option<crate::mesh::OwnerScope>,
+    /// A private exchange's private scope, restored for its terminal callback.
+    scope: Option<crate::mesh::PrivateScope>,
     /// For a private exchange, keeps every observing plugin's own inference
     /// private from admission to its terminal callback: between callbacks it
     /// still holds request and response content.
@@ -716,7 +716,7 @@ impl ExchangeSession {
                 .unwrap_or(1),
         );
         let deadline = Instant::now() + budget;
-        let scope = crate::mesh::current_owner_scope();
+        let scope = crate::mesh::current_private_scope();
         let private_observers = match &scope {
             Some(scope) => manager
                 .inner
@@ -831,7 +831,7 @@ impl ExchangeSession {
     /// its observers' private binding.
     async fn run_terminal(mut self, outcome: String) {
         let scope = self.scope.clone();
-        crate::mesh::with_owner_scope(scope, async {
+        crate::mesh::with_private_scope(scope, async {
             let terminal = self.final_terminal_event(&outcome).await;
             self.manager.exchange_phase(terminal).await;
         })

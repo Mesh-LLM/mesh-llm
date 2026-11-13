@@ -212,7 +212,7 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         super::request_parse::MESH_TWIN_BRACKET_HEADER,
         // A client's scope headers never pass through as is; see below.
         super::routing_scope::MESH_SCOPE_HEADER,
-        super::routing_scope::MESH_SCOPE_OWNERS_HEADER,
+        super::routing_scope::MESH_SCOPE_NODES_HEADER,
     ];
     let omitted = INGRESS_CREDENTIAL_HEADERS
         .iter()
@@ -220,18 +220,18 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         .chain(OMITTED_ON_PEER_FORWARD.iter().copied());
     let mut forwarded =
         finalize_forwarded_request(raw, false, None, None, &omitted.collect::<Vec<_>>())?;
-    // A private request only reaches nodes in this node's trust circle. Tell that node
+    // A private request only reaches nodes in this node's private scope. Tell that node
     // it is private, so it serves it only from what stays in scope (not from
     // a split whose stages run on a stranger's node). The receiving node
-    // narrows the request to its own and this node's owner's nodes, within
-    // the circle named here (which carries any narrowing the client asked for).
-    if let Some(scope) = crate::mesh::current_owner_scope() {
+    // narrows the request to itself and this node, within
+    // the scope named here (which carries any narrowing the client asked for).
+    if let Some(scope) = crate::mesh::current_private_scope() {
         let request_line_end = forwarded
             .windows(2)
             .position(|pair| pair == b"\r\n")
             .map_or(0, |at| at + 2);
         let marker = super::routing_scope::private_scope_header_line()
-            + &super::routing_scope::owner_limit_header_line(&scope);
+            + &super::routing_scope::node_limit_header_line(&scope);
         forwarded.splice(request_line_end..request_line_end, marker.into_bytes());
     }
     Ok(forwarded)
@@ -298,13 +298,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_private_request_tells_the_owned_peer_it_is_private() {
-        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-scope: bogus\r\nx-mesh-scope-owners: other\r\nContent-Length: 2\r\n\r\n{}";
-        let scope = Some(crate::mesh::OwnerScope::of([
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-scope: bogus\r\nx-mesh-scope-nodes: other\r\nContent-Length: 2\r\n\r\n{}";
+        let scope = Some(crate::mesh::PrivateScope::of([
             "me".to_string(),
             "friend".to_string(),
         ]));
         let forwarded =
-            crate::mesh::with_owner_scope(scope, async { prepare_peer_forwarded_request(raw) })
+            crate::mesh::with_private_scope(scope, async { prepare_peer_forwarded_request(raw) })
                 .await
                 .unwrap();
         let text = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
@@ -312,7 +312,7 @@ mod tests {
         assert!(
             text.starts_with(
                 "post /v1/chat/completions http/1.1\r\nx-mesh-scope: private\r\n\
-                 x-mesh-scope-owners: me,friend\r\n"
+                 x-mesh-scope-nodes: me,friend\r\n"
             ),
             "{text}"
         );

@@ -2,14 +2,13 @@
 //! `@private` model suffix. `incognito` is an alias for `private` in both.
 //! They work on the automatic directive too: `auto@private`, `mesh@private`.
 //!
-//! Both mean the same thing: serve this request only inside the trust circle
-//! of the node the client is talking to: nodes signed by its owner or by an
-//! owner in its trust store. The selector is consumed here,
+//! Both mean the same thing: serve this request only on the node the client
+//! is talking to and the nodes it lists. The selector is consumed here,
 //! at the entry node: the suffix is removed from the model name before any
 //! model lookup, so a peer advertising a model literally named `x@private`
 //! can never be selected by it, and the header is stripped before a request
-//! is forwarded. Whether a peer is "yours" is decided by its verified owner
-//! certificate (`mesh::owner_scope`), never by a name.
+//! is forwarded. Whether a peer is "yours" is decided by its node id, which
+//! its QUIC connection proves (`mesh::private_scope`), never by a name.
 //!
 //! A trailing `@private` or `@incognito` is reserved: it always means scope.
 //! A Hugging Face revision with either name must be referenced by commit
@@ -19,15 +18,15 @@ use super::client_stream::ClientStream;
 use super::request_parse::{
     BufferedHttpRequest, header_values_from_parsed_raw, rewrite_model_field,
 };
-use crate::mesh::{self, OwnerScope};
+use crate::mesh::{self, PrivateScope};
 use crate::runtime::IngressType;
 
 pub(crate) const MESH_SCOPE_HEADER: &str = "x-mesh-scope";
 pub(crate) const PRIVATE_SCOPE: &str = "private";
-/// Narrows a private request to these owners (comma-separated), within this
-/// node's circle. A plugin's nested call carries the circle of the request
+/// Narrows a private request to these nodes (comma-separated), within this
+/// node's scope. A plugin's nested call carries the scope of the request
 /// that caused it here; it can never widen the node's own.
-pub(crate) const MESH_SCOPE_OWNERS_HEADER: &str = "x-mesh-scope-owners";
+pub(crate) const MESH_SCOPE_NODES_HEADER: &str = "x-mesh-scope-nodes";
 /// Header values that select private scope; the first is canonical.
 const PRIVATE_SCOPE_ALIASES: [&str; 2] = [PRIVATE_SCOPE, "incognito"];
 /// Reserved model-name suffixes that select private scope.
@@ -114,16 +113,16 @@ fn private_scope_requested(request: &BufferedHttpRequest) -> Result<bool, ScopeR
             "model '{model}' names no model before its private suffix"
         )));
     }
-    // An owner limit alone also selects private, as it does for transforms:
+    // An node limit alone also selects private, as it does for transforms:
     // it can only narrow a private request, never mean a public one.
-    let owner_limit = !header_values_from_parsed_raw(&request.raw, MESH_SCOPE_OWNERS_HEADER)
+    let node_limit = !header_values_from_parsed_raw(&request.raw, MESH_SCOPE_NODES_HEADER)
         .map_err(|()| {
             bad(format!(
-                "could not read the {MESH_SCOPE_OWNERS_HEADER} header"
+                "could not read the {MESH_SCOPE_NODES_HEADER} header"
             ))
         })?
         .is_empty();
-    Ok(header || owner_limit || private_model_base(request.model_name.as_deref()).is_some())
+    Ok(header || node_limit || private_model_base(request.model_name.as_deref()).is_some())
 }
 
 /// `model` without its reserved private suffix, when it has one.
@@ -137,26 +136,18 @@ pub(crate) fn private_model_base(model: Option<&str>) -> Option<&str> {
 
 /// Consume the private selector on a request entering at this node.
 ///
-/// Returns the owner scope to route it in, `None` for an ordinary request,
-/// or a rejection: private was asked for but this node has no verified owner
-/// to scope to. Never falls back to public routing.
+/// Returns the private scope to route it in, or `None` for an ordinary
+/// request. Never falls back to public routing.
 pub(crate) async fn resolve(
     node: &mesh::Node,
     request: &mut BufferedHttpRequest,
-) -> Result<Option<OwnerScope>, ScopeRejection> {
+) -> Result<Option<PrivateScope>, ScopeRejection> {
     if !private_scope_requested(request)? {
         return Ok(None);
     }
-    let Some(scope) = node.private_owner_scope().await else {
-        return Err(ScopeRejection {
-            status: 403,
-            message: "private routing needs this node to be signed by your owner key \
-                      (start it with `--owner-key`, after `mesh-llm auth init`)"
-                .to_string(),
-        });
-    };
-    let scope = match requested_owners(&request.raw)? {
-        Some(owners) => scope.intersect(&owners),
+    let scope = node.entry_private_scope();
+    let scope = match requested_nodes(&request.raw)? {
+        Some(nodes) => scope.intersect(&nodes),
         None => scope,
     };
     if let Some(base) = private_model_base(request.model_name.as_deref()).map(str::to_string) {
@@ -165,30 +156,30 @@ pub(crate) async fn resolve(
     Ok(Some(scope))
 }
 
-/// The owner limit a raw head carries, for request transforms that run
-/// before [`resolve`]. An unreadable header limits to no owners at all.
-pub(crate) fn head_owner_limit(raw: &[u8]) -> Option<OwnerScope> {
-    requested_owners(raw).unwrap_or_else(|_| Some(OwnerScope::of(Vec::new())))
+/// The node limit a raw head carries, for request transforms that run
+/// before [`resolve`]. An unreadable header limits to no nodes at all.
+pub(crate) fn head_node_limit(raw: &[u8]) -> Option<PrivateScope> {
+    requested_nodes(raw).unwrap_or_else(|_| Some(PrivateScope::of(Vec::new())))
 }
 
-/// The owners named in [`MESH_SCOPE_OWNERS_HEADER`], if the head has it.
-fn requested_owners(raw: &[u8]) -> Result<Option<OwnerScope>, ScopeRejection> {
-    let values = header_values_from_parsed_raw(raw, MESH_SCOPE_OWNERS_HEADER).map_err(|()| {
+/// The nodes named in [`MESH_SCOPE_NODES_HEADER`], if the head has it.
+fn requested_nodes(raw: &[u8]) -> Result<Option<PrivateScope>, ScopeRejection> {
+    let values = header_values_from_parsed_raw(raw, MESH_SCOPE_NODES_HEADER).map_err(|()| {
         ScopeRejection {
             status: 400,
-            message: format!("could not read the {MESH_SCOPE_OWNERS_HEADER} header"),
+            message: format!("could not read the {MESH_SCOPE_NODES_HEADER} header"),
         }
     })?;
     if values.is_empty() {
         return Ok(None);
     }
-    let owners = values
+    let nodes = values
         .iter()
         .flat_map(|value| value.split(','))
         .map(str::trim)
         .filter(|owner| !owner.is_empty())
         .map(str::to_string);
-    Ok(Some(OwnerScope::of(owners)))
+    Ok(Some(PrivateScope::of(nodes)))
 }
 
 /// [`resolve`] for a request entering this node's API ingress. Returns
@@ -196,8 +187,8 @@ fn requested_owners(raw: &[u8]) -> Result<Option<OwnerScope>, ScopeRejection> {
 ///
 /// A request from a peer is already assigned here and runs locally. It is
 /// private when the peer that forwarded it marked it so: then this node
-/// serves it only from what stays on its own owner's and that peer's owner's
-/// nodes (see [`mesh::Node::forwarded_private_scope`]). The marker can only
+/// serves it only from what stays on itself and that peer
+/// (see [`mesh::Node::forwarded_private_scope`]). The marker can only
 /// narrow, and a peer request never routes onward.
 pub(crate) async fn resolve_at_ingress(
     node: &mesh::Node,
@@ -205,7 +196,7 @@ pub(crate) async fn resolve_at_ingress(
     mut request: BufferedHttpRequest,
     ingress_type: IngressType,
     requested_by: Option<iroh::EndpointId>,
-) -> Option<(ClientStream, BufferedHttpRequest, Option<OwnerScope>)> {
+) -> Option<(ClientStream, BufferedHttpRequest, Option<PrivateScope>)> {
     if ingress_type == IngressType::RemoteQuicHttp {
         let scope = peer_private_scope(node, &request, requested_by).await;
         return Some((stream, request, scope));
@@ -230,37 +221,37 @@ pub(crate) async fn peer_private_scope(
     node: &mesh::Node,
     request: &BufferedHttpRequest,
     requested_by: Option<iroh::EndpointId>,
-) -> Option<OwnerScope> {
+) -> Option<PrivateScope> {
     // An unreadable or repeated header counts as marked, and an unknown
-    // requester adds no owner: narrowing is the safe side.
+    // requester adds no node: narrowing is the safe side.
     if !head_requests_private_scope(&request.raw) {
         return None;
     }
     let scope = match requested_by {
-        Some(requester) => node.forwarded_private_scope(requester).await,
-        None => OwnerScope::of(node.local_scope_owner_id().await),
+        Some(requester) => node.forwarded_private_scope(requester),
+        None => PrivateScope::new(node.local_scope_node_id()),
     };
-    // The entry node's circle, as it forwarded it: narrows, never widens.
-    Some(match head_owner_limit(&request.raw) {
-        Some(owners) => scope.intersect(&owners),
+    // The entry node's scope, as it forwarded it: narrows, never widens.
+    Some(match head_node_limit(&request.raw) {
+        Some(nodes) => scope.intersect(&nodes),
         None => scope,
     })
 }
 
-/// The owner limit a forwarded private request carries: the circle it was
+/// The node limit a forwarded private request carries: the scope it was
 /// scoped to at its entry node.
-pub(crate) fn owner_limit_header_line(scope: &OwnerScope) -> String {
+pub(crate) fn node_limit_header_line(scope: &PrivateScope) -> String {
     format!(
-        "{MESH_SCOPE_OWNERS_HEADER}: {}\r\n",
-        scope.owner_ids().join(",")
+        "{MESH_SCOPE_NODES_HEADER}: {}\r\n",
+        scope.node_ids().join(",")
     )
 }
 
 /// A private request on its way to this node's own local server. That
 /// server is reached over loopback, outside this task's scope, so: its peer
 /// consultation hooks are turned off (they would pick peers unscoped), and
-/// the circle is named for its exchange hooks ([`local_server_scope`]).
-pub(crate) fn mark_private_for_local_server(raw: &[u8], scope: &OwnerScope) -> Vec<u8> {
+/// the scope is named for its exchange hooks ([`local_server_scope`]).
+pub(crate) fn mark_private_for_local_server(raw: &[u8], scope: &PrivateScope) -> Vec<u8> {
     let mut raw = raw.to_vec();
     // Hooks are off unless the body turns them on; a body that names them
     // gets both flags set off. Others are left as they are.
@@ -271,21 +262,21 @@ pub(crate) fn mark_private_for_local_server(raw: &[u8], scope: &OwnerScope) -> V
         .windows(2)
         .position(|pair| pair == b"\r\n")
         .map_or(0, |at| at + 2);
-    let marker = private_scope_header_line() + &owner_limit_header_line(scope);
+    let marker = private_scope_header_line() + &node_limit_header_line(scope);
     raw.splice(request_line_end..request_line_end, marker.into_bytes());
     raw
 }
 
 /// The scope a request reached this node's local server in, from
 /// [`mark_private_for_local_server`]. Any scope header makes it private,
-/// limited to the owners every owner limit names; none of them, no owners.
-pub(crate) fn local_server_scope(headers: &axum::http::HeaderMap) -> Option<OwnerScope> {
+/// limited to the nodes every node limit names; none of them, no nodes.
+pub(crate) fn local_server_scope(headers: &axum::http::HeaderMap) -> Option<PrivateScope> {
     headers.get(MESH_SCOPE_HEADER)?;
     let limits = headers
-        .get_all(MESH_SCOPE_OWNERS_HEADER)
+        .get_all(MESH_SCOPE_NODES_HEADER)
         .iter()
         .map(|value| {
-            OwnerScope::of(
+            PrivateScope::of(
                 value
                     .to_str()
                     .unwrap_or_default()
@@ -298,7 +289,7 @@ pub(crate) fn local_server_scope(headers: &axum::http::HeaderMap) -> Option<Owne
     Some(
         limits
             .reduce(|scope, limit| scope.intersect(&limit))
-            .unwrap_or_else(|| OwnerScope::of(Vec::new())),
+            .unwrap_or_else(|| PrivateScope::of(Vec::new())),
     )
 }
 
@@ -307,11 +298,11 @@ mod tests {
     use super::*;
 
     /// The loopback hop to this node's own server: peer consultation off,
-    /// the circle named, and a client's own limit can only narrow it.
+    /// the scope named, and a client's own limit can only narrow it.
     #[test]
     fn a_private_request_reaches_the_local_server_marked_and_without_hooks() {
-        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nx-mesh-scope-owners: me,friend,evil\r\nContent-Length: 39\r\n\r\n{\"model\":\"m\",\"skippy_hooks\":true,\"x\":1}";
-        let scope = OwnerScope::of(["me".to_string(), "friend".to_string()]);
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nx-mesh-scope-nodes: me,friend,evil\r\nContent-Length: 39\r\n\r\n{\"model\":\"m\",\"skippy_hooks\":true,\"x\":1}";
+        let scope = PrivateScope::of(["me".to_string(), "friend".to_string()]);
         let marked = mark_private_for_local_server(raw, &scope);
         let text = String::from_utf8_lossy(&marked);
         assert!(text.contains("\"skippy_hooks\":false"), "{text}");
@@ -329,7 +320,10 @@ mod tests {
         assert_eq!(local_server_scope(&axum::http::HeaderMap::new()), None);
         let mut bare = axum::http::HeaderMap::new();
         bare.insert(MESH_SCOPE_HEADER, "private".parse().unwrap());
-        assert_eq!(local_server_scope(&bare), Some(OwnerScope::of(Vec::new())));
+        assert_eq!(
+            local_server_scope(&bare),
+            Some(PrivateScope::of(Vec::new()))
+        );
     }
 
     #[test]
@@ -419,29 +413,29 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_call_names_the_owners_it_keeps_to() {
+    fn a_nested_call_names_the_nodes_it_keeps_to() {
         let head = |headers: &str| format!("POST /v1/chat/completions HTTP/1.1\r\n{headers}\r\n");
-        assert_eq!(requested_owners(head("").as_bytes()).unwrap(), None);
-        let owners = requested_owners(head("x-mesh-scope-owners: a, b,\r\n").as_bytes())
+        assert_eq!(requested_nodes(head("").as_bytes()).unwrap(), None);
+        let nodes = requested_nodes(head("x-mesh-scope-nodes: a, b,\r\n").as_bytes())
             .unwrap()
             .unwrap();
-        assert_eq!(owners, OwnerScope::of(["a".to_string(), "b".to_string()]));
-        // Narrowing only: owners the node does not trust stay out.
-        let circle = OwnerScope::of(["b".to_string(), "c".to_string()]);
-        assert_eq!(circle.intersect(&owners), OwnerScope::new("b"));
+        assert_eq!(nodes, PrivateScope::of(["a".to_string(), "b".to_string()]));
+        // Narrowing only: nodes this node does not list stay out.
+        let scope = PrivateScope::of(["b".to_string(), "c".to_string()]);
+        assert_eq!(scope.intersect(&nodes), PrivateScope::new("b"));
         let many =
             "x-filler: 1\r\n".repeat(2 * crate::network::openai::request_parse::MAX_HEADERS + 1);
-        assert!(requested_owners(head(&many).as_bytes()).is_err());
+        assert!(requested_nodes(head(&many).as_bytes()).is_err());
         // Transforms that run before `resolve` see the same limit; an
         // unreadable one admits nobody.
-        assert_eq!(head_owner_limit(head("").as_bytes()), None);
+        assert_eq!(head_node_limit(head("").as_bytes()), None);
         assert_eq!(
-            head_owner_limit(head("x-mesh-scope-owners: a,b\r\n").as_bytes()),
-            Some(owners)
+            head_node_limit(head("x-mesh-scope-nodes: a,b\r\n").as_bytes()),
+            Some(nodes)
         );
         assert_eq!(
-            head_owner_limit(head(&many).as_bytes()),
-            Some(OwnerScope::of(Vec::new()))
+            head_node_limit(head(&many).as_bytes()),
+            Some(PrivateScope::of(Vec::new()))
         );
     }
 }

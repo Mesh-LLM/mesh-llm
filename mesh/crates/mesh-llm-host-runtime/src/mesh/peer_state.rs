@@ -9,11 +9,10 @@ pub use mesh_llm_membership::peer_state::{
     PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
 };
 
-/// Inside a private request, keep only peers owned by the request's owner.
-fn retain_owner_scoped(peers: &mut Vec<PeerInfo>) {
-    if let Some(scope) = super::owner_scope::current_owner_scope() {
-        let now = super::owner_scope::now_unix_ms();
-        peers.retain(|peer| scope.admits_peer(peer, now));
+/// Inside a private request, keep only the peers its scope admits.
+fn retain_private_scoped(peers: &mut Vec<PeerInfo>) {
+    if let Some(scope) = super::private_scope::current_private_scope() {
+        peers.retain(|peer| scope.admits_peer(peer));
     }
 }
 
@@ -125,6 +124,8 @@ pub struct OwnerRuntimeConfig {
     pub node_label: Option<String>,
     pub trust_store: TrustStore,
     pub trust_policy: TrustPolicy,
+    /// Other nodes that may serve this node's private requests.
+    pub private_nodes: Vec<EndpointId>,
     pub activity: mesh_llm_config::RuntimeActivityConfig,
     pub drain_timeout_secs: u64,
     pub drain_timeout_max_secs: u64,
@@ -484,7 +485,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect()
         };
-        retain_owner_scoped(&mut peer_data);
+        retain_private_scoped(&mut peer_data);
         self.filter_model_requirements(&mut peer_data).await;
         let mut served = std::collections::HashSet::new();
         for s in &my_hosted_models {
@@ -726,7 +727,7 @@ impl Node {
         let now_ms = crate::network::peer_blocks::now_ms();
         let mut peers = self.peers().await;
         peers.retain(|peer| !self.peer_blocks.is_blocked(&peer.id, now_ms));
-        retain_owner_scoped(&mut peers);
+        retain_private_scoped(&mut peers);
         self.filter_model_requirements(&mut peers).await;
         peers
     }

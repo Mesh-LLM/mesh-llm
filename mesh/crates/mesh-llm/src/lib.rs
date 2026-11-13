@@ -550,6 +550,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         node_label: cli.owner.node_label,
         trust_policy: cli.owner.trust_policy.map(map_trust_policy),
         trust_owner: cli.owner.trust_owner,
+        private_nodes: cli.owner.private_node,
         nostr_discovery: cli.nostr_discovery,
         audit_log_path: cli.logging.audit_log_path,
         audit_log_format: cli.logging.audit_log_format,

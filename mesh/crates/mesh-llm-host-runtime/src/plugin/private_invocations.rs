@@ -1,18 +1,18 @@
-//! Which plugins are handling a private request, and for which owners.
+//! Which plugins are handling a private request, and for which nodes.
 //!
 //! A plugin calls back into the host for its own inference
 //! (`inference/chat_completions`) on a different task from the request it is
-//! handling, so the request's owner scope does not follow it. While any
+//! handling, so the request's private scope does not follow it. While any
 //! private request is being handled by a plugin (a virtual-model turn, an
 //! OpenAI exchange hook, a request transform), the host marks every nested
-//! call from that plugin private, limited to the owners of every such
+//! call from that plugin private, limited to the nodes of every such
 //! request at once. Fails closed: a public request handled by the same plugin
 //! at the same moment is narrowed too, never the other way round.
 //!
-//! The limit keeps a nested call inside the circle of the request that
+//! The limit keeps a nested call inside the scope of the request that
 //! caused it. Without it the node running the plugin would scope the call
-//! to its own trust circle, which for a request forwarded from another
-//! owner's node is not the circle that request was given.
+//! to its own private scope, which for a request forwarded from another
+//! node is not the scope that request was given.
 //!
 //! A plugin keeps working on a call the host sends no cancel for. So a
 //! private call runs to the plugin's reply on its own task
@@ -26,7 +26,7 @@
 // shortcut: per plugin, not per request. A per-request token would need the
 // plugin protocol to echo it back on nested calls.
 
-use crate::mesh::OwnerScope;
+use crate::mesh::PrivateScope;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -38,19 +38,19 @@ pub(crate) const ABANDONED_LINGER: Duration = Duration::from_secs(300);
 /// How a plugin's nested inference must be scoped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NestedScope {
-    /// Private, in this node's own trust circle: the request it handles
+    /// Private, in this node's own private scope: the request it handles
     /// entered here and has not been scoped yet (a request transform).
-    NodeCircle,
-    /// Private, and only these owners' nodes.
-    Owners(OwnerScope),
+    NodeScope,
+    /// Private, and only these nodes' nodes.
+    Nodes(PrivateScope),
 }
 
 impl NestedScope {
-    fn narrowed_by(self, limit: Option<&OwnerScope>) -> Self {
+    fn narrowed_by(self, limit: Option<&PrivateScope>) -> Self {
         match (self, limit) {
             (scope, None) => scope,
-            (Self::NodeCircle, Some(limit)) => Self::Owners(limit.clone()),
-            (Self::Owners(owners), Some(limit)) => Self::Owners(owners.intersect(limit)),
+            (Self::NodeScope, Some(limit)) => Self::Nodes(limit.clone()),
+            (Self::Nodes(nodes), Some(limit)) => Self::Nodes(nodes.intersect(limit)),
         }
     }
 }
@@ -58,10 +58,10 @@ impl NestedScope {
 #[derive(Default)]
 struct State {
     next_id: u64,
-    /// Per plugin: each running invocation's owner limit, by invocation id.
-    active: BTreeMap<String, BTreeMap<u64, Option<OwnerScope>>>,
+    /// Per plugin: each running invocation's node limit, by invocation id.
+    active: BTreeMap<String, BTreeMap<u64, Option<PrivateScope>>>,
     /// Per plugin: abandoned invocations' limits, until they stop lingering.
-    lingering: BTreeMap<String, Vec<(Instant, Option<OwnerScope>)>>,
+    lingering: BTreeMap<String, Vec<(Instant, Option<PrivateScope>)>>,
 }
 
 impl State {
@@ -106,9 +106,13 @@ impl PrivateInvocations {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// `owners` limits the plugin's nested calls to those owners' nodes;
-    /// `None` leaves them to this node's trust circle.
-    pub(crate) fn begin(&self, plugin: &str, owners: Option<OwnerScope>) -> PrivateInvocationGuard {
+    /// `nodes` limits the plugin's nested calls to those nodes' nodes;
+    /// `None` leaves them to this node's private scope.
+    pub(crate) fn begin(
+        &self,
+        plugin: &str,
+        nodes: Option<PrivateScope>,
+    ) -> PrivateInvocationGuard {
         let mut state = self.lock();
         state.reap(plugin, Instant::now());
         let id = state.next_id;
@@ -117,7 +121,7 @@ impl PrivateInvocations {
             .active
             .entry(plugin.to_string())
             .or_default()
-            .insert(id, owners);
+            .insert(id, nodes);
         PrivateInvocationGuard {
             invocations: self.clone(),
             plugin: plugin.to_string(),
@@ -140,13 +144,13 @@ impl PrivateInvocations {
             .lingering
             .get(plugin)
             .into_iter()
-            .flat_map(|l| l.iter().map(|(_, owners)| owners));
+            .flat_map(|l| l.iter().map(|(_, nodes)| nodes));
         let mut scope = None;
-        for owners in active.chain(lingering) {
+        for nodes in active.chain(lingering) {
             scope = Some(
                 scope
-                    .unwrap_or(NestedScope::NodeCircle)
-                    .narrowed_by(owners.as_ref()),
+                    .unwrap_or(NestedScope::NodeScope)
+                    .narrowed_by(nodes.as_ref()),
             );
         }
         scope
@@ -190,7 +194,7 @@ impl Drop for PrivateInvocationGuard {
     fn drop(&mut self) {
         let linger = self.invocations.linger;
         let mut state = self.invocations.lock();
-        let owners = state
+        let nodes = state
             .active
             .get_mut(&self.plugin)
             .and_then(|active| active.remove(&self.id));
@@ -202,13 +206,13 @@ impl Drop for PrivateInvocationGuard {
             state.active.remove(&self.plugin);
         }
         if !self.finished
-            && let Some(owners) = owners
+            && let Some(nodes) = nodes
         {
             state
                 .lingering
                 .entry(self.plugin.clone())
                 .or_default()
-                .push((Instant::now() + linger, owners));
+                .push((Instant::now() + linger, nodes));
         }
         // Expired entries go even if the plugin never calls back.
         state.reap(&self.plugin, Instant::now());
@@ -227,7 +231,7 @@ mod tests {
         let second = invocations.begin("moa", None);
         assert_eq!(
             invocations.nested_scope("moa"),
-            Some(NestedScope::NodeCircle)
+            Some(NestedScope::NodeScope)
         );
         assert_eq!(invocations.nested_scope("other"), None);
         first.finish();
@@ -237,26 +241,26 @@ mod tests {
     }
 
     #[test]
-    fn nested_calls_keep_to_the_owners_of_every_request_in_progress() {
+    fn nested_calls_keep_to_the_nodes_of_every_request_in_progress() {
         let invocations = PrivateInvocations::default();
-        let ab = OwnerScope::of(["a".to_string(), "b".to_string()]);
-        let bc = OwnerScope::of(["b".to_string(), "c".to_string()]);
+        let ab = PrivateScope::of(["a".to_string(), "b".to_string()]);
+        let bc = PrivateScope::of(["b".to_string(), "c".to_string()]);
         let first = invocations.begin("moa", Some(ab.clone()));
         assert_eq!(
             invocations.nested_scope("moa"),
-            Some(NestedScope::Owners(ab.clone()))
+            Some(NestedScope::Nodes(ab.clone()))
         );
         let second = invocations.begin("moa", Some(bc));
         let unscoped = invocations.begin("moa", None);
         assert_eq!(
             invocations.nested_scope("moa"),
-            Some(NestedScope::Owners(OwnerScope::new("b")))
+            Some(NestedScope::Nodes(PrivateScope::new("b")))
         );
         second.finish();
         unscoped.finish();
         assert_eq!(
             invocations.nested_scope("moa"),
-            Some(NestedScope::Owners(ab))
+            Some(NestedScope::Nodes(ab))
         );
         first.finish();
         assert_eq!(invocations.nested_scope("moa"), None);
@@ -265,10 +269,10 @@ mod tests {
     #[test]
     fn an_abandoned_invocation_keeps_the_plugin_private_for_a_while() {
         let invocations = PrivateInvocations::default();
-        drop(invocations.begin("moa", Some(OwnerScope::new("a"))));
+        drop(invocations.begin("moa", Some(PrivateScope::new("a"))));
         assert_eq!(
             invocations.nested_scope("moa"),
-            Some(NestedScope::Owners(OwnerScope::new("a")))
+            Some(NestedScope::Nodes(PrivateScope::new("a")))
         );
         assert_eq!(invocations.nested_scope("other"), None);
 
@@ -317,7 +321,7 @@ mod tests {
         let _ = waiting.await;
         assert_eq!(
             invocations.nested_scope("moa"),
-            Some(NestedScope::NodeCircle)
+            Some(NestedScope::NodeScope)
         );
         // The plugin replies later; only then is it public again.
         reply_tx.send(()).unwrap();
@@ -352,7 +356,7 @@ mod tests {
         assert!(tokio::time::timeout_at(deadline, held).await.is_err());
         assert_eq!(
             invocations.nested_scope("hook"),
-            Some(NestedScope::NodeCircle)
+            Some(NestedScope::NodeScope)
         );
         reply_tx.send(()).unwrap();
         done_rx.await.unwrap();

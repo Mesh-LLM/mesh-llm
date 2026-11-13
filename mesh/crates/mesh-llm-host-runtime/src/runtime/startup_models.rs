@@ -192,6 +192,15 @@ pub(super) fn owner_runtime_config(
         node_label: options.node_label.clone(),
         trust_store,
         trust_policy,
+        private_nodes: options
+            .private_nodes
+            .iter()
+            .map(|id| {
+                mesh::endpoint_id_from_hex(id.trim()).with_context(|| {
+                    format!("--private-node {id} is not a node id (64 hex characters)")
+                })
+            })
+            .collect::<Result<_>>()?,
         activity: config.runtime.activity.clone(),
         drain_timeout_secs: config.runtime.drain_timeout_secs,
         drain_timeout_max_secs: config.runtime.drain_timeout_max_secs,

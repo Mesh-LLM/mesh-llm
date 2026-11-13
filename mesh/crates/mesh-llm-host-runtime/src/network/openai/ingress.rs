@@ -604,7 +604,7 @@ async fn resolve_remote_mesh_route(
         .collect();
     // A private request: these hosts were found after the ingress snapshot,
     // so they get its split check too.
-    if mesh::current_owner_scope().is_some() {
+    if mesh::current_private_scope().is_some() {
         let mut found = election::ModelTargets::default();
         found.targets.insert(
             model_name.to_string(),
@@ -615,7 +615,7 @@ async fn resolve_remote_mesh_route(
         );
         let kept = ctx
             .node
-            .targets_in_current_owner_scope(found)
+            .targets_in_current_private_scope(found)
             .await
             .candidates(model_name);
         remote_hosts.retain(|id| kept.contains(&election::InferenceTarget::Remote(*id)));
@@ -1436,8 +1436,7 @@ async fn admit_buffered_api_request(
     let admitted_as = ctx
         .route
         .node
-        .owner_admission_ingress(ingress_type, requester)
-        .await;
+        .private_node_admission_ingress(ingress_type, requester);
     check_activity_admission(
         tcp_stream,
         &ctx.route.node.activity_policy_guard,
@@ -1601,7 +1600,7 @@ async fn handle_api_proxy_connection_inner(
         return;
     };
     let targets = match &scope {
-        Some(scope) => node.targets_in_owner_scope(scope, &targets).await,
+        Some(scope) => node.targets_in_private_scope(scope, &targets).await,
         None => targets,
     };
     // Boxed: the dispatch future is large, and the scope wrapper would
@@ -1638,7 +1637,7 @@ async fn handle_api_proxy_connection_inner(
         )
         .await;
     });
-    mesh::with_owner_scope(scope, dispatch).await;
+    mesh::with_private_scope(scope, dispatch).await;
 }
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's

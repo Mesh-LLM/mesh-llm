@@ -163,8 +163,8 @@ async fn ready_targets(
 /// False for a private request this node is outside of: it loads no model
 /// for it.
 async fn local_may_serve_current_request(node: &crate::mesh::Node) -> bool {
-    match crate::mesh::current_owner_scope() {
-        Some(scope) => node.local_in_owner_scope(&scope).await,
+    match crate::mesh::current_private_scope() {
+        Some(scope) => node.local_in_private_scope(&scope),
         None => true,
     }
 }
@@ -212,7 +212,7 @@ async fn dispatch_cold(
     // The refreshed local target gets a private request's scope check again.
     let mut targets = ctx
         .node
-        .targets_in_current_owner_scope(refresh_local_targets(
+        .targets_in_current_private_scope(refresh_local_targets(
             ctx.targets,
             &lifecycle.targets_for(model_name),
             &execution_model,

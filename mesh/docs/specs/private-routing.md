@@ -1,84 +1,48 @@
 # Private routing
 
 Run your nodes in a shared mesh, such as the public one, and still send one
-request only to nodes you trust.
+request only to nodes you choose.
 
 ## Who can answer a private request
 
-A private request is answered only by the **trust circle** of the node the
-client talks to (the *entry node*):
+A private request is answered only by the node the client talks to (the
+*entry node*) and the nodes that node lists as its **private nodes**. With no
+list, a private request never leaves the entry node.
 
-1. nodes signed by the entry node's own owner key, and
-2. nodes signed by an owner key in the entry node's trust store
-   (`mesh-llm auth trust add`, or `--trust-owner` on `serve`).
+A node is listed by its **node id**: its QUIC endpoint id, which every
+connection to it proves. Nothing a peer merely says counts: model names,
+node labels, hostnames and gossip are never used for this decision. No owner
+key or certificate is involved.
 
-With an empty trust store, the circle is just your own nodes.
-
-The circle is checked against each peer's **ownership certificate**: the
-owner key's signature over the peer's QUIC endpoint id, which the peer
-presents when it connects. A peer is in the circle only while its certificate
-verifies, is bound to that peer's endpoint, has not expired and is not
-revoked in the entry node's trust store. Nothing a peer merely says counts:
-model names, node labels, hostnames and gossip are never used for this
-decision.
-
-The circle is the entry node's view. It is not transitive: if you trust
-Alice and Alice trusts Bob, your private requests do not reach Bob.
+The list is the entry node's own. It is not transitive: if your laptop lists
+your studio and your studio lists a friend's node, your laptop's private
+requests do not reach the friend's node.
 
 ## Set up your nodes
 
-The owner key is the identity. Create it once, then give every node you own
-that key. A node only needs the key to sign (and renew) its own certificate.
-
-1. On your main machine, create the owner key and note its owner id:
+1. On each node you want to use, read its node id:
 
    ```bash
-   mesh-llm auth init            # writes ~/.mesh-llm/owner-keystore.json
-   mesh-llm auth status          # prints "Owner ID: …"
+   mesh-llm auth status          # prints "Node ID: …" (64 hex characters)
    ```
 
-   On a headless node, use `auth init --no-passphrase`, or keep the passphrase
-   and set `MESH_LLM_OWNER_PASSPHRASE` for `serve`.
+   The console and `/api/status` show it too.
 
-2. Copy `~/.mesh-llm/owner-keystore.json` to each of your other machines,
-   over a channel you trust. It is the owner's secret key: anyone holding it
-   can sign nodes into your circle.
-
-3. Start every node with it. With no `--owner-key`, a node uses
-   `~/.mesh-llm/owner-keystore.json` when it exists:
+2. On each node you send private requests to, list the others:
 
    ```bash
-   mesh-llm serve --auto --owner-key ~/.mesh-llm/owner-keystore.json --node-label studio
+   mesh-llm serve --auto --private-node <studio-id> --private-node <mini-id>
    ```
 
-   A node with an owner key signs a certificate for its endpoint at startup
-   and renews it while it runs (certificates last 7 days). Add
-   `--owner-required` to refuse to start without one.
+   A node reads its list at startup, so restart it after a change. An id
+   that is not 64 hex characters stops the node from starting.
 
-4. Check from any of your nodes: the console and `/api/status` show each
-   peer's owner and whether it is `verified`. Your nodes show your owner id.
+Listing is one-way. If you also send private requests to your studio, list
+your other nodes on it too.
 
-### Add someone you trust
-
-To let a friend's nodes answer your private requests, ask them for their
-owner id (`mesh-llm auth status` on their side) and add it on each of your
-entry nodes:
-
-```bash
-mesh-llm auth trust add <their-owner-id> --label alice
-mesh-llm auth trust list
-mesh-llm auth trust remove <their-owner-id>
-```
-
-or pass `--trust-owner <their-owner-id>` to `serve`. A node reads its trust
-store at startup, so restart it after a change. Adding an owner here only
-widens private routing; it does not change who may join your mesh unless you
-also set `--trust-policy allowlist` (see
-[Ownership and admission control](../MESHES.md#private-ownership-and-trust)).
-Their nodes keep their own key; you never share yours.
-
-Trust is one-way. Their private requests reach your nodes only if they add
-your owner id too.
+Listed nodes also count as yours for admission: a request from one is
+admitted as local, so a node that pauses remote inference while you use it
+still serves your own nodes.
 
 ## Ask for private routing
 
@@ -98,61 +62,43 @@ curl localhost:9337/private/v1/chat/completions -H 'Content-Type: application/js
 `incognito` is an alias everywhere: `qwen3-32b@incognito`,
 `x-mesh-scope: incognito`. The suffix works on the automatic directive too:
 `mesh@private` or `auto@private` picks a model, or convenes a committee when
-the MoA plugin is on, from the circle only.
+the MoA plugin is on, from the listed nodes only.
 
 `GET /v1/models` with `x-mesh-scope: private` (or under `/private/v1`) lists
-only what the circle serves.
+only what this node and its listed nodes serve.
 
 ## Guarantees
 
-- Never falls back to public nodes. If no node in the circle serves the model,
-  the request fails; it is not retried publicly.
-- An entry node with no verified owner certificate answers 403.
+- Never falls back to public nodes. If neither the entry node nor a listed
+  node serves the model, the request fails (404); it is not retried publicly.
 - The entry node decides once; peers never re-route a forwarded request, so
   the entry node is the whole boundary. `x-mesh-target` and failover only
-  choose among nodes in the circle, and the QUIC tunnel refuses any other peer
-  as a backstop.
+  choose among listed nodes, and the QUIC tunnel refuses any other peer as a
+  backstop.
 - The selector is consumed at the entry node: `@private` is stripped before
   model lookup and a client's `x-mesh-scope` is not forwarded. A private
-  request forwarded to a peer carries `x-mesh-scope: private` and
-  `x-mesh-scope-owners` naming the entry node's circle. The peer then keeps
-  that request to its own owner's and the entry node's owner's nodes, the
-  only owners it knows are in the entry node's circle, and within the owners
-  named. It does not use its own trust store for it. Both headers only ever
-  narrow what the peer does; a marker from an unknown requester adds no
-  owner but the peer's own.
-- A split whose stages include a node outside the circle is not a private
-  target: its activations and KV would leave the circle.
-- Your own nodes come first: a request from a node of the same owner is
-  admitted as local, so a node that pauses remote inference still serves you.
-  This priority is for your own owner key only, not for trusted owners.
+  request forwarded to a listed node carries `x-mesh-scope: private` and
+  `x-mesh-scope-nodes` naming the entry node's scope. That node keeps the
+  request to itself and the entry node, within the nodes named; it does not
+  use its own list for it. Both headers only ever narrow what the peer does.
+- A split whose stages include an unlisted node is not a private target: its
+  activations and KV would leave the scope.
 - Plugins: while a plugin handles a private request (a virtual-model turn
   such as the MoA committee, an OpenAI exchange hook, or a request
   transform), every inference request that plugin makes back to the host is
-  sent with `x-mesh-scope: private`. A virtual-model turn or exchange hook
-  already has its request's owner scope, so its calls also carry
-  `x-mesh-scope-owners` with those owners. The host scopes such a call to
-  them, within its own circle (this node included only if its owner is
-  named), so a plugin running on a trusted owner's node cannot reach owners
-  the entry node does not trust. A request transform runs before its request
-  is scoped, at the node the client used, so its calls send only the private
-  header and get that node's circle. When the request it transforms is
-  itself a plugin's nested call with an owners header, the transform's own
-  calls keep that limit too, as they do when another private request the
-  plugin handles at the same time names owners. The owners header can only
-  narrow a private request, never widen it. This is per plugin, not
-  per request: a public request the same plugin handles at the same moment
-  is narrowed too, and private requests from different circles at once
-  leave only their common owners. The plugin stays private until it
-  replies, even if the client leaves first. If the call's deadline passes
-  without a reply, the plugin stays private for five more minutes, since it
-  may still be working. A virtual-model turn or request transform that
-  times out also restarts the plugin, which ends that work. An exchange hook
-  is not restarted at its deadline: it stays private until it replies or its
-  connection ends, and is restarted if it has done neither five minutes
-  after the deadline.
+  sent with `x-mesh-scope: private`, and with `x-mesh-scope-nodes` naming the
+  request's scope when it has one yet. The host scopes such a call within its
+  own scope, so a plugin on a listed node cannot reach nodes the entry node
+  did not list. The nodes header can only narrow, never widen. This is per
+  plugin, not per request: a public request the same plugin handles at the
+  same moment is narrowed too. The plugin stays private until it replies,
+  even if the client leaves first, and for five more minutes after a missed
+  deadline, since it may still be working. A virtual-model turn or request
+  transform that times out also restarts the plugin. An exchange hook stays
+  private until it replies or its connection ends, and is restarted if it has
+  done neither five minutes after its deadline.
 - A plugin inference endpoint on the entry node can still serve a private
-  request for a model no node in the circle serves. Such an endpoint may send
+  request for a model no listed node serves. Such an endpoint may send
   the request to an outside service; install only plugins you trust.
   What a plugin does on its own, outside these calls, is up to the plugin:
   install only plugins you trust.
@@ -165,20 +111,19 @@ only what the circle serves.
   must be referenced by commit.
 
 Private routing controls where a request is computed. It does not hide the
-request from the nodes in your circle, and it does not encrypt anything
+request from the nodes you list, and it does not encrypt anything
 beyond what the mesh's QUIC transport already does.
 
 ## Mixed versions
 
 A node advertises private routing in its gossip (the `private-routing`
-subprotocol). A private request goes only to nodes that advertise it, even
-your own: a node on an older release would ignore the private marker and
+subprotocol). A private request goes only to listed nodes that advertise it: a node on an older release would ignore the private marker and
 could serve the request from a split with a stranger's stage. Until you
 upgrade them, your older nodes simply don't serve private requests.
 
 On the node itself, requests marked private turn off peer consultation
 (Mesh hooks for images, uncertainty and drift), which would pick peers
-outside the circle, and run its exchange hooks in the request's circle.
+outside the scope, and run its exchange hooks in the request's scope.
 
 ## Not yet
 

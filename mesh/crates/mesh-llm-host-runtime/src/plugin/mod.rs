@@ -957,14 +957,14 @@ impl PluginManager {
     }
 
     /// Mark `plugin_name` as handling a private request until the guard
-    /// drops; `owners` is that request's scope, when it has one yet. See
+    /// drops; `nodes` is that request's scope, when it has one yet. See
     /// [`private_invocations`].
     pub(crate) fn begin_private_invocation(
         &self,
         plugin_name: &str,
-        owners: Option<crate::mesh::OwnerScope>,
+        nodes: Option<crate::mesh::PrivateScope>,
     ) -> private_invocations::PrivateInvocationGuard {
-        self.inner.private_invocations.begin(plugin_name, owners)
+        self.inner.private_invocations.begin(plugin_name, nodes)
     }
 
     /// How nested inference from `plugin_name` must be scoped, if private.

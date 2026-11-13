@@ -63,7 +63,7 @@ impl PluginManager {
         client_path: &str,
         body: &mut Value,
         private: bool,
-        owner_limit: Option<crate::mesh::OwnerScope>,
+        node_limit: Option<crate::mesh::PrivateScope>,
     ) -> Result<bool> {
         let plugins = self.request_transform_plugins().await?;
         let mut changed = false;
@@ -77,7 +77,7 @@ impl PluginManager {
                 body: body.clone(),
             };
             let output = self
-                .invoke_request_transform(&plugin_name, &input, private, owner_limit.clone())
+                .invoke_request_transform(&plugin_name, &input, private, node_limit.clone())
                 .await?;
             let Some(replacement) = output.body else {
                 continue;
@@ -94,7 +94,7 @@ impl PluginManager {
         plugin_name: &str,
         input: &RequestTransformInput,
         private: bool,
-        owner_limit: Option<crate::mesh::OwnerScope>,
+        node_limit: Option<crate::mesh::PrivateScope>,
     ) -> Result<RequestTransformOutput> {
         let input_json = serde_json::to_string(input)?;
         // The input goes to the plugin in one control frame, which its reader
@@ -108,10 +108,10 @@ impl PluginManager {
             );
         }
         // Transforms run before the request is scoped: nested calls keep to
-        // this node's trust circle, the one the request will get, and to the
-        // request's own owner limit when it is itself a nested call.
+        // this node's private scope, the one the request will get, and to the
+        // request's own node limit when it is itself a nested call.
         let private_call =
-            || private.then(|| self.begin_private_invocation(plugin_name, owner_limit.clone()));
+            || private.then(|| self.begin_private_invocation(plugin_name, node_limit.clone()));
         if self.is_test_bridge_enabled(plugin_name) {
             let call = private_call();
             let output = self
@@ -451,10 +451,10 @@ mod tests {
     }
 
     /// A → B → transform: a nested call from B's plugin arrives at B's own
-    /// ingress with A's request's owners. A transform there keeps its own
-    /// nested calls to those owners, not B's whole circle.
+    /// ingress with A's request's nodes. A transform there keeps its own
+    /// nested calls to those nodes, not B's whole scope.
     #[tokio::test]
-    async fn a_nested_calls_owner_limit_reaches_the_transforms_own_calls() {
+    async fn a_nested_calls_node_limit_reaches_the_transforms_own_calls() {
         let cell = Arc::new(std::sync::OnceLock::new());
         let seen = Arc::new(std::sync::Mutex::new(None));
         let probe = ScopeProbe {
@@ -469,7 +469,7 @@ mod tests {
             .set_test_manifests(BTreeMap::from([("t".to_string(), manifest)]))
             .await;
         let _ = cell.set(manager.clone());
-        let owners = crate::mesh::OwnerScope::of(["a".to_string(), "b".to_string()]);
+        let nodes = crate::mesh::PrivateScope::of(["a".to_string(), "b".to_string()]);
         let mut body = request();
         manager
             .transform_request(
@@ -477,14 +477,14 @@ mod tests {
                 "/v1/chat/completions",
                 &mut body,
                 true,
-                Some(owners.clone()),
+                Some(nodes.clone()),
             )
             .await
             .unwrap();
         assert_eq!(
             *seen.lock().unwrap(),
-            Some(crate::plugin::private_invocations::NestedScope::Owners(
-                owners
+            Some(crate::plugin::private_invocations::NestedScope::Nodes(
+                nodes
             ))
         );
         assert_eq!(manager.private_nested_scope("t"), None);

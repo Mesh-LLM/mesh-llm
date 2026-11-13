@@ -490,7 +490,7 @@ where
             plugins: transformer,
             private_hint: parsed.private_base
                 || super::routing_scope::head_requests_private_scope(&raw),
-            owner_limit: super::routing_scope::head_owner_limit(&raw),
+            node_limit: super::routing_scope::head_node_limit(&raw),
         },
         requires_json_transform,
     )
@@ -682,12 +682,12 @@ fn system_one_forward_path(path: &str) -> String {
 }
 
 /// The plugins that transform a request, whether its head already asks for
-/// private scope (the model suffix is read from the body), and the owners it
+/// private scope (the model suffix is read from the body), and the nodes it
 /// is limited to when it is a plugin's nested call.
 struct Transformer<'a> {
     plugins: Option<&'a plugin::PluginManager>,
     private_hint: bool,
-    owner_limit: Option<crate::mesh::OwnerScope>,
+    node_limit: Option<crate::mesh::PrivateScope>,
 }
 
 async fn rewrite_request_body_for_forwarding(
@@ -735,7 +735,7 @@ async fn rewrite_request_body_for_forwarding(
     let transformed = async {
         let transformed = plugin_transform::apply_request_transforms(
             transformer.plugins,
-            (transformer.private_hint, transformer.owner_limit),
+            (transformer.private_hint, transformer.node_limit),
             &outcome.request_path,
             path,
             body_json,

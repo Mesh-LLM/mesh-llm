@@ -437,8 +437,8 @@ fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
 async fn a_private_exchange_keeps_its_observers_private_until_its_terminal_callback() {
     use crate::plugin::private_invocations::NestedScope;
     let (manager, mut receiver) = observer_manager(false).await;
-    let scope = crate::mesh::OwnerScope::new("me");
-    let private = Some(NestedScope::Owners(scope.clone()));
+    let scope = crate::mesh::PrivateScope::new("me");
+    let private = Some(NestedScope::Nodes(scope.clone()));
     let event = |id: &str| {
         request_event(
             id.into(),
@@ -450,7 +450,7 @@ async fn a_private_exchange_keeps_its_observers_private_until_its_terminal_callb
             false,
         )
     };
-    let (mut session, _) = crate::mesh::with_owner_scope(
+    let (mut session, _) = crate::mesh::with_private_scope(
         Some(scope.clone()),
         ExchangeSession::begin(&manager, event("finished")),
     )
@@ -464,7 +464,7 @@ async fn a_private_exchange_keeps_its_observers_private_until_its_terminal_callb
     assert_eq!(receiver.recv().await.unwrap(), b"response");
     assert_eq!(manager.private_nested_scope("delayed-observer"), None);
 
-    let (session, _) = crate::mesh::with_owner_scope(
+    let (session, _) = crate::mesh::with_private_scope(
         Some(scope),
         ExchangeSession::begin(&manager, event("cancelled")),
     )
