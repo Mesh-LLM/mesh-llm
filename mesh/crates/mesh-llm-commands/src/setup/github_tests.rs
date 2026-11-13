@@ -2,7 +2,7 @@ use super::github::{SetupGitHubOutcome, execute_github_star_plan, github_summary
 use super::github_runner::{GhCommand, GhCommandError, GhCommandOutput, GhCommandRunner};
 use super::{
     SetupConfirmPrompt, SetupGitHubStarPlan, SetupGitHubStarSkipReason, SetupPlan, SetupPluginPlan,
-    SetupPluginSkipReason, SetupPromptDefault, SetupPromptKind, SetupPrompter,
+    SetupPromptDefault, SetupPromptKind, SetupPrompter,
 };
 use std::collections::VecDeque;
 
@@ -245,7 +245,7 @@ fn summary_reports_nonfatal_eligibility_failures_honestly() {
     let plan = SetupPlan::new(
         super::SetupRuntimePlan::Skip,
         super::SetupServicePlan::Skip,
-        SetupPluginPlan::Skip(SetupPluginSkipReason::HiddenPrompt),
+        SetupPluginPlan::Skip,
         prompt_plan(),
     );
 

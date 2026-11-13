@@ -6,8 +6,11 @@
 //! before the new host is activated; a repair that cannot be made stops the
 //! upgrade rather than activating a known-incompatible plugin. Compatible
 //! plugins stay at their versions, with attended notices for available
-//! updates. Optional plugin sets install only when explicitly selected or
-//! accepted at an attended prompt; unattended paths install nothing extra.
+//! updates. The catalog's `recommended` plugin set installs by default
+//! (offered with install preselected when attended), once per machine:
+//! a recorded offer is never repeated and members added later show as a
+//! notice. `--skip-plugin-install`
+//! opts out and `--plugin-set` selects another set.
 
 use anyhow::{Result, bail};
 use mesh_llm_cli::{BinaryFlavor, Cli, Command};

@@ -56,20 +56,13 @@ pub enum SetupGitHubStarSkipReason {
 pub enum SetupPluginPlan {
     /// Install this catalog set without prompting (`--plugin-set NAME`).
     Install(String),
-    /// Offer the recommended set when attended, defaulting to No.
+    /// Offer the recommended set when attended, with install preselected.
     Offer,
-    /// Skip optional plugin installation: explicitly, or because no prompt
-    /// may be asked and no set was selected.
-    Skip(SetupPluginSkipReason),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SetupPluginSkipReason {
-    /// `--skip-plugin-install` or the legacy environment default.
-    ExplicitSkip,
-    /// No prompt may be asked and no set was selected: nothing optional is
-    /// installed.
-    HiddenPrompt,
+    /// Install the recommended set without prompting: no prompt may be asked
+    /// (`--yes`, `--no-interactive`, no terminal) and nothing was selected.
+    InstallDefault,
+    /// Skip optional plugin installation because the operator opted out.
+    Skip,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

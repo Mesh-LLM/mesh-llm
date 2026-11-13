@@ -6,7 +6,7 @@ use super::summary::{
 };
 use super::{
     SetupActions, SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupOptions,
-    SetupPlan, SetupPluginPlan, SetupPluginSkipReason, SetupPrompter, SetupStep,
+    SetupPlan, SetupPluginPlan, SetupPrompter, SetupStep,
     github::{SetupGitHubOutcome, execute_github_star_plan},
     github_runner::{GhCommandRunner, ProcessGhCommandRunner},
     plan_setup,
@@ -79,7 +79,7 @@ struct CliSetupPrompter;
 impl SetupPrompter for CliSetupPrompter {
     fn confirm(&mut self, prompt: SetupConfirmPrompt) -> Option<bool> {
         // The prompt's declared default reaches the terminal: the plugin-set
-        // offer declines on an empty reply, exactly as its plan promises.
+        // offer accepts on an empty reply, exactly as its plan promises.
         confirm_yes_no(prompt.message, prompt.default)
     }
 }
@@ -321,16 +321,14 @@ impl SetupActions for CliSetupActions<'_> {
                 SetupPluginPlan::Offer => crate::plugin_sets::OptionalPluginPlan::Offer(
                     crate::plugin_sets::RECOMMENDED_SET.to_string(),
                 ),
-                SetupPluginPlan::Skip(reason) => {
-                    crate::plugin_sets::OptionalPluginPlan::Skip(match reason {
-                        SetupPluginSkipReason::ExplicitSkip => {
-                            Some("Optional plugin installation skipped.".to_string())
-                        }
-                        SetupPluginSkipReason::HiddenPrompt => None,
-                    })
+                SetupPluginPlan::InstallDefault => {
+                    crate::plugin_sets::OptionalPluginPlan::InstallDefault(
+                        crate::plugin_sets::RECOMMENDED_SET.to_string(),
+                    )
                 }
+                SetupPluginPlan::Skip => crate::plugin_sets::OptionalPluginPlan::Skip,
             };
-            let result = if matches!(plan, SetupPluginPlan::Skip(_)) {
+            let result = if matches!(plan, SetupPluginPlan::Skip) {
                 // A skip prints its line; nothing here can fail.
                 crate::plugin_sets::run_optional_plugin_phase(
                     &optional,
@@ -341,15 +339,15 @@ impl SetupActions for CliSetupActions<'_> {
                 .unwrap_or(crate::plugin_sets::OptionalPluginResult::Skipped)
             } else {
                 // The only reader of the terminal: the offer prints its lines
-                // first, then the prompter answers with a No default, so an
-                // unattended or EOF answer declines.
+                // first, then the prompter answers with a Yes default (install
+                // is preselected); an explicit `n` or an EOF declines.
                 let mut prompt = |_set: &str| {
                     let reply = prompter.confirm(super::SetupConfirmPrompt {
                         kind: super::SetupPromptKind::InstallPlugins,
                         message: PLUGIN_SET_PROMPT,
-                        default: super::SetupPromptDefault::No,
+                        default: super::SetupPromptDefault::Yes,
                     });
-                    super::SetupPromptDefault::No.resolve(reply)
+                    super::SetupPromptDefault::Yes.resolve(reply)
                 };
                 // The core steps already succeeded; optional selection and
                 // download failures are reported as incomplete installation.

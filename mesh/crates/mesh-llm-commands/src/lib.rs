@@ -13,6 +13,7 @@ pub mod model_package;
 pub mod operational_logging;
 pub mod owner_control;
 pub mod plugin;
+pub mod plugin_set_offers;
 pub mod plugin_sets;
 #[cfg(test)]
 mod plugin_upgrade_test_support;
