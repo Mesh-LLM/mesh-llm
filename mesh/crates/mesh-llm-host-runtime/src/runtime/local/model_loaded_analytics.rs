@@ -55,6 +55,8 @@ pub(in crate::runtime) struct LoadedModel<'a> {
     pub(in crate::runtime) package_ref: Option<&'a str>,
     /// The default DFlash pairing attached to this model, if any.
     pub(in crate::runtime) dflash: Option<&'a mesh_llm_skippy_adapter::config::DefaultDFlash>,
+    /// The device the load selected (`CUDA0`, `CPU`), if it selected one.
+    pub(in crate::runtime) device: Option<&'a str>,
 }
 
 /// Catalog entries a load matched, found by the means its source allows.
@@ -169,6 +171,9 @@ fn model_identity(model: &LoadedModel<'_>, catalog_name: Option<&str>) -> ModelI
             .and_then(mesh_llm_analytics::Label::sanitize),
         dflash_draft: pairing
             .and_then(|pairing| mesh_llm_analytics::Label::sanitize(&pairing.draft.repo)),
+        backend: model
+            .device
+            .and_then(model_identity::backend_of_selected_device),
     }
 }
 
@@ -201,6 +206,7 @@ pub(in crate::runtime) fn report_model_loaded_analytics(
         path: None,
         package_ref: None,
         dflash: None,
+        device: None,
     });
 }
 
@@ -217,6 +223,7 @@ pub(in crate::runtime) fn report_split_model_loaded_analytics(model: &str, packa
         path: None,
         package_ref: Some(package_ref),
         dflash: None,
+        device: None,
     });
 }
 

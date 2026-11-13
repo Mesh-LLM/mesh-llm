@@ -379,6 +379,19 @@ fn pinned_skippy_device(
     }
 }
 
+/// The device a load selects, in the order the load applies them: a pinned
+/// GPU unless a device override was given, else the configured device.
+fn selected_device<'a>(
+    pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
+    configured: Option<&'a str>,
+) -> Option<&'a str> {
+    match pinned_gpu {
+        Some(gpu) if device_override.is_none() => Some(gpu.backend_device.as_str()),
+        _ => configured,
+    }
+}
+
 pub(super) fn pinned_stage_device(
     gpu: &crate::runtime::StartupPinnedGpuTarget,
 ) -> skippy_protocol::StageDevice {
@@ -1185,6 +1198,11 @@ async fn start_local_skippy_model(
         path: Some(spec.model_path),
         package_ref: None,
         dflash: resolved.speculative.default_dflash.as_ref(),
+        device: selected_device(
+            spec.pinned_gpu,
+            spec.device_override.as_deref(),
+            resolved.hardware.device.as_deref(),
+        ),
     });
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
@@ -1455,6 +1473,11 @@ async fn start_local_package_v2_model(
         path: None,
         package_ref: Some(&package.package_ref),
         dflash: None,
+        device: selected_device(
+            spec.pinned_gpu,
+            spec.device_override.as_deref(),
+            resolved.hardware.device.as_deref(),
+        ),
     });
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,

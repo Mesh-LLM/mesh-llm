@@ -33,6 +33,9 @@ pub(crate) struct ModelIdentity {
     pub(crate) family: Option<Label>,
     /// The public repository of the DFlash draft attached by default.
     pub(crate) dflash_draft: Option<Label>,
+    /// The backend of the device the model was loaded onto, when the load
+    /// selected one. Reported with the hardware dimensions, not here.
+    pub(crate) backend: Option<&'static str>,
 }
 
 impl ModelIdentity {
@@ -45,6 +48,7 @@ impl ModelIdentity {
             moe: None,
             family: None,
             dflash_draft: None,
+            backend: None,
         }
     }
 
@@ -112,6 +116,17 @@ fn catalog_name_for_request(name: &str) -> Option<String> {
         .into_iter()
         .find(|model| model.name == name || model.exact_ref() == name)
         .map(|model| model.name)
+}
+
+/// The backend of a selected device name: `CUDA0` is `cuda`, `CPU` is
+/// `cpu`. A device no backend name covers reports nothing rather than a guess.
+pub(crate) fn backend_of_selected_device(device: &str) -> Option<&'static str> {
+    mesh_llm_analytics::backend_of_device(device).or_else(|| {
+        device
+            .to_ascii_lowercase()
+            .starts_with("cpu")
+            .then_some("cpu")
+    })
 }
 
 /// Bucket a GGUF `general.size_label` (`8B`, `0.6B`, `35B-A3B`, `8x7B`,
