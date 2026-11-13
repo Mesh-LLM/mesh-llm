@@ -52,8 +52,13 @@ pub const PINNED_SHARE_PER_KEY: (u64, u64) = (1, 2);
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Pin {
     committed_at: Instant,
-    /// When a challenge of the turn arrived, while it is being opened.
+    /// When the latest challenge of the turn arrived, while one is being
+    /// opened.
     opening_since: Option<Instant>,
+    /// The challenges of the turn that hold it for their opening: each
+    /// request holds the pin until its own opening ends, so one that is
+    /// turned away cannot release the pin of one being replayed.
+    openings: u32,
     opened_at: Option<Instant>,
     released: bool,
     /// The client key the turn is bound to, once its pin was admitted.
@@ -65,6 +70,7 @@ impl Pin {
         Self {
             committed_at,
             opening_since: None,
+            openings: 0,
             opened_at: None,
             released: false,
             client_key: None,
@@ -79,8 +85,17 @@ impl Pin {
     /// opening ends, for [`OPENING_PIN`] at most, also when its pin was
     /// released or gave way. A turn already opened keeps the pin of its rows.
     fn opening(&mut self, now: Instant) {
+        self.openings = self.openings.saturating_add(1);
         if self.opened_at.is_none() {
             self.opening_since = Some(now);
+        }
+    }
+
+    /// One challenge's opening ended; the pin holds for the others.
+    fn opening_ended(&mut self) {
+        self.openings = self.openings.saturating_sub(1);
+        if self.openings == 0 {
+            self.opening_since = None;
         }
     }
 
@@ -92,7 +107,10 @@ impl Pin {
     /// The turn was opened: with attention partials, it stays pinned until
     /// their rows are opened; without, nothing will ask for its rows.
     pub(super) fn opened(&mut self, now: Instant, partials: bool) {
-        self.opening_since = None;
+        // an opening still running holds the pin until it ends
+        if self.openings == 0 {
+            self.opening_since = None;
+        }
         if partials {
             self.opened_at = Some(now);
         } else {
@@ -231,7 +249,7 @@ impl Recorder {
     pub fn end_opening(&self, receipt_id: &str) {
         let mut state = self.lock();
         if let Some(turn) = turn_mut(&mut state.committed, receipt_id) {
-            turn.pin.opening_since = None;
+            turn.pin.opening_ended();
         }
         state.drop_unpinned_states(Instant::now());
     }
