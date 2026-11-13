@@ -40,11 +40,11 @@ fn migration_ci_graph_consumer_without_declared_need_is_rejected() -> TestResult
     graph_rejects(
         "linux",
         &[(
-            "needs: [hosts, native_runtimes, authority_linux_x64, product_automation_linux_x64]",
-            "needs: [native_runtimes, authority_linux_x64, product_automation_linux_x64]",
+            "needs: [hosts, native_runtime_cpu, authority_linux_x64, product_automation_linux_x64]",
+            "needs: [native_runtime_cpu, authority_linux_x64, product_automation_linux_x64]",
         )],
         // When/Then: the undeclared read is a disconnected consumer.
-        "job 'runtime_product' reads needs.hosts without declaring it",
+        "job 'product_cpu' reads needs.hosts without declaring it",
     )
 }
 
@@ -104,10 +104,10 @@ fn migration_ci_graph_summary_must_need_every_job_and_survive_failure() -> TestR
     graph_rejects(
         "linux",
         &[(
-            "kotlin_sdk_input, sdk, product_smoke, authority_source",
-            "kotlin_sdk_input, sdk, authority_source",
+            "product_cpu, product_smoke_cpu, native_runtime_cuda",
+            "product_cpu, native_runtime_cuda",
         )],
-        "summary does not need lane job 'product_smoke'",
+        "summary does not need lane job 'product_smoke_cpu'",
     )?;
     // Given/When/Then: a summary that also runs on cancellation.
     graph_rejects(

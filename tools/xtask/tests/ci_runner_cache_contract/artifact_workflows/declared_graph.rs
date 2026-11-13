@@ -60,15 +60,33 @@ fn graph_platform_privacy_tests_are_declared_on_windows() {
 fn graph_platform_producers_and_consumers_keep_separate_responsibilities() {
     for platform in ["linux", "macos", "windows"] {
         let lane = document(&format!("ci-{platform}-lane.yml"));
-        let product = job(&lane, "runtime_product");
+        let product = job(
+            &lane,
+            if platform == "linux" {
+                "product_cpu"
+            } else {
+                "runtime_product"
+            },
+        );
         requires(
             text(product, "if").unwrap(),
             &[
                 "needs.hosts.result == 'success'",
-                "needs.native_runtimes.result == 'success'",
+                if platform == "linux" {
+                    "needs.native_runtime_cpu.result == 'success'"
+                } else {
+                    "needs.native_runtimes.result == 'success'"
+                },
             ],
         );
-        let runtime = job(&lane, "native_runtimes");
+        let runtime = job(
+            &lane,
+            if platform == "linux" {
+                "native_runtime_cpu"
+            } else {
+                "native_runtimes"
+            },
+        );
         assert!(!runtime.get("needs").unwrap().list().contains(&"hosts"));
         for (component, required, forbidden) in [
             (

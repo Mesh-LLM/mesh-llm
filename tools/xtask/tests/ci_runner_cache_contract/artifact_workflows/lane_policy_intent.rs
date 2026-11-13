@@ -330,7 +330,7 @@ fn graph_main_base_identity_and_manual_depot_forwarding_remain_owned() {
     for (lane, consumer) in [
         ("quality", "quality"),
         ("linux", "hosts"),
-        ("linux", "native_runtimes"),
+        ("linux", "native_runtime_cpu"),
     ] {
         let doc = document(&format!("ci-{lane}-lane.yml"));
         assert_eq!(

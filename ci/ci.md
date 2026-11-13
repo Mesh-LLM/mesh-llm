@@ -1342,6 +1342,38 @@ lifecycle execution, and does not remove another lane's interpreter setup.
 
 ## Fan-out and timing controls
 
+Linux advances each backend independently. Before, every runtime joined before
+any product, and every product joined before smoke or SDK consumption. Now:
+
+```mermaid
+flowchart LR
+    automation --> runtimes[Independent CPU CUDA ROCm Vulkan runtimes]
+    automation --> host[Shared host via UI]
+    runtimes --> own[Matching backend product]
+    host --> own
+    own --> smoke[Matching backend smoke]
+    cpu[CPU product] --> rust[Rust SDK smoke]
+    cpu --> kotlin[Kotlin SDK smoke]
+    native[Kotlin native SDK input] --> kotlin
+    runtimes --> final[Exhaustive lane summary]
+    own --> final
+    smoke --> final
+    rust --> final
+    kotlin --> final
+```
+
+Runtimes never wait for the host. Four singleton runtime calls and four
+singleton composition calls each fit the existing Linux 7-worker PR and
+12-worker main/manual matrix budgets. Existing smoke row concurrency is
+unchanged; earlier eligibility does not add smoke rows. Failed backend work
+fails the lane, while unrelated backend work may finish. The protected PR
+sibling monitor alone cancels other lanes. Main/manual keep exhaustive results.
+Windows retains its shared 1-worker PR/2-worker main/manual matrices, because
+splitting independent runtime calls would multiply that budget. macOS needs
+no change for its single Metal row. Release is deferred pending runner-image
+catalog changes. Catalog membership, slice IDs and immutable artifacts remain
+unchanged. Hosted timing and peak-worker evidence for this graph are pending.
+
 The planner records profile budgets: PR drafts/ready runs allow at most
 7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;
 main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
@@ -1390,7 +1422,7 @@ not cancellation targets. The monitor costs one GitHub-hosted Linux slot while
 the PR runs; this bounded overhead replaces five per-lane polling jobs and is
 expected to recover more capacity whenever a lane fails early.
 
-Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
+Inside remaining macOS and Windows matrices, PR-only `fail_fast` inputs are enabled for
 Rust-test, host, native-runtime, product, platform-check, and full Swift target
 matrices. The
 first required failure cancels queued and in-progress siblings in that matrix.
@@ -2320,7 +2352,7 @@ source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
 Seven root workflows freeze one protected source commit per run, then provision
-11 topic/native producer instances across those workflows. All 28 reusable calls
+11 topic/native producer instances across those workflows. All 34 reusable calls
 into the 17 audit workflows forward dependency-provided identities; lane summaries
 require the selected producer jobs to succeed. These metadata inputs are not yet
 consumed by the 27 existing audit steps, which retain their published immutable

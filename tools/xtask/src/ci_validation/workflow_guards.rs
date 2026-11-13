@@ -26,6 +26,7 @@ mod laya;
 mod nightly_stability;
 mod permissions;
 mod pr_canary;
+mod product_chains;
 mod quality_consistency;
 mod quality_contracts;
 mod registry_canary;
@@ -80,6 +81,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         workflows.insert(name, document);
     }
     cancellation::check(&workflows)?;
+    product_chains::check(&workflows)?;
     quality_contracts::check(root, &workflows)?;
     quality_consistency::check(&workflows)?;
     selected_ref::check(&workflows)?;
