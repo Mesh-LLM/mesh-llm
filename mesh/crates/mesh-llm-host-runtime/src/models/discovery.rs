@@ -150,6 +150,10 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
             .peers
             .values()
             .filter(|peer| peer.is_admitted())
+            .filter(|peer| {
+                // A private listing shows only what the scope's nodes serve.
+                mesh::current_private_scope().is_none_or(|scope| scope.admits_peer(peer))
+            })
             .map(|peer| (peer.clone(), state.peer_has_observed_liveness(peer)))
             .unzip()
     };
@@ -174,6 +178,10 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
                     | crate::proto::node::InferenceAdmissionState::AllPaused
             )
         );
+        // `@private`/`@incognito` are reserved request selectors, never a model
+        // a peer can advertise: listing one would let a stranger's model pose
+        // as private.
+        names.retain(|name| !crate::network::openai::routing_scope::has_private_model_suffix(name));
         for name in names {
             let available = live
                 && !paused

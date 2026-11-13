@@ -122,6 +122,7 @@ pub struct PeerAnnouncement {
     pub local_gguf_content_id_supported: bool,
     pub decode_batch_policy_supported: bool,
     pub plugin_origin_signature_supported: bool,
+    pub private_routing_supported: bool,
     pub persistent_lane_marker_supported: bool,
     /// The peer refuses split-stage requests that would make it fetch model
     /// files it does not already have. False for peers that predate the field.
@@ -378,6 +379,7 @@ pub struct PeerInfo {
     pub local_gguf_content_id_supported: bool,
     pub decode_batch_policy_supported: bool,
     pub plugin_origin_signature_supported: bool,
+    pub private_routing_supported: bool,
     pub persistent_lane_marker_supported: bool,
     pub refuses_peer_model_downloads: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
@@ -446,6 +448,7 @@ impl PeerInfo {
             local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
             decode_batch_policy_supported: ann.decode_batch_policy_supported,
             plugin_origin_signature_supported: ann.plugin_origin_signature_supported,
+            private_routing_supported: ann.private_routing_supported,
             persistent_lane_marker_supported: ann.persistent_lane_marker_supported,
             refuses_peer_model_downloads: ann.refuses_peer_model_downloads,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),

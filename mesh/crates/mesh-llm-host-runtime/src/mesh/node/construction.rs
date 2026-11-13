@@ -215,6 +215,7 @@ impl Node {
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
             trust_policy: owner_runtime.trust_policy,
+            private_nodes: private_node_set(owner_config.as_ref()),
             enumerate_host,
             gpu_name: hardware.gpu_name,
             hostname: hardware.hostname,
@@ -296,6 +297,13 @@ fn hardware_for_identity(
         hardware.host_ram_offload_gain_bytes = 0;
     }
     hardware
+}
+
+/// The nodes besides this one that may serve its private requests.
+fn private_node_set(
+    owner: Option<&OwnerRuntimeConfig>,
+) -> Arc<std::collections::HashSet<EndpointId>> {
+    Arc::new(owner.iter().flat_map(|c| c.private_nodes.clone()).collect())
 }
 
 struct StartupPolicies {

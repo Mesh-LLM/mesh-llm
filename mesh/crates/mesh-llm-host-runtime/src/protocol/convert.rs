@@ -1009,6 +1009,13 @@ pub(crate) fn local_ann_to_proto_ann(
                     features: vec![mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE.into()],
                 });
             }
+            if ann.private_routing_supported {
+                subprotocols.push(crate::proto::node::MeshSubprotocol {
+                    name: mesh_llm_protocol::PRIVATE_ROUTING_SUBPROTOCOL.into(),
+                    major: 1,
+                    features: Vec::new(),
+                });
+            }
             subprotocols
         },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
@@ -1278,6 +1285,10 @@ pub(crate) fn proto_ann_to_local(
                     .features
                     .iter()
                     .any(|feature| feature == mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE)
+        }),
+        private_routing_supported: pa.subprotocols.iter().any(|subprotocol| {
+            subprotocol.name == mesh_llm_protocol::PRIVATE_ROUTING_SUBPROTOCOL
+                && subprotocol.major == 1
         }),
         persistent_lane_marker_supported: supports_skippy_stage_feature(
             &pa.subprotocols,
