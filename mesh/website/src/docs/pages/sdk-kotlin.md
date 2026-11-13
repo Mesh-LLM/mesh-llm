@@ -4,23 +4,7 @@ title: Java, Kotlin, and Android SDK
 
 # Java, Kotlin, and Android SDK
 
-## Read local runtime capacity
-
-For a started serving node and an exact local serving ID, within a coroutine:
-
-```kotlin
-node.runtimeCapacity("exact-serving-id")?.let { capacity ->
-    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
-    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
-}
-```
-
-`RuntimeCapacity` fields are `ULong`. Each call reads the latest published
-observation without HTTP. Busy lanes count toward capacity; this does not reserve
-resources. Unknown, unsupported, unavailable or incomplete capacity returns `null`;
-stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
-callers choose a freshness policy for long inference. The total pool is not a
-per-request context limit.
+## Install
 
 Install `ai.meshllm:meshllm-android:{{ site.sdkVersion }}` from the GitHub
 Packages registry at `https://maven.pkg.github.com/Mesh-LLM/mesh-llm`.
@@ -52,6 +36,24 @@ try {
 
 Use `joinTokens = listOf(token)` for a private mesh and `ownerKeyPath` for an
 existing Mesh LLM owner keystore. Client mode loads no serving runtime.
+
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID, within a coroutine:
+
+```kotlin
+node.runtimeCapacity("exact-serving-id")?.let { capacity ->
+    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
+    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
+}
+```
+
+`LaneCapacity` fields are `ULong`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. Unknown, unsupported, unavailable or incomplete capacity returns `null`;
+stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long inference. The total pool is not a
+per-request context limit.
 
 ## Discover advertised models
 

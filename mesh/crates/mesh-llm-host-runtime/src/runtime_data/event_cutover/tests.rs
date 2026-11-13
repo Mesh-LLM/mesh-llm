@@ -152,7 +152,7 @@ fn producer_write_methods_match_producers_source() {
         extracted, listed,
         "PRODUCER_WRITE_METHODS has drifted from producers.rs's real write methods"
     );
-    assert_eq!(PRODUCER_WRITE_METHODS.len(), 11);
+    assert_eq!(PRODUCER_WRITE_METHODS.len(), 13);
 }
 
 #[test]

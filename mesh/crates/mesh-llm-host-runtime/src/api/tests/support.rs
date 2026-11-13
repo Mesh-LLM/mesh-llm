@@ -1040,6 +1040,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
                 }],
             },
         );
+        inner.runtime_data_producer.publish_runtime_instance_registered("collector-model", "runtime-1");
         inner.runtime_data_producer.publish_llama_slots_snapshot(
             runtime_data::RuntimeLlamaSlotsSnapshot {
                 status: runtime_data::RuntimeLlamaEndpointStatus::Ready,
