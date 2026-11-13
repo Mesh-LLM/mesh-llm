@@ -61,6 +61,39 @@ env:
   CARGO_PROFILE_BENCH_DEBUG: "0"
 
 jobs:
+  consistency:
+    name: Candidate source consistency
+    if: ${{ contains(fromJson(inputs.lane_plan_json).required_slices, 'quality') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+      - name: Check CI crate-list drift
+        run: '"$MESH_LLM_AUTOMATION_BIN" repo-consistency ci-crate-lists'
+      - name: Check publish crate-chain drift
+        run: '"$MESH_LLM_AUTOMATION_BIN" repo-consistency publish-crates'
+      - name: Check release targets and embedded client dependency purity
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" repo-consistency release-targets
+          RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER='' cargo tree -p mesh-llm-client --prefix=none --no-dedupe > "$RUNNER_TEMP/mesh-client-deps.txt"
+          forbidden='keyring|rpassword|hf-hub|dirs|clap|include_dir|rmcp|keyring-core'
+          if grep -E "^[[:space:]│├└─-]*($forbidden)([[:space:]]|$)" "$RUNNER_TEMP/mesh-client-deps.txt"; then
+            echo "Forbidden dependency found in mesh-client" >&2
+            exit 1
+          fi
+      - name: Check console print drift
+        run: '"$MESH_LLM_AUTOMATION_BIN" repo-consistency no-console-print'
+      - name: Check process environment mutation ownership
+        run: '"$MESH_LLM_AUTOMATION_BIN" repository env-mutation-census'
+
   authority_source:
     name: Freeze protected automation source
     if: ${{ (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) }}
@@ -129,7 +162,7 @@ jobs:
 
   summary:
     name: CI / Quality
-    needs: [quality, runner_contract, authority_source, authority_linux_x64]
+    needs: [consistency, quality, runner_contract, authority_source, authority_linux_x64]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:

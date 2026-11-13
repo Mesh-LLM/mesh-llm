@@ -88,8 +88,8 @@ fn migration_ci_graph_planned_job_outside_static_graph_is_rejected() -> TestResu
         "quality",
         &[
             (
-                "needs: [quality, runner_contract, authority_source, authority_linux_x64]",
-                "needs: [quality, runner_contracts, authority_source, authority_linux_x64]",
+                "needs: [consistency, quality, runner_contract, authority_source, authority_linux_x64]",
+                "needs: [consistency, quality, runner_contracts, authority_source, authority_linux_x64]",
             ),
             ("  runner_contract:\n", "  runner_contracts:\n"),
         ],
@@ -126,7 +126,16 @@ fn migration_ci_graph_lane_identity_must_match_workflow() -> TestResult {
     let golden = Golden::load("control-main")?;
     let output = Call::lane(
         &golden.lane_plan("quality"),
-        &needs("quality", &["quality", "runner_contract"]),
+        &needs(
+            "quality",
+            &[
+                "consistency",
+                "quality",
+                "runner_contract",
+                "authority_source",
+                "authority_linux_x64",
+            ],
+        ),
     )
     .with("--workflow", &lane_workflow("linux"))
     .run_rust_only()?;
