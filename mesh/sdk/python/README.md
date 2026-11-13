@@ -46,7 +46,17 @@ python3 -I -B mesh/sdk/python/tests/test_binding.py
 Use the matching `.so` or `.dll` on other platforms. The SDK-owned lazy loader
 checks every generated API checksum before caching the native module. Generated
 UniFFI output is preserved apart from trailing whitespace normalization.
+After regenerating bindings, update the matching file hash in `sdk-inputs.json`;
+for `mesh_ffi.py`, use the SHA-256 of
+`src/meshllm/_generated/mesh_ffi.py` for the
+`files["src/meshllm/_generated/mesh_ffi.py"]` entry. Verify the updated source
+manifest from the repository root with
+`cargo xtool automation smoke-observation sdk-source --kind root`.
 The component tests above use mock handles; the binding tests require the real
 sibling bridge and test checksum refusal and native version readback without
 constructing a node or starting services. Neither test suite qualifies model
 serving or a published wheel.
+
+The SDK's source distribution includes the native bridge prepared by
+`scripts/build-native.sh`, so the default `python -m build` sdist-to-wheel flow
+can build the platform wheel without compiling or downloading a bridge.

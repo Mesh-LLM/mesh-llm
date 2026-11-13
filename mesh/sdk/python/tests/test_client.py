@@ -6,7 +6,9 @@ import pathlib
 import sys
 import threading
 import unittest
+from collections.abc import Callable
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / "src"))
@@ -17,6 +19,7 @@ from meshllm import (
     OpenAIStreamChunk,
     OpenAIStreamStarted,
 )
+from meshllm.client import _EventSink
 
 
 class FakeOpenAIStreamEvent:
@@ -147,6 +150,28 @@ class FakeHandle:
 
 
 class NodeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_event_sink_bounds_callbacks_before_the_event_loop(self) -> None:
+        class RecordingLoop:
+            def __init__(self) -> None:
+                self.callbacks: list[Callable[[], None]] = []
+
+            def call_soon_threadsafe(
+                self, callback: Callable[[], None], *args: object
+            ) -> None:
+                if args:
+                    raise AssertionError("unexpected callback arguments")
+                self.callbacks.append(callback)
+
+        loop = RecordingLoop()
+        sink = _EventSink(cast(asyncio.AbstractEventLoop, loop))
+        for _ in range(300):
+            sink.on_event(FakeOpenAIStreamEvent("sse"))
+
+        self.assertEqual(len(loop.callbacks), 1)
+        loop.callbacks[0]()
+        with self.assertRaisesRegex(RuntimeError, "consumer fell behind"):
+            await sink.next()
+
     async def test_create_embedded_roles(self) -> None:
         calls: list[tuple[object, ...]] = []
         handle = FakeHandle()
@@ -169,6 +194,24 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(models[0].context_length, 131_072)
 
         self.assertFalse(handle.started)
+
+    async def test_startup_failure_does_not_stop_a_node_that_never_started(self) -> None:
+        class FailedStartHandle(FakeHandle):
+            def __init__(self) -> None:
+                super().__init__()
+                self.stop_called = False
+
+            def start(self) -> None:
+                raise RuntimeError("start failed")
+
+            def stop(self) -> None:
+                self.stop_called = True
+
+        handle = FailedStartHandle()
+        with self.assertRaisesRegex(RuntimeError, "start failed"):
+            await Node(handle).start()
+
+        self.assertFalse(handle.stop_called)
 
     async def test_list_models_keeps_effort_states_distinct(self) -> None:
         handle = FakeHandle()
@@ -267,15 +310,22 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(handle.cancelled, ["stream-1"])
 
-    async def test_cancelling_during_stream_startup_cancels_native_request(self) -> None:
+    async def test_repeated_cancellation_during_stream_startup_cancels_native_request(self) -> None:
         started = threading.Event()
         release = threading.Event()
+        cancel_started = threading.Event()
+        release_cancel = threading.Event()
 
         class SlowHandle(FakeHandle):
             def openai_stream(self, path: str, body_json: str, listener: object) -> str:
                 started.set()
                 release.wait(timeout=2)
                 return "slow-stream"
+
+            def cancel(self, request_id: str) -> None:
+                cancel_started.set()
+                release_cancel.wait(timeout=2)
+                super().cancel(request_id)
 
         handle = SlowHandle()
         stream = Node(handle).inference.stream_chat_completions({"model": "model-a"})
@@ -284,10 +334,44 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
         task.cancel()
         release.set()
+        await asyncio.to_thread(cancel_started.wait, 2)
+        task.cancel()
+        release_cancel.set()
         with self.assertRaises(asyncio.CancelledError):
             await task
 
         self.assertEqual(handle.cancelled, ["slow-stream"])
+
+    async def test_repeated_cancellation_during_node_start_stops_started_node(self) -> None:
+        started = threading.Event()
+        release_start = threading.Event()
+        stop_started = threading.Event()
+        release_stop = threading.Event()
+
+        class SlowHandle(FakeHandle):
+            def start(self) -> None:
+                started.set()
+                release_start.wait(timeout=2)
+                self.started = True
+
+            def stop(self) -> None:
+                stop_started.set()
+                release_stop.wait(timeout=2)
+                self.started = False
+
+        handle = SlowHandle()
+        task = asyncio.create_task(Node(handle).start())
+        await asyncio.to_thread(started.wait, 2)
+
+        task.cancel()
+        release_start.set()
+        await asyncio.to_thread(stop_started.wait, 2)
+        task.cancel()
+        release_stop.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertFalse(handle.started)
 
     async def test_stream_queue_overflow_fails_and_cancels_native_request(self) -> None:
         class FastHandle(FakeHandle):

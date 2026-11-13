@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from threading import Lock
+from typing import Any, TypeVar
 
 from ._binding import native
 from .types import (
@@ -17,6 +19,38 @@ from .types import (
 )
 
 _MAX_STREAM_EVENTS = 256
+_NO_EVENT = object()
+_TaskResult = TypeVar("_TaskResult")
+
+
+async def _await_owned_task(task: asyncio.Task[_TaskResult]) -> _TaskResult:
+    """Keep waiting for owned cleanup even when the caller cancels repeatedly."""
+    while True:
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                return task.result()
+
+
+async def _cancel_stream_after_start(task: asyncio.Task[str], handle: Any) -> None:
+    try:
+        request_id = await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        return
+    await asyncio.to_thread(handle.cancel, request_id)
+
+
+async def _stop_node_after_start(task: asyncio.Task[None], handle: Any) -> None:
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        return
+    await asyncio.to_thread(handle.stop)
 
 
 def _model_from_native(model: object) -> Model:
@@ -38,32 +72,56 @@ def _model_from_native(model: object) -> Model:
 class _EventSink:
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
-        self._queue: asyncio.Queue[object] = asyncio.Queue(maxsize=_MAX_STREAM_EVENTS)
+        self._pending: deque[object] = deque()
+        self._lock = Lock()
+        self._available = asyncio.Event()
+        self._notification_scheduled = False
         self._overflowed = False
 
     def on_event(self, event: object) -> None:
-        self._loop.call_soon_threadsafe(self._deliver, event)
-
-    def _deliver(self, event: object) -> None:
-        if self._overflowed:
-            return
-        try:
-            self._queue.put_nowait(event)
-        except asyncio.QueueFull:
-            self._overflowed = True
-            while not self._queue.empty():
-                self._queue.get_nowait()
-            self._queue.put_nowait(
-                RuntimeError(
-                    f"OpenAI stream consumer fell behind by {_MAX_STREAM_EVENTS} events"
+        with self._lock:
+            if self._overflowed:
+                return
+            if len(self._pending) == _MAX_STREAM_EVENTS:
+                self._pending.clear()
+                self._pending.append(
+                    RuntimeError(
+                        f"OpenAI stream consumer fell behind by {_MAX_STREAM_EVENTS} events"
+                    )
                 )
-            )
+                self._overflowed = True
+            else:
+                self._pending.append(event)
+            if self._notification_scheduled:
+                return
+            self._notification_scheduled = True
+
+        try:
+            self._loop.call_soon_threadsafe(self._notify)
+        except RuntimeError:
+            with self._lock:
+                self._notification_scheduled = False
+
+    def _notify(self) -> None:
+        self._available.set()
 
     async def next(self) -> object:
-        event = await self._queue.get()
-        if isinstance(event, BaseException):
-            raise event
-        return event
+        while True:
+            with self._lock:
+                event = self._pending.popleft() if self._pending else _NO_EVENT
+                if event is _NO_EVENT:
+                    self._notification_scheduled = False
+            if event is not _NO_EVENT:
+                if isinstance(event, BaseException):
+                    raise event
+                return event
+
+            self._available.clear()
+            with self._lock:
+                if self._pending:
+                    self._available.set()
+                    continue
+            await self._available.wait()
 
 
 class Inference:
@@ -137,8 +195,10 @@ class Inference:
         try:
             request_id = await asyncio.shield(start_task)
         except asyncio.CancelledError:
-            request_id = await start_task
-            await asyncio.to_thread(self._handle.cancel, request_id)
+            cleanup_task = asyncio.create_task(
+                _cancel_stream_after_start(start_task, self._handle)
+            )
+            await _await_owned_task(cleanup_task)
             raise
         finished = False
         try:
@@ -223,7 +283,15 @@ class Node:
         return cls(handle)
 
     async def start(self) -> None:
-        await asyncio.to_thread(self._handle.start)
+        start_task = asyncio.create_task(asyncio.to_thread(self._handle.start))
+        try:
+            await asyncio.shield(start_task)
+        except asyncio.CancelledError:
+            cleanup_task = asyncio.create_task(
+                _stop_node_after_start(start_task, self._handle)
+            )
+            await _await_owned_task(cleanup_task)
+            raise
 
     async def stop(self) -> None:
         await asyncio.to_thread(self._handle.stop)
