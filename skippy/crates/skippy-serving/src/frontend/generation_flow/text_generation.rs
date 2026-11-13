@@ -212,6 +212,11 @@ impl StageOpenAiBackend {
             &gated_speculative,
             self.runahead_governor.as_deref(),
         );
+        let speculation_summary = self.speculation_summary(
+            &gated_speculative,
+            speculating,
+            sampling.top_logprobs.is_some(),
+        );
         // Speculative windows, native MTP, and DFlash blocks sample or accept
         // tokens outside the one-token-per-sample path that records logprobs.
         let gated_speculative = if sampling.top_logprobs.is_some() {
@@ -380,24 +385,121 @@ impl StageOpenAiBackend {
         if crate::generation_stats::observer_installed() {
             output.generation_stats = Some(self.generation_stats(
                 &output,
-                &gated_speculative.effective_strategy,
-                speculating && sampling.top_logprobs.is_none(),
-                total_ms,
+                GenerationStatsInputs {
+                    speculative_strategy: &gated_speculative.effective_strategy,
+                    speculation_allowed: speculating && sampling.top_logprobs.is_none(),
+                    speculation: speculation_summary,
+                    request_shape: prompt.shape,
+                    total_ms,
+                },
             ));
         }
         Ok(output)
     }
 }
 
+/// The speculation plan a request ran under, as the stats observer reports it.
+#[derive(Clone, Copy, Debug)]
+struct SpeculationSummary {
+    stand_down: Option<crate::generation_stats::SpeculationStandDown>,
+    draft_token_cap: Option<usize>,
+    verify_window_max_tokens: usize,
+    runahead_budget_tokens: usize,
+}
+
+/// What [`StageOpenAiBackend::generation_stats`] needs beyond the output.
+struct GenerationStatsInputs<'a> {
+    speculative_strategy: &'a str,
+    speculation_allowed: bool,
+    speculation: SpeculationSummary,
+    request_shape: crate::generation_stats::RequestShape,
+    total_ms: f64,
+}
+
+/// Most draft tokens the plan's proposer offers per verify window.
+///
+/// Proposers are checked in the order the generation paths prefer them. A
+/// DFlash draft without a stated cap uses its trained block, which this
+/// frontend does not know, so it is `None` rather than a guess.
+fn draft_token_cap(
+    plan: &crate::frontend::SpeculativeDecodeConfig,
+    draft_model_window: Option<usize>,
+) -> Option<usize> {
+    if let Some(dflash) = plan.dflash.as_ref() {
+        return dflash.max_draft_tokens;
+    }
+    if plan.native_mtp.enabled {
+        return Some(plan.native_mtp.max_draft_tokens);
+    }
+    if let Some(ngram) = plan.ngram.as_ref() {
+        return Some(ngram.max_proposal_tokens);
+    }
+    draft_model_window
+}
+
 impl StageOpenAiBackend {
+    /// Whether the resolved plan, before any gating, speculates at all.
+    fn plan_speculates(&self) -> bool {
+        let plan = &self.speculative;
+        plan.dflash.is_some()
+            || plan.native_mtp.enabled
+            || plan.ngram.is_some()
+            || plan.extension.is_some()
+            || self.draft.is_some()
+    }
+
+    /// The speculation plan for one request, and why it stood down if it did.
+    ///
+    /// The cap and window come from the ungated plan, so a stood-down request
+    /// still says what it would have run with; the run-ahead budget is the one
+    /// the search settled on for this request.
+    fn speculation_summary(
+        &self,
+        after_search: &crate::frontend::SpeculativeDecodeConfig,
+        speculating: bool,
+        logprobs: bool,
+    ) -> SpeculationSummary {
+        use crate::generation_stats::SpeculationStandDown;
+
+        let stand_down = if !self.plan_speculates() {
+            None
+        } else if !speculating {
+            let trialling = self
+                .speculation_governor
+                .as_ref()
+                .is_some_and(|governor| governor.is_trialling());
+            Some(if trialling {
+                SpeculationStandDown::GateTrial
+            } else {
+                SpeculationStandDown::GateMeasuredLoss
+            })
+        } else {
+            logprobs.then_some(SpeculationStandDown::Logprobs)
+        };
+        SpeculationSummary {
+            stand_down,
+            draft_token_cap: draft_token_cap(
+                &self.speculative,
+                self.draft.as_ref().map(|_| self.speculative_window),
+            ),
+            verify_window_max_tokens: self.speculative.verify_window.max_tokens,
+            runahead_budget_tokens: after_search.verify_window.runahead_max_tokens,
+        }
+    }
+
     /// The observer's view of one finished generation: counts and timings only.
     fn generation_stats(
         &self,
         output: &GeneratedText,
-        speculative_strategy: &str,
-        speculation_allowed: bool,
-        total_ms: f64,
+        inputs: GenerationStatsInputs<'_>,
     ) -> crate::generation_stats::GenerationStats {
+        let GenerationStatsInputs {
+            speculative_strategy,
+            speculation_allowed,
+            speculation,
+            request_shape,
+            total_ms,
+        } = inputs;
         let (split, downstream_lanes) = match &self.mode {
             InferenceBackendMode::LocalRuntime => (false, None),
             InferenceBackendMode::EmbeddedStageZero { lane_pool, .. } => {
@@ -426,6 +528,10 @@ impl StageOpenAiBackend {
             finish_reason: output.finish_reason.as_str(),
             speculative_strategy: speculative_strategy.to_owned(),
             speculation_allowed,
+            speculation_stand_down: speculation.stand_down,
+            draft_token_cap: speculation.draft_token_cap,
+            verify_window_max_tokens: speculation.verify_window_max_tokens,
+            runahead_budget_tokens: speculation.runahead_budget_tokens,
             draft_windows: draft.map_or(0, |stats| stats.windows as u64),
             draft_proposed_tokens: draft.map_or(0, |stats| stats.draft_tokens as u64),
             draft_accepted_tokens: draft.map_or(0, |stats| stats.accepted_tokens as u64),
@@ -435,6 +541,7 @@ impl StageOpenAiBackend {
             activation_codec: wire.map(|wire| wire.codec),
             activation_prefill_bytes: wire.map_or(0, |wire| wire.prefill_bytes as u64),
             activation_decode_bytes: wire.map_or(0, |wire| wire.decode_bytes as u64),
+            request_shape,
         }
     }
 }

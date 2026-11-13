@@ -75,6 +75,8 @@ impl StageOpenAiBackend {
 
         // Native path: render with tools and use the template's own metadata.
         let native = self.render_chat_prompt(request, &options, &marker, None, true)?;
+        let shape =
+            crate::generation_stats::RequestShape::of_chat(request, tool_calls_requested(request));
 
         // If the request carries tools but the template does not support native
         // tool calling, re-render with server-side tool-call emulation: strip
@@ -110,6 +112,7 @@ impl StageOpenAiBackend {
                 media: emulated.media,
                 chat_parse_metadata: Some(emulated.metadata_json),
                 recurrent_cache_prefix_text,
+                shape,
             });
         }
 
@@ -133,6 +136,7 @@ impl StageOpenAiBackend {
             media: native.media,
             chat_parse_metadata: Some(native.metadata_json),
             recurrent_cache_prefix_text,
+            shape,
         })
     }
 

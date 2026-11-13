@@ -14,19 +14,20 @@
 //! after others were dropped carries `weight`, the number of requests it
 //! stands for, so totals stay right when summed by weight.
 //!
-//! Model names are reported only when `model_loaded` reported them: an exact
-//! catalog name for a model this node loaded from a catalog or repository
-//! reference. Anything else, including a local file, a configured alias, or a
-//! name a client typed into a request, is `redacted`.
+//! Model names follow [`model_identity`]: a catalog name when the runtime
+//! holds one, otherwise `redacted` plus architecture and size.
 
-use std::collections::HashSet;
+pub(crate) mod model_identity;
+
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mesh_llm_analytics::{Event, Label, Properties};
 use mesh_llm_membership::selected_path::SelectedPathObservation;
-use skippy_serving::generation_stats::{GenerationStats, GenerationStatsObserver};
+use skippy_serving::generation_stats::{GenerationStats, GenerationStatsObserver, RequestShape};
+
+use self::model_identity::ModelIdentity;
 
 use crate::network::metrics::{AttemptOutcome, AttemptTarget};
 
@@ -39,7 +40,6 @@ const EVENTS_PER_MINUTE: u32 = 30;
 const MESH_LINKS_FIRST_DELAY: Duration = Duration::from_secs(5 * 60);
 const MESH_LINKS_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-static REPORTABLE_MODELS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 static REQUEST_LIMITER: RateLimiter = RateLimiter::new(EVENTS_PER_MINUTE);
 static ROUTE_LIMITER: RateLimiter = RateLimiter::new(EVENTS_PER_MINUTE);
 
@@ -53,28 +53,6 @@ pub(crate) fn install() {
     ));
 }
 
-/// Allow `name` to be reported. Call only for an exact catalog name loaded
-/// from a catalog or repository reference, never a local file or an alias.
-pub(crate) fn allow_model_name(name: &str) {
-    if let Ok(mut models) = REPORTABLE_MODELS.lock() {
-        models
-            .get_or_insert_with(HashSet::new)
-            .insert(name.to_owned());
-    }
-}
-
-fn model_label(name: &str) -> Label {
-    let allowed = REPORTABLE_MODELS
-        .lock()
-        .ok()
-        .is_some_and(|models| models.as_ref().is_some_and(|set| set.contains(name)));
-    if allowed {
-        Label::sanitize_or_redact(name)
-    } else {
-        Label::redacted()
-    }
-}
-
 struct AnalyticsObserver;
 
 impl GenerationStatsObserver for AnalyticsObserver {
@@ -82,10 +60,12 @@ impl GenerationStatsObserver for AnalyticsObserver {
         let Some(weight) = REQUEST_LIMITER.admit(Instant::now()) else {
             return;
         };
-        mesh_llm_analytics::capture(
-            Event::InferenceRequest,
-            request_properties(stats, model_label(&stats.model_id), weight),
-        );
+        let mut properties =
+            request_properties(stats, &model_identity::lookup(&stats.model_id), weight);
+        if let Some(hardware) = mesh_llm_analytics::serving_hardware() {
+            properties = hardware.apply(properties);
+        }
+        mesh_llm_analytics::capture(Event::InferenceRequest, properties);
     }
 }
 
@@ -106,7 +86,58 @@ fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
 
-fn request_properties(stats: &GenerationStats, model: Label, weight: u64) -> Properties {
+/// The coarse kind of request: `agentic` when tools are in play (offered, or
+/// results in the history), `chat` for other message requests, `completion`
+/// for a raw prompt.
+fn request_kind(shape: &RequestShape) -> &'static str {
+    if shape.tools_offered || shape.tool_results {
+        "agentic"
+    } else if shape.chat {
+        "chat"
+    } else {
+        "completion"
+    }
+}
+
+/// Context length in coarse bands, so acceptance and speed can be compared
+/// at like context without an exact-length breakdown.
+fn context_band(tokens: u64) -> &'static str {
+    match tokens {
+        0..2_048 => "lt2k",
+        2_048..8_192 => "2k-8k",
+        8_192..32_768 => "8k-32k",
+        32_768..131_072 => "32k-128k",
+        _ => "128k+",
+    }
+}
+
+fn with_request_shape(properties: Properties, shape: &RequestShape) -> Properties {
+    properties
+        .with("request_kind", request_kind(shape))
+        .with("tools_offered", shape.tools_offered)
+        .with("tool_results", shape.tool_results)
+        .with("system_prompt", shape.system_prompt)
+        .with(
+            "user_turns",
+            mesh_llm_analytics::bucket_count(u64::from(shape.user_turns)),
+        )
+}
+
+/// The speculation plan a request ran under: why it stood down, and the caps
+/// that bound how much it could draft.
+fn with_speculation_plan(mut properties: Properties, stats: &GenerationStats) -> Properties {
+    if let Some(reason) = stats.speculation_stand_down {
+        properties = properties.with("spec_stand_down", reason.as_str());
+    }
+    if let Some(cap) = stats.draft_token_cap {
+        properties = properties.with("spec_draft_cap", cap);
+    }
+    properties
+        .with("spec_window_max", stats.verify_window_max_tokens)
+        .with("spec_runahead_tokens", stats.runahead_budget_tokens)
+}
+
+fn request_properties(stats: &GenerationStats, model: &ModelIdentity, weight: u64) -> Properties {
     let prompt = u64::from(stats.prompt_tokens);
     let completion = u64::from(stats.completion_tokens);
     let context = prompt + completion;
@@ -114,8 +145,8 @@ fn request_properties(stats: &GenerationStats, model: Label, weight: u64) -> Pro
     let accepted = stats.draft_accepted_tokens + stats.mtp_accepted_tokens;
     let windows = stats.draft_windows + stats.mtp_verifications;
 
-    let mut properties = Properties::new()
-        .with("model", model)
+    let mut properties = model
+        .apply(Properties::new())
         .with("weight", weight)
         .with("serving", if stats.split { "split" } else { "local" })
         .with("concurrency_limit", stats.concurrency_limit)
@@ -123,6 +154,7 @@ fn request_properties(stats: &GenerationStats, model: Label, weight: u64) -> Pro
         .with("prompt_tokens", prompt)
         .with("completion_tokens", completion)
         .with("context_tokens", context)
+        .with("context_band", context_band(context))
         .with(
             "cached_prompt_tokens",
             u64::from(stats.cached_prompt_tokens),
@@ -151,6 +183,8 @@ fn request_properties(stats: &GenerationStats, model: Label, weight: u64) -> Pro
         .with("spec_draft_accepted_tokens", stats.draft_accepted_tokens)
         .with("spec_mtp_proposed_tokens", stats.mtp_proposed_tokens)
         .with("spec_mtp_accepted_tokens", stats.mtp_accepted_tokens);
+    properties = with_request_shape(properties, &stats.request_shape);
+    properties = with_speculation_plan(properties, stats);
 
     if let Some(fill) = ratio(context, stats.context_size as u64) {
         properties = properties.with("context_fill", fill);
@@ -263,13 +297,39 @@ fn link_and_rtt(
     (link, rtt)
 }
 
-fn outcome_str(outcome: AttemptOutcome) -> &'static str {
-    match outcome {
-        AttemptOutcome::Success => "success",
-        AttemptOutcome::Timeout => "timeout",
-        AttemptOutcome::Unavailable => "unavailable",
-        AttemptOutcome::ContextOverflow => "context_overflow",
-        AttemptOutcome::Rejected => "rejected",
+/// How a routing attempt ended, as analytics reports it.
+///
+/// Finer than [`AttemptOutcome`], which routing metrics score targets by. A
+/// stream that broke after the response started, and a client that went away
+/// mid-request, are both `unavailable` to the router, but they say different
+/// things about the target, and long attempts that ended either way were
+/// otherwise indistinguishable from a peer that never answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RouteOutcome {
+    Attempt(AttemptOutcome),
+    /// The response had started and the upstream stream then failed.
+    StreamFailed,
+    /// The client disconnected before the attempt finished.
+    ClientDisconnected,
+}
+
+impl From<AttemptOutcome> for RouteOutcome {
+    fn from(outcome: AttemptOutcome) -> Self {
+        Self::Attempt(outcome)
+    }
+}
+
+impl RouteOutcome {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Attempt(AttemptOutcome::Success) => "success",
+            Self::Attempt(AttemptOutcome::Timeout) => "timeout",
+            Self::Attempt(AttemptOutcome::Unavailable) => "unavailable",
+            Self::Attempt(AttemptOutcome::ContextOverflow) => "context_overflow",
+            Self::Attempt(AttemptOutcome::Rejected) => "rejected",
+            Self::StreamFailed => "stream_failed",
+            Self::ClientDisconnected => "client_disconnected",
+        }
     }
 }
 
@@ -279,8 +339,23 @@ pub(crate) struct RouteAttempt<'a> {
     pub(crate) target: &'a AttemptTarget,
     pub(crate) queue_wait: Duration,
     pub(crate) attempt_time: Duration,
-    pub(crate) outcome: AttemptOutcome,
+    pub(crate) outcome: RouteOutcome,
     pub(crate) completion_tokens: Option<u64>,
+}
+
+/// The `link` and RTT for a remote attempt's peer, looked up when the attempt
+/// ended. A peer no longer in the mesh by then is `departed`: it left during
+/// the attempt, which is itself the likeliest explanation for the outcome.
+fn route_link(
+    peer: Option<(Option<SelectedPathObservation>, Option<u32>)>,
+) -> (&'static str, Option<u32>) {
+    match peer {
+        Some((path, direct_rtt_ms)) => {
+            let (link, rtt) = link_and_rtt(path, direct_rtt_ms);
+            (link.as_str(), rtt)
+        }
+        None => ("departed", None),
+    }
 }
 
 /// Report one routing attempt. A remote target's link is looked up off the
@@ -295,10 +370,22 @@ pub(crate) fn report_route(
     };
     let properties = route_properties(&attempt, weight);
     let Some(peer_id) = remote_peer else {
-        mesh_llm_analytics::capture(Event::InferenceRoute, properties);
+        // No peer link to classify: the attempt stayed on this node or went
+        // to a configured endpoint, and `link` says which.
+        let link = match attempt.target {
+            AttemptTarget::Endpoint(_) => "endpoint",
+            AttemptTarget::Local(_) | AttemptTarget::Remote(_) => "local",
+        };
+        mesh_llm_analytics::capture(Event::InferenceRoute, properties.with("link", link));
         return;
     };
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        // Off a runtime the peer table cannot be read, but the attempt and
+        // its outcome still count.
+        mesh_llm_analytics::capture(
+            Event::InferenceRoute,
+            properties.with("link", LinkClass::Unknown.as_str()),
+        );
         return;
     };
     let node = node.clone();
@@ -307,12 +394,10 @@ pub(crate) fn report_route(
             .peers()
             .await
             .into_iter()
-            .find(|peer| peer.id == peer_id);
-        let (link, rtt) = link_and_rtt(
-            peer.as_ref().and_then(|peer| peer.selected_path),
-            peer.as_ref().and_then(|peer| peer.current_direct_rtt_ms()),
-        );
-        let mut properties = properties.with("link", link.as_str());
+            .find(|peer| peer.id == peer_id)
+            .map(|peer| (peer.selected_path, peer.current_direct_rtt_ms()));
+        let (link, rtt) = route_link(peer);
+        let mut properties = properties.with("link", link);
         if let Some(rtt) = rtt {
             properties = properties.with("rtt_ms", rtt);
         }
@@ -327,14 +412,14 @@ fn route_properties(attempt: &RouteAttempt<'_>, weight: u64) -> Properties {
         AttemptTarget::Endpoint(_) => "endpoint",
     };
     let attempt_ms = attempt.attempt_time.as_secs_f64() * 1000.0;
-    let mut properties = Properties::new()
-        .with(
-            "model",
-            attempt.model.map_or_else(Label::redacted, model_label),
-        )
+    let model = attempt
+        .model
+        .map_or_else(ModelIdentity::redacted, model_identity::lookup);
+    let mut properties = model
+        .apply(Properties::new())
         .with("weight", weight)
         .with("target", target)
-        .with("outcome", outcome_str(attempt.outcome))
+        .with("outcome", attempt.outcome.as_str())
         .with(
             "queue_wait_ms",
             round2(attempt.queue_wait.as_secs_f64() * 1000.0),

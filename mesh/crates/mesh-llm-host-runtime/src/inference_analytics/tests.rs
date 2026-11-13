@@ -21,6 +21,10 @@ fn stats() -> GenerationStats {
         finish_reason: "stop",
         speculative_strategy: "dflash".to_owned(),
         speculation_allowed: true,
+        speculation_stand_down: None,
+        draft_token_cap: Some(15),
+        verify_window_max_tokens: 16,
+        runahead_budget_tokens: 0,
         draft_windows: 0,
         draft_proposed_tokens: 0,
         draft_accepted_tokens: 0,
@@ -30,12 +34,19 @@ fn stats() -> GenerationStats {
         activation_codec: Some("f16"),
         activation_prefill_bytes: 1 << 20,
         activation_decode_bytes: 1 << 16,
+        request_shape: RequestShape {
+            chat: true,
+            tools_offered: true,
+            tool_results: true,
+            system_prompt: true,
+            user_turns: 3,
+        },
     }
 }
 
 #[test]
 fn request_properties_derive_rates_from_the_measurement() {
-    let properties = request_properties(&stats(), Label::redacted(), 3);
+    let properties = request_properties(&stats(), &ModelIdentity::redacted(), 3);
 
     assert_eq!(properties.get("weight"), Some(&Value::Int(3)));
     assert_eq!(properties.get("serving"), Some(&Value::Static("split")));
@@ -61,7 +72,7 @@ fn request_properties_omit_rates_with_no_denominator() {
     idle.mtp_verifications = 0;
     idle.downstream_lanes = None;
 
-    let properties = request_properties(&idle, Label::redacted(), 1);
+    let properties = request_properties(&idle, &ModelIdentity::redacted(), 1);
 
     assert!(properties.get("decode_tps").is_none());
     assert!(properties.get("spec_acceptance").is_none());
@@ -70,12 +81,118 @@ fn request_properties_omit_rates_with_no_denominator() {
 }
 
 #[test]
-fn model_names_are_redacted_unless_loaded_from_a_reference() {
-    assert_eq!(model_label("acme-merger-finetune").as_str(), "redacted");
-    allow_model_name("Qwen3-Coder-30B-A3B-Q4_K_M");
+fn request_properties_carry_the_workload_without_content() {
+    let properties = request_properties(&stats(), &ModelIdentity::redacted(), 1);
+
     assert_eq!(
-        model_label("Qwen3-Coder-30B-A3B-Q4_K_M").as_str(),
-        "Qwen3-Coder-30B-A3B-Q4_K_M"
+        properties.get("request_kind"),
+        Some(&Value::Static("agentic"))
+    );
+    assert_eq!(properties.get("tools_offered"), Some(&Value::Bool(true)));
+    assert_eq!(properties.get("tool_results"), Some(&Value::Bool(true)));
+    assert_eq!(properties.get("system_prompt"), Some(&Value::Bool(true)));
+    // Three user turns land in the 3-4 bucket, not as an exact count.
+    assert_eq!(properties.get("user_turns"), Some(&Value::Static("3-4")));
+    assert_eq!(
+        properties.get("context_band"),
+        Some(&Value::Static("2k-8k"))
+    );
+}
+
+#[test]
+fn request_kinds_split_agentic_chat_and_completion() {
+    let chat = RequestShape {
+        chat: true,
+        ..RequestShape::default()
+    };
+    assert_eq!(request_kind(&chat), "chat");
+    assert_eq!(request_kind(&RequestShape::default()), "completion");
+    let tool_loop = RequestShape {
+        tool_results: true,
+        ..chat
+    };
+    assert_eq!(request_kind(&tool_loop), "agentic");
+}
+
+#[test]
+fn context_bands_do_not_share_edges() {
+    assert_eq!(context_band(0), "lt2k");
+    assert_eq!(context_band(2_047), "lt2k");
+    assert_eq!(context_band(2_048), "2k-8k");
+    assert_eq!(context_band(32_768), "32k-128k");
+    assert_eq!(context_band(131_072), "128k+");
+}
+
+#[test]
+fn request_properties_carry_the_speculation_plan() {
+    let mut stood_down = stats();
+    stood_down.speculation_allowed = false;
+    stood_down.speculation_stand_down =
+        Some(skippy_serving::generation_stats::SpeculationStandDown::GateTrial);
+    let properties = request_properties(&stood_down, &ModelIdentity::redacted(), 1);
+
+    assert_eq!(
+        properties.get("spec_stand_down"),
+        Some(&Value::Static("gate_trial"))
+    );
+    assert_eq!(properties.get("spec_draft_cap"), Some(&Value::Int(15)));
+    assert_eq!(properties.get("spec_window_max"), Some(&Value::Int(16)));
+    assert_eq!(properties.get("spec_runahead_tokens"), Some(&Value::Int(0)));
+    // Drafted and accepted counts are what make acceptance computable.
+    assert_eq!(
+        properties.get("spec_proposed_tokens"),
+        Some(&Value::Int(300))
+    );
+    assert_eq!(
+        properties.get("spec_accepted_tokens"),
+        Some(&Value::Int(150))
+    );
+
+    let speculating = request_properties(&stats(), &ModelIdentity::redacted(), 1);
+    assert!(speculating.get("spec_stand_down").is_none());
+}
+
+#[test]
+fn model_names_are_redacted_unless_a_catalog_identity_was_registered() {
+    let unknown = request_properties(&stats(), &model_identity::lookup("acme-merger-finetune"), 1);
+    assert_eq!(unknown.get("model"), Some(&Value::Text(Label::redacted())));
+    model_identity::register(
+        "served-under-a-stem",
+        ModelIdentity {
+            model: Label::sanitize("Qwen3-Coder-30B-A3B-Q4_K_M").unwrap(),
+            ..ModelIdentity::redacted()
+        },
+    );
+    let named = request_properties(&stats(), &model_identity::lookup("served-under-a-stem"), 1);
+    assert_eq!(
+        named.get("model"),
+        Some(&Value::Text(
+            Label::sanitize("Qwen3-Coder-30B-A3B-Q4_K_M").unwrap()
+        ))
+    );
+}
+
+#[test]
+fn route_outcomes_separate_disconnects_and_broken_streams() {
+    assert_eq!(
+        RouteOutcome::from(AttemptOutcome::Unavailable).as_str(),
+        "unavailable"
+    );
+    assert_eq!(RouteOutcome::StreamFailed.as_str(), "stream_failed");
+    assert_eq!(
+        RouteOutcome::ClientDisconnected.as_str(),
+        "client_disconnected"
+    );
+}
+
+#[test]
+fn a_peer_gone_by_the_end_of_the_attempt_is_departed_not_unknown() {
+    assert_eq!(route_link(None), ("departed", None));
+    // Still in the mesh with no selected path: genuinely unknown.
+    assert_eq!(route_link(Some((None, Some(9)))), ("unknown", None));
+    assert_eq!(
+        route_link(Some((Some(path("direct", "192.168.1.20:4000")), Some(2)))),
+        ("lan", Some(2))
     );
 }
 

@@ -50,6 +50,7 @@ Every event carries:
 | `build_channel` | `release`, `prerelease`, `development` | Whether pre-releases get real use |
 | `os`, `arch` | `macos`, `aarch64` | Which platforms to prioritize |
 | `exec_env` | `plain`, `container`, `ci`, `service` | Whether a run came from someone's machine or from throwaway infrastructure. A container gets a fresh home directory every run, so it looks like a brand new install each time; this is what separates those from real adoption. Detected from `/.dockerenv`, `/run/.containerenv`, and the `container`, `KUBERNETES_SERVICE_HOST`, `INVOCATION_ID`, and CI provider variables |
+| `internal` | `true`, `false` | Whether this is the maintainers' own traffic, so it can be left out of figures about real use. `true` for a development build (a commit-stamped version), in CI, or when `MESH_LLM_ANALYTICS_INTERNAL=1` is set, which maintainers set on lab and benchmark machines. It changes nothing about what is sent |
 
 And one of these events:
 
@@ -60,7 +61,7 @@ And one of these events:
 | `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …) | Which commands are used, and which fail |
 | `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested`, `auto_update`, `post_update_restart` — all booleans | How nodes are started. `auto_update` is whether the node manages its own upgrades; `post_update_restart` marks the second half of a self-update, since updating restarts the process and would otherwise count as a second node start |
 | `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded` | Whether nodes stay up |
-| `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`, and for a model served under a configured alias such as `server.alias`), `source` (`direct_gguf`, `layer_package`, `whisper_file`, `split_layer_package` for stage 0 of a split from a Hugging Face package, `split_local_source` for stage 0 of a split from anything else, which is always `redacted`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
+| `model_loaded` | `model` (catalog name, or `redacted`; see [Model names](#model-names)), `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` (see [Model names](#model-names)), `source` (`direct_gguf`, `layer_package`, `whisper_file`, `split_layer_package` for stage 0 of a split from a Hugging Face package, `split_local_source` for stage 0 of a split from anything else, which is always `redacted`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
 | `inference_request` | see below | How fast real requests are served: prefill, decode, context length, prompt cache, speculative decoding, and lanes |
@@ -85,31 +86,69 @@ same machine could land in one range on one start and the next range on the
 following one. Earlier versions reported `vram_total` and `system_ram` as
 ranges.
 
+### Model names
+
+A model is named only by a public identity mesh-llm already holds for it: the
+name of the model catalog entry it came from. That is the
+case when a catalog model's file is loaded from the Hugging Face cache, when
+a layer package's name is exactly a catalog name, and when a split package
+comes from a catalog entry's published package. Everything else is
+`redacted`: a `--gguf` file anywhere else, a Hugging Face repository the
+catalog does not list (private or not), a configured alias such as
+`server.alias`, and a model name a client typed.
+
+A `redacted` model is described instead, by properties read from the GGUF
+header that say what kind of model it is without saying which one:
+
+| Property | Example | Notes |
+|---|---|---|
+| `model_arch` | `qwen3moe`, `llama` | `general.architecture` |
+| `model_params` | `lt1b`, `1-3b`, `4-9b`, `10-19b`, `20-39b`, `40-79b`, `80-159b`, `160-399b`, `400b+` | The total parameter count in whole billions, from `general.size_label`; absent when the label does not parse |
+| `model_moe` | `true` | Whether the model routes through experts |
+| `model_family` | `Qwen3.8`, `Nemotron-3.5-Bolt` | Only when the published DFlash pairing that matched the model's shape names a family; it comes from that pairing, not from the file |
+| `dflash_draft` | `AtomicChat/Qwen3.6-27B-DFlash-GGUF` | The public repository of the DFlash draft attached by default |
+
+A catalog model carries these too. The file name is never read for any of
+them.
+
 `inference_request` is sent for a generation this node served. At most 30
 are sent per minute per process; when some were skipped, the next one
 carries a `weight` saying how many requests it stands for. It carries:
 
 | Property | Example | Notes |
 |---|---|---|
-| `model` | `Qwen3-8B-Q4_K_M`, `redacted` | Named only when `model_loaded` named it: an exact catalog name for a model loaded from a catalog or repository reference. Local files and configured aliases are `redacted` |
+| `model`, `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` | `Qwen3-8B-Q4_K_M`, `redacted` | As `model_loaded` reported them; see [Model names](#model-names) |
 | `weight` | `1`, `12` | Requests this event represents |
+| `backend` | `cuda`, `metal`, `rocm`, `vulkan`, `cpu` | The backend serving runs on |
+| `gpu_family` | `apple-m4`, `rtx-4090`, `gb10`, `none` | `hardware_profile`'s `gpu_model` reduced to its family: vendor words, form factor (`laptop`) and Apple tiers (`pro`, `max`) dropped, so it has fewer values than `gpu_model` |
+| `vram_gb` | `24`, `128` | As on `hardware_profile` |
+| `request_kind` | `agentic`, `chat`, `completion` | `agentic` when tools were offered or the history carries tool results, `chat` for other message requests, `completion` for a raw prompt |
+| `tools_offered`, `tool_results`, `system_prompt` | `true` | Whether tools were offered (and not turned off by `tool_choice`), whether the history carries tool results, and whether a system or developer message was present. Never the tools, their names, or any message text |
+| `user_turns` | `1`, `3-4`, `33+` | User messages in the history, bucketed |
 | `serving` | `local`, `split` | Whole model on this node, or stage 0 of a split |
 | `downstream_lanes`, `concurrency_limit` | `4`, `2` | Persistent lanes to the next split stage, and generations admitted at once |
 | `context_size`, `prompt_tokens`, `completion_tokens`, `context_tokens`, `context_fill` | `32768`, `3000`, `200`, `3200`, `0.0977` | Token counts only, never tokens |
+| `context_band` | `lt2k`, `2k-8k`, `8k-32k`, `32k-128k`, `128k+` | `context_tokens` in bands that share no edges |
 | `cached_prompt_tokens`, `prefill_tokens`, `cache_hit_kind` | `2000`, `1000`, `prefix` | How much of the prompt the KV cache saved |
 | `queue_wait_ms`, `restore_ms`, `prefill_ms`, `decode_ms`, `ttft_ms`, `total_ms` | `512.4` | Timings |
 | `prefill_tps`, `decode_tps` | `2000`, `50` | Tokens per second |
 | `finish_reason` | `stop`, `length` | Why generation ended |
 | `spec_strategy`, `spec_allowed` | `dflash`, `ngram-suffix`, `disabled` | The speculative decoding strategy, and whether the speculation gate let this request use it |
+| `spec_stand_down` | `gate_trial`, `gate_measured_loss`, `logprobs` | Why a request whose plan speculates ran without it: the speculation gate is trialling plain decode, the gate measured speculation losing and kept it off, or the request asked for logprobs. Absent when it speculated or had nothing planned |
+| `spec_draft_cap`, `spec_window_max`, `spec_runahead_tokens` | `15`, `16`, `0` | The most draft tokens the proposer offers per verify window (absent for a DFlash draft using its trained block), the largest verify window, and the run-ahead token budget (`0` is fixed-depth) |
 | `spec_proposed_tokens`, `spec_accepted_tokens`, `spec_acceptance`, `spec_windows`, `spec_accepted_per_window` | `300`, `150`, `0.5`, `50`, `3` | Draft tokens proposed and accepted, overall and split into draft-model/N-gram (`spec_draft_*`) and native MTP/split DFlash (`spec_mtp_*`) |
 | `activation_codec`, `activation_prefill_bytes`, `activation_decode_bytes` | `f16` | Split only: bytes sent to the next stage |
 
 `inference_route` is sent for each routing attempt this node fronted, under
 the same per-minute limit and `weight` rule. It carries `model` (as above),
 `target` (`local`, `remote`, `endpoint`), `outcome` (`success`, `timeout`,
-`unavailable`, `context_overflow`, `rejected`), `queue_wait_ms`, `attempt_ms`,
-`completion_tokens`, `end_to_end_tps`, and for a remote target `link` and
-`rtt_ms`.
+`unavailable`, `context_overflow`, `rejected`, `stream_failed` when the
+response had started and the upstream stream then broke,
+`client_disconnected` when the client went away first), `queue_wait_ms`,
+`attempt_ms`, `completion_tokens`, `end_to_end_tps`, `link`, and for a
+remote target `rtt_ms`. `link` is always set: `local` or `endpoint` for
+those targets, and for a remote target its class (below) when the attempt
+ended, or `departed` when the peer had left the mesh by then.
 
 `mesh_links` is sent five minutes after a node starts and hourly after that.
 It carries `peers`, and for each link class (`lan`, `wan`, `relay`,
@@ -132,11 +171,14 @@ commands and node starts.
   by the analytics code, and the API cannot carry free text.
 - **Model contents or file paths.** `--gguf /home/you/private.gguf` reports
   `model_requested: true` on `serve_started`, and a `model_loaded` carrying
-  `model: redacted`, `source: direct_gguf`. The file name is never reported,
-  not even the stem without its directories — a name you chose for a local
-  file is yours, and `acme-merger-finetune` says as much as the path does.
-  Elsewhere, a model name that is not catalog-shaped is reported as
-  `redacted`.
+  `model: redacted`, `source: direct_gguf`, with the architecture and size
+  class from its GGUF header. The file name is never reported, not even the
+  stem without its directories — a name you chose for a local file is yours,
+  and `acme-merger-finetune` says as much as the path does. A model is named
+  only when it matches a catalog entry, and then by the catalog's name.
+- **Request structure beyond a few flags.** `inference_request` says whether
+  tools were offered, whether a system prompt was present, and how many user
+  turns there were, bucketed. Never the tools, their schemas, or any message.
 - **Your IP address or location.** Every event sets `$geoip_disable` and a
   null `$ip`, and the project discards client IP data at ingestion.
 - **Anything that identifies your mesh peers.** No peer IDs, addresses, mesh
@@ -153,10 +195,11 @@ commands and node starts.
 The reporting code accepts only a fixed set of event names and a closed set of
 property values. Free-form text cannot be attached to an event, so a prompt
 cannot leak through this path even by mistake. Text that does appear — a model
-name — passes a grammar that rejects paths, whitespace, and anything
-over-long, and becomes `redacted` when it fails. Names sourced from a local
-file are redacted ahead of that grammar rather than relying on it, because a
-bare file stem would satisfy it.
+name, a model architecture or family, a draft repository, a GPU family —
+passes a grammar that rejects paths, whitespace, and anything over-long, and
+becomes `redacted` when it fails. A model is named only from a catalog entry
+it was matched to, never from its file or served name, so a bare file stem
+that would satisfy the grammar is never consulted.
 
 ## How it differs from `[telemetry]`
 
