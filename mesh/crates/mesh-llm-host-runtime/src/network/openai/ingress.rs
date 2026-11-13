@@ -1520,6 +1520,7 @@ async fn try_handle_virtual_model_intercept(
         route_observer,
         request.exchange_observation_id.as_deref(),
         request.exchange_id(),
+        request.request_id.as_uuid().to_string(),
     )
     .await
     {
