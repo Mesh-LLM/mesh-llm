@@ -332,10 +332,10 @@ fn reject_fields(object: &Map<String, Value>) -> Result<(), InferenceError> {
     if let Some(key) = object
         .get("prompt_cache_key")
         .filter(|value| !value.is_null())
-        && key.as_str().is_none_or(|key| key.len() > 64)
+        && key.as_str().is_none_or(|key| key.chars().count() > 64)
     {
         return Err(InferenceError::invalid_request(
-            "prompt_cache_key must be a string of at most 64 bytes",
+            "prompt_cache_key must be a string of at most 64 characters",
         )
         .with_param("prompt_cache_key"));
     }
@@ -530,6 +530,25 @@ mod tests {
             "choices":[{"message":{"content":text},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
         })
+    }
+
+    #[test]
+    fn compact_cache_key_uses_unicode_character_bounds() {
+        let mut body = json!({
+            "model": "m", "input": "hello", "prompt_cache_key": "🦀".repeat(64)
+        });
+        prepare(&mut body, &ResponseContinuation::disabled()).unwrap();
+        let mut body = json!({
+            "model": "m", "input": "hello", "prompt_cache_key": "🦀".repeat(65)
+        });
+        let error = prepare(&mut body, &ResponseContinuation::disabled())
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.body().error.param.as_deref(),
+            Some("prompt_cache_key")
+        );
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
     }
 
     fn pending_compaction_item() -> Value {

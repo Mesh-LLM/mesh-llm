@@ -111,6 +111,10 @@ impl ResponsesTurn {
                 object.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
+        // Validate the effective request too. A stored continuation may have
+        // been created by an older process contract, and inherited controls
+        // must not bypass the current ingress validation boundary.
+        super::request_validation::validate_request_fields(object)?;
         // The original ingress owns authorization. Capture the effective
         // policy after continuation inheritance and before Chat normalization
         // reduces an allowed-tools choice to its backend selection mode.

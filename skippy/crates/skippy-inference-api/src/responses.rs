@@ -506,12 +506,18 @@ fn normalize_openai_compat_request_with_policy(
         });
     };
 
+    let path_only = path_only(path);
+    if path_only == "/v1/responses" {
+        // Validate the raw Responses shape before translation removes fields
+        // such as `instructions` or turns `input` into Chat messages.
+        request_validation::validate_request_fields(object)?;
+    }
+
     let mut changed = alias_max_tokens(object);
     let mut rewritten_path = None;
     let mut response_adapter = ResponseAdapterMode::None;
     let mut agent_session_id = None;
 
-    let path_only = path_only(path);
     if path_only == "/v1/responses/compact" {
         changed = true;
         rewritten_path = Some(rewrite_path_preserving_query(path, "/v1/chat/completions"));

@@ -11,7 +11,8 @@ request/response JSON, OpenAI-style errors, model discovery, generation,
 embedding, rerank, audio, streaming Server-Sent Events framing, and the direct
 Responses WebSocket adapter. Mesh uses the HTTP portions as the shared
 inference frontend for embedded single-stage and stage-split serving; its
-public ingress does not yet expose the Responses WebSocket adapter.
+public ingress also exposes the Responses WebSocket adapter while keeping each
+turn at the original ingress for independent routing.
 
 Mesh-local compatibility wrappers should stay thin. Request normalization,
 Responses API translation, stream-chunk parsing, stream usage conversion, and
@@ -133,6 +134,24 @@ field and explicit `"disabled"` all normalize to the internal
 SSE, and WebSocket turns. Ordinary Chat Completions keeps its existing
 `mesh_compact` behavior, and `/v1/responses/compact` remains the separate,
 explicit compaction operation.
+
+The request boundary validates the schema shapes it consumes before response
+capture, continuation lookup, or backend translation. `instructions` is a
+string or `null`. `metadata` is `null` or an object of at most 16 string pairs;
+keys are at most 64 Unicode characters and values at most 512. Both
+`safety_identifier` and `prompt_cache_key` are `null` or strings of at most 64
+Unicode characters. A safety identifier remains opaque correlation metadata:
+it is echoed with the response and does not activate a monitoring or protection
+service in Mesh.
+
+`text` and `reasoning` are each `null` or objects. Existing `text.format`
+translation is supported, while a non-null `text.verbosity` is unsupported.
+`reasoning.effort` accepts the schema values `none`, `low`, `medium`, `high`,
+and `xhigh`, subject to the selected model's existing capability checks. A
+non-null `reasoning.summary` is rejected as unsupported because Mesh does not
+honor reasoning-summary requests; `null` or omission keeps the default. This
+is bounded validation of known Responses controls, not blanket rejection of
+unknown compatibility extensions.
 
 Tool authorization belongs to that ingress-owned turn. Continuations inherit
 the original `allowed_tools` object, including an omitted `mode` defaulting to
@@ -284,7 +303,7 @@ chain remains backend-owned.
 | `/v1/models` | Route shape and model-object serialization | Advertise exact full model refs accepted by the runtime | Supported |
 | `/v1/chat/completions` | Parse common and advanced fields, stream/non-stream envelopes | Tokenization, sampling, stop handling, usage, feature execution | Supported with backend feature guards |
 | `/v1/completions` | Prompt parsing and response envelopes | Token prompts, sampling, stop handling, usage | Supported with backend feature guards |
-| `/v1/responses` | Own the supported HTTP/SSE and standalone WebSocket lifecycle and continuation state | Execute the resulting chat/completion request | Partial; explicit gaps above; Mesh WebSocket ingress not yet wired |
+| `/v1/responses` | Own the shared HTTP/SSE and WebSocket lifecycle and continuation state for standalone Skippy and full Mesh ingress | Execute the resulting chat/completion request | Partial; explicit gaps above |
 | `/v1/responses/compact` | Resolve history, validate terminal summary/usage, and seal process-local state | Produce one complete summary with usage | Supported subset; non-streaming and ingress-bound |
 | `/v1/embeddings` | Parse OpenAI input/encoding shapes and serialize vectors | Tokenize or accept token IDs, pool, normalize, and report usage | Supported for compatible local full models |
 | `/v1/rerank` | Parse query/documents and serialize ranked results | Execute classifier scoring and report usage | Supported for compatible local full models |

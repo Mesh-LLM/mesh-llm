@@ -115,6 +115,22 @@ If the resulting prompt exceeds the selected runtime's context window, that
 runtime returns `context_length_exceeded`. Automatic truncation is not yet
 supported; explicit `/v1/responses/compact` remains a separate opt-in operation.
 
+Mesh validates the Responses request shapes it consumes before continuation
+lookup, response capture, or backend routing. `instructions` is a string or
+`null`. `metadata` is `null` or an object with at most 16 string pairs; keys
+are limited to 64 Unicode characters and values to 512. `safety_identifier`
+and `prompt_cache_key` are `null` or strings limited to 64 Unicode characters.
+The safety identifier is opaque correlation metadata that Mesh echoes; setting
+it does not activate a monitoring or protection service.
+
+`text` and `reasoning` must each be `null` or objects. Existing `text.format`
+support is unchanged, while non-null `text.verbosity` is unsupported.
+`reasoning.effort` accepts `none`, `low`, `medium`, `high`, and `xhigh`, subject
+to support by the selected model. Non-null `reasoning.summary` is explicitly
+unsupported because Mesh does not honor summary requests; omit it or use
+`null`. This is bounded validation of known fields, not a claim that Mesh is
+fully conformant or that every unknown extension is rejected.
+
 ```sh
 curl -s http://localhost:9337/v1/responses \
   -H 'Content-Type: application/json' \

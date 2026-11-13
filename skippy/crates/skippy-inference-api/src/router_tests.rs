@@ -1978,6 +1978,44 @@ async fn responses_http_sse_and_compaction_reject_orphans_before_backend_executi
 }
 
 #[tokio::test]
+async fn responses_http_and_sse_reject_malformed_request_controls_before_backend_execution() {
+    let backend = Arc::new(SessionCaptureBackend::default());
+    let app = router_for(backend.clone());
+    let cases = [
+        (json!({"instructions": []}), "instructions"),
+        (json!({"metadata": []}), "metadata"),
+        (json!({"metadata": {"key": 7}}), "metadata"),
+        (
+            json!({"safety_identifier": "🦀".repeat(65)}),
+            "safety_identifier",
+        ),
+        (json!({"prompt_cache_key": []}), "prompt_cache_key"),
+        (json!({"text": "plain"}), "text"),
+        (json!({"reasoning": []}), "reasoning"),
+        (
+            json!({"reasoning": {"summary": "auto"}}),
+            "reasoning.summary",
+        ),
+    ];
+    for stream in [false, true] {
+        for (fields, expected_param) in &cases {
+            let mut request = json!({"model":"capture-model", "input":"hi", "stream":stream});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let response =
+                post_json_with_app_and_request_id(app.clone(), "/v1/responses", request, None)
+                    .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = response_body_json(response).await;
+            assert_eq!(body["error"]["param"], *expected_param);
+        }
+    }
+    assert!(backend.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn responses_route_preserves_tool_calls_and_logprobs() {
     let response = post_json(
         "/v1/responses",
