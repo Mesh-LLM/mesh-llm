@@ -12,11 +12,11 @@ use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response::common::sse_data_frame_is_openai_error;
 use crate::network::openai::response_adapter;
-use crate::network::openai::tool_call_ids::ChatStreamNormalizationState;
 use crate::plugin::openai_exchange::ExchangeOutputDigests;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
+use skippy_inference_api::chat::identifiers::ChatStreamNormalizationState;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 #[path = "normalized_chat_stream.rs"]
 mod normalized_chat_stream;

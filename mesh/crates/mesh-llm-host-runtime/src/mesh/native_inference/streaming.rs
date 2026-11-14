@@ -2,6 +2,7 @@
 use super::*;
 use futures_util::StreamExt;
 use serde_json::Value;
+use skippy_inference_api::chat::identifiers::ChatStreamNormalizationState;
 use tokio::sync::mpsc;
 
 type ChunkSender = mpsc::Sender<Result<Value>>;
@@ -65,6 +66,7 @@ impl Node {
                 prepared.backend.chat_completion_stream(request, prepared.context.clone()),
             ) => started??,
         };
+        let mut normalization = ChatStreamNormalizationState::default();
         loop {
             let chunk = tokio::select! {
                 _ = tx.closed() => return Ok(()),
@@ -73,7 +75,9 @@ impl Node {
             let Some(chunk) = chunk else {
                 break;
             };
-            tx.send(Ok(serde_json::to_value(ChatCompletionChunk::from(chunk?))?))
+            let mut chunk = serde_json::to_value(ChatCompletionChunk::from(chunk?))?;
+            normalization.normalize_chunk(&mut chunk);
+            tx.send(Ok(chunk))
                 .await
                 .context("native chunk consumer closed")?;
         }
@@ -90,6 +94,7 @@ impl Node {
         let (_send, mut recv) = tokio::time::timeout(idle, self.open_native_chat(provider, &call))
             .await
             .context("native inference timed out opening the provider stream")??;
+        let mut normalization = ChatStreamNormalizationState::default();
         loop {
             let frame = tokio::select! {
                 _ = tx.closed() => return Ok(()),
@@ -103,8 +108,9 @@ impl Node {
             if frame.payload_json.is_empty() {
                 return Ok(());
             }
-            let chunk =
+            let mut chunk =
                 serde_json::from_slice(&frame.payload_json).context("decode native chat chunk")?;
+            normalization.normalize_chunk(&mut chunk);
             tx.send(Ok(chunk))
                 .await
                 .context("native chunk consumer closed")?;
@@ -128,6 +134,7 @@ impl Node {
                     prepared.backend.chat_completion_stream(request, prepared.context.clone()),
                 ) => started??,
             };
+            let mut normalization = ChatStreamNormalizationState::default();
             loop {
                 let chunk = tokio::select! {
                     _ = send.stopped() => return Ok(()),
@@ -136,7 +143,9 @@ impl Node {
                 let Some(chunk) = chunk else {
                     break;
                 };
-                send_value(send, &ChatCompletionChunk::from(chunk?)).await?;
+                let mut chunk = serde_json::to_value(ChatCompletionChunk::from(chunk?))?;
+                normalization.normalize_chunk(&mut chunk);
+                send_value(send, &chunk).await?;
             }
             write_native_frame(
                 send,

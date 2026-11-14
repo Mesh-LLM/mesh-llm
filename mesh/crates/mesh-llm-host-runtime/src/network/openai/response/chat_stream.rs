@@ -10,12 +10,11 @@ use super::probe::{
 use super::relay::{relay_error_response, relay_success_response};
 use super::stream_translation::write_captured_sse_event;
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
-use crate::network::openai::{
-    client_stream::ClientStream, tool_call_ids::ChatStreamNormalizationState,
-};
+use crate::network::openai::client_stream::ClientStream;
 use anyhow::{Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
+use skippy_inference_api::chat::identifiers::ChatStreamNormalizationState;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
 pub(in crate::network::openai::response) async fn relay_translated_messages_stream<

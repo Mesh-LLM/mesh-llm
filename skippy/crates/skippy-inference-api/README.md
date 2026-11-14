@@ -17,6 +17,10 @@ Responses API translation, stream-chunk parsing, stream usage conversion, and
 upstream error mapping are owned here so the host binary and staged runtimes do
 not grow separate OpenAI compatibility layers.
 
+[`chat::identifiers`](src/chat/identifiers.rs) owns response and tool-call ID
+normalization for HTTP and native chat adapters. Each stream retains the first
+response ID and creation time across reasoning, text, tool calls, and usage.
+
 The compatibility target is the mesh OpenAI surface, not llama-server process
 compatibility. Request fields such as tools, structured-output shape,
 logprobs, and `/v1/responses` are parsed and normalized here; backend support
