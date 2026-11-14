@@ -765,8 +765,10 @@ impl Node {
             .await;
         match recovery {
             ClosedConnectionRecovery::Reconnect(addr) => {
-                self.reconnect_closed_connection_or_remove(remote, addr)
-                    .await;
+                if self.wait_before_redial(remote).await {
+                    self.reconnect_closed_connection_or_remove(remote, addr)
+                        .await;
+                }
             }
             ClosedConnectionRecovery::RemovePeer => {
                 self.remove_peer(remote, MeshPeerRemovalReason::ClosedConnectionNoAddress)
@@ -792,6 +794,26 @@ impl Node {
                     .await;
             }
         }
+    }
+
+    /// Wait out the backoff for a peer whose connections keep closing (#3081).
+    /// `false` when the peer reconnected on its own meanwhile, so no redial.
+    async fn wait_before_redial(&self, remote: EndpointId) -> bool {
+        let delay = self.state.lock().await.redial_backoff.delay_before_redial(
+            remote,
+            std::time::Instant::now(),
+            rand::random::<f64>(),
+        );
+        if delay.is_zero() {
+            return true;
+        }
+        tracing::info!(
+            delay_ms = delay.as_millis() as u64,
+            "Connection to {} keeps closing; waiting before the redial",
+            remote.fmt_short()
+        );
+        tokio::time::sleep(delay).await;
+        !self.state.lock().await.connections.contains_key(&remote)
     }
 
     pub(crate) async fn remove_closed_connection(

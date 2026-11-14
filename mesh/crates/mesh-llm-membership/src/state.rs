@@ -50,6 +50,8 @@ pub struct MembershipState {
     /// Latest verified signed cache-affinity record per node, plus this
     /// node's own, relayed byte-for-byte.
     pub cache_affinity_records: HeldRecords,
+    /// Recent redials per peer, to back off from one that keeps closing (#3081).
+    pub redial_backoff: crate::redial_backoff::RedialBackoff,
 }
 
 impl Default for MembershipState {
@@ -70,6 +72,7 @@ impl Default for MembershipState {
             test_peer_liveness: HashSet::new(),
             node_records: HeldRecords::new(NODE_RECORD),
             cache_affinity_records: HeldRecords::new(CACHE_AFFINITY_RECORD),
+            redial_backoff: crate::redial_backoff::RedialBackoff::default(),
         }
     }
 }
