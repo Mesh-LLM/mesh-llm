@@ -107,6 +107,9 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             region,
             auto,
             relay,
+            // not summarized: audit summaries never carried the discovery
+            // mode before, and the mesh-llm-events grammar has no token for it
+            mesh_discovery_mode: _,
         }) => {
             assembly.command.push_str(" discover");
             assembly.redact("--name", name.is_some());

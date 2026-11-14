@@ -293,6 +293,7 @@ mod tests {
             region: Some("private-region".to_string()),
             auto: false,
             relay: vec!["wss://relay.private.example/?token=private-token".to_string()],
+            mesh_discovery_mode: None,
         });
         let result: Result<()> = Err(Error::new(CommandDispatchRejected)
             .context("private command rejection detail with private-token"));
@@ -397,6 +398,7 @@ mod tests {
             region: Some("private-region".to_string()),
             auto: false,
             relay: vec!["wss://relay.private.example/?token=private-token".to_string()],
+            mesh_discovery_mode: None,
         }));
         boundary.finish(&Err(Error::new(CommandDispatchRejected)
             .context("private command rejection detail with private-token")));

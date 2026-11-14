@@ -805,7 +805,9 @@ Switches:
 
 ### `discover`
 
-Use this to discover meshes via Nostr and optionally select one automatically.
+Use this to discover meshes through the selected discovery provider and
+optionally select one automatically. Pass `--mesh-discovery-mode mdns` (before
+the command, or after `discover`) for LAN mDNS discovery.
 
 Switches:
 
@@ -814,7 +816,12 @@ Switches:
 - `--min-vram <MIN_VRAM>`: filter by minimum VRAM (GB).
 - `--region <REGION>`: filter by region.
 - `--auto`: print best invite token (useful for piping).
-- `--relay <RELAY>`: custom relay URL(s).
+- `--relay <RELAY>`: custom relay URL(s). Only valid with
+  `--mesh-discovery-mode nostr`.
+- `--mesh-discovery-mode <nostr|mdns>` (default: `nostr`): discovery provider
+  for this command; overrides a top-level `--mesh-discovery-mode`. Joining an
+  mDNS-discovered mesh still needs an invite token — pass top-level
+  `--join <token>` before `discover`.
 
 ### `benchmark`
 
