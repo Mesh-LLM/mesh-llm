@@ -7,7 +7,9 @@ use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{LlamaLoraAdapter, Model as RawModel};
 
 use crate::decision::bighead_gguf::load_bighead_backend;
+use crate::decision::bighead_hidden::LlamaHiddenStateProvider;
 use crate::decision::bighead_serve::BigHeadModel;
+use crate::decision::bighead_serve::{HiddenStateProvider, RenderedQuestion};
 use crate::dflash::SharedDFlashDraft;
 use crate::error::{ensure_ok, free_error};
 use crate::logging::write_native_log_note;
@@ -236,6 +238,34 @@ impl StageModel {
     /// native contract to mirror.
     pub fn has_native_model(&self) -> bool {
         !self.inner.raw.is_null()
+    }
+
+    /// Whether this model has an adjacent BigHead LoRA loaded for decision reads.
+    ///
+    /// This is intended for offline feature extraction and provenance checks;
+    /// ordinary generation sessions do not apply the decision adapter.
+    pub fn has_bighead_lora_adapter(&self) -> bool {
+        self.inner.bighead_lora.is_some()
+    }
+
+    /// Collects the option and answer hidden states with the BigHead decision
+    /// adapter applied. This uses the same tokenizer, prefill and LoRA path as
+    /// production decision serving, while keeping feature vectors off the HTTP API.
+    pub fn collect_bighead_hidden_states(
+        &self,
+        rendered: &mut [RenderedQuestion],
+    ) -> Result<Vec<Vec<Vec<f32>>>> {
+        let bighead = self
+            .inner
+            .bighead
+            .as_ref()
+            .ok_or_else(|| anyhow!("model has no embedded BigHead artifact"))?;
+        let mut session = self.create_session()?;
+        let mut provider =
+            LlamaHiddenStateProvider::capture(self, &mut session, bighead.hidden_size())?;
+        provider
+            .hidden_states(rendered)
+            .map_err(|error| anyhow!("collect BigHead hidden states: {error}"))
     }
 
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
