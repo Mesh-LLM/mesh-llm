@@ -40,6 +40,12 @@ fn shared(action: &Node) -> DynResult<()> {
     Ok(())
 }
 
+fn is_swift_build_step(step: &Node) -> bool {
+    field(step, "name").is_some_and(|name| {
+        name.starts_with("Build Swift target") || name.starts_with("Build host-only Swift")
+    })
+}
+
 fn consumers(workflow: &Node) -> DynResult<()> {
     for (_, job) in h::member(workflow, "jobs")?.entries() {
         let Ok(steps) = h::steps(job) else { continue };
@@ -52,11 +58,7 @@ fn consumers(workflow: &Node) -> DynResult<()> {
                         | "./.github/actions/prepare-native-sdk-input"
                 )
             )
-        }) || steps.iter().any(|step| {
-            field(step, "name").is_some_and(|name| {
-                name.starts_with("Build Swift target") || name.starts_with("Build host-only Swift")
-            })
-        });
+        }) || steps.iter().any(is_swift_build_step);
         if !managed {
             continue;
         }
@@ -114,6 +116,7 @@ fn consumers(workflow: &Node) -> DynResult<()> {
                 )
             ) || field(candidate, "name")
                 == Some("Prepare source-bound native cleanup before managed work")
+                || is_swift_build_step(candidate)
             {
                 h::before(restore, index)?;
             }

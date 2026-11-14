@@ -5,6 +5,42 @@ fn smoke() -> String {
 }
 
 #[test]
+fn swift_artifact_consumer_requires_restore_before_build_steps() {
+    let source = include_str!("../../../../../../.github/workflows/swift-sdk-artifact.yml");
+    consumers(&workflow_yaml::parse(source).unwrap()).unwrap();
+    for (restore_index, build_step) in ["Build Swift target", "Build host-only Swift SDK input"]
+        .into_iter()
+        .enumerate()
+    {
+        let restore_marker = "      - name: Restore product automation\n";
+        let (restore_start, _) = source
+            .match_indices(restore_marker)
+            .nth(restore_index)
+            .unwrap();
+        let restore_end = source[restore_start..]
+            .find("\n      - name:")
+            .map_or(source.len(), |offset| restore_start + offset + 1);
+        let restore_step = &source[restore_start..restore_end];
+        let without_restore = format!("{}{}", &source[..restore_start], &source[restore_end..]);
+        let build_marker = format!("      - name: {build_step}\n");
+        let (build_start, _) = without_restore.match_indices(&build_marker).next().unwrap();
+        let build_end = without_restore[build_start..]
+            .find("\n      - name:")
+            .map_or(without_restore.len(), |offset| build_start + offset + 1);
+        let mutated = format!(
+            "{}{}\n{}",
+            &without_restore[..build_end],
+            restore_step,
+            &without_restore[build_end..]
+        );
+        assert!(
+            consumers(&workflow_yaml::parse(&mutated).unwrap()).is_err(),
+            "restore must precede {build_step}"
+        );
+    }
+}
+
+#[test]
 fn restored_and_standalone_paths_are_admitted() {
     consumers(&workflow_yaml::parse(&smoke()).unwrap()).unwrap();
 }
