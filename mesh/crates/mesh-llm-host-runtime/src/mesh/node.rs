@@ -1597,9 +1597,12 @@ impl Node {
     /// Adopt a mesh ID announced by a direct peer.
     ///
     /// With no ID yet, the node takes the announced one. A node in an
-    /// unrestricted mesh then moves to any lower ID it hears, so a mesh whose
-    /// nodes each started with their own ID settles on one ID. Requirement-aware
-    /// meshes and SDK memberships keep the ID they were given.
+    /// unrestricted public mesh then moves to any lower ID it hears, so a mesh
+    /// whose nodes each started with their own ID settles on one ID.
+    /// Requirement-aware meshes keep their policy-derived ID, and private
+    /// meshes keep first-heard adoption: an SDK membership in one keeps a fixed
+    /// ID and refuses peers that announce another, so moving would cut a worker
+    /// off from it.
     pub async fn set_mesh_id(&self, id: String) {
         if let Some(state) = self.requirement_mesh_state.lock().await.clone()
             && state.mesh_id != id
@@ -1622,9 +1625,11 @@ impl Node {
     }
 
     /// Store `id` when the node has none, or when it is a lower ID of an
-    /// unrestricted mesh. Returns whether the stored ID changed.
+    /// unrestricted public mesh. Returns whether the stored ID changed.
     async fn adopt_announced_mesh_id(&self, id: String) -> bool {
-        let converges = !self.is_membership && self.local_mesh_requirements.is_unrestricted();
+        let converges = self.public_mesh
+            && !self.is_membership
+            && self.local_mesh_requirements.is_unrestricted();
         let mut current = self.mesh_id.lock().await;
         match current.as_deref() {
             None => {}
