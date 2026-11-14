@@ -123,6 +123,9 @@ pub struct Node {
     /// An attachment to a host-owned full-model backend, never a GPU participant.
     pub(crate) full_model_only: bool,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
+    /// Ticks whenever `mesh_id` is stored, so the runtime can keep the saved
+    /// rejoin preference on the current ID.
+    pub(crate) mesh_id_changed: Arc<tokio::sync::watch::Sender<()>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
     pub(crate) bootstrap_token: Arc<Mutex<Option<crate::SignedBootstrapToken>>>,
@@ -760,6 +763,7 @@ impl Node {
             identity_state_dir: None,
             full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
+            mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
@@ -1580,6 +1584,12 @@ impl Node {
         self.mesh_id.lock().await.clone()
     }
 
+    /// Notified each time the node stores a mesh ID: when it first takes
+    /// one and when it later converges on a lower one.
+    pub(crate) fn subscribe_mesh_id_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.mesh_id_changed.subscribe()
+    }
+
     pub async fn first_joined_mesh_ts(&self) -> Option<u64> {
         *self.first_joined_mesh_ts.lock().await
     }
@@ -1615,6 +1625,7 @@ impl Node {
             return;
         }
         if self.adopt_announced_mesh_id(id).await {
+            self.mesh_id_changed.send_replace(());
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
                 None,
@@ -1651,6 +1662,7 @@ impl Node {
             );
         }
         *self.mesh_id.lock().await = Some(id);
+        self.mesh_id_changed.send_replace(());
         self.emit_plugin_mesh_event(
             crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
             None,

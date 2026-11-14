@@ -344,6 +344,17 @@ async fn make_test_node_with_requirements(
     role: super::NodeRole,
     local_mesh_requirements: crate::MeshRequirements,
 ) -> Result<Node> {
+    make_configured_test_node(role, local_mesh_requirements, |_| {}).await
+}
+
+/// Like [`make_test_node_with_requirements`], with `configure` applied before
+/// the accept loop takes its copy of the node, so plain fields such as
+/// `public_mesh` and `is_membership` also hold for the connections it accepts.
+async fn make_configured_test_node(
+    role: super::NodeRole,
+    local_mesh_requirements: crate::MeshRequirements,
+    configure: impl FnOnce(&mut Node),
+) -> Result<Node> {
     use iroh::endpoint::QuicTransportConfig;
 
     let transport_config = QuicTransportConfig::builder()
@@ -376,7 +387,7 @@ async fn make_test_node_with_requirements(
 
     let config_state = crate::runtime::config_state::ConfigState::default();
     let live_request_defaults = config_state.live_request_defaults();
-    let node = Node {
+    let mut node = Node {
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
         native_inference: Default::default(),
@@ -411,6 +422,7 @@ async fn make_test_node_with_requirements(
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         requirement_mesh_state: Arc::new(Mutex::new(None)),
         mesh_id: Arc::new(Mutex::new(None)),
+        mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
         mesh_policy_hash: Arc::new(Mutex::new(None)),
         signed_genesis_policy: Arc::new(Mutex::new(None)),
         bootstrap_token: Arc::new(Mutex::new(None)),
@@ -496,6 +508,7 @@ async fn make_test_node_with_requirements(
         local_endpoints: super::node::LocalEndpoints::default(),
         is_membership: false,
     };
+    configure(&mut node);
 
     let accept_node = node.clone();
     tokio::spawn(async move {
