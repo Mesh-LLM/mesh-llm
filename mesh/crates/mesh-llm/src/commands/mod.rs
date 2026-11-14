@@ -134,6 +134,19 @@ fn gpu_command_reads_survey(command: Option<&mesh_llm_cli::GpuCommand>) -> bool 
     !matches!(command, Some(mesh_llm_cli::GpuCommand::RunBenchmark { .. }))
 }
 
+/// Run a `gpus` command, loading the native runtime first when it reads the
+/// hardware survey.
+async fn dispatch_gpus(
+    cli: &Cli,
+    json: bool,
+    command: Option<&mesh_llm_cli::GpuCommand>,
+) -> Result<()> {
+    if gpu_command_reads_survey(command) {
+        load_installed_native_runtime(cli).await;
+    }
+    mesh_llm_commands::gpus::dispatch_gpu_command(json, command, cli.config.as_deref())
+}
+
 /// Dispatch general CLI commands and propagate the selected command's result.
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
@@ -152,17 +165,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             dispatch_download_command(name.as_deref(), *draft).await
         }
         Command::Update { .. } => mesh_llm_commands::update::run_update(cli).await,
-        Command::Gpus { json, command } => {
-            if gpu_command_reads_survey(command.as_ref()) {
-                load_installed_native_runtime(cli).await;
-            }
-            mesh_llm_commands::gpus::dispatch_gpu_command(
-                *json,
-                command.as_ref(),
-                cli.config.as_deref(),
-            )?;
-            Ok(())
-        }
+        Command::Gpus { json, command } => dispatch_gpus(cli, *json, command.as_ref()).await,
         Command::Runtime { .. } | Command::KvCache { .. } => {
             unreachable!("runtime and kv-cache commands are dispatched before general commands")
         }
