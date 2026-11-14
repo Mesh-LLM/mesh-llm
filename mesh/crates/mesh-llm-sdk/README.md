@@ -105,6 +105,27 @@ transport, plugins or owner control, and it shares the node's payment
 settings. Its allowlist is its own, but owner and certificate revocations in
 the node's trust store apply to it too.
 
+## Local runtime capacity
+
+`node.runtime_capacity("exact-serving-id")?` reads current host-owned runtime
+observations in process, without a console listener or inference request. It
+returns `Option<mesh_llm_sdk::capacity::RuntimeCapacity>` with execution lane
+count, the smallest lane's context budget, the sum of all lane budgets, and
+the oldest observation's `captured_at_unix_ms`. Busy lanes remain part of
+capacity; applications must track their own reservations.
+
+Each call reads shared state again. Unknown or unsupported local models,
+unavailable instances, missing timestamps, empty lanes, invalid contexts, or
+overflowing totals return `None`. Stopping/stopped runtimes return an error.
+The timestamp advances when the runtime publishes an observation, which can
+be delayed by long inference; callers choose their own freshness threshold.
+These are local host observations, never remote peers' advertised capacity.
+
+The Node.js, Swift, and Kotlin SDKs expose the same observation through
+`node.runtimeCapacity(model)`. Node.js fields are `bigint`; Swift uses `UInt64`
+and Kotlin uses `ULong`. Python support is deferred; this API is not yet
+available in the separate Python SDK.
+
 ## Native model discovery and inference
 
 Join a mesh, read the local and remote model catalog, choose an advertised
@@ -200,15 +221,21 @@ stream reports shutdown as an error rather than successful truncated output.
 Native remote inference cannot consume a model requiring payment; use a provider
 that permits unpaid inference or a separate supported payment integration.
 
-The legacy `status()`, `openai_client()` and live-transcription APIs still use
-HTTP. They are not used by the native discovery/inference path above.
+The legacy `status()` and `openai_client()` APIs still use HTTP. They are not
+used by the native discovery/inference path above.
 
 ## Live transcription
 
 A node serving a speech-recognition model (Whisper) transcribes live audio.
-The caller supplies 16-bit mono PCM at any sample rate, for example from a
-microphone, and reads transcript events while the speaker talks. Any node can
-host the session; the mesh relays it to the node serving the model.
+The caller supplies 16-bit mono PCM at 8000 to 96000 Hz, for example from a
+microphone, and reads transcript events while the speaker talks.
+
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
 
 ```rust,no_run
 use mesh_llm_sdk::MeshNode;

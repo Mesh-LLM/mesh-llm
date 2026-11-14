@@ -1,4 +1,4 @@
-//! Actual publication CLI with an independently certified selected-source package.
+//! Actual publication CLI with independently verified or retry-recovered selected sources.
 use super::*;
 use std::path::Path;
 
@@ -61,32 +61,80 @@ fn fixture(pass: &str) -> (Fixture, Value, String) {
 
 #[test]
 fn selected_publication_exports_exact_commit_and_keeps_controller_checkout() {
-    let (fixture, input, selected) = fixture("verify-1");
-    let output = invoke(&fixture, &input, "publication");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let root = fixture.0.join("source");
-    let bundle = fixture.0.join("package/candidate.bundle");
-    let heads = git(&root, &["bundle", "list-heads", bundle.to_str().unwrap()]);
-    assert_eq!(
-        heads,
-        format!("{selected} refs/heads/llama-canary/repair-123-4-aaaaaaaaaa")
-    );
-    assert_eq!(
-        git(&root, &["rev-parse", "HEAD"]),
-        input["controller_revision"].as_str().unwrap()
-    );
-    assert!(!root.join("candidate").exists());
-    let body = fs::read_to_string(fixture.0.join("package/pr-body.md")).unwrap();
-    assert!(body.contains(&selected));
-    assert!(body.contains("Both complete per-family passes succeeded"));
-    assert!(body.contains("actions/runs/123"));
-    // The bundle restores into the protected controller's history, including all
-    // selected-branch commits; it does not require a candidate-owned bootstrap.
-    git(&root, &["bundle", "verify", bundle.to_str().unwrap()]);
+    for (pass, recovered) in [("verify-1", false), ("repair-1", true)] {
+        let (fixture, mut input, selected) = fixture(pass);
+        input["retry_recovered"] = json!(recovered.to_string());
+        let output = invoke(&fixture, &input, "publication");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let root = fixture.0.join("source");
+        let bundle = fixture.0.join("package/candidate.bundle");
+        let heads = git(&root, &["bundle", "list-heads", bundle.to_str().unwrap()]);
+        assert_eq!(
+            heads,
+            format!("{selected} refs/heads/llama-canary/repair-123-4-aaaaaaaaaa")
+        );
+        assert_eq!(
+            git(&root, &["rev-parse", "HEAD"]),
+            input["controller_revision"].as_str().unwrap()
+        );
+        assert!(!root.join("candidate").exists());
+        let body = fs::read_to_string(fixture.0.join("package/pr-body.md")).unwrap();
+        assert!(body.contains(&selected));
+        assert_eq!(
+            body.contains("Both complete per-family passes succeeded"),
+            !recovered
+        );
+        assert_eq!(
+            body.contains("every infrastructure retry was recovered"),
+            recovered
+        );
+        assert!(body.contains("actions/runs/123"));
+        // The bundle restores into the protected controller's history, including all
+        // selected-branch commits; it does not require a candidate-owned bootstrap.
+        git(&root, &["bundle", "verify", bundle.to_str().unwrap()]);
+    }
+}
+
+#[test]
+fn recovered_selected_publication_rejects_invalid_source_and_verifier_evidence() {
+    for case in [
+        "wrong-pass",
+        "foreign-source",
+        "wrong-controller",
+        "missing-root",
+        "corrupt",
+    ] {
+        let (fixture, mut input, _) = fixture(if case == "wrong-pass" {
+            "verify-1"
+        } else {
+            "repair-1"
+        });
+        input["retry_recovered"] = json!("true");
+        match case {
+            "foreign-source" => input["selected_source"] = json!("c".repeat(40)),
+            "wrong-controller" => {
+                git(&fixture.0.join("source"), &["checkout", "selected"]);
+            }
+            "missing-root" => {
+                input.as_object_mut().unwrap().remove("source_root");
+            }
+            "corrupt" => fs::write(fixture.0.join("package/binaries.tar"), "corrupt").unwrap(),
+            _ => (),
+        }
+        assert!(
+            !invoke(&fixture, &input, "publication").status.success(),
+            "{case}"
+        );
+        assert!(
+            !fixture.0.join("package/candidate.bundle").exists(),
+            "{case}"
+        );
+        assert!(!fixture.0.join("package/pr-body.md").exists(), "{case}");
+    }
 }
 
 #[test]

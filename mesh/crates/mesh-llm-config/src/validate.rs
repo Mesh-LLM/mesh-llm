@@ -90,6 +90,14 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     if let Err(diagnostic) = validate_mesh_requirements_config(&config.mesh_requirements) {
         diagnostics.push(diagnostic);
     }
+    if let Some(id) = config.private.invalid_node() {
+        diagnostics.push(validation_diagnostic(
+            "private.nodes",
+            format!(
+                "private.nodes entry {id:?} is not a node id (64 hex characters, as `mesh-llm auth status` prints it)"
+            ),
+        ));
+    }
     if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
         diagnostics.push(diagnostic);
     }

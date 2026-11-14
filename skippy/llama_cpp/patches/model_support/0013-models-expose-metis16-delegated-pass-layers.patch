@@ -1,7 +1,7 @@
-From 982923d59eee72eddc1c073300ea4c2ee62c89ae Mon Sep 17 00:00:00 2001
+From a9d8a5cb095d461ae7281337f25f9ef660256d77 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 6 Nov 2026 10:38:07 -0800
-Subject: [PATCH 13/15] models: expose Metis16 delegated pass layers
+Subject: [PATCH 29/32] models: expose Metis16 delegated pass layers
 
 ---
  src/models/metis16.cpp | 167 +++++++++++++++++++++--------------------
@@ -200,10 +200,10 @@ index 8a433f3cc..6f0b32b54 100644
          // end of the pass: one more memory read, the depth head, and an entry recording where the pass left the token
          ggml_tensor * retrieved = mem_read(model, &x);
 diff --git a/src/models/models.h b/src/models/models.h
-index 15aca9529..8c92196cd 100644
+index 5661c2ea5..7adc95719 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1817,6 +1817,9 @@ struct llama_model_metis16 : public llama_model_base {
+@@ -1786,6 +1786,9 @@ struct llama_model_metis16 : public llama_model_base {
  
      struct graph : public llm_build_mamba_base {
          graph(const llm_graph_params & params);
@@ -213,6 +213,3 @@ index 15aca9529..8c92196cd 100644
  
          // memory bank of the current forward: keys [n_mem, n_entry, n_tokens], values [n_entry, n_mem, n_tokens]
          ggml_tensor * bank_k  = nullptr;
--- 
-2.54.0 (Apple Git-157)
-

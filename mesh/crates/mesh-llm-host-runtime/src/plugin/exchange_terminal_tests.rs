@@ -210,7 +210,7 @@ async fn assert_typed_error_body_drop(
     use http_body_util::BodyExt;
     use skippy_inference_api::wire_bytes::observe_response_body;
     let manager = empty_manager().await;
-    let (session, _) = ExchangeSession::begin(
+    let (mut session, _) = ExchangeSession::begin(
         &manager,
         request_event(
             "typed-denial".into(),

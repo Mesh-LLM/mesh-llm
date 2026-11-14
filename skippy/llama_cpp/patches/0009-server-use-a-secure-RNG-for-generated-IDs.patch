@@ -1,7 +1,7 @@
-From 185115afe54cbac461b6aea156f8e5371716f57f Mon Sep 17 00:00:00 2001
+From 1bf00588c7afc7a00fbfd78a8a7cddf0aa72ee0d Mon Sep 17 00:00:00 2001
 From: benthecarman <benthecarman@live.com>
 Date: Wed, 7 Oct 2026 14:42:10 -0500
-Subject: [PATCH 09/16] server: use a secure RNG for generated IDs
+Subject: [PATCH 09/32] server: use a secure RNG for generated IDs
 
 random_string() seeded a fresh mt19937 with a single 32-bit value from
 random_device on every call, so each 32-character ID could take at most
@@ -18,10 +18,10 @@ size.
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index 05fd04c29..726c34079 100644
+index 0013c09cd..7543c6f8c 100644
 --- a/tools/server/server-common.cpp
 +++ b/tools/server/server-common.cpp
-@@ -169,12 +169,12 @@ std::string random_string() {
+@@ -173,12 +173,12 @@ std::string random_string() {
      static const std::string str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
  
      std::random_device rd;
@@ -36,6 +36,3 @@ index 05fd04c29..726c34079 100644
      }
  
      return result;
--- 
-2.54.0 (Apple Git-157)
-

@@ -99,7 +99,9 @@ fn graph_lane_source_identity_and_protected_reporting_follow_typed_consumers() {
         assert_eq!(checkout.len(), 1);
         assert_eq!(
             input(checkout[0], "ref"),
-            Some("${{ github.event.repository.default_branch }}")
+            Some(
+                "${{ needs.authority_source.outputs.source_sha || github.event.repository.default_branch }}"
+            )
         );
         let concurrency = doc.get("concurrency").unwrap();
         assert!(
@@ -330,7 +332,7 @@ fn graph_main_base_identity_and_manual_depot_forwarding_remain_owned() {
     for (lane, consumer) in [
         ("quality", "quality"),
         ("linux", "hosts"),
-        ("linux", "native_runtimes"),
+        ("linux", "native_runtime_cpu"),
     ] {
         let doc = document(&format!("ci-{lane}-lane.yml"));
         assert_eq!(

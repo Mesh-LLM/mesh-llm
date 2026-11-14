@@ -17,8 +17,12 @@ test('live options preserve defaults and explicit push-to-talk while audio and e
   }
   await startLiveTranscription(handle)
   assert.deepEqual(calls.shift(), {})
-  const live = await startLiveTranscription(handle, { sampleRate: 48000, turnDetection: null })
-  assert.deepEqual(calls.shift(), { sample_rate: 48000, turn_detection: null })
+  const live = await startLiveTranscription(handle, {
+    model: 'speech#fast', language: 'de', prompt: 'jargon', sampleRate: 48000, turnDetection: null
+  })
+  assert.deepEqual(calls.shift(), {
+    model: 'speech#fast', language: 'de', prompt: 'jargon', sample_rate: 48000, turn_detection: null
+  })
   await live.sendAudio(new Int16Array([1, -2]))
   await live.sendAudioF32(new Float32Array([0.5]))
   await live.commit()

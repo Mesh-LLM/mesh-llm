@@ -168,7 +168,7 @@ Run `just hooks-install` once per clone before your first commit; git cannot act
 Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
 
 - Rust change — format changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings`. Follow the owning product's additional validation rules.
-- External Python SDK or research interface change — use the owning external component's declared interpreter, source pin and locked dependencies. The SDK component command is `"$SDK_PYTHON" -I -B "$MESH_PYTHON_SDK_SOURCE/sdk/tests/test_client.py"`; its mock FFI coverage is separate from the four genuine SDK clients and their preserved required compatibility or embedding-workload cadence. Set `MESH_PYTHON_SDK_SOURCE` to the admitted external checkout before local source contract gates. Binding generation belongs to that external SDK, with explicit Mesh source and existing UniFFI 0.32.0 generator inputs; native bridge staging requires an already built target library and has no consumer compiler fallback. Reader constructor fixtures use native `just agentic-trajectory-reader-contracts`. Generic repository policy and CI planning use `just ci-validate`, including `ci-automation-contracts` and the native `ci-legacy-contracts`; do not restore the retired generic Python unittest gate.
+- Python SDK change — use the in-tree component under `mesh/sdk/python`. Its component command is `"$SDK_PYTHON" -I -B mesh/sdk/python/tests/test_client.py`; mock FFI coverage is separate from the four locked ecosystem clients and their preserved required compatibility or embedding-workload cadence. Binding generation uses this repository's Mesh source, the existing UniFFI 0.32.0 generator and an already built native library; staging has no consumer compiler fallback. External Python research changes still use their owning source pin and locked dependencies. Reader constructor fixtures use native `just agentic-trajectory-reader-contracts`. Generic repository policy and CI planning use `just ci-validate`, including `ci-automation-contracts` and the native `ci-legacy-contracts`; do not restore the retired generic Python unittest gate.
 - UI-only change — follow `mesh/AGENTS.md` and run `just build`.
 - CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
 - Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface, plus tests that consume the changed surface when such tests exist.
@@ -233,22 +233,19 @@ Swift, and Kotlin. Keep constructors, option defaults, request/response shapes,
 pagination, streaming/error handling, and resource cleanup consistent with the
 shipped APIs. An implementation change is not complete with source code alone;
 update and validate the corresponding examples under `mesh/website/src/docs/`
-and the owning SDK guides in the same change or coordinated companion PR.
+and the owning SDK guides in the same repository change.
 
 The invariant has a completion condition: a public SDK API change is complete
 only when every language surface's own checks and maintained examples pass
-against the same native API revision — Rust, Node.js, Swift, and Kotlin inside
-this repository, and Python through a companion PR in
-`Mesh-LLM/mesh-llm-python-sdk` that has merged with its admitted immutable
-native checkpoint pinning that same revision. Until that condition holds, the
+against the same native API revision. Rust, Node.js, Python, Swift, and Kotlin
+are all maintained inside this repository. Until that condition holds, the
 change is in progress, not shippable, regardless of which surfaces have landed.
 
-The Python SDK is maintained in `Mesh-LLM/mesh-llm-python-sdk`; changes that cross
-that boundary require a coordinated companion PR and matching generated native
-bindings. Generate bindings from the exact native library metadata with the
-pinned generator; do not hand-edit generated bindings. Document any unavoidable
-platform restriction explicitly, with its reason and parity follow-up, rather
-than claiming parity based only on a common method name.
+The Python SDK source, tests, locked client environments and generated bindings
+are maintained under `mesh/sdk/python`. Generate bindings from the exact native
+library metadata with the pinned generator; do not hand-edit generated bindings.
+Document any unavoidable platform restriction explicitly, with its reason and
+parity follow-up, rather than claiming parity based only on a common method name.
 
 ## Pull Requests
 

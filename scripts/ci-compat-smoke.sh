@@ -28,7 +28,7 @@ BATCH_SIZE="${MESH_COMPAT_BATCH_SIZE:-}"
 UBATCH_SIZE="${MESH_COMPAT_UBATCH_SIZE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 ATTESTATION_EXPECTED_STATUS="${MESH_RELEASE_ATTESTATION_EXPECTED_STATUS:-valid}"
-# Admit immutable external SDK source before starting the product or SDK children.
+# Admit the in-tree SDK source before starting the product or SDK children.
 "${automation[@]}" automation smoke-observation sdk-source --kind root >/dev/null
 SMOKE_STATE_DIR="$(mktemp -d "${MESH_COMPAT_STATE_PARENT:-/tmp}/mesh-llm-compat-state.XXXXXX")"
 SDK_EVIDENCE_DIR="$(mktemp -d "${MESH_COMPAT_SDK_EVIDENCE_PARENT:-/tmp}/mesh-llm-sdk-evidence.XXXXXX")"

@@ -101,6 +101,19 @@ research-source-restore:
     git -C "$target" fetch --quiet --depth 1 origin "$revision"
     git -C "$target" checkout --quiet --detach "$revision"
 
+# Admit the immutable research checkout, restoring it only for local runs that
+# have not received the CI-prepared source environment.
+[private]
+research-source-admit binary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    automation_bin={{binary}}
+    if [[ -z "${MESH_PYTHON_RESEARCH_SOURCE:-}" ]]; then
+        just research-source-restore
+        export MESH_PYTHON_RESEARCH_SOURCE="$PWD/.sdk-source/research"
+    fi
+    "$automation_bin" automation smoke-observation research-source --kind root
+
 # Run all checks: repo consistency, Rust tests, author exemplars, fmt, clippy, UI/docs builds, and E2E smoke.
 test-all:
     #!/usr/bin/env bash
@@ -228,6 +241,8 @@ test-all:
 ci-automation-contracts:
     #!/usr/bin/env bash
     set -euo pipefail
+    repo_root="$(pwd -P)"
+    export MESH_PYTHON_SDK_SOURCE="$repo_root/mesh/sdk/python"
     command -v node >/dev/null 2>&1 || { echo "ci-automation-contracts requires the Node component for finite local action fixtures; install Node before this required gate." >&2; exit 1; }
     bootstrap="$(just automation-bootstrap)"
     binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
@@ -235,6 +250,11 @@ ci-automation-contracts:
     test -n "$binary"
     test -n "$target_directory"
     export CARGO_TARGET_DIR="$target_directory"
+    "$binary" automation smoke-observation sdk-source --kind root >/dev/null
+    # CI prepares this separate research fixture in a preceding workflow step;
+    # local contract runs restore and admit the same immutable source here.
+    MESH_PYTHON_RESEARCH_SOURCE="$(just research-source-admit "$binary")"
+    export MESH_PYTHON_RESEARCH_SOURCE
     just with-lld cargo build --locked -p xtask --bins --examples
     # Codec and corpus contracts run after the native-library-free bootstrap;
     # their fixtures use local pinned data and do not acquire HF datasets.

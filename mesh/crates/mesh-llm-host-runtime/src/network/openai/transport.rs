@@ -34,9 +34,10 @@ pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
 
 use super::response::{
     CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
-    attempt_outcome_for_result, completion_tokens_for_result, request_outcome_for_status,
-    request_service_for_target, route_attempt_result_label, route_http_endpoint_attempt,
-    route_local_attempt, route_remote_attempt, target_health_outcome_for_attempt,
+    attempt_outcome_for_result, attempt_report_for_result, completion_tokens_for_result,
+    request_outcome_for_status, request_service_for_target, route_attempt_result_label,
+    route_http_endpoint_attempt, route_local_attempt, route_remote_attempt,
+    target_health_outcome_for_attempt,
 };
 #[cfg(test)]
 use super::routing_rank::order_remote_hosts_by_context;
@@ -398,6 +399,27 @@ async fn handle_mesh_control_request(
 
 // ── Model-aware tunnel routing ──
 
+/// Private routing is decided by the full ingress; the bootstrap path never
+/// scopes, so it refuses a private request instead of routing it to whichever
+/// host it finds. Returns the stream back when the request is not private.
+async fn refuse_private_at_bootstrap(
+    node: &mesh::Node,
+    tcp_stream: ClientStream,
+    request: &mut BufferedHttpRequest,
+) -> Option<ClientStream> {
+    let (status, message) = match super::routing_scope::resolve(node, request).await {
+        Ok(None) => return Some(tcp_stream),
+        Ok(Some(_)) => (
+            503,
+            "private routing is not available until this node finishes starting".to_string(),
+        ),
+        Err(rejection) => (rejection.status, rejection.message),
+    };
+    release_request_objects(node, &request.request_object_request_ids).await;
+    let _ = super::response::send_error(tcp_stream, status, &message).await;
+    None
+}
+
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
 ///
 /// Peeks at the HTTP request, handles `/v1/models`, resolves the target host
@@ -425,6 +447,10 @@ pub async fn handle_mesh_request(
             let _ = super::parse_failure::send_read_failure(tcp_stream, &err).await;
             return;
         }
+    };
+    let Some(tcp_stream) = refuse_private_at_bootstrap(&node, tcp_stream, &mut request).await
+    else {
+        return;
     };
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
@@ -1015,16 +1041,10 @@ fn record_mesh_request_attempt(
     attempt_time: Duration,
     attempt_result: &RouteAttemptResult,
 ) {
-    if matches!(attempt_result, RouteAttemptResult::ClientDisconnected) {
-        return;
-    }
-    node.record_inference_attempt(
+    node.record_inference_attempt_report(
         effective_model,
         attempt_target,
-        queue_wait,
-        attempt_time,
-        attempt_outcome_for_result(attempt_result),
-        completion_tokens_for_result(attempt_result),
+        attempt_report_for_result(attempt_result, queue_wait, attempt_time, false),
     );
 }
 
@@ -1705,13 +1725,10 @@ pub async fn route_to_target(
         },
     )
     .await;
-    node.record_inference_attempt(
+    node.record_inference_attempt_report(
         model,
         &target,
-        Duration::ZERO,
-        route_started.elapsed(),
-        attempt_outcome_for_result(&result),
-        completion_tokens_for_result(&result),
+        attempt_report_for_result(&result, Duration::ZERO, route_started.elapsed(), true),
     );
     tracing::info!(
         target = ?target,

@@ -140,7 +140,7 @@ fn artifact_main_budget_and_cuda_catalog_preserve_registered_product_smokes() {
         assert_eq!(
             text(job(&linux, key), "if"),
             Some(
-                format!("${{{{ contains(fromJson(inputs.smoke_matrix).*.id, '{id}') }}}}").as_str()
+                format!("${{{{ inputs.backend == 'cpu' && contains(fromJson(inputs.smoke_matrix).*.id, '{id}') }}}}").as_str()
             )
         );
     }

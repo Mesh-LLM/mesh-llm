@@ -130,7 +130,7 @@ not wait on a producer and only plan or validate (the entry planners through
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
-such as authority audits, canary summaries, and preview
+such as authority audits, canary summaries, release receipt verification, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
@@ -159,24 +159,32 @@ platform adapters may remain thin. Existing Python checks, Just recipes and
 workflow entrypoints remain operational during migration and are transitional,
 not templates for new tooling. Existing isolated compatibility or upstream
 fixtures may be retained only with an explicit maintainer decision; new Python
-tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
-Python-free or remove legacy validation before its Rust replacement passes.
+tooling requires an explicit maintainer decision to change that policy. The
+Python SDK is a product component under `mesh/sdk/python`; its package source,
+component tests, locked client environments and four ecosystem smoke clients
+are permitted there. `ci/python-tooling-policy.json` lists the exact in-tree
+Python source files and their interpreter invocations. This product-source
+exception does not permit generic repository automation. Do not claim the
+required path is Python-free or remove legacy validation before its Rust
+replacement passes.
 
-Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
-using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
-an immutable default source commit. These interfaces do not authorize new
-repository Python implementations. The canary Jinja environment belongs to its
-run's state directory and must use a preinstalled interpreter; dependency
-restoration must not download an interpreter or skip upstream tests. Freeze the
-Jinja project before selecting historical source checkouts so older sources do
-not need to contain the dependency manifest.
+Retained external Python dependencies have bounded owners: llama.cpp's upstream
+Jinja and FP8 conversion tests using the trusted controller's
+`ci/llama-canary/jinja/uv.lock`, the optional llama-benchy wrapper with an
+immutable default source commit, and the separate Python research project.
+These interfaces do not authorize new repository Python implementations. The
+canary Jinja environment belongs to its run's state directory and must use a
+preinstalled interpreter; dependency restoration must not download an
+interpreter or skip upstream tests. Freeze the Jinja project before selecting
+historical source checkouts so older sources do not need to contain the
+dependency manifest.
 
 `just ci-crate-lists`, selected by the normal Quality validation gate, also
 checks repository Python tooling. Its typed policy is
-`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
-and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. Platform-specific runner prerequisite lists require
+`ci/python-tooling-policy.json`: the exact in-tree Python SDK source roster,
+external dependency inputs, source pins and executable invocation exceptions
+must retain their documented owners and reviewed occurrence counts.
+Platform-specific runner prerequisite lists require
 separate exact entries; listing an interpreter as a prerequisite does not
 authorize executing or installing it. The census includes tracked and new
 nonignored files, including hidden directories. Python sources, shebangs, unapproved
@@ -384,6 +392,21 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Dependencies, summaries, and cancellation
 
+- Lane summaries restore their controller from the run's frozen protected
+  `authority_source` revision whenever that producer is selected. When it is
+  skipped, retain the protected default branch rather than an empty checkout
+  ref that would select PR code. During the Linux backend fan-out migration,
+  admit the earlier grouped job layout
+  only when its dependency names identify that layout; require every planned
+  grouped job to succeed and reject mixed grouped/per-backend results. This
+  lets in-flight summaries finish without rebuilding successful producers.
+- Quality candidate-source consistency runs in a required hosted peer job,
+  independent of protected authority production and the full contract suite.
+  Check crate lists, publishing, release targets, client dependency purity,
+  console output and environment mutation on `inputs.source_sha`. Keep the
+  full automation and legacy contract suite in the existing Quality slice,
+  with its authority dependencies intact. Consistency failure must not gate
+  that suite on main or manual-full; PR sibling cancellation remains unchanged.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
@@ -408,7 +431,19 @@ retired parser behavior, and source review still owns semantic emulation.
   workflow containing the first failure so that lane can publish its stable
   diagnostic result. This policy is PR-only; main, manual, release,
   deployment, cleanup, cache-warming, and newer PR revisions are never targets.
-- Within a PR platform lane, compilation, functional-test, product, and smoke
+- Linux backend runtimes start independently of the shared host. Each product
+  needs only its own runtime, the shared host, and its existing automation and
+  authority producers. Each smoke needs only its consumed backend product;
+  Rust and Kotlin SDK smokes consume CPU. Keep catalog rows and artifact IDs.
+  Four singleton runtime and product calls stay below Linux's existing 7-worker
+  PR and 12-worker main/manual matrix budgets. A failed backend fails the lane;
+  other backends in that lane may finish. The protected sibling monitor alone
+  cancels other PR lanes; never add cancellation credentials to executors.
+  Windows retains its shared 1-worker PR/2-worker main/manual matrices until
+  row-specific consumers can advance without multiplying native capacity.
+  macOS has one Metal row. Release restructuring remains deferred because its
+  literal image bindings require a separate runner-image catalog change.
+- Within other PR platform matrices, compilation, functional-test, product, and smoke
   matrices fail fast so a required row failure cancels their queued and
   in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
   runs continue sibling rows to retain complete diagnostics, and Quality
@@ -660,6 +695,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   workflows. Every CI invocation of `mesh-llm` includes `--log-format json`.
 - Release and packaging wrap the same producers with signing, attestation,
   publication, and retention. They do not fork the underlying build commands.
+- Stable downstream packaging dispatch carries the published tag commit, native
+  runtime release manifest digest, and a run-attempt correlation ID. The tag
+  commit can differ from the build source after release resources are generated.
+  A separate wait job requires the matching successful downstream receipt and
+  every requested channel. Its two-hour deadline fails closed. The downstream
+  credential needs Contents write and Actions read; rerunning the wait job must
+  not dispatch another publication.
 
 ## Workflow definition and dependencies
 
@@ -754,6 +796,10 @@ The `retry_recovered` marker flows through attempt selection, the `result` job
 outputs and the publication input; the handoff gate admits the recovered
 `repair-*` package only when that marker is present, and ordinary candidates
 still require a `verify-*` package.
+This also applies to unchanged selected-source `certify-and-publish` runs:
+final selection retains the recovery marker, and the publisher exports the
+exact selected repair commit from the frozen controller checkout. It does not
+require a `verify-1` package after successful retry reconciliation.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,
@@ -808,6 +854,11 @@ selection steps may receive the read-only GitHub token; workers and repair
 agents remain credential-free. Runner placement uses managed labels and queues
 when matching capacity is unavailable; it never queries the repository runner
 API or adds an administrator credential to repair workers.
+
+Native candidate producers on both macOS and Linux cap CTest concurrency at
+four processes. Graph-contract cases construct many full-model contexts; do
+not saturate the host with sixteen such cases or increase per-case timeouts
+to mask contention. Keep the complete suite and its 900-second case deadline.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation

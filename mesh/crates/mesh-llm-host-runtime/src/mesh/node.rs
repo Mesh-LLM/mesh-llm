@@ -20,6 +20,7 @@ pub(crate) use membership::{
 
 pub(crate) use local_request_metrics::LocalRequestMetricsSampler;
 pub use local_request_metrics::LocalRequestMetricsSnapshot;
+pub(crate) use routing_telemetry::InferenceAttemptReport;
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
@@ -197,6 +198,8 @@ pub struct Node {
     pub(crate) control_listener: Arc<Mutex<Option<ControlListenerLifecycle>>>,
     pub(crate) trust_store: Arc<Mutex<TrustStore>>,
     pub(crate) trust_policy: TrustPolicy,
+    /// Nodes besides this one that may serve its private requests.
+    pub(crate) private_nodes: super::private_nodes::PrivateNodes,
     pub enumerate_host: bool,
     pub gpu_name: Option<String>,
     pub hostname: Option<String>,
@@ -810,6 +813,7 @@ impl Node {
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
+            private_nodes: Default::default(),
             enumerate_host: false,
             gpu_name: None,
             hostname: None,

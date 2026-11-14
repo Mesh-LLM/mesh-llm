@@ -9,7 +9,7 @@ const LINUX: &str = r#"{"lane":"linux","required":true,"required_slices":["runti
 
 fn linux_needs(runtime_product: &str) -> String {
     format!(
-        r#"{{"ui_artifact":{{"result":"success"}},"static_abi":{{"result":"skipped"}},"rust_tests":{{"result":"skipped"}},"hosts":{{"result":"success"}},"native_runtimes":{{"result":"success"}},"runtime_product":{runtime_product},"kotlin_sdk_input":{{"result":"skipped"}},"sdk":{{"result":"skipped"}},"product_smoke":{{"result":"skipped"}}}}"#
+        r#"{{"ui_artifact":{{"result":"success"}},"static_abi":{{"result":"skipped"}},"rust_tests":{{"result":"skipped"}},"hosts":{{"result":"success"}},"native_runtime_cpu":{{"result":"success"}},"product_cpu":{runtime_product},"kotlin_sdk_input":{{"result":"skipped"}},"sdk":{{"result":"skipped"}}}}"#
     )
 }
 
@@ -25,8 +25,40 @@ fn migration_ci_graph_planned_failure_is_rejected() -> TestResult {
     rejects(
         LINUX,
         &linux_needs(r#"{"result":"failure"}"#),
-        "planned job 'runtime_product' finished with 'failure'",
+        "planned job 'product_cpu' finished with 'failure'",
     )
+}
+
+#[test]
+fn failed_backend_fails_lane_while_other_backend_rows_succeed() -> TestResult {
+    let golden = crate::support::Golden::load("main")?;
+    let cases = crate::support::expected_jobs()?;
+    let jobs = cases["main"]["linux"].as_array().expect("jobs");
+    let planned = jobs
+        .iter()
+        .map(|job| job.as_str().expect("job"))
+        .collect::<Vec<_>>();
+    let mut states: serde_json::Value =
+        serde_json::from_str(&crate::support::needs("linux", &planned))?;
+    for backend in ["cpu", "cuda", "rocm", "vulkan"] {
+        let runtime = format!("native_runtime_{backend}");
+        states[&runtime]["result"] = "failure".into();
+        states[format!("product_{backend}")]["result"] = "skipped".into();
+        states[format!("product_smoke_{backend}")]["result"] = "skipped".into();
+        let output = Call::lane(&golden.lane_plan("linux"), &states.to_string()).run()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            text(&output.stderr).contains(&format!(
+                "planned job \"{runtime}\" finished with \"failure\""
+            )),
+            "{backend}: {}",
+            text(&output.stderr)
+        );
+        states[&runtime]["result"] = "success".into();
+        states[format!("product_{backend}")]["result"] = "success".into();
+        states[format!("product_smoke_{backend}")]["result"] = "success".into();
+    }
+    Ok(())
 }
 
 #[test]
@@ -47,7 +79,7 @@ fn migration_ci_graph_planned_cancellation_is_rejected() -> TestResult {
     rejects(
         LINUX,
         &linux_needs(r#"{"result":"cancelled"}"#),
-        "planned job 'runtime_product' finished with 'cancelled'",
+        "planned job 'product_cpu' finished with 'cancelled'",
     )
 }
 
@@ -57,7 +89,7 @@ fn migration_ci_graph_selected_skip_is_rejected() -> TestResult {
     rejects(
         LINUX,
         &linux_needs(r#"{"result":"skipped"}"#),
-        "planned job 'runtime_product' finished with 'skipped'",
+        "planned job 'product_cpu' finished with 'skipped'",
     )
 }
 
@@ -78,7 +110,7 @@ fn migration_ci_graph_unknown_and_absent_results_are_rejected() -> TestResult {
     rejects(QUALITY, "{}", "planned job 'quality' finished with None")?;
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
+        r#"{"consistency":{"result":"success"},"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
         "lane job 'x\\n' finished with 1.5",
     )
 }
@@ -88,7 +120,7 @@ fn migration_ci_graph_unplanned_job_must_skip() -> TestResult {
     // Given/When/Then: an unplanned job that ran anyway.
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
+        r#"{"consistency":{"result":"success"},"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
         "lane job 'runner_contract' finished with 'success'",
     )
 }
@@ -221,10 +253,11 @@ fn lane_inline_and_reordered_exact_options_reach_domain_validation() -> TestResu
 
 #[test]
 fn selected_native_authority_cannot_fail_cancel_skip_or_disappear() -> TestResult {
-    for job in ["authority_source", "authority_linux_x64"] {
+    for job in ["consistency", "authority_source", "authority_linux_x64"] {
         for result in [Some("failure"), Some("cancelled"), Some("skipped"), None] {
             let mut states = serde_json::json!({
                 "quality": {"result": "success"},
+                "consistency": {"result": "success"},
                 "authority_source": {"result": "success"},
                 "authority_linux_x64": {"result": "success"}
             });

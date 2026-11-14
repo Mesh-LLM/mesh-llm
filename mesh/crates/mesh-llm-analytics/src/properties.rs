@@ -111,6 +111,24 @@ fn env_is_set(key: &str) -> bool {
     std::env::var_os(key).is_some_and(|value| !value.is_empty())
 }
 
+/// Whether this process's events are the maintainers' own traffic.
+///
+/// Three things make a run internal, all of them already known to the
+/// binary: a development build (a commit-stamped version, which no release
+/// channel ships), a CI environment, or an explicit
+/// [`crate::ENV_ANALYTICS_INTERNAL`] marker that lab and benchmark machines
+/// set. Dashboards filter on it; it changes nothing about what is sent.
+#[must_use]
+pub(crate) fn is_internal(channel: BuildChannel, exec_env: &str, marked: bool) -> bool {
+    marked || channel == BuildChannel::Development || exec_env == "ci"
+}
+
+fn internal_marker_set() -> bool {
+    std::env::var(crate::ENV_ANALYTICS_INTERNAL)
+        .ok()
+        .is_some_and(|value| crate::consent::is_truthy(&value))
+}
+
 /// The CPU architecture, as a fixed string.
 #[must_use]
 pub const fn architecture() -> &'static str {
@@ -130,18 +148,21 @@ pub const fn architecture() -> &'static str {
 /// than by this crate.
 #[must_use]
 pub fn base_properties() -> Properties {
+    let channel = BuildChannel::classify(BUILD_VERSION);
+    let exec_env = exec_env();
     Properties::new()
         .with(
             "mesh_llm_version",
             crate::Label::sanitize_or_redact(BUILD_VERSION),
         )
-        .with(
-            "build_channel",
-            BuildChannel::classify(BUILD_VERSION).as_str(),
-        )
+        .with("build_channel", channel.as_str())
         .with("os", os_family())
         .with("arch", architecture())
-        .with("exec_env", exec_env())
+        .with("exec_env", exec_env)
+        .with(
+            "internal",
+            is_internal(channel, exec_env, internal_marker_set()),
+        )
         .with("$lib", LIB_NAME)
         .with(
             "$lib_version",

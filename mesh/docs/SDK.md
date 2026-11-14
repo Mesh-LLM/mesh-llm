@@ -62,6 +62,32 @@ times out after fifteen seconds. See the
 
 ## Common SDK capabilities
 
+### Local runtime capacity
+
+Rust, Node.js, Swift, and Kotlin can read the latest published local runtime
+capacity in process, without a console listener or an inference request.
+Python support is deferred; this capability is not yet available in the
+separate Python SDK.
+
+Use an exact local serving ID. Results contain execution lanes (including busy
+lanes), the smallest per-lane context budget, the total context pool, and the
+oldest observation's Unix timestamp in milliseconds. Each call reads shared
+state again. Unknown or unsupported models, unavailable instances, or incomplete
+observations return an absent value (`None`, `null`, or `nil`). A stopped node
+returns an error. The timestamp can lag during long inference; the caller
+chooses its freshness policy. Capacity observations do not reserve resources.
+Retired instances are excluded; newly registered instances require an observation
+before their model has complete capacity.
+
+| SDK | Call | Unsigned fields |
+|---|---|---|
+| Rust | `node.runtime_capacity(model)?` | `usize` lanes, `u64` context and timestamp |
+| Node.js | `await node.runtimeCapacity(model)` | `bigint` |
+| Swift | `try await node.runtimeCapacity(model)` | `UInt64` |
+| Kotlin | `node.runtimeCapacity(model)` | `ULong` |
+
+### Shared operations
+
 | Capability | Contract across Rust, Node.js, Python, Swift and Kotlin |
 |---|---|
 | Lifecycle | Start, stop, status and join by invite token in client, serve-only or combined mode |
@@ -88,7 +114,19 @@ graceful stop returning remaining events, and immediate close. Defaults are
 16 kHz mono audio and turn detection with threshold `0.5`, 300 ms prefix padding
 and 500 ms silence. An explicit null turn detector (Python `None`) enables
 push-to-talk. Events preserve speech-start/stop, delta, committed, completed and
-error variants. This transport uses the embedded realtime WebSocket.
+error variants. Rust, Node.js, Swift and Kotlin embedded sessions use typed
+channels directly to a locally loaded speech model; no local HTTP or WebSocket
+connection is opened.
+Remote-only speech models are rejected before audio is accepted. Rust's explicit
+`LiveTranscription::start` and `OpenAiClient` retain network-based mesh relaying.
+Sample rates remain 8000–96000 Hz, with the same language, prompt, model/profile,
+VAD, cadence and tentative-result options. Dropping either native half, closing
+the session, or stopping the node cancels inference and releases admission.
+Native sessions validate audio rate, cadence and VAD settings before startup
+returns; invalid options fail before audio is accepted.
+Turn IDs remain opaque and stable within each session.
+The separately versioned Python SDK retains its current transport; its native
+transcription migration is deferred.
 
 ## Native Runtime Artifacts
 

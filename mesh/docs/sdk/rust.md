@@ -1,5 +1,24 @@
 # Rust SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```rust,no_run
+use mesh_llm_sdk::{MeshNode, capacity::LaneCapacity};
+
+fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<LaneCapacity>> {
+    node.runtime_capacity(model)
+}
+```
+
+The result reports `execution_lanes`, `context_tokens_per_lane`,
+`context_pool_tokens`, and `captured_at_unix_ms`. Each call reads the latest
+published native observation without HTTP. Busy lanes count toward capacity;
+this does not reserve resources. `None` means unknown, unsupported, unavailable,
+or incomplete capacity. Stopped nodes return an error. The timestamp is the
+oldest observation; callers choose a freshness policy for long-running inference.
+
 `mesh-llm-sdk` exposes one embedded `MeshNode`. Choose its role with the builder:
 
 | Builder | Consumes mesh inference | Serves local models |
@@ -75,6 +94,24 @@ arrive when reading chunks. Dropping the stream cancels inference; node shutdown
 is reported as an error on a retained stream. Native remote inference cannot
 consume a provider that requires payment. Older peers that do not implement
 native inference return an error, with no HTTP fallback.
+
+Local native backend failures preserve `mesh_llm_sdk::inference::InferenceError` in the
+`anyhow::Error` chain. Use `downcast_ref::<InferenceError>()` and its `body()` or
+`status()` to distinguish context exhaustion, invalid requests and retryable
+backend failures without parsing display text. Remote failures retain the peer's
+error message; they do not carry a local backend error type. Node.js, Swift and
+Kotlin expose the structured fields of request and stream failures through
+`details`, preserving status and raw bodies through their existing native bridges.
+There is no native ABI or wire change. Python parity is deferred to a separate
+change in its external SDK repository.
+
+Backend-specific request options are retained in `ChatCompletionRequest::extra`.
+For a local llama-compatible provider, `id_slot` selects a lane, `cache_prompt`
+controls prompt reuse, and `chat_template_kwargs` preserves `enable_thinking` and
+`preserve_thinking`. These are explicit extensions, not aliases for
+`reasoning_effort`; bind them to the selected provider and check its support.
+Image content parts, tool definitions/results and usage options use the existing
+typed request fields. Native transport does not rename or discard extensions.
 
 Streaming deadlines bound progress, not total duration: `chat_completion()` must
 finish within five minutes, while `chat_completion_stream()` fails only after
@@ -164,6 +201,12 @@ The temporary local-only `thinking_controls` API is replaced by `models()`
 metadata and native `chat_completion()`.
 
 ## Live transcription
+
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.
 
 ```rust,no_run
 use mesh_llm_sdk::live_transcription::LiveTranscriptionOptions;

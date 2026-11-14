@@ -146,6 +146,7 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
         || old.decode_batch_policy_supported != new.decode_batch_policy_supported
         || old.plugin_origin_signature_supported != new.plugin_origin_signature_supported
+        || old.private_routing_supported != new.private_routing_supported
         || old.persistent_lane_marker_supported != new.persistent_lane_marker_supported
         || old.refuses_peer_model_downloads != new.refuses_peer_model_downloads
         || crate::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
@@ -335,6 +336,7 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
         decode_batch_policy_supported: peer.decode_batch_policy_supported,
         plugin_origin_signature_supported: peer.plugin_origin_signature_supported,
+        private_routing_supported: peer.private_routing_supported,
         persistent_lane_marker_supported: peer.persistent_lane_marker_supported,
         refuses_peer_model_downloads: peer.refuses_peer_model_downloads,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
@@ -422,6 +424,7 @@ pub fn update_existing_direct_peer(
     existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
     existing.decode_batch_policy_supported = ann.decode_batch_policy_supported;
     existing.plugin_origin_signature_supported = ann.plugin_origin_signature_supported;
+    existing.private_routing_supported = ann.private_routing_supported;
     existing.persistent_lane_marker_supported = ann.persistent_lane_marker_supported;
     existing.refuses_peer_model_downloads = ann.refuses_peer_model_downloads;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();

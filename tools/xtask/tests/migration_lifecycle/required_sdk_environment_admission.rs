@@ -152,6 +152,7 @@ fn compatibility_setup_rejects_existing_files_directories_and_broken_symlinks_be
             .env("RUNNER_TEMP", temporary.path())
             .env("SDK_KIND", "compatibility")
             .env("MESH_LLM_AUTOMATION_BIN", &controller)
+            .env("MESH_PYTHON_SDK_SOURCE", root.join("mesh/sdk/python"))
             .env("GITHUB_ENV", &github_environment)
             .current_dir(&root)
             .output()

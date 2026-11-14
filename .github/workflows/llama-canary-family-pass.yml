@@ -99,7 +99,7 @@ jobs:
       package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}-macOS
     env:
       MESH_LLM_REQUIRE_SCCACHE: '1'
-      CTEST_PARALLEL_LEVEL: '16'
+      CTEST_PARALLEL_LEVEL: '4'
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
       LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
       NATIVE_BUILD_MODE: ${{ inputs.mode }}

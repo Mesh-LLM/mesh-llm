@@ -4,6 +4,8 @@ title: Node.js and Electron SDK
 
 # Node.js and Electron SDK
 
+## Install
+
 Install `@mesh-llm/sdk` with `npm install @mesh-llm/sdk`. The SDK uses a native
 N-API addon and one embedded `Node` with `client`, `serve`, and `combined`
 roles. `serve` is serve-only; `combined` also permits inference.
@@ -31,6 +33,25 @@ try {
 
 Use `joinTokens: [token]` for a private mesh and `ownerKeyPath` for an existing
 Mesh LLM owner keystore. Client mode loads no serving runtime.
+
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```js
+const capacity = await node.runtimeCapacity('exact-serving-id')
+if (capacity !== null) {
+  console.log(capacity.executionLanes, capacity.contextTokensPerLane,
+    capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+Fields are `bigint` to preserve unsigned native precision. Each call reads the
+latest published observation without HTTP. Busy lanes count toward capacity;
+this does not reserve resources. Unknown, unsupported, unavailable or incomplete
+capacity returns `null`; stopped nodes reject. The timestamp is the oldest
+observation in Unix milliseconds; callers choose a freshness policy for long
+inference. The total pool is not a per-request context limit.
 
 ## Discover advertised models
 
@@ -151,6 +172,13 @@ primary mesh; it does not combine these independent meshes.
 
 ## Live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 Use signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection to commit
 turns explicitly:
 
@@ -211,3 +239,25 @@ the core. In this schema, `mode: 'serve'` means combined serving and inference,
 while `'serve_only'` means serving without SDK inference. The full-config
 default is combined, exactly as in Rust. Existing `Node.create()` keeps its
 client default and camelCase convenience options.
+
+## Structured inference failures
+
+`OpenAIRequestError.details` exposes the backend's `message`, `type`, `code`
+and `param` for both failed requests and streams. Check the code rather than
+matching display text:
+
+```javascript
+try {
+  await node.inference.chatCompletions({ model, messages })
+} catch (error) {
+  if (error instanceof OpenAIRequestError && error.details?.code === 'context_length_exceeded') {
+    // Compact the conversation before retrying.
+  } else {
+    throw error
+  }
+}
+```
+
+Import `OpenAIRequestError` from `@mesh-llm/sdk`. `statusCode` and the raw `body`
+remain available. `details` is `null` for transport failures or an unstructured
+body; missing optional fields stay `null`. Unknown codes are preserved.

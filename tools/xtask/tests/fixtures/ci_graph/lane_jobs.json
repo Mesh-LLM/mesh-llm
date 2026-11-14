@@ -3,6 +3,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -10,10 +11,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cuda",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cuda",
+      "product_smoke_cuda",
       "ui_artifact"
     ],
     "macos": [],
@@ -32,6 +33,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -39,10 +41,13 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_rocm",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_rocm",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -63,6 +68,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -80,6 +86,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -89,11 +96,21 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
-      "sdk",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -128,6 +145,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -141,12 +159,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -181,6 +209,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -194,12 +223,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -234,6 +273,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -247,12 +287,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -287,6 +337,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -307,6 +358,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -323,6 +375,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -336,12 +389,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -376,6 +439,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -389,12 +453,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -429,6 +503,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -442,12 +517,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -482,6 +567,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -495,12 +581,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -535,6 +631,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -548,12 +645,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -588,6 +695,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -600,6 +708,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -612,6 +721,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -619,10 +729,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -644,6 +754,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -651,10 +762,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -673,6 +784,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -684,6 +796,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -695,6 +808,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -702,10 +816,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -729,6 +843,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -736,10 +851,19 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -761,6 +885,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -772,6 +897,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -793,6 +919,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -810,6 +937,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -831,6 +959,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality",
       "runner_contract"
     ],
@@ -844,12 +973,22 @@
       "authority_source",
       "hosts",
       "kotlin_sdk_input",
-      "native_runtimes",
+      "native_runtime_cpu",
+      "native_runtime_cuda",
+      "native_runtime_rocm",
+      "native_runtime_vulkan",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_cuda",
+      "product_rocm",
+      "product_smoke_cpu",
+      "product_smoke_cuda",
+      "product_smoke_rocm",
+      "product_smoke_vulkan",
+      "product_vulkan",
       "rust_tests",
-      "sdk",
+      "sdk_kotlin",
+      "sdk_rust",
       "static_abi",
       "ui_artifact"
     ],
@@ -884,6 +1023,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -891,10 +1031,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -906,6 +1046,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [
@@ -917,10 +1058,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -939,6 +1080,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -946,10 +1088,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "runtime_product",
-      "sdk",
+      "product_cpu",
+      "sdk_rust",
       "ui_artifact"
     ],
     "macos": [
@@ -971,6 +1113,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],
@@ -978,10 +1121,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -993,6 +1136,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [
@@ -1004,10 +1148,10 @@
       "authority_linux_x64",
       "authority_source",
       "hosts",
-      "native_runtimes",
+      "native_runtime_cpu",
       "product_automation_linux_x64",
-      "product_smoke",
-      "runtime_product",
+      "product_cpu",
+      "product_smoke_cpu",
       "rust_tests",
       "static_abi",
       "ui_artifact"
@@ -1019,6 +1163,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [
@@ -1034,6 +1179,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [
@@ -1049,6 +1195,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "consistency",
       "quality"
     ],
     "website": [],

@@ -1,5 +1,23 @@
 # Kotlin/Android SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID, within a coroutine:
+
+```kotlin
+node.runtimeCapacity("exact-serving-id")?.let { capacity ->
+    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
+    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
+}
+```
+
+`LaneCapacity` fields use `ULong`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. `null` means unknown, unsupported, unavailable, or incomplete capacity.
+Stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long-running inference. Do not use the total
+pool as a per-request context limit.
+
 Install `ai.meshllm:meshllm-android:<version>` from GitHub Packages. Configure
 the repository and credentials in Gradle:
 
@@ -147,6 +165,12 @@ constructor keeps its client default and Kotlin convenience arguments.
 
 ## Live transcription
 
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.
+
 ```kotlin
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -183,3 +207,23 @@ concurrently with microphone input. `stop()` finishes the turn and returns
 unread events; `close()` abandons the session.
 Cancelling `events()` also closes the session without waiting for a pending
 native read; native cleanup finishes in the background.
+## Structured inference failures
+
+`OpenAIRequestException.details` and `OpenAIStreamException.details` expose
+typed `InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```kotlin
+try {
+    node.inference.chatCompletions(request)
+} catch (error: OpenAIRequestException) {
+    if (error.details?.code == "context_length_exceeded") {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `null` for transport failures or an unstructured body;
+missing optional fields stay `null`. Unknown codes are preserved.

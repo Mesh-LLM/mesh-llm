@@ -677,6 +677,7 @@ fn make_test_peer(
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
         refuses_peer_model_downloads: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
@@ -1039,6 +1040,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
                 }],
             },
         );
+        inner.runtime_data_producer.publish_runtime_instance_registered("collector-model", "runtime-1");
         inner.runtime_data_producer.publish_llama_slots_snapshot(
             runtime_data::RuntimeLlamaSlotsSnapshot {
                 status: runtime_data::RuntimeLlamaEndpointStatus::Ready,

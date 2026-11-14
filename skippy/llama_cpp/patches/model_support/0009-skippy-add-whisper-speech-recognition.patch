@@ -1,7 +1,7 @@
-From 58cdd19cdb8f1941e8a019511fa5b3a5c132916c Mon Sep 17 00:00:00 2001
+From 51f654cb4b220564c3a899de414d0bef57d889e0 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
-Subject: [PATCH 09/15] skippy: add Whisper speech recognition
+Subject: [PATCH 25/32] skippy: add Whisper speech recognition
 
 Build pinned whisper.cpp on this tree's ggml targets and fold it into
 libllama when SKIPPY_WHISPER_SOURCE_DIR names its source, so the runtime
@@ -238,7 +238,7 @@ index 54c87b6f2..80710eb3b 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index eab1c3a46..ea0cdd178 100644
+index 9133041eb..19ba7e532 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -97,6 +97,7 @@ add_library(llama
@@ -787,6 +787,3 @@ index 000000000..680549066
 +extern "C" void skippy_asr_result_free(struct skippy_asr_result * result) {
 +    delete result;
 +}
--- 
-2.54.0 (Apple Git-157)
-

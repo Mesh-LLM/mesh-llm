@@ -97,6 +97,7 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
         },
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
+        private: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),

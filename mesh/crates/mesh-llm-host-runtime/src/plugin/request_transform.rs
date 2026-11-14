@@ -62,6 +62,8 @@ impl PluginManager {
         path: &str,
         client_path: &str,
         body: &mut Value,
+        private: bool,
+        node_limit: Option<crate::mesh::PrivateScope>,
     ) -> Result<bool> {
         let plugins = self.request_transform_plugins().await?;
         let mut changed = false;
@@ -74,7 +76,9 @@ impl PluginManager {
                 client_path: client_path.to_string(),
                 body: body.clone(),
             };
-            let output = self.invoke_request_transform(&plugin_name, &input).await?;
+            let output = self
+                .invoke_request_transform(&plugin_name, &input, private, node_limit.clone())
+                .await?;
             let Some(replacement) = output.body else {
                 continue;
             };
@@ -89,6 +93,8 @@ impl PluginManager {
         &self,
         plugin_name: &str,
         input: &RequestTransformInput,
+        private: bool,
+        node_limit: Option<crate::mesh::PrivateScope>,
     ) -> Result<RequestTransformOutput> {
         let input_json = serde_json::to_string(input)?;
         // The input goes to the plugin in one control frame, which its reader
@@ -101,24 +107,43 @@ impl PluginManager {
                 input_json.len()
             );
         }
+        // Transforms run before the request is scoped: nested calls keep to
+        // this node's private scope, the one the request will get, and to the
+        // request's own node limit when it is itself a nested call.
+        let private_call =
+            || private.then(|| self.begin_private_invocation(plugin_name, node_limit.clone()));
         if self.is_test_bridge_enabled(plugin_name) {
-            return self
+            let call = private_call();
+            let output = self
                 .mcp_request(plugin_name, "request_transform/invoke", input)
                 .await;
+            if let Some(call) = call {
+                call.finish();
+            }
+            return output;
         }
-        let plugin = self
-            .inner
-            .plugins
-            .get(plugin_name)
-            .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
-        let response = plugin
-            .invoke_service(
-                proto::ServiceKind::RequestTransform,
-                SERVICE_NAME,
-                &input_json,
-                Some(TRANSFORM_TIMEOUT),
-            )
-            .await?;
+        if !self.inner.plugins.contains_key(plugin_name) {
+            bail!("Unknown plugin '{plugin_name}'");
+        }
+        // The plugin is done once it replies, whatever the reply says; the
+        // call runs to that reply even if the client leaves.
+        let (manager, name) = (self.clone(), plugin_name.to_string());
+        let response = super::private_invocations::run_to_reply(private_call(), async move {
+            let plugin = manager
+                .inner
+                .plugins
+                .get(&name)
+                .with_context(|| format!("Unknown plugin '{name}'"))?;
+            plugin
+                .invoke_service(
+                    proto::ServiceKind::RequestTransform,
+                    SERVICE_NAME,
+                    &input_json,
+                    Some(TRANSFORM_TIMEOUT),
+                )
+                .await
+        })
+        .await?;
         if response.is_error {
             bail!(
                 "request transform plugin '{plugin_name}' failed: {}",
@@ -239,7 +264,13 @@ mod tests {
         let manager = manager(&["b-append", "c-noop", "a-append"]).await;
         let mut body = request();
         let changed = manager
-            .transform_request("/v1/chat/completions", "/v1/messages", &mut body)
+            .transform_request(
+                "/v1/chat/completions",
+                "/v1/messages",
+                &mut body,
+                false,
+                None,
+            )
             .await
             .unwrap();
         assert!(changed);
@@ -252,7 +283,13 @@ mod tests {
         let mut body = request();
         assert!(
             !manager
-                .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+                .transform_request(
+                    "/v1/chat/completions",
+                    "/v1/chat/completions",
+                    &mut body,
+                    false,
+                    None
+                )
                 .await
                 .unwrap()
         );
@@ -279,6 +316,8 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
+                None,
             )
             .await
             .unwrap_err();
@@ -291,7 +330,13 @@ mod tests {
         let mut body = request();
         assert!(
             !manager
-                .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+                .transform_request(
+                    "/v1/chat/completions",
+                    "/v1/chat/completions",
+                    &mut body,
+                    false,
+                    None
+                )
                 .await
                 .unwrap()
         );
@@ -306,6 +351,8 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
+                None,
             )
             .await
             .unwrap_err();
@@ -323,6 +370,8 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
+                None,
             )
             .await
             .unwrap_err();
@@ -340,6 +389,8 @@ mod tests {
                 "/v1/chat/completions",
                 "/v1/chat/completions",
                 &mut request(),
+                false,
+                None,
             )
             .await
             .unwrap_err();
@@ -355,9 +406,87 @@ mod tests {
         body["messages"][0]["content"] = json!("x".repeat(MAX_INPUT_BYTES));
         let error = manager(&["c-noop"])
             .await
-            .transform_request("/v1/chat/completions", "/v1/chat/completions", &mut body)
+            .transform_request(
+                "/v1/chat/completions",
+                "/v1/chat/completions",
+                &mut body,
+                false,
+                None,
+            )
             .await
             .unwrap_err();
         assert!(error.to_string().contains("request too large"), "{error}");
+    }
+
+    /// Records how the plugin's nested calls would be scoped mid-transform.
+    struct ScopeProbe {
+        manager: Arc<std::sync::OnceLock<PluginManager>>,
+        seen: Arc<std::sync::Mutex<Option<crate::plugin::private_invocations::NestedScope>>>,
+    }
+
+    impl PluginRpcBridge for ScopeProbe {
+        fn handle_request(
+            &self,
+            plugin_name: String,
+            _method: String,
+            _params_json: String,
+        ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
+            let scope = self
+                .manager
+                .get()
+                .unwrap()
+                .private_nested_scope(&plugin_name);
+            *self.seen.lock().unwrap() = scope;
+            Box::pin(async move {
+                Ok(RpcResult {
+                    result_json: serde_json::to_string(&RequestTransformOutput::unchanged())
+                        .unwrap(),
+                })
+            })
+        }
+
+        fn handle_notification(&self, _: String, _: String, _: String) -> BridgeFuture<()> {
+            Box::pin(async {})
+        }
+    }
+
+    /// A → B → transform: a nested call from B's plugin arrives at B's own
+    /// ingress with A's request's nodes. A transform there keeps its own
+    /// nested calls to those nodes, not B's whole scope.
+    #[tokio::test]
+    async fn a_nested_calls_node_limit_reaches_the_transforms_own_calls() {
+        let cell = Arc::new(std::sync::OnceLock::new());
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let probe = ScopeProbe {
+            manager: cell.clone(),
+            seen: seen.clone(),
+        };
+        let manager = PluginManager::for_test_bridge(&["t"], Arc::new(probe));
+        let manifest = mesh_llm_plugin::plugin_manifest![
+            mesh_llm_plugin::request_transform::request_transform()
+        ];
+        manager
+            .set_test_manifests(BTreeMap::from([("t".to_string(), manifest)]))
+            .await;
+        let _ = cell.set(manager.clone());
+        let nodes = crate::mesh::PrivateScope::of(["a".to_string(), "b".to_string()]);
+        let mut body = request();
+        manager
+            .transform_request(
+                "/v1/chat/completions",
+                "/v1/chat/completions",
+                &mut body,
+                true,
+                Some(nodes.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            Some(crate::plugin::private_invocations::NestedScope::Nodes(
+                nodes
+            ))
+        );
+        assert_eq!(manager.private_nested_scope("t"), None);
     }
 }
