@@ -976,8 +976,15 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 The local `scripts/hooks/commit-msg` hook now invokes the Rust
 `repository conventional-commits` command through the repository Cargo alias.
 The workflow commit check, planner and five lane summaries use Rust owners
-through `prepare-ci-controller`. The local package resolver requires
-prepared or restored automation and invokes metadata-only discovery. Protected
+through `prepare-ci-controller`. Lane summaries use the protected revision frozen
+by `authority_source`, keeping validation stable across default-branch updates
+while producers run. When that producer is skipped, summaries retain the
+protected default branch rather than
+falling back to PR code. Linux accepts the preceding grouped dependency layout
+for in-flight runs, rejects mixed layouts and still requires every planned job
+to succeed.
+The local package resolver requires prepared or restored automation and invokes
+metadata-only discovery. Protected
 callers still pin the old resolver and retain its Python implementation until
 rollout. Pre-checkout audit and no-checkout sentinel jobs must not build
 candidate code and remain blocked on protected delivery. Registry-pull summaries

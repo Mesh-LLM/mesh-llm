@@ -1,5 +1,27 @@
 //! Static Linux backend calls preserve catalog row and consumer identities.
 
+use super::Checked;
+use crate::plan::document::Json;
+
+pub(super) fn grouped_layout(needs: &Json) -> Checked<bool> {
+    // In-flight workflows can still report the pre-fan-out dependency names.
+    // Identify that graph by its keys, never by whether its jobs passed.
+    let grouped = ["native_runtimes", "runtime_product", "product_smoke"]
+        .iter()
+        .any(|job| needs.get(job).is_some());
+    let backend = JOBS.iter().any(|(_, runtime, product, smoke)| {
+        [runtime, product, smoke]
+            .iter()
+            .any(|job| needs.get(job).is_some())
+    }) || ["sdk_rust", "sdk_kotlin"]
+        .iter()
+        .any(|job| needs.get(job).is_some());
+    if grouped && backend {
+        return Err("mixed Linux job layouts".to_owned());
+    }
+    Ok(grouped)
+}
+
 pub(super) const JOBS: [(&str, &str, &str, &str); 4] = [
     (
         "linux-cpu",

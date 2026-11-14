@@ -384,6 +384,14 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Dependencies, summaries, and cancellation
 
+- Lane summaries restore their controller from the run's frozen protected
+  `authority_source` revision whenever that producer is selected. When it is
+  skipped, retain the protected default branch rather than an empty checkout
+  ref that would select PR code. During the Linux backend fan-out migration,
+  admit the earlier grouped job layout
+  only when its dependency names identify that layout; require every planned
+  grouped job to succeed and reject mixed grouped/per-backend results. This
+  lets in-flight summaries finish without rebuilding successful producers.
 - Quality candidate-source consistency runs in a required hosted peer job,
   independent of protected authority production and the full contract suite.
   Check crate lists, publishing, release targets, client dependency purity,
