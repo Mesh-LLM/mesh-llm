@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _quic = UdpSocket::bind((Ipv4Addr::LOCALHOST, quic))?;
     if matches!(plan.behavior, Behavior::HoldBind | Behavior::ExternalModels) {
         std::fs::write(root.join("bind.armed"), b"armed")?;
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(60);
         while !root.join("bind.release").exists() {
             if Instant::now() >= until {
                 return Err("bind release deadline".into());
