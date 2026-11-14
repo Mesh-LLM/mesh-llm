@@ -55,6 +55,13 @@ pub async fn run_setup_command(args: SetupCommandArgs<'_>) -> Result<()> {
     let mut actions = CliSetupActions::new(args.environment, args.configured, args.options.verbose);
     let plan = run_setup(args.options, args.environment, &mut prompter, &mut actions).await?;
     print_setup_summary(&plan, &actions, args.options.verbose);
+    if super::console_open::opens_console_after_setup(
+        args.environment,
+        args.options,
+        &actions.service_outcome,
+    ) {
+        super::console_open::open_console_when_ready().await;
+    }
     Ok(())
 }
 

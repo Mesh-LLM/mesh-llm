@@ -1,5 +1,6 @@
 mod actions;
 mod command;
+mod console_open;
 mod environment;
 mod github;
 mod github_runner;
