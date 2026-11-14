@@ -9,13 +9,16 @@ const LOW: &str = "1111111111111111";
 const HIGH: &str = "eeeeeeeeeeeeeeee";
 
 async fn wait_for_mesh_id(node: &Node, expected: &str) {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let converged = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while node.mesh_id().await.as_deref() != Some(expected) {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     })
-    .await
-    .unwrap_or_else(|_| panic!("node should converge on mesh ID {expected}"));
+    .await;
+    if converged.is_err() {
+        let observed = node.mesh_id().await;
+        panic!("node should converge on mesh ID {expected}, still at {observed:?}");
+    }
 }
 
 async fn make_public_test_node() -> Result<Node> {
