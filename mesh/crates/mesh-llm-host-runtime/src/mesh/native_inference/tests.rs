@@ -33,6 +33,7 @@ struct RecordingBackend {
     generated_chunks: Arc<AtomicUsize>,
     stream_forever: bool,
     pacing: Option<Pacing>,
+    stream_events: Option<Vec<GenerationEvent>>,
 }
 
 /// Shapes a test stream: either slow enough that the whole generation outlives
@@ -73,6 +74,11 @@ impl InferenceBackend for RecordingBackend {
             .push(context.cancellation_token());
         let model = request.model.clone();
         self.requests.lock().unwrap().push(request);
+        if let Some(events) = &self.stream_events {
+            return Ok(Box::pin(futures_util::stream::iter(
+                events.clone().into_iter().map(Ok),
+            )));
+        }
         if self.stream_forever {
             let generated = self.generated_chunks.clone();
             return Ok(Box::pin(futures_util::stream::repeat_with(move || {
@@ -458,6 +464,76 @@ async fn remote_native_stream_times_out_when_provider_withholds_stream_credit() 
             .contains("timed out opening the provider stream")
     );
     assert!(stream.next_chunk().await.is_none());
+    client.endpoint.close().await;
+    provider.endpoint.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_stream_keeps_one_response_identity_locally_and_over_real_mesh() {
+    let model = "native-test";
+    let mut reasoning = GenerationEvent::delta(model, "");
+    reasoning.choices[0].delta.content = None;
+    reasoning.choices[0].delta.reasoning_content = Some("Let me check.".into());
+    let mut tool = GenerationEvent::delta(model, "");
+    tool.choices[0].delta.content = None;
+    tool.choices[0].delta.tool_calls = Some(serde_json::json!([
+        {"index":0,"id":"call-1","type":"function","function":{"name":"read","arguments":"{}"}}
+    ]));
+    let events = [
+        GenerationEvent::role(model),
+        reasoning,
+        GenerationEvent::delta(model, "Hello"),
+        GenerationEvent::delta(model, " world!"),
+        tool,
+        GenerationEvent::done_with_reason(model, skippy_inference_api::FinishReason::ToolCalls),
+        GenerationEvent::usage(model, Usage::new(10, 5)),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, mut event)| {
+        event.id = format!("backend-chunk-{index}");
+        event.created = 100 + index as u64;
+        event
+    })
+    .collect::<Vec<_>>();
+    let expected = events
+        .iter()
+        .cloned()
+        .map(|mut event| {
+            event.id.clone_from(&events[0].id);
+            event.created = events[0].created;
+            serde_json::to_value(ChatCompletionChunk::from(event)).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let (provider, _, _) = serving_node(None).await;
+    provider
+        .register_native_backend(
+            model,
+            "instance-1",
+            31337,
+            Some(Arc::new(RecordingBackend {
+                stream_events: Some(events),
+                ..Default::default()
+            })),
+            None,
+        )
+        .await;
+    let client = Node::new_for_tests(NodeRole::Client).await.unwrap();
+    connect(&client, &provider).await;
+    for caller in [&provider, &client] {
+        let mut stream = caller
+            .native_chat_completion_stream(call(&provider, None))
+            .await
+            .unwrap();
+        let mut actual = Vec::new();
+        while let Some(chunk) = tokio::time::timeout(Duration::from_secs(5), stream.next_chunk())
+            .await
+            .unwrap()
+        {
+            actual.push(chunk.unwrap());
+        }
+        assert_eq!(actual, expected);
+    }
     client.endpoint.close().await;
     provider.endpoint.close().await;
 }
