@@ -1230,12 +1230,27 @@ fn backend_device_for_name_for_platform(
     } else if upper.contains("AMD")
         || upper.contains("RADEON")
         || upper.contains("INSTINCT")
-        || upper.starts_with("MI")
+        || is_bare_instinct_model(&upper)
     {
         Some(format!("ROCm{index}"))
     } else {
         None
     }
+}
+
+/// An AMD Instinct model reported without its brand, such as `MI300X`. A bare
+/// "MI" prefix is not enough: Windows names its VM and driverless adapters
+/// "Microsoft Hyper-V Video" and "Microsoft Basic Display Adapter".
+#[cfg(any(
+    not(feature = "skippy-devices"),
+    feature = "dynamic-native-runtime",
+    test
+))]
+fn is_bare_instinct_model(upper: &str) -> bool {
+    upper
+        .strip_prefix("MI")
+        .and_then(|rest| rest.bytes().next())
+        .is_some_and(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(all(

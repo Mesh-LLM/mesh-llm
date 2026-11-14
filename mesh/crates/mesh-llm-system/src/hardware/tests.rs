@@ -624,6 +624,34 @@ fn test_backend_device_for_name_recognizes_nvgpu_soc_names() {
 }
 
 #[test]
+fn test_backend_device_for_name_leaves_microsoft_adapters_unassigned() {
+    // Windows reports these for virtual machines and for hosts without a GPU
+    // driver; their "MI" prefix is not an AMD Instinct model.
+    for name in [
+        "Microsoft Hyper-V Video",
+        "Microsoft Basic Display Adapter",
+        "Microsoft Basic Render Driver",
+    ] {
+        assert_eq!(
+            backend_device_for_name_for_platform(name, 0, false, false),
+            None,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn test_backend_device_for_name_recognizes_bare_instinct_models() {
+    for name in ["MI300X", "MI250X", "mi100", "AMD Instinct MI325X"] {
+        assert_eq!(
+            backend_device_for_name_for_platform(name, 2, false, false),
+            Some("ROCm2".to_string()),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn pinned_gpu_runtime_resolver_accepts_single_match() {
     let gpus = vec![
         synthetic_gpu(0, Some("pci:0000:65:00.0")),
