@@ -92,7 +92,6 @@ impl Node {
             bind_discoverable_endpoint(secret_key.clone(), relay, quic_bind).await?;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
-        let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
@@ -165,6 +164,7 @@ impl Node {
             identity_state_dir: identity.as_ref().map(|identity| identity.state_dir.clone()),
             full_model_only: identity.is_some(),
             mesh_id: Arc::new(Mutex::new(None)),
+            mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
@@ -183,7 +183,7 @@ impl Node {
             peer_change_tx,
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            inflight_change_tx,
+            inflight_change_tx: watch::channel(0u64).0,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
             cache_affinity_inventory: Arc::new(std::sync::Mutex::new(

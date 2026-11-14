@@ -342,6 +342,7 @@ impl Node {
             identity_state_dir: None,
             full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
+            mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             bootstrap_token: Arc::new(Mutex::new(None)),
