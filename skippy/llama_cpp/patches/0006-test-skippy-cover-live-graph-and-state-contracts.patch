@@ -7,7 +7,7 @@ Subject: [PATCH 06/32] test(skippy): cover live graph and state contracts
  .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
  src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
- src/skippy/tests/graph_contract_cases.cmake   |  120 ++
+ src/skippy/tests/graph_contract_cases.cmake   |  131 ++
  src/skippy/tests/graph_contract_checks.h      |  138 ++
  src/skippy/tests/graph_contract_models.cpp    |  223 +++
  .../tests/hardware_application_probe.cpp      |   78 +
@@ -42,7 +42,7 @@ Subject: [PATCH 06/32] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 38 files changed, 10272 insertions(+), 30 deletions(-)
+ 38 files changed, 10283 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
@@ -1165,7 +1165,7 @@ new file mode 100644
 index 000000000..4ee862411
 --- /dev/null
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,131 @@
 +# Registry dimensions are checked by scripts/tests/test_synthetic_graph_registry.py.
 +function(skippy_contract_case family arch layers width mtp mode)
 +    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-${family}")
@@ -1273,6 +1273,17 @@ index 000000000..4ee862411
 +skippy_contract_case(bailingmoe2 bailingmoe2 19 4096 0 causal)
 +skippy_contract_case(minimax-m2 minimax-m2 62 3072 0 causal)
 +skippy_contract_case(deepseek4 deepseek4 43 4096 0 causal)
++skippy_contract_case(beam beam 52 5120 0 causal)
++skippy_contract_case(clover-moe clover_moe 40 2048 0 causal)
++skippy_contract_case(flint flint 49 2048 0 causal)
++skippy_contract_case(kolibri1 kolibri1 50 2560 0 causal)
++skippy_contract_case(lfm3 lfm3 24 2048 0 causal)
++skippy_contract_case(limite limite 48 1280 0 causal)
++skippy_contract_case(metis16 metis16 24 8192 0 causal)
++skippy_contract_case(muse-spark muse-spark 62 8192 0 causal)
++skippy_contract_case(ricursive ricursive 80 5120 0 causal)
++skippy_contract_case(sensenova-u1 sensenova_u1 42 4096 0 causal)
++skippy_contract_case(xing4-0 xing4_0 40 14336 1 causal)
 +
 +# GLM-5.3 is too large for the ordinary one-host family battery. Keep its
 +# production topology in a separate synthetic-architecture lane so this case

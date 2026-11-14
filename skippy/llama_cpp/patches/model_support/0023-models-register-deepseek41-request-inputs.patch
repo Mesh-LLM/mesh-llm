@@ -1,0 +1,40 @@
+From 899d6f70f68f36fb4ad7237ea78c34ebbbf96fb5 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 12:01:06 +1100
+Subject: [PATCH] models: register DeepSeek 4.1 request inputs
+
+---
+ src/models/deepseek41.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/models/deepseek41.cpp b/src/models/deepseek41.cpp
+index ea24f6a7a..f46502cab 100644
+--- a/src/models/deepseek41.cpp
++++ b/src/models/deepseek41.cpp
+@@ -794,6 +794,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+         ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t) hparams.ple_n_heads*n_tokens);
+         ggml_set_name(ids, ("engram_ids-" + std::to_string(il)).c_str());
+         ggml_set_input(ids);
++        request_input(ids, ("deepseek41.engram_ids." + std::to_string(il)).c_str());
+         inp41->engram_ids.push_back(ids);
+ 
+         ggml_tensor * rows = ggml_get_rows(ctx0, model.per_layer_tok_embd, ids);
+@@ -807,6 +808,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+         engram_keep = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens);
+         ggml_set_input(engram_keep);
+         ggml_set_name(engram_keep, "engram_keep");
++        request_input(engram_keep, "deepseek41.engram_keep");
+         inp41->engram_keep = engram_keep;
+     }
+     ggml_tensor * cand_pin = nullptr;
+@@ -818,6 +820,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+             cand_pin = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, (ci.kq_mask->ne[0] + bs - 1)/bs, ci.kq_mask->ne[1], 1, ci.kq_mask->ne[3]);
+             ggml_set_input(cand_pin);
+             ggml_set_name(cand_pin, "cand_pin");
++            request_input(cand_pin, "deepseek41.candidate_pin");
+             inp41->cand_pin = cand_pin;
+         }
+     }
+-- 
+2.56.0
+

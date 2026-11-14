@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "skippy-cpp-api",
-  "registry_sha256": "b728aded7ecf526901a7b2735a4cb94aac4d749c0ebb8888caa8aa82d65e134e",
+  "registry_sha256": "961607ab41b23c604bcf05f7a7bf4dce73d5df7e44afb45e29093ca59a96113c",
   "artifacts": [
     {
       "id": "smollm2-q8-inference",

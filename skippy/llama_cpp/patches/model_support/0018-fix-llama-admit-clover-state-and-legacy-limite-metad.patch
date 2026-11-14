@@ -1,0 +1,60 @@
+From 253cb12cd1de7c20dacb3bdf0a6bbf73cffef81f Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 02:19:19 +1100
+Subject: [PATCH] fix(llama): admit Clover state and legacy Limite metadata
+
+Register Clover recurrent state ownership, preserve the released Limite 1B attention scale when early GGUF conversions omit it, and keep Beam synthetic fixtures at the requested depth.
+---
+ src/models/clover-moe.cpp  | 2 +-
+ src/models/limite.cpp      | 8 +++++++-
+ tests/test-llama-archs.cpp | 2 +-
+ 3 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/src/models/clover-moe.cpp b/src/models/clover-moe.cpp
+index 09baa2726..6adfda85f 100644
+--- a/src/models/clover-moe.cpp
++++ b/src/models/clover-moe.cpp
+@@ -332,7 +332,7 @@ ggml_tensor * llama_model_clover_moe::graph::build_layer_attn_linear(
+ 
+     ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+ 
+-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+     cb(state, "state_predelta", il);
+ 
+diff --git a/src/models/limite.cpp b/src/models/limite.cpp
+index 8468d1a1f..c5c90a1fa 100644
+--- a/src/models/limite.cpp
++++ b/src/models/limite.cpp
+@@ -6,7 +6,13 @@
+ 
+ void llama_model_limite::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+-    ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale);
++    if (!ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false)) {
++        if (hparams.n_layer() != 48) {
++            throw std::runtime_error("Limite requires an explicit attention scale for unknown depths");
++        }
++        // Early GGUF conversions omit this key; the released 1B checkpoints use 0.1.
++        hparams.f_attention_scale = 0.1f;
++    }
+     ml.get_key(LLM_KV_ATTENTION_XSA_EPS,           hparams.f_xsa_eps, false);
+     ml.get_arr(LLM_KV_FINAL_LOGIT_SIGMOID_CAPPING, hparams.final_logit_sigmoid_capping, false);
+ 
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 682a1b061..ddebf70d8 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -374,7 +374,7 @@ static gguf_context_ptr get_gguf_ctx(
+     if (arch == LLM_ARCH_BEAM) {
+         n_head    = 4;
+         n_head_kv = 2;
+-        n_layer   = 4;
++        if (!contract_layers) { n_layer = 4; }
+     }
+     n_layer = std::max(n_layer, n_layer_min);
+     const uint32_t n_embd_head = n_embd / n_head;
+-- 
+2.56.0
+

@@ -145,15 +145,32 @@ fn current_full_roster_routes_published_large_families_without_mutating_canonica
     let copy = bytes.clone();
     let projected = serde_json::to_value(project(&bytes).unwrap()).unwrap();
     let rows = projected["include"].as_array().unwrap();
-    for family in ["minimax-m3", "inkling", "glm45-air", "qwen4exp", "llama4"] {
+    for family in [
+        "minimax-m3",
+        "inkling",
+        "glm45-air",
+        "qwen4exp",
+        "llama4",
+        "beam",
+        "muse-spark",
+    ] {
         let row = rows.iter().find(|row| row["families"] == family).unwrap();
         assert_eq!(row["memory_tier"], "accelerator-memory-256plus", "{family}");
     }
-    let row = rows
-        .iter()
-        .find(|row| row["families"] == "lfm2-vl")
-        .unwrap();
-    assert_eq!(row["memory_tier"], "accelerator-memory-128plus");
+    for family in [
+        "lfm2-vl",
+        "limite",
+        "lfm3",
+        "sensenova-u1",
+        "xing4-0",
+        "clover-moe",
+        "flint",
+        "ricursive",
+        "kolibri1",
+    ] {
+        let row = rows.iter().find(|row| row["families"] == family).unwrap();
+        assert_eq!(row["memory_tier"], "accelerator-memory-128plus", "{family}");
+    }
     assert_eq!(bytes, copy);
     assert_eq!(std::fs::read(&manifest).unwrap(), original);
 }

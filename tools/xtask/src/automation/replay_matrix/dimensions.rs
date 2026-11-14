@@ -124,11 +124,17 @@ impl Projection {
         }
         let hyper = qualified(self.hyper, &architecture, "hyper_connection.count")?;
         let output = qualified(self.output, &architecture, "embedding_length_out")?;
-        let width = match (architecture.as_str(), hyper) {
-            ("qwen4exp", count) | ("dflash", count @ Some(_)) => {
-                let count = count.filter(|count| *count > 0).ok_or_else(|| {
-                    field("hyper_connection.count", "requires one positive count")
-                })?;
+        if architecture == "qwen4exp" && hyper.is_none() {
+            return Err(field(
+                "hyper_connection.count",
+                "requires one positive count",
+            ));
+        }
+        let width = match hyper {
+            Some(count) => {
+                if count == 0 {
+                    return Err(field("hyper_connection.count", "requires a positive count"));
+                }
                 let width = embedding
                     .checked_mul(count)
                     .filter(|width| *width <= 0x7fff_ffff)
@@ -141,7 +147,7 @@ impl Projection {
                 }
                 width
             }
-            _ => embedding,
+            None => embedding,
         };
         Ok(Some(Dimensions {
             architecture,

@@ -1,0 +1,26 @@
+From e9bba77fb466095efeb74d47b2ce098f1700b99c Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 02:13:25 +1100
+Subject: [PATCH] fix(sensenova-u1): bind custom position input for staged
+ graphs
+
+---
+ src/models/sensenova-u1.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/models/sensenova-u1.cpp b/src/models/sensenova-u1.cpp
+index 8904aed0b..ba2b8f1ae 100644
+--- a/src/models/sensenova-u1.cpp
++++ b/src/models/sensenova-u1.cpp
+@@ -96,6 +96,8 @@ llama_model_sensenova_u1::graph::graph(const llm_graph_params & params) : llm_gr
+     auto & inp_pos = inp->pos;
+     inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)n_tokens*hparams.n_pos_per_embd());
+     ggml_set_input(inp_pos);
++    // The custom M-RoPE positions are a request leaf like build_inp_pos().
++    request_input(inp_pos, "positions");
+     res->add_input(std::move(inp));
+ 
+     for (int axis = 0; axis < 3; ++axis) {
+-- 
+2.56.0
+

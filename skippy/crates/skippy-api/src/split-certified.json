@@ -3,7 +3,7 @@
   "native_recipe": {
     "llama_upstream_sha": "8954f194837d2ec4d5f67f20c81b84abe63883ba",
     "skippy_abi": "0.1.80",
-    "patch_queue_sha256": "4aced80199c0b685fcbc265218fa62b4bd6d2bbc06034aa0b185dc9ec4b70635"
+    "patch_queue_sha256": "cb1e37190e69c04ee9a38ff289312048d2e3397207581c5823086fb4977788a9"
   },
   "architectures": [
     "afmoe",
@@ -12,9 +12,11 @@
     "arwkv7",
     "bailingmoe2",
     "bailingmoe3",
+    "beam",
     "bloom",
     "chameleon",
     "chatglm",
+    "clover_moe",
     "cohere2",
     "deepseek2",
     "deepseek32",
@@ -25,6 +27,7 @@
     "exaone4",
     "falcon",
     "falcon-h1",
+    "flint",
     "gemma",
     "gemma2",
     "gemma3",
@@ -49,14 +52,18 @@
     "jamba",
     "kimi-k3",
     "kimi-linear",
+    "kolibri1",
     "laguna",
     "lfm2",
     "lfm2moe",
+    "lfm3",
+    "limite",
     "llama",
     "llama4",
     "maincoder",
     "mamba",
     "mellum",
+    "metis16",
     "mimo2",
     "minicpm",
     "minicpm3",
@@ -66,6 +73,7 @@
     "mistral4",
     "mpt",
     "muse-glimmer",
+    "muse-spark",
     "nemotron",
     "nemotron_h",
     "nemotron_h_moe",
@@ -83,12 +91,15 @@
     "qwen3vl",
     "qwen3vlmoe",
     "qwen4exp",
+    "ricursive",
     "rwkv6",
     "rwkv7",
+    "sensenova_u1",
     "smollm3",
     "spark2_5",
     "stablelm",
     "starcoder2",
-    "step35"
+    "step35",
+    "xing4_0"
   ]
 }
