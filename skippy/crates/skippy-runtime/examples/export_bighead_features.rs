@@ -7,6 +7,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -31,6 +34,43 @@ struct Args {
     model: PathBuf,
     input: PathBuf,
     output: PathBuf,
+}
+
+struct LoadHeartbeat {
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl LoadHeartbeat {
+    fn start() -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            let start = Instant::now();
+            while !worker_stop.load(Ordering::Relaxed) {
+                thread::sleep(std::time::Duration::from_secs(30));
+                if !worker_stop.load(Ordering::Relaxed) {
+                    eprintln!(
+                        "[features] Q4 model load still active; elapsed_s={}",
+                        start.elapsed().as_secs()
+                    );
+                }
+            }
+        });
+        Self {
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for LoadHeartbeat {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -95,8 +135,10 @@ fn main() -> Result<()> {
         n_gpu_layers: -1,
         ..RuntimeConfig::default()
     };
+    let load_heartbeat = LoadHeartbeat::start();
     let model = StageModel::open_from_parts(&model_parts, &config)
         .context("load Q4 BigHead model parts")?;
+    drop(load_heartbeat);
     ensure!(
         model.has_bighead_lora_adapter(),
         "runtime did not attach the BigHead LoRA adapter"
@@ -451,12 +493,25 @@ fn sha256_file(path: &Path) -> Result<String> {
         File::open(path).with_context(|| format!("open {} for hashing", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 1024 * 1024];
+    let size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let start = Instant::now();
+    let mut next_log = 1024 * 1024 * 1024;
+    let mut total = 0u64;
     loop {
         let count = file.read(&mut buffer).context("read file for hashing")?;
         if count == 0 {
             break;
         }
         hasher.update(&buffer[..count]);
+        total += count as u64;
+        if total >= next_log {
+            eprintln!(
+                "[features] hashing {}: bytes={total}/{size} elapsed_s={}",
+                path.display(),
+                start.elapsed().as_secs()
+            );
+            next_log += 1024 * 1024 * 1024;
+        }
     }
     Ok(hex::encode(hasher.finalize()))
 }
