@@ -1187,8 +1187,8 @@ Invoke-InRepo {
     if ($windowsArch -eq "arm64") {
         # clang targets the MSVC ABI, so the DLLs import the same runtime as
         # the x64 build. armv8.2-a is the floor of every Windows on ARM laptop
-        # since the Snapdragon 8cx. OpenMP is off: the VS clang ships no
-        # ARM64 libomp, and ggml falls back to its own thread pool.
+        # since the Snapdragon 8cx. OpenMP is off: ggml then uses its own
+        # thread pool, and no OpenMP runtime has to ship with the DLLs.
         $isaArgs = @(
             "-DCMAKE_SYSTEM_NAME=Windows",
             "-DCMAKE_SYSTEM_PROCESSOR=ARM64",

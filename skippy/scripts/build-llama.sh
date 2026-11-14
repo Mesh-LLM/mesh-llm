@@ -382,8 +382,8 @@ esac
 if [[ "$LLAMA_STAGE_TARGET" == aarch64-pc-windows-msvc ]]; then
   # ggml's CPU backend refuses MSVC on ARM unless GGML_NATIVE=ON, so clang
   # compiles for the MSVC ABI and the DLLs import the same host runtime as the
-  # x64 build. armv8.2-a is the floor of Windows on ARM laptops; the Visual
-  # Studio clang ships no ARM64 libomp, so ggml uses its own thread pool.
+  # x64 build. armv8.2-a is the floor of Windows on ARM laptops. OpenMP is off,
+  # so ggml uses its own thread pool and no OpenMP runtime ships with the DLLs.
   # Matches mesh/scripts/build-windows.ps1 -TargetArch arm64.
   if ! command -v clang >/dev/null 2>&1; then
     echo "clang is required for $LLAMA_STAGE_TARGET: add the Visual Studio component Microsoft.VisualStudio.Component.VC.Llvm.Clang to PATH" >&2
