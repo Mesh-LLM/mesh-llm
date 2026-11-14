@@ -223,7 +223,12 @@ impl PluginManager {
         };
         {
             let state = state.lock().unwrap();
-            event["exchange_id"] = json!(state.exchange_id);
+            // A dispatch names its own exchange (a model re-pick is a new
+            // exchange of the same session); only an event that carries no id
+            // takes the session's.
+            if event["exchange_id"].as_str().is_none_or(str::is_empty) {
+                event["exchange_id"] = json!(state.exchange_id);
+            }
             event["endpoint"] = json!(state.endpoint);
         }
         event["observation_id"] = json!(observation_id);
@@ -272,6 +277,7 @@ impl PluginManager {
         if state.attempt_history.len() < 16 {
             let mut attempt = serde_json::Map::new();
             for key in [
+                "exchange_id",
                 "model",
                 "provider",
                 "target",
@@ -868,6 +874,10 @@ impl ExchangeSession {
         );
         event["response_wire_commitment"] = json!(emission.commitment);
         if let Some(selected) = &emission.selected {
+            // `exchange_id` is deliberately not copied: the response side
+            // streams were opened under the session's id, and observers key
+            // their response receipts by the terminal's `exchange_id`. The
+            // served dispatch's id stays on `attempt_history`.
             for key in [
                 "effective_request_wire_digest",
                 "effective_request_encoding",

@@ -212,7 +212,8 @@ async fn installed_lifecycle_quic_terminal_preserves_request_identity_and_report
         .find(|event| event["phase"] == "exchange_finished")
         .unwrap();
     assert_eq!(received["observation_point"], "serving_host_ingress");
-    assert_eq!(received["exchange_id"], id.to_string());
+    assert_eq!(received["request_id"], id.to_string());
+    assert_ne!(received["exchange_id"], id.to_string());
     assert_eq!(terminal["exchange_id"], received["exchange_id"]);
     assert_eq!(terminal["execution_outcome"], "completed");
     assert_eq!(terminal["usage"]["prompt_tokens"], 2);
@@ -349,11 +350,17 @@ async fn installed_lifecycle_quic_gateway_and_server_share_exchange_identity() {
         .find(|event| event["phase"] == "exchange_finished")
         .unwrap();
     assert_eq!(seller_terminal["requested_by_node_id"], buyer_hex);
-    for events in [&buyer_events, &seller_events] {
+    // The request id travels with the request; each node's exchange id is its
+    // own, shared by that node's events.
+    for (events, received) in [
+        (&buyer_events, buyer_received),
+        (&seller_events, seller_received),
+    ] {
         for event in events.iter().filter(|event| {
             event["phase"] == "request_received" || event["phase"] == "exchange_finished"
         }) {
-            assert_eq!(event["exchange_id"], buyer_received["exchange_id"]);
+            assert_eq!(event["exchange_id"], received["exchange_id"]);
+            assert_eq!(event["request_id"], buyer_received["request_id"]);
         }
     }
     assert_eq!(buyer.requests.lock().await.len(), 0);

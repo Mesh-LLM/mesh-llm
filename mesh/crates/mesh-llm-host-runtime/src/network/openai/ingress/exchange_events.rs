@@ -374,19 +374,21 @@ pub(super) fn exchange_output_digests_from_outcome(
 /// and dispatch is about to happen. There is no typed `GenerationRequest`
 /// on this path (see the #1331 design note), so the envelope carries only
 /// the model — the same narrow route fact path 1's `ChatExchangeRoute`
-/// carries. Mints the exchange id here, at admission, so it can pair this
-/// effective event with its terminal event even when concurrent raw-proxy
-/// requests share the same model. Returns `None` — no id minted, no publish
+/// carries. Derives the exchange id here, at admission (see
+/// [`proxy::BufferedHttpRequest::exchange_id`]), so it can pair this effective event with its
+/// terminal event even when concurrent raw-proxy requests share the same
+/// model. Returns `None` — no id derived, no publish
 /// — when nobody declares `openai.exchange.v1`: nothing downstream would
 /// ever see it.
-pub(super) async fn mint_and_publish_effective_raw_proxy(
+pub(super) async fn derive_and_publish_effective_raw_proxy(
     plugin_manager: &crate::plugin::PluginManager,
+    request: &proxy::BufferedHttpRequest,
     model_name: &str,
 ) -> Option<String> {
     if !plugin_manager.has_subscriber().await {
         return None;
     }
-    let exchange_id = uuid::Uuid::new_v4().to_string();
+    let exchange_id = request.exchange_id();
     plugin_manager
         .publish(&OpenAiExchangeEnvelope::effective(
             exchange_id.clone(),
