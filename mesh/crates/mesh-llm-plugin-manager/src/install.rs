@@ -274,28 +274,6 @@ pub async fn update_plugin(
     .await
 }
 
-/// Update (or repair) `current` to the release its catalog entry pins, when
-/// that release is available for the platform and supports `host_version`.
-/// This is the only update source an automatic repair may use: the pin and
-/// its digest are immutable, and the release's own compatibility declaration
-/// is checked before anything is downloaded.
-pub async fn update_plugin_from_catalog(
-    current: &InstalledPluginMetadata,
-    host_version: &str,
-    options: &PluginInstallOptions,
-    progress: &mut impl PluginProgressReporter,
-) -> Result<InstallOutcome> {
-    let client = catalog_client()?;
-    let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
-    let entry = catalog.find_exact(&current.name).with_context(|| {
-        format!(
-            "'{}' has no catalog entry, so there is no verified update source for it",
-            current.name
-        )
-    })?;
-    install_pinned_entry(current, entry, host_version, options, progress).await
-}
-
 /// A verified update source for this installed package, not just its name.
 /// A missing or different-source entry leaves explicit updates on their own
 /// repository; an unavailable catalog is reported separately.

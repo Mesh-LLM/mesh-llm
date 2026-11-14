@@ -25,7 +25,7 @@ pub use compatibility::{
 pub use github::{GitHubRelease, GitHubReleaseAsset, GitHubReleaseClient};
 pub use install::{
     InstallOutcome, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter,
-    install_plugin, update_plugin, update_plugin_from_catalog,
+    install_plugin, update_plugin,
 };
 pub use legacy_defaults::{
     NO_DEFAULT_PLUGINS_ENV, Surface, UNLISTED_DEFAULT_ALLOWS, allows, default_plugins_opted_out,
