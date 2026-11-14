@@ -3,7 +3,7 @@
 //! library rules, dependency gaps and `verify`.
 
 use super::linux_deps_elf::{
-    ElfImage, Raised, casefold, check_arch, elf_image, iter_files, parent, sha256,
+    ElfImage, Raised, casefold, check_arch, elf_image, iter_files, parent, sha256, sibling_links,
 };
 use super::toolchain::Toolchain;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -65,7 +65,8 @@ impl Package<'_> {
         directories.extend(self.scan_dirs.iter().cloned());
         let mut images = Vec::new();
         let mut aliases: HashMap<String, (String, String)> = HashMap::new();
-        for path in iter_files(&directories) {
+        let links = sibling_links(&self.lib_dir);
+        for path in iter_files(&directories).into_iter().chain(links) {
             let Some(image) = elf_image(self.tools, &path)? else {
                 continue;
             };

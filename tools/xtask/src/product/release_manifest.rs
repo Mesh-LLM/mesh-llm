@@ -328,6 +328,7 @@ mod tests {
                         .map_err(|failure| failure.error)
                         .unwrap(),
                 ),
+                link: None,
             }],
         )
         .unwrap();

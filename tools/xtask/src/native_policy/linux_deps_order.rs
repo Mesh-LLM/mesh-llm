@@ -2,7 +2,7 @@
 //! packaged libraries in load order (dependencies first) with the primary
 //! runtime library last.
 
-use super::linux_deps_elf::{ElfImage, Raised, join};
+use super::linux_deps_elf::{ElfImage, Raised, file_name, join, sibling_links};
 use super::linux_deps_policy::Package;
 use crate::ci_plan::catalog::os_error_text;
 use std::collections::{BTreeMap, HashSet};
@@ -41,7 +41,7 @@ impl<'a> Walk<'a> {
     }
 }
 
-/// Regular, non-symlink entries of the library directory, by name.
+/// Regular entries of the library directory and the links to them, by name.
 fn library_names(lib_dir: &str) -> Result<Vec<String>, Raised> {
     let entries = std::fs::read_dir(lib_dir).map_err(|error| os_error_text(&error, lib_dir))?;
     let mut names = Vec::new();
@@ -51,6 +51,11 @@ fn library_names(lib_dir: &str) -> Result<Vec<String>, Raised> {
             names.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
+    names.extend(
+        sibling_links(lib_dir)
+            .iter()
+            .map(|path| file_name(path).to_owned()),
+    );
     names.sort();
     Ok(names)
 }
@@ -111,7 +116,7 @@ pub(super) fn dependency_order(
     let mut ordered = walk.ordered;
     let ordered_names: HashSet<String> = ordered
         .iter()
-        .map(|path| super::linux_deps_elf::file_name(path).to_owned())
+        .map(|path| file_name(path).to_owned())
         .collect();
     ordered.extend(
         names

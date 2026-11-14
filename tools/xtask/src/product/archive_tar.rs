@@ -2,8 +2,9 @@ use super::archive::Entry;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
+use std::path::Path;
 
 fn octal(field: &mut [u8], value: u64) -> Result<(), String> {
     let digits = format!("{value:o}");
@@ -42,11 +43,29 @@ fn header(entry: &Entry) -> Result<[u8; 512], String> {
     octal(&mut bytes[116..124], 0)?;
     octal(
         &mut bytes[124..136],
-        if entry.directory { 0 } else { entry.size },
+        if entry.directory || entry.link.is_some() {
+            0
+        } else {
+            entry.size
+        },
     )?;
     octal(&mut bytes[136..148], 0)?;
     bytes[148..156].fill(b' ');
-    bytes[156] = if entry.directory { b'5' } else { b'0' };
+    bytes[156] = match (&entry.link, entry.directory) {
+        (Some(_), _) => b'2',
+        (None, true) => b'5',
+        (None, false) => b'0',
+    };
+    if let Some(target) = &entry.link {
+        let target = target.as_bytes();
+        if target.len() > 100 {
+            return Err(format!(
+                "tar link target exceeds ustar limit: {}",
+                entry.name
+            ));
+        }
+        bytes[157..157 + target.len()].copy_from_slice(target);
+    }
     bytes[257..263].copy_from_slice(b"ustar\0");
     bytes[263..265].copy_from_slice(b"00");
     let checksum: u64 = bytes.iter().map(|byte| u64::from(*byte)).sum();
@@ -57,10 +76,15 @@ fn header(entry: &Entry) -> Result<[u8; 512], String> {
 pub(super) fn write(file: File, entries: &[Entry]) -> Result<(), String> {
     let mut encoder = GzEncoder::new(file, Compression::default());
     for entry in entries {
+        if let Some(target) = &entry.link
+            && fs::read_link(&entry.path).ok().as_deref() != Some(Path::new(target))
+        {
+            return Err(format!("archive input changed: {}", entry.path.display()));
+        }
         encoder
             .write_all(&header(entry)?)
             .map_err(|error| error.to_string())?;
-        if !entry.directory {
+        if !entry.directory && entry.link.is_none() {
             let mut input = File::open(&entry.path).map_err(|error| error.to_string())?;
             let mut digest = Sha256::new();
             let mut copied = 0_u64;

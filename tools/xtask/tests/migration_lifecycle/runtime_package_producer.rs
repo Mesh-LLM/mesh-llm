@@ -533,6 +533,89 @@ fn distribution_build_suffixes_the_runtime_id_and_takes_the_rank_from_the_enviro
 }
 
 #[test]
+fn linux_package_keeps_the_versioned_library_once_and_links_its_sonames() {
+    let fixture = Fixture::new();
+    let build = fixture.path().join("build");
+    fs::write(build.join("libllama.so.0.1.0"), b"\x7fELFinert-runtime").unwrap();
+    std::os::unix::fs::symlink("libllama.so.0.1.0", build.join("libllama.so.0")).unwrap();
+    std::os::unix::fs::symlink("libllama.so.0", build.join("libllama.so")).unwrap();
+    // A link to a file outside the build directory is still copied.
+    fs::create_dir(fixture.path().join("elsewhere")).unwrap();
+    fs::write(
+        fixture.path().join("elsewhere/libextra.so.1.0"),
+        b"\x7fELFinert-extra",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../elsewhere/libextra.so.1.0", build.join("libextra.so.1"))
+        .unwrap();
+    fixture.tool(
+        "cargo",
+        "[[ ${1:-} == xtool ]] || exit 96\nshift\nexec \"$AUTOMATION\" \"$@\"",
+    );
+    fixture.tool("readelf", "printf 'Version needs section GLIBC_2.17\\n'");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/scripts/package-native-runtime.sh");
+    let body = "\"$PACKAGE_SCRIPT\" --backend cpu --target x86_64-unknown-linux-gnu --out \"$TEST_ROOT/output\" --no-model-package-tool";
+    let (ok, _, error) = fixture.run(
+        body,
+        &[
+            ("PACKAGE_SCRIPT", script.to_string_lossy().into_owned()),
+            (
+                "LLAMA_STAGE_BUILD_DIR",
+                build.to_string_lossy().into_owned(),
+            ),
+            (
+                "LLAMA_WORKDIR",
+                fixture
+                    .path()
+                    .join("absent-owned-source")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+    );
+    assert!(ok, "{error}");
+    let artifact = "meshllm-native-runtime-linux-x86_64-cpu";
+    let lib = fixture.path().join("output").join(artifact).join("lib");
+    for name in ["libllama.so", "libllama.so.0"] {
+        assert_eq!(
+            fs::read_link(lib.join(name)).unwrap(),
+            Path::new("libllama.so.0.1.0"),
+            "{name}"
+        );
+    }
+    for name in ["libllama.so.0.1.0", "libextra.so.1"] {
+        assert!(
+            fs::symlink_metadata(lib.join(name)).unwrap().is_file(),
+            "{name}"
+        );
+    }
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(lib.parent().unwrap().join("manifest.json")).unwrap())
+            .unwrap();
+    let files = manifest["runtime"]["files"].as_object().unwrap();
+    for name in ["libllama.so", "libllama.so.0", "libllama.so.0.1.0"] {
+        assert_eq!(
+            files[&format!("lib/{name}")],
+            files["lib/libllama.so.0.1.0"],
+            "{name}"
+        );
+    }
+    let archive = fixture.path().join(format!("output/{artifact}.tar.gz"));
+    let (ok, listing, error) = fixture.run(
+        "tar -tvzf \"$ARCHIVE\"",
+        &[("ARCHIVE", archive.to_string_lossy().into_owned())],
+    );
+    assert!(ok, "{error}");
+    let links: Vec<_> = listing
+        .lines()
+        .filter(|line| line.starts_with('l'))
+        .collect();
+    assert_eq!(links.len(), 2, "{listing}");
+    fixture.directory.close().unwrap();
+}
+
+#[test]
 fn package_runtime_version_reads_product_file_instead_of_differing_workspace_version() {
     let fixture = Fixture::new();
     let product = fixture.path().join("skippy/crates/skippy-native-runtime");

@@ -22,6 +22,9 @@ pub(super) struct Entry {
     pub(super) size: u64,
     pub(super) mode: u32,
     pub(super) sha256: Option<String>,
+    /// Target of a soname link, a regular file in the same directory (tar only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) link: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -157,7 +160,8 @@ fn plan(args: &[String]) -> Result<Plan, String> {
         return Err("archive sidecar may not be inside the source directory".into());
     }
     let mut entries = Vec::new();
-    collect(&source, "mesh-bundle", &mut entries)?;
+    let links = matches!(kind, Kind::TarGz);
+    collect(&source, "mesh-bundle", links, &mut entries)?;
     if entries.len() > 4096 {
         return Err("archive exceeds 4096 entries".into());
     }
@@ -169,13 +173,53 @@ fn plan(args: &[String]) -> Result<Plan, String> {
     })
 }
 
-fn collect(path: &Path, name: &str, entries: &mut Vec<Entry>) -> Result<(), String> {
+/// A native runtime links its soname names (`libfoo.so.0`) to the library
+/// beside it; those are the only links a bundle may carry. Same rule as
+/// `linux-runtime-deps`: a name in the same directory that resolves to a
+/// regular file there.
+fn sibling_link(path: &Path) -> Option<String> {
+    let target = fs::read_link(path).ok()?;
+    let mut components = target.components();
+    let (Some(Component::Normal(name)), None) = (components.next(), components.next()) else {
+        return None;
+    };
+    let name = name.to_str()?;
+    if name.len() > 100 || name.contains(['\\', '\n', '\r', '\0']) {
+        return None;
+    }
+    let resolved = fs::canonicalize(path).ok()?;
+    (resolved.is_file() && resolved.parent() == fs::canonicalize(path.parent()?).ok().as_deref())
+        .then(|| name.to_owned())
+}
+
+fn collect(path: &Path, name: &str, links: bool, entries: &mut Vec<Entry>) -> Result<(), String> {
     if entries.len() >= 4096 {
         return Err("archive exceeds 4096 entries".into());
     }
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() {
-        return Err(format!("archive input is a symlink: {}", path.display()));
+        if !links {
+            return Err(format!(
+                "archive input is a symlink, which zip doesn't carry: {}",
+                path.display()
+            ));
+        }
+        let link = sibling_link(path).ok_or_else(|| {
+            format!(
+                "archive input is a symlink but not to a regular file in its directory: {}",
+                path.display()
+            )
+        })?;
+        entries.push(Entry {
+            name: name.to_owned(),
+            path: path.to_owned(),
+            directory: false,
+            size: 0,
+            mode: 0o777,
+            sha256: None,
+            link: Some(link),
+        });
+        return Ok(());
     }
     if !(metadata.is_file() || metadata.is_dir()) {
         return Err(format!(
@@ -194,6 +238,7 @@ fn collect(path: &Path, name: &str, entries: &mut Vec<Entry>) -> Result<(), Stri
         } else {
             None
         },
+        link: None,
     });
     if metadata.is_dir() {
         let mut children = fs::read_dir(path)
@@ -209,7 +254,7 @@ fn collect(path: &Path, name: &str, entries: &mut Vec<Entry>) -> Result<(), Stri
             if filename.contains(['\\', '\n', '\r', '\0']) {
                 return Err("archive member name is not portable".into());
             }
-            collect(&child.path(), &format!("{name}/{filename}"), entries)?;
+            collect(&child.path(), &format!("{name}/{filename}"), links, entries)?;
         }
     }
     Ok(())
@@ -303,6 +348,7 @@ mod tests {
             size: 4,
             mode: 0o755,
             sha256: Some(hex::encode(Sha256::digest(b"host"))),
+            link: None,
         };
         fs::write(&source, b"HOST")?;
         let tar = archive_tar::write(
@@ -321,6 +367,7 @@ mod tests {
                 size: 4,
                 mode: 0o755,
                 sha256: Some(hex::encode(Sha256::digest(b"host"))),
+                link: None,
             }],
         );
         let original = fs::read(&source)?;

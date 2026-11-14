@@ -31,6 +31,12 @@ pub(super) fn write(mut file: File, entries: &[Entry]) -> Result<(), String> {
     let mut directory = Vec::new();
     let mut position = 0_u64;
     for entry in entries {
+        if entry.link.is_some() {
+            return Err(format!(
+                "archive input is a symlink, which zip doesn't carry: {}",
+                entry.path.display()
+            ));
+        }
         let mut data = Vec::new();
         if !entry.directory {
             File::open(&entry.path)

@@ -446,6 +446,56 @@ fn migration_product_archive_rejects_self_inclusion_and_malformed_asset() -> Tes
 }
 
 #[test]
+fn migration_product_tar_archive_keeps_runtime_soname_links() -> TestResult {
+    let scratch = Scratch::new()?;
+    let source = scratch.path().join("mesh-bundle");
+    let lib = source.join("native-runtimes/rt/lib");
+    fs::create_dir_all(&lib)?;
+    fs::write(lib.join("libx.so.0.1.0"), b"library bytes")?;
+    std::os::unix::fs::symlink("libx.so.0.1.0", lib.join("libx.so.0"))?;
+    std::os::unix::fs::symlink("libx.so.0", lib.join("libx.so"))?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
+    composed(&source, "mesh-llm")?;
+
+    let archive = scratch.path().join("product.tar.gz");
+    let output = command(scratch.path(), "archive-write", &source, &archive, "tar.gz")?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let unpacked = scratch.path().join("unpacked");
+    fs::create_dir(&unpacked)?;
+    let extracted = Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&unpacked)
+        .output()?;
+    assert!(
+        extracted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&extracted.stderr)
+    );
+    let lib = unpacked.join("mesh-bundle/native-runtimes/rt/lib");
+    assert_eq!(
+        fs::read_link(lib.join("libx.so.0"))?,
+        Path::new("libx.so.0.1.0")
+    );
+    assert!(fs::symlink_metadata(lib.join("libx.so.0.1.0"))?.is_file());
+    assert_eq!(fs::read(lib.join("libx.so.0"))?, b"library bytes");
+    assert_eq!(fs::read_link(lib.join("libx.so"))?, Path::new("libx.so.0"));
+    assert_eq!(fs::read(lib.join("libx.so"))?, b"library bytes");
+
+    let zip = scratch.path().join("product.zip");
+    let output = command(scratch.path(), "archive-write", &source, &zip, "zip")?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("zip doesn't carry"));
+    assert!(!zip.exists());
+    Ok(())
+}
+
+#[test]
 fn migration_product_archive_rejects_missing_symlink_and_traversal() -> TestResult {
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
@@ -462,6 +512,19 @@ fn migration_product_archive_rejects_missing_symlink_and_traversal() -> TestResu
     assert!(!target.exists());
 
     fs::remove_file(source.join("mesh-llm"))?;
+    // Only a link to a regular file in its own directory is kept.
+    fs::create_dir_all(source.join("lib"))?;
+    for points_to in ["../mesh-llm", "/bin/sh", "lib"] {
+        std::os::unix::fs::symlink(points_to, source.join("libx.so.0"))?;
+        let outside = command(scratch.path(), "archive-plan", &source, &target, "tar.gz")?;
+        assert!(!outside.status.success(), "{points_to}");
+        assert!(
+            String::from_utf8_lossy(&outside.stderr).contains("symlink"),
+            "{points_to}"
+        );
+        fs::remove_file(source.join("libx.so.0"))?;
+    }
+    fs::remove_dir(source.join("lib"))?;
     let escaped = command(
         scratch.path(),
         "archive-write",
