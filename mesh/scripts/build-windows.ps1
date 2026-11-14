@@ -1333,7 +1333,9 @@ Invoke-InRepo {
     # Invoke-InRepo makes these shell-relative paths resolve from the repository
     # root. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
     # remote host and fail after the expensive ABI build has already completed.
-    $runtimeOut = "target/$profileDir/native-runtimes"
+    # The host looks for native-runtimes next to its own executable, so the
+    # runtime goes into the same cargo output directory as mesh-llm.exe.
+    $runtimeOut = "$($cargoOutputRoot -replace '\\', '/')/$profileDir/native-runtimes"
     Invoke-NativeCommand $packagingBash @(
         "scripts/package-native-runtime.sh",
         "--backend", $backendName,
