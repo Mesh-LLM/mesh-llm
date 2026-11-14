@@ -43,22 +43,6 @@ select `mode="serve"` or `"combined"` and pass
 native runtime. Client mode does not load a model-serving runtime. A serve-only
 node rejects SDK inference calls.
 
-## Read local runtime capacity
-
-For a started serving node and an exact local serving ID:
-
-```python
-capacity = await node.runtime_capacity("exact-serving-id")
-if capacity is not None:
-    print(capacity.execution_lanes, capacity.context_tokens_per_lane,
-          capacity.context_pool_tokens, capacity.captured_at_unix_ms)
-```
-
-The latest observation includes busy lanes and does not reserve capacity.
-Unknown, unsupported, unavailable or incomplete capacity returns `None`;
-stopped nodes raise an error. The timestamp is the oldest observation in Unix
-milliseconds; the total context pool is not a per-request context limit.
-
 ## Discover every advertised workload
 
 `node.models` queries the node's primary mesh inventory in process, including
