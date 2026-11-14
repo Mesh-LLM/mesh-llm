@@ -21,6 +21,15 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
+# Speech recognition folds the pinned whisper.cpp into llama.dll, as
+# skippy/scripts/build-llama.sh does for Linux, macOS and CI runtimes.
+# SKIPPY_SPEECH_RECOGNITION=OFF builds a runtime whose skippy_asr_* calls
+# report UNSUPPORTED.
+$speechRecognition = if ($env:SKIPPY_SPEECH_RECOGNITION) { $env:SKIPPY_SPEECH_RECOGNITION.ToUpperInvariant() } else { "ON" }
+if ($speechRecognition -notin @("ON", "OFF")) {
+    throw "Unsupported SKIPPY_SPEECH_RECOGNITION '$($env:SKIPPY_SPEECH_RECOGNITION)'. Expected ON or OFF."
+}
+$whisperDir = Join-Path $repoRoot ".deps\whisper.cpp"
 $meshUiDir = Join-Path $repoRoot "mesh\crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null
@@ -137,6 +146,21 @@ function Prepare-Llama {
             Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue
         } else {
             $env:LLAMA_WORKDIR = $previousWorkdir
+        }
+    }
+}
+
+# Fetch the pinned whisper.cpp into .deps/whisper.cpp through the same script
+# build-llama.sh uses. A stray WHISPER_WORKDIR is cleared so the prepared tree
+# is always the one CMake builds.
+function Prepare-Whisper {
+    $previousWorkdir = $env:WHISPER_WORKDIR
+    Remove-Item Env:WHISPER_WORKDIR -ErrorAction SilentlyContinue
+    try {
+        Invoke-NativeCommand "bash" @("skippy/scripts/prepare-whisper.sh")
+    } finally {
+        if ($null -ne $previousWorkdir) {
+            $env:WHISPER_WORKDIR = $previousWorkdir
         }
     }
 }
@@ -1078,6 +1102,9 @@ $packagingBash = Resolve-PackagingBash
 
 Invoke-InRepo {
     Prepare-Llama
+    if ($speechRecognition -eq "ON") {
+        Prepare-Whisper
+    }
     # Resolve after preparing, so a pin switch builds into the new pin's
     # directory rather than the one the previous stamp named.
     $script:buildDir = Resolve-StageBuildDir $backendName
@@ -1121,6 +1148,11 @@ Invoke-InRepo {
         # that mesh-llm does not use; keep it off to match build-llama.sh.
         "-DMTMD_VIDEO=OFF"
     )
+
+    # SKIPPY_WHISPER_SOURCE_DIR is a CMake cache entry, so OFF passes it empty
+    # rather than leaving a previous configuration's tree in place.
+    $whisperSource = if ($speechRecognition -eq "ON") { ConvertTo-CmakePath $whisperDir } else { "" }
+    $cmakeArgs += "-DSKIPPY_WHISPER_SOURCE_DIR=$whisperSource"
 
     $rcPath = Resolve-CommandPath "rc"
     $mtPath = Resolve-CommandPath "mt"
