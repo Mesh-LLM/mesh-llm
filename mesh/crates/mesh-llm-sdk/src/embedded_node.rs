@@ -57,8 +57,9 @@ impl MeshNode {
         Ok(OpenAiClient::new(self.api_base_url()))
     }
 
-    /// Starts live transcription on this node; see
-    /// [`crate::live_transcription`].
+    /// Starts in-process transcription with a locally loaded speech model.
+    /// Remote-only models are rejected; use [`crate::live_transcription::LiveTranscription::start`]
+    /// explicitly when a network session is needed.
     pub async fn start_live_transcription(
         &self,
         options: crate::live_transcription::LiveTranscriptionOptions,
@@ -67,7 +68,7 @@ impl MeshNode {
             self.mode.allows_client_inference(),
             "client inference is disabled for a serve-only node"
         );
-        crate::live_transcription::LiveTranscription::start(self.api_base_url(), options).await
+        crate::live_transcription::LiveTranscription::start_native(&self.handle, options).await
     }
 
     pub async fn status(&self) -> anyhow::Result<MeshNodeStatus> {

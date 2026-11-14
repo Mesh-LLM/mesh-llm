@@ -106,7 +106,7 @@ async fn a_private_request_keeps_to_the_listed_nodes() {
         .await
         .unwrap();
     let listed = listed_peer(71, "listed-model");
-    node.private_nodes = std::sync::Arc::new([listed.id].into());
+    node.private_nodes = crate::mesh::private_nodes::PrivateNodes::of([listed.id]);
     node.insert_test_peer(listed).await;
     node.insert_test_peer(listed_peer(72, "stranger-model"))
         .await;

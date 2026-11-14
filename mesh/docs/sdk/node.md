@@ -153,6 +153,12 @@ client default and camelCase convenience options.
 
 ## Live transcription
 
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.
+
 ```js
 const session = await node.startLiveTranscription({
   model: 'speech-model', sampleRate: 16000, turnDetection: null,
@@ -184,3 +190,24 @@ empty text clears it. Append `delta` text to the confirmed transcript and let
 `completed` replace the whole turn, including tentative text. Read events
 concurrently with microphone input. `stop()` finishes the turn and returns
 unread events; `close()` abandons the session.
+## Structured inference failures
+
+`OpenAIRequestError.details` exposes the backend's `message`, `type`, `code`
+and `param` for both failed requests and streams. Check the code rather than
+matching display text:
+
+```javascript
+try {
+  await node.inference.chatCompletions({ model, messages })
+} catch (error) {
+  if (error instanceof OpenAIRequestError && error.details?.code === 'context_length_exceeded') {
+    // Compact the conversation before retrying.
+  } else {
+    throw error
+  }
+}
+```
+
+Import `OpenAIRequestError` from `@mesh-llm/sdk`. `statusCode` and the raw `body`
+remain available. `details` is `null` for transport failures or an unstructured
+body; missing optional fields stay `null`. Unknown codes are preserved.

@@ -151,6 +151,13 @@ primary mesh; it does not combine these independent meshes.
 
 ## Live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 Use signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection to commit
 turns explicitly:
 
@@ -211,3 +218,25 @@ the core. In this schema, `mode: 'serve'` means combined serving and inference,
 while `'serve_only'` means serving without SDK inference. The full-config
 default is combined, exactly as in Rust. Existing `Node.create()` keeps its
 client default and camelCase convenience options.
+
+## Structured inference failures
+
+`OpenAIRequestError.details` exposes the backend's `message`, `type`, `code`
+and `param` for both failed requests and streams. Check the code rather than
+matching display text:
+
+```javascript
+try {
+  await node.inference.chatCompletions({ model, messages })
+} catch (error) {
+  if (error instanceof OpenAIRequestError && error.details?.code === 'context_length_exceeded') {
+    // Compact the conversation before retrying.
+  } else {
+    throw error
+  }
+}
+```
+
+Import `OpenAIRequestError` from `@mesh-llm/sdk`. `statusCode` and the raw `body`
+remain available. `details` is `null` for transport failures or an unstructured
+body; missing optional fields stay `null`. Unknown codes are preserved.

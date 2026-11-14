@@ -140,6 +140,13 @@ primary mesh; it never combines independent memberships implicitly.
 
 ## Live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 Use signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection to commit
 turns explicitly:
 
@@ -202,3 +209,24 @@ omitted fields use native defaults, and unknown keys are rejected by the core.
 Full-config `mode` is `client`, `serve_only`, or `serve` (combined); the
 full-config default is combined, matching Rust. The existing `Node(...)`
 constructor keeps its client default and Kotlin convenience arguments.
+
+## Structured inference failures
+
+`OpenAIRequestException.details` and `OpenAIStreamException.details` expose
+typed `InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```kotlin
+try {
+    node.inference.chatCompletions(request)
+} catch (error: OpenAIRequestException) {
+    if (error.details?.code == "context_length_exceeded") {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `null` for transport failures or an unstructured body;
+missing optional fields stay `null`. Unknown codes are preserved.

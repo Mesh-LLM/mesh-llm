@@ -169,16 +169,22 @@ fn git_environment() -> DynResult<BTreeMap<OsString, Value>> {
 fn check_paths(repo_root: &Path, paths: &BTreeSet<String>, policy: &Policy) -> DynResult<()> {
     let manifest_paths = validate_inputs(repo_root, paths, policy)?;
     let mut observed_manifests = BTreeSet::new();
+    let mut observed_python_sources = BTreeSet::new();
     let mut observed_invocations = BTreeMap::<(String, String), usize>::new();
 
     for relative in paths {
         let path = Path::new(relative);
         let absolute = repo_root.join(path);
         if invocations::is_python_source(path) {
-            return Err(format!(
-                "repository Python source is forbidden: {relative}; keep SDK and upstream source in pinned external checkouts"
-            )
-            .into());
+            if !policy
+                .in_tree_python_component
+                .source_files
+                .iter()
+                .any(|expected| expected == relative)
+            {
+                return Err(format!("unreviewed repository Python source: {relative}").into());
+            }
+            observed_python_sources.insert(relative.as_str());
         }
         if invocations::is_python_package_manifest(path, &absolute)? {
             if !manifest_paths.contains(relative.as_str()) {
@@ -217,6 +223,11 @@ fn check_paths(repo_root: &Path, paths: &BTreeSet<String>, policy: &Policy) -> D
             .into());
         }
     }
+    for expected in &policy.in_tree_python_component.source_files {
+        if !observed_python_sources.contains(expected.as_str()) {
+            return Err(format!("stale in-tree Python SDK source entry {expected}").into());
+        }
+    }
     check_invocation_counts(policy, &observed_invocations)
 }
 
@@ -237,6 +248,39 @@ fn validate_inputs(
             )
             .into());
         }
+    }
+    let component = &policy.in_tree_python_component;
+    let canonical_repo_root = repo_root.canonicalize()?;
+    let sdk = crate::automation::python_sdk_source::admit(&canonical_repo_root)?;
+    let admitted_paths = sdk
+        .pins
+        .iter()
+        .map(|(path, _)| {
+            path.strip_prefix(&canonical_repo_root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .map_err(|_| "in-tree Python SDK pin escaped the repository")
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if !paths.contains(&component.manifest_path)
+        || !admitted_paths.contains(&component.manifest_path)
+    {
+        return Err(
+            "in-tree Python SDK manifest is not admitted by the repository source roster".into(),
+        );
+    }
+    for source in &component.source_files {
+        if !paths.contains(source) || !admitted_paths.contains(source) {
+            return Err(format!("in-tree Python SDK source is not admitted: {source}").into());
+        }
+    }
+    for package_input in &component.package_inputs {
+        if !paths.contains(package_input) || !admitted_paths.contains(package_input) {
+            return Err(format!(
+                "in-tree Python SDK package input is not admitted: {package_input}"
+            )
+            .into());
+        }
+        manifests.insert(package_input.clone());
     }
     policy::validate_external_source_descriptors(repo_root, &policy.external_source_descriptors)?;
     policy::validate_external_script_pins(repo_root, &policy.external_script_pins)?;

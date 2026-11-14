@@ -88,7 +88,19 @@ graceful stop returning remaining events, and immediate close. Defaults are
 16 kHz mono audio and turn detection with threshold `0.5`, 300 ms prefix padding
 and 500 ms silence. An explicit null turn detector (Python `None`) enables
 push-to-talk. Events preserve speech-start/stop, delta, committed, completed and
-error variants. This transport uses the embedded realtime WebSocket.
+error variants. Rust, Node.js, Swift and Kotlin embedded sessions use typed
+channels directly to a locally loaded speech model; no local HTTP or WebSocket
+connection is opened.
+Remote-only speech models are rejected before audio is accepted. Rust's explicit
+`LiveTranscription::start` and `OpenAiClient` retain network-based mesh relaying.
+Sample rates remain 8000–96000 Hz, with the same language, prompt, model/profile,
+VAD, cadence and tentative-result options. Dropping either native half, closing
+the session, or stopping the node cancels inference and releases admission.
+Native sessions validate audio rate, cadence and VAD settings before startup
+returns; invalid options fail before audio is accepted.
+Turn IDs remain opaque and stable within each session.
+The separately versioned Python SDK retains its current transport; its native
+transcription migration is deferred.
 
 ## Native Runtime Artifacts
 

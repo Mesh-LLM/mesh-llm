@@ -46,6 +46,11 @@ on:
         required: false
         default: false
         type: boolean
+      backend:
+        description: Optional single backend from the unchanged catalog rows.
+        required: false
+        default: ''
+        type: string
       runtime_matrix:
         description: JSON Linux product rows from the versioned CI plan.
         required: true
@@ -79,10 +84,22 @@ jobs:
     permissions:
       contents: read
     outputs:
+      runtime_matrix: ${{ steps.rows.outputs.runtime_matrix }}
       runner: ${{ steps.policy.outputs.runner }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
       allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
     steps:
+      - name: Select requested backend rows
+        id: rows
+        shell: bash
+        env:
+          RUNTIME_MATRIX: ${{ inputs.runtime_matrix }}
+          BACKEND: ${{ inputs.backend }}
+        run: |
+          set -euo pipefail
+          case "$BACKEND" in ''|cpu|cuda|rocm|vulkan) ;; *) exit 1 ;; esac
+          rows="$(jq -c --arg backend "$BACKEND" '[.[] | select($backend == "" or .backend == $backend)]' <<< "$RUNTIME_MATRIX")"
+          printf 'runtime_matrix=%s\n' "$rows" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.policy_source_sha || github.event.repository.default_branch }}
@@ -115,9 +132,9 @@ jobs:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
-        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+        runtime: ${{ fromJson(needs.runner_policy.outputs.runtime_matrix) }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     defaults:
       run:
         shell: bash

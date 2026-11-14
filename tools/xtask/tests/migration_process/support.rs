@@ -43,10 +43,14 @@ pub fn limits() -> Limits {
 }
 
 pub fn ready(limits: &mut Limits, marker: &[u8]) {
+    ready_with_deadline(limits, marker, Duration::from_secs(2));
+}
+
+pub fn ready_with_deadline(limits: &mut Limits, marker: &[u8], deadline: Duration) {
     limits.readiness = Readiness::Line {
         stream: Stream::Stdout,
         bytes: marker.to_vec(),
-        deadline: Duration::from_secs(2),
+        deadline,
     };
 }
 

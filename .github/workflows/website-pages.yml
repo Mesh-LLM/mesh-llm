@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ff53048ee7a87b3244ccbfa1b2888fde5db31a73d0dfa42f283d25dde0115307
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:857e6641d78868318d81a353c13d5a021187dec8694ffc4a2ecdf6c34b84de0f
 
     steps:
       - name: Checkout repository

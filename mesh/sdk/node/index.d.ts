@@ -110,9 +110,17 @@ export type OpenAIStreamSSE = {
 
 export type OpenAIStreamEvent = OpenAIStreamStarted | OpenAIStreamSSE
 
+export type InferenceErrorDetails = {
+  message: string
+  type: string
+  code: string | null
+  param: string | null
+}
+
 export declare class OpenAIRequestError extends Error {
   readonly statusCode: number | null
   readonly body: string | null
+  readonly details: InferenceErrorDetails | null
 }
 
 export declare class Inference {

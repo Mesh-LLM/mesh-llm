@@ -444,7 +444,7 @@ exit 23
         .env(
             "MESH_PYTHON_SDK_SOURCE",
             std::env::var_os("MESH_PYTHON_SDK_SOURCE")
-                .expect("prepare the pinned external SDK source for native admission"),
+                .expect("set the in-tree SDK source for native admission"),
         )
         .env(
             "SKIPPY_WORKLOAD_SDK_PYTHON",

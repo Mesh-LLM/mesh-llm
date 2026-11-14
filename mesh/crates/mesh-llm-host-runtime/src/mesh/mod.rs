@@ -103,6 +103,7 @@ pub(crate) mod plugin_keys;
 mod plugin_mesh;
 mod plugin_streams;
 mod pre_admission;
+pub(crate) mod private_nodes;
 mod private_scope;
 pub mod requirements;
 mod signed_records;
@@ -119,7 +120,6 @@ pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use mesh_llm_membership::connection_reservation::*;
 use mesh_llm_membership::state::MembershipState;
 use model_identity::*;
-pub(crate) use plugin_streams::endpoint_id_from_hex;
 pub(crate) use private_scope::{PrivateScope, current_private_scope, with_private_scope};
 // Main's openai::model_names calls this through the mesh:: path; keep the
 // pub(crate) surface stable across the model_identity move.
@@ -169,6 +169,7 @@ pub(crate) use mesh_llm_membership::{identity_home_dir, identity_state_dir};
     reason = "shared discovery address classification moved to mesh-llm-membership"
 )]
 pub(crate) use mesh_llm_membership::{is_global_ipv4_candidate, is_public_ipv4_candidate};
+pub(crate) use node::{InferenceAttemptReport, NodeStartupSpec, ScopedNodeIdentity};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -180,7 +181,6 @@ pub(crate) use node::{
     MembershipEntry, MembershipNodeConfig, PeerDownReport, StartupResolution,
     membership_token_endpoint, peer_down_endpoint_id,
 };
-pub(crate) use node::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
     peer_has_observed_liveness, public_model_id_for_routable_model, resolve_peer_leaving,

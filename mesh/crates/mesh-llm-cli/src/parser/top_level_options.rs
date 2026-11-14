@@ -455,10 +455,4 @@ pub struct OwnerOptions {
     /// Add trusted owner IDs on top of the local trust store.
     #[arg(long)]
     pub trust_owner: Vec<String>,
-
-    /// Another of your nodes that may serve this node's private requests, by
-    /// the node id `mesh-llm auth status` prints. Repeatable. Without any, a
-    /// private request stays on this node.
-    #[arg(long = "private-node", value_name = "NODE_ID")]
-    pub private_node: Vec<String>,
 }

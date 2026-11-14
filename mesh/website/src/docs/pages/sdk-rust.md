@@ -4,6 +4,30 @@ title: Rust SDK
 
 # Rust SDK
 
+## Structured native inference failures
+
+Local native backend failures preserve `mesh_llm_sdk::inference::InferenceError`
+in the `anyhow::Error` chain, including failures yielded by `next_chunk()`:
+
+```rust
+use mesh_llm_sdk::inference::InferenceError;
+
+fn context_is_full(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<InferenceError>().is_some_and(|failure| {
+        failure.body().error.code.as_deref() == Some("context_length_exceeded")
+    })
+}
+```
+
+`status()`, `message()` and `body().error` retain the backend's status,
+message, type, code and parameter. Remote native failures retain the peer's
+message rather than a local backend type. Errors without a structured backend
+body remain ordinary `anyhow::Error` values; do not infer a code from display text.
+Node.js, Swift and Kotlin expose structured backend fields through their request
+and stream failure types' `details` property. Their existing native bridges
+preserve status and raw bodies without an ABI change. Python parity is deferred
+to a separate change in its external SDK repository.
+
 Use [`mesh-llm-sdk`](https://crates.io/crates/mesh-llm-sdk) to embed one `MeshNode`.
 Its default `serving` feature includes the embedded node APIs. Select the role
 with `.client()`, `.serve_only()`, or `.serve()` (combined).
@@ -107,6 +131,13 @@ failures and provider HTTP errors return errors. `document_ocr_raw` preserves
 provider status, content type and body for application status handling.
 
 ## Memberships and live transcription
+
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
 
 `add_membership`, `remove_membership`, and `memberships` manage additional meshes
 without loading local models again. Each membership has its own identity,

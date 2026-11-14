@@ -1010,6 +1010,7 @@ mod tests {
             models: Vec::new(),
             plugins: Vec::new(),
             owner_control: Default::default(),
+            private: Default::default(),
             telemetry: Default::default(),
             analytics: Default::default(),
             updates: Default::default(),
