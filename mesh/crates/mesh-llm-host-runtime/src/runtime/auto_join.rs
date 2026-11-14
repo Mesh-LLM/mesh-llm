@@ -525,18 +525,24 @@ pub(super) fn resolve_rejoin_tokens(
 /// Save the node's mesh ID as the rejoin preference each time `changes` says
 /// the node stored a new one. A node of a public mesh can move to a lower mesh
 /// ID long after its first save, and its next start should still prefer the
-/// mesh it converged on. Runs for as long as the node does.
+/// mesh it converged on. Ends when the node's endpoint closes, so a stopped
+/// embedded runtime does not keep its node alive through this task.
 pub(super) async fn save_last_mesh_id_on_change(
     node: mesh::Node,
     mut changes: tokio::sync::watch::Receiver<()>,
 ) {
-    while changes.changed().await.is_ok() {
-        if let Some(id) = node.mesh_id().await
-            && let Err(error) = mesh::save_last_mesh_id(&id)
-        {
-            tracing::warn!(error = %error, "failed to save last mesh ID");
-        }
-    }
+    let closed = node.endpoint.closed();
+    closed
+        .run_until(async move {
+            while changes.changed().await.is_ok() {
+                if let Some(id) = node.mesh_id().await
+                    && let Err(error) = mesh::save_last_mesh_id(&id)
+                {
+                    tracing::warn!(error = %error, "failed to save last mesh ID");
+                }
+            }
+        })
+        .await;
 }
 
 pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, node: &mesh::Node) {
@@ -754,11 +760,12 @@ mod tests {
         node.public_mesh = true;
 
         // As at startup: the node takes an ID and saves it, then keeps
-        // following changes.
-        let changes = node.subscribe_mesh_id_changes();
+        // following changes. Subscribing after HIGH leaves no notification
+        // pending, so only the later change can move the saved ID.
         node.set_mesh_id(HIGH.into()).await;
         mesh::save_last_mesh_id(HIGH).expect("initial save should succeed");
-        tokio::spawn(save_last_mesh_id_on_change(node.clone(), changes));
+        let changes = node.subscribe_mesh_id_changes();
+        let follower = tokio::spawn(save_last_mesh_id_on_change(node.clone(), changes));
 
         node.set_mesh_id(LOW.into()).await;
         assert_eq!(node.mesh_id().await.as_deref(), Some(LOW));
@@ -776,6 +783,13 @@ mod tests {
             "the rejoin preference should move to the converged ID, still {:?}",
             mesh::load_last_mesh_id()
         );
+
+        // A stopped runtime closes the node's endpoint, which ends the task.
+        node.endpoint.close().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), follower)
+            .await
+            .expect("the task should end once the endpoint closes")
+            .expect("the task should not panic");
     }
 
     #[test]
