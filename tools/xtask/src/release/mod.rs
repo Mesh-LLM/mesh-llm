@@ -21,6 +21,7 @@ mod link_commits;
 mod link_gh;
 mod link_host;
 mod notes_base;
+mod packaging_receipt;
 mod preflight;
 mod preview_version;
 mod regroup;
@@ -41,6 +42,7 @@ use std::io::Read as _;
 #[derive(Clone, Copy)]
 pub(crate) enum ReleaseCommand {
     PreviewVersion,
+    PackagingReceipt,
     Inventory,
     Base,
     Link,
@@ -57,6 +59,7 @@ impl ReleaseCommand {
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
             "preview-version" => Some(Self::PreviewVersion),
+            "packaging-receipt" => Some(Self::PackagingReceipt),
             "inventory" => Some(Self::Inventory),
             "notes-base" => Some(Self::Base),
             "notes-link" => Some(Self::Link),
@@ -75,6 +78,7 @@ impl ReleaseCommand {
 pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
     let report = match command {
         ReleaseCommand::PreviewVersion => preview_version::run(args),
+        ReleaseCommand::PackagingReceipt => return packaging_receipt::run(args),
         ReleaseCommand::Inventory => return inventory::run(args).map_err(Into::into),
         ReleaseCommand::Base => notes_base::run(args, || {
             let mut bytes = Vec::new();

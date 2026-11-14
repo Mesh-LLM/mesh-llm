@@ -880,14 +880,17 @@ days.
 
 After a stable release with the full GPU matrix succeeds, the downstream
 `mesh-packaging` dispatch job first checks that its
-`MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository.
+`MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository
+and probes the Actions run-list endpoint. Because that endpoint is public,
+the probe does not prove that the credential can download an artifact. A denied
+artifact download fails the wait job.
 That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
 The dispatch binds the published tag commit, native runtime manifest SHA-256,
-and upstream run-attempt correlation ID. It does not wait for packaging: the
-operator verifies the matching downstream readiness receipt and every requested
-channel before reporting distribution complete.
+and upstream run-attempt correlation ID. A separate job waits for the matching
+run and validates its readiness receipt and requested channels. Retrying the
+wait job does not dispatch another packaging run.
 
 The non-canary path below assumes the version-preparation PR has merged.
 

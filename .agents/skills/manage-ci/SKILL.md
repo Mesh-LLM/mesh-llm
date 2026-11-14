@@ -130,7 +130,7 @@ not wait on a producer and only plan or validate (the entry planners through
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
-such as authority audits, canary summaries, and preview
+such as authority audits, canary summaries, release receipt verification, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
@@ -682,8 +682,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Stable downstream packaging dispatch carries the published tag commit, native
   runtime release manifest digest, and a run-attempt correlation ID. The tag
   commit can differ from the build source after release resources are generated.
-  The dispatcher does not wait for downstream readiness; operators verify the
-  matching receipt and all requested channels before reporting distribution complete.
+  A separate wait job requires the matching successful downstream receipt and
+  every requested channel. Its two-hour deadline fails closed. The downstream
+  credential needs Contents write and Actions read; rerunning the wait job must
+  not dispatch another publication.
 
 ## Workflow definition and dependencies
 
