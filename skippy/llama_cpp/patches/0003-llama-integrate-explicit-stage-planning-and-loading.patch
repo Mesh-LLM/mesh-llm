@@ -4331,9 +4331,14 @@ index bc93c6f9e..f7f1db8fc 100644
          }
      } else {
          get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
-@@ -718,6 +781,16 @@ llama_model_loader::llama_model_loader(
+@@ -718,6 +781,20 @@ llama_model_loader::llama_model_loader(
      n_kv      = gguf_get_n_kv(metadata);
-     n_tensors = weights_map.size();
+-    n_tensors = weights_map.size();
++    // BigHead tensors share the GGUF but are consumed by Skippy, not this model graph.
++    n_tensors = static_cast<int>(std::count_if(
++            weights_map.begin(),
++            weights_map.end(),
++            [](const auto & entry) { return entry.first.compare(0, 8, "bighead.") != 0; }));
  
 +    if (has_stage_selection) {
 +        for (const std::string & name : stage_selection.resident_tensor_names) {
