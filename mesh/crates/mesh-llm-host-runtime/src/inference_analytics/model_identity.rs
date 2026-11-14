@@ -119,13 +119,15 @@ fn catalog_name_for_request(name: &str) -> Option<String> {
 }
 
 /// The backend of a selected device name: `CUDA0` is `cuda`, `CPU` is
-/// `cpu`. A device no backend name covers reports nothing rather than a guess.
-pub(crate) fn backend_of_selected_device(device: &str) -> Option<&'static str> {
-    mesh_llm_analytics::backend_of_device(device).or_else(|| {
-        device
-            .to_ascii_lowercase()
-            .starts_with("cpu")
-            .then_some("cpu")
+/// `cpu`. A selected device no backend name covers (`SYCL0`) is `other`: a
+/// device was chosen, so the runtime's registered GPUs must not stand in.
+pub(crate) fn backend_of_selected_device(device: &str) -> &'static str {
+    mesh_llm_analytics::backend_of_device(device).unwrap_or_else(|| {
+        if device.to_ascii_lowercase().starts_with("cpu") {
+            "cpu"
+        } else {
+            "other"
+        }
     })
 }
 

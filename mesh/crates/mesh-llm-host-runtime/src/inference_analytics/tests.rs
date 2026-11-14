@@ -276,3 +276,28 @@ fn mesh_links_summarize_each_class() {
     assert!(properties.get("relay_rtt_ms_median").is_none());
     assert_eq!(properties.get("unknown_peers"), Some(&Value::Int(0)));
 }
+
+#[test]
+fn the_selected_device_outranks_the_runtime_backend_on_requests() {
+    let hardware = mesh_llm_analytics::ServingHardware {
+        backend: "cuda",
+        gpu_family: Value::from("rtx-4090"),
+        vram_gb: Some(24),
+    };
+    let on_cpu = ModelIdentity {
+        backend: Some("cpu"),
+        ..ModelIdentity::redacted()
+    };
+    let properties = hardware.apply(
+        request_properties(&stats(), &on_cpu, 1),
+        request_backend(&on_cpu, || Some("cuda")),
+    );
+    assert_eq!(properties.get("backend"), Some(&Value::Static("cpu")));
+
+    // No device selected: the runtime's offload device decides.
+    let unselected = ModelIdentity::redacted();
+    assert_eq!(
+        request_backend(&unselected, || Some("vulkan")),
+        Some("vulkan")
+    );
+}

@@ -171,9 +171,7 @@ fn model_identity(model: &LoadedModel<'_>, catalog_name: Option<&str>) -> ModelI
             .and_then(mesh_llm_analytics::Label::sanitize),
         dflash_draft: pairing
             .and_then(|pairing| mesh_llm_analytics::Label::sanitize(&pairing.draft.repo)),
-        backend: model
-            .device
-            .and_then(model_identity::backend_of_selected_device),
+        backend: model.device.map(model_identity::backend_of_selected_device),
     }
 }
 

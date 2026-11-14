@@ -121,7 +121,7 @@ carries a `weight` saying how many requests it stands for. It carries:
 |---|---|---|
 | `model`, `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` | `Qwen3-8B-Q4_K_M`, `redacted` | As `model_loaded` reported them; see [Model names](#model-names) |
 | `weight` | `1`, `12` | Requests this event represents |
-| `backend` | `cuda`, `metal`, `rocm`, `vulkan`, `cpu` | The backend that served: the device the model was loaded onto when the load selected one (a model on `CPU` is `cpu` even with a GPU present), otherwise the first GPU device the loaded runtime offloads to |
+| `backend` | `cuda`, `metal`, `rocm`, `vulkan`, `cpu`, `other` | The backend that served: the device the model was loaded onto when the load selected one (a model on `CPU` is `cpu` even with a GPU present; a selected device of any other kind is `other`), otherwise the first GPU device the loaded runtime offloads to |
 | `gpu_family` | `apple-m4`, `rtx-4090`, `gb10`, `none` | `hardware_profile`'s `gpu_model` reduced to its family: vendor words, form factor (`laptop`) and Apple tiers (`pro`, `max`) dropped, so it has fewer values than `gpu_model` |
 | `vram_gb` | `24`, `128` | GPU memory in whole GiB. Unlike `hardware_profile`, it leaves out the system RAM that extends the budget on discrete-GPU hosts, and is absent with no GPU |
 | `request_kind` | `agentic`, `chat`, `completion` | `agentic` when tools were offered or the history carries tool results, `chat` for other message requests, `completion` for a raw prompt |

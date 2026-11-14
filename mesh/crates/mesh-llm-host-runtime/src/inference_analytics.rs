@@ -63,13 +63,20 @@ impl GenerationStatsObserver for AnalyticsObserver {
         let model = model_identity::lookup(&stats.model_id);
         let mut properties = request_properties(stats, &model, weight);
         if let Some(hardware) = mesh_llm_analytics::serving_hardware() {
-            // The device the model was loaded onto decides the backend; with
-            // no device selected, the runtime offloads to its GPU devices.
-            let backend = model.backend.or_else(loaded_backend);
-            properties = hardware.apply(properties, backend);
+            properties = hardware.apply(properties, request_backend(&model, loaded_backend));
         }
         mesh_llm_analytics::capture(Event::InferenceRequest, properties);
     }
+}
+
+/// The backend an `inference_request` reports. The device the model was
+/// loaded onto decides it; only a load that selected no device takes the
+/// runtime's, since the runtime then offloads to its own GPU devices.
+fn request_backend(
+    model: &ModelIdentity,
+    runtime_backend: impl FnOnce() -> Option<&'static str>,
+) -> Option<&'static str> {
+    model.backend.or_else(runtime_backend)
 }
 
 /// The backend a model loaded with no selected device runs on: the first GPU
