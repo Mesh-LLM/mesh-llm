@@ -10,7 +10,7 @@ fi
 case "$APP_MODE" in
   console|"")
     # shellcheck disable=SC2086
-    exec mesh-llm --client --auto --port 9337 --console 3131 --listen-all $HEADLESS_FLAG
+    exec mesh-llm client --auto --port 9337 --console 3131 --listen-all $HEADLESS_FLAG
     ;;
   worker)
     echo "APP_MODE=worker is not supported by the client-only image; use a build that includes the staged runtime." >&2
