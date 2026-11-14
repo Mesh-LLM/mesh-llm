@@ -4804,6 +4804,7 @@ dependencies = [
  "skippy-model-hf",
  "skippy-model-ref",
  "skippy-native-runtime",
+ "skippy-runtime",
  "skippy-runtime-install",
  "strum",
  "tempfile",

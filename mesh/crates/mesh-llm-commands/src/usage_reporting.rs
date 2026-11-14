@@ -75,17 +75,81 @@ pub fn init_for_unparsed(raw_args: &[OsString], config_path: Option<&Path>) {
     mesh_llm_analytics::init(crate::analytics::config_preference(config_path));
 }
 
+/// Why a `serve` session or a one-shot command failed, from a fixed list.
+///
+/// Classified from the typed causes in the error chain, never from its text,
+/// so no path, model name, or message rides along. The outermost recognised
+/// cause wins: a model download that failed on a permission error is
+/// `model_download`. A failure with no recognised cause is `other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The port `serve` binds is already held, typically by another node.
+    PortInUse,
+    PermissionDenied,
+    /// No compatible native runtime could be resolved, or it would not load.
+    RuntimeUnavailable,
+    ModelDownload,
+    /// The config file is not valid TOML for the config schema.
+    ConfigInvalid,
+    Other,
+}
+
+impl FailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PortInUse => "port_in_use",
+            Self::PermissionDenied => "permission_denied",
+            Self::RuntimeUnavailable => "runtime_unavailable",
+            Self::ModelDownload => "model_download",
+            Self::ConfigInvalid => "config_invalid",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn classify(error: &anyhow::Error) -> Self {
+        for cause in error.chain() {
+            if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                match io.kind() {
+                    std::io::ErrorKind::AddrInUse => return Self::PortInUse,
+                    std::io::ErrorKind::PermissionDenied => return Self::PermissionDenied,
+                    _ => {}
+                }
+            }
+            if cause.is::<skippy_runtime::NativeRuntimeLoadError>()
+                || cause.is::<skippy_runtime_install::NativeRuntimeResolutionError>()
+            {
+                return Self::RuntimeUnavailable;
+            }
+            if cause.is::<hf_hub::HFError>() {
+                return Self::ModelDownload;
+            }
+            if cause.is::<toml::de::Error>() {
+                return Self::ConfigInvalid;
+            }
+        }
+        Self::Other
+    }
+}
+
 /// Record the outcome of a one-shot command.
 ///
-/// Only the family and the outcome are reported. Both are closed enums, so no
-/// argument, path, model name, or error text can ride along.
-pub fn record_cli_command(family: CliCommandFamily, outcome: CliCommandOutcome) {
-    mesh_llm_analytics::capture(
-        Event::CliCommand,
-        Properties::new()
-            .with("family", family.as_str())
-            .with("outcome", outcome.as_str()),
-    );
+/// The family, the outcome and, for a failed command, its [`FailureKind`] are
+/// reported. All three are closed enums, so no argument, path, model name, or
+/// error text can ride along.
+pub fn record_cli_command(
+    family: CliCommandFamily,
+    outcome: CliCommandOutcome,
+    error: Option<&anyhow::Error>,
+) {
+    let mut properties = Properties::new()
+        .with("family", family.as_str())
+        .with("outcome", outcome.as_str());
+    if outcome == CliCommandOutcome::Failed
+        && let Some(error) = error
+    {
+        properties = properties.with("failure", FailureKind::classify(error).as_str());
+    }
+    mesh_llm_analytics::capture(Event::CliCommand, properties);
 }
 
 /// A `serve` session being measured from start to shutdown.
@@ -107,20 +171,22 @@ impl ServeSession {
         }
     }
 
-    /// Record the session ending, bucketing how long it lasted.
+    /// Record the session ending, bucketing how long it lasted, and for a
+    /// failed session its [`FailureKind`].
     ///
     /// Session length is the signal that separates a node someone actually
     /// runs from one that crashed or was tried once.
-    pub fn finish(self, succeeded: bool) {
-        mesh_llm_analytics::capture(
-            Event::ServeStopped,
-            Properties::new()
-                .with(
-                    "session_length",
-                    mesh_llm_analytics::bucket_duration_secs(self.started.elapsed().as_secs()),
-                )
-                .with("succeeded", succeeded),
-        );
+    pub fn finish(self, outcome: Result<(), &anyhow::Error>) {
+        let mut properties = Properties::new()
+            .with(
+                "session_length",
+                mesh_llm_analytics::bucket_duration_secs(self.started.elapsed().as_secs()),
+            )
+            .with("succeeded", outcome.is_ok());
+        if let Err(error) = outcome {
+            properties = properties.with("failure", FailureKind::classify(error).as_str());
+        }
+        mesh_llm_analytics::capture(Event::ServeStopped, properties);
     }
 }
 
@@ -407,6 +473,64 @@ pub async fn shutdown() {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    fn classify(error: anyhow::Error) -> &'static str {
+        FailureKind::classify(&error).as_str()
+    }
+
+    #[test]
+    fn failure_kind_reads_io_kinds_under_context() {
+        let held = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        assert_eq!(
+            classify(anyhow::Error::new(held).context("bind API port 9337")),
+            "port_in_use"
+        );
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            classify(anyhow::Error::new(denied).context("write config")),
+            "permission_denied"
+        );
+        let other = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(classify(anyhow::Error::new(other)), "other");
+    }
+
+    #[test]
+    fn failure_kind_recognises_runtime_download_and_config_errors() {
+        let runtime = skippy_runtime::NativeRuntimeLoadError::Load("missing symbol".into());
+        assert_eq!(
+            classify(anyhow::Error::from(runtime).context("load native runtime")),
+            "runtime_unavailable"
+        );
+        assert_eq!(
+            classify(anyhow::Error::from(hf_hub::HFError::CacheNotEnabled).context("download")),
+            "model_download"
+        );
+        let toml = toml::from_str::<toml::Value>("not = = toml").unwrap_err();
+        assert_eq!(
+            classify(anyhow::Error::from(toml).context("Invalid config")),
+            "config_invalid"
+        );
+    }
+
+    #[test]
+    fn failure_kind_ignores_error_text() {
+        // Only types count: a message that names a port or a runtime is other.
+        assert_eq!(
+            classify(anyhow::anyhow!(
+                "address already in use: native runtime load failed"
+            )),
+            "other"
+        );
+    }
+
+    #[test]
+    fn failure_kind_keeps_a_download_that_failed_on_io_a_download_failure() {
+        // HFError::Io wraps the io error transparently, so the chain shows the
+        // Hugging Face error, not a permission error.
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let error = anyhow::Error::from(hf_hub::HFError::from(denied)).context("download model");
+        assert_eq!(classify(error), "model_download");
+    }
 
     #[test]
     fn serve_properties_describe_shape_without_naming_anything() {

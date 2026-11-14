@@ -157,6 +157,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
                 Ok(_) => mesh_llm_events::CliCommandOutcome::Completed,
                 Err(_) => mesh_llm_events::CliCommandOutcome::Failed,
             },
+            command_dispatch.as_ref().err(),
         );
         if logging_initialized {
             let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
@@ -184,7 +185,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         // so give the survey a bounded chance to land first. A successful
         // startup never waits for it.
         let _ = tokio::time::timeout(Duration::from_secs(10), hardware_profile).await;
-        session.finish(false);
+        session.finish(Err(&error));
         mesh_llm_commands::usage_reporting::shutdown().await;
         return Err(error);
     }
@@ -197,7 +198,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
 
     let outcome =
         mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await;
-    session.finish(outcome.is_ok());
+    session.finish(outcome.as_ref().map(|_| ()));
     mesh_llm_commands::usage_reporting::shutdown().await;
     outcome
 }
@@ -220,7 +221,8 @@ async fn emit_early_cli_process_event(
         install_cli_operational_audit_bridge();
     }
     mesh_llm_commands::operational_logging::emit_cli_process_event(family, outcome);
-    mesh_llm_commands::usage_reporting::record_cli_command(family, outcome);
+    // A parse failure carries no error chain to classify.
+    mesh_llm_commands::usage_reporting::record_cli_command(family, outcome, None);
     if logging_initialized {
         let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
     }
