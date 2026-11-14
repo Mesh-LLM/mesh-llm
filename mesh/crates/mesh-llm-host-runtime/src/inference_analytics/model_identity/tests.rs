@@ -80,8 +80,8 @@ fn text(value: &mesh_llm_analytics::Value) -> Option<String> {
 
 #[test]
 fn a_selected_device_names_its_backend() {
-    assert_eq!(backend_of_selected_device("CPU"), Some("cpu"));
-    assert_eq!(backend_of_selected_device("CUDA1"), Some("cuda"));
-    assert_eq!(backend_of_selected_device("MTL0"), Some("metal"));
-    assert_eq!(backend_of_selected_device("SYCL0"), None);
+    assert_eq!(backend_of_selected_device("CPU"), "cpu");
+    assert_eq!(backend_of_selected_device("CUDA1"), "cuda");
+    assert_eq!(backend_of_selected_device("MTL0"), "metal");
+    assert_eq!(backend_of_selected_device("SYCL0"), "other");
 }
