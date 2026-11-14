@@ -529,38 +529,56 @@ pub(super) fn resolve_rejoin_tokens(
 /// embedded runtime does not keep its node alive through this task.
 pub(super) async fn save_last_mesh_id_on_change(
     node: mesh::Node,
+    changes: tokio::sync::watch::Receiver<()>,
+) {
+    let closed = node.endpoint.closed();
+    closed
+        .run_until(follow_mesh_id_changes(node, changes))
+        .await;
+}
+
+async fn follow_mesh_id_changes(node: mesh::Node, mut changes: tokio::sync::watch::Receiver<()>) {
+    while changes.changed().await.is_ok() {
+        if let Some(id) = node.mesh_id().await
+            && let Err(error) = mesh::save_last_mesh_id(&id)
+        {
+            tracing::warn!(error = %error, "failed to save last mesh ID");
+        }
+    }
+}
+
+/// After `delay`, record the joined mesh and save its ID as the rejoin
+/// preference, then follow later changes. All of it ends when the node's
+/// endpoint closes, so a stopped runtime never saves an ID after shutdown.
+async fn save_last_mesh_id_after_join(
+    node: mesh::Node,
     mut changes: tokio::sync::watch::Receiver<()>,
+    delay: std::time::Duration,
 ) {
     let closed = node.endpoint.closed();
     closed
         .run_until(async move {
-            while changes.changed().await.is_ok() {
-                if let Some(id) = node.mesh_id().await
-                    && let Err(error) = mesh::save_last_mesh_id(&id)
-                {
+            tokio::time::sleep(delay).await;
+            // This save covers every change so far; later ones are saved below.
+            changes.mark_unchanged();
+            if let Some(id) = node.mesh_id().await {
+                record_first_joined_mesh_ts(&node).await;
+                if let Err(error) = mesh::save_last_mesh_id(&id) {
                     tracing::warn!(error = %error, "failed to save last mesh ID");
                 }
+                tracing::info!("Mesh ID: {id}");
             }
+            follow_mesh_id_changes(node, changes).await;
         })
         .await;
 }
 
 pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, node: &mesh::Node) {
-    let save_node = node.clone();
-    let mut mesh_id_changes = node.subscribe_mesh_id_changes();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        // This save covers every change so far; later ones are saved below.
-        mesh_id_changes.mark_unchanged();
-        if let Some(id) = save_node.mesh_id().await {
-            record_first_joined_mesh_ts(&save_node).await;
-            if let Err(error) = mesh::save_last_mesh_id(&id) {
-                tracing::warn!(error = %error, "failed to save last mesh ID");
-            }
-            tracing::info!("Mesh ID: {id}");
-        }
-        save_last_mesh_id_on_change(save_node, mesh_id_changes).await;
-    });
+    tokio::spawn(save_last_mesh_id_after_join(
+        node.clone(),
+        node.subscribe_mesh_id_changes(),
+        std::time::Duration::from_secs(5),
+    ));
 
     let mesh_id = node
         .mesh_id()
@@ -745,6 +763,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_shutdown_during_the_join_delay_saves_no_mesh_id() {
+        let home = tempfile::tempdir().expect("tempdir should exist");
+        let _home = TestHomeGuard::set(home.path());
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .expect("test node should start");
+        node.set_mesh_id("eeeeeeeeeeeeeeee".into()).await;
+        let saver = tokio::spawn(save_last_mesh_id_after_join(
+            node.clone(),
+            node.subscribe_mesh_id_changes(),
+            std::time::Duration::from_secs(60),
+        ));
+
+        node.endpoint.close().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), saver)
+            .await
+            .expect("the task should end once the endpoint closes")
+            .expect("the task should not panic");
+        assert_eq!(mesh::load_last_mesh_id(), None);
     }
 
     #[tokio::test]
