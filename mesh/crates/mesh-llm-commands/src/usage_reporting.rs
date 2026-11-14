@@ -95,9 +95,13 @@ pub struct ServeSession {
 
 impl ServeSession {
     /// Record that a runtime surface started, and begin timing it.
+    ///
+    /// The hardware profile is not reported here: with a dynamic native
+    /// runtime the survey reads devices from the loaded runtime, which is not
+    /// loaded yet at this point. The caller reports it once runtime
+    /// initialization has finished, see [`report_hardware_profile`].
     pub fn start(cli: &Cli) -> Self {
         mesh_llm_analytics::capture(Event::ServeStarted, serve_properties(cli));
-        report_hardware_profile();
         Self {
             started: Instant::now(),
         }
@@ -157,9 +161,18 @@ fn is_post_update_restart() -> bool {
 
 /// Report the shape of this machine, once per serving process.
 ///
+/// Call it after native runtime initialization: with a dynamic runtime
+/// (every Windows host, and release builds elsewhere) the survey takes devices
+/// and memory from the loaded runtime, and before the load it falls back to
+/// what the OS reports. On Windows that fallback counts display adapters the
+/// runtime cannot use and misses an integrated GPU's shared memory, so a
+/// report sent earlier describes a different machine than the node advertises.
+///
 /// Hardware probes shell out to platform tools, so this runs on a blocking
-/// thread and reports whenever it finishes. Startup never waits for it.
-pub fn report_hardware_profile() {
+/// thread and reports whenever it finishes. Startup never waits for it. The
+/// returned handle lets a caller that is about to shut analytics down wait a
+/// bounded time for the report first; dropping it leaves the task running.
+pub fn report_hardware_profile() -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(|| {
         use mesh_llm_system::hardware::Metric;
 
@@ -178,7 +191,7 @@ pub fn report_hardware_profile() {
             Event::HardwareProfile,
             hardware_properties(&survey, &flavors),
         );
-    });
+    })
 }
 
 /// Build hardware properties from a survey and the detected backends.

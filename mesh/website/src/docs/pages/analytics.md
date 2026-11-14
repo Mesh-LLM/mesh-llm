@@ -68,7 +68,8 @@ And one of these events:
 | `inference_route` | see below | Where requests go (this node, a peer, an endpoint), whether they succeed, and the link to the peer |
 | `mesh_links` | see below | How this node's peers are connected and how far away they are |
 
-`hardware_profile` is sent once per `serve` process and carries:
+`hardware_profile` is sent once per `serve` process, after the native runtime
+has loaded, so it describes the devices and memory the node uses. It carries:
 
 | Property | Example | Notes |
 |---|---|---|
