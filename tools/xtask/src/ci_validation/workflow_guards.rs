@@ -39,6 +39,7 @@ mod runner_finalization;
 mod runtime_events;
 mod selected_ref;
 mod shell;
+mod smoke_automation;
 mod windows_build_paths;
 mod windows_skippy_probes;
 
@@ -82,6 +83,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     }
     cancellation::check(&workflows)?;
     product_chains::check(&workflows)?;
+    smoke_automation::check(root, &workflows)?;
     quality_contracts::check(root, &workflows)?;
     quality_consistency::check(&workflows)?;
     selected_ref::check(&workflows)?;

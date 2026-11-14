@@ -2387,8 +2387,8 @@ authority artifact, and `product-clean` claims no protected authority. Its
 `identity_json` output (source SHA, artifact ID, executable digest, producer
 OS/architecture) is the only value consumers receive.
 
-The static ABI producer, Rust test batches, host, native-runtime and product
-composition jobs of each lane list the producer in `needs`, take its identity as
+The static ABI producer, Rust test batches, host, native-runtime, native SDK, Swift target/assembly, SDK smoke and product smoke
+jobs of each lane list the producer in `needs`, take its identity as
 the `product_automation` input and run `restore-automation`, which verifies
 source, artifact ID, digest and that the producer ran on the same OS and
 architecture. They never rebuild xtask and have no `prepare-automation`
@@ -2400,6 +2400,8 @@ run the restored executable when `MESH_LLM_AUTOMATION_BIN` is set and otherwise
 keep `cargo xtool`. The lane planner (`ci validate-lane`) lists the producers as
 required exactly when a restoring job is planned, so a selected consumer cannot
 run without its producer and an unplanned producer must be skipped.
+
+Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
 workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
@@ -2420,9 +2422,7 @@ saves the result.
 
 Other jobs that must not wait on a producer keep `prepare-automation`: the
 release UI stamp and the
-Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
-`restore-smoke-inputs`, which already prefers an exported
-`MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
+Windows unit platform-check jobs, independent release SDK and smoke callers, canary, nightly, Docker and warm-cache
 workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,

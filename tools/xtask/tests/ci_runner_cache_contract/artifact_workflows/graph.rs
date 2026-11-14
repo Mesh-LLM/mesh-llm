@@ -44,17 +44,25 @@ fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
     let kotlin = job(&linux, "kotlin_sdk_input");
     assert_eq!(
         kotlin.get("needs").unwrap().list(),
-        ["static_abi", "authority_linux_x64"]
+        [
+            "static_abi",
+            "authority_linux_x64",
+            "product_automation_linux_x64"
+        ]
     );
     assert_eq!(
         job(&linux, "sdk_kotlin").get("needs").unwrap().list(),
-        ["product_cpu", "kotlin_sdk_input"]
+        [
+            "product_cpu",
+            "kotlin_sdk_input",
+            "product_automation_linux_x64"
+        ]
     );
     let macos = document("ci-macos-lane.yml");
     let swift = job(&macos, "swift_sdk_input");
     assert_eq!(
         swift.get("needs").unwrap().list(),
-        ["authority_macos_arm64"]
+        ["authority_macos_arm64", "product_automation_macos_arm64"]
     );
     assert_eq!(
         input(swift, "max_parallel"),

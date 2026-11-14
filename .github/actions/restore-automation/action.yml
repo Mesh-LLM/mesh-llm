@@ -4,6 +4,18 @@ inputs:
   source_sha:
     description: Immutable automation source commit supplied by the declared producer dependency.
     required: true
+  product_source_sha:
+    description: Product identity source; when supplied must match source_sha and require product-clean identity and complete immutable outputs.
+    required: false
+    default: ''
+  source_profile:
+    description: Product identity source claim; product consumers require product-clean.
+    required: false
+    default: ''
+  require_product:
+    description: Require complete product-source identity with no artifact-name fallback.
+    required: false
+    default: 'false'
   artifact_id:
     description: Optional immutable same-run producer artifact ID; must be paired with binary_sha256.
     required: false
@@ -27,6 +39,9 @@ runs:
       shell: bash
       env:
         AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_PRODUCT_SOURCE_SHA: ${{ inputs.product_source_sha }}
+        AUTOMATION_SOURCE_PROFILE: ${{ inputs.source_profile }}
+        AUTOMATION_REQUIRE_PRODUCT: ${{ inputs.require_product }}
         AUTOMATION_ARTIFACT_ID: ${{ inputs.artifact_id }}
         AUTOMATION_BINARY_SHA256: ${{ inputs.binary_sha256 }}
         AUTOMATION_PRODUCER_OS: ${{ inputs.producer_os }}
@@ -39,6 +54,14 @@ runs:
           [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
         fi
         if [[ -n "$AUTOMATION_PRODUCER_OS$AUTOMATION_PRODUCER_ARCH" ]]; then
+          test "$AUTOMATION_PRODUCER_OS" = "$RUNNER_OS" || exit 1
+          test "$AUTOMATION_PRODUCER_ARCH" = "$RUNNER_ARCH" || exit 1
+        fi
+        if [[ "${AUTOMATION_REQUIRE_PRODUCT:-false}" == true ]]; then
+          test "$AUTOMATION_SOURCE_PROFILE" = product-clean || exit 1
+          test "$AUTOMATION_PRODUCT_SOURCE_SHA" = "$AUTOMATION_SOURCE_SHA" || exit 1
+          [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
           test "$AUTOMATION_PRODUCER_OS" = "$RUNNER_OS" || exit 1
           test "$AUTOMATION_PRODUCER_ARCH" = "$RUNNER_ARCH" || exit 1
         fi

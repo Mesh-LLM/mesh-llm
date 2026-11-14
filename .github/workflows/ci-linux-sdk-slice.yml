@@ -7,6 +7,10 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: true
+        type: string
       sdk_kind:
         description: Selected Linux SDK consumer.
         required: true
@@ -48,6 +52,7 @@ jobs:
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       sdk_kind: rust
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
@@ -63,6 +68,7 @@ jobs:
     uses: ./.github/workflows/sdk-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       sdk_kind: kotlin
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux

@@ -41,7 +41,7 @@ on:
         default: ''
         type: string
       product_automation:
-        description: Same-run product-source automation identity JSON from the lane's product_automation producer. Required for Swift, whose bare macOS runner restores that executable instead of compiling xtask.
+        description: Same-run product-source automation identity JSON. Lane SDK consumers restore it; independent Linux callers prepare once when empty.
         required: false
         default: ''
         type: string
@@ -272,17 +272,24 @@ jobs:
         if: ${{ inputs.sdk_kind != 'swift' }}
         run: verify-runner-image public cpu
 
-      # Bare macos-15 has no runner image, linker, or compiler cache; restore
-      # the lane's xtask so admission never compiles it here.
       - name: Restore product automation
-        if: ${{ inputs.sdk_kind == 'swift' }}
+        if: ${{ inputs.product_automation != '' }}
         uses: ./.github/actions/restore-automation
         with:
           source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
           artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
           binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
           producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
           producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
+      - name: Prepare standalone automation
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && job.container.id == '' && runner.environment == 'github-hosted' && 'hosted-bare' || 'image' }}
 
       - uses: ./.github/actions/restore-smoke-inputs
         id: model_inputs
