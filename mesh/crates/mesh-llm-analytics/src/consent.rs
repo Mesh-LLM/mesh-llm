@@ -13,6 +13,10 @@ pub const ENV_DO_NOT_TRACK: &str = "DO_NOT_TRACK";
 pub const ENV_POSTHOG_KEY: &str = "MESH_LLM_POSTHOG_KEY";
 /// Runtime override for the ingestion host, for self-hosted PostHog.
 pub const ENV_POSTHOG_HOST: &str = "MESH_LLM_POSTHOG_HOST";
+/// Marks this machine's events as the maintainers' own traffic (lab nodes,
+/// benchmarks, dogfooding) so dashboards can exclude them. Not an opt-out:
+/// the events still go out, labelled `internal`.
+pub const ENV_ANALYTICS_INTERNAL: &str = "MESH_LLM_ANALYTICS_INTERNAL";
 
 /// Default ingestion host. PostHog US cloud.
 pub const DEFAULT_POSTHOG_HOST: &str = "https://us.i.posthog.com";
@@ -185,7 +189,7 @@ pub fn ingestion_host() -> String {
         .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_owned())
 }
 
-fn is_truthy(value: &str) -> bool {
+pub(crate) fn is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"

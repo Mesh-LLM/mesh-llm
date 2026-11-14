@@ -8,6 +8,11 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: false
+        default: ''
+        type: string
       artifact_name:
         required: true
         type: string
@@ -100,6 +105,25 @@ jobs:
       - name: Trust checkout directory
         if: job.container.id != ''
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Restore product automation
+        if: ${{ inputs.product_automation != '' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
+      - name: Prepare standalone automation
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && job.container.id == '' && runner.environment == 'github-hosted' && 'hosted-bare' || 'image' }}
 
       - name: Prepare dispatched release version
         if: inputs.release_tag != ''
@@ -290,10 +314,12 @@ jobs:
         env:
           CLEANUP_ARTIFACT_PATH: ${{ inputs.artifact_path }}
           CLEANUP_BINARY_PATH: ${{ inputs.mesh_binary_target }}
+          PRODUCT_AUTOMATION: ${{ inputs.product_automation }}
         run: |
           if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
             "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
           else
+            test -z "$PRODUCT_AUTOMATION" || exit 1
             cargo xtool ci-ops runner-cleanup --job smoke --evidence-uploaded false
           fi
 
@@ -315,6 +341,25 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
+      - name: Restore product automation
+        if: ${{ inputs.product_automation != '' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
+      - name: Prepare standalone automation
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && job.container.id == '' && runner.environment == 'github-hosted' && 'hosted-bare' || 'image' }}
+
       - name: Prepare dispatched release version
         if: inputs.release_tag != ''
         run: scripts/release-version.sh "${{ inputs.release_tag }}"
@@ -333,8 +378,6 @@ jobs:
           node-version: 24.20.0
           package-manager-cache: false
 
-      - name: Prepare smoke automation
-        uses: ./.github/actions/prepare-automation
 
       # Uses existing CPython 3.12 and a hash-locked SDK-only environment.
       - name: Prepare required locked SDK clients

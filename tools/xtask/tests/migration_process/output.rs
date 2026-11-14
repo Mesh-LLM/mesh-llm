@@ -5,8 +5,9 @@ use std::time::Duration;
 fn migration_process_flood_drains_both_pipes_with_bounded_retention() {
     let root = tempfile::tempdir().unwrap();
     let mut limits = limits();
+    limits.execution = Duration::from_secs(60);
     limits.retained_bytes_per_stream = 128;
-    ready(&mut limits, b"READY");
+    ready_with_deadline(&mut limits, b"READY", Duration::from_secs(30));
     let report = supervise(
         &spec(root.path(), "flood"),
         &limits,

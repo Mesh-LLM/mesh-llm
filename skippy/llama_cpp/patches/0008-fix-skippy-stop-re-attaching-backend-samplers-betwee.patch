@@ -1,7 +1,7 @@
-From 2d727dddd1c28729f6a1db66f3a9d9a438040289 Mon Sep 17 00:00:00 2001
+From e14b70ecf6e68fa79fcdd63a2ed743dd13e23320 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 18:34:14 +0100
-Subject: [PATCH 08/16] fix(skippy): stop re-attaching backend samplers between
+Subject: [PATCH 08/32] fix(skippy): stop re-attaching backend samplers between
  verify windows
 
 A sampled verify window needs every row's prediction, so it detaches a
@@ -73,10 +73,10 @@ index f1de95cc5..36c972d92 100644
      session->reset_required = false;
      session->verify_checkpoints.clear();
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 00a6ff0ec..471d598a2 100644
+index d764514ed..4bceea3cd 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -498,9 +498,19 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -500,9 +500,19 @@ int test_native_model_load_production(const char * fixture_path) {
      CHECK(!session->sampling_backend_enabled);
      CHECK(session->sampling_backend_retired);
  
@@ -108,6 +108,3 @@ index bb3c0e621..2e9b20c48 100644
  
      const bool activation_input = skippy_is_filtered(session) && session->stage_model->config.layer_start > 0;
      status = skippy_checkpoint_verify_window(
--- 
-2.54.0 (Apple Git-157)
-

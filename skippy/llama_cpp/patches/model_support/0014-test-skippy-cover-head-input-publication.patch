@@ -1,7 +1,7 @@
-From 35c1595adad835b677ff64149da817fe54d3f285 Mon Sep 17 00:00:00 2001
+From 2b2d1e997e8061b63aa771babfe69479a54f2229 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:20:42 +1100
-Subject: [PATCH 14/15] test(skippy): cover head-input publication and stage
+Subject: [PATCH 30/32] test(skippy): cover head-input publication and stage
  capture
 
 DeepSeek-V4 publishes the head input as the mean of its hyper-connection
@@ -16,7 +16,7 @@ case runs in native-rollback mode.
  3 files changed, 134 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c2238097e..d8e31aa55 100644
+index 3b52d472e..014788628 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -515,6 +515,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
@@ -29,7 +29,7 @@ index c2238097e..d8e31aa55 100644
      add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
-@@ -793,6 +796,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -785,6 +788,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_recurrent_rollback PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
  
@@ -50,10 +50,10 @@ index c2238097e..d8e31aa55 100644
          NAME skippy_generate_mamba2_fixture
          COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index 511e647f4..7418c05c5 100644
+index afc8c77b3..e32e1e0de 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
-@@ -11,7 +11,9 @@
+@@ -13,7 +13,9 @@ static const skippy::log_gate::installer skippy_log_gate_installer{};
  #include "skippy/stage_slice_plan.h"
  #include "skippy/stage_realization.h"
  
@@ -63,7 +63,7 @@ index 511e647f4..7418c05c5 100644
  #include <cmath>
  #include <cstdint>
  #include <cstdio>
-@@ -21,6 +23,7 @@
+@@ -23,6 +25,7 @@ static const skippy::log_gate::installer skippy_log_gate_installer{};
  #include <memory>
  #include <set>
  #include <stdexcept>
@@ -267,6 +267,3 @@ index 0d1bbf6e7..fdcdc631f 100644
 +    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
 +set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
 +    FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)
--- 
-2.54.0 (Apple Git-157)
-

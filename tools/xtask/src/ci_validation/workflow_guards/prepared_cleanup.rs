@@ -1,4 +1,5 @@
 //! Persistent cleanup custody for the four source-built native workflow phases.
+use super::super::handoffs;
 use super::{Node, field};
 use crate::command::DynResult;
 
@@ -58,13 +59,16 @@ pub(super) fn check(job: &Node) -> DynResult<()> {
     }
     let work = &steps[work_index];
     let runner_contract = field(work, "name") == Some("Check trusted runner package");
-    // Only the runner-image job needs nothing beyond cleanup; Laya jobs run other xtask commands.
-    let recipe = if runner_contract {
-        "just runner-cleanup-bootstrap"
+    let preparation = if runner_contract {
+        "report=\"$(just runner-cleanup-bootstrap)\"\nbinary=\"$(printf '%s\\n' \"$report\" | awk -F= '$1 == \"binary_path\" { count++; print substr($0, index($0, \"=\") + 1) } END { if (count != 1) exit 1 }')\""
     } else {
-        "just automation-bootstrap"
+        let (restore, action) =
+            handoffs::step(steps, "uses", "./.github/actions/restore-automation")?;
+        handoffs::before(restore, prepare_index)?;
+        handoffs::binding(handoffs::member(action, "with")?, "require_product", "true")?;
+        "binary=\"$MESH_LLM_AUTOMATION_BIN\""
     };
-    let expected = PREPARE.replace("{bootstrap}", recipe);
+    let expected = PREPARE.replace("{preparation}", preparation);
     if field(prepare, "timeout-minutes") != Some("20")
         || field(prepare, "run").map(lines) != Some(lines(&expected))
         || prepare.get("env").and_then(|env| field(env, "SOURCE_SHA"))
@@ -104,8 +108,7 @@ pub(super) fn check(job: &Node) -> DynResult<()> {
 const PREPARE: &str = r#"set -euo pipefail
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
 test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-report="$({bootstrap})"
-binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+{preparation}
 [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
 sha="$(sha256sum "$binary" | awk '{print $1}')"
 [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1

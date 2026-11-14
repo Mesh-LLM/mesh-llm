@@ -1,7 +1,7 @@
-From 3abdd5b2bd7d3bda237557a228170740b46ce5c3 Mon Sep 17 00:00:00 2001
+From 6924d8f4d58f3efebfb670059d3d00b607ec1fc0 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 6 Nov 2026 10:37:00 -0800
-Subject: [PATCH 08/15] models: add Qwen3-MoE native MTP
+Subject: [PATCH 24/32] models: add Qwen3-MoE native MTP
 
 ---
  conversion/qwen.py         |  98 ++++++++++++++++
@@ -13,10 +13,10 @@ Subject: [PATCH 08/15] models: add Qwen3-MoE native MTP
  6 files changed, 331 insertions(+), 19 deletions(-)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
-index 7c9744f51..e678bd042 100644
+index 83c844ce6..4b7b921f8 100644
 --- a/conversion/qwen.py
 +++ b/conversion/qwen.py
-@@ -277,12 +277,110 @@ class Qwen3Model(Qwen2Model):
+@@ -278,12 +278,110 @@ class Qwen3Model(Qwen2Model):
  @ModelBase.register("Qwen3MoeForCausalLM")
  @ModelBase.example("Qwen/Qwen3-30B-A3B")
  class Qwen3MoeModel(Qwen2MoeModel):
@@ -128,7 +128,7 @@ index 7c9744f51..e678bd042 100644
      def set_vocab(self):
          # deal with intern-s1
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 5f9cbf1e3..7ed746229 100644
+index 30185f02c..4bca32f0c 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
 @@ -3256,6 +3256,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -149,7 +149,7 @@ index 5f9cbf1e3..7ed746229 100644
  
      MODEL_ARCH.FLINT: [
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index db01bc2f5..eab1c3a46 100644
+index 00b76d844..9133041eb 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -256,6 +256,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
@@ -168,10 +168,10 @@ index db01bc2f5..eab1c3a46 100644
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/models/models.h b/src/models/models.h
-index 00538e6b0..f714f51d3 100644
+index fe6eb9008..f7db5929d 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -655,6 +655,11 @@ struct llama_model_qwen3moe : public llama_model_base {
+@@ -624,6 +624,11 @@ struct llama_model_qwen3moe : public llama_model_base {
          graph(const llm_graph_params & params);
      };
  
@@ -465,10 +465,10 @@ index ce7144a22..c4cc708cd 100644
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ab0585747..dea533e77 100644
+index db3a90b3d..6efc704fc 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -2147,7 +2147,7 @@ int main(int argc, char ** argv) {
+@@ -2154,7 +2154,7 @@ int main(int argc, char ** argv) {
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
                      arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
@@ -477,6 +477,3 @@ index ab0585747..dea533e77 100644
                      0,
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
--- 
-2.54.0 (Apple Git-157)
-

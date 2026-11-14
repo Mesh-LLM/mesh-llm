@@ -491,6 +491,40 @@ pub(in crate::network::openai) fn attempt_outcome_for_result(
     }
 }
 
+/// An attempt's report for routing metrics and analytics.
+///
+/// Analytics separates a stream that failed after it started, and a client
+/// that disconnected, from a target that was unavailable. Routing metrics keep
+/// scoring them as before; `score_client_disconnect` says whether this call
+/// site counts a client disconnect against the target at all.
+pub(in crate::network::openai) fn attempt_report_for_result(
+    result: &RouteAttemptResult,
+    queue_wait: std::time::Duration,
+    attempt_time: std::time::Duration,
+    score_client_disconnect: bool,
+) -> crate::mesh::InferenceAttemptReport {
+    use crate::inference_analytics::RouteOutcome;
+
+    let metrics_outcome = attempt_outcome_for_result(result);
+    let (route_outcome, metrics_outcome) = match result {
+        RouteAttemptResult::ClientDisconnected => (
+            RouteOutcome::ClientDisconnected,
+            score_client_disconnect.then_some(metrics_outcome),
+        ),
+        RouteAttemptResult::CommittedStreamFailure { .. } => {
+            (RouteOutcome::StreamFailed, Some(metrics_outcome))
+        }
+        _ => (metrics_outcome.into(), Some(metrics_outcome)),
+    };
+    crate::mesh::InferenceAttemptReport {
+        queue_wait,
+        attempt_time,
+        metrics_outcome,
+        route_outcome,
+        completion_tokens: completion_tokens_for_result(result),
+    }
+}
+
 pub(in crate::network::openai) fn completion_tokens_for_result(
     result: &RouteAttemptResult,
 ) -> Option<u64> {

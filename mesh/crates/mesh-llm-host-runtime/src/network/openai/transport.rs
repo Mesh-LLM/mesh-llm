@@ -34,9 +34,10 @@ pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
 
 use super::response::{
     CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
-    attempt_outcome_for_result, completion_tokens_for_result, request_outcome_for_status,
-    request_service_for_target, route_attempt_result_label, route_http_endpoint_attempt,
-    route_local_attempt, route_remote_attempt, target_health_outcome_for_attempt,
+    attempt_outcome_for_result, attempt_report_for_result, completion_tokens_for_result,
+    request_outcome_for_status, request_service_for_target, route_attempt_result_label,
+    route_http_endpoint_attempt, route_local_attempt, route_remote_attempt,
+    target_health_outcome_for_attempt,
 };
 #[cfg(test)]
 use super::routing_rank::order_remote_hosts_by_context;
@@ -1040,16 +1041,10 @@ fn record_mesh_request_attempt(
     attempt_time: Duration,
     attempt_result: &RouteAttemptResult,
 ) {
-    if matches!(attempt_result, RouteAttemptResult::ClientDisconnected) {
-        return;
-    }
-    node.record_inference_attempt(
+    node.record_inference_attempt_report(
         effective_model,
         attempt_target,
-        queue_wait,
-        attempt_time,
-        attempt_outcome_for_result(attempt_result),
-        completion_tokens_for_result(attempt_result),
+        attempt_report_for_result(attempt_result, queue_wait, attempt_time, false),
     );
 }
 
@@ -1730,13 +1725,10 @@ pub async fn route_to_target(
         },
     )
     .await;
-    node.record_inference_attempt(
+    node.record_inference_attempt_report(
         model,
         &target,
-        Duration::ZERO,
-        route_started.elapsed(),
-        attempt_outcome_for_result(&result),
-        completion_tokens_for_result(&result),
+        attempt_report_for_result(&result, Duration::ZERO, route_started.elapsed(), true),
     );
     tracing::info!(
         target = ?target,

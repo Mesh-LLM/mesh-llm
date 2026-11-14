@@ -22,7 +22,6 @@ mod response_quality;
 mod routing_rank;
 pub(crate) mod routing_scope;
 pub(crate) mod runtime_events;
-mod tool_call_ids;
 pub(crate) mod transport;
 pub(crate) mod virtual_model;
 

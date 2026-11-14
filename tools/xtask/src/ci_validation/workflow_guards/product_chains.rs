@@ -41,7 +41,11 @@ fn verify(lane: &Node) -> Result<(), String> {
                 ],
                 "product",
             ),
-            (smoke.as_str(), vec![product.as_str()], "product-smoke"),
+            (
+                smoke.as_str(),
+                vec![product.as_str(), "product_automation_linux_x64"],
+                "product-smoke",
+            ),
         ] {
             let job = jobs
                 .get(name)
@@ -67,8 +71,18 @@ fn verify(lane: &Node) -> Result<(), String> {
         }
     }
     for (name, expected) in [
-        ("sdk_rust", vec!["product_cpu"]),
-        ("sdk_kotlin", vec!["product_cpu", "kotlin_sdk_input"]),
+        (
+            "sdk_rust",
+            vec!["product_cpu", "product_automation_linux_x64"],
+        ),
+        (
+            "sdk_kotlin",
+            vec![
+                "product_cpu",
+                "kotlin_sdk_input",
+                "product_automation_linux_x64",
+            ],
+        ),
     ] {
         if jobs.get(name).map(dependencies) != Some(expected.into_iter().collect())
             || !summary.contains(name)
@@ -105,7 +119,10 @@ mod tests {
                 "needs: [hosts, native_runtime_cpu, native_runtime_cuda, authority_linux_x64, product_automation_linux_x64]",
             ),
             ("max_parallel: 1", "max_parallel: 7"),
-            ("needs: [product_cpu]", "needs: [product_cpu, product_cuda]"),
+            (
+                "needs: [product_cpu, product_automation_linux_x64]",
+                "needs: [product_cpu, product_cuda, product_automation_linux_x64]",
+            ),
         ] {
             assert!(source().contains(from));
             let mutated = source().replace(from, to);

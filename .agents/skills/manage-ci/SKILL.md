@@ -119,7 +119,7 @@ work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
 the `product-clean` source profile) that compiles `xtask` for the lane's
 `source_sha` on a GitHub-hosted runner with a read-only token and no secrets.
-Host, runtime, product, Rust-test and static-ABI jobs of that lane declare it in
+Host, runtime, product, Rust-test, static-ABI, native SDK, SDK smoke and product smoke jobs of that lane declare it in
 `needs` and restore it through `restore-automation`, which checks the
 producer's source, artifact ID, executable digest and runner OS/architecture;
 they never rebuild it and never fall back to `prepare-automation`. Its artifact
@@ -134,7 +134,7 @@ such as authority audits, canary summaries, release receipt verification, and pr
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
-always compiled in-run. `prepare-automation` takes a closed `tool` input
+always compiled in-run. SDK and smoke consumers restore before source admission, composition verification and cleanup controller freezing. Product restores require the product-clean claim, the lane source SHA, and complete artifact/digest/platform outputs; protected authority identities are rejected. Shared smoke restoration prepares only when MESH_LLM_AUTOMATION_BIN is empty. Standalone and release SDK/smoke jobs own one explicit preparation path when no product identity is supplied. `prepare-automation` takes a closed `tool` input
 (`xtask` by default, or `authority-automation`); `upload-automation` selects
 `authority-automation` exactly for the `protected-clean` source profile, and
 only full xtask may use the hosted executable cache.
@@ -159,24 +159,32 @@ platform adapters may remain thin. Existing Python checks, Just recipes and
 workflow entrypoints remain operational during migration and are transitional,
 not templates for new tooling. Existing isolated compatibility or upstream
 fixtures may be retained only with an explicit maintainer decision; new Python
-tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
-Python-free or remove legacy validation before its Rust replacement passes.
+tooling requires an explicit maintainer decision to change that policy. The
+Python SDK is a product component under `mesh/sdk/python`; its package source,
+component tests, locked client environments and four ecosystem smoke clients
+are permitted there. `ci/python-tooling-policy.json` lists the exact in-tree
+Python source files and their interpreter invocations. This product-source
+exception does not permit generic repository automation. Do not claim the
+required path is Python-free or remove legacy validation before its Rust
+replacement passes.
 
-Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
-using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
-an immutable default source commit. These interfaces do not authorize new
-repository Python implementations. The canary Jinja environment belongs to its
-run's state directory and must use a preinstalled interpreter; dependency
-restoration must not download an interpreter or skip upstream tests. Freeze the
-Jinja project before selecting historical source checkouts so older sources do
-not need to contain the dependency manifest.
+Retained external Python dependencies have bounded owners: llama.cpp's upstream
+Jinja and FP8 conversion tests using the trusted controller's
+`ci/llama-canary/jinja/uv.lock`, the optional llama-benchy wrapper with an
+immutable default source commit, and the separate Python research project.
+These interfaces do not authorize new repository Python implementations. The
+canary Jinja environment belongs to its run's state directory and must use a
+preinstalled interpreter; dependency restoration must not download an
+interpreter or skip upstream tests. Freeze the Jinja project before selecting
+historical source checkouts so older sources do not need to contain the
+dependency manifest.
 
 `just ci-crate-lists`, selected by the normal Quality validation gate, also
 checks repository Python tooling. Its typed policy is
-`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
-and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. Platform-specific runner prerequisite lists require
+`ci/python-tooling-policy.json`: the exact in-tree Python SDK source roster,
+external dependency inputs, source pins and executable invocation exceptions
+must retain their documented owners and reviewed occurrence counts.
+Platform-specific runner prerequisite lists require
 separate exact entries; listing an interpreter as a prerequisite does not
 authorize executing or installing it. The census includes tracked and new
 nonignored files, including hidden directories. Python sources, shebangs, unapproved

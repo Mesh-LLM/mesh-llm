@@ -62,6 +62,7 @@ pub(super) fn smoke_selected(row: &str, smoke: &[String]) -> bool {
 }
 
 pub(super) fn consumes_automation(jobs: &[&str]) -> bool {
-    JOBS.iter()
-        .any(|(_, runtime, product, _)| jobs.contains(runtime) || jobs.contains(product))
+    JOBS.iter().any(|(_, runtime, product, smoke)| {
+        jobs.contains(runtime) || jobs.contains(product) || jobs.contains(smoke)
+    })
 }

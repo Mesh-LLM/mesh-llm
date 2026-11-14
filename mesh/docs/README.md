@@ -13,7 +13,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | Pin an API request to a provider, inspect prices, or exclude peers | [PROVIDER_SELECTION.md](PROVIDER_SELECTION.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
-| Language-specific SDK examples | [Rust](mesh/sdk/rust.md), [Node.js](mesh/sdk/node.md), [Swift](mesh/sdk/swift.md), [Kotlin/Android](mesh/sdk/kotlin.md) |
+| Language-specific SDK examples | [Rust](sdk/rust.md), [Node.js](sdk/node.md), [Python](sdk/python.md), [Swift](sdk/swift.md), [Kotlin/Android](sdk/kotlin.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) |
 | Embedding, rerank, encoder-decoder, OCR, and audio models | [NON_CHAT_MODELS.md](../../skippy/docs/NON_CHAT_MODELS.md) |
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](../../skippy/docs/LAYER_PACKAGE_REPOS.md) |

@@ -169,6 +169,7 @@ pub(crate) use mesh_llm_membership::{identity_home_dir, identity_state_dir};
     reason = "shared discovery address classification moved to mesh-llm-membership"
 )]
 pub(crate) use mesh_llm_membership::{is_global_ipv4_candidate, is_public_ipv4_candidate};
+pub(crate) use node::{InferenceAttemptReport, NodeStartupSpec, ScopedNodeIdentity};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -180,7 +181,6 @@ pub(crate) use node::{
     MembershipEntry, MembershipNodeConfig, PeerDownReport, StartupResolution,
     membership_token_endpoint, peer_down_endpoint_id,
 };
-pub(crate) use node::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
     peer_has_observed_liveness, public_model_id_for_routable_model, resolve_peer_leaving,

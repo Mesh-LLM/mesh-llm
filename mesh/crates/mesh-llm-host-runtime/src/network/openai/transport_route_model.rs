@@ -887,16 +887,10 @@ fn record_route_model_attempt(
     attempt_time: Duration,
     attempt_result: &RouteAttemptResult,
 ) {
-    if matches!(attempt_result, RouteAttemptResult::ClientDisconnected) {
-        return;
-    }
-    node.record_inference_attempt(
+    node.record_inference_attempt_report(
         Some(model),
         target,
-        queue_wait,
-        attempt_time,
-        attempt_outcome_for_result(attempt_result),
-        completion_tokens_for_result(attempt_result),
+        attempt_report_for_result(attempt_result, queue_wait, attempt_time, false),
     );
 }
 

@@ -1,7 +1,7 @@
-From 4720e07dc8f478e9b08ddf0e60a748fd6b6282a5 Mon Sep 17 00:00:00 2001
+From 9ff0ab9cbd2efbeb013b360857587653c72431ee Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH 06/15] models: add Laya decision model support
+Subject: [PATCH 22/32] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -264,7 +264,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d3c86694f..db01bc2f5 100644
+index c197f4737..00b76d844 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -95,6 +95,8 @@ add_library(llama
@@ -403,7 +403,7 @@ index 89856dd5c..f35716bfe 100644
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 2153d6cfe..c77de22ee 100644
+index 8280c9a85..57101690f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -389,6 +389,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -418,7 +418,7 @@ index 2153d6cfe..c77de22ee 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -3058,6 +3063,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -3068,6 +3073,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_EUROBERT:
          case LLM_ARCH_WAVTOKENIZER_DEC:
          case LLM_ARCH_MODERN_BERT:
@@ -426,7 +426,7 @@ index 2153d6cfe..c77de22ee 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
          case LLM_ARCH_GEMMA_EMBEDDING2:
          case LLM_ARCH_DREAM:
-@@ -3897,6 +3903,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3907,6 +3913,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_BERT:
          case LLM_ARCH_JINA_BERT_V3:
          case LLM_ARCH_MODERN_BERT:
@@ -2806,6 +2806,3 @@ index 000000000..8a713d563
 +
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
--- 
-2.54.0 (Apple Git-157)
-

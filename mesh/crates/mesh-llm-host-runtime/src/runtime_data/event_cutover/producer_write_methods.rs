@@ -1,4 +1,4 @@
-//! The plan's eleven-row field matrix, at producer-write-method
+//! The plan's thirteen-row field matrix, at producer-write-method
 //! granularity: `RuntimeDataProducer`'s non-`#[cfg(test)]` write entry
 //! points in `producers.rs`, each mapped to the `FieldId` dirty scope it
 //! publishes under. `tests::producer_write_methods_match_producers_source`
@@ -14,12 +14,12 @@ pub(crate) struct ProducerWriteMethod {
     pub field: FieldId,
 }
 
-/// The eleven non-test `RuntimeDataProducer` write methods, each mapped to
+/// The thirteen non-test `RuntimeDataProducer` write methods, each mapped to
 /// its `FieldId`. Kept as a hand-authored field mapping (mechanical set
 /// extraction alone can't infer WHICH dirty scope a method delegates to
 /// across `producers.rs`/`collector.rs`); its NAME set is what `tests`
 /// mechanically verifies against the real source.
-pub(crate) const PRODUCER_WRITE_METHODS: [ProducerWriteMethod; 11] = [
+pub(crate) const PRODUCER_WRITE_METHODS: [ProducerWriteMethod; 13] = [
     ProducerWriteMethod {
         method: "mark_status_dirty",
         field: FieldId::Status,
@@ -39,6 +39,14 @@ pub(crate) const PRODUCER_WRITE_METHODS: [ProducerWriteMethod; 11] = [
     ProducerWriteMethod {
         method: "publish_routing_snapshot",
         field: FieldId::Routing,
+    },
+    ProducerWriteMethod {
+        method: "publish_runtime_instance_registered",
+        field: FieldId::Runtime,
+    },
+    ProducerWriteMethod {
+        method: "publish_runtime_instance_unregistered",
+        field: FieldId::Runtime,
     },
     ProducerWriteMethod {
         method: "publish_llama_slots_snapshot",

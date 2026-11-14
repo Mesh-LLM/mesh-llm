@@ -1,7 +1,7 @@
-From df645f043528a642d59c3e23de88a53ebbbbd940 Mon Sep 17 00:00:00 2001
+From 7d4723f2765c93dcadba5b7c1aeeab6685bf13ad Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:27:44 +1100
-Subject: [PATCH 12/15] skippy: add clef joint decision reads
+Subject: [PATCH 28/32] skippy: add clef joint decision reads
 
 Render the systemone template, tokenize the prompt pieces with their
 decision order, and read one score per option from the embeddings output
@@ -202,7 +202,7 @@ index 93232a2b8..8845ab5fd 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0e619d785..c2238097e 100644
+index ec73d02c2..3b52d472e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -97,6 +97,8 @@ add_library(llama
@@ -774,6 +774,3 @@ index 000000000..6ccd39221
 +        return skippy_success(out_error);
 +    });
 +}
--- 
-2.54.0 (Apple Git-157)
-

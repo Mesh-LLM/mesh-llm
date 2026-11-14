@@ -141,6 +141,18 @@ impl RuntimeDataCollector {
             .clone()
     }
 
+    pub(crate) fn with_runtime_status<T>(
+        &self,
+        read: impl FnOnce(&RuntimeStatusSnapshot) -> T,
+    ) -> T {
+        let snapshots = self
+            .shared
+            .snapshots
+            .read()
+            .expect("runtime data snapshots lock poisoned");
+        read(&snapshots.runtime_status)
+    }
+
     pub(crate) fn runtime_status_snapshot(&self) -> RuntimeStatusSnapshot {
         self.snapshots().runtime_status
     }
@@ -225,46 +237,6 @@ impl RuntimeDataCollector {
                 runtime_status.llama_runtime = selected;
                 changed = true;
             }
-            changed
-        })
-    }
-
-    pub(crate) fn replace_llama_slots_snapshot(&self, snapshot: RuntimeLlamaSlotsSnapshot) -> bool {
-        self.update_runtime_status(RuntimeDataDirty::RUNTIME, |runtime_status| {
-            let next_runtime =
-                build_llama_runtime_snapshot(&runtime_status.llama_runtime.metrics, snapshot);
-            let mut changed = false;
-
-            if let Some(instance_id) = next_runtime.slots.instance_id.clone()
-                && runtime_status.llama_runtime_by_instance.get(&instance_id) != Some(&next_runtime)
-            {
-                runtime_status
-                    .llama_runtime_by_instance
-                    .insert(instance_id, next_runtime.clone());
-                changed = true;
-            }
-
-            if let Some(model) = next_runtime.slots.model.clone() {
-                if should_replace_model_runtime_projection(
-                    runtime_status.llama_runtime_by_model.get(&model),
-                    &next_runtime,
-                ) {
-                    runtime_status
-                        .llama_runtime_by_model
-                        .insert(model, next_runtime.clone());
-                    changed = true;
-                }
-
-                let selected = select_runtime_llama_projection(runtime_status);
-                if runtime_status.llama_runtime != selected {
-                    runtime_status.llama_runtime = selected;
-                    changed = true;
-                }
-            } else if runtime_status.llama_runtime != next_runtime {
-                runtime_status.llama_runtime = next_runtime;
-                changed = true;
-            }
-
             changed
         })
     }
@@ -1075,7 +1047,7 @@ fn build_llama_runtime_items(
     }
 }
 
-fn build_llama_runtime_snapshot(
+pub(super) fn build_llama_runtime_snapshot(
     metrics: &RuntimeLlamaMetricsSnapshot,
     slots: RuntimeLlamaSlotsSnapshot,
 ) -> RuntimeLlamaRuntimeSnapshot {
@@ -1086,7 +1058,7 @@ fn build_llama_runtime_snapshot(
     }
 }
 
-fn should_replace_model_runtime_projection(
+pub(super) fn should_replace_model_runtime_projection(
     current: Option<&RuntimeLlamaRuntimeSnapshot>,
     next: &RuntimeLlamaRuntimeSnapshot,
 ) -> bool {
@@ -1108,7 +1080,7 @@ fn should_replace_model_runtime_projection(
     )
 }
 
-fn select_runtime_llama_projection(
+pub(super) fn select_runtime_llama_projection(
     runtime_status: &RuntimeStatusSnapshot,
 ) -> RuntimeLlamaRuntimeSnapshot {
     if let Some(primary_ready) = runtime_status.primary_model.as_ref().and_then(|model| {
