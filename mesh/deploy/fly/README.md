@@ -1,6 +1,6 @@
 # mesh-llm Fly.io Console
 
-Fly app running mesh-llm in `--client` mode — no GPU, just QUIC tunnels to mesh nodes.
+Fly app running mesh-llm in `client` mode — no GPU, just QUIC tunnels to mesh nodes.
 
 | App | URL | Fly config |
 |---|---|---|
@@ -12,7 +12,7 @@ Also available at [public.meshllm.cloud](https://public.meshllm.cloud).
 
 ```
                               ┌─────────────────────────┐
-Browser/curl ──HTTPS──→ Fly   │  mesh-llm --client      │
+Browser/curl ──HTTPS──→ Fly   │  mesh-llm client        │
                               │  discovers mesh via      │──QUIC──→ GPU nodes
                               │  Nostr, tunnels requests │
                               └─────────────────────────┘
@@ -58,7 +58,7 @@ fly deploy --config mesh/deploy/fly/console/fly.toml --dockerfile mesh/deploy/fl
 
 ```bash
 # Same as what the Fly app runs — no Docker needed
-mesh-llm --client --auto
+mesh-llm client --auto
 ```
 
 ## Docker (local)
