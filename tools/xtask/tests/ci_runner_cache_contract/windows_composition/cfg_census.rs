@@ -11,6 +11,10 @@ use std::{
 };
 
 const UNVERIFIED: &[&str] = &[
+    // skippy-hardware-profile, skippy-native-runtime, skippy-model-hf,
+    // skippy-hf-hub and skippy-model-package run their library tests in the
+    // Windows unit row's own step; catalog routing waits until the rename
+    // map stops listing them as successors.
     "skippy-hardware-profile",
     "skippy-native-runtime",
     "skippy-model-hf",
