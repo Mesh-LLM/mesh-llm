@@ -466,10 +466,10 @@ async fn selected_event_keeps_its_own_exchange_id_and_empty_takes_the_sessions()
     }
 }
 
-/// After a re-pick the terminal joins the dispatch that served: it carries the
-/// selected event's exchange id, and `attempt_history` records each attempt's.
+/// After a re-pick the terminal keeps the session's id, which the response side
+/// streams were opened under, and `attempt_history` records each attempt's.
 #[tokio::test]
-async fn terminal_takes_the_served_dispatchs_exchange_id() {
+async fn terminal_keeps_the_sessions_exchange_id_after_a_repick() {
     let (manager, _, terminals) =
         crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
     let (mut session, _) = ExchangeSession::begin(
@@ -514,9 +514,57 @@ async fn terminal_takes_the_served_dispatchs_exchange_id() {
     })
     .await
     .unwrap();
-    assert_eq!(terminal["exchange_id"], "dispatch-1");
+    assert_eq!(terminal["exchange_id"], "dispatch-0");
     assert_eq!(terminal["attempt_history"][0]["exchange_id"], "dispatch-0");
     assert_eq!(terminal["attempt_history"][1]["exchange_id"], "dispatch-1");
+}
+
+/// With a response-body observer, a re-pick must leave the terminal under the
+/// id the response stream was opened with, or the observer cannot find its
+/// receipt for the terminal.
+#[tokio::test]
+async fn repick_with_response_body_keeps_terminal_and_response_stream_aligned() {
+    let (manager, mut receiver) = observer_manager(false).await;
+    let (mut session, result) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "repick-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(result.error_status().is_none());
+    let mut selected = request_event(
+        "repick-1".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    selected["phase"] = json!("backend_selected");
+    selected["attempt"] = json!(1);
+    manager
+        .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+        .await;
+    let observer = session.observer();
+    assert!(observer.try_chunk(0, b"response"));
+    observer.finish(commit_wire_bytes(b"response"));
+    let terminal = session.final_terminal_event("completed").await;
+    assert_eq!(terminal["exchange_id"], "repick-0");
+    assert_eq!(terminal["attempt_history"][0]["exchange_id"], "repick-1");
+    assert_eq!(
+        terminal["observer_response_delivery"]["delayed-observer"],
+        true
+    );
+    assert_eq!(receiver.recv().await.unwrap(), b"response");
+    manager.shutdown().await;
 }
 
 #[test]

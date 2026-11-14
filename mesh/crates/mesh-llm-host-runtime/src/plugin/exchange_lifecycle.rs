@@ -874,10 +874,11 @@ impl ExchangeSession {
         );
         event["response_wire_commitment"] = json!(emission.commitment);
         if let Some(selected) = &emission.selected {
-            // The served dispatch's own id: after a re-pick the terminal must
-            // join the dispatch that served, not dispatch 0.
+            // `exchange_id` is deliberately not copied: the response side
+            // streams were opened under the session's id, and observers key
+            // their response receipts by the terminal's `exchange_id`. The
+            // served dispatch's id stays on `attempt_history`.
             for key in [
-                "exchange_id",
                 "effective_request_wire_digest",
                 "effective_request_encoding",
                 "model",
