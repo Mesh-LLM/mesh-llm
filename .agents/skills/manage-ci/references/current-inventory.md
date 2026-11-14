@@ -69,7 +69,9 @@ L2 post-checkout planning, the five lane summaries, and Quality commit
 convention use the narrow `ci-controller` executable through
 `prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release
 Cargo bypasses compiler wrappers and Just and reuses an exact-key cached
-release executable when present. Other automation keeps the closed
+release executable when present. For default-branch pushes each lane summary
+checks out the event SHA; other events keep the protected default-branch
+checkout. Other automation keeps the closed
 `prepare-automation` hosted-bare profile under the same rules, while
 image callers retain verification and sccache unchanged. Quality convention
 and environment ownership checks, runner-contract cleanup, registry summary,

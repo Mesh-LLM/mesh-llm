@@ -973,7 +973,10 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 The local `scripts/hooks/commit-msg` hook now invokes the Rust
 `repository conventional-commits` command through the repository Cargo alias.
 The workflow commit check, planner and five lane summaries use Rust owners
-through `prepare-ci-controller`. The local package resolver requires
+through `prepare-ci-controller`. For a default-branch push, each lane summary
+builds its controller from the event SHA that defined its workflow; later main
+commits cannot change its validation. Pull requests and manual dispatches keep
+the protected default-branch checkout. The local package resolver requires
 prepared or restored automation and invokes metadata-only discovery. Protected
 callers still pin the old resolver and retain its Python implementation until
 rollout. Pre-checkout audit and no-checkout sentinel jobs must not build

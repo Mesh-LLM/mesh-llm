@@ -48,6 +48,16 @@ fn graph_entrypoint_plans_are_single_and_pr_cancellation_keys_are_independent() 
                     input(native, "supersession_key"),
                     Some("pr-${{ github.event.pull_request.number }}")
                 );
+            } else {
+                let identity = named(plan, "Validate immutable main identity");
+                assert_eq!(
+                    text(identity.get("env").unwrap(), "SOURCE_SHA"),
+                    Some("${{ github.sha }}")
+                );
+                assert_eq!(
+                    input(native, "source_sha"),
+                    Some("${{ needs.plan.outputs.source_sha }}")
+                );
             }
         }
     }
@@ -99,7 +109,9 @@ fn graph_lane_source_identity_and_protected_reporting_follow_typed_consumers() {
         assert_eq!(checkout.len(), 1);
         assert_eq!(
             input(checkout[0], "ref"),
-            Some("${{ github.event.repository.default_branch }}")
+            Some(
+                "${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.sha || github.event.repository.default_branch }}"
+            )
         );
         let concurrency = doc.get("concurrency").unwrap();
         assert!(

@@ -404,6 +404,11 @@ retired parser behavior, and source review still owns semantic emulation.
   A skipped slice is valid only when absent from the plan. Reject required
   skips, failures, cancellations, unknown results, duplicate plan entries, and
   planned IDs outside the static needs graph.
+- Lane summaries on default-branch push check out the immutable `github.sha`
+  before building their controller, so a later main commit cannot change the
+  validator for an older lane graph. Pull requests, manual dispatches, and
+  other refs keep the protected default-branch checkout; never select their
+  checkout from the caller-supplied source SHA.
 - Cancel superseded PR runs. Do not cancel releases, deployments, cache
   warming, cleanup, or publishing unless their rollback semantics explicitly
   permit it.
