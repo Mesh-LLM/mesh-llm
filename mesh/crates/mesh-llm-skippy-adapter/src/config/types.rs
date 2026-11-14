@@ -15,6 +15,11 @@ pub(super) const BUILTIN_BATCH: u32 = skippy_config::local_serving::BATCH;
 /// 0.670 → 0.415 s (C1) and 6.38 → 3.97 s (C8); decode 22.2 → 39.4 tok/s at C8.
 /// See WHITE_UBATCH_512_FALSIFICATION_2026_09_08 in the 2026-09-08 competitive bench.
 pub(super) const BUILTIN_UBATCH: u32 = skippy_config::local_serving::UBATCH;
+/// Batch and micro-batch for expert (MoE) models when nothing sets them. At 512 tokens each
+/// expert of a 256-expert, top-8 model sees about 16 rows, so expert matmuls run in small tiles.
+/// Served prefill of a 12.5k-token prompt on a DGX Spark: Qwen3.6-35B-A3B 2661 -> 3271 tok/s
+/// (+23%) at 2048, with decode unchanged; dense models moved 0-7% and keep 512.
+pub(super) const BUILTIN_MOE_UBATCH: u32 = 2048;
 pub(super) const BUILTIN_PARALLEL: usize = skippy_config::local_serving::PARALLEL;
 pub(super) const BUILTIN_PREFILL_CHUNK_SIZE: usize =
     skippy_config::local_serving::PREFILL_CHUNK_SIZE;

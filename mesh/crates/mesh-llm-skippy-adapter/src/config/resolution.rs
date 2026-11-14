@@ -12,10 +12,11 @@ use super::support::{
     resolve_bool_or_auto, resolve_field_string, resolve_field_value, resolve_prefix_cache,
 };
 use super::types::{
-    BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
-    BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedMultimodalConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedStageKvCache, ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_MOE_UBATCH, BUILTIN_PARALLEL,
+    BUILTIN_PREFILL_CHUNK_SIZE, BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig,
+    ResolvedModelFitConfig, ResolvedMultimodalConfig, ResolvedSkippyConfig,
+    ResolvedSkippyExecutionConfig, ResolvedStageKvCache, ResolvedThroughputConfig,
+    SkippyConfigResolveRequest,
 };
 use mesh_llm_config::KvDiskCodec;
 use mesh_llm_config::{
@@ -248,6 +249,15 @@ fn resolve_model_fit_config(
     kv_policy: KvCachePolicy,
 ) -> Result<ResolvedModelFitConfig> {
     let throughput = resolve_throughput_defaults(context);
+    let is_moe = context
+        .request
+        .compact_meta
+        .is_some_and(|meta| meta.expert_count > 1);
+    let (builtin_batch, builtin_ubatch) = if is_moe {
+        (BUILTIN_BATCH.max(BUILTIN_MOE_UBATCH), BUILTIN_MOE_UBATCH)
+    } else {
+        (BUILTIN_BATCH, BUILTIN_UBATCH)
+    };
 
     let ctx_size = pick_value(
         context.model_fit.and_then(|fit| fit.ctx_size),
@@ -265,7 +275,7 @@ fn resolve_model_fit_config(
             .global_macro
             .as_ref()
             .and_then(|defaults| defaults.batch),
-        BUILTIN_BATCH,
+        builtin_batch,
     );
     let ubatch = resolve_field_value(
         context.model_fit.and_then(|fit| fit.ubatch),
@@ -278,7 +288,7 @@ fn resolve_model_fit_config(
             .global_macro
             .as_ref()
             .and_then(|defaults| defaults.ubatch),
-        BUILTIN_UBATCH,
+        builtin_ubatch,
     );
     let cache_type_k = resolve_cache_type_k(context, kv_policy);
     let cache_type_v = resolve_cache_type_v(context, kv_policy);
