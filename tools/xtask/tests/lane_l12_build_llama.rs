@@ -34,7 +34,7 @@ impl Fixture {
         );
         write_tool(
             &tools.join("uname"),
-            "#!/bin/sh\nprintf '%s\\n' \"$FIXTURE_OS\"\n",
+            "#!/bin/sh\ncase \"$1\" in -m) printf '%s\\n' \"$FIXTURE_ARCH\" ;; *) printf '%s\\n' \"$FIXTURE_OS\" ;; esac\n",
         );
         write_tool(
             &tools.join("nvcc"),
@@ -75,6 +75,8 @@ impl Fixture {
                 format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", self.tools.display()),
             )
             .env("FIXTURE_OS", os)
+            .env("FIXTURE_ARCH", "x86_64")
+            .env_remove("SOURCE_DATE_EPOCH")
             .env("LLAMA_WORKDIR", &self.work)
             .env("LLAMA_STAGE_BUILD_DIR", &self.build)
             .env("LLAMA_STAGE_BACKEND", "cpu")
@@ -171,6 +173,167 @@ fn linux_omits_macos_target() {
             .unwrap(),
     );
     assert!(!fixture.log().contains("CMAKE_OSX_DEPLOYMENT_TARGET"));
+}
+#[test]
+fn linux_x86_64_default_pins_a_sandy_bridge_compatible_isa_in_configure_and_stamp() {
+    let fixture = Fixture::new(true);
+    success(fixture.command("Linux").output().unwrap());
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(
+            fixture.log().contains(argument),
+            "missing configure argument {argument}"
+        );
+        assert!(
+            fixture.stamp().contains(&format!("cmake-arg={argument}")),
+            "missing build-stamp argument {argument}"
+        );
+    }
+}
+#[test]
+fn reproducible_linux_x86_64_configure_disables_avx_and_sse42() {
+    for epoch in ["", "1700000000"] {
+        let fixture = Fixture::new(true);
+        success(
+            fixture
+                .command("Linux")
+                .env("SOURCE_DATE_EPOCH", epoch)
+                .output()
+                .unwrap(),
+        );
+        for argument in [
+            "-DGGML_NATIVE=OFF",
+            "-DGGML_SSE42=OFF",
+            "-DGGML_AVX=OFF",
+            "-DGGML_AVX2=OFF",
+        ] {
+            assert!(fixture.log().contains(argument), "missing {argument}");
+            assert!(fixture.stamp().contains(&format!("cmake-arg={argument}")));
+        }
+    }
+}
+#[test]
+fn linux_x86_64_cmake_false_native_value_pins_the_portable_isa_baseline() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .env("LLAMA_STAGE_GGML_NATIVE", "FALSE")
+            .output()
+            .unwrap(),
+    );
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(
+            fixture.log().contains(argument),
+            "missing portable ISA argument {argument}"
+        );
+    }
+}
+#[test]
+fn linux_x86_64_cmake_false_native_values_are_normalized_before_matching() {
+    for value in ["foo-NOTFOUND", "fAlSe", "  Off  "] {
+        let fixture = Fixture::new(true);
+        success(
+            fixture
+                .command("Linux")
+                .env("LLAMA_STAGE_GGML_NATIVE", value)
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            fixture.log().contains("-DGGML_SSE42=ON"),
+            "portable baseline missing for {value:?}"
+        );
+        let log = fixture.log();
+        let original = format!("-DGGML_NATIVE={value}");
+        assert!(
+            log.find(&original).unwrap() < log.rfind("-DGGML_NATIVE=OFF").unwrap(),
+            "canonical native setting must override {value:?}"
+        );
+        assert!(fixture.stamp().contains("cmake-arg=-DGGML_NATIVE=OFF"));
+    }
+}
+#[test]
+fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .env("LLAMA_STAGE_GGML_NATIVE", "ON")
+            .output()
+            .unwrap(),
+    );
+    assert!(fixture.log().contains("-DGGML_NATIVE=ON"));
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(
+            !fixture.log().contains(argument),
+            "unexpected portable ISA argument {argument}"
+        );
+    }
+}
+#[test]
+fn linux_non_x86_64_build_does_not_receive_x86_isa_flags() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .env("FIXTURE_ARCH", "aarch64")
+            .output()
+            .unwrap(),
+    );
+    for argument in [
+        "-DGGML_SSE42=ON",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(
+            !fixture.log().contains(argument),
+            "unexpected x86 ISA argument {argument}"
+        );
+    }
 }
 #[test]
 fn cuda_enables_graph_capture() {

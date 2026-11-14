@@ -78,6 +78,37 @@ fn build_accelerator_sources_object_path_limit_is_shared_by_windows_native_backe
     );
 }
 #[test]
+fn build_accelerator_sources_linux_x86_64_release_isa_is_explicit_and_portable() {
+    let bash = commands(&source("skippy/scripts/build-llama.sh"));
+    let linux_x86_64 = bash
+        .split(r#"if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then"#)
+        .nth(1)
+        .unwrap()
+        .split("\nfi")
+        .next()
+        .unwrap();
+    assert!(linux_x86_64.contains("LLAMA_GGML_NATIVE_NORMALIZED"));
+    assert!(bash.contains("sed -e 's/^[[:space:]]*//'"));
+    assert!(bash.contains("tr '[:lower:]' '[:upper:]'"));
+    assert!(linux_x86_64.contains("OFF|NO|FALSE|N|0|IGNORE|NOTFOUND"));
+    for argument in [
+        "-DGGML_NATIVE=OFF",
+        "-DGGML_SSE42=$LLAMA_BASELINE_AVX",
+        "-DGGML_AVX=$LLAMA_BASELINE_AVX",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_AVX512_VBMI=OFF",
+        "-DGGML_AVX512_VNNI=OFF",
+        "-DGGML_AVX512_BF16=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+    ] {
+        assert!(linux_x86_64.contains(argument), "missing {argument}");
+    }
+}
+#[test]
 fn build_accelerator_sources_windows_linker_selects_rust_or_llvm_and_preserves_exit_and_arguments()
 {
     let windows = source("scripts/cargo-linker.cmd");
