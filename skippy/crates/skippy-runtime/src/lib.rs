@@ -13,6 +13,7 @@ mod devices;
 mod dflash;
 mod error;
 mod gguf_writer;
+mod host_buffer;
 mod kv_pages;
 mod laya;
 pub mod logging;

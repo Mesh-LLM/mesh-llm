@@ -259,7 +259,7 @@ impl StageSession {
             free_error(error);
         }
 
-        let mut payload = vec![0_u8; bytes];
+        let mut payload = crate::host_buffer::native_output_buffer(bytes);
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -327,7 +327,7 @@ impl StageSession {
             free_error(error);
         }
 
-        let mut payload = vec![0_u8; bytes];
+        let mut payload = crate::host_buffer::native_output_buffer(bytes);
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -413,7 +413,7 @@ impl StageSession {
             free_error(error);
         }
 
-        let mut payload = vec![0_u8; bytes];
+        let mut payload = crate::host_buffer::native_output_buffer(bytes);
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -548,7 +548,7 @@ impl StageSession {
             free_error(error);
         }
 
-        let mut payload = vec![0_u8; bytes];
+        let mut payload = crate::host_buffer::native_output_buffer(bytes);
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
