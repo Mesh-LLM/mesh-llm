@@ -3,6 +3,7 @@ param(
     [string]$CudaArch = "",
     [string]$RocmArch = "",
     [string]$BuildProfile = "",
+    [string]$TargetArch = "",
     [switch]$DynamicHost,
     [switch]$HostOnly,
     [switch]$SkippyOnly
