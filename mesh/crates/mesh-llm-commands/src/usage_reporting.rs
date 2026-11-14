@@ -115,7 +115,7 @@ impl FailureKind {
                     _ => {}
                 }
             }
-            if cause.is::<skippy_runtime::NativeRuntimeLoadError>()
+            if cause.is::<skippy_ffi::NativeRuntimeLoadError>()
                 || cause.is::<skippy_runtime_install::NativeRuntimeResolutionError>()
             {
                 return Self::RuntimeUnavailable;
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn failure_kind_recognises_runtime_download_and_config_errors() {
-        let runtime = skippy_runtime::NativeRuntimeLoadError::Load("missing symbol".into());
+        let runtime = skippy_ffi::NativeRuntimeLoadError::Load("missing symbol".into());
         assert_eq!(
             classify(anyhow::Error::from(runtime).context("load native runtime")),
             "runtime_unavailable"
