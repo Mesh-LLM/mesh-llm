@@ -94,6 +94,7 @@ pub(crate) async fn handle_tool_query(
         reducer_attempts: attempts,
         turn_kind: TurnKind::Fanout,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        drafts: Vec::new(),
     }
 }
 

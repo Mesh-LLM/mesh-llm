@@ -137,6 +137,15 @@ async fn early_exit_summaries_account_for_aborted_workers() {
         result.turn_kind
     );
 
+    // The drafts the synthesized answer was built from ride along for the
+    // capture hook: the two fast workers answered, the aborted tail did not.
+    assert_eq!(
+        result.drafts.len(),
+        2,
+        "drafts should hold exactly the answers that reached arbitration"
+    );
+    assert!(result.drafts.iter().all(|d| !d.text.is_empty()));
+
     // The contract: we dispatched 4 workers. Every dispatched worker
     // must appear in `worker_summaries`, with `succeeded` reflecting
     // its true fate (succeeded / failed / aborted). The header

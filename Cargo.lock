@@ -5072,6 +5072,7 @@ dependencies = [
  "mesh-mixture-of-agents",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
