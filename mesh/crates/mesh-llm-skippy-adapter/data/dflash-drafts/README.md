@@ -4,7 +4,7 @@ Some DFlash drafts are only published as safetensors, or only in a GGUF our
 runtime cannot use. `manifest.json` lists the ones mesh-llm converts and hosts
 under `meshllm/`. Nothing is uploaded there by hand: when the manifest changes
 on `main`, `.github/workflows/dflash-drafts-publish.yml` converts each draft
-that is not yet published and uploads it with the repository's `HF_TOKEN`.
+that is not yet published and uploads it with the repository's write-scoped `HF_PUBLISH_TOKEN` secret.
 
 A pairing may name a `meshllm/` draft only if this manifest produces it with
 the same file, SHA-256 and size; the `dflash_drafts_tests` unit tests enforce
