@@ -22,6 +22,7 @@ use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
 use skippy_inference_api::generation::GenerationRequest;
+use skippy_inference_api::generation::MessageContent;
 use skippy_runtime::ChatTemplateJsonOptions;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
@@ -68,6 +69,45 @@ impl StageOpenAiBackend {
         request: &GenerationRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
+        // A prefilled assistant message is continued, not rendered as a turn:
+        // templates close every assistant turn, so the model would see a
+        // finished answer and stop. Render the history before it with the
+        // generation prompt and append its text, as llama.cpp's server does.
+        // The text is appended only where the template itself puts message
+        // content: the whole conversation, rendered with the prefill as an
+        // ordinary turn, must read as the generation prompt followed by that
+        // text. Templates that add a channel or header first (Harmony), or
+        // open a reasoning block, keep the ordinary rendering, as do the cases
+        // `continued_prefill` excludes.
+        if let Some(continued) = continued_prefill(request, &options) {
+            let mut history = request.clone();
+            history.messages.pop();
+            history.extra.remove("prefill_assistant");
+            let continuation_options = ChatTemplateOptions {
+                add_assistant: true,
+                ..options.clone()
+            };
+            let mut prepared = self.prepare_chat_prompt(&history, continuation_options)?;
+            // Probe where the template puts content with a marker no template
+            // writes, so a prefill that starts like a template tag can't pass.
+            let mut probe = request.clone();
+            probe.extra.remove("prefill_assistant");
+            if let Some(last) = probe.messages.last_mut() {
+                last.content = Some(MessageContent::Text(CONTENT_PROBE.to_string()));
+            }
+            let probe_options = ChatTemplateOptions {
+                add_assistant: false,
+                ..options.clone()
+            };
+            let probe = self.prepare_chat_prompt(&probe, probe_options)?;
+            if prefill_at_content_boundary(&prepared.text, &probe.text)
+                && !generation_prompt_opens_reasoning(prepared.chat_parse_metadata.as_deref())
+            {
+                prepared.text.push_str(&continued);
+                return Ok(prepared);
+            }
+        }
+
         let marker = {
             let runtime = lock_runtime(&self.runtime);
             runtime.media_marker()
@@ -417,4 +457,266 @@ pub(super) fn parse_emulated_chat_output(
         reasoning_content: None,
         tool_calls,
     })
+}
+
+/// The text a `prefill_assistant` request asks the model to continue: the
+/// last message, when the request set `prefill_assistant` and that message is
+/// an assistant one with text-only content and no other field. `None` leaves
+/// the request to the ordinary template rendering, which sees every field.
+fn assistant_continuation(request: &GenerationRequest) -> Option<String> {
+    request
+        .extra
+        .get("prefill_assistant")
+        .filter(|value| !value.is_null())?;
+    let last = request
+        .messages
+        .last()
+        .filter(|message| message.role == "assistant" && message.extra.is_empty())?;
+    let content = last.content.as_ref()?;
+    let text_only = match content {
+        MessageContent::Text(_) => true,
+        MessageContent::Parts(parts) => parts.iter().all(|part| part.content_type == "text"),
+        MessageContent::Other(_) => false,
+    };
+    if !text_only {
+        return None;
+    }
+    // The same text the template would have rendered: parts joined by "\n".
+    crate::frontend::message_content_to_generation_text(content, "", &mut Vec::new()).ok()
+}
+
+/// The prefill to continue, or `None` to keep the ordinary rendering: also
+/// when a grammar or schema constrains the output or tools are requested
+/// (neither the grammar nor the tool-call parser would see the text already
+/// written), or nothing comes before the prefill.
+fn continued_prefill(request: &GenerationRequest, options: &ChatTemplateOptions) -> Option<String> {
+    if options.grammar.is_some()
+        || options.json_schema.is_some()
+        || tool_calls_requested(request)
+        || request.messages.len() < 2
+    {
+        return None;
+    }
+    assistant_continuation(request)
+}
+
+/// Content for the probe turn: private-use characters, so it can't be read
+/// as, or collide with, anything a template writes.
+const CONTENT_PROBE: &str = "\u{E000}skippy-prefill-content-probe\u{E001}";
+
+/// Whether the template puts message content right after the generation
+/// prompt: the conversation rendered with [`CONTENT_PROBE`] as the last
+/// assistant turn must read as the history's generation prompt followed by
+/// the probe. Judged on the probe, never on the prefill's own bytes.
+fn prefill_at_content_boundary(with_generation_prompt: &str, probe_render: &str) -> bool {
+    probe_render
+        .strip_prefix(with_generation_prompt)
+        .is_some_and(|rest| rest.starts_with(CONTENT_PROBE))
+}
+
+/// Whether the rendered generation prompt ends inside a reasoning block: it
+/// contains the template's thinking start tag and no end tag after it.
+fn generation_prompt_opens_reasoning(metadata_json: Option<&str>) -> bool {
+    let Some(metadata) = metadata_json.and_then(|json| serde_json::from_str::<Value>(json).ok())
+    else {
+        return false;
+    };
+    let prompt = metadata
+        .get("generation_prompt")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(start_tag) = metadata
+        .get("thinking_start_tag")
+        .and_then(Value::as_str)
+        .filter(|tag| !tag.is_empty())
+    else {
+        return false;
+    };
+    let Some(opened) = prompt.rfind(start_tag) else {
+        return false;
+    };
+    let after = &prompt[opened + start_tag.len()..];
+    !metadata
+        .get("thinking_end_tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|tag| !tag.is_empty())
+        .any(|tag| after.contains(tag))
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use skippy_inference_api::generation::GenerationMessage;
+
+    fn request(messages: Vec<(&str, &str)>, prefill: bool) -> GenerationRequest {
+        let mut request = GenerationRequest {
+            messages: messages
+                .into_iter()
+                .map(|(role, content)| GenerationMessage {
+                    role: role.into(),
+                    content: Some(MessageContent::Text(content.into())),
+                    extra: Default::default(),
+                })
+                .collect(),
+            ..GenerationRequest::default()
+        };
+        if prefill {
+            request
+                .extra
+                .insert("prefill_assistant".into(), Value::String("unused".into()));
+        }
+        request
+    }
+
+    #[test]
+    fn a_prefilled_assistant_message_is_continued() {
+        let request = request(vec![("user", "Count."), ("assistant", "1\n2\n")], true);
+        assert_eq!(assistant_continuation(&request).as_deref(), Some("1\n2\n"));
+    }
+
+    #[test]
+    fn without_prefill_or_an_assistant_tail_nothing_is_continued() {
+        let history = request(vec![("user", "Hi."), ("assistant", "Hello.")], false);
+        assert_eq!(assistant_continuation(&history), None);
+        let user_last = request(vec![("user", "Hi.")], true);
+        assert_eq!(assistant_continuation(&user_last), None);
+    }
+
+    #[test]
+    fn text_parts_are_joined_as_the_template_would_and_other_parts_are_left_to_it() {
+        let mut parts = request(vec![("user", "Count.")], true);
+        parts.messages.push(GenerationMessage {
+            role: "assistant".into(),
+            content: Some(MessageContent::Parts(
+                serde_json::from_value(serde_json::json!([
+                    {"type": "text", "text": "first"},
+                    {"type": "text", "text": "second"}
+                ]))
+                .unwrap(),
+            )),
+            extra: Default::default(),
+        });
+        assert_eq!(
+            assistant_continuation(&parts).as_deref(),
+            Some("first\nsecond")
+        );
+        if let Some(MessageContent::Parts(list)) = &mut parts.messages[1].content {
+            list[1].content_type = "image_url".into();
+        }
+        assert_eq!(assistant_continuation(&parts), None);
+    }
+
+    #[test]
+    fn a_constrained_output_or_an_empty_history_is_left_to_the_template() {
+        let prefilled = request(vec![("user", "Give JSON."), ("assistant", "{")], true);
+        let plain = ChatTemplateOptions::default();
+        assert_eq!(continued_prefill(&prefilled, &plain).as_deref(), Some("{"));
+        for options in [
+            ChatTemplateOptions {
+                json_schema: Some("{\"type\":\"object\"}".into()),
+                ..ChatTemplateOptions::default()
+            },
+            ChatTemplateOptions {
+                grammar: Some("root ::= \"x\"".into()),
+                ..ChatTemplateOptions::default()
+            },
+        ] {
+            assert_eq!(continued_prefill(&prefilled, &options), None);
+        }
+        let alone = request(vec![("assistant", "1\n")], true);
+        assert_eq!(continued_prefill(&alone, &plain), None);
+    }
+
+    #[test]
+    fn a_request_with_tools_is_left_to_the_template() {
+        let mut with_tools = request(vec![("user", "Run it."), ("assistant", "TOOL_CALL ")], true);
+        with_tools.tools = Some(serde_json::json!([
+            {"type": "function", "function": {"name": "run", "parameters": {}}}
+        ]));
+        assert_eq!(
+            continued_prefill(&with_tools, &ChatTemplateOptions::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn the_prefill_is_appended_only_where_the_template_puts_content() {
+        // ChatML (Qwen): content follows the generation prompt directly.
+        let chatml = "<|im_start|>user\nCount.<|im_end|>\n<|im_start|>assistant\n";
+        assert!(prefill_at_content_boundary(
+            chatml,
+            &format!("{chatml}{CONTENT_PROBE}<|im_end|>\n")
+        ));
+        // Harmony (GPT-OSS): the generation prompt stops inside the header,
+        // and the template writes a channel and a message tag before content.
+        let harmony = "<|start|>user<|message|>Hi<|end|><|start|>assistant";
+        assert!(!prefill_at_content_boundary(
+            harmony,
+            &format!("{harmony}<|channel|>final<|message|>{CONTENT_PROBE}<|end|>")
+        ));
+        // A template that writes anything else before the content.
+        assert!(!prefill_at_content_boundary(
+            chatml,
+            &format!("{chatml}<think>\n\n</think>\n\n{CONTENT_PROBE}<|im_end|>\n")
+        ));
+        // History rendered differently once the probe is a turn.
+        assert!(!prefill_at_content_boundary(
+            chatml,
+            &format!("<|im_start|>user\nCount!<|im_end|>\n<|im_start|>assistant\n{CONTENT_PROBE}")
+        ));
+    }
+
+    #[test]
+    fn a_short_prefill_that_starts_like_a_template_tag_is_not_taken_for_content() {
+        // Judged on the prefill's bytes, "<" would match the start of
+        // Harmony's `<|channel|>` and land inside the header. The probe can't.
+        let harmony = "<|start|>user<|message|>Hi<|end|><|start|>assistant";
+        let rendered_with_prefill = format!("{harmony}<|channel|>final<|message|><<|end|>");
+        assert!(
+            rendered_with_prefill
+                .strip_prefix(harmony)
+                .is_some_and(|rest| rest.starts_with('<')),
+            "the collision this guards against"
+        );
+        assert!(!prefill_at_content_boundary(
+            harmony,
+            &format!("{harmony}<|channel|>final<|message|>{CONTENT_PROBE}<|end|>")
+        ));
+    }
+
+    #[test]
+    fn a_prefill_with_other_fields_is_left_to_the_template() {
+        let mut with_tool_calls = request(vec![("user", "Run it."), ("assistant", "Sure.")], true);
+        with_tool_calls.messages[1].extra.insert(
+            "tool_calls".into(),
+            serde_json::json!([{"id": "call_1", "type": "function"}]),
+        );
+        assert_eq!(assistant_continuation(&with_tool_calls), None);
+    }
+
+    fn metadata(generation_prompt: &str) -> String {
+        serde_json::json!({
+            "generation_prompt": generation_prompt,
+            "thinking_start_tag": "<think>",
+            "thinking_end_tags": ["</think>"],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn an_open_reasoning_block_in_the_generation_prompt_is_detected() {
+        assert!(generation_prompt_opens_reasoning(Some(&metadata(
+            "<|im_start|>assistant\n<think>\n"
+        ))));
+        assert!(!generation_prompt_opens_reasoning(Some(&metadata(
+            "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        ))));
+        assert!(!generation_prompt_opens_reasoning(Some(&metadata(
+            "<|im_start|>assistant\n"
+        ))));
+        assert!(!generation_prompt_opens_reasoning(None));
+    }
 }
