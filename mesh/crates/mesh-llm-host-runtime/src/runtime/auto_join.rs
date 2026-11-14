@@ -550,7 +550,7 @@ async fn follow_mesh_id_changes(node: mesh::Node, mut changes: tokio::sync::watc
 /// After `delay`, record the joined mesh and save its ID as the rejoin
 /// preference, then follow later changes. All of it ends when the node's
 /// endpoint closes, so a stopped runtime never saves an ID after shutdown.
-async fn save_last_mesh_id_after_join(
+pub(super) async fn save_last_mesh_id_after_join(
     node: mesh::Node,
     mut changes: tokio::sync::watch::Receiver<()>,
     delay: std::time::Duration,
@@ -727,111 +727,6 @@ pub(super) fn run_auto_model_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Points the identity store at a temporary home and restores it on drop.
-    struct TestHomeGuard {
-        test_home: Option<std::ffi::OsString>,
-        node_key_path: Option<std::ffi::OsString>,
-    }
-
-    impl TestHomeGuard {
-        fn set(home: &Path) -> Self {
-            let previous = Self {
-                test_home: std::env::var_os("MESH_LLM_TEST_HOME"),
-                node_key_path: std::env::var_os("MESH_LLM_NODE_KEY_PATH"),
-            };
-            // SAFETY: only #[serial] tests use this guard, and Drop restores both values.
-            unsafe {
-                std::env::set_var("MESH_LLM_TEST_HOME", home);
-                std::env::remove_var("MESH_LLM_NODE_KEY_PATH");
-            }
-            previous
-        }
-    }
-
-    impl Drop for TestHomeGuard {
-        fn drop(&mut self) {
-            // SAFETY: only #[serial] tests use this guard, and it restores what it changed.
-            unsafe {
-                match self.test_home.take() {
-                    Some(value) => std::env::set_var("MESH_LLM_TEST_HOME", value),
-                    None => std::env::remove_var("MESH_LLM_TEST_HOME"),
-                }
-                match self.node_key_path.take() {
-                    Some(value) => std::env::set_var("MESH_LLM_NODE_KEY_PATH", value),
-                    None => std::env::remove_var("MESH_LLM_NODE_KEY_PATH"),
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn a_shutdown_during_the_join_delay_saves_no_mesh_id() {
-        let home = tempfile::tempdir().expect("tempdir should exist");
-        let _home = TestHomeGuard::set(home.path());
-        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
-            .await
-            .expect("test node should start");
-        node.set_mesh_id("eeeeeeeeeeeeeeee".into()).await;
-        let saver = tokio::spawn(save_last_mesh_id_after_join(
-            node.clone(),
-            node.subscribe_mesh_id_changes(),
-            std::time::Duration::from_secs(60),
-        ));
-
-        node.endpoint.close().await;
-        tokio::time::timeout(std::time::Duration::from_secs(5), saver)
-            .await
-            .expect("the task should end once the endpoint closes")
-            .expect("the task should not panic");
-        assert_eq!(mesh::load_last_mesh_id(), None);
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn the_saved_rejoin_preference_follows_a_later_mesh_id_convergence() {
-        const LOW: &str = "1111111111111111";
-        const HIGH: &str = "eeeeeeeeeeeeeeee";
-        let home = tempfile::tempdir().expect("tempdir should exist");
-        let _home = TestHomeGuard::set(home.path());
-        let mut node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
-            .await
-            .expect("test node should start");
-        node.public_mesh = true;
-
-        // As at startup: the node takes an ID and saves it, then keeps
-        // following changes. Subscribing after HIGH leaves no notification
-        // pending, so only the later change can move the saved ID.
-        node.set_mesh_id(HIGH.into()).await;
-        mesh::save_last_mesh_id(HIGH).expect("initial save should succeed");
-        let changes = node.subscribe_mesh_id_changes();
-        let follower = tokio::spawn(save_last_mesh_id_on_change(node.clone(), changes));
-
-        node.set_mesh_id(LOW.into()).await;
-        assert_eq!(node.mesh_id().await.as_deref(), Some(LOW));
-        let saved = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                if mesh::load_last_mesh_id().as_deref() == Some(LOW) {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await;
-        assert!(
-            saved.is_ok(),
-            "the rejoin preference should move to the converged ID, still {:?}",
-            mesh::load_last_mesh_id()
-        );
-
-        // A stopped runtime closes the node's endpoint, which ends the task.
-        node.endpoint.close().await;
-        tokio::time::timeout(std::time::Duration::from_secs(5), follower)
-            .await
-            .expect("the task should end once the endpoint closes")
-            .expect("the task should not panic");
-    }
 
     #[test]
     fn successful_join_mesh_label_preserves_named_and_unnamed_meshes() {
