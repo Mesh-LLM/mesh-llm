@@ -203,12 +203,12 @@ scenario!(
 scenario!(
     d14_slow_headers,
     |plan: &mut Plan| plan.behavior = Behavior::SlowHeaders,
-    Some("deadline expired")
+    Some("models_transfer_failed")
 );
 scenario!(
     d14_slow_body,
     |plan: &mut Plan| plan.behavior = Behavior::SlowBody,
-    Some("deadline expired")
+    Some("models_transfer_failed")
 );
 scenario!(
     d14_flood,

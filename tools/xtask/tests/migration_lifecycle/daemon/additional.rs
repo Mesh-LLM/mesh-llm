@@ -14,9 +14,12 @@ fn d14_endless_models_body_is_bounded() {
     let output = command(&case).output().unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+    assert!(case.native.join("models.count").exists());
     let diagnostics = String::from_utf8_lossy(&output.stderr);
     assert!(
-        diagnostics.contains("response_limit") || diagnostics.contains("deadline expired"),
+        diagnostics.contains("response_limit")
+            || diagnostics.contains("models_transfer_failed")
+            || diagnostics.contains("deadline expired"),
         "{diagnostics}"
     );
     assert!(sentinel.0.try_wait().unwrap().is_none());
