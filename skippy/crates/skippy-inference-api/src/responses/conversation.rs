@@ -1,7 +1,9 @@
 //! Agent loops (Codex) resend the conversation as typed Responses items,
 //! including the function calls the model made and their outputs. Chat
 //! completions carry those as assistant `tool_calls` and `tool` messages.
-use super::{translate_responses_input_message, translate_responses_message_content};
+use super::request_translation::{
+    translate_responses_input_message, translate_responses_message_content,
+};
 use crate::InferenceError;
 use serde_json::Value;
 
@@ -160,7 +162,7 @@ fn responses_function_call_output_message(item: &Value) -> Result<Value, Inferen
 
 #[cfg(test)]
 mod tests {
-    use super::super::translate_responses_input_to_messages;
+    use super::super::request_translation::translate_responses_input_to_messages;
 
     #[test]
     fn responses_tool_loop_items_translate_to_chat_tool_messages() {

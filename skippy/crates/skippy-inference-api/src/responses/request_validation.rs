@@ -8,10 +8,14 @@ const MAX_METADATA_KEYS: usize = 16;
 const MAX_METADATA_KEY_CHARS: usize = 64;
 const MAX_METADATA_VALUE_CHARS: usize = 512;
 const MAX_IDENTIFIER_CHARS: usize = 64;
+const MIN_OUTPUT_TOKENS: u64 = 16;
+const MAX_TOP_LOGPROBS: u64 = 20;
 
 /// Validate controls the Responses ingress reads, rejecting unsupported values
 /// rather than silently ignoring them.
 pub(super) fn validate_request_fields(object: &Map<String, Value>) -> Result<(), InferenceError> {
+    max_output_tokens(object)?;
+    top_logprobs(object)?;
     nullable_string(object, "instructions")?;
     metadata(object)?;
     nullable_bounded_string(object, "safety_identifier", MAX_IDENTIFIER_CHARS)?;
@@ -50,6 +54,100 @@ pub(super) fn validate_request_fields(object: &Map<String, Value>) -> Result<(),
         );
     }
     Ok(())
+}
+
+pub(super) fn canonicalize_and_validate_request_fields(
+    object: &mut Map<String, Value>,
+) -> Result<(), InferenceError> {
+    canonicalize_max_output_tokens(object);
+    validate_request_fields(object)
+}
+
+/// Normalize legacy Chat token-limit aliases onto the Responses field before
+/// continuation inheritance and response-envelope capture.
+///
+/// Presence decides precedence, including an explicit `null`: the canonical
+/// Responses field wins, followed by `max_tokens`, then
+/// `max_completion_tokens`, then the legacy llama.cpp `n_predict` alias.
+/// Removing the losing aliases prevents a shadow value from overriding or
+/// resurrecting the effective limit later, and keeps released peers from
+/// trying to deserialize a malformed losing alias before dispatch.
+pub(super) fn canonicalize_max_output_tokens(object: &mut Map<String, Value>) -> bool {
+    let canonical_present = object.contains_key("max_output_tokens");
+    let max_tokens = object.remove("max_tokens");
+    let max_completion_tokens = object.remove("max_completion_tokens");
+    let n_predict = object.remove("n_predict");
+    if canonical_present {
+        return max_tokens.is_some() || max_completion_tokens.is_some() || n_predict.is_some();
+    }
+    if let Some(value) = max_tokens.or(max_completion_tokens).or(n_predict) {
+        object.insert("max_output_tokens".to_string(), value);
+        return true;
+    }
+    false
+}
+
+/// Translate the already-effective Responses limit to the shared Chat field.
+pub(super) fn translate_max_output_tokens(object: &mut Map<String, Value>) -> bool {
+    let Some(value) = object.remove("max_output_tokens") else {
+        return false;
+    };
+    object.insert("max_tokens".to_string(), value);
+    true
+}
+
+fn max_output_tokens(object: &Map<String, Value>) -> Result<(), InferenceError> {
+    let Some(value) = object
+        .get("max_output_tokens")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(());
+    };
+    let Some(value) = value.as_u64() else {
+        if value.as_f64().is_some_and(|value| {
+            value.is_finite() && value.fract() == 0.0 && value > f64::from(u32::MAX)
+        }) {
+            return Err(unsupported_output_token_limit());
+        }
+        return Err(InferenceError::invalid_request(
+            "max_output_tokens must be an integer greater than or equal to 16, or null",
+        )
+        .with_param("max_output_tokens"));
+    };
+    if value < MIN_OUTPUT_TOKENS {
+        return Err(InferenceError::invalid_request(
+            "max_output_tokens must be an integer greater than or equal to 16, or null",
+        )
+        .with_param("max_output_tokens"));
+    }
+    if value > u64::from(u32::MAX) {
+        return Err(unsupported_output_token_limit());
+    }
+    Ok(())
+}
+
+fn unsupported_output_token_limit() -> InferenceError {
+    InferenceError::unsupported(format!(
+        "max_output_tokens values greater than {} are not supported by the generation backend",
+        u32::MAX
+    ))
+    .with_param("max_output_tokens")
+}
+
+fn top_logprobs(object: &Map<String, Value>) -> Result<(), InferenceError> {
+    let Some(value) = object.get("top_logprobs").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    if value
+        .as_u64()
+        .is_some_and(|value| value <= MAX_TOP_LOGPROBS)
+    {
+        return Ok(());
+    }
+    Err(InferenceError::invalid_request(
+        "top_logprobs must be an integer between 0 and 20, or null",
+    )
+    .with_param("top_logprobs"))
 }
 
 fn nullable_string(object: &Map<String, Value>, field: &'static str) -> Result<(), InferenceError> {

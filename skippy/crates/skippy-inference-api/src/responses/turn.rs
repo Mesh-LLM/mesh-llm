@@ -89,7 +89,7 @@ impl ResponsesTurn {
         let object = body
             .as_object_mut()
             .ok_or_else(|| InferenceError::invalid_request("request body must be a JSON object"))?;
-        super::request_validation::validate_request_fields(object)?;
+        super::request_validation::canonicalize_and_validate_request_fields(object)?;
         let obfuscation_policy = ObfuscationPolicy::capture_and_strip(object)?;
         let explicit_model = object
             .get("model")

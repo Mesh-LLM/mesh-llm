@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use skippy_guardrails::MESH_COMPACT_FIELD;
 
 #[test]
 fn accepted_responses_truncation_modes_force_compaction_off() {

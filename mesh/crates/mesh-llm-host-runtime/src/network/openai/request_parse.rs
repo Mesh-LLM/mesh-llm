@@ -531,11 +531,37 @@ where
     )
     .await
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
+    // A Responses request crosses the mesh as normalized Chat JSON. Preserve
+    // ordinary Chat parsing, but if a losing extension made the typed metadata
+    // parse fail, recover routing fields from the documented Responses backend
+    // marker instead of discarding the already selected concrete model.
+    let fallback_routing_body = if metadata.is_none()
+        && rewrite.body_json.is_none()
+        && parsed.path.split('?').next() == Some("/v1/chat/completions")
+        && body
+            .windows(skippy_inference_api::MESH_COMPACT_FIELD.len())
+            .any(|window| window == skippy_inference_api::MESH_COMPACT_FIELD.as_bytes())
+    {
+        serde_json::from_slice(&body).ok()
+    } else {
+        None
+    };
+    let responses_routing = responses_routing_metadata(
+        &parsed.path,
+        rewrite
+            .body_json
+            .as_ref()
+            .or(fallback_routing_body.as_ref()),
+    );
+    let stream = responses_routing
+        .as_ref()
+        .map(|routing| routing.stream)
+        .unwrap_or_else(|| metadata.as_ref().and_then(|value| value.stream));
     let mut response_adapter = rewrite.response_adapter;
     if response_adapter == ResponseAdapter::None
         && parsed.path.split('?').next().unwrap_or(&parsed.path) == "/v1/chat/completions"
     {
-        response_adapter = if metadata.as_ref().and_then(|value| value.stream) == Some(true) {
+        response_adapter = if stream == Some(true) {
             ResponseAdapter::OpenAiChatCompletionsStream
         } else {
             ResponseAdapter::OpenAiChatCompletionsJson
@@ -558,16 +584,15 @@ where
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
             None => None,
         }
+    } else if let Some(routing) = responses_routing.as_ref() {
+        routing.model_name.clone()
     } else {
         metadata.as_ref().and_then(|value| value.model.clone())
     };
-    let completion_tokens = metadata.as_ref().and_then(|value| {
-        value
-            .max_completion_tokens
-            .or(value.max_tokens)
-            .or(value.max_output_tokens)
-            .or(value.n_predict)
-    });
+    let completion_tokens = responses_routing
+        .as_ref()
+        .map(|routing| routing.completion_tokens)
+        .unwrap_or_else(|| completion_tokens_from_metadata(metadata.as_ref()));
     let raw = finalize_forwarded_request(
         raw,
         header_end,
@@ -602,7 +627,7 @@ where
         body_bytes,
         body_len_bytes,
         completion_tokens,
-        stream: metadata.as_ref().and_then(|value| value.stream),
+        stream,
         model_name,
         request_object_request_ids: rewrite.request_object_request_ids,
         response_adapter,
@@ -611,6 +636,49 @@ where
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
         automatic_route: false,
+    })
+}
+
+struct ResponsesRoutingMetadata {
+    model_name: Option<String>,
+    completion_tokens: Option<u32>,
+    stream: Option<bool>,
+}
+
+fn responses_routing_metadata(
+    client_path: &str,
+    normalized_body: Option<&serde_json::Value>,
+) -> Option<ResponsesRoutingMetadata> {
+    let path = client_path.split('?').next();
+    let normalized_responses = path == Some("/v1/chat/completions")
+        && normalized_body.and_then(|body| body.get(skippy_inference_api::MESH_COMPACT_FIELD))
+            == Some(&serde_json::Value::Bool(false));
+    if path != Some("/v1/responses") && !normalized_responses {
+        return None;
+    }
+
+    Some(ResponsesRoutingMetadata {
+        model_name: normalized_body
+            .and_then(|body| body.get("model"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        completion_tokens: normalized_body
+            .and_then(|body| body.get("max_tokens"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+        stream: normalized_body
+            .and_then(|body| body.get("stream"))
+            .and_then(serde_json::Value::as_bool),
+    })
+}
+
+fn completion_tokens_from_metadata(metadata: Option<&RequestMetadata>) -> Option<u32> {
+    metadata.and_then(|value| {
+        value
+            .max_completion_tokens
+            .or(value.max_tokens)
+            .or(value.max_output_tokens)
+            .or(value.n_predict)
     })
 }
 

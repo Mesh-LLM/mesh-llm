@@ -95,12 +95,14 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `model` | Supported | Opaque exact-match id; Mesh-style refs such as `org/repo:Q4_K_M` pass through without frontend parsing. |
 | `messages` | Supported | String and text-part content are parsed; stage backend applies the model chat template through llama.cpp `llama-common`. |
 | `prompt` | Supported | String and string-array prompts are accepted; token prompts parse but are rejected until a backend can honor token IDs directly. |
-| `max_tokens` / `max_completion_tokens` | Parsed | Backend decides enforcement. |
+| `max_tokens` / `max_completion_tokens` | Parsed | Chat/Completions behavior is unchanged; the backend decides enforcement. |
+| Responses `max_output_tokens` | Frontend-validated | Accepts `null` or JSON integers from 16 through `u32::MAX`. For compatibility, Responses also accepts `max_tokens`, `max_completion_tokens`, and the legacy llama.cpp `n_predict`; canonical `max_output_tokens` wins by presence, including `null`, then `max_tokens`, `max_completion_tokens`, and `n_predict`. Only the effective value is validated; every losing alias is removed before capture and forwarding so mixed-version peers receive one `max_tokens` field. The effective value is echoed and inherited. The Open Responses schema has no upper bound; larger schema-valid integers fail explicitly as unsupported because the current Chat generation boundary is `u32`, and are never clamped. Ordinary Chat Completions handling of `n_predict` is unchanged. |
 | `stop` | Parsed | Backend decides enforcement. |
 | `n` / `best_of` | Parsed | Single-choice requests are accepted; multi-choice generation is rejected until the response/backend path supports it. |
 | `temperature`, `top_p`, `seed` | Supported | Stage backend passes supported sampling controls to llama.cpp sampling. |
 | penalties / `logit_bias` | Supported | Presence/frequency/repeat penalties and token-id logit bias are passed to llama.cpp. |
-| `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether logits/probability data can be produced. |
+| Chat `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved with the existing Chat contract. Backend decides whether logits/probability data can be produced. |
+| Responses `top_logprobs` | Frontend-validated | Accepts `null` or integers from 0 through 20. Any non-null value, including zero, enables backend logprobs without requiring the non-schema `logprobs` field; `include: ["message.output_text.logprobs"]` also enables them. |
 | `tools` / `tool_choice` | Responses-enforced; Chat backend-gated | Responses validates function identifiers and references at ingress. Its `allowed_tools` keeps the complete `tools` array visible to the backend, reduces only the backend choice to its effective mode, and rejects terminal calls outside the original allowed set. Chat Completions preserves tool settings; the backend decides generation support. |
 | `max_tool_calls` | Responses-enforced | Accepts positive JSON integers through `u64::MAX` or `null`, inherits across continuations, and fails the whole response with `tool_call_limit_exceeded` when generated calls exceed the effective cap. The field is never forwarded to Chat backends. |
 | `parallel_tool_calls` | Responses-enforced | `false` permits at most one function call generated for the current response. The backend still receives the hint, while the ingress rejects a backend that returns multiple calls. Omitted, `true`, and `null` permit multiple calls. |
@@ -123,9 +125,12 @@ function-call output items, structured-output request translation, usage detail
 objects, and terminal status mapping. A caller that supplies a
 `ResponseContinuation` can store completed turns and restore the full input and
 output transcript for `previous_response_id`. Effective generation controls
-inherit when omitted and explicit child values override them; instructions are
-per-turn and never inherit. Failed and incomplete turns are never retained. The
-store is bounded, in-memory, and caller-scoped.
+inherit when omitted and explicit child values override them. For
+`max_output_tokens` and `top_logprobs`, explicit `null` clears an inherited
+value; the response resource reports the effective configuration, including
+the default `top_logprobs: 0` after a clear. Instructions are per-turn and never
+inherit. Failed and incomplete turns are never retained. The store is bounded,
+in-memory, and caller-scoped.
 
 Streamed Responses use provider-profile payload padding by default. Omitted or
 `null` `stream_options`, and an empty object, enable it;

@@ -3,6 +3,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[path = "routing/cache_cost.rs"]
 mod cache_cost;
+#[path = "routing/responses.rs"]
+mod responses;
 
 type PromptShapeObservation = (Option<String>, Option<u64>, Option<u64>);
 

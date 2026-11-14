@@ -20,6 +20,9 @@ use uuid::Uuid;
 use super::*;
 use crate::AudioTranscriptionRequest;
 
+#[path = "router_tests/responses_numeric_controls.rs"]
+mod responses_numeric_controls;
+
 /// A valid UUIDv4 the frontend will now accept and forward verbatim.
 const CLIENT_NONCE: &str = "6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f";
 
@@ -1863,7 +1866,7 @@ async fn chat_completion_route_accepts_tools_structured_output_and_logprobs() {
                 "parallel_tool_calls": true,
                 "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}},
                 "logprobs": true,
-                "top_logprobs": 2
+                "top_logprobs": 21
             }),
         )
         .await;
@@ -1918,10 +1921,9 @@ async fn responses_route_translates_to_chat_and_back() {
                 "model": "test-model",
                 "instructions": "be concise",
                 "input": "hi",
-                "max_output_tokens": 12,
+                "max_output_tokens": 16,
                 "tools": [{"type": "function", "function": {"name": "lookup"}}],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}},
-                "logprobs": true,
                 "top_logprobs": 1
             }),
         )
@@ -2023,7 +2025,6 @@ async fn responses_route_preserves_tool_calls_and_logprobs() {
             "model": "tool-call",
             "input": "hi",
             "tools": [{"type": "function", "function": {"name": "lookup"}}],
-            "logprobs": true,
             "top_logprobs": 1
         }),
     )

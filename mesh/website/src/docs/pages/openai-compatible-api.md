@@ -144,6 +144,33 @@ and `prompt_cache_key` are `null` or strings limited to 64 Unicode characters.
 The safety identifier is opaque correlation metadata that Mesh echoes; setting
 it does not activate a monitoring or protection service.
 
+`max_output_tokens` accepts `null` or a JSON integer of at least 16. The Open
+Responses schema does not impose an upper bound, but Mesh's current Chat
+generation boundary represents token limits as `u32`; schema-valid values above
+`4294967295` therefore fail explicitly as unsupported and are never clamped.
+Responses also accepts the legacy aliases `max_tokens`,
+`max_completion_tokens`, and llama.cpp's `n_predict`. The canonical field wins
+by presence, including an explicit `null`; without it, precedence is
+`max_tokens`, then `max_completion_tokens`, then `n_predict`. Only the winning
+value is validated. All losing aliases are removed before the response
+configuration is captured or the request is forwarded, and the backend sees a
+single `max_tokens` field. This normalization is an ingress compatibility
+boundary for mixed-version meshes: a released peer never has to deserialize a
+malformed losing `n_predict`. The effective value is used for routing and
+context budgets, echoed as `max_output_tokens`, and inherited by follow-ups;
+an explicit `null` through any winning field clears an inherited limit.
+Ordinary Chat Completions handling of `n_predict` is unchanged.
+
+`top_logprobs` accepts `null` or an integer from 0 through 20. Any non-null
+value, including zero, enables backend log-probability generation without a
+separate `logprobs` field. Requesting
+`include: ["message.output_text.logprobs"]` also enables it, including when
+`top_logprobs` is null. Follow-ups inherit omitted values, while explicit null
+clears the inherited control; the response resource reports the effective
+configuration, so a cleared `top_logprobs` is reported as the default `0`.
+These bounds apply only to Responses requests and do not narrow ordinary Chat
+Completions controls.
+
 `text` and `reasoning` must each be `null` or objects. Existing `text.format`
 support is unchanged, while non-null `text.verbosity` is unsupported.
 `reasoning.effort` accepts `none`, `low`, `medium`, `high`, and `xhigh`, subject
