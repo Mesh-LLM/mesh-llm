@@ -1,4 +1,7 @@
-use std::ffi::{CString, c_char};
+use std::{
+    ffi::{CStr, CString, c_char},
+    ptr::NonNull,
+};
 
 #[cfg(feature = "dynamic-runtime")]
 use crate::dynamic;
@@ -47,6 +50,86 @@ where
 pub enum NativeRuntimeLoadError {
     Load(String),
     AlreadyLoaded,
+}
+
+/// A llama.cpp LoRA adapter loaded for one model. The adapter must be applied
+/// only to contexts created from that model and must outlive every context
+/// using it.
+pub struct LlamaLoraAdapter {
+    raw: NonNull<Opaque>,
+    free: unsafe extern "C" fn(*mut Opaque),
+    set: unsafe extern "C" fn(*mut Opaque, *mut *mut Opaque, usize, *mut f32) -> i32,
+}
+
+impl LlamaLoraAdapter {
+    /// Loads a GGUF LoRA adapter for `model`.
+    ///
+    /// # Safety
+    ///
+    /// `model` must be a live llama.cpp model from the currently loaded runtime.
+    pub unsafe fn load(model: *const Opaque, path: &CStr) -> Result<Self, String> {
+        if model.is_null() {
+            return Err("cannot load a LoRA adapter for a null model".into());
+        }
+        #[cfg(feature = "dynamic-runtime")]
+        let (init, free, set) = dynamic::llama_lora_adapter_api_optional().ok_or_else(|| {
+            "loaded llama.cpp runtime does not export the LoRA adapter API".to_string()
+        })?;
+        #[cfg(not(feature = "dynamic-runtime"))]
+        let (init, free, set) = (
+            static_bindings::llama_adapter_lora_init,
+            static_bindings::llama_adapter_lora_free,
+            static_bindings::llama_set_adapters_lora,
+        );
+
+        // SAFETY: the caller guarantees the model belongs to this runtime;
+        // `path` is NUL-terminated and remains valid for the duration of init.
+        let raw = NonNull::new(unsafe { init(model, path.as_ptr()) }).ok_or_else(|| {
+            format!(
+                "llama.cpp could not load LoRA adapter {}",
+                path.to_string_lossy()
+            )
+        })?;
+        Ok(Self { raw, free, set })
+    }
+
+    /// Applies this adapter to one llama.cpp context at the requested scale.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when llama.cpp rejects the adapter for this context.
+    ///
+    /// # Safety
+    ///
+    /// `context` must be a live llama.cpp context created from the model used
+    /// to load this adapter, and must not be concurrently mutated.
+    pub unsafe fn apply(&self, context: *mut Opaque, scale: f32) -> Result<(), String> {
+        if context.is_null() {
+            return Err("cannot apply a LoRA adapter to a null context".into());
+        }
+        if !scale.is_finite() {
+            return Err("LoRA adapter scale must be finite".into());
+        }
+        let mut adapter = self.raw.as_ptr();
+        let mut scale = scale;
+        // SAFETY: the caller guarantees context/model identity and exclusive
+        // context access; the adapter remains owned by `self`.
+        let status = unsafe { (self.set)(context, &mut adapter, 1, &mut scale) };
+        if status != 0 {
+            return Err(format!(
+                "llama.cpp rejected the LoRA adapter (status {status})"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for LlamaLoraAdapter {
+    fn drop(&mut self) {
+        // SAFETY: `raw` is the unique adapter handle returned by init and is
+        // freed once, before its owning model is released by StageModelInner.
+        unsafe { (self.free)(self.raw.as_ptr()) };
+    }
 }
 
 impl std::fmt::Display for NativeRuntimeLoadError {

@@ -1,5 +1,5 @@
-use std::ffi::CString;
 use std::ptr;
+use std::{ffi::CString, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{
@@ -58,6 +58,9 @@ pub struct StageSession {
     pub(crate) batched_activation_exports: bool,
     /// Attached DFlash draft that mirrors this session's target positions.
     pub(crate) dflash: Option<crate::dflash::DFlashSessionLink>,
+    /// Keeps the native model, its adapters, and any model-borrowing contexts
+    /// alive until this session's context has been freed.
+    pub(crate) _model_owner: Option<Arc<crate::native::StageModelInner>>,
 }
 
 pub struct DecodeBatchRequest<'a> {

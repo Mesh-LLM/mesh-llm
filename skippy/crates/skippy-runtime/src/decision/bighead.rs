@@ -36,11 +36,9 @@
 //!   models). One file, atomic with the model; the loader reads the head from
 //!   the GGUF skippy is already parsing. A sidecar directory form remains
 //!   useful in development (training writes safetensors before packaging).
-//!   The LoRA adapter that adapts the torso defaults to MERGED into the GGUF
-//!   at packaging time (one weights artifact, two languages); it stays a
-//!   serve-time adapter only if the A2 skew gate shows merging hurts chat.
-//!   Tensor extraction is intentionally not in this module yet; the loader
-//!   takes parsed tensors so both tests and the future integration stay honest.
+//!   An unmerged adapter is an adjacent `<model-stem>.lora.gguf` file and is
+//!   activated only for BigHead decision contexts. GGUF metadata marks whether
+//!   the sidecar is required; ordinary chat sessions never receive it.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +54,9 @@ pub struct BigHeadConfig {
     pub hidden_size: usize,
     /// Pointer projection dimension (q/k width).
     pub pointer_dim: usize,
+    /// True when decision inference must load the sibling LoRA GGUF adapter.
+    #[serde(default)]
+    pub lora_required: bool,
     /// Per-question-kind temperatures, composed with `calibration.json` semantics:
     /// softmax(scores / T).
     #[serde(default)]
@@ -211,6 +212,7 @@ mod tests {
             schema_version: Some("1".into()),
             hidden_size: h,
             pointer_dim: d,
+            lora_required: false,
             kinds: [("noul".to_string(), 0.9)].into_iter().collect(),
         }
     }

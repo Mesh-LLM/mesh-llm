@@ -470,6 +470,33 @@ pub(crate) fn llama_model_is_diffusion_fn() -> Option<LlamaModelStateFn> {
     })
 }
 
+type LlamaAdapterInitFn =
+    unsafe extern "C" fn(model: *const Opaque, path: *const c_char) -> *mut Opaque;
+type LlamaAdapterFreeFn = unsafe extern "C" fn(adapter: *mut Opaque);
+type LlamaSetAdaptersFn = unsafe extern "C" fn(
+    ctx: *mut Opaque,
+    adapters: *mut *mut Opaque,
+    adapter_count: usize,
+    scales: *mut f32,
+) -> c_int;
+
+/// Returns the complete llama.cpp LoRA API only when all required symbols are
+/// exported. Older compatible runtimes remain loadable; BigHead reports a
+/// clear error if an adapter is requested from one of them.
+pub(crate) fn llama_lora_adapter_api_optional()
+-> Option<(LlamaAdapterInitFn, LlamaAdapterFreeFn, LlamaSetAdaptersFn)> {
+    static CACHE: OnceLock<Option<(LlamaAdapterInitFn, LlamaAdapterFreeFn, LlamaSetAdaptersFn)>> =
+        OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let symbols = symbols();
+        Some((
+            symbols.lookup_optional(b"llama_adapter_lora_init\0")?,
+            symbols.lookup_optional(b"llama_adapter_lora_free\0")?,
+            symbols.lookup_optional(b"llama_set_adapters_lora\0")?,
+        ))
+    })
+}
+
 type LlamaModelMetaValStrFn = unsafe extern "C" fn(
     model: *const Opaque,
     key: *const c_char,

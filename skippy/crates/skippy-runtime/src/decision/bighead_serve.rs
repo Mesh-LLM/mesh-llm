@@ -208,6 +208,10 @@ impl BigHeadModel {
         self.config.hidden_size
     }
 
+    pub fn lora_required(&self) -> bool {
+        self.config.lora_required
+    }
+
     /// Scores the request with a provider whose model/session borrow is scoped
     /// to this call. Production uses this path so raw llama handles cannot
     /// outlive their owning `StageModel` or `StageSession`.
@@ -303,6 +307,7 @@ mod tests {
                 schema_version: Some("1".into()),
                 hidden_size: h,
                 pointer_dim: d,
+                lora_required: false,
                 kinds: Default::default(),
             },
             BigHeadWeights {
@@ -412,6 +417,7 @@ mod tests {
                 schema_version: None,
                 hidden_size: 4,
                 pointer_dim: 2,
+                lora_required: false,
                 kinds: Default::default(),
             },
             BigHeadWeights {

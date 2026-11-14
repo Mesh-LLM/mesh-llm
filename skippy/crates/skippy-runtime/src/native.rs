@@ -4,7 +4,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use skippy_ffi::Model as RawModel;
+use skippy_ffi::{LlamaLoraAdapter, Model as RawModel};
 
 use crate::decision::bighead_gguf::load_bighead_backend;
 use crate::decision::bighead_serve::BigHeadModel;
@@ -100,12 +100,14 @@ pub struct SystemOneReadSlot {
     pub label_token_ids: Vec<i32>,
 }
 
-struct StageModelInner {
+pub(crate) struct StageModelInner {
     raw: *mut RawModel,
     terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
     /// Optional pointer-head artifact embedded in this model's GGUF.
     bighead: Option<BigHeadModel>,
+    /// Optional decision-only LoRA adapter beside this model's GGUF.
+    bighead_lora: Option<LlamaLoraAdapter>,
     /// External DFlash draft that borrows this model's context. Freed before
     /// the native model.
     dflash: Option<SharedDFlashDraft>,
@@ -118,8 +120,9 @@ pub struct StageModelReader {
     inner: Arc<StageModelInner>,
 }
 
-// The native model and vocabulary are immutable after loading. Session/context
-// mutation is owned by separate handles and remains externally serialized.
+// The native model, vocabulary, and loaded LoRA adapter are immutable after
+// loading. Session/context mutation is owned by separate handles; llama.cpp
+// reads the shared adapter while each context is exclusively mutated.
 unsafe impl Send for StageModelInner {}
 unsafe impl Sync for StageModelInner {}
 
@@ -154,9 +157,36 @@ fn load_bighead_for_path(path: &Path) -> Result<Option<BigHeadModel>> {
 
 fn install_bighead_for_path(model: &mut StageModel, path: &Path) -> Result<()> {
     let bighead = load_bighead_for_path(path)?;
+    let adapter_path = path.with_extension("lora.gguf");
+    let lora_required = bighead.as_ref().is_some_and(BigHeadModel::lora_required);
+    if lora_required && !adapter_path.is_file() {
+        return Err(anyhow!(
+            "BigHead artifact requires LoRA adapter {}, but it is missing",
+            adapter_path.display()
+        ));
+    }
+    let bighead_lora = if bighead.is_some() && adapter_path.is_file() {
+        let adapter_path_c = path_to_cstring(&adapter_path, "BigHead LoRA adapter path")?;
+        // SAFETY: the raw model belongs to `model`, and the adapter is loaded
+        // for that exact model before it is shared with serving sessions.
+        let llama_model = unsafe { skippy_ffi::skippy_model_llama_model(model.raw_model()) };
+        Some(
+            unsafe { LlamaLoraAdapter::load(llama_model, &adapter_path_c) }
+                .map_err(|error| anyhow!("load BigHead LoRA adapter: {error}"))?,
+        )
+    } else {
+        None
+    };
     let inner = Arc::get_mut(&mut model.inner)
         .ok_or_else(|| anyhow!("cannot attach BigHead while model readers are active"))?;
     inner.bighead = bighead;
+    if inner.bighead.is_some() && bighead_lora.is_some() {
+        write_native_log_note(format!(
+            "BigHead LoRA adapter loaded from {}",
+            adapter_path.display()
+        ));
+    }
+    inner.bighead_lora = bighead_lora;
     Ok(())
 }
 
@@ -193,6 +223,7 @@ impl StageModel {
                 terminal_stage: true,
                 capability: None,
                 bighead: None,
+                bighead_lora: None,
                 dflash: None,
             }),
             media: None,
@@ -259,6 +290,7 @@ impl StageModel {
                 terminal_stage: config.is_terminal_stage(),
                 capability,
                 bighead: None,
+                bighead_lora: None,
                 dflash: None,
             }),
             media,
@@ -567,6 +599,7 @@ impl StageModel {
             terminal_stage: self.inner.terminal_stage,
             batched_activation_exports: self.supports_batched_activation_exports(),
             dflash: None,
+            _model_owner: Some(Arc::clone(&self.inner)),
         };
         self.link_session_dflash(&mut session)?;
         Ok(session)
@@ -601,6 +634,7 @@ impl StageModel {
             terminal_stage: self.inner.terminal_stage,
             batched_activation_exports: self.supports_batched_activation_exports(),
             dflash: None,
+            _model_owner: Some(Arc::clone(&self.inner)),
         };
         self.link_session_dflash(&mut session)?;
         Ok(session)
@@ -619,6 +653,17 @@ impl StageModel {
 
     pub(crate) fn bighead_backend(&self) -> Option<&BigHeadModel> {
         self.inner.bighead.as_ref()
+    }
+
+    pub(crate) fn apply_bighead_lora(&self, session: &StageSession) -> Result<()> {
+        let Some(adapter) = &self.inner.bighead_lora else {
+            return Ok(());
+        };
+        // SAFETY: `session` is created from this model and exclusively borrowed
+        // while the BigHead hidden-state provider captures its context.
+        let context = unsafe { skippy_ffi::skippy_session_llama_context(session.raw) };
+        unsafe { adapter.apply(context, 1.0) }
+            .map_err(|error| anyhow!("apply BigHead LoRA adapter: {error}"))
     }
 
     pub(crate) fn dflash_draft(&self) -> Option<&SharedDFlashDraft> {
@@ -1253,6 +1298,9 @@ impl Drop for StageModelInner {
     fn drop(&mut self) {
         // The draft context borrows tensors from this model's context.
         self.dflash.take();
+        // llama.cpp adapters are associated with their base model and must be
+        // freed while it is still live.
+        drop(self.bighead_lora.take());
         if !self.raw.is_null() {
             unsafe {
                 let _ = skippy_ffi::skippy_model_free(self.raw, ptr::null_mut());

@@ -274,6 +274,9 @@ impl<'a> LlamaHiddenStateProvider<'a> {
                 expected_hidden_size
             )));
         }
+        model
+            .apply_bighead_lora(session)
+            .map_err(DecisionError::Backend)?;
         Ok(Self {
             model,
             session,

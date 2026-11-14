@@ -16,6 +16,15 @@ use crate::{
 };
 
 unsafe extern "C" {
+    pub fn llama_adapter_lora_init(model: *const Opaque, path: *const c_char) -> *mut Opaque;
+    pub fn llama_adapter_lora_free(adapter: *mut Opaque);
+    pub fn llama_set_adapters_lora(
+        ctx: *mut Opaque,
+        adapters: *mut *mut Opaque,
+        adapter_count: usize,
+        scales: *mut f32,
+    ) -> c_int;
+
     /// Borrow a token embedding; negative indices count from the last output.
     /// Invalid output indices return null.
     pub fn llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;

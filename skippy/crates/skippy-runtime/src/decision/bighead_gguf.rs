@@ -61,12 +61,14 @@ pub fn load_bighead_from_gguf(path: &Path) -> Result<Option<(BigHeadConfig, BigH
 /// serve time over the llama context (see [`super::bighead_hidden`]), and
 /// `decide` fails closed until then.
 pub fn load_bighead_backend(path: &Path) -> Result<Option<BigHeadModel>> {
-    Ok(load_bighead_from_gguf(path)?
-        .map(|(config, weights)| BigHeadModel::new(config, weights)))
+    Ok(load_bighead_from_gguf(path)?.map(|(config, weights)| BigHeadModel::new(config, weights)))
 }
 
 fn carries_bighead(catalog: &GgufCatalog) -> bool {
-    catalog.metadata.keys().any(|key| key.starts_with(BIGHEAD_PREFIX))
+    catalog
+        .metadata
+        .keys()
+        .any(|key| key.starts_with(BIGHEAD_PREFIX))
         || catalog
             .tensors
             .iter()
@@ -92,12 +94,21 @@ fn read_config(catalog: &GgufCatalog) -> Result<BigHeadConfig> {
             "unsupported bighead schema {version:?} in model GGUF (expected {BIGHEAD_SCHEMA_VERSION:?})"
         );
     }
+    let lora_required = metadata
+        .get("bighead.lora_required")
+        .map(|value| {
+            value
+                .as_bool()
+                .context("bighead.lora_required must be a boolean")
+        })
+        .transpose()?
+        .unwrap_or(false);
     let mut kinds = BTreeMap::new();
     for (key, value) in metadata {
         if let Some(kind) = key.strip_prefix("bighead.kind.") {
-            let temperature = value
-                .as_f64()
-                .with_context(|| format!("bighead temperature for kind {kind:?} must be a float"))?;
+            let temperature = value.as_f64().with_context(|| {
+                format!("bighead temperature for kind {kind:?} must be a float")
+            })?;
             kinds.insert(kind.to_string(), temperature);
         }
     }
@@ -105,6 +116,7 @@ fn read_config(catalog: &GgufCatalog) -> Result<BigHeadConfig> {
         schema_version,
         hidden_size,
         pointer_dim,
+        lora_required,
         kinds,
     })
 }
@@ -148,12 +160,19 @@ fn has_tensor(catalog: &GgufCatalog, name: &str) -> bool {
 /// Reads one fp32 tensor payload from the artifact. The catalog reader parses
 /// the GGUF structure and resolves absolute payload offsets; the bytes
 /// themselves are read here, once, per tensor the head needs.
-fn read_f32_tensor(path: &Path, catalog: &GgufCatalog, name: &str, dims: &[u64]) -> Result<Vec<f32>> {
+fn read_f32_tensor(
+    path: &Path,
+    catalog: &GgufCatalog,
+    name: &str,
+    dims: &[u64],
+) -> Result<Vec<f32>> {
     let tensor = catalog
         .tensors
         .iter()
         .find(|tensor| tensor.name == name)
-        .with_context(|| format!("model GGUF carries bighead.* keys but is missing tensor {name}"))?;
+        .with_context(|| {
+            format!("model GGUF carries bighead.* keys but is missing tensor {name}")
+        })?;
     ensure!(
         tensor.ggml_type == GGML_TYPE_F32,
         "bighead tensor {name} must be fp32 (ggml type {GGML_TYPE_F32}), got type {}",
@@ -185,7 +204,10 @@ fn read_f32_tensor(path: &Path, catalog: &GgufCatalog, name: &str, dims: &[u64])
     file.read_exact(&mut bytes)
         .with_context(|| format!("read bighead tensor {name} payload"))?;
     let (chunks, tail) = bytes.as_chunks::<4>();
-    assert!(tail.is_empty(), "GGUF fp32 tensor payload is not a multiple of four bytes");
+    assert!(
+        tail.is_empty(),
+        "GGUF fp32 tensor payload is not a multiple of four bytes"
+    );
     Ok(chunks.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
@@ -265,11 +287,27 @@ mod tests {
     }
 
     fn kv_u32(key: &str, value: u32) -> (&str, u32, Vec<u8>) {
-        (Box::leak(key.to_string().into_boxed_str()), GGUF_TYPE_UINT32, value.to_le_bytes().to_vec())
+        (
+            Box::leak(key.to_string().into_boxed_str()),
+            GGUF_TYPE_UINT32,
+            value.to_le_bytes().to_vec(),
+        )
     }
 
     fn kv_f32(key: &str, value: f32) -> (&str, u32, Vec<u8>) {
-        (Box::leak(key.to_string().into_boxed_str()), GGUF_TYPE_FLOAT32, value.to_le_bytes().to_vec())
+        (
+            Box::leak(key.to_string().into_boxed_str()),
+            GGUF_TYPE_FLOAT32,
+            value.to_le_bytes().to_vec(),
+        )
+    }
+
+    fn kv_bool(key: &str, value: bool) -> (&str, u32, Vec<u8>) {
+        (
+            Box::leak(key.to_string().into_boxed_str()),
+            7,
+            vec![u8::from(value)],
+        )
     }
 
     fn write_string(bytes: &mut Vec<u8>, value: &str) {
@@ -298,16 +336,41 @@ mod tests {
             kv_u32("bighead.schema_version", 1),
             kv_u32("bighead.hidden_size", 4),
             kv_u32("bighead.pointer_dim", 2),
+            kv_bool("bighead.lora_required", true),
             kv_f32("bighead.kind.noul", 0.9),
             kv_f32("bighead.kind.choice", 1.1),
         ];
         let tensors = vec![
-            TensorSpec { name: "bighead.norm.weight", dims: vec![4], values: vec![1.0, 1.1, 1.2, 1.3] },
-            TensorSpec { name: "bighead.norm.bias", dims: vec![4], values: vec![0.1, 0.2, 0.3, 0.4] },
-            TensorSpec { name: "bighead.q.weight", dims: vec![2, 4], values: vec![0.0, 8.0, 1.0, 9.0, 2.0, 10.0, 3.0, 11.0] },
-            TensorSpec { name: "bighead.k.weight", dims: vec![2, 4], values: vec![4.0, 12.0, 5.0, 13.0, 6.0, 14.0, 7.0, 15.0] },
-            TensorSpec { name: "bighead.q.bias", dims: vec![2], values: vec![0.5, 0.6] },
-            TensorSpec { name: "bighead.k.bias", dims: vec![2], values: vec![0.7, 0.8] },
+            TensorSpec {
+                name: "bighead.norm.weight",
+                dims: vec![4],
+                values: vec![1.0, 1.1, 1.2, 1.3],
+            },
+            TensorSpec {
+                name: "bighead.norm.bias",
+                dims: vec![4],
+                values: vec![0.1, 0.2, 0.3, 0.4],
+            },
+            TensorSpec {
+                name: "bighead.q.weight",
+                dims: vec![2, 4],
+                values: vec![0.0, 8.0, 1.0, 9.0, 2.0, 10.0, 3.0, 11.0],
+            },
+            TensorSpec {
+                name: "bighead.k.weight",
+                dims: vec![2, 4],
+                values: vec![4.0, 12.0, 5.0, 13.0, 6.0, 14.0, 7.0, 15.0],
+            },
+            TensorSpec {
+                name: "bighead.q.bias",
+                dims: vec![2],
+                values: vec![0.5, 0.6],
+            },
+            TensorSpec {
+                name: "bighead.k.bias",
+                dims: vec![2],
+                values: vec![0.7, 0.8],
+            },
         ];
         (metadata, tensors)
     }
@@ -320,15 +383,13 @@ mod tests {
         assert_eq!(config.schema_version.as_deref(), Some("1"));
         assert_eq!(config.hidden_size, 4);
         assert_eq!(config.pointer_dim, 2);
+        assert!(config.lora_required);
         assert_eq!(config.kinds.len(), 2);
         assert!((config.kinds["noul"] - 0.9).abs() < 1e-6);
         assert!((config.kinds["choice"] - 1.1).abs() < 1e-6);
         assert_eq!(weights.norm_weight, vec![1.0, 1.1, 1.2, 1.3]);
         assert_eq!(weights.norm_bias, vec![0.1, 0.2, 0.3, 0.4]);
-        assert_eq!(
-            weights.q,
-            vec![0.0, 8.0, 1.0, 9.0, 2.0, 10.0, 3.0, 11.0]
-        );
+        assert_eq!(weights.q, vec![0.0, 8.0, 1.0, 9.0, 2.0, 10.0, 3.0, 11.0]);
         assert_eq!(weights.k, vec![4.0, 12.0, 5.0, 13.0, 6.0, 14.0, 7.0, 15.0]);
         assert_eq!(weights.q_bias.as_deref(), Some(&[0.5, 0.6][..]));
         assert_eq!(weights.k_bias.as_deref(), Some(&[0.7, 0.8][..]));
