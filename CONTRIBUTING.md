@@ -56,8 +56,9 @@ Windows on ARM. It needs `rustup target add aarch64-pc-windows-msvc` and two
 Visual Studio components: the ARM64 MSVC tools
 (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) and the C++ Clang compiler
 (`Microsoft.VisualStudio.Component.VC.Llvm.Clang`), which builds llama.cpp and
-the `ring` crate for ARM64. Only the CPU backend is supported, and releases do
-not publish a Windows ARM64 archive yet.
+the `ring` crate for ARM64. The executables and `native-runtimes/` land in
+`target\aarch64-pc-windows-msvc\debug`. Only the CPU backend is supported, and
+releases do not publish a Windows ARM64 archive yet.
 
 ## Build from source
 
