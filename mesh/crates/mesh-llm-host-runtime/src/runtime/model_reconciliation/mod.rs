@@ -13,7 +13,7 @@ pub(crate) use planner::{
 };
 pub(crate) use state::{ModelTargetReconciliationState, current_time_secs};
 
-fn model_identity_matches(left: &str, right: &str) -> bool {
+pub(super) fn model_identity_matches(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }

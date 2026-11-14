@@ -142,6 +142,18 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
         )
     }
 
+    suspend fun nativeStatus(): NativeNodeStatus = withContext(Dispatchers.IO) {
+        NativeNodeStatus.decode(handle.nativeStatusJson())
+    }
+
+    suspend fun statusEvents(): StatusEvents {
+        val subscription = withContext(Dispatchers.IO) { handle.statusEvents() }
+        return StatusEvents(
+            nextJson = { withContext(Dispatchers.IO) { subscription.nextEventJson() } },
+            closeNative = { subscription.closeEvents() },
+        )
+    }
+
     suspend fun joinToken(token: String): Unit = withContext(Dispatchers.IO) { handle.joinToken(token) }
 
     /** Transcribe in process with a locally loaded speech model. Close the session to cancel inference. */

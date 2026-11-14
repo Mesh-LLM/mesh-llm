@@ -46,6 +46,7 @@ mod tests {
             task: None,
             shutdown,
             native_node: None,
+            exit: tokio::sync::watch::channel(None).1,
         };
         let runtime = tokio::spawn(async move {
             match requests.recv().await.expect("discovery request") {

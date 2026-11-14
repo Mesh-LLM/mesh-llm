@@ -853,6 +853,9 @@ public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
 
     func stop() throws
 
+    func nativeStatusJson() throws  -> String
+
+    func statusEvents() throws  -> StatusSubscriptionNative
     /**
      * Current local capacity for an exact serving ID; unavailable is not zero.
      */
@@ -1069,6 +1072,24 @@ open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
 }
 }
 
+open func nativeStatusJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_native_status_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func statusEvents()throws  -> StatusSubscriptionNative  {
+    return try  FfiConverterTypeStatusSubscriptionNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_status_events(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
     /**
      * Current local capacity for an exact serving ID; unavailable is not zero.
      */
@@ -1125,6 +1146,133 @@ public func FfiConverterTypeMeshNodeHandle_lift(_ handle: UInt64) throws -> Mesh
 #endif
 public func FfiConverterTypeMeshNodeHandle_lower(_ value: MeshNodeHandle) -> UInt64 {
     return FfiConverterTypeMeshNodeHandle.lower(value)
+}
+
+
+
+
+
+
+public protocol StatusSubscriptionNativeProtocol: AnyObject, Sendable {
+
+    func closeEvents()
+
+    func nextEventJson() throws  -> String?
+
+}
+open class StatusSubscriptionNative: StatusSubscriptionNativeProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_meshllm_ffi_fn_clone_statussubscriptionnative(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_meshllm_ffi_fn_free_statussubscriptionnative(handle, $0) }
+    }
+
+
+
+
+open func closeEvents()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_statussubscriptionnative_close_events(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+open func nextEventJson()throws  -> String?  {
+    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_statussubscriptionnative_next_event_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeStatusSubscriptionNative: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = StatusSubscriptionNative
+
+    public static func lift(_ handle: UInt64) throws -> StatusSubscriptionNative {
+        return StatusSubscriptionNative(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: StatusSubscriptionNative) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StatusSubscriptionNative {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: StatusSubscriptionNative, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeStatusSubscriptionNative_lift(_ handle: UInt64) throws -> StatusSubscriptionNative {
+    return try FfiConverterTypeStatusSubscriptionNative.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeStatusSubscriptionNative_lower(_ value: StatusSubscriptionNative) -> UInt64 {
+    return FfiConverterTypeStatusSubscriptionNative.lower(value)
 }
 
 
@@ -2814,6 +2962,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_native_status_json() != 14927) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status_events() != 53265) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_runtime_capacity() != 26263) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2833,6 +2987,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_stop_json() != 12637) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_statussubscriptionnative_close_events() != 54834) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_statussubscriptionnative_next_event_json() != 58623) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {

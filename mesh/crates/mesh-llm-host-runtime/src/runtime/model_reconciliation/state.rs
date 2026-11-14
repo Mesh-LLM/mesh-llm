@@ -8,6 +8,8 @@ use crate::api;
 use super::intent::{DesiredModelState, DesiredRuntimeIntent, IntentPersistence, IntentSource};
 use super::model_identity_matches;
 
+mod intent_errors;
+
 type LoadCompletionTx = tokio::sync::oneshot::Sender<anyhow::Result<api::RuntimeLoadResponse>>;
 type UnloadCompletionTx = tokio::sync::oneshot::Sender<anyhow::Result<api::RuntimeUnloadResponse>>;
 
@@ -35,14 +37,17 @@ pub(crate) struct ModelTargetReconciliationState {
     retired_intents: BTreeSet<String>,
     next_intent_sequence: u64,
     shared_history: Option<Arc<Mutex<Vec<DesiredRuntimeIntent>>>>,
+    collector: Option<crate::runtime_data::RuntimeDataCollector>,
 }
 
 impl ModelTargetReconciliationState {
     pub(crate) fn with_shared_history(
         shared_history: Arc<Mutex<Vec<DesiredRuntimeIntent>>>,
+        collector: crate::runtime_data::RuntimeDataCollector,
     ) -> Self {
         Self {
             shared_history: Some(shared_history),
+            collector: Some(collector),
             ..Self::default()
         }
     }
@@ -284,6 +289,7 @@ impl ModelTargetReconciliationState {
                 && !intent.source.is_maintained()
         }) {
             self.retired_intents.insert(intent_id.to_string());
+            self.publish_history();
         }
     }
 
@@ -300,32 +306,6 @@ impl ModelTargetReconciliationState {
         }
     }
 
-    pub(crate) fn set_intent_error(&mut self, intent_id: &str, error: impl Into<String>) {
-        if let Some(intent) = self
-            .intent_history
-            .iter_mut()
-            .find(|intent| intent.intent_id == intent_id)
-        {
-            intent.set_last_error(error);
-            self.publish_history();
-        }
-    }
-
-    pub(crate) fn set_effective_intent_error(
-        &mut self,
-        model_ref: &str,
-        profile: &str,
-        error: impl Into<String>,
-    ) {
-        let Some(intent_id) = self
-            .effective_intent(model_ref, profile)
-            .map(|intent| intent.intent_id.clone())
-        else {
-            return;
-        };
-        self.set_intent_error(&intent_id, error);
-    }
-
     fn publish_history(&self) {
         let Some(shared) = &self.shared_history else {
             return;
@@ -334,6 +314,24 @@ impl ModelTargetReconciliationState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             self.intent_history.iter().cloned().collect();
+        if let Some(collector) = &self.collector {
+            let error = self.intent_history.iter().rev().find_map(|intent| {
+                self.is_effective_intent(
+                    &intent.intent_id,
+                    &intent.canonical_model_ref,
+                    &intent.profile,
+                )
+                .then(|| intent.last_error.clone())
+                .flatten()
+            });
+            collector.update_runtime_status(
+                crate::runtime_data::RuntimeDataDirty::STATUS,
+                |status| {
+                    status.model_intent_error = error;
+                    true
+                },
+            );
+        }
     }
 
     // ─── Load tracking ─────────────────────────────────────────────────────
@@ -348,6 +346,15 @@ impl ModelTargetReconciliationState {
             .remove(&(model_ref.to_string(), profile.to_string()));
         self.failed_models
             .remove(&(model_ref.to_string(), profile.to_string()));
+        for intent in &mut self.intent_history {
+            if model_identity_matches(&intent.canonical_model_ref, model_ref)
+                && intent.profile == profile
+                && intent.desired_state == DesiredModelState::Present
+            {
+                intent.last_error = None;
+            }
+        }
+        self.publish_history();
     }
 
     pub(crate) fn record_load_failure(

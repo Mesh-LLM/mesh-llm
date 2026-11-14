@@ -98,3 +98,32 @@ omitted fields use native defaults, and unknown keys are rejected by the core.
 Full-config `mode` is `client`, `serve_only`, or `serve` (combined); the
 full-config default is combined, matching Rust. The existing `Node(...)`
 constructor keeps its client default and Kotlin convenience arguments.
+
+## Native status and readiness
+
+`nativeStatus()` returns a typed snapshot directly from the embedded runtime.
+`statusEvents()` opens a subscription with the current snapshot followed by native
+changes. It reports `loading`, `downloading` (file and byte counts), `ready`,
+`failed` (with the native reason), and `stopped`, plus serving models, the full
+advertised catalog, local descriptors and per-model execution lane capacities.
+No console listener, HTTP request or polling timer is used. For client-only
+mode, ready means the node has started; it does not guarantee a reachable remote
+provider.
+
+Use a separate subscription for each consumer. Subscriptions coalesce
+intermediate progress to the newest state. Recoverable model-load failures keep the stream open for retries. A runtime
+failure or stop ends the stream after its terminal snapshot; a lost native
+publisher raises an error. Explicit close or node stop cancels pending reads and
+releases the subscription. A restart needs a new subscription on the restarted
+node; an old stream never reconnects to a different node generation.
+Cancelling a direct `nextEvent()` call also closes the subscription and wakes
+its native reader.
+
+```kotlin
+val updates = node.statusEvents()
+try {
+    updates.events().collect { status ->
+        if (status.state == NodeLifecycle.Ready) { /* local serving is ready */ }
+    }
+} finally { updates.close() }
+```

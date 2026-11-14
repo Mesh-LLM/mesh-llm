@@ -220,6 +220,7 @@ mod tests {
             task: None,
             shutdown: watch::channel(false).0,
             native_node: None,
+            exit: tokio::sync::watch::channel(None).1,
         }
     }
 
