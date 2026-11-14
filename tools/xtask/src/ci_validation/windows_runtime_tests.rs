@@ -72,7 +72,7 @@ fn prepare_before_configure(script: &str) -> bool {
     let Some((_, build)) = script.rsplit_once("Invoke-InRepo {\n    Prepare-Llama\n") else {
         return false;
     };
-    let resolve = build.find("$script:buildDir = Resolve-StageBuildDir $backendName");
+    let resolve = build.find("$script:buildDir = Resolve-StageBuildDir $stageKey");
     let configure = build.find("\"-B\", $buildDir,");
     matches!((resolve, configure), (Some(resolve), Some(configure)) if resolve < configure)
 }
@@ -85,7 +85,7 @@ fn windows_prepares_the_pin_before_resolving_the_directory_used_by_cmake() {
             .contains("Join-Path $llamaDir \".mesh-llm-patched-sha\"")
     );
     assert!(!prepare_before_configure(&script.replace(
-        "$script:buildDir = Resolve-StageBuildDir $backendName",
+        "$script:buildDir = Resolve-StageBuildDir $stageKey",
         "$script:buildDir = $buildDir"
     )));
     assert!(!prepare_before_configure(&script.replace(

@@ -1071,14 +1071,20 @@ $TargetArch = Normalize-RecipeArgument $TargetArch @("target_arch", "targetarch"
 
 # PowerShell variable names ignore case, so the resolved value cannot be named
 # $targetArch: that is the $TargetArch parameter itself.
+$hostIsArm64 = Test-HostIsArm64
 $windowsArch = switch ($TargetArch.ToLowerInvariant()) {
-    "" { "x64" }
+    # The machine's own architecture by default: an ARM64 machine's Rust
+    # toolchain builds ARM64, so x64 there would mix the two.
+    "" { if ($hostIsArm64) { "arm64" } else { "x64" } }
     "x64" { "x64" }
     "amd64" { "x64" }
     "x86_64" { "x64" }
     "arm64" { "arm64" }
     "aarch64" { "arm64" }
     default { throw "Unsupported -TargetArch '$TargetArch'. Use x64 or arm64." }
+}
+if ($hostIsArm64 -and $windowsArch -eq "x64") {
+    throw "Building x64 on an ARM64 machine is not supported. Omit -TargetArch or pass -TargetArch arm64."
 }
 $rustTarget = if ($windowsArch -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
 # x64 keeps cargo's default output directory, target\<profile>; an explicit
@@ -1249,6 +1255,10 @@ Invoke-InRepo {
 
     if (Resolve-CommandPath "ninja") {
         $cmakeArgs = @("-G", "Ninja") + $cmakeArgs
+    } elseif ($windowsArch -eq "arm64") {
+        # The Visual Studio generator ignores the clang and ARM64 settings above
+        # and would build for the host with MSVC.
+        throw "-TargetArch arm64 needs Ninja on PATH. Install the Visual Studio component Microsoft.VisualStudio.Component.VC.CMake.Project (C++ CMake tools for Windows) or put ninja on PATH."
     }
 
     switch ($backendName) {

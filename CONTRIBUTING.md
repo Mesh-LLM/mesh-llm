@@ -52,8 +52,9 @@ LLVM.LLVM`.
 **Windows ARM64**: `scripts\build-windows.ps1 -Backend cpu -TargetArch arm64`
 builds the host, the Skippy CLI and the CPU runtime for
 `aarch64-pc-windows-msvc`, cross-compiling from an x64 machine or natively on
-Windows on ARM. It needs `rustup target add aarch64-pc-windows-msvc` and two
-Visual Studio components: the ARM64 MSVC tools
+Windows on ARM, which is also the default architecture there. It needs Ninja
+on `PATH`, `rustup target add aarch64-pc-windows-msvc` and two Visual Studio
+components: the ARM64 MSVC tools
 (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) and the C++ Clang compiler
 (`Microsoft.VisualStudio.Component.VC.Llvm.Clang`), which builds llama.cpp and
 the `ring` crate for ARM64. The executables and `native-runtimes/` land in
