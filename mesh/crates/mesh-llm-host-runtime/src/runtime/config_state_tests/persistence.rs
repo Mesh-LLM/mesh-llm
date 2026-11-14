@@ -41,6 +41,7 @@ fn config_sync_noop_apply_skips_disk_write() {
         },
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
+        private: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),

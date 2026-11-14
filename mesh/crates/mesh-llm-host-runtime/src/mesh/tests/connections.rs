@@ -456,7 +456,7 @@ async fn make_test_node_with_requirements(
         control_listener: Arc::new(Mutex::new(None)),
         trust_store: Arc::new(Mutex::new(TrustStore::default())),
         trust_policy: TrustPolicy::Off,
-        private_nodes: Arc::default(),
+        private_nodes: Default::default(),
         enumerate_host: false,
         gpu_name: None,
         hostname: None,

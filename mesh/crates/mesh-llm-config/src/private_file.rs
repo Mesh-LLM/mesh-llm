@@ -162,7 +162,7 @@ fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
     false
 }
 
-fn create_private_dirs(dir: &Path) -> io::Result<()> {
+pub(crate) fn create_private_dirs(dir: &Path) -> io::Result<()> {
     let mut missing = Vec::new();
     let mut current = Some(dir);
     while let Some(path) = current {
