@@ -114,6 +114,32 @@ pub(super) fn split_missing_active_stage_nodes(
     missing
 }
 
+/// Adds the nodes of `more` that `nodes` does not hold yet.
+pub(super) fn split_add_stage_nodes(nodes: &mut Vec<iroh::EndpointId>, more: &[iroh::EndpointId]) {
+    for node_id in more {
+        if !nodes.contains(node_id) {
+            nodes.push(*node_id);
+        }
+    }
+}
+
+/// The nodes of `unconfirmed` that are connected again and still run a stage
+/// of `active`. A node a re-plan replaced is no longer this split's concern.
+pub(super) fn split_rejoined_stage_nodes(
+    active: &SplitTopologyGeneration,
+    unconfirmed: &[iroh::EndpointId],
+    connected_node_ids: &[iroh::EndpointId],
+) -> Vec<iroh::EndpointId> {
+    unconfirmed
+        .iter()
+        .filter(|node_id| {
+            connected_node_ids.contains(node_id)
+                && active.stages.iter().any(|stage| stage.node_id == **node_id)
+        })
+        .copied()
+        .collect()
+}
+
 pub(super) fn split_unavailable_active_stage_nodes(
     active: &SplitTopologyGeneration,
     connected_node_ids: &[iroh::EndpointId],

@@ -354,6 +354,7 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         previously_unavailable_stage_nodes: Vec::new(),
+        unconfirmed_stage_nodes: Vec::new(),
         auto_balance: (spec.placement.closed_loop && !topology_locked).then(|| {
             auto_balance::AutoBalanceController::new(
                 auto_balance::AutoBalanceControllerConfig::from_env(),
