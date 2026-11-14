@@ -73,7 +73,7 @@ runs:
   using: composite
   steps:
     - name: Prepare smoke automation
-      if: runner.os != 'Linux' || job.container.id != ''
+      if: (runner.os != 'Linux' || job.container.id != '') && env.MESH_LLM_AUTOMATION_BIN == ''
       uses: ./.github/actions/prepare-automation
 
     # Hosted Linux has no sccache, so `cargo xtool` cannot run there.

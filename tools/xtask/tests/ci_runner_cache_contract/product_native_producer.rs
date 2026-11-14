@@ -21,7 +21,12 @@ const CONSUMERS: &[&str] = &[
     "static-abi-artifact.yml",
 ];
 /// Slices that forward the identity to a reusable workflow which restores it.
-const NESTED_CONSUMERS: &[(&str, &str)] = &[("ci-macos-sdk-slice.yml", "sdk-smoke.yml")];
+const NESTED_CONSUMERS: &[(&str, &str)] = &[
+    ("ci-macos-sdk-slice.yml", "sdk-smoke.yml"),
+    ("ci-linux-sdk-slice.yml", "sdk-smoke.yml"),
+    ("ci-linux-product-smoke-slice.yml", "smoke.yml"),
+    ("ci-macos-product-smoke-slice.yml", "smoke.yml"),
+];
 
 fn read(path: &str) -> Node {
     workflow_yaml::parse(&fs::read_to_string(support::root().join(path)).unwrap()).unwrap()
@@ -185,6 +190,12 @@ fn every_lane_producer_is_linked_by_needs_and_every_consumer_restores_without_co
             }
             assert!(
                 CONSUMERS.contains(&callee)
+                    || [
+                        "native-sdk-artifact.yml",
+                        "swift-sdk-artifact.yml",
+                        "ci-windows-product-smoke-slice.yml"
+                    ]
+                    .contains(&callee)
                     || NESTED_CONSUMERS.iter().any(|(slice, _)| *slice == callee),
                 "{lane}/{name}: {callee}"
             );
@@ -282,9 +293,10 @@ fn nested_consumer_slices_forward_the_identity_to_a_restoring_workflow() {
         ] {
             assert!(callee.contains(expected), "{workflow}: {expected}");
         }
-        for forbidden in ["uses: ./.github/actions/prepare-automation", "cargo xtool"] {
-            assert!(!callee.contains(forbidden), "{workflow}: {forbidden}");
-        }
+        assert!(
+            callee.contains("inputs.product_automation == ''"),
+            "{workflow}: standalone preparation must be conditional"
+        );
     }
 }
 
@@ -322,6 +334,51 @@ fn restore_rejects_a_producer_on_a_different_runner_before_any_download() {
             fixture.run(command).status.success(),
             accepted,
             "{os}/{arch} on {runner_os}/{runner_arch}"
+        );
+    }
+}
+
+#[test]
+fn product_restore_refuses_missing_foreign_and_protected_identities_before_download() {
+    let action = read(".github/actions/restore-automation/action.yml");
+    let Node::Seq(steps) = action.get("runs").unwrap().get("steps").unwrap() else {
+        panic!()
+    };
+    let admission = text(&steps[0], "run");
+    let source = "0123456789012345678901234567890123456789";
+    for (profile, product_source, artifact, accepted) in [
+        ("product-clean", source, "123", true),
+        ("", "", "", false),
+        ("protected-clean", source, "123", false),
+        (
+            "product-clean",
+            "1123456789012345678901234567890123456789",
+            "123",
+            false,
+        ),
+        ("product-clean", source, "", false),
+    ] {
+        let fixture = Fixture::new();
+        let mut command = Command::new("bash");
+        command
+            .env_clear()
+            .args(["-c", admission])
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env("RUNNER_TEMP", fixture.path())
+            .env("RUNNER_OS", "Linux")
+            .env("RUNNER_ARCH", "X64")
+            .env("AUTOMATION_PRODUCER_OS", "Linux")
+            .env("AUTOMATION_PRODUCER_ARCH", "X64")
+            .env("AUTOMATION_SOURCE_SHA", source)
+            .env("AUTOMATION_PRODUCT_SOURCE_SHA", product_source)
+            .env("AUTOMATION_SOURCE_PROFILE", profile)
+            .env("AUTOMATION_REQUIRE_PRODUCT", "true")
+            .env("AUTOMATION_ARTIFACT_ID", artifact)
+            .env("AUTOMATION_BINARY_SHA256", "a".repeat(64));
+        assert_eq!(
+            fixture.run(command).status.success(),
+            accepted,
+            "{profile}/{artifact}"
         );
     }
 }

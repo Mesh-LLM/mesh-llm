@@ -8,6 +8,11 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: false
+        default: ''
+        type: string
       artifact_name:
         required: true
         type: string
@@ -132,6 +137,25 @@ jobs:
 
       - name: Verify prebuilt smoke environment
         run: verify-runner-image public cpu
+
+      - name: Restore product automation
+        if: ${{ inputs.product_automation != '' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
+      - name: Prepare standalone automation
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && job.container.id == '' && runner.environment == 'github-hosted' && 'hosted-bare' || 'image' }}
 
       - uses: ./.github/actions/restore-smoke-inputs
         id: model_inputs

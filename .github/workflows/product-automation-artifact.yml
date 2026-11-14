@@ -18,7 +18,7 @@ on:
     outputs:
       identity_json:
         description: Source-bound native identity projected only from this producer's independent outputs.
-        value: ${{ format('{{"source_sha":"{0}","artifact_id":"{1}","binary_sha256":"{2}","producer_os":"{3}","producer_arch":"{4}"}}', jobs.producer.outputs.source_sha, jobs.producer.outputs.artifact_id, jobs.producer.outputs.binary_sha256, jobs.producer.outputs.producer_os, jobs.producer.outputs.producer_arch) }}
+        value: ${{ format('{{"source_profile":"product-clean","source_sha":"{0}","artifact_id":"{1}","binary_sha256":"{2}","producer_os":"{3}","producer_arch":"{4}"}}', jobs.producer.outputs.source_sha, jobs.producer.outputs.artifact_id, jobs.producer.outputs.binary_sha256, jobs.producer.outputs.producer_os, jobs.producer.outputs.producer_arch) }}
       source_sha:
         value: ${{ jobs.producer.outputs.source_sha }}
       artifact_id:

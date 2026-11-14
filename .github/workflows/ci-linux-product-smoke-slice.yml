@@ -7,6 +7,10 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: true
+        type: string
       original_event_name:
         description: Original event used for model-cache publication policy.
         required: false
@@ -54,6 +58,7 @@ jobs:
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       mesh_binary_target: ${{ inputs.binary_target }}
@@ -68,6 +73,7 @@ jobs:
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
@@ -84,6 +90,7 @@ jobs:
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
@@ -105,6 +112,7 @@ jobs:
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cuda
       artifact_path: ci-artifacts/linux-cuda
       mesh_binary_target: ${{ inputs.binary_target }}
@@ -134,6 +142,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-cpu
@@ -156,6 +176,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare source-bound native cleanup before managed work
         timeout-minutes: 20
         env:
@@ -164,8 +196,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-          report="$(just automation-bootstrap)"
-          binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+          binary="$MESH_LLM_AUTOMATION_BIN"
           [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
           sha="$(sha256sum "$binary" | awk '{print $1}')"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1
@@ -301,6 +332,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare source-bound native cleanup before managed work
         timeout-minutes: 20
         env:
@@ -309,8 +352,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-          report="$(just automation-bootstrap)"
-          binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+          binary="$MESH_LLM_AUTOMATION_BIN"
           [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
           sha="$(sha256sum "$binary" | awk '{print $1}')"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1
@@ -370,6 +412,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare source-bound native cleanup before managed work
         timeout-minutes: 20
         env:
@@ -378,8 +432,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-          report="$(just automation-bootstrap)"
-          binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+          binary="$MESH_LLM_AUTOMATION_BIN"
           [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
           sha="$(sha256sum "$binary" | awk '{print $1}')"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1

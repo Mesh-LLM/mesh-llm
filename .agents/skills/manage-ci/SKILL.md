@@ -119,7 +119,7 @@ work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
 the `product-clean` source profile) that compiles `xtask` for the lane's
 `source_sha` on a GitHub-hosted runner with a read-only token and no secrets.
-Host, runtime, product, Rust-test and static-ABI jobs of that lane declare it in
+Host, runtime, product, Rust-test, static-ABI, native SDK, SDK smoke and product smoke jobs of that lane declare it in
 `needs` and restore it through `restore-automation`, which checks the
 producer's source, artifact ID, executable digest and runner OS/architecture;
 they never rebuild it and never fall back to `prepare-automation`. Its artifact
@@ -134,7 +134,7 @@ such as authority audits, canary summaries, release receipt verification, and pr
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
-always compiled in-run. `prepare-automation` takes a closed `tool` input
+always compiled in-run. SDK and smoke consumers restore before source admission, composition verification and cleanup controller freezing. Product restores require the product-clean claim, the lane source SHA, and complete artifact/digest/platform outputs; protected authority identities are rejected. Shared smoke restoration prepares only when MESH_LLM_AUTOMATION_BIN is empty. Standalone and release SDK/smoke jobs own one explicit preparation path when no product identity is supplied. `prepare-automation` takes a closed `tool` input
 (`xtask` by default, or `authority-automation`); `upload-automation` selects
 `authority-automation` exactly for the `protected-clean` source profile, and
 only full xtask may use the hosted executable cache.
