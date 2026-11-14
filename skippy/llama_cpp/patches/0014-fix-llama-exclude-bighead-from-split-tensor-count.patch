@@ -1,0 +1,32 @@
+From 8e3cfc714ed1013537eec43cff8b5e7853d54189 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 20:55:02 +1100
+Subject: [PATCH] fix(llama): exclude BigHead tensors from split count
+
+---
+ src/llama-model-loader.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index 38545e5b3..eb3dbf1a6 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -726,9 +726,13 @@ llama_model_loader::llama_model_loader(
+ 
+             get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
+ 
+-            // sanity check
++            // BigHead tensors are carried in the GGUF shards but are loaded by Skippy.
++            // Keep the split metadata check aligned with the model tensor count below.
+             {
+-                const int n_tensors_loaded = (int) weights_map.size();
++                const int n_tensors_loaded = static_cast<int>(std::count_if(
++                        weights_map.begin(),
++                        weights_map.end(),
++                        [](const auto & entry) { return entry.first.compare(0, 8, "bighead.") != 0; }));
+                 if (n_tensors != n_tensors_loaded) {
+                     throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
+                 }
+-- 
+2.56.0
+
