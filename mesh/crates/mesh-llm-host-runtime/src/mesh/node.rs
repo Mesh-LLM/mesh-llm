@@ -1594,8 +1594,12 @@ impl Node {
         }
     }
 
-    /// Set the mesh identity. If None was set, adopts the given ID (from gossip).
-    /// If already set, ignores (originator's ID wins).
+    /// Adopt a mesh ID announced by a direct peer.
+    ///
+    /// With no ID yet, the node takes the announced one. A node in an
+    /// unrestricted mesh then moves to any lower ID it hears, so a mesh whose
+    /// nodes each started with their own ID settles on one ID. Requirement-aware
+    /// meshes and SDK memberships keep the ID they were given.
     pub async fn set_mesh_id(&self, id: String) {
         if let Some(state) = self.requirement_mesh_state.lock().await.clone()
             && state.mesh_id != id
@@ -1607,10 +1611,7 @@ impl Node {
             );
             return;
         }
-        let mut current = self.mesh_id.lock().await;
-        if current.is_none() {
-            *current = Some(id);
-            drop(current);
+        if self.adopt_announced_mesh_id(id).await {
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
                 None,
@@ -1618,6 +1619,22 @@ impl Node {
             )
             .await;
         }
+    }
+
+    /// Store `id` when the node has none, or when it is a lower ID of an
+    /// unrestricted mesh. Returns whether the stored ID changed.
+    async fn adopt_announced_mesh_id(&self, id: String) -> bool {
+        let converges = !self.is_membership && self.local_mesh_requirements.is_unrestricted();
+        let mut current = self.mesh_id.lock().await;
+        match current.as_deref() {
+            None => {}
+            Some(ours) if converges && id.as_str() < ours => {
+                tracing::info!("mesh ID converged from {ours} to {id}");
+            }
+            Some(_) => return false,
+        }
+        *current = Some(id);
+        true
     }
 
     /// Set mesh ID unconditionally (for originator).
