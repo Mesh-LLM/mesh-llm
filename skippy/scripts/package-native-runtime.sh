@@ -733,14 +733,22 @@ if [[ "$BUILD" == "1" ]]; then
     "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
 fi
 
+# build-llama.sh follows the machine's own compiler except for the targets it
+# names; Windows ARM64 needs its clang settings even on an ARM64 machine.
+llama_stage_target=""
+if [[ "$TARGET_TRIPLE" == aarch64-pc-windows-msvc ]]; then
+    llama_stage_target="$TARGET_TRIPLE"
+fi
+
 if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
-    LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_LINK_MODE=dynamic LLAMA_STAGE_BACKEND="$(build_backend)" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
+    LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_LINK_MODE=dynamic LLAMA_STAGE_BACKEND="$(build_backend)" LLAMA_STAGE_TARGET="$llama_stage_target" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
 fi
 
 if [[ "$BUILD" == "1" ]]; then
     env \
         LLAMA_STAGE_LINK_MODE=dynamic \
         LLAMA_STAGE_BACKEND="$(build_backend)" \
+        LLAMA_STAGE_TARGET="$llama_stage_target" \
         LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
         LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
         "$SCRIPT_DIR/build-llama.sh"
