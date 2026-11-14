@@ -36,6 +36,7 @@ skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime",
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.80.0" }
 mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.80.0", features = ["host-io"] }
 skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.80.0" }
+skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.80.0" }
 mesh-llm-system = { path = "../mesh-llm-system", version = "0.80.0", features = ["skippy-devices"] }
 mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.80.0" }
 skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.80.0" }
