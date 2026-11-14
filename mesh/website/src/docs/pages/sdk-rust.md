@@ -69,6 +69,26 @@ implicitly. See [SDK overview](/docs/pages/sdk/).
 The former thin client facade, `ClientBuilder`, and `client`/`node` feature split
 have been removed from this SDK. Migrate callers to the embedded `MeshNode`.
 
+## Read local runtime capacity
+
+Rust hosts can read their embedded runtime's published capacity without HTTP:
+
+```rust,no_run
+use mesh_llm_sdk::{MeshNode, capacity::LaneCapacity};
+
+fn capacity(node: &MeshNode, model: &str) -> anyhow::Result<Option<LaneCapacity>> {
+    node.runtime_capacity(model)
+}
+```
+
+The observation contains `execution_lanes`, `context_tokens_per_lane` (the
+smallest lane budget), `context_pool_tokens` (the sum), and
+`captured_at_unix_ms` (the oldest contributing observation). Busy lanes count;
+hosts track their own reservations. Call again to observe runtime changes.
+Unknown/unsupported models or incomplete observations return `None`. Stopping
+or stopped nodes return an error. Long inference can delay publication, so use
+the timestamp to apply an application-specific freshness policy.
+
 ## Discover all mesh-advertised models
 
 `node.models()` queries the primary mesh inventory directly in process. It

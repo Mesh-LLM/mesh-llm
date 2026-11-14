@@ -6,6 +6,7 @@ mod live_transcription;
 mod memberships;
 mod model_discovery;
 mod node_config;
+mod runtime_capacity;
 mod status;
 
 use mesh_llm_sdk::embedded_node::{SseDecoder, SseFrame};

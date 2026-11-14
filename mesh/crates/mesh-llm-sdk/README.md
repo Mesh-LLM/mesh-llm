@@ -130,6 +130,27 @@ transport, plugins or owner control, and it shares the node's payment
 settings. Its allowlist is its own, but owner and certificate revocations in
 the node's trust store apply to it too.
 
+## Local runtime capacity
+
+`node.runtime_capacity("exact-serving-id")?` reads current host-owned runtime
+observations in process, without a console listener or inference request. It
+returns `Option<mesh_llm_sdk::capacity::RuntimeCapacity>` with execution lane
+count, the smallest lane's context budget, the sum of all lane budgets, and
+the oldest observation's `captured_at_unix_ms`. Busy lanes remain part of
+capacity; applications must track their own reservations.
+
+Each call reads shared state again. Unknown or unsupported local models,
+unavailable instances, missing timestamps, empty lanes, invalid contexts, or
+overflowing totals return `None`. Stopping/stopped runtimes return an error.
+The timestamp advances when the runtime publishes an observation, which can
+be delayed by long inference; callers choose their own freshness threshold.
+These are local host observations, never remote peers' advertised capacity.
+
+The Node.js, Swift, and Kotlin SDKs expose the same observation through
+`node.runtimeCapacity(model)`. Node.js fields are `bigint`; Swift uses `UInt64`
+and Kotlin uses `ULong`. Python support is deferred; this API is not yet
+available in the separate Python SDK.
+
 ## Native model discovery and inference
 
 Join a mesh, read the local and remote model catalog, choose an advertised

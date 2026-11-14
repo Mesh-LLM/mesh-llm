@@ -223,6 +223,14 @@ export type NativeRuntimePruneResult = {
 
 export type NodeMode = 'client' | 'serve' | 'combined'
 
+/** Local capacity, including busy lanes. BigInt preserves native u64 values. */
+export type LaneCapacity = {
+  executionLanes: bigint
+  contextTokensPerLane: bigint
+  contextPoolTokens: bigint
+  capturedAtUnixMs: bigint
+}
+
 /** Known values are listed for completion; newer peers may advertise other workloads. */
 export type ModelWorkloadClass =
   | 'causal_generation' | 'embedding' | 'rerank' | 'encoder_decoder'
@@ -394,6 +402,8 @@ export declare class StatusEvents implements AsyncIterable<NativeNodeStatus> {
 export declare class Node {
   nativeStatus(): Promise<NativeNodeStatus>
   statusEvents(): Promise<StatusEvents>
+  /** Reads the latest observation; null for unknown, unsupported or incomplete capacity. */
+  runtimeCapacity(model: string): Promise<LaneCapacity | null>
   static create(options?: NodeOptions): Node
   static fromConfig(config: EmbeddedMeshNodeConfig): Node
   readonly inference: Inference

@@ -1,5 +1,23 @@
 # Kotlin/Android SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID, within a coroutine:
+
+```kotlin
+node.runtimeCapacity("exact-serving-id")?.let { capacity ->
+    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
+    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
+}
+```
+
+`LaneCapacity` fields use `ULong`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. `null` means unknown, unsupported, unavailable, or incomplete capacity.
+Stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long-running inference. Do not use the total
+pool as a per-request context limit.
+
 Install `ai.meshllm:meshllm-android:<version>` from GitHub Packages. Configure
 the repository and credentials in Gradle:
 

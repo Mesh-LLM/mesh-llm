@@ -24,6 +24,7 @@ mod node;
 mod node_config;
 mod request_types;
 mod runtime_blocking;
+mod runtime_capacity;
 mod status;
 
 pub use errors::FfiError;
@@ -43,5 +44,5 @@ pub use native_runtime_types::{
 pub use node::create_node;
 pub use node_config::create_node_config_json;
 pub use request_types::{ModelNative, NodeStatusNative, OpenAiResponseNative};
-
+pub use runtime_capacity::RuntimeCapacityNative;
 pub use status::StatusSubscriptionNative;
