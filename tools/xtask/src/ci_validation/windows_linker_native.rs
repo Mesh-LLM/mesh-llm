@@ -135,13 +135,12 @@ impl LinkerFixture {
             .sysroot
             .join("lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe");
         let body = format!(
-            "$ErrorActionPreference='Stop'; $scriptDir={}; function Resolve-LldLinker {{ {} }}; {}; Remove-Item Env:MESH_CI_STABLE_PROC_MACRO_METADATA -ErrorAction SilentlyContinue; Configure-LldLinker; if ($env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER -ne {} -or $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER -ne {}) {{ throw 'default Mesh linker must remain LLVM' }}; $env:MESH_CI_STABLE_PROC_MACRO_METADATA='1'; Configure-LldLinker; if ($env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER -ne {} -or $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER -ne {}) {{ throw 'opted-in Mesh host must use the adapter driver' }}",
+            "$ErrorActionPreference='Stop'; $scriptDir={}; function Resolve-LldLinker {{ {} }}; {}; Remove-Item Env:MESH_CI_STABLE_PROC_MACRO_METADATA -ErrorAction SilentlyContinue; Configure-LldLinker; if ($env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER -ne {} -or $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER -ne {}) {{ throw 'default Mesh linker must remain LLVM' }}; $env:MESH_CI_STABLE_PROC_MACRO_METADATA='1'; Configure-LldLinker; $expectedDriver=[IO.Path]::GetFullPath({}); if (![string]::Equals([IO.Path]::GetFullPath($env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER),$expectedDriver,[StringComparison]::OrdinalIgnoreCase) -or ![string]::Equals([IO.Path]::GetFullPath($env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER),$expectedDriver,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'opted-in Mesh host must use the adapter driver' }}",
             quote(self.driver.parent().unwrap().to_str().unwrap()),
             quote(llvm.to_str().unwrap()),
             function(&script(), "Configure-LldLinker"),
             quote(llvm.to_str().unwrap()),
             quote(llvm.to_str().unwrap()),
-            quote(self.driver.to_str().unwrap()),
             quote(self.driver.to_str().unwrap())
         );
         let report = execute(&body, &self.root);
