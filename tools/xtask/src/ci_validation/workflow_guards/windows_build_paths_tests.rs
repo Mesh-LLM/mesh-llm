@@ -85,3 +85,55 @@ fn windows_build_paths_multi_platform_job_uses_windows_condition() {
         .is_err()
     );
 }
+
+#[test]
+fn windows_build_paths_host_target_keeps_provider_fallback_and_actual_cache_root() {
+    let source = "  - uses: ./.github/actions/setup-windows-short-paths\n    id: short_paths\n    with:\n      cargo_target: host\n  - uses: Swatinem/rust-cache@finite-pin\n    with:\n      workspaces: . -> target\n      cache-targets: ${{ steps.short_paths.outputs.cargo_target == '' }}\n      cache-directories: ${{ steps.short_paths.outputs.cargo_target }}\n";
+    host_target_mode(&job(source), true).unwrap();
+    assert!(host_target_mode(&job(source), false).is_err());
+    for (before, after) in [
+        ("cargo_target: host", "cargo_target: arbitrary"),
+        ("id: short_paths", "id: missing_output"),
+        ("workspaces: . -> target", "workspaces: . -> D:\\b"),
+        (
+            "${{ steps.short_paths.outputs.cargo_target == '' }}",
+            "true",
+        ),
+        (
+            "cache-directories: ${{ steps.short_paths.outputs.cargo_target }}",
+            "cache-directories: target",
+        ),
+    ] {
+        assert!(
+            host_target_mode(&job(&source.replace(before, after)), true).is_err(),
+            "{before}"
+        );
+    }
+    host_target_mode(
+        &job("  - uses: ./.github/actions/setup-windows-short-paths\n"),
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn windows_build_paths_short_target_cannot_become_the_default_or_run_on_other_providers() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root
+        .path()
+        .join(".github/actions/setup-windows-short-paths");
+    fs::create_dir_all(&directory).unwrap();
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.github/actions/setup-windows-short-paths/action.yml"),
+    )
+    .unwrap();
+    for candidate in [
+        source.replace("default: workspace", "default: host"),
+        source.replace(" && runner.environment == 'github-hosted'", ""),
+        source.replace("inputs.cargo_target == 'host' && ", ""),
+    ] {
+        fs::write(directory.join("action.yml"), candidate).unwrap();
+        assert!(host_target_action(root.path()).is_err());
+    }
+}

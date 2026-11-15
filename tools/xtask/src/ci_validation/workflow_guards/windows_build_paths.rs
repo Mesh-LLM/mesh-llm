@@ -42,8 +42,10 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
                     None
                 },
             )?;
+            host_target_mode(job, workflow == "ci-windows-host-slice.yml")?;
         }
     }
+    host_target_action(root)?;
     // The composite action installs sccache in its own Windows branch.
     let action = fs::read_to_string(root.join(".github/actions/prepare-automation/action.yml"))?;
     let action = workflow_yaml::parse(&action)?;
@@ -51,6 +53,71 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         return Err("prepare-automation action has no steps".into());
     };
     sccache_pinned(steps)
+}
+
+fn host_target_mode(job: &Node, host: bool) -> DynResult<()> {
+    let Some(Node::Seq(steps)) = job.get("steps") else {
+        return Err("Windows host target requires job steps".into());
+    };
+    let setup = steps
+        .iter()
+        .find(|step| field(step, "uses") == Some(ACTION))
+        .ok_or("Windows host target requires short-path setup")?;
+    let mode = setup
+        .get("with")
+        .and_then(|with| field(with, "cargo_target"));
+    if mode != if host { Some("host") } else { None } {
+        return Err("only the Windows host producer may opt into the short Cargo target".into());
+    }
+    if host {
+        if field(setup, "id") != Some("short_paths") {
+            return Err("Windows host target must expose its cache directory".into());
+        }
+        let cache = steps
+            .iter()
+            .find(|step| {
+                field(step, "uses").is_some_and(|uses| uses.starts_with("Swatinem/rust-cache@"))
+            })
+            .and_then(|step| step.get("with"))
+            .ok_or("Windows host target requires declared cache paths")?;
+        if field(cache, "workspaces") != Some(". -> target")
+            || field(cache, "cache-targets")
+                != Some("${{ steps.short_paths.outputs.cargo_target == '' }}")
+            || field(cache, "cache-directories")
+                != Some("${{ steps.short_paths.outputs.cargo_target }}")
+        {
+            return Err(
+                "Windows host cache must clean the junction and archive the actual Cargo target"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn host_target_action(root: &Path) -> DynResult<()> {
+    let source =
+        fs::read_to_string(root.join(".github/actions/setup-windows-short-paths/action.yml"))?;
+    let action = workflow_yaml::parse(&source)?;
+    let default = action
+        .get("inputs")
+        .and_then(|inputs| inputs.get("cargo_target"));
+    if default.and_then(|input| field(input, "default")) != Some("workspace") {
+        return Err("Windows short target must default to the existing workspace path".into());
+    }
+    let Some(Node::Seq(steps)) = action.get("runs").and_then(|runs| runs.get("steps")) else {
+        return Err("Windows short-path action requires steps".into());
+    };
+    let target = steps
+        .iter()
+        .find(|step| field(step, "id") == Some("host_target"))
+        .ok_or("Windows short-path action requires its host target adapter")?;
+    if field(target, "if")
+        != Some("${{ inputs.cargo_target == 'host' && runner.environment == 'github-hosted' }}")
+    {
+        return Err("Windows short target must be confined to opted-in GitHub-hosted jobs".into());
+    }
+    Ok(())
 }
 fn sccache_pinned(steps: &[Node]) -> DynResult<()> {
     for step in steps {

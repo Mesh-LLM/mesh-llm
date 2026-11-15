@@ -14,14 +14,45 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
-    let body = format!(
-        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); $expectedCore=[System.IO.Path]::Combine($PSHOME,'Modules'); if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH),$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture admitted core module path mismatch' }}; $env:PSModulePath=$expectedCore; if (![string]::Equals($env:PSModulePath,$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture core module path mismatch' }}; $pathCommand=Get-Command -Name Test-Path -CommandType Cmdlet -ErrorAction Stop; [Console]::Error.WriteLine('windows-fixture path-command kind='+$pathCommand.CommandType+' module='+$pathCommand.ModuleName+' assembly='+$pathCommand.ImplementingType.Assembly.Location); if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.ImplementingType.Assembly.Location,[System.IO.Path]::Combine([System.IO.Path]::Combine($env:SystemRoot, 'Microsoft.Net', 'assembly', 'GAC_MSIL'), 'Microsoft.PowerShell.Commands.Management', 'v4.0_3.0.0.0__31bf3856ad364e35', 'Microsoft.PowerShell.Commands.Management.dll'),[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture Test-Path native assembly mismatch' }}; [Console]::Error.WriteLine('windows-fixture build-core-module-admitted ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
-    );
-    let system = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
-    let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let system = PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"));
+    let executable = system.join("System32/WindowsPowerShell/v1.0/powershell.exe");
     assert!(
         executable.is_file(),
         "native Windows PowerShell is required"
+    );
+    let assembly = system
+        .join("Microsoft.Net")
+        .join("assembly")
+        .join("GAC_MSIL")
+        .join("Microsoft.PowerShell.Commands.Management")
+        .join("v4.0_3.0.0.0__31bf3856ad364e35")
+        .join("Microsoft.PowerShell.Commands.Management.dll");
+    execute_powershell(body, cwd, executable, &assembly)
+}
+fn execute_pwsh(body: &str, cwd: &Path) -> process::ProcessReport {
+    let path = std::env::var_os("PATH").expect("declared PATH must contain PowerShell 7");
+    let executable = std::env::split_paths(&path)
+        .map(|directory| cwd.join(directory).join("pwsh.exe"))
+        .find(|candidate| candidate.is_file())
+        .expect("native PowerShell 7 must be available on declared PATH");
+    let assembly = executable
+        .parent()
+        .unwrap()
+        .join("Microsoft.PowerShell.Commands.Management.dll");
+    let body = format!(
+        "if ($PSVersionTable.PSVersion.Major -ne 7) {{ throw 'fixture requires PowerShell 7' }}; {body}"
+    );
+    execute_powershell(&body, cwd, executable, &assembly)
+}
+fn execute_powershell(
+    body: &str,
+    cwd: &Path,
+    executable: PathBuf,
+    assembly: &Path,
+) -> process::ProcessReport {
+    let assembly = quote(assembly.to_str().expect("PowerShell assembly Unicode path"));
+    let body = format!(
+        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); $expectedCore=[System.IO.Path]::Combine($PSHOME,'Modules'); if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH),$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture admitted core module path mismatch' }}; $env:PSModulePath=$expectedCore; if (![string]::Equals($env:PSModulePath,$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture core module path mismatch' }}; $pathCommand=Get-Command -Name Test-Path -CommandType Cmdlet -ErrorAction Stop; [Console]::Error.WriteLine('windows-fixture path-command kind='+$pathCommand.CommandType+' module='+$pathCommand.ModuleName+' assembly='+$pathCommand.ImplementingType.Assembly.Location); if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.ImplementingType.Assembly.Location,{assembly},[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture Test-Path native assembly mismatch' }}; [Console]::Error.WriteLine('windows-fixture build-core-module-admitted ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
     );
     let mut environment = [
         "SystemRoot",
@@ -206,4 +237,84 @@ fn native_windows_relative_llama_override_is_bound_to_repo_not_process_directory
         );
         assert_eq!(accepted(&body, directory.path()), expected);
     }
+}
+
+fn host_target_body(workspace: &Path, target: &Path, cargo_override: &str) -> String {
+    let source = super::source(".github/actions/setup-windows-short-paths/host-target.ps1");
+    format!(
+        "$ErrorActionPreference='Stop'; $env:CARGO_TARGET_DIR={}; $env:GITHUB_ENV={}; $env:GITHUB_OUTPUT={}; {}; Initialize-HostCargoTarget -Workspace {} -TargetRoot {}",
+        quote(cargo_override),
+        quote(workspace.join("env").to_str().unwrap()),
+        quote(workspace.join("output").to_str().unwrap()),
+        function(&source, "Initialize-HostCargoTarget"),
+        quote(workspace.to_str().unwrap()),
+        quote(target.to_str().unwrap()),
+    )
+}
+
+#[cfg_attr(windows, test)]
+fn native_windows_host_target_preserves_paths_and_refuses_existing_inputs() {
+    for execute in [execute, execute_pwsh] {
+        host_target_cases(execute);
+    }
+}
+
+fn host_target_cases(execute: fn(&str, &Path) -> process::ProcessReport) {
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("workspace-é-模型");
+    let target = directory.path().join("b");
+    fs::create_dir(&workspace).unwrap();
+    let result = execute(&host_target_body(&workspace, &target, ""), &workspace);
+    assert!(result.success(), "{result:?}");
+    fs::create_dir_all(target.join("release")).unwrap();
+    fs::write(target.join("release/mesh-llm.exe"), b"host").unwrap();
+    assert_eq!(
+        fs::read(workspace.join("target/release/mesh-llm.exe")).unwrap(),
+        b"host"
+    );
+    fs::create_dir(workspace.join("target/cargo-timings")).unwrap();
+    fs::write(workspace.join("target/cargo-timings/test.html"), b"timing").unwrap();
+    assert_eq!(
+        fs::read(target.join("cargo-timings/test.html")).unwrap(),
+        b"timing"
+    );
+    for (name, key) in [("env", "CARGO_TARGET_DIR"), ("output", "cargo_target")] {
+        let output = fs::read_to_string(workspace.join(name)).unwrap();
+        assert_eq!(
+            output.trim_start_matches('\u{feff}').trim(),
+            format!("{key}={}", target.display())
+        );
+    }
+    let foreign = directory.path().join("foreign");
+    fs::create_dir(&foreign).unwrap();
+    for (entry, cargo_override) in [
+        ("directory", ""),
+        ("file", ""),
+        ("override", "D:\\existing"),
+    ] {
+        let workspace = directory.path().join(entry);
+        fs::create_dir(&workspace).unwrap();
+        if entry == "directory" {
+            fs::create_dir(workspace.join("target")).unwrap();
+        } else if entry == "file" {
+            fs::write(workspace.join("target"), b"preserve").unwrap();
+        }
+        let short = workspace.join("short");
+        let result = execute(
+            &host_target_body(&workspace, &short, cargo_override),
+            &workspace,
+        );
+        assert!(!result.success(), "{result:?}");
+        assert!(!short.exists());
+        assert!(!workspace.join("env").exists());
+        if entry == "file" {
+            assert_eq!(fs::read(workspace.join("target")).unwrap(), b"preserve");
+        }
+    }
+    fs::write(foreign.join("keep"), b"foreign").unwrap();
+    let workspace = directory.path().join("foreign-workspace");
+    fs::create_dir(&workspace).unwrap();
+    assert!(!execute(&host_target_body(&workspace, &foreign, ""), &workspace).success());
+    assert_eq!(fs::read(foreign.join("keep")).unwrap(), b"foreign");
+    assert!(!workspace.join("target").exists());
 }

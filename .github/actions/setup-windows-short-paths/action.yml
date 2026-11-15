@@ -1,6 +1,17 @@
 name: Configure short Windows build paths
 description: Keep compiler cache and temporary files below Windows toolchain path limits.
 
+inputs:
+  cargo_target:
+    description: "Cargo target mode: workspace, or host for a fresh short target on GitHub-hosted runners."
+    required: false
+    default: workspace
+
+outputs:
+  cargo_target:
+    description: Absolute short host target, or empty when the workspace target remains active.
+    value: ${{ steps.host_target.outputs.cargo_target }}
+
 runs:
   using: composite
   steps:
@@ -19,3 +30,8 @@ runs:
         }
         Write-Host "Windows compiler cache: $($paths.SCCACHE_DIR)"
         Write-Host "Windows temporary root: $($paths.TEMP)"
+    - name: Configure short host Cargo target
+      id: host_target
+      if: ${{ inputs.cargo_target == 'host' && runner.environment == 'github-hosted' }}
+      shell: pwsh
+      run: '& "$env:GITHUB_ACTION_PATH/host-target.ps1"'

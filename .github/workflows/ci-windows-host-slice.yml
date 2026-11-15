@@ -149,6 +149,9 @@ jobs:
         id: layout
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - uses: ./.github/actions/setup-windows-short-paths
+        id: short_paths
+        with:
+          cargo_target: host
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         # sccache 0.17+ expands Cargo's rustc argfile and exceeds the Windows
@@ -165,6 +168,8 @@ jobs:
         continue-on-error: true
         with:
           workspaces: . -> target
+          cache-targets: ${{ steps.short_paths.outputs.cargo_target == '' }}
+          cache-directories: ${{ steps.short_paths.outputs.cargo_target }}
           cache-bin: "false"
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
           shared-key: ci-host-windows-${{ inputs.profile }}

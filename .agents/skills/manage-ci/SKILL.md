@@ -642,6 +642,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   The two product steps also set `LINK=--time-trace` so LLVM writes one trace
   beside each actual linker output. Upload those traces with Cargo timings;
   they measure linker work separately without changing Rust codegen flags.
+- The Windows host producer opts into a same-volume short Cargo target on
+  GitHub-hosted runners only. The short-path action refuses existing target
+  entries or a nonempty Cargo target override, then creates an NTFS junction at
+  the conventional `target` path. Other callers/providers keep their paths.
+  rust-cache cleans through the workspace junction but archives the absolute
+  short directory through `cache-directories`, with `cache-targets` disabled.
+  Keep the short Cargo target in the cache's environment compatibility hash.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
