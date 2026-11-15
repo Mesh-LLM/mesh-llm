@@ -166,8 +166,8 @@ jobs:
         with:
           workspaces: . -> target
           cache-bin: "false"
-          # pe0 excludes older timestamped proc-macro DLLs. The per-run suffix is measurement only.
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}-pe0-measurement-${{ github.run_id }}
+          # Measurement only: match the PE0 candidate's no-archive-restore treatment.
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}-pe-clock-measurement-${{ github.run_id }}
           shared-key: ci-host-windows-${{ inputs.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -192,7 +192,6 @@ jobs:
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
           LINK: --time-trace
-          SOURCE_DATE_EPOCH: "0"
         with:
           profile: ${{ inputs.profile }}
       - name: Upload immutable Windows Skippy CLI input
@@ -208,7 +207,6 @@ jobs:
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
           LINK: --time-trace
-          SOURCE_DATE_EPOCH: "0"
         with:
           profile: ${{ inputs.profile == 'dev' && 'debug' || inputs.profile }}
           skip_ui: "true"
