@@ -1052,7 +1052,7 @@ if ($HostOnly) {
             }
         }
         Set-BuildVersionStamp
-        $hostArgs = @("build")
+        $hostArgs = @("build", "--timings")
         $hostOutputProfile = "debug"
         if ($buildProfile -eq "release") {
             $hostArgs += "--release"
