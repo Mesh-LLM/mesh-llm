@@ -140,7 +140,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
-| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
+| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential; only the history shard/card upload step gets the write-scoped `HF_PUBLISH_TOKEN`. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
 Agentic replay is manual-only while the full-session, long-context workload is
@@ -1375,8 +1375,9 @@ parity canaries remain required. Other variables include `CUDA_VERSION`,
 `MESH_VULKAN_INFERENCE_RUNNER_ENABLED`, smoke configuration variables, and
 release/deployment variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN` (read-only: model downloads and rate-limit
-resilience), `HF_PUBLISH_TOKEN` (write: only the two DFlash publish
-workflows), release-attestation keys, `CARGO_REGISTRY_TOKEN`
+resilience), `HF_PUBLISH_TOKEN` (write: the two DFlash publish
+workflows and the agentic replay history upload, so scoped to the `meshllm/`
+DFlash model repos and the replay history dataset), release-attestation keys, `CARGO_REGISTRY_TOKEN`
 and deployment tokens.
 
 ## Live inspection

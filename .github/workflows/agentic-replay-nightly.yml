@@ -244,7 +244,7 @@ jobs:
       - name: Publish immutable run shard and card
         if: ${{ !cancelled() && steps.history.outcome == 'success' }}
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
           RUN_DATE=$(date -u +%F)
