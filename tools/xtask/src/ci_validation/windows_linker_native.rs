@@ -1,5 +1,5 @@
 //! Exercise the real CMD driver and Rust metadata selector on native Windows.
-use super::{execute, quote};
+use super::{execute, function, quote, script};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -129,11 +129,30 @@ impl LinkerFixture {
             "never invoke the linker after a missing-helper refusal"
         );
     }
+
+    fn mesh_host_selects_adapter_only_with_opt_in(&self) {
+        let llvm = self
+            .sysroot
+            .join("lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe");
+        let body = format!(
+            "$ErrorActionPreference='Stop'; $scriptDir={}; function Resolve-LldLinker {{ {} }}; {}; Remove-Item Env:MESH_CI_STABLE_PROC_MACRO_METADATA -ErrorAction SilentlyContinue; Configure-LldLinker; if ($env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER -ne {} -or $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER -ne {}) {{ throw 'default Mesh linker must remain LLVM' }}; $env:MESH_CI_STABLE_PROC_MACRO_METADATA='1'; Configure-LldLinker; if ($env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER -ne {} -or $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER -ne {}) {{ throw 'opted-in Mesh host must use the adapter driver' }}",
+            quote(self.driver.parent().unwrap().to_str().unwrap()),
+            quote(llvm.to_str().unwrap()),
+            function(&script(), "Configure-LldLinker"),
+            quote(llvm.to_str().unwrap()),
+            quote(llvm.to_str().unwrap()),
+            quote(self.driver.to_str().unwrap()),
+            quote(self.driver.to_str().unwrap())
+        );
+        let report = execute(&body, &self.root);
+        assert!(report.success(), "{report:?}");
+    }
 }
 
 #[cfg_attr(windows, test)]
 fn native_windows_linker_metadata_preserves_product_links_and_failure() {
     let fixture = LinkerFixture::new();
+    fixture.mesh_host_selects_adapter_only_with_opt_in();
     for (label, is_macro, name, primary, enabled, code, debug_none) in [
         ("macro", true, "macro_fixture", false, true, 0, true),
         ("normal", false, "macro_fixture", false, true, 0, false),

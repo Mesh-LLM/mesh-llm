@@ -1,5 +1,7 @@
 //! Declared graph intent only; this does not execute a hosted/platform job.
-use super::{Node, document, input, job, named, source, steps, support, text};
+use super::{
+    Node, assert_mutation_rejected, document, input, job, named, source, steps, support, text,
+};
 use std::fs;
 fn runs(node: &Node) -> String {
     steps(node)
@@ -167,9 +169,25 @@ fn graph_host_artifact_names_and_ui_inputs_are_platform_pure() {
             }
         }
     }
-    let windows = source("ci-windows-host-slice.yml");
-    assert!(windows.contains("./.github/actions/prepare-windows-host-input"));
-    assert!(!windows.contains("scripts/build-windows.ps1"));
+    let delegates_build = |doc: &Node| {
+        steps(job(doc, "windows_host"))
+            .iter()
+            .any(|step| text(step, "uses") == Some("./.github/actions/prepare-windows-host-input"))
+            && doc
+                .get("jobs")
+                .unwrap()
+                .entries()
+                .iter()
+                .filter(|(_, job)| job.get("steps").is_some())
+                .all(|(_, job)| !runs(job).contains("scripts/build-windows.ps1"))
+    };
+    assert!(delegates_build(&document("ci-windows-host-slice.yml")));
+    assert_mutation_rejected(
+        "ci-windows-host-slice.yml",
+        "$uiPath = \"$env:UI_DIR/dist/index.html\"",
+        "& scripts/build-windows.ps1\n          $uiPath = \"$env:UI_DIR/dist/index.html\"",
+        delegates_build,
+    );
 }
 #[test]
 fn graph_smoke_gates_parse_ids_and_catalog_domains_have_consumers() {

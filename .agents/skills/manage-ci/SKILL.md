@@ -648,8 +648,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   their otherwise unused PDB records a random rustc temporary export-file path
   in the DLL's GUID. Shipping Skippy, Mesh, runtime DLLs and build scripts retain
   their existing link flags, optimization, panic behavior and debug settings.
-  Require restored product-source automation; never compile a helper from a
-  linker invocation. Its archive prefix binds the adapter and workflow sources
+  Mesh's HostOnly linker configuration selects that same CMD driver when opted
+  in; its ordinary direct LLVM selection remains the default. Require restored
+  product-source automation; never compile a helper from a linker invocation.
+  Its archive prefix binds the adapter, Mesh configuration and workflow sources
   so older nondeterministic build-tool DLLs cannot be restored.
   This candidate is unqualified. The per-run archive suffix and retained
   serde_derive DLLs are measurement controls, not shipping requirements.

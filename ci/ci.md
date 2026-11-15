@@ -1526,7 +1526,10 @@ omit PDB generation: the PDB command records a random rustc export-file path,
 whose hash reaches the DLL's GUID and downstream sccache keys. Shipping targets
 and other links keep their flags and release profile. The existing restored
 product-source automation runs the adapter; it has no compiler fallback.
-The host archive prefix binds the adapter and workflow sources to exclude older
+Mesh's HostOnly linker configuration selects the CMD driver only with the
+opt-in, preserving its default direct LLVM path. The native fixture executes
+that configuration for both target variables with the opt-in enabled and unset.
+The host archive prefix binds the adapter, Mesh configuration and workflow sources to exclude older
 nondeterministic build-tool DLLs.
 This candidate remains unqualified. Its per-run archive suffix prevents target
 archive restores, and retained serde_derive DLLs support byte-level comparison;

@@ -1175,8 +1175,10 @@ with it.
   Both compilations set `SOURCE_DATE_EPOCH=0` and enable the Rust-owned native
   Windows linker adapter for non-primary proc-macro libraries only. Those
   build-time DLLs omit PDBs whose GUID otherwise hashes a random rustc `.def`
-  path. Other links retain their flags. The archive prefix binds adapter and
-  workflow sources. This candidate is unqualified; its per-run archive suffix
+  path. Mesh's HostOnly configuration selects the CMD driver only with the
+  opt-in; default builds still select LLVM directly. Other links retain their
+  flags. The archive prefix binds adapter, Mesh configuration and workflow
+  sources. This candidate is unqualified; its per-run archive suffix
   and retained serde_derive DLLs are temporary measurement controls.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI

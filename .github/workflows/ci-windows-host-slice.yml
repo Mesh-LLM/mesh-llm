@@ -167,7 +167,7 @@ jobs:
           workspaces: . -> target
           cache-bin: "false"
           # Bind build-tool metadata policy. The per-run suffix is measurement only.
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt', 'scripts/cargo-linker.cmd', 'tools/xtask/src/native_policy/windows_linker.rs', '.github/workflows/ci-windows-host-slice.yml') }}-macro-metadata-measurement-${{ github.run_id }}
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt', 'scripts/cargo-linker.cmd', 'mesh/scripts/build-windows.ps1', 'tools/xtask/src/native_policy/windows_linker.rs', '.github/workflows/ci-windows-host-slice.yml') }}-macro-metadata-measurement-${{ github.run_id }}
           shared-key: ci-host-windows-${{ inputs.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
