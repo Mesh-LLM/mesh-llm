@@ -328,6 +328,7 @@ impl KvStageIntegration {
         let rewarm_enqueued = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
             &self.admission_best_effort_outstanding,
+            self.admission_total_cap,
             CaptureAdmission::BestEffort,
         )
         .is_some_and(|admission_credit| {

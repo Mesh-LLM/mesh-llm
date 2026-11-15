@@ -247,6 +247,10 @@ impl KvStageIntegration {
         let worker_exact_state_records_pending = exact_state_records_pending.clone();
         let admission_outstanding = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let admission_best_effort_outstanding = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let admission_total_cap =
+            crate::kv_integration::exact_state::exact_state_admission_total_for_lanes(
+                config.lane_count,
+            );
         #[cfg(test)]
         let exact_state_worker_received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         #[cfg(test)]
@@ -391,6 +395,7 @@ impl KvStageIntegration {
             exact_state_records_pending,
             admission_outstanding,
             admission_best_effort_outstanding,
+            admission_total_cap,
             #[cfg(test)]
             exact_state_captures_outstanding: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -1072,6 +1077,7 @@ mod tests {
             crate::kv_integration::exact_state::ExactStateAdmissionCredit::acquire(
                 &self.total,
                 &self.best_effort,
+                crate::kv_integration::exact_state::EXACT_STATE_ADMISSION_TOTAL,
                 crate::kv_integration::exact_state::CaptureAdmission::Continuation,
             )
             .expect("a fresh per-test budget must admit")
@@ -1839,6 +1845,7 @@ mod reserved_admission_harness {
         ExactStateAdmissionCredit::acquire(
             &kv.admission_outstanding,
             &kv.admission_best_effort_outstanding,
+            crate::kv_integration::exact_state::EXACT_STATE_ADMISSION_TOTAL,
             class,
         )
     }

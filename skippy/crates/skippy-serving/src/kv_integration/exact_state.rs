@@ -70,6 +70,18 @@ pub const EXACT_STATE_ADMISSION_TOTAL: usize = 2;
 /// boundary always finds a slot unless the whole budget is exhausted.
 pub const EXACT_STATE_ADMISSION_RESERVED: usize = 1;
 
+/// Per-stage total admission slots. The single-stream floor is the legacy
+/// constant (channel capacity plus one worker-held record); a stage serving
+/// `lane_count` concurrent lanes admits one in-flight payload per lane plus
+/// the recorder's own headroom, because a capture declined under admission
+/// loses that session's exchange permanently — the next turn re-prefills it.
+/// Concurrent multi-turn sessions measured on the fleet starved at the floor:
+/// whichever session completed first held the only best-effort slot and every
+/// other lane's record was declined for the whole wave.
+pub(crate) fn exact_state_admission_total_for_lanes(lane_count: u32) -> usize {
+    EXACT_STATE_ADMISSION_TOTAL.max(lane_count as usize + 1)
+}
+
 /// Move-only credit for one in-flight exact-state payload. Construction
 /// reserves a slot atomically (CAS, so competing producers cannot
 /// oversubscribe the budget); Drop releases it exactly once on every terminal
@@ -88,14 +100,16 @@ impl ExactStateAdmissionCredit {
     pub(crate) fn acquire(
         total: &Arc<std::sync::atomic::AtomicUsize>,
         best_effort: &Arc<std::sync::atomic::AtomicUsize>,
+        total_cap: usize,
         class: CaptureAdmission,
     ) -> Option<Self> {
+        let total_cap = total_cap.max(EXACT_STATE_ADMISSION_TOTAL);
         use std::sync::atomic::Ordering::{AcqRel, Acquire};
         match class {
             CaptureAdmission::Continuation => {
                 let mut observed = total.load(Acquire);
                 loop {
-                    if observed >= EXACT_STATE_ADMISSION_TOTAL {
+                    if observed >= total_cap {
                         return None;
                     }
                     match total.compare_exchange_weak(observed, observed + 1, AcqRel, Acquire) {
@@ -112,7 +126,7 @@ impl ExactStateAdmissionCredit {
                 }
             }
             CaptureAdmission::BestEffort => {
-                let reserved_cap = EXACT_STATE_ADMISSION_TOTAL - EXACT_STATE_ADMISSION_RESERVED;
+                let reserved_cap = total_cap - EXACT_STATE_ADMISSION_RESERVED;
                 let mut observed_best_effort = best_effort.load(Acquire);
                 loop {
                     if observed_best_effort >= reserved_cap {
@@ -132,7 +146,7 @@ impl ExactStateAdmissionCredit {
                 // if the total budget was exhausted concurrently.
                 let mut observed_total = total.load(Acquire);
                 loop {
-                    if observed_total >= EXACT_STATE_ADMISSION_TOTAL {
+                    if observed_total >= total_cap {
                         best_effort.fetch_sub(1, AcqRel);
                         return None;
                     }
@@ -392,6 +406,7 @@ impl KvStageIntegration {
                 && let Some(admission_credit) = ExactStateAdmissionCredit::acquire(
                     &self.admission_outstanding,
                     &self.admission_best_effort_outstanding,
+                    self.admission_total_cap,
                     CaptureAdmission::BestEffort,
                 )
                 && self.try_begin_record(&page_id)
@@ -523,6 +538,7 @@ impl KvStageIntegration {
         let Some(mut admission_credit) = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
             &self.admission_best_effort_outstanding,
+            self.admission_total_cap,
             admission,
         ) else {
             #[cfg(test)]
@@ -955,6 +971,7 @@ impl KvStageIntegration {
         let rewarm_enqueued = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
             &self.admission_best_effort_outstanding,
+            self.admission_total_cap,
             CaptureAdmission::BestEffort,
         )
         .is_some_and(|admission_credit| {
@@ -1226,6 +1243,7 @@ mod admission_credit_tests {
         let guard = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(guard.is_some(), "fresh budget admits Continuation");
@@ -1240,17 +1258,20 @@ mod admission_credit_tests {
         let first = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         let second = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(first.is_some() && second.is_some(), "two slots for TOTAL=2");
         let third = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(
@@ -1263,11 +1284,19 @@ mod admission_credit_tests {
     #[test]
     fn best_effort_declines_at_reserved_cap_even_with_budget_headroom() {
         let (total, best_effort) = counters();
-        let first =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let first = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(first.is_some());
-        let second =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let second = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(
             second.is_none(),
             "BestEffort cap is TOTAL - RESERVED = 1; second must decline"
@@ -1276,14 +1305,67 @@ mod admission_credit_tests {
     }
 
     #[test]
+    fn multi_lane_stages_admit_one_capture_per_lane() {
+        // Fleet regression: concurrent multi-turn sessions starved at the
+        // single-stream floor — whichever session completed first held the
+        // only best-effort slot and every other lane's capture was declined,
+        // so its exchange was lost and its next turn re-prefilled it. A stage
+        // serving four lanes must admit four concurrent captures.
+        let (total, best_effort) = counters();
+        let cap = super::exact_state_admission_total_for_lanes(4);
+        assert_eq!(cap, 5, "four lanes plus recorder headroom");
+        let held: Vec<_> = (0..4)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    cap,
+                    CaptureAdmission::BestEffort,
+                )
+            })
+            .collect();
+        assert!(
+            held.iter().all(|credit| credit.is_some()),
+            "every lane's capture must be admitted"
+        );
+        assert_eq!(total.load(Ordering::Acquire), 4);
+        let continuation = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            cap,
+            CaptureAdmission::Continuation,
+        );
+        assert!(
+            continuation.is_some(),
+            "the reserved continuation share still admits"
+        );
+        assert_eq!(total.load(Ordering::Acquire), 5);
+        assert!(
+            ExactStateAdmissionCredit::acquire(
+                &total,
+                &best_effort,
+                cap,
+                CaptureAdmission::BestEffort
+            )
+            .is_none(),
+            "budget exhausted at the lane-scaled cap"
+        );
+    }
+
+    #[test]
     fn continuation_admits_after_best_effort_under_reserved_share() {
         let (total, best_effort) = counters();
-        let best =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let best = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(best.is_some(), "BestEffort takes its single slot");
         let cont = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(
@@ -1317,9 +1399,12 @@ mod admission_credit_tests {
                         } else {
                             CaptureAdmission::BestEffort
                         };
-                        if let Some(credit) =
-                            ExactStateAdmissionCredit::acquire(&total, &best_effort, class)
-                        {
+                        if let Some(credit) = ExactStateAdmissionCredit::acquire(
+                            &total,
+                            &best_effort,
+                            EXACT_STATE_ADMISSION_TOTAL,
+                            class,
+                        ) {
                             held.push((class, credit));
                         }
                     }
@@ -1360,6 +1445,7 @@ mod admission_credit_tests {
             let credit = ExactStateAdmissionCredit::acquire(
                 &total,
                 &best_effort,
+                EXACT_STATE_ADMISSION_TOTAL,
                 CaptureAdmission::Continuation,
             )
             .expect("topping up an under-subscribed budget must succeed");
@@ -1383,7 +1469,8 @@ mod admission_credit_tests {
                             ExactStateAdmissionCredit::acquire(
                                 &total,
                                 &best_effort,
-                                CaptureAdmission::BestEffort
+                                EXACT_STATE_ADMISSION_TOTAL,
+                                CaptureAdmission::BestEffort,
                             )
                             .is_none(),
                             "an exhausted budget must decline every BestEffort attempt"
@@ -1414,10 +1501,15 @@ mod admission_credit_tests {
         let recovery_continuation = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
-        let recovery_best_effort =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let recovery_best_effort = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(
             recovery_continuation.is_some() && recovery_best_effort.is_some(),
             "budget must recover after the drain"
@@ -1441,12 +1533,14 @@ mod admission_credit_tests {
         let first = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         )
         .expect("first Continuation admitted");
         let second = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         )
         .expect("second Continuation admitted");
@@ -1466,7 +1560,8 @@ mod admission_credit_tests {
                             ExactStateAdmissionCredit::acquire(
                                 &total,
                                 &best_effort,
-                                CaptureAdmission::BestEffort
+                                EXACT_STATE_ADMISSION_TOTAL,
+                                CaptureAdmission::BestEffort,
                             )
                             .is_none(),
                             "a continuation-exhausted budget must decline every BestEffort via rollback"
@@ -1494,8 +1589,13 @@ mod admission_credit_tests {
         assert_eq!(total.load(Ordering::Acquire), 0);
         assert_eq!(best_effort.load(Ordering::Acquire), 0);
         assert!(
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort)
-                .is_some(),
+            ExactStateAdmissionCredit::acquire(
+                &total,
+                &best_effort,
+                EXACT_STATE_ADMISSION_TOTAL,
+                CaptureAdmission::BestEffort
+            )
+            .is_some(),
             "budget recovers after the drain"
         );
     }

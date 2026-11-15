@@ -204,6 +204,9 @@ pub struct KvStageIntegration {
     /// the worker. See `ExactStateAdmissionCredit`.
     pub(crate) admission_outstanding: Arc<AtomicUsize>,
     pub(crate) admission_best_effort_outstanding: Arc<AtomicUsize>,
+    /// Per-stage admission ceiling, scaled by lane count; see
+    /// `exact_state::exact_state_admission_total_for_lanes`.
+    pub(crate) admission_total_cap: usize,
     /// Test-only outstanding-capture tracking: incremented when a capture task
     /// is scheduled onto the iteration scheduler, released when that task
     /// reaches ANY terminal outcome (recorded, skipped, error, panic) via a
@@ -1420,8 +1423,13 @@ mod exact_state_record_queue_tests {
         best_effort: &Arc<AtomicUsize>,
         class: CaptureAdmission,
     ) -> ExactStateAdmissionCredit {
-        ExactStateAdmissionCredit::acquire(total, best_effort, class)
-            .expect("a fresh budget must admit")
+        ExactStateAdmissionCredit::acquire(
+            total,
+            best_effort,
+            crate::kv_integration::exact_state::EXACT_STATE_ADMISSION_TOTAL,
+            class,
+        )
+        .expect("a fresh budget must admit")
     }
 
     struct RecordingObserver(Arc<Mutex<Vec<KvLifecycleEvent>>>);
