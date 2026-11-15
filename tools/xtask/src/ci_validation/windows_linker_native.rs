@@ -37,7 +37,8 @@ impl LinkerFixture {
             .ancestors()
             .nth(2)
             .unwrap()
-            .join("scripts/cargo-linker.cmd");
+            .join("scripts")
+            .join("cargo-linker.cmd");
         let response = root.join("link arguments.rsp");
         fs::write(&response, b"\xff\xfe/\0D\0E\0B\0U\0G\0\r\0\n\0").unwrap();
         Self {
@@ -53,7 +54,7 @@ impl LinkerFixture {
 
     fn preamble(&self, log: &Path) -> String {
         format!(
-            "$ErrorActionPreference='Stop'; $env:PATH={}+';'+$env:PATH; $env:MESH_WINDOWS_LINK_FIXTURE_SYSROOT={}; $env:MESH_WINDOWS_LINK_FIXTURE_LOG={}; $env:MESH_LLM_AUTOMATION_BIN={}; $env:MESH_CI_STABLE_PROC_MACRO_METADATA='1'; $env:SOURCE_DATE_EPOCH='0'; $env:CARGO_MANIFEST_DIR={}; $env:CARGO_CRATE_NAME='macro_fixture'; Remove-Item Env:CARGO_PRIMARY_PACKAGE -ErrorAction SilentlyContinue;",
+            "$ErrorActionPreference='Stop'; $env:ComSpec=[IO.Path]::Combine($env:SystemRoot,'System32','cmd.exe'); $env:PATHEXT='.COM;.EXE;.BAT;.CMD'; $env:PATH={}+';'+$env:PATH; $env:MESH_WINDOWS_LINK_FIXTURE_SYSROOT={}; $env:MESH_WINDOWS_LINK_FIXTURE_LOG={}; $env:MESH_LLM_AUTOMATION_BIN={}; $env:MESH_CI_STABLE_PROC_MACRO_METADATA='1'; $env:SOURCE_DATE_EPOCH='0'; $env:CARGO_MANIFEST_DIR={}; $env:CARGO_CRATE_NAME='macro_fixture'; Remove-Item Env:CARGO_PRIMARY_PACKAGE -ErrorAction SilentlyContinue;",
             quote(self.tools.to_str().unwrap()),
             quote(self.sysroot.to_str().unwrap()),
             quote(log.to_str().unwrap()),
