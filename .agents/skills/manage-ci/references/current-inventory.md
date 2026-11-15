@@ -1170,6 +1170,8 @@ with it.
   standalone producer/upload/host sequence contiguous.
   These observations add no compilation, change no product features or
   profiles, and do not enter immutable host/product inputs.
+  Both product steps set `LINK=--time-trace`; their timing artifact also retains
+  LLVM's per-output `.time-trace.json` files for independent linker evidence.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;

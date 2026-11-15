@@ -639,6 +639,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   build or change product features/profiles.
   Timing artifacts use architecture and run-attempt identities and retain for
   one day; cache counters use the existing statistics action and its retention.
+  The two product steps also set `LINK=--time-trace` so LLVM writes one trace
+  beside each actual linker output. Upload those traces with Cargo timings;
+  they measure linker work separately without changing Rust codegen flags.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad

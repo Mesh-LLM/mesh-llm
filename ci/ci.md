@@ -1517,6 +1517,9 @@ compiler work, invalidation and cache behavior without adding a build or
 changing product features, profiles or immutable host/product inputs.
 The host job disables sccache idle expiry so long uncached links retain the
 same daemon's counters.
+Both product steps set `LINK=--time-trace` and retain LLVM's per-output
+`.time-trace.json` files in the timing artifact. These measure linker work
+separately without adding Rust codegen flags or success-output warnings.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
