@@ -124,6 +124,7 @@ jobs:
     env:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -165,7 +166,8 @@ jobs:
         with:
           workspaces: . -> target
           cache-bin: "false"
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          # Bind build-tool metadata policy before restoring target artifacts.
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt', 'scripts/cargo-linker.cmd', 'mesh/scripts/build-windows.ps1', 'tools/xtask/src/native_policy/windows_linker.rs', '.github/workflows/ci-windows-host-slice.yml') }}
           shared-key: ci-host-windows-${{ inputs.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -187,6 +189,11 @@ jobs:
           }
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
+          LINK: --time-trace
+          SOURCE_DATE_EPOCH: "0"
+          MESH_CI_STABLE_PROC_MACRO_METADATA: "1"
         with:
           profile: ${{ inputs.profile }}
       - name: Upload immutable Windows Skippy CLI input
@@ -197,10 +204,32 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Prepare immutable Windows host
+        id: mesh_host
         uses: ./.github/actions/prepare-windows-host-input
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
+          LINK: --time-trace
+          SOURCE_DATE_EPOCH: "0"
+          MESH_CI_STABLE_PROC_MACRO_METADATA: "1"
         with:
           profile: ${{ inputs.profile == 'dev' && 'debug' || inputs.profile }}
           skip_ui: "true"
+          prior_cache_evidence_name: windows-skippy-cache-${{ matrix.host.architecture }}-${{ github.run_attempt }}
+      - name: Capture Mesh host compiler-cache evidence
+        if: ${{ !cancelled() && steps.mesh_host.outcome != 'skipped' }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: windows-host-cache-${{ matrix.host.architecture }}-${{ github.run_attempt }}
+      - name: Upload Windows compilation timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: windows-host-timings-${{ matrix.host.architecture }}-${{ github.run_attempt }}
+          path: |
+            target/cargo-timings/
+            target/**/*.time-trace.json
+          if-no-files-found: warn
+          retention-days: 1
       - name: Upload immutable Windows host input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
