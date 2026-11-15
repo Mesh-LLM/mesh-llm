@@ -642,6 +642,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   The two product steps also set `LINK=--time-trace` so LLVM writes one trace
   beside each actual linker output. Upload those traces with Cargo timings;
   they measure linker work separately without changing Rust codegen flags.
+- Windows host compilation fixes `SOURCE_DATE_EPOCH=0` so LLVM emits stable
+  PE timestamps. Proc-macro DLLs are rebuilt rather than cached by sccache;
+  their complete bytes contribute to downstream Rust cache keys. Keep the
+  host archive compatibility prefix at `pe0` so timestamped DLLs from older
+  Cargo target archives cannot be restored into this cohort.
+  This candidate is unqualified. Its per-run archive suffix and retained
+  serde_derive DLLs are measurement controls, not shipping requirements.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
