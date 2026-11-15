@@ -1520,6 +1520,12 @@ same daemon's counters.
 Both product steps set `LINK=--time-trace` and retain LLVM's per-output
 `.time-trace.json` files in the timing artifact. These measure linker work
 separately without adding Rust codegen flags or success-output warnings.
+Both host compilations set `SOURCE_DATE_EPOCH=0` so LLVM emits stable PE
+timestamps. sccache hashes complete proc-macro DLLs when caching consumers;
+the host archive prefix includes `pe0` to exclude older timestamped DLLs.
+This candidate remains unqualified. Its per-run archive suffix prevents target
+archive restores, and retained serde_derive DLLs support byte-level comparison;
+these two measurement controls must be removed from a shipping change.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These

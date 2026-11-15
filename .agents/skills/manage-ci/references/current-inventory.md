@@ -1172,6 +1172,10 @@ with it.
   profiles, and do not enter immutable host/product inputs.
   Both product steps set `LINK=--time-trace`; their timing artifact also retains
   LLVM's per-output `.time-trace.json` files for independent linker evidence.
+  Both compilations set `SOURCE_DATE_EPOCH=0` for stable LLVM PE timestamps;
+  the host archive prefix includes `pe0` to invalidate older timestamped
+  proc-macro DLLs. This candidate is unqualified. The per-run archive suffix
+  and retained serde_derive DLLs are temporary measurement controls.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
