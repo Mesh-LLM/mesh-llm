@@ -1161,6 +1161,15 @@ with it.
 
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
+- The Windows host slice retains Cargo timing HTML for its existing standalone
+  Skippy and Mesh compilations in a separate one-day architecture/attempt
+  artifact. Fingerprint diagnostics explain invalidations in the job log;
+  the existing statistics action retains cumulative counters after each phase.
+  The host job disables sccache idle expiry across long uncached links.
+  The shared Windows host action's optional prebuild snapshot keeps the
+  standalone producer/upload/host sequence contiguous.
+  These observations add no compilation, change no product features or
+  profiles, and do not enter immutable host/product inputs.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;

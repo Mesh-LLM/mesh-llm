@@ -124,6 +124,7 @@ jobs:
     env:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -187,6 +188,8 @@ jobs:
           }
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         with:
           profile: ${{ inputs.profile }}
       - name: Upload immutable Windows Skippy CLI input
@@ -197,10 +200,27 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Prepare immutable Windows host
+        id: mesh_host
         uses: ./.github/actions/prepare-windows-host-input
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         with:
           profile: ${{ inputs.profile == 'dev' && 'debug' || inputs.profile }}
           skip_ui: "true"
+          prior_cache_evidence_name: windows-skippy-cache-${{ matrix.host.architecture }}-${{ github.run_attempt }}
+      - name: Capture Mesh host compiler-cache evidence
+        if: ${{ !cancelled() && steps.mesh_host.outcome != 'skipped' }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: windows-host-cache-${{ matrix.host.architecture }}-${{ github.run_attempt }}
+      - name: Upload Windows compilation timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: windows-host-timings-${{ matrix.host.architecture }}-${{ github.run_attempt }}
+          path: target/cargo-timings/
+          if-no-files-found: warn
+          retention-days: 1
       - name: Upload immutable Windows host input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

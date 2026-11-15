@@ -1509,6 +1509,15 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+The Windows host slice uploads Cargo HTML timings from its existing standalone
+Skippy and Mesh compilations as a separate one-day architecture/attempt
+artifact. Each phase also records Cargo fingerprint diagnostics and cumulative
+sccache counters through the existing statistics action. These reports separate
+compiler work, invalidation and cache behavior without adding a build or
+changing product features, profiles or immutable host/product inputs.
+The host job disables sccache idle expiry so long uncached links retain the
+same daemon's counters.
+
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
