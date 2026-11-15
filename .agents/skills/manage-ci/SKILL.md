@@ -368,6 +368,15 @@ retired parser behavior, and source review still owns semantic emulation.
   The planner must emit a versioned machine-readable plan containing the
   profile, source identity, direct domains, affected crates, required slice
   IDs, bounded matrices, dependency reasons, and fan-out budgets.
+- Windows linker/cache policy requires explicit `ci-control` and
+  `platform-windows` ownership for `scripts/cargo-linker.cmd`,
+  `tools/xtask/src/native_policy/windows_linker.rs`, and
+  `mesh/scripts/build-windows.ps1`. Its tests require `platform-windows`
+  ownership for `tools/xtask/src/native_policy/windows_linker_tests.rs` and
+  `tools/xtask/src/ci_validation/windows_linker_native.rs`, so their changes
+  select the Windows unit row. Land missing entries in the protected catalog
+  before the dependent implementation. Documenting these requirements does not
+  activate routing or relax the catalog comparison.
 - Supported profiles are semantic and closed: draft PR, ready PR, exhaustive
   main, and explicit full/manual validation. Do not add ad hoc boolean inputs
   when a profile or ownership rule expresses the decision.
