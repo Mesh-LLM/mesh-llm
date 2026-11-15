@@ -1520,6 +1520,10 @@ same daemon's counters.
 Both product steps set `LINK=--time-trace` and retain LLVM's per-output
 `.time-trace.json` files in the timing artifact. These measure linker work
 separately without adding Rust codegen flags or success-output warnings.
+This measurement-only branch isolates Cargo 1.100's directory layout with its
+private legacy-layout opt-out and prevents target-archive restores using a
+per-run archive prefix. These controls are diagnostic and must not be merged
+as production policy. Compiler, features and release optimization stay fixed.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These

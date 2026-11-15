@@ -125,6 +125,8 @@ jobs:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
       SCCACHE_IDLE_TIMEOUT: "0"
+      # Diagnostic only: isolate Cargo 1.100's build-directory layout.
+      __CARGO_TEMPORARY_BUILD_DIR_NEW_LAYOUT_OPT_OUT: "1"
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -166,7 +168,8 @@ jobs:
         with:
           workspaces: . -> target
           cache-bin: "false"
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          # Measurement only: prevent unequal restored target archives.
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}-measurement-${{ github.run_id }}
           shared-key: ci-host-windows-${{ inputs.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0

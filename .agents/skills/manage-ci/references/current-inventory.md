@@ -1172,6 +1172,9 @@ with it.
   profiles, and do not enter immutable host/product inputs.
   Both product steps set `LINK=--time-trace`; their timing artifact also retains
   LLVM's per-output `.time-trace.json` files for independent linker evidence.
+  This measurement-only branch also sets Cargo 1.100's private legacy-layout
+  opt-out for the host job and uses a per-run target-archive prefix. These
+  diagnostic controls are not production policy and must not be merged.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;

@@ -642,6 +642,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   The two product steps also set `LINK=--time-trace` so LLVM writes one trace
   beside each actual linker output. Upload those traces with Cargo timings;
   they measure linker work separately without changing Rust codegen flags.
+- This measurement-only branch tests Cargo 1.100's private legacy-layout
+  opt-out in the Windows host job and prevents target-archive restores with a
+  per-run archive prefix. The private variable is diagnostic, not an admitted
+  production dependency. Keep Rustc, sccache, product source, features and
+  release optimization unchanged; do not merge these measurement controls.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
