@@ -39,6 +39,19 @@ class Model:
 
 
 @dataclass(frozen=True, slots=True)
+class LaneCapacity:
+    """Complete local capacity for one exact serving ID. This does not reserve lanes."""
+
+    execution_lanes: int
+    #: Smallest lane context, safe for any lane.
+    context_tokens_per_lane: int
+    #: Sum of lane contexts, not a per-request limit.
+    context_pool_tokens: int
+    #: Oldest observation in Unix milliseconds; the caller chooses its freshness policy.
+    captured_at_unix_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class Status:
     running: bool
     mode: str

@@ -64,10 +64,8 @@ times out after fifteen seconds. See the
 
 ### Local runtime capacity
 
-Rust, Node.js, Swift, and Kotlin can read the latest published local runtime
-capacity in process, without a console listener or an inference request.
-Python support is deferred; this capability is not yet available in the
-separate Python SDK.
+Rust, Node.js, Python, Swift, and Kotlin can read the latest published local
+runtime capacity in process, without a console listener or an inference request.
 
 Use an exact local serving ID. Results contain execution lanes (including busy
 lanes), the smallest per-lane context budget, the total context pool, and the
@@ -83,6 +81,7 @@ before their model has complete capacity.
 |---|---|---|
 | Rust | `node.runtime_capacity(model)?` | `usize` lanes, `u64` context and timestamp |
 | Node.js | `await node.runtimeCapacity(model)` | `bigint` |
+| Python | `await node.runtime_capacity(model)` | `int` |
 | Swift | `try await node.runtimeCapacity(model)` | `UInt64` |
 | Kotlin | `node.runtimeCapacity(model)` | `ULong` |
 

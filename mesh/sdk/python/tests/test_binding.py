@@ -53,6 +53,14 @@ class BindingAdmissionTests(unittest.TestCase):
             module.create_node(mode, [], [], False, None, 0, 0)
         self.assertEqual(caught.exception[0], "unknown node mode: " + mode)
 
+    def test_actual_runtime_capacity_refuses_stopped_node(self) -> None:
+        _binding._set_native_for_testing(None)
+        module = _binding.native()
+        node = module.create_node("client", [], [], False, None, 0, 0)
+        with self.assertRaises(module.FfiError.HostUnavailable) as caught:
+            node.runtime_capacity("model")
+        self.assertEqual(caught.exception[0], "node is not running")
+
     def test_missing_guard_is_not_cached(self) -> None:
         _binding._set_native_for_testing(None)
         with patch.object(_binding, "import_module", return_value=SimpleNamespace()):
