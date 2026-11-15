@@ -190,6 +190,7 @@ jobs:
         uses: ./.github/actions/prepare-skippy-cli-input
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
+          LINK: --time-trace
         with:
           profile: ${{ inputs.profile }}
       - name: Upload immutable Windows Skippy CLI input
@@ -204,6 +205,7 @@ jobs:
         uses: ./.github/actions/prepare-windows-host-input
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
+          LINK: --time-trace
         with:
           profile: ${{ inputs.profile == 'dev' && 'debug' || inputs.profile }}
           skip_ui: "true"
@@ -218,7 +220,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: windows-host-timings-${{ matrix.host.architecture }}-${{ github.run_attempt }}
-          path: target/cargo-timings/
+          path: |
+            target/cargo-timings/
+            target/**/*.time-trace.json
           if-no-files-found: warn
           retention-days: 1
       - name: Upload immutable Windows host input
