@@ -11,6 +11,7 @@ mod context_support;
 mod final_sweep;
 #[cfg(test)]
 mod final_sweep_tests;
+mod fleet;
 mod hardware;
 mod inputs;
 mod lifecycle;
@@ -120,6 +121,13 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         Some("pin" | "comparison" | "mlflow-export" | "mlflow-publish")
     ) {
         return final_sweep::command(args);
+    }
+    if matches!(
+        args.first().map(String::as_str),
+        Some("fleet" | "fleet-status")
+    ) {
+        let root = std::env::current_dir()?;
+        return fleet::command(&root, args);
     }
     if args.first().map(String::as_str) != Some("worker") {
         return Err("AgentX accepts comparison --input JSON --output DIR or mlflow-export; legacy unpinned launch modes are not admitted".into());

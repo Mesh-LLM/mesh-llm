@@ -11771,6 +11771,7 @@ dependencies = [
 name = "xtask"
 version = "0.78.0"
 dependencies = [
+ "base64 0.22.1",
  "caseless",
  "ci-controller",
  "ed25519-dalek",

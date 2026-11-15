@@ -222,3 +222,27 @@ pub(crate) fn display_relative(repo_root: &Path, path: &Path) -> String {
 pub(crate) fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+/// Range-GETs the first byte of a URL and returns the HTTP status code. Used
+/// by fleet pre-flight to prove CDN chunks are readable before submitting
+/// jobs that depend on them.
+pub fn probe_url_range(url: &str) -> DynResult<u16> {
+    let output = std::process::Command::new("curl")
+        .args([
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--max-time",
+            "30",
+            "-r",
+            "0-0",
+            url,
+        ])
+        .output()
+        .map_err(|e| format!("curl pre-flight: {e}"))?;
+    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    code.parse::<u16>()
+        .map_err(|_| format!("pre-flight returned non-numeric status: {code}").into())
+}
