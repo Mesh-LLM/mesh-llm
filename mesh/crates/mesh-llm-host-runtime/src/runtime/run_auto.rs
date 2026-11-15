@@ -24,10 +24,11 @@ use super::{
     record_runtime_operational_event, resolve_runtime_owner_key_path,
     resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
     run_auto_runtime_loop_and_shutdown, run_local_model_only, runtime_data_producer_for_console,
-    runtime_startup_requirements, setup_run_auto_console_state, setup_run_auto_serving_surface,
-    spawn_embedded_runtime_control_forwarder, spawn_run_auto_additional_model_tasks,
-    spawn_run_auto_discovery_publisher, start_run_auto_bootstrap_proxy, startup_device_override,
-    startup_local_model_loop, swarm_capture_observer_requested,
+    runtime_startup_requirements, save_last_mesh_id_on_change, setup_run_auto_console_state,
+    setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
+    spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
+    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -1191,6 +1192,9 @@ pub(super) async fn run_auto_start_new_mesh(
     } else {
         None
     };
+    // Subscribed before the ID is set, so a convergence right after the save
+    // below is not missed.
+    let mesh_id_changes = node.subscribe_mesh_id_changes();
     let mesh_id = node
         .initialize_mesh_identity_as_originator(
             options.mesh_name.as_deref(),
@@ -1199,6 +1203,7 @@ pub(super) async fn run_auto_start_new_mesh(
         .await?;
     record_first_joined_mesh_ts(node).await;
     mesh::save_last_mesh_id(&mesh_id)?;
+    tokio::spawn(save_last_mesh_id_on_change(node.clone(), mesh_id_changes));
     tracing::info!("Mesh ID: {mesh_id}");
     let _ = emit_event(OutputEvent::InviteToken {
         token: node.invite_token().await,
