@@ -197,3 +197,31 @@ an explicit nonzero exit, another signal, or forced cleanup fails the campaign.
 
 The ordinary CI/GPU suite and registered JY templates are unchanged. This
 benchmark owner does not mark the long-prefix/cancellation/L3 TODO complete.
+
+## Prefix-reuse probe
+
+`prefix-reuse-probe.py` reproduces the exact-state retention regression: N
+interleaved multi-turn conversations with append-only histories against one
+`skippy serve`, reporting `cached_tokens` per request. Any miss after each
+conversation's first turn is a retention defect, not prompt churn. Exit code 1
+on any post-first-turn miss.
+
+```
+# serve with the knobs under test, then:
+python3 skippy/evals/agentx/prefix-reuse-probe.py 64000 4 6 6300
+```
+
+Two distinct prefix-cache budgets matter for retention experiments, and A/B
+runs must move the intended one:
+
+- `--prefix-cache-budget` (`kv_cache.max_bytes`) bounds the exact-state
+  catalog; its auto default is estimated from attention KV metadata and can
+  undercount hybrid recurrent state. The retention floor keeps concurrent
+  sessions' entries alive past this cap.
+- `--prefix-cache-ram` (`kv_cache.l2_max_bytes`) bounds resident-checkpoint
+  RAM and is independent of the exact-state catalog.
+
+The AgentX comparison harness exposes both for its skippy arm through
+`AGENTX_SKIPPY_PREFIX_CACHE_BUDGET` and `AGENTX_SKIPPY_PREFIX_CACHE_RAM`, so
+fleet campaigns can encode and reproduce retention experiments without
+editing the harness.

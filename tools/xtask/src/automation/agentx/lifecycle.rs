@@ -18,6 +18,8 @@ const LLAMA_KV_UNIFIED_ENV: &str = "AGENTX_LLAMA_KV_UNIFIED";
 const SKIPPY_KV_UNIFIED_ENV: &str = "AGENTX_SKIPPY_KV_UNIFIED";
 const SKIPPY_MICROBATCH_TOKENS_ENV: &str = "AGENTX_SKIPPY_MICROBATCH_TOKENS";
 const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
+const SKIPPY_PREFIX_CACHE_BUDGET_ENV: &str = "AGENTX_SKIPPY_PREFIX_CACHE_BUDGET";
+const SKIPPY_PREFIX_CACHE_RAM_ENV: &str = "AGENTX_SKIPPY_PREFIX_CACHE_RAM";
 const BASELINE_MICROBATCH_TOKENS: usize = 512;
 const TELEMETRY_FILE: &str = "skippy-telemetry.otlp.jsonl";
 const BATCH_TOKENS: usize = 2_048;
@@ -113,6 +115,17 @@ fn positive_override(name: &str, value: &str) -> DynResult<usize> {
     }
 }
 
+/// Text-valued env override for IEC byte budgets (`64GiB`) and other raw
+/// settings values that are passed through verbatim after presence check.
+fn text_env_override(name: &str) -> DynResult<Option<String>> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value.trim().to_string())),
+        Ok(_) => Err(format!("{name} must not be empty").into()),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(format!("{name}: {error}").into()),
+    }
+}
+
 fn positive_env_override(name: &str) -> DynResult<Option<usize>> {
     match std::env::var(name) {
         Ok(value) => positive_override(name, &value).map(Some),
@@ -147,10 +160,38 @@ fn skippy_diagnostic_arguments(generation_concurrency: Option<usize>) -> Vec<Str
     arguments
 }
 
+/// Prefix-cache budget overrides for the comparison skippy arm.
+/// `AGENTX_SKIPPY_PREFIX_CACHE_BUDGET` sets the exact-state retention cap
+/// (`--prefix-cache-budget`, the byte limit whose auto default is estimated
+/// from attention KV metadata); `AGENTX_SKIPPY_PREFIX_CACHE_RAM` sets the
+/// resident-checkpoint RAM budget (`--prefix-cache-ram`). They are distinct
+/// budgets, and A/B experiments must target the one they mean to move.
+fn skippy_prefix_cache_budget_arguments(
+    budget: Option<String>,
+    ram: Option<String>,
+) -> Vec<String> {
+    let mut arguments = Vec::new();
+    if let Some(budget) = budget {
+        arguments.extend(["--prefix-cache-budget".to_string(), budget]);
+    }
+    if let Some(ram) = ram {
+        arguments.extend(["--prefix-cache-ram".to_string(), ram]);
+    }
+    arguments
+}
+
+fn skippy_prefix_cache_budget_override() -> DynResult<Vec<String>> {
+    Ok(skippy_prefix_cache_budget_arguments(
+        text_env_override(SKIPPY_PREFIX_CACHE_BUDGET_ENV)?,
+        text_env_override(SKIPPY_PREFIX_CACHE_RAM_ENV)?,
+    ))
+}
+
 fn skippy_overrides() -> DynResult<Vec<String>> {
     let mut arguments =
         skippy_diagnostic_arguments(positive_env_override(SKIPPY_GENERATION_CONCURRENCY_ENV)?);
     arguments.extend(skippy_kv_layout_override()?);
+    arguments.extend(skippy_prefix_cache_budget_override()?);
     Ok(arguments)
 }
 
@@ -925,6 +966,30 @@ mod tests {
                 process::Value::Public(argument) if argument == "--ctx-size")));
             }
         }
+    }
+
+    #[test]
+    fn skippy_prefix_cache_budget_overrides_target_distinct_budgets() {
+        // The exact-state retention cap and the resident-checkpoint RAM budget
+        // are different knobs; each env override must reach its own flag.
+        assert_eq!(
+            skippy_prefix_cache_budget_arguments(Some("64GiB".into()), None),
+            ["--prefix-cache-budget".to_string(), "64GiB".to_string()]
+        );
+        assert_eq!(
+            skippy_prefix_cache_budget_arguments(None, Some("8GiB".into())),
+            ["--prefix-cache-ram".to_string(), "8GiB".to_string()]
+        );
+        assert_eq!(
+            skippy_prefix_cache_budget_arguments(Some("unbounded".into()), Some("off".into())),
+            [
+                "--prefix-cache-budget".to_string(),
+                "unbounded".to_string(),
+                "--prefix-cache-ram".to_string(),
+                "off".to_string()
+            ]
+        );
+        assert!(skippy_prefix_cache_budget_arguments(None, None).is_empty());
     }
 
     #[test]
