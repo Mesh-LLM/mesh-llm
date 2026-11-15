@@ -398,6 +398,7 @@ fn tensor_split_schema() -> ConfigValueSchema {
 /// This list should be updated during the release process.
 fn known_mesh_llm_versions() -> &'static [&'static str] {
     &[
+        "0.80.0",
         "0.79.0",
         "0.78.0",
         "0.77.0",
