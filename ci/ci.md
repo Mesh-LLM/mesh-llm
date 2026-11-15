@@ -1520,9 +1520,14 @@ same daemon's counters.
 Both product steps set `LINK=--time-trace` and retain LLVM's per-output
 `.time-trace.json` files in the timing artifact. These measure linker work
 separately without adding Rust codegen flags or success-output warnings.
-Both host compilations set `SOURCE_DATE_EPOCH=0` so LLVM emits stable PE
-timestamps. sccache hashes complete proc-macro DLLs when caching consumers;
-the host archive prefix includes `pe0` to exclude older timestamped DLLs.
+Both host compilations set `SOURCE_DATE_EPOCH=0` and opt into the Rust-owned
+native Windows linker adapter. Only matching non-primary proc-macro libraries
+omit PDB generation: the PDB command records a random rustc export-file path,
+whose hash reaches the DLL's GUID and downstream sccache keys. Shipping targets
+and other links keep their flags and release profile. The existing restored
+product-source automation runs the adapter; it has no compiler fallback.
+The host archive prefix binds the adapter and workflow sources to exclude older
+nondeterministic build-tool DLLs.
 This candidate remains unqualified. Its per-run archive suffix prevents target
 archive restores, and retained serde_derive DLLs support byte-level comparison;
 these two measurement controls must be removed from a shipping change.
@@ -2386,7 +2391,7 @@ consumed by the 27 existing audit steps, which retain their published immutable
 pin. Switching those steps requires a reviewed published replacement action.
 No hosted execution or cross-platform native qualification is recorded here.
 
-The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
+The existing Windows unit platform row prepares the repository automation tool and selects 23 exact native xtask binary methods: three build/path, one linker-metadata, seven installer-helper, eight whole-installer-consumer, two private-state handle-lock, one directory-DACL and one POSIX-path test. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of 23. It prebuilds the real xtask executable and inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This adds no runner or planner row and does not replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
 Windows row selection is conditional. This owning workflow edit maps through ci-control to all platform rows, and main/manual-full profiles select all rows. Standalone future changes under tools/xtask, just, Justfile or install.ps1 are not guaranteed to select Windows unit under the protected ownership catalog. The gate qualifies only a planner-selected Windows unit row; an unselected row records no native evidence. This proposal changes no protected catalog and adds no routing bypass.
 

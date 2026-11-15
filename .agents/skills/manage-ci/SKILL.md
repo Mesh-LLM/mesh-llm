@@ -642,13 +642,20 @@ checked-in expiry are the maintainer-controlled approval boundary.
   The two product steps also set `LINK=--time-trace` so LLVM writes one trace
   beside each actual linker output. Upload those traces with Cargo timings;
   they measure linker work separately without changing Rust codegen flags.
-- Windows host compilation fixes `SOURCE_DATE_EPOCH=0` so LLVM emits stable
-  PE timestamps. Proc-macro DLLs are rebuilt rather than cached by sccache;
-  their complete bytes contribute to downstream Rust cache keys. Keep the
-  host archive compatibility prefix at `pe0` so timestamped DLLs from older
-  Cargo target archives cannot be restored into this cohort.
-  This candidate is unqualified. Its per-run archive suffix and retained
+- The Windows host metadata candidate sets `SOURCE_DATE_EPOCH=0` and opts into
+  the Rust-owned `native windows-linker` adapter through the existing linker
+  driver. Only matching non-primary proc-macro libraries receive `/DEBUG:NONE`:
+  their otherwise unused PDB records a random rustc temporary export-file path
+  in the DLL's GUID. Shipping Skippy, Mesh, runtime DLLs and build scripts retain
+  their existing link flags, optimization, panic behavior and debug settings.
+  Require restored product-source automation; never compile a helper from a
+  linker invocation. Its archive prefix binds the adapter and workflow sources
+  so older nondeterministic build-tool DLLs cannot be restored.
+  This candidate is unqualified. The per-run archive suffix and retained
   serde_derive DLLs are measurement controls, not shipping requirements.
+  The existing Windows unit row selects 23 exact nonignored native methods,
+  including the CMD/adapter contract for scope, unchanged response files,
+  inherited streams, native exit codes and missing-helper refusal.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad

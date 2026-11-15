@@ -1,4 +1,6 @@
 //! Execute the maintained PowerShell functions on native Windows, never model their path semantics.
+#[path = "windows_linker_native.rs"]
+mod linker_metadata;
 use super::{function, script};
 use crate::process::{
     self, Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value,
