@@ -292,38 +292,19 @@ Because the repository squash-merges, the PR title becomes the commit subject
 on `main`. Give the PR the conventional title, not just the branch commits.
 
 The hook is opt-in per clone, so CI is what actually enforces this. The Quality
-lane rejects a pull request whose title is not conventional, and rejects any
-branch commit carrying a denied attribution trailer, because the squash body
-aggregates those messages. Branch commit *subjects* are not judged in CI --
-messy work-in-progress subjects are fine, since only the title survives the
-squash.
+lane rejects a pull request whose title is not conventional. Branch commit
+*subjects* are not judged in CI -- messy work-in-progress subjects are fine,
+since only the title survives the squash.
 
 See [`.agents/skills/release-notes/SKILL.md`](.agents/skills/release-notes/SKILL.md)
 for the full pipeline.
 
 ### Attribution trailers
 
-Agent, bot, and relay attribution trailers are not kept in this history. The
-hook rejects a commit whose trailers name an agent or bot, use an agent
-attribution address such as `noreply@anthropic.com`, sit at a relay identity
-domain such as `meshllm.communities.buzz.xyz`, or belong to a `[bot]` account:
-
-```
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>          # rejected
-Co-authored-by: scama <a1860575018c46@meshllm.communities.buzz.xyz>  # rejected
-Co-authored-by: coderabbitai[bot] <...@users.noreply.github.com>     # rejected
-Co-authored-by: Real Person <real@example.com>                  # kept
-```
-
-Trailers naming a human contributor are untouched. Extend the lists in
-`tools/xtask/src/repository/conventional_commit/trailers.rs` when a new agent identity shows up.
-
-A squash merge builds the commit on `main` from the pull request title and
-body, both of which CI validates, so a trailer in a branch commit cannot reach
-`main` on its own. Keep them out of branch commits anyway: branch history is
-still read during review, and that protection is a repository setting rather
-than a law of nature. See the CI notes in
-[`.agents/skills/manage-ci/references/current-inventory.md`](.agents/skills/manage-ci/references/current-inventory.md).
+The hook and CI do not blacklist attribution identities. Human, agent, bot and
+relay-address trailers are accepted; Conventional Commit subject validation is
+unchanged. Credit contributions accurately. A squash merge takes its title and
+body from the pull request; review those before merging.
 
 
 ## CI / GitHub Actions

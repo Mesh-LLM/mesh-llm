@@ -715,6 +715,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Workflow definition and dependencies
 
+- Commit convention checks validate Conventional Commit subjects only. Do not
+  blacklist contributor names, email addresses, bot accounts or relay domains
+  in attribution trailers. The PR gate checks the title without fetching branch
+  commit messages or scanning the PR body for attribution.
+
 - Declare least-privilege `permissions` explicitly. Default to
   `contents: read`; grant write or OIDC permissions only to the owning job.
 - Set `persist-credentials: false` on checkout unless a narrowly scoped job

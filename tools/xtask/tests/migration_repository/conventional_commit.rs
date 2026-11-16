@@ -12,9 +12,6 @@ The type decides which release-notes section the change lands in.\n\
 Add a 'Release-Notes: <Section>' trailer to override, or\n\
 'BREAKING CHANGE: <what>' for a breaking change.\n\
 \nCatch this at commit time instead of in CI:  just hooks-install\n\
-Agent, bot, and relay attribution trailers are not kept in this\n\
-history. GitHub re-adds them when squashing a PR whose commits carry\n\
-them, so remove them from the branch commits.\n\
 Bypass once with --no-verify if you know the commit is not a release entry.\n";
 
 fn rejected(subject: &str, problems: &[&str]) -> String {
@@ -109,47 +106,30 @@ fn migration_repository_commits_reports_every_subject_problem() -> TestResult {
     Ok(())
 }
 
-const DENIED: &str = "fix: ok\n# comment\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nSigned-off-by: Bot [bot] <x@y.z>\nReviewed-by: Sol Luna <sol@meshllm.communities.buzz.xyz>\nTested-by: Solomon <real@example.com>\nHelped-by: x <dependabot[bot]@users.noreply.github.com>\n";
-
-fn denied_problems() -> [&'static str; 4] {
-    [
-        "drop 'Co-Authored-By: Claude <noreply@anthropic.com>': 'noreply@anthropic.com' is an agent attribution address",
-        "drop 'Signed-off-by: Bot [bot] <x@y.z>': 'Bot [bot]' is a bot account",
-        "drop 'Reviewed-by: Sol Luna <sol@meshllm.communities.buzz.xyz>': 'meshllm.communities.buzz.xyz' is a relay identity domain",
-        "drop 'Helped-by: x <dependabot[bot]@users.noreply.github.com>': 'dependabot[bot]@users.noreply.github.com' is a bot account",
-    ]
-}
+const ATTRIBUTED: &str = "fix: ok\n# comment\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nSigned-off-by: Bot [bot] <x@y.z>\nReviewed-by: Sol Luna <sol@meshllm.communities.buzz.xyz>\nTested-by: Solomon <real@example.com>\nHelped-by: x <dependabot[bot]@users.noreply.github.com>\n";
 
 #[test]
-fn migration_repository_commits_file_rejects_denied_trailers() -> TestResult {
-    // Given: a message file with comments and agent/bot/relay trailers.
+fn migration_repository_commits_accepts_attribution_in_files_and_messages() -> TestResult {
     let scratch = Scratch::new("commits-file")?;
-    scratch.write("msg.txt", DENIED)?;
-    // When: the file and the trailers-only mode run.
-    let full = check(scratch.path(), &["msg.txt"])?;
-    let trailers = check(scratch.path(), &["--trailers-only", "msg.txt"])?;
-    // Then: both reject exactly the denied identities; Solomon is allowed.
-    let expected = rejected("fix: ok", &denied_problems());
-    assert_output(&full, 1, "", &expected);
-    assert_output(&trailers, 1, "", &expected);
-    Ok(())
-}
-
-#[test]
-fn migration_repository_commits_trailers_only_ignores_subject() -> TestResult {
-    let scratch = Scratch::new("commits-trailers-only")?;
-    scratch.write(
-        "clean.txt",
-        "Some messy WIP subject\n\nCo-authored-by: Real <real@example.com>\n",
-    )?;
-    let output = check(scratch.path(), &["--trailers-only", "clean.txt"])?;
-    assert_output(&output, 0, "", "");
+    scratch.write("msg.txt", ATTRIBUTED)?;
+    for args in [&["msg.txt"][..], &["--message", ATTRIBUTED][..]] {
+        let output = check(scratch.path(), args)?;
+        assert_output(&output, 0, "", "");
+    }
+    // Attribution is accepted, but it cannot excuse an invalid subject.
+    let invalid = ATTRIBUTED.replacen("fix: ok", "Bad subject", 1);
+    assert_eq!(
+        check(scratch.path(), &["--message", &invalid])?
+            .status
+            .code(),
+        Some(1)
+    );
     Ok(())
 }
 
 #[test]
 fn migration_repository_commits_range_reports_each_bad_commit() -> TestResult {
-    // Given: history with a valid commit, a bad subject and a bad trailer.
+    // Given: history with a valid commit, a bad subject and accepted attribution.
     let scratch = Scratch::new("commits-range")?;
     let repo = scratch.path().join("repo");
     git_init(&repo)?;
@@ -167,11 +147,6 @@ fn migration_repository_commits_range_reports_each_bad_commit() -> TestResult {
     let received = "  received: Bad subject".to_owned();
     let types = format!("  types:    {TYPES}");
     let expected = rejected(
-        "fix: fine",
-        &[
-            "drop 'Co-authored-by: Codex <codex@example.com>': 'Codex' names an agent or bot (codex)",
-        ],
-    ) + &rejected(
         "Bad subject",
         &[
             "subject is not Conventional Commits v1.0.0",

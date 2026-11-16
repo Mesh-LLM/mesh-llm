@@ -3,7 +3,6 @@
 //! `--message`, or every non-merge commit in a `--range`.
 
 mod subject;
-mod trailers;
 
 use crate::DynResult;
 use crate::repository::check_args::{Grammar, ParsedArgs};
@@ -13,9 +12,9 @@ use std::path::Path;
 use std::process::Command;
 
 const GRAMMAR: Grammar = Grammar {
-    usage: "cargo xtool repository conventional-commits [--message MESSAGE] [--range RANGE] [--trailers-only] [file]",
+    usage: "cargo xtool repository conventional-commits [--message MESSAGE] [--range RANGE] [file]",
     values: &["--message", "--range"],
-    flags: &["--trailers-only"],
+    flags: &[],
 };
 
 const GUIDANCE: &str = "\nConventional Commits: https://www.conventionalcommits.org/en/v1.0.0/\n\
@@ -23,9 +22,6 @@ The type decides which release-notes section the change lands in.\n\
 Add a 'Release-Notes: <Section>' trailer to override, or\n\
 'BREAKING CHANGE: <what>' for a breaking change.\n\
 \nCatch this at commit time instead of in CI:  just hooks-install\n\
-Agent, bot, and relay attribution trailers are not kept in this\n\
-history. GitHub re-adds them when squashing a PR whose commits carry\n\
-them, so remove them from the branch commits.\n\
 Bypass once with --no-verify if you know the commit is not a release entry.\n";
 
 enum Source<'a> {
@@ -62,14 +58,13 @@ fn source(parsed: &ParsedArgs) -> Result<Source<'_>, CheckReport> {
 }
 
 fn check(cwd: &Path, parsed: &ParsedArgs) -> Result<CheckReport, CheckReport> {
-    let trailers_only = parsed.flag("--trailers-only");
     let lines = match source(parsed)? {
-        Source::Range(range) => return check_range(cwd, range, trailers_only),
+        Source::Range(range) => return check_range(cwd, range),
         Source::Message(message) if strip(message).is_empty() => Vec::new(),
         Source::Message(message) => splitlines(message).into_iter().map(str::to_owned).collect(),
         Source::File(file) => read_message_file(&cwd.join(file))?,
     };
-    let stderr = review(&lines, trailers_only);
+    let stderr = review(&lines);
     Ok(finish(stderr))
 }
 
@@ -91,16 +86,9 @@ fn read_message_file(path: &Path) -> Result<Vec<String>, CheckReport> {
 }
 
 /// The rejection report for one message, or an empty string when accepted.
-fn review(lines: &[String], trailers_only: bool) -> String {
+fn review(lines: &[String]) -> String {
     let subject = lines.first().map_or("", String::as_str);
-    let body = lines.iter().skip(1).map(String::as_str);
-    let problems = if trailers_only {
-        trailers::check_trailers(lines.iter().map(String::as_str))
-    } else {
-        let mut problems = subject::check_subject(subject);
-        problems.extend(trailers::check_trailers(body));
-        problems
-    };
+    let problems = subject::check_subject(subject);
     if problems.is_empty() {
         return String::new();
     }
@@ -122,7 +110,7 @@ fn finish(stderr: String) -> CheckReport {
 /// Every record from `git log --no-merges`, newest first; blank lines are
 /// dropped before the first line is taken as the subject, and an empty
 /// message is rejected for its empty subject.
-fn check_range(cwd: &Path, range: &str, trailers_only: bool) -> Result<CheckReport, CheckReport> {
+fn check_range(cwd: &Path, range: &str) -> Result<CheckReport, CheckReport> {
     let output = Command::new("git")
         .current_dir(cwd)
         .args([
@@ -162,7 +150,7 @@ fn check_range(cwd: &Path, range: &str, trailers_only: bool) -> Result<CheckRepo
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
         })
-        .map(|lines| review(&lines, trailers_only))
+        .map(|lines| review(&lines))
         .collect::<String>();
     Ok(finish(stderr))
 }

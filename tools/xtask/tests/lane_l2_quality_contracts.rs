@@ -22,9 +22,19 @@ fn commit_validation_and_publication_keep_their_trust_and_approval_boundaries() 
     assert!(job.contains("ref: ${{ github.event.repository.default_branch }}"));
     assert!(job.contains("persist-credentials: false"));
     assert!(job.contains("PR_TITLE: ${{ github.event.pull_request.title }}"));
-    assert!(job.contains("PR_BODY: ${{ github.event.pull_request.body }}"));
     assert!(job.contains("repository conventional-commits --message \"$PR_TITLE\""));
-    assert!(job.contains("--trailers-only"));
+    for removed in [
+        "--trailers-only",
+        "PR_BODY:",
+        "PR_NUMBER:",
+        "GH_TOKEN:",
+        "gh api",
+    ] {
+        assert!(
+            !job.contains(removed),
+            "retired attribution scan: {removed}"
+        );
+    }
     let script = fs::read_to_string(root.join("scripts/release-notes-generate.sh"))?;
     let approval = script.find("RELEASE_NOTES_APPROVED").ok_or("approval")?;
     let publication = script.find("gh release edit").ok_or("publication")?;

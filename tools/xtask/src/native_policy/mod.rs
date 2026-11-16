@@ -12,6 +12,7 @@ mod forbidden;
 mod glibc;
 mod host_dependencies;
 mod imports;
+mod library_aliases;
 mod linux_deps;
 mod linux_deps_collect;
 mod linux_deps_elf;
@@ -57,6 +58,7 @@ pub(crate) enum NativeCommand {
     VerifyRuntimePackage,
     PackageSourceVersion,
     RuntimeManifestWrite,
+    DeduplicateLinuxLibraries,
 }
 
 impl NativeCommand {
@@ -69,6 +71,7 @@ impl NativeCommand {
             "release-matrix" => Some(Self::ReleaseMatrix),
             "verify-runtime-package" => Some(Self::VerifyRuntimePackage),
             "package-source-version" => Some(Self::PackageSourceVersion),
+            "deduplicate-linux-libraries" => Some(Self::DeduplicateLinuxLibraries),
             "runtime-manifest-write" => Some(Self::RuntimeManifestWrite),
             _ => None,
         }
@@ -83,6 +86,7 @@ pub(crate) fn run(
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
     let report = match command {
+        NativeCommand::DeduplicateLinuxLibraries => return library_aliases::run(args),
         NativeCommand::RuntimeManifestWrite => return runtime_manifest_writer::run(args),
         NativeCommand::PackageSourceVersion => package_version_command::run(args),
         NativeCommand::SelectRuntime => select_runtime::run(args),

@@ -975,6 +975,9 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 The local `scripts/hooks/commit-msg` hook now invokes the Rust
 `repository conventional-commits` command through the repository Cargo alias.
+It validates subjects only, without an attribution identity blacklist. The PR
+commit-convention job checks the title and does not fetch branch messages or
+scan the PR body for attribution. Runner placement and lane topology are unchanged.
 The workflow commit check, planner and five lane summaries use Rust owners
 through `prepare-ci-controller`. Lane summaries use the protected revision frozen
 by `authority_source`, keeping validation stable across default-branch updates
