@@ -37,7 +37,17 @@ Clients must omit those parameters. Anthropic pagination is described below.
 The OpenAI response contains standard model fields:
 
 ```json
-{"object":"list","data":[{"id":"llm-model","object":"model","created":0,"owned_by":"mesh-llm"}]}
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "llm-model",
+      "object": "model",
+      "created": 0,
+      "owned_by": "mesh-llm"
+    }
+  ]
+}
 ```
 
 `created: 0` explicitly represents an unknown release timestamp. Get an exact
@@ -52,7 +62,15 @@ curl -s http://localhost:9337/v1/models -H 'anthropic-version: 2023-06-01'
 
 ```json
 {
-  "data": [{"id":"llm-model","type":"model","display_name":"llm-model","created_at":"1970-01-01T00:00:00Z","lifecycle":"active"}],
+  "data": [
+    {
+      "id": "llm-model",
+      "type": "model",
+      "display_name": "llm-model",
+      "created_at": "1970-01-01T00:00:00Z",
+      "lifecycle": "active"
+    }
+  ],
   "has_more": false,
   "first_id": "llm-model",
   "last_id": "llm-model"
@@ -171,8 +189,29 @@ configuration, so a cleared `top_logprobs` is reported as the default `0`.
 These bounds apply only to Responses requests and do not narrow ordinary Chat
 Completions controls.
 
-`text` and `reasoning` must each be `null` or objects. Existing `text.format`
-support is unchanged, while non-null `text.verbosity` is unsupported.
+`text` and `reasoning` must each be `null` or objects. Non-null `text.verbosity`
+is unsupported. `text.format` supports explicit `text`, `json_object`, and a
+conservative `json_schema` subset on upgraded Skippy workers. Explicit formats
+suppress deployment grammar defaults; supplying both `text.format` and the Chat
+extension `response_format` is rejected.
+
+Omitted schema defaults to `{}` (unconstrained JSON), and omitted schema name
+uses `response`. Supplied names use 1–64 ASCII letters, digits, underscores or
+dashes. Empty or annotation-only schemas also allow any JSON value. Otherwise,
+the schema subset requires an explicit single type at every node. Objects need
+`properties` and `additionalProperties: false`; optional `required` entries must
+be unique declared property names. Arrays need one object-valued `items` schema.
+Scalar types are `string`, `number`, `integer`, `boolean`, and `null`; scalar
+`const` or nonempty `enum` values must match the declared type (integer literals
+must use JSON integer notation, not `7.0`). String `title`
+and `description` annotations are accepted. Other keywords, references,
+compositions, type unions, patterns, formats, and numeric/length/count bounds
+are rejected with a parameterized 400 rather than silently ignored, including
+when `strict` is false. Schemas are limited to 1 MiB serialized, 32 nesting
+levels, 4,096 schema nodes plus enum entries, and 8 KiB per string literal.
+`json_object` independently permits arbitrary JSON objects. Legacy native
+`json_schema` extensions retain their previous behavior and are not covered by
+this standard-format enforcement guarantee.
 `reasoning.effort` accepts `none`, `low`, `medium`, `high`, and `xhigh`, subject
 to support by the selected model. Non-null `reasoning.summary` is explicitly
 unsupported because Mesh does not honor summary requests; omit it or use
@@ -207,7 +246,7 @@ function choice, and an `allowed_tools` subset:
 {
   "tool_choice": {
     "type": "allowed_tools",
-    "tools": [{"type": "function", "name": "get_weather"}],
+    "tools": [{ "type": "function", "name": "get_weather" }],
     "mode": "auto"
   }
 }

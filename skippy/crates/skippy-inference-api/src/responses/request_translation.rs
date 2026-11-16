@@ -208,9 +208,16 @@ pub(super) fn translate_openai_responses_input(
     if let Some(format) = object.get("text").and_then(|text| text.get("format"))
         && let Some(response_format) = chat_response_format(format)?
     {
-        object
-            .entry("response_format".to_string())
-            .or_insert(response_format);
+        if object
+            .get("response_format")
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err(InferenceError::invalid_request(
+                "text.format cannot be combined with response_format",
+            )
+            .with_param("text.format"));
+        }
+        object.insert("response_format".to_string(), response_format);
     }
     let mut wants_logprobs = object
         .get("top_logprobs")
@@ -297,16 +304,31 @@ fn chat_response_format(format: &Value) -> Result<Option<Value>, InferenceError>
         InferenceError::invalid_request(message.to_string()).with_param("text.format")
     };
     match format.get("type").and_then(Value::as_str) {
-        None | Some("text") => Ok(None),
+        None => Ok(None),
+        Some("text") => Ok(Some(serde_json::json!({"type": "text"}))),
         Some("json_object") => Ok(Some(serde_json::json!({"type": "json_object"}))),
         Some("json_schema") => {
-            let name = format
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid("json_schema format requires a name"))?;
+            let name = match format.get("name") {
+                None => "response",
+                Some(Value::String(name))
+                    if !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') =>
+                {
+                    name
+                }
+                _ => {
+                    return Err(invalid(
+                        "json_schema name must contain 1-64 letters, digits, underscores or dashes",
+                    ));
+                }
+            };
             let schema = format
                 .get("schema")
-                .ok_or_else(|| invalid("json_schema format requires a schema"))?;
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
             let mut json_schema = serde_json::json!({"name": name, "schema": schema});
             for key in ["description", "strict"] {
                 if let Some(value) = format.get(key) {

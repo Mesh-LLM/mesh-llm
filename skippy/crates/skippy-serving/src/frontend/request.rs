@@ -1,3 +1,5 @@
+mod structured_output;
+
 use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::EmbeddedReasoningBudget;
 use crate::frontend::EmbeddedReasoningEnabled;
@@ -740,7 +742,8 @@ fn apply_chat_only_request_defaults(
             request.extra.insert(name.to_string(), value);
         }
     }
-    if extra_value_is_omitted(&request.extra, "grammar")
+    if request.response_format.as_ref().is_none_or(Value::is_null)
+        && extra_value_is_omitted(&request.extra, "grammar")
         && extra_value_is_omitted(&request.extra, "json_schema")
         && let Some((name, value)) = [
             ("grammar", defaults.grammar.clone()),
@@ -1099,6 +1102,7 @@ pub(super) fn chat_template_options(
         request.reasoning_effort,
         &request.extra,
     )?;
+    let (grammar, json_schema) = structured_output::resolve(request)?;
     Ok(ChatTemplateOptions {
         add_assistant: request
             .extra
@@ -1115,8 +1119,8 @@ pub(super) fn chat_template_options(
         .map_err(|error| InferenceError::invalid_request(error.to_string()))?,
         chat_template: chat_template(request, defaults)?,
         use_jinja: optional_bool_extra(&request.extra, "jinja")?.unwrap_or(true),
-        grammar: structured_output_string(request, "grammar")?,
-        json_schema: structured_output_json(request, "json_schema")?,
+        grammar,
+        json_schema,
         skip_chat_parsing: optional_bool_extra(&request.extra, "skip_chat_parsing")?
             .unwrap_or(false),
     })
@@ -1378,46 +1382,6 @@ fn optional_bool_extra(
             value
                 .as_bool()
                 .ok_or_else(|| InferenceError::invalid_request(format!("{name} must be a boolean")))
-        })
-        .transpose()
-}
-
-fn structured_output_string(
-    request: &GenerationRequest,
-    name: &str,
-) -> InferenceResult<Option<String>> {
-    let value = bounded_optional_string_extra(&request.extra, name)?;
-    if value.is_some()
-        && request
-            .extra
-            .get("json_schema")
-            .is_some_and(|value| !value.is_null())
-    {
-        return Err(InferenceError::invalid_request(
-            "grammar and json_schema cannot both be set",
-        ));
-    }
-    if let Some(grammar) = value.as_deref() {
-        crate::grammar_bounds::check_grammar(grammar).map_err(InferenceError::invalid_request)?;
-    }
-    Ok(value)
-}
-
-fn structured_output_json(
-    request: &GenerationRequest,
-    name: &str,
-) -> InferenceResult<Option<String>> {
-    request
-        .extra
-        .get(name)
-        .filter(|value| !value.is_null())
-        .map(|value| {
-            if !value.is_object() {
-                return Err(InferenceError::invalid_request(
-                    "json_schema must be an object",
-                ));
-            }
-            serialize_bounded_native_parser_json("json_schema", value)
         })
         .transpose()
 }
