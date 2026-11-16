@@ -35,6 +35,13 @@ if ! command -v python3.12 >/dev/null; then
 fi
 command -v cargo >/dev/null || curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 command -v just >/dev/null || cargo install just --locked
+# Fresh machine: a cold sccache adds failure modes (CUDA cubin outputs are not
+# cacheable) with no cache benefit. Build with a sccache-free PATH.
+BUILD_PATH="$PATH"
+if command -v sccache >/dev/null 2>&1; then
+  SCC_DIR="$(dirname "$(command -v sccache)")"
+  BUILD_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$SCC_DIR$" | paste -sd: -)"
+fi
 
 # ---- product source at the pinned commit ----
 echo "== cloning $REPO_URL @ ${PRODUCT_COMMIT:0:12}"
@@ -45,10 +52,10 @@ UPSTREAM_PIN="$(tr -d '[:space:]' < skippy/llama_cpp/upstream.txt)"
 
 # ---- product build: native runtime + skippy CLI (owning recipes) ----
 echo "== building product runtime (backend=$BACKEND)"
-if ! just release-runtime-build "$BACKEND" > "$W/build-runtime.log" 2>&1; then
+if ! PATH="$BUILD_PATH" just release-runtime-build "$BACKEND" > "$W/build-runtime.log" 2>&1; then
   tail -5 "$W/build-runtime.log"; echo PRODUCT_BUILD_FAILED; exit 46
 fi
-if ! just skippy-cli-release-build > "$W/build-cli.log" 2>&1; then
+if ! PATH="$BUILD_PATH" just skippy-cli-release-build > "$W/build-cli.log" 2>&1; then
   tail -5 "$W/build-cli.log"; echo PRODUCT_BUILD_FAILED; exit 46
 fi
 RUNTIME_DIR="$(ls -d "$W/repo/dist/native-runtimes"/meshllm-native-runtime-* 2>/dev/null | head -1)"
@@ -63,8 +70,8 @@ CMAKE_FLAGS=(-DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release)
 if [ "$BACKEND" = "cuda" ]; then
   CMAKE_FLAGS+=(-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=121)
 fi
-cmake -B build -S . "${CMAKE_FLAGS[@]}" > "$W/baseline-cmake.log" 2>&1 || { tail -5 "$W/baseline-cmake.log"; echo BASELINE_BUILD_FAILED; exit 47; }
-cmake --build build --target llama-server -j "$THREADS" > "$W/baseline-build.log" 2>&1 || { tail -5 "$W/baseline-build.log"; echo BASELINE_BUILD_FAILED; exit 47; }
+PATH="$BUILD_PATH" cmake -B build -S . "${CMAKE_FLAGS[@]}" > "$W/baseline-cmake.log" 2>&1 || { tail -5 "$W/baseline-cmake.log"; echo BASELINE_BUILD_FAILED; exit 47; }
+PATH="$BUILD_PATH" cmake --build build --target llama-server -j "$THREADS" > "$W/baseline-build.log" 2>&1 || { tail -5 "$W/baseline-build.log"; echo BASELINE_BUILD_FAILED; exit 47; }
 mkdir -p "$W/repo/.deps/agentx-llama-build/bin" "$W/repo/.deps/agentx-llama-build/lib"
 cp build/bin/llama-server "$W/repo/.deps/agentx-llama-build/bin/"
 [ -d build/lib ] && cp build/lib/*.so* "$W/repo/.deps/agentx-llama-build/lib/" 2>/dev/null || true
