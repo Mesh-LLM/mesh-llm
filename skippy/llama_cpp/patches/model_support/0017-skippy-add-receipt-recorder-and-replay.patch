@@ -1,4 +1,4 @@
-From ce3482bd1db2205be2a81b7d7fa2ec74a811d7f9 Mon Sep 17 00:00:00 2001
+From 07c0692bb5908528284f13b42ea0382ef133c5ad Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 02:04:42 -0500
 Subject: [PATCH] skippy: add receipt recorder and replay
@@ -77,13 +77,10 @@ storing every matmul column. Replaces skippy_model_set_receipt_tap and
 the serving context's eval-callback hooks it needed.
 ABI 0.1.78 -> 0.1.91.
 ---
- ggml/include/ggml.h                    |  10 +
- ggml/src/ggml-cpu/ops.cpp              |  10 +-
  ggml/src/ggml-cuda/ggml-cuda.cu        |   4 +
  ggml/src/ggml-cuda/receipt-digest.cu   | 353 +++++++++
  ggml/src/ggml-cuda/receipt-digest.cuh  |  46 ++
  ggml/src/ggml-metal/ggml-metal.cpp     |   8 +
- ggml/src/ggml.c                        |  15 +
  include/skippy.h                       |   1 +
  include/skippy/common.h                |   2 +-
  include/skippy/receipts.h              | 719 ++++++++++++++++++
@@ -105,7 +102,7 @@ ABI 0.1.78 -> 0.1.91.
  src/skippy/receipts_draw.cpp           | 172 +++++
  src/skippy/receipts_draw.h             |  33 +
  src/skippy/receipts_glue.cpp           | 406 ++++++++++
- src/skippy/receipts_graph.cpp          | 812 ++++++++++++++++++++
+ src/skippy/receipts_graph.cpp          | 811 ++++++++++++++++++++
  src/skippy/receipts_internal.h         | 407 ++++++++++
  src/skippy/receipts_layers.cpp         | 610 +++++++++++++++
  src/skippy/receipts_layers.h           | 162 ++++
@@ -127,7 +124,7 @@ ABI 0.1.78 -> 0.1.91.
  tests/test-skippy-kv-page-export.cpp   |  67 ++
  tests/test-skippy-receipt-classify.cpp | 532 +++++++++++++
  tests/test-skippy-receipt-draw.cpp     | 137 ++++
- 50 files changed, 8319 insertions(+), 5 deletions(-)
+ 47 files changed, 8286 insertions(+), 2 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/receipt-digest.cu
  create mode 100644 ggml/src/ggml-cuda/receipt-digest.cuh
  create mode 100644 include/skippy/receipts.h
@@ -156,82 +153,19 @@ ABI 0.1.78 -> 0.1.91.
  create mode 100644 tests/test-skippy-receipt-classify.cpp
  create mode 100644 tests/test-skippy-receipt-draw.cpp
 
-diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
-index 973aea25b..7d99d6785 100644
---- a/ggml/include/ggml.h
-+++ b/ggml/include/ggml.h
-@@ -2550,6 +2550,16 @@ extern "C" {
-             struct ggml_tensor * a,
-             int32_t              n_kv_max);
- 
-+    // Ask the op to sum the values of an F16 V in F32. GGML_PREC_F32 is set on
-+    // every attention op and the CPU kernel does not read it for V, so a
-+    // caller that needs the exact sum asks here. Off by default.
-+    GGML_API void ggml_flash_attn_ext_set_f32_value_sum(
-+            struct ggml_tensor * a,
-+            bool                 f32_value_sum);
-+
-+    GGML_API bool ggml_flash_attn_ext_get_f32_value_sum(
-+            const struct ggml_tensor * a);
-+
-     GGML_API void ggml_flash_attn_ext_add_sinks(
-             struct ggml_tensor * a,
-             struct ggml_tensor * sinks);
-diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
-index 1884600e6..b0338bf62 100644
---- a/ggml/src/ggml-cpu/ops.cpp
-+++ b/ggml/src/ggml-cpu/ops.cpp
-@@ -8895,6 +8895,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
-     GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
-     GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
- 
-+    // an F16 V is summed in F16 unless the node asks for an F32 value sum: the
-+    // F16 sum of a long context drifts from the exact one by percents
-+    const bool acc_f16 = v->type == GGML_TYPE_F16 && !ggml_flash_attn_ext_get_f32_value_sum(dst);
-+
-     int ith = params->ith;
- 
-     for (int ir = ir0; ir < ir1; ++ir) {
-@@ -8914,7 +8918,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
-         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
-         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
- 
--        if (v->type == GGML_TYPE_F16) {
-+        if (acc_f16) {
-             memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
-         } else {
-             memset(VKQ32, 0, DV*sizeof(float));
-@@ -8970,7 +8974,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
- 
-             const char * v_data = ((const char *) v->data + (ik1*nbv1 + iv2*nbv2 + iv3*nbv3));
- 
--            if (v->type == GGML_TYPE_F16) {
-+            if (acc_f16) {
-                 if (s > M) {
-                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                     M = s;
-@@ -9011,7 +9015,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
-             S = S*ms + vs; // scale and increment sum with partial sum
-         }
- 
--        if (v->type == GGML_TYPE_F16) {
-+        if (acc_f16) {
-             for (int64_t d = 0; d < DV; ++d) {
-                 VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
-             }
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 258fa4bf4..ad9a8e42f 100644
+index 664a391af..0aef1371c 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -28,6 +28,7 @@
+@@ -29,6 +29,7 @@
  #include "ggml-cuda/diagmask.cuh"
  #include "ggml-cuda/diag.cuh"
  #include "ggml-cuda/diffusion-sampling.cuh"
 +#include "ggml-cuda/receipt-digest.cuh"
  #include "ggml-cuda/fattn.cuh"
+ #include "ggml-cuda/fp8.cuh"
  #include "ggml-cuda/fwht.cuh"
- #include "ggml-cuda/getrows.cuh"
-@@ -6900,6 +6901,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -7214,6 +7215,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_cuda_diffusion_sample") == 0) {
          return (void *)ggml_cuda_diffusion_sample;
      }
@@ -672,32 +606,6 @@ index 528853974..b61a1c719 100644
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
-diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index c6a080d22..532f7231d 100644
---- a/ggml/src/ggml.c
-+++ b/ggml/src/ggml.c
-@@ -5682,6 +5682,21 @@ void ggml_flash_attn_ext_set_n_kv_max(
-     ggml_set_op_params_i32(a, 4, n_kv_max);
- }
- 
-+void ggml_flash_attn_ext_set_f32_value_sum(
-+        struct ggml_tensor * a,
-+        bool                 f32_value_sum) {
-+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-+
-+    ggml_set_op_params_i32(a, 5, f32_value_sum ? 1 : 0);
-+}
-+
-+bool ggml_flash_attn_ext_get_f32_value_sum(
-+        const struct ggml_tensor * a) {
-+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-+
-+    return ggml_get_op_params_i32(a, 5) != 0;
-+}
-+
- void ggml_flash_attn_ext_add_sinks(
-         struct ggml_tensor * a,
-         struct ggml_tensor * sinks) {
 diff --git a/include/skippy.h b/include/skippy.h
 index 48e0be2cf..8df2bc6bd 100644
 --- a/include/skippy.h
@@ -1466,7 +1374,7 @@ index c1a755c4c..2ff44e01e 100644
  enum skippy_sampler_type {
      SKIPPY_SAMPLER_PENALTIES = 1,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d8e31aa55..1fae547bd 100644
+index 014788628..c36747b33 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -85,6 +85,18 @@ add_library(llama
@@ -1523,7 +1431,7 @@ index d8e31aa55..1fae547bd 100644
  
  # The Clef decision read renders the model's `systemone` chat template with
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index ba345d3d2..288edace3 100644
+index dff74dde9..da6afd2ea 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -17,6 +17,7 @@
@@ -1534,7 +1442,7 @@ index ba345d3d2..288edace3 100644
  
  #include <algorithm>
  #include <atomic>
-@@ -1478,6 +1479,21 @@ void llama_context::set_n_threads(int32_t n_threads, int32_t n_threads_batch) {
+@@ -1468,6 +1469,21 @@ void llama_context::set_n_threads(int32_t n_threads, int32_t n_threads_batch) {
      cparams.n_threads_batch = n_threads_batch;
  }
  
@@ -1556,7 +1464,7 @@ index ba345d3d2..288edace3 100644
  void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data) {
      LLAMA_LOG_DEBUG("%s: call\n", __func__);
  
-@@ -1993,6 +2009,26 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1983,6 +1999,26 @@ llm_graph_result * llama_context::process_ubatch(
              return nullptr;
          }
  
@@ -1583,7 +1491,7 @@ index ba345d3d2..288edace3 100644
          if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
              LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
              ret = GGML_STATUS_ALLOC_FAILED;
-@@ -2012,6 +2048,10 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -2002,6 +2038,10 @@ llm_graph_result * llama_context::process_ubatch(
          //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
      }
  
@@ -1594,7 +1502,7 @@ index ba345d3d2..288edace3 100644
      const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
-@@ -2019,6 +2059,10 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -2009,6 +2049,10 @@ llm_graph_result * llama_context::process_ubatch(
          return nullptr;
      }
  
@@ -1605,7 +1513,7 @@ index ba345d3d2..288edace3 100644
      ret = GGML_STATUS_SUCCESS;
  
      return res;
-@@ -2332,6 +2376,10 @@ int llama_context::decode(
+@@ -2322,6 +2366,10 @@ int llama_context::decode(
          return -1;
      }
  
@@ -1616,7 +1524,7 @@ index ba345d3d2..288edace3 100644
      const auto & vocab   = model.vocab;
      const auto & hparams = model.hparams;
  
-@@ -3341,6 +3389,10 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -3325,6 +3373,10 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
      res->reset();
  
      auto * gf = model.build_graph(gparams);
@@ -1628,7 +1536,7 @@ index ba345d3d2..288edace3 100644
      if ((cache_capabilities & skippy_cache_admitted_capabilities) != skippy_cache_admitted_capabilities) {
          LLAMA_LOG_ERROR("%s: reserved graph state exceeds loaded cache admission\n", __func__);
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 50e39c829..6e648a638 100644
+index d699a1088..1f1798231 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -50,6 +50,7 @@ llama_context * llama_init_from_model_with_graph_inputs(
@@ -1639,7 +1547,7 @@ index 50e39c829..6e648a638 100644
  
  // stores copy of the memory in device buffer. used for fast state save/load
  struct llama_memory_buffer {
-@@ -153,6 +154,9 @@ struct llama_context {
+@@ -150,6 +151,9 @@ struct llama_context {
  
      void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
  
@@ -1649,7 +1557,7 @@ index 50e39c829..6e648a638 100644
      void set_embeddings (bool value);
      void set_embeddings_nextn(bool value, bool masked);
      void set_embeddings_layer_inp(uint32_t lid, bool enable);
-@@ -503,6 +507,8 @@ private:
+@@ -516,6 +520,8 @@ private:
      ggml_abort_callback abort_callback      = nullptr;
      void *              abort_callback_data = nullptr;
  
@@ -1659,10 +1567,10 @@ index 50e39c829..6e648a638 100644
  
      // pointers and buffer types used for the compute buffer of each backend
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 846cd0f82..e18c0227d 100644
+index 1358811e8..92a923b2e 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -1568,6 +1568,7 @@ void llm_graph_result::reset() {
+@@ -1573,6 +1573,7 @@ void llm_graph_result::reset() {
      fused_nodes.clear();
      hdmd_inputs.clear();
      block_boundaries.clear();
@@ -1670,7 +1578,7 @@ index 846cd0f82..e18c0227d 100644
      state_effects.clear();
      input_choices.clear();
      build_inputs = {};
-@@ -1747,6 +1748,26 @@ void llm_graph_result::add_skippy_input_choice(
+@@ -1743,6 +1744,26 @@ void llm_graph_result::add_skippy_input_choice(
      input_choices.push_back({alternatives, selected});
  }
  
@@ -1698,7 +1606,7 @@ index 846cd0f82..e18c0227d 100644
          ggml_cgraph * graph,
          std::vector<skippy_activation_port> imports,
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index baef5f19c..c47618d0a 100644
+index 0e4431fe6..bac3a981a 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -18,6 +18,7 @@
@@ -1709,7 +1617,7 @@ index baef5f19c..c47618d0a 100644
  
  struct ggml_cgraph;
  struct ggml_context;
-@@ -1077,6 +1078,15 @@ public:
+@@ -1075,6 +1076,15 @@ public:
              std::vector<skippy_activation_port> imports,
              std::vector<skippy_activation_port> exports,
              std::vector<skippy_state_effect> effects);
@@ -1725,7 +1633,7 @@ index baef5f19c..c47618d0a 100644
  
      ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
  
-@@ -1143,6 +1153,8 @@ public:
+@@ -1145,6 +1155,8 @@ public:
      std::vector<llm_graph_input_ptr> inputs;
      std::vector<llm_graph_fused_node> fused_nodes;
      std::vector<skippy_block_boundary> block_boundaries;
@@ -1735,10 +1643,10 @@ index baef5f19c..c47618d0a 100644
      std::vector<skippy_input_choice> input_choices;
  
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 8a655a138..74273f66b 100644
+index f0f2be6fc..6dab24185 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -452,6 +452,8 @@ void llama_kv_cache::init_rotation(const char * name_tag) {
+@@ -457,6 +457,8 @@ void llama_kv_cache::init_rotation(const char * name_tag) {
  }
  
  void llama_kv_cache::clear(bool data) {
@@ -1747,7 +1655,7 @@ index 8a655a138..74273f66b 100644
      for (uint32_t s = 0; s < n_stream; ++s) {
          v_cells[s].reset();
          v_heads[s] = 0;
-@@ -470,6 +472,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+@@ -475,6 +477,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
          return true;
      }
  
@@ -1756,7 +1664,7 @@ index 8a655a138..74273f66b 100644
      // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
      GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
  
-@@ -572,6 +576,8 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
+@@ -577,6 +581,8 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
          return;
      }
  
@@ -1765,7 +1673,7 @@ index 8a655a138..74273f66b 100644
      GGML_ASSERT(seq_id_src >= 0 && (size_t) seq_id_src < seq_to_stream.size());
      GGML_ASSERT(seq_id_dst >= 0 && (size_t) seq_id_dst < seq_to_stream.size());
  
-@@ -664,6 +670,8 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+@@ -669,6 +675,8 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
          return;
      }
  
@@ -1774,7 +1682,7 @@ index 8a655a138..74273f66b 100644
      GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
  
      auto & cells = v_cells[seq_to_stream[seq_id]];
-@@ -691,6 +699,8 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
+@@ -696,6 +704,8 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
          return;
      }
  
@@ -1783,7 +1691,7 @@ index 8a655a138..74273f66b 100644
      GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
      GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_add() is only supported for n_pos_per_embd() == 1");
  
-@@ -741,6 +751,8 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
+@@ -746,6 +756,8 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
          return;
      }
  
@@ -1792,7 +1700,7 @@ index 8a655a138..74273f66b 100644
      GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
      GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_div() is only supported for n_pos_per_embd() == 1");
  
-@@ -870,6 +882,7 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool
+@@ -875,6 +887,7 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool
              const auto moves = compact_cells();
              did_compact = !moves.empty();
              if (did_compact) {
@@ -1800,7 +1708,7 @@ index 8a655a138..74273f66b 100644
                  copy_compacted_cells(moves);
                  LLAMA_LOG_DEBUG("%s: compacted %zu KV cells\n", __func__, moves.size());
              }
-@@ -1038,7 +1051,37 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
+@@ -1043,7 +1056,37 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
      return updated;
  }
  
@@ -1838,7 +1746,7 @@ index 8a655a138..74273f66b 100644
  
      if (debug > 0) {
          for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-@@ -1125,6 +1168,30 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+@@ -1130,6 +1173,30 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
  
      res.resize(n_seqs);
  
@@ -1869,7 +1777,7 @@ index 8a655a138..74273f66b 100644
      for (uint32_t s = 0; s < n_seqs; ++s) {
          const auto seq_id = ubatch.seq_id_unq[s];
  
-@@ -1189,6 +1256,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+@@ -1194,6 +1261,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
  
          uint32_t n_tested = 0;
  
@@ -1881,7 +1789,7 @@ index 8a655a138..74273f66b 100644
          // for continuous slots, we test that all tokens in the ubatch fit, starting from the current head
          // for non-continuous slots, we test the tokens one by one
          const uint32_t n_test = cont ? n_tokens : 1;
-@@ -1215,7 +1287,14 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+@@ -1220,7 +1292,14 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                  //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
                  //    - mask SWA, using current max pos for that sequence in the cache
                  //                always insert in the cell with minimum pos
@@ -1897,7 +1805,7 @@ index 8a655a138..74273f66b 100644
  
                  if (!can_use && cells.seq_count(idx) == 1) {
                      const llama_pos pos_cell = cells.pos_get(idx);
-@@ -1238,6 +1317,9 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+@@ -1243,6 +1322,9 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
  
                  if (can_use) {
                      res.idxs[s].push_back(idx);
@@ -1907,7 +1815,7 @@ index 8a655a138..74273f66b 100644
                  } else {
                      if (cont) {
                          break;
-@@ -1254,6 +1336,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+@@ -1259,6 +1341,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
              }
  
              if (n_tested >= cells.size()) {
@@ -1919,7 +1827,7 @@ index 8a655a138..74273f66b 100644
                  //LLAMA_LOG_ERROR("%s: failed to find a slot for %d tokens\n", __func__, n_tokens);
                  return { };
              }
-@@ -1591,6 +1678,96 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
+@@ -1606,6 +1693,96 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
      return v_cells[seq_to_stream[seq_id]];
  }
  
@@ -2016,7 +1924,7 @@ index 8a655a138..74273f66b 100644
  uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
      GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
  
-@@ -1981,6 +2158,11 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1996,6 +2173,11 @@ bool llama_kv_cache::stage_import_kv_page(
          return true;
      }
  
@@ -2028,7 +1936,7 @@ index 8a655a138..74273f66b 100644
      llama_ubatch ubatch = {};
      auto udata = std::make_shared<llama_ubatch::data_t>();
      const uint32_t n_tokens = static_cast<uint32_t>(desc.token_count);
-@@ -2471,6 +2653,9 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2486,6 +2668,9 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
      ubatch.output       = udata->output.data();
      ubatch.data         = std::move(udata);
  
@@ -2038,7 +1946,7 @@ index 8a655a138..74273f66b 100644
      const uint32_t  head_before = v_heads[strm];
      const slot_info sinfo       = find_slot(ubatch, false);
      if (sinfo.empty()) {
-@@ -2516,6 +2701,10 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+@@ -2531,6 +2716,10 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
      // note: this also helps some backends with performance (f.ex https://github.com/ggml-org/llama.cpp/pull/16812#issuecomment-3455112220)
      const uint32_t n_pad = 256;
  
@@ -2049,7 +1957,7 @@ index 8a655a138..74273f66b 100644
      for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
          const auto & cells = v_cells[sinfo.strm[s]];
  
-@@ -3619,6 +3808,10 @@ void llama_kv_cache::state_read_sinfo(
+@@ -3666,6 +3855,10 @@ void llama_kv_cache::state_read_sinfo(
    llama_state_seq_flags   flags,
        slot_info_vec_t *   sinfos_out,
  const slot_info_vec_t *   sinfos_in) {
@@ -2060,7 +1968,7 @@ index 8a655a138..74273f66b 100644
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
      if (other) {
          return;
-@@ -4457,6 +4650,24 @@ uint32_t llama_kv_cache_context::get_n_kv_rows() const {
+@@ -4504,6 +4697,24 @@ uint32_t llama_kv_cache_context::get_n_kv_rows() const {
      return n_kv_rows;
  }
  
@@ -2086,7 +1994,7 @@ index 8a655a138..74273f66b 100644
      // Full-cache and update contexts do not carry a concrete ubatch/slot pair.
      if (ubatches.empty() || sinfos.empty() || i_cur >= ubatches.size() || i_cur >= sinfos.size()) {
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 7189c4447..63093aa32 100644
+index 4bc80bb96..d416e8569 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -5,6 +5,9 @@
@@ -2099,7 +2007,7 @@ index 7189c4447..63093aa32 100644
  #include <unordered_map>
  #include <string>
  #include <vector>
-@@ -272,6 +275,11 @@ public:
+@@ -275,6 +278,11 @@ public:
      // return empty slot_info on failure
      slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
  
@@ -2111,7 +2019,7 @@ index 7189c4447..63093aa32 100644
      // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
      void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
  
-@@ -312,7 +320,42 @@ public:
+@@ -315,7 +323,42 @@ public:
      // note: used by n-gram input embeddings
      void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
  
@@ -2154,7 +2062,7 @@ index 7189c4447..63093aa32 100644
      const llama_model & model;
      const llama_hparams & hparams;
  
-@@ -481,6 +524,11 @@ public:
+@@ -487,6 +530,11 @@ public:
  
      uint32_t get_n_kv() const;
      uint32_t get_n_kv_rows() const;
@@ -4093,10 +4001,10 @@ index 000000000..8d8c8086e
 +}
 diff --git a/src/skippy/receipts_graph.cpp b/src/skippy/receipts_graph.cpp
 new file mode 100644
-index 000000000..74a183141
+index 000000000..74cabab5a
 --- /dev/null
 +++ b/src/skippy/receipts_graph.cpp
-@@ -0,0 +1,812 @@
+@@ -0,0 +1,811 @@
 +// Receipt tensors of a built graph: which ones a recorder, replay or glue
 +// evaluation reports. Reading them back is in receipts_readback.cpp.
 +
@@ -4615,15 +4523,14 @@ index 000000000..74a183141
 +}
 +
 +// Asks every attention op of the graph to accumulate in f32. A backend that
-+// sums f16 values in f16 (the CPU kernel, for a ubatch smaller than a tile)
-+// drifts from the exact output by percents over a long context, which the
-+// attention check of a receipt would take for a cut context.
++// sums f16 values in f16 drifts from the exact output by percents over a long
++// context, which the attention check of a receipt would take for a cut
++// context. The CPU kernel always sums values in f32.
 +void force_f32_attention(ggml_cgraph * gf) {
 +    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
 +        ggml_tensor * node = ggml_graph_node(gf, i);
 +        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
 +            ggml_prec_set_acc(node, GGML_PREC_F32);
-+            ggml_flash_attn_ext_set_f32_value_sum(node, true);
 +        }
 +    }
 +}
@@ -8364,7 +8271,7 @@ index c044b686b..4e8c0599d 100644
      ggml_cgraph * graph = ggml_new_graph_custom(
              result.get_ctx(), result.get_max_nodes(), false);
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index b8b159025..e3e90ddbb 100644
+index 7c55e2c5f..a5c288c02 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -190,6 +190,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
@@ -9206,5 +9113,5 @@ index 000000000..3c3d6f245
 +    return 0;
 +}
 -- 
-2.54.0
+2.54.0 (Apple Git-157)
 

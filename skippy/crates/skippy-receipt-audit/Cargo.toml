@@ -20,15 +20,15 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.79.0" }
-skippy-model-hf = { path = "../skippy-model-hf", version = "0.79.0" }
-skippy-model-ref = { path = "../skippy-model-ref", version = "0.79.0" }
-skippy-receipts = { path = "../skippy-receipts", version = "0.79.0" }
-skippy-runtime = { path = "../skippy-runtime", version = "0.79.0" }
+skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.80.0" }
+skippy-model-hf = { path = "../skippy-model-hf", version = "0.80.0" }
+skippy-model-ref = { path = "../skippy-model-ref", version = "0.80.0" }
+skippy-receipts = { path = "../skippy-receipts", version = "0.80.0" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.80.0" }
 
 [dev-dependencies]
 # The toy model and honest turn the audit's tests run on.
-skippy-receipts = { path = "../skippy-receipts", version = "0.79.0", features = ["test-support"] }
+skippy-receipts = { path = "../skippy-receipts", version = "0.80.0", features = ["test-support"] }
 tempfile = "3"
 
 [lints]
