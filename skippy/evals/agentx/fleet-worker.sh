@@ -250,6 +250,39 @@ PYEOF
   for w in $(seq 1 12); do kill -0 $SP 2>/dev/null || break; sleep 5; done
   kill -9 $SP 2>/dev/null || true
   sleep 5
+  # ---- nsys CUDA timeline: one c1 prefill per engine ----
+  echo "-- nsys profiles:"
+  for ENGINE in llama skippy skippy-nocache; do
+    PORT=$((PORT+1))
+    EXTRA=""
+    [ "$ENGINE" = "skippy-nocache" ] && EXTRA="--prefix-cache off"
+    [ "$ENGINE" = "skippy" ] || [ "$ENGINE" = "skippy-nocache" ] && BIN="$W/repo/target/release/skippy" || BIN="$W/repo/.deps/agentx-llama-build/bin/llama-server"
+    if [ "$ENGINE" = "llama" ]; then
+      nsys profile -o "$W/nsys-$ENGINE" --trace=cuda,nvtx --force-overwrite=true \
+        "$BIN" --model "$MODEL" --alias m --host 127.0.0.1 --port $PORT --parallel 1 --batch-size 2048 --ubatch-size 512 --n-gpu-layers 99 --cache-type-k f16 --cache-type-v f16 --flash-attn on --jinja --ctx-size 131072 --no-kv-unified --threads "$THREADS" --threads-batch "$THREADS" > /dev/null 2>&1 &
+    else
+      [ "$ENGINE" = "skippy" ] && PC="on" || PC="off"
+      nsys profile -o "$W/nsys-$ENGINE" --trace=cuda,nvtx --force-overwrite=true \
+        "$BIN" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache "$PC" --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > /dev/null 2>&1 &
+    fi
+    NPID=$!
+    for i in $(seq 1 180); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
+    kill -0 $NPID 2>/dev/null && python3 - "$PORT" <<'NSYSPY'
+import json, sys, time, urllib.request
+PORT = int(sys.argv[1])
+msgs = [{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Session stable context block. "*220 + " Write one paragraph."}]
+body = json.dumps({"model":"m","messages":msgs,"max_tokens":32,"temperature":0,"stream":False}).encode()
+t0=time.time()
+r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions",data=body,headers={"Content-Type":"application/json"}),timeout=300)
+out=json.load(r)
+print(f"  nsys {PORT}: ttft={out.get('choices',[{}])[0].get('created',0)} total={time.time()-t0:.3f}s tokens={out.get('usage',{}).get('completion_tokens',0)}")
+NSYSPY
+    kill $NPID 2>/dev/null || true; sleep 10; kill -9 $NPID 2>/dev/null || true; sleep 5
+  done
+  # Ship nsys reports
+  for f in "$W"/nsys-*.nsys-rep; do [ -f "$f" ] && cp "$f" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null; done
+  for f in "$W"/nsys-*.qdrep; do [ -f "$f" ] && cp "$f" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null; done
+
   # ---- skippy profile WITHOUT prefix cache: isolates checkpoint export cost ----
   PORT=$((PORT+1))
   "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache off --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-nocache.log" 2>&1 &
