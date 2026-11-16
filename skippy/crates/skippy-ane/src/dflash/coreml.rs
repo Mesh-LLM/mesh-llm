@@ -1,5 +1,6 @@
 //! Rust bindings for the stateful Core ML draft model.
 
+use std::cell::RefCell;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -135,22 +136,67 @@ impl CoreMlDraft {
             {
                 bail!("ANE draft returned an unexpected token tensor");
             }
-            let mut result = vec![0i32; rows - 1];
-            let destination = result.as_mut_ptr();
-            let copy = StackBlock::new(move |source: std::ptr::NonNull<std::ffi::c_void>, _| {
-                // SAFETY: Core ML invokes this block synchronously while the retained
-                // MLMultiArray and the `rows - 1` destination are both alive.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        source.as_ptr().cast::<i32>(),
-                        destination,
-                        rows - 1,
-                    );
+            let shape = unsafe { tokens.shape() };
+            if shape.len() != 3
+                || shape.objectAtIndex(0).unsignedIntegerValue() != 1
+                || shape.objectAtIndex(1).unsignedIntegerValue() != 1
+                || shape.objectAtIndex(2).unsignedIntegerValue() != rows - 1
+            {
+                bail!("ANE draft returned an unexpected token shape");
+            }
+            let strides = unsafe { tokens.strides() };
+            if strides.len() != 3 {
+                bail!("ANE draft returned an unexpected token stride layout");
+            }
+            let stride = usize::try_from(strides.objectAtIndex(2).integerValue())?;
+            if stride == 0 {
+                bail!("ANE draft returned a zero token stride");
+            }
+            let copied = RefCell::new(None);
+            let copy_destination = &copied;
+            let copy = StackBlock::new(move |source: std::ptr::NonNull<std::ffi::c_void>, size| {
+                let Ok(size) = usize::try_from(size) else {
+                    return;
+                };
+                if size % std::mem::size_of::<i32>() != 0
+                    || size > isize::MAX as usize
+                    || !source.as_ptr().cast::<i32>().is_aligned()
+                {
+                    return;
                 }
+                // SAFETY: Core ML supplies an aligned Int32 buffer that remains valid
+                // for the synchronous block call; `size` is its byte length.
+                let storage = unsafe {
+                    std::slice::from_raw_parts(
+                        source.as_ptr().cast::<i32>(),
+                        size / std::mem::size_of::<i32>(),
+                    )
+                };
+                copy_destination.replace(read_strided_tokens(storage, rows - 1, stride));
             });
             unsafe { tokens.getBytesWithHandler(&copy) };
-            Ok(result)
+            copied
+                .into_inner()
+                .context("ANE draft token buffer is shorter than its strides require")
         })
+    }
+}
+
+fn read_strided_tokens(storage: &[i32], count: usize, stride: usize) -> Option<Vec<i32>> {
+    if stride == 0 {
+        return None;
+    }
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    let last = (count - 1).checked_mul(stride)?;
+    if last >= storage.len() {
+        return None;
+    }
+    if stride == 1 {
+        Some(storage[..count].to_vec())
+    } else {
+        Some((0..count).map(|index| storage[index * stride]).collect())
     }
 }
 
@@ -206,4 +252,22 @@ fn validate_shape(model: &MLModel, context: usize, rows: usize) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_strided_tokens;
+
+    #[test]
+    fn token_reads_follow_last_dimension_stride() {
+        assert_eq!(
+            read_strided_tokens(&[11, 22, 33], 3, 1),
+            Some(vec![11, 22, 33])
+        );
+        assert_eq!(
+            read_strided_tokens(&[11, -1, 22, -1, 33], 3, 2),
+            Some(vec![11, 22, 33])
+        );
+        assert_eq!(read_strided_tokens(&[11, -1, 22], 3, 2), None);
+    }
 }

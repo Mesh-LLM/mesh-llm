@@ -7,7 +7,9 @@ layers, attention, and output head on Apple Neural Engine. Core ML places the
 final argmax on CPU; the target model and exact verification remain on Metal.
 Conversion and serving need no Python or Core ML Tools. The converter uses a
 Rust GGUF reader and MIL package writer, then calls Apple's Core ML compiler.
-Serving needs only the compiled model and embedding file.
+Serving needs the source draft GGUF, compiled model, embedding file, and
+matching manifest. Skippy still opens the draft GGUF and checks its hash when
+attaching the ANE drafter.
 
 The converter accepts the exact draft GGUF used by the model catalog and the
 target GGUF that will serve requests. They must be paired: the target supplies

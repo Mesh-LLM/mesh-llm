@@ -280,207 +280,14 @@ fn draft_block(
     );
     for (index, layer) in layers.iter().enumerate() {
         let p = format!("block_{index}");
-        let norm = rms(
-            b,
-            &x,
-            &layer.attn_norm,
-            &[1, WIDTH as i64, 1, rows],
-            1,
-            &format!("{p}_attn_norm"),
-        );
-        let q_proj = conv(b, &norm, &layer.q, 4_096, rows, &format!("{p}_q_proj"));
-        let k_proj = conv(b, &norm, &layer.k, 1_024, rows, &format!("{p}_k_proj"));
-        let v_proj = conv(b, &norm, &layer.v, 1_024, rows, &format!("{p}_v_proj"));
-        let q = heads(b, &q_proj, QUERY_HEADS, rows, &format!("{p}_q"));
-        let k = heads(b, &k_proj, KV_HEADS, rows, &format!("{p}_k"));
-        let v = heads(b, &v_proj, KV_HEADS, rows, &format!("{p}_v"));
-        let q = rms(
-            b,
-            &q,
-            &layer.q_norm,
-            &[QUERY_HEADS, rows, HEAD],
-            2,
-            &format!("{p}_q_norm"),
-        );
-        let k = rms(
-            b,
-            &k,
-            &layer.k_norm,
-            &[KV_HEADS, rows, HEAD],
-            2,
-            &format!("{p}_k_norm"),
-        );
-        let q = rope(
-            b,
-            &q,
-            "q_cos",
-            "q_sin",
-            QUERY_HEADS,
-            rows,
-            &format!("{p}_q_rope"),
-        );
-        let k = rope(
-            b,
-            &k,
-            "q_cos",
-            "q_sin",
-            KV_HEADS,
-            rows,
-            &format!("{p}_k_rope"),
-        );
-        let query = b.reshape(&q, &[KV_HEADS, 4 * rows, HEAD], &format!("{p}_query"));
-        let scores_history = b.matmul(
-            &query,
-            &history[index].0,
-            true,
-            &[KV_HEADS, 4 * rows, context],
-            &format!("{p}_history_score"),
-        );
-        let scores_block = b.matmul(
-            &query,
-            &k,
-            true,
-            &[KV_HEADS, 4 * rows, rows],
-            &format!("{p}_block_score"),
-        );
-        let score = b.concat(
-            &[scores_history, scores_block],
-            2,
-            &[KV_HEADS, 4 * rows, context + rows],
-            &format!("{p}_score"),
-        );
-        let score = b.reshape(
-            &score,
-            &[KV_HEADS, 4, rows, context + rows],
-            &format!("{p}_score_4d"),
-        );
-        let scale = b.konst_f16(&format!("{p}_attention_scale"), (HEAD as f32).powf(-0.5));
-        let score = b.mul(
-            &score,
-            &scale,
-            &[KV_HEADS, 4, rows, context + rows],
-            &format!("{p}_scaled_score"),
-        );
-        let score = b.add(
-            &score,
-            "mask",
-            &[KV_HEADS, 4, rows, context + rows],
-            &format!("{p}_masked_score"),
-        );
-        let prob = b.softmax(
-            &score,
-            -1,
-            &[KV_HEADS, 4, rows, context + rows],
-            &format!("{p}_prob"),
-            false,
-        );
-        let prob = b.reshape(
-            &prob,
-            &[KV_HEADS, 4 * rows, context + rows],
-            &format!("{p}_prob_3d"),
-        );
-        let ph = b.slice(
-            &prob,
-            &[0, 0, 0],
-            &[KV_HEADS as i32, (4 * rows) as i32, context as i32],
-            &[KV_HEADS, 4 * rows, context],
-            &format!("{p}_prob_history"),
-        );
-        let pb = b.slice(
-            &prob,
-            &[0, 0, context as i32],
-            &[KV_HEADS as i32, (4 * rows) as i32, (context + rows) as i32],
-            &[KV_HEADS, 4 * rows, rows],
-            &format!("{p}_prob_block"),
-        );
-        let ah = b.matmul(
-            &ph,
-            &history[index].1,
-            false,
-            &[KV_HEADS, 4 * rows, HEAD],
-            &format!("{p}_attn_history"),
-        );
-        let ab = b.matmul(
-            &pb,
-            &v,
-            false,
-            &[KV_HEADS, 4 * rows, HEAD],
-            &format!("{p}_attn_block"),
-        );
-        let attended = b.add(
-            &ah,
-            &ab,
-            &[KV_HEADS, 4 * rows, HEAD],
-            &format!("{p}_attended"),
-        );
-        let attended = b.reshape(
-            &attended,
-            &[QUERY_HEADS, rows, HEAD],
-            &format!("{p}_attended_heads"),
-        );
-        let attended = b.transpose(
-            &attended,
-            &[0, 2, 1],
-            &[QUERY_HEADS, HEAD, rows],
-            &format!("{p}_attended_transposed"),
-        );
-        let attended = b.reshape(
-            &attended,
-            &[1, QUERY_HEADS * HEAD, 1, rows],
-            &format!("{p}_attended_conv"),
-        );
-        let projected = conv(
-            b,
-            &attended,
-            &layer.output,
-            WIDTH as i64,
-            rows,
-            &format!("{p}_output_proj"),
-        );
+        let projected = draft_attention(b, &x, layer, &history[index], context, rows, &p);
         x = b.add(
             &x,
             &projected,
             &[1, WIDTH as i64, 1, rows],
             &format!("{p}_attn_residual"),
         );
-        let norm = rms(
-            b,
-            &x,
-            &layer.ffn_norm,
-            &[1, WIDTH as i64, 1, rows],
-            1,
-            &format!("{p}_ffn_norm"),
-        );
-        let gate = conv(
-            b,
-            &norm,
-            &layer.gate,
-            FFN as i64,
-            rows,
-            &format!("{p}_gate"),
-        );
-        let sigmoid = b.sigmoid(&gate, &[1, FFN as i64, 1, rows], &format!("{p}_sigmoid"));
-        let gate = b.mul(
-            &gate,
-            &sigmoid,
-            &[1, FFN as i64, 1, rows],
-            &format!("{p}_silu"),
-        );
-        let up = conv(b, &norm, &layer.up, FFN as i64, rows, &format!("{p}_up"));
-        let hidden = b.mul(
-            &gate,
-            &up,
-            &[1, FFN as i64, 1, rows],
-            &format!("{p}_ffn_hidden"),
-        );
-        let down = conv(
-            b,
-            &hidden,
-            &layer.down,
-            WIDTH as i64,
-            rows,
-            &format!("{p}_down"),
-        );
+        let down = draft_ffn(b, &x, layer, rows, &p);
         x = b.add(
             &x,
             &down,
@@ -489,6 +296,215 @@ fn draft_block(
         );
     }
     x
+}
+
+fn draft_attention(
+    b: &mut Block,
+    x: &str,
+    layer: &Layer,
+    history: &(String, String),
+    context: i64,
+    rows: i64,
+    p: &str,
+) -> String {
+    let norm = rms(
+        b,
+        x,
+        &layer.attn_norm,
+        &[1, WIDTH as i64, 1, rows],
+        1,
+        &format!("{p}_attn_norm"),
+    );
+    let q_proj = conv(b, &norm, &layer.q, 4_096, rows, &format!("{p}_q_proj"));
+    let k_proj = conv(b, &norm, &layer.k, 1_024, rows, &format!("{p}_k_proj"));
+    let v_proj = conv(b, &norm, &layer.v, 1_024, rows, &format!("{p}_v_proj"));
+    let q = heads(b, &q_proj, QUERY_HEADS, rows, &format!("{p}_q"));
+    let k = heads(b, &k_proj, KV_HEADS, rows, &format!("{p}_k"));
+    let v = heads(b, &v_proj, KV_HEADS, rows, &format!("{p}_v"));
+    let q = rms(
+        b,
+        &q,
+        &layer.q_norm,
+        &[QUERY_HEADS, rows, HEAD],
+        2,
+        &format!("{p}_q_norm"),
+    );
+    let k = rms(
+        b,
+        &k,
+        &layer.k_norm,
+        &[KV_HEADS, rows, HEAD],
+        2,
+        &format!("{p}_k_norm"),
+    );
+    let q = rope(
+        b,
+        &q,
+        "q_cos",
+        "q_sin",
+        QUERY_HEADS,
+        rows,
+        &format!("{p}_q_rope"),
+    );
+    let k = rope(
+        b,
+        &k,
+        "q_cos",
+        "q_sin",
+        KV_HEADS,
+        rows,
+        &format!("{p}_k_rope"),
+    );
+    let query = b.reshape(&q, &[KV_HEADS, 4 * rows, HEAD], &format!("{p}_query"));
+    let scores_history = b.matmul(
+        &query,
+        &history.0,
+        true,
+        &[KV_HEADS, 4 * rows, context],
+        &format!("{p}_history_score"),
+    );
+    let scores_block = b.matmul(
+        &query,
+        &k,
+        true,
+        &[KV_HEADS, 4 * rows, rows],
+        &format!("{p}_block_score"),
+    );
+    let score = b.concat(
+        &[scores_history, scores_block],
+        2,
+        &[KV_HEADS, 4 * rows, context + rows],
+        &format!("{p}_score"),
+    );
+    let score = b.reshape(
+        &score,
+        &[KV_HEADS, 4, rows, context + rows],
+        &format!("{p}_score_4d"),
+    );
+    let scale = b.konst_f16(&format!("{p}_attention_scale"), (HEAD as f32).powf(-0.5));
+    let score = b.mul(
+        &score,
+        &scale,
+        &[KV_HEADS, 4, rows, context + rows],
+        &format!("{p}_scaled_score"),
+    );
+    let score = b.add(
+        &score,
+        "mask",
+        &[KV_HEADS, 4, rows, context + rows],
+        &format!("{p}_masked_score"),
+    );
+    let prob = b.softmax(
+        &score,
+        -1,
+        &[KV_HEADS, 4, rows, context + rows],
+        &format!("{p}_prob"),
+        false,
+    );
+    let prob = b.reshape(
+        &prob,
+        &[KV_HEADS, 4 * rows, context + rows],
+        &format!("{p}_prob_3d"),
+    );
+    let ph = b.slice(
+        &prob,
+        &[0, 0, 0],
+        &[KV_HEADS as i32, (4 * rows) as i32, context as i32],
+        &[KV_HEADS, 4 * rows, context],
+        &format!("{p}_prob_history"),
+    );
+    let pb = b.slice(
+        &prob,
+        &[0, 0, context as i32],
+        &[KV_HEADS as i32, (4 * rows) as i32, (context + rows) as i32],
+        &[KV_HEADS, 4 * rows, rows],
+        &format!("{p}_prob_block"),
+    );
+    let ah = b.matmul(
+        &ph,
+        &history.1,
+        false,
+        &[KV_HEADS, 4 * rows, HEAD],
+        &format!("{p}_attn_history"),
+    );
+    let ab = b.matmul(
+        &pb,
+        &v,
+        false,
+        &[KV_HEADS, 4 * rows, HEAD],
+        &format!("{p}_attn_block"),
+    );
+    let attended = b.add(
+        &ah,
+        &ab,
+        &[KV_HEADS, 4 * rows, HEAD],
+        &format!("{p}_attended"),
+    );
+    let attended = b.reshape(
+        &attended,
+        &[QUERY_HEADS, rows, HEAD],
+        &format!("{p}_attended_heads"),
+    );
+    let attended = b.transpose(
+        &attended,
+        &[0, 2, 1],
+        &[QUERY_HEADS, HEAD, rows],
+        &format!("{p}_attended_transposed"),
+    );
+    let attended = b.reshape(
+        &attended,
+        &[1, QUERY_HEADS * HEAD, 1, rows],
+        &format!("{p}_attended_conv"),
+    );
+    conv(
+        b,
+        &attended,
+        &layer.output,
+        WIDTH as i64,
+        rows,
+        &format!("{p}_output_proj"),
+    )
+}
+
+fn draft_ffn(b: &mut Block, x: &str, layer: &Layer, rows: i64, p: &str) -> String {
+    let norm = rms(
+        b,
+        x,
+        &layer.ffn_norm,
+        &[1, WIDTH as i64, 1, rows],
+        1,
+        &format!("{p}_ffn_norm"),
+    );
+    let gate = conv(
+        b,
+        &norm,
+        &layer.gate,
+        FFN as i64,
+        rows,
+        &format!("{p}_gate"),
+    );
+    let sigmoid = b.sigmoid(&gate, &[1, FFN as i64, 1, rows], &format!("{p}_sigmoid"));
+    let gate = b.mul(
+        &gate,
+        &sigmoid,
+        &[1, FFN as i64, 1, rows],
+        &format!("{p}_silu"),
+    );
+    let up = conv(b, &norm, &layer.up, FFN as i64, rows, &format!("{p}_up"));
+    let hidden = b.mul(
+        &gate,
+        &up,
+        &[1, FFN as i64, 1, rows],
+        &format!("{p}_ffn_hidden"),
+    );
+    conv(
+        b,
+        &hidden,
+        &layer.down,
+        WIDTH as i64,
+        rows,
+        &format!("{p}_down"),
+    )
 }
 
 fn conv(b: &mut Block, x: &str, weight: &str, output: i64, rows: i64, name: &str) -> String {
@@ -553,16 +569,16 @@ fn rms(b: &mut Block, x: &str, weight: &str, shape: &[i64], axis: i32, name: &st
     let scaled = b.mul(x, &inverse, shape, &format!("{name}_scaled"));
     let square = b.mul(&scaled, &scaled, shape, &format!("{name}_square"));
     let mean = b.reduce_mean(&square, &[axis], true, &reduced, &format!("{name}_mean"));
-    let inverse_square = b.mul(
-        &inverse,
-        &inverse,
-        &reduced,
-        &format!("{name}_inverse_square"),
-    );
     let epsilon = b.konst_f16(&format!("{name}_epsilon"), 1e-6);
-    let epsilon = b.mul(
-        &inverse_square,
+    let scaled_inverse = b.mul(
+        &inverse,
         &epsilon,
+        &reduced,
+        &format!("{name}_scaled_inverse"),
+    );
+    let epsilon = b.mul(
+        &inverse,
+        &scaled_inverse,
         &reduced,
         &format!("{name}_scaled_epsilon"),
     );

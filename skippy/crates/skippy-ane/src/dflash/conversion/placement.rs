@@ -66,10 +66,7 @@ fn count_placement(plan: &MLComputePlan) -> Result<Placement> {
     for index in 0..operations.len() {
         let operation = operations.objectAtIndex(index);
         let name = unsafe { operation.operatorName() }.to_string();
-        if ![".conv", ".matmul", ".softmax"]
-            .iter()
-            .any(|suffix| name.ends_with(suffix))
-        {
+        if !requires_neural_engine(&name) {
             continue;
         }
         result.neural_operations += 1;
@@ -81,4 +78,22 @@ fn count_placement(plan: &MLComputePlan) -> Result<Placement> {
         }
     }
     Ok(result)
+}
+
+fn requires_neural_engine(name: &str) -> bool {
+    let operator = name.rsplit('.').next().unwrap_or(name);
+    ["conv", "matmul", "softmax"].contains(&operator)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_neural_engine;
+
+    #[test]
+    fn bare_and_prefixed_costly_ops_require_ane() {
+        for name in ["conv", "matmul", "softmax", "ios18.conv", "ios18.softmax"] {
+            assert!(requires_neural_engine(name), "{name}");
+        }
+        assert!(!requires_neural_engine("ios18.argmax"));
+    }
 }
