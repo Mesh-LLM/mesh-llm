@@ -38,6 +38,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
         trust: _,
+        receipt_audit: _,
     } = logging;
     let marked;
     let prefetched = match mesh::current_private_scope() {
@@ -257,8 +258,18 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         served_by,
         peer_capsule_id,
         trust,
+        receipt_audit,
     } = logging;
-    let watch = match ReceiptWatch::begin(node, trust, tcp_stream, host_id, prefetched).await {
+    let mut watch = match ReceiptWatch::begin(
+        node,
+        trust,
+        tcp_stream,
+        host_id,
+        prefetched,
+        receipt_audit.is_some(),
+    )
+    .await
+    {
         Ok(watch) => watch,
         Err(why) => return refuse_unwatched(tcp_stream, host_id, &why, route_observer).await,
     };
@@ -297,6 +308,18 @@ pub(in crate::network::openai) async fn route_remote_attempt(
     .await;
     quic_recv.finish();
     watch.stop_observing(tcp_stream);
+    if matches!(
+        result,
+        RouteAttemptResult::Delivered {
+            status_code: 200..=299,
+            ..
+        }
+    ) && let Some(attempt) = receipt_audit
+        && let Some(verdict) = watch.take_verdict()
+        && let Some(manager) = node.plugin_manager().await
+    {
+        manager.record_receipt_audit(attempt.observation_id, attempt.attempt_id, host_id, verdict);
+    }
     result
 }
 

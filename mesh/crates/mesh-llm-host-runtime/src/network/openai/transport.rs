@@ -930,6 +930,7 @@ async fn route_mesh_request_attempts(
                 // capsule id to.
                 peer_capsule_id: None,
                 trust: request.trust,
+                receipt_audit: None,
             },
         )
         .await;
@@ -1643,6 +1644,11 @@ async fn route_remote_attempt_with_retry(
         logging,
     )
     .await;
+    // Another tunnel can be another billable turn, even when the first
+    // response did not arrive. It must not share a single audit attempt id.
+    if logging.receipt_audit.is_some() {
+        return result;
+    }
     for retry in 1..=REMOTE_UNCOMMITTED_RETRIES {
         if !should_retry_uncommitted_remote_attempt(result) {
             return result;
@@ -1793,6 +1799,7 @@ async fn route_to_elected_target(
             served_by: None,
             peer_capsule_id: None,
             trust,
+            receipt_audit: None,
         },
     )
     .await;
@@ -1924,6 +1931,7 @@ pub async fn route_http_endpoint_request(
             served_by: None,
             peer_capsule_id: None,
             trust: request.trust,
+            receipt_audit: None,
         },
     )
     .await;

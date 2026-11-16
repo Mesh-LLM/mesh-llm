@@ -15,6 +15,7 @@
 //! - **no audit:** this node did not or could not audit the turn. That
 //!   says nothing about the peer.
 
+use mesh_llm_plugin::openai_exchange::ReceiptAuditStatus;
 use skippy_receipt_audit::outcome::Outcome;
 use skippy_receipt_audit::output::AuditOutput;
 use skippy_receipt_audit::turn_audit::TurnAudit;
@@ -58,6 +59,16 @@ pub(super) enum Verdict {
 }
 
 impl Verdict {
+    pub(super) fn status(&self) -> ReceiptAuditStatus {
+        match self {
+            Self::Passed => ReceiptAuditStatus::Passed,
+            Self::Failed { .. } | Self::Strike(_) => ReceiptAuditStatus::Failed,
+            Self::NoAudit(_) | Self::Unauditable { .. } | Self::AnotherModel(_) => {
+                ReceiptAuditStatus::Unverified
+            }
+        }
+    }
+
     pub(super) fn strike(reason: impl AsRef<str>) -> Self {
         Self::Strike(Shown::of(reason.as_ref()))
     }

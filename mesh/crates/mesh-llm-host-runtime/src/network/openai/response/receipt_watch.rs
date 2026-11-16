@@ -41,12 +41,13 @@ impl ReceiptWatch {
         client: &ClientStream,
         host_id: iroh::EndpointId,
         request: &[u8],
+        require_verdict: bool,
     ) -> Result<Self, String> {
         if !trust.audits_peers() || client.is_mesh_peer() {
             return Ok(Self(None));
         }
         let tier = trust.requires_receipts();
-        receipt_audit::watch(node, host_id, request, tier)
+        receipt_audit::watch(node, host_id, request, tier, require_verdict)
             .await
             .map(Self)
     }
@@ -80,6 +81,13 @@ impl ReceiptWatch {
         if let Some(watch) = &self.0 {
             client.stop_observing(&watch.observer);
         }
+    }
+
+    pub(super) fn take_verdict(
+        &mut self,
+    ) -> Option<tokio::sync::oneshot::Receiver<mesh_llm_plugin::openai_exchange::ReceiptAuditStatus>>
+    {
+        self.0.as_mut()?.verdict.take()
     }
 
     /// `upstream`, read for the audit too when this node translates the
@@ -182,6 +190,7 @@ impl ReceiptWatch {
             request: Vec::new(),
             receipt_id: String::new(),
             observer,
+            verdict: None,
         }))
     }
 }

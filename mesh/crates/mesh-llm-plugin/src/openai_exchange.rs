@@ -261,6 +261,17 @@ pub type OpenAiExchangeHandler = std::sync::Arc<
         + Sync,
 >;
 
+/// The host's receipt audit status for an authenticated remote inference attempt.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptAuditStatus {
+    Pending,
+    Passed,
+    Failed,
+    #[serde(other)]
+    Unverified,
+}
+
 /// Evidence publication is independent from inference success. Wire commitments
 /// cover HTTP entity bytes, including emitted SSE framing, before final emission.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -290,6 +301,20 @@ pub struct OpenAiExchangeEvent {
     pub response_wire_commitment: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_outcome: Option<String>,
+    /// `pending` on a selected attempt requiring an audit, followed by the
+    /// local verdict on `exchange_finished`. Only `passed` confirms an audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_audit: Option<ReceiptAuditStatus>,
+    /// Host-minted id shared only by this selected attempt and its verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_audit_attempt_id: Option<String>,
+    /// Authenticated remote endpoint for the selected inference attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_peer_id: Option<String>,
+    /// Opaque channel names declared for the selected remote model. Absent
+    /// when the host cannot unambiguously resolve the routed descriptor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_model_channels: Option<Vec<String>>,
     /// Admission provenance remains available when client delivery fails.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission_denied: Option<bool>,
@@ -314,8 +339,32 @@ impl OpenAiExchangeEvent {
 
 #[cfg(test)]
 mod event_tests {
-    use super::OpenAiExchangeEvent;
+    use super::{OpenAiExchangeEvent, ReceiptAuditStatus};
     use serde_json::json;
+
+    #[test]
+    fn receipt_audit_is_additive_and_unknown_status_is_never_a_pass() {
+        let mut payload = json!({"exchange_id":"x", "phase":"exchange_finished",
+            "endpoint":"chat_completions", "observation_point":"client_egress",
+            "method":"POST", "path":"/v1/chat/completions"});
+        assert_eq!(
+            OpenAiExchangeEvent::parse(&payload).unwrap().receipt_audit,
+            None
+        );
+        for (status, expected) in [
+            ("pending", ReceiptAuditStatus::Pending),
+            ("passed", ReceiptAuditStatus::Passed),
+            ("failed", ReceiptAuditStatus::Failed),
+            ("unverified", ReceiptAuditStatus::Unverified),
+            ("future_status", ReceiptAuditStatus::Unverified),
+        ] {
+            payload["receipt_audit"] = json!(status);
+            assert_eq!(
+                OpenAiExchangeEvent::parse(&payload).unwrap().receipt_audit,
+                Some(expected)
+            );
+        }
+    }
 
     #[test]
     fn parses_host_phases_and_terminal_evidence_without_losing_false() {
