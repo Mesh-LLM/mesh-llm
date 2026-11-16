@@ -18,6 +18,9 @@
 //! - Downloaded model files (live under `~/.mesh-llm/models/`)
 //! - Any new file type not explicitly listed above — update this list first
 //!
+//! A stopped instance's directory, with its logs, is removed by the next run
+//! once seven days have passed since its last write (`dead_slots.rs`).
+//!
 //! # Runtime root resolution
 //!
 //! The root directory (containing per-instance subdirectories) is resolved via
@@ -343,7 +346,7 @@ pub struct RuntimeProcessTarget {
     pub expected_start_time: Option<i64>,
 }
 
-fn binary_process_name(binary: &str) -> Option<String> {
+pub(super) fn binary_process_name(binary: &str) -> Option<String> {
     let path = Path::new(binary);
 
     #[cfg(windows)]
