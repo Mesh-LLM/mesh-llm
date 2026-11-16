@@ -38,6 +38,7 @@ mod hf_remote;
 pub use branch_history::NotOnBranch;
 pub use hf_file::HfFile;
 use hf_remote::HfRemote;
+pub use hf_remote::NoSuchFile;
 
 const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
 /// The most bytes the sparse copies under a cache root hold. Opening a copy

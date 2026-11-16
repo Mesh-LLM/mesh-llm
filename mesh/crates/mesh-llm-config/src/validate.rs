@@ -104,6 +104,9 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     if let Some(problem) = config.receipts.audit_one_in_problem() {
         diagnostics.push(validation_diagnostic("receipts.audit_one_in", problem));
     }
+    if let Some(problem) = config.receipts.audit_threads_problem() {
+        diagnostics.push(validation_diagnostic("receipts.audit_threads", problem));
+    }
     diagnostics.extend(validate_logging_config(&config.logging));
     diagnostics.extend(validate_audit_config(&config.logging.audit));
 

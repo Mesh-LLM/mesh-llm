@@ -29,8 +29,10 @@
 //! no audit; under a policy that requires receipts, one of another repo
 //! demotes the peer from the tier too.
 //!
-//! Then the VRF decides. A turn it does not draw is no audit, and so is a
-//! drawn turn whose model this node cannot tie to a Hugging Face file. A
+//! Then the VRF decides. A turn it does not draw is not audited, and says
+//! so to a plugin that waits for its verdict ([`Verdict::NotDrawn`]). A
+//! drawn turn whose model this node cannot tie to a Hugging Face file is no
+//! audit. A
 //! drawn turn whose answer has a shape its request did not allow (tool
 //! calls, several choices, another end) contradicts the request, which is a
 //! strike. Everything here runs on the request path, so it reads no file
@@ -234,7 +236,7 @@ pub(super) fn sort(
         Claim::Unnamed(why) => return Sorted::Settled(Verdict::unauditable(why, &asked.model)),
     };
     if !turn_audit::audit_drawn(&receipt, &asked.key, rate) {
-        return Sorted::Settled(Verdict::no_audit("the VRF did not draw the turn"));
+        return Sorted::Settled(Verdict::NotDrawn);
     }
     Sorted::Drawn {
         receipt: Box::new(receipt),
@@ -266,7 +268,7 @@ pub(super) type Settling = Option<tokio::task::JoinHandle<()>>;
 
 /// Takes the response of a watched turn from the collector: settles it, or
 /// queues its audit. Called on the request path.
-pub(super) fn receive(turn: WatchedTurn, collected: Collected) -> Settling {
+pub(super) fn receive(mut turn: WatchedTurn, collected: Collected) -> Settling {
     let received = Instant::now();
     let host = turn.asked.host;
     let mut reply = match collected {
@@ -300,6 +302,7 @@ pub(super) fn receive(turn: WatchedTurn, collected: Collected) -> Settling {
             file,
             branch,
         } => {
+            turn.drawn = true;
             if let Some(why) = contradiction(&turn.asked, &reply) {
                 return settle(turn, subject, Verdict::strike(why));
             }
@@ -307,7 +310,7 @@ pub(super) fn receive(turn: WatchedTurn, collected: Collected) -> Settling {
                 let why = format!(
                     "the peer named a commit of this model this node has not fetched, and this node fetches at most {COMMITS_PER_DAY} commits per peer and model a day"
                 );
-                return settle(turn, subject, Verdict::no_audit(why));
+                return settle(turn, subject, Verdict::unsettled(why));
             }
             queue(turn, reply, *receipt, file, branch, received)
         }
@@ -339,6 +342,7 @@ fn queue(
         return settle(turn, subject, verdict);
     };
     let audits = turn.node.receipt_audits.clone();
+    let host = turn.asked.host;
     let opener = audits.claimed_opener();
     let job = Job {
         turn,
@@ -349,27 +353,40 @@ fn queue(
         received,
         runtime,
     };
-    let (job, why) = match audits
-        .worker
-        .submit(job, move |stopping| AuditRunner::new(stopping, opener))
-    {
-        Ok(()) => return None,
+    let (job, verdict) = match audits
+        .workers
+        .submit(job, audits.threads(), move |stopping| {
+            AuditRunner::new(stopping, opener)
+        }) {
+        Ok(()) => {
+            audits.audit_queued(host);
+            return None;
+        }
         Err(Refused::Busy(job)) => {
             let skipped = audits
                 .busy
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 + 1;
             tracing::warn!(
-                "receipt audit: a drawn turn of {} is not audited: the audit worker is busy ({skipped} drawn turns not audited for that since this node started)",
+                "receipt audit: a drawn turn of {} is not audited: every audit worker is busy ({skipped} drawn turns not audited for that since this node started; [receipts] audit_threads sets how many workers run)",
                 job.turn.asked.host.fmt_short()
             );
-            (job, "the audit worker is busy")
+            // a peer whose own audits hold workers may have made them busy
+            let verdict = match audits.holds_a_worker(&host) {
+                true => {
+                    Verdict::unsettled("every audit worker is busy, some with turns of this peer")
+                }
+                false => Verdict::no_audit("every audit worker is busy"),
+            };
+            (job, verdict)
         }
-        Err(Refused::ShutDown(job)) => (job, "this node is shutting down"),
-        Err(Refused::Disabled(job)) => (job, "this node's audit worker is off"),
+        Err(Refused::ShutDown(job)) => (job, Verdict::no_audit("this node is shutting down")),
+        Err(Refused::Disabled(job)) => {
+            (job, Verdict::no_audit("this node's audit workers are off"))
+        }
     };
     let subject = job.subject();
-    settle(job.turn, subject, Verdict::no_audit(why))
+    settle(job.turn, subject, verdict)
 }
 
 /// Acts on a verdict reached on the request path. A strike may block the
@@ -397,6 +414,7 @@ fn settle(turn: WatchedTurn, subject: Subject, verdict: Verdict) -> Settling {
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
+    use mesh_llm_plugin::openai_exchange::ReceiptAuditStatus;
     use skippy_receipts::toy_turn::{RUNTIME, Turn};
     use skippy_receipts::turn::BindingRequest;
     use skippy_receipts::vrf;
@@ -455,8 +473,8 @@ mod tests {
         assert_eq!(*receipt, turn.receipt);
         assert_eq!(file.to_string(), TOY_MODEL);
         // the same receipt, not drawn, says nothing and asks nothing
-        let why = no_audit(sort(&asked, &no_catalog, carried(&turn), false, NEVER));
-        assert_eq!(why, "the VRF did not draw the turn");
+        let sorted = sort(&asked, &no_catalog, carried(&turn), false, NEVER);
+        assert!(matches!(sorted, Sorted::Settled(Verdict::NotDrawn)));
     }
 
     /// The receipts a peer that advertises them may not answer with, each
@@ -665,6 +683,134 @@ mod tests {
         }
     }
 
+    /// A peer earns that the turns a plugin pays for are sampled: its drawn
+    /// turns must pass. One that does not pass makes it unproven again, and
+    /// three in a day that ended without a verdict, for a reason a peer can
+    /// cause, take it out of the `receipts` tier.
+    #[tokio::test]
+    async fn a_peer_earns_sampling_and_loses_it_with_a_drawn_turn_that_does_not_pass() {
+        use crate::network::peer_blocks::now_ms;
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
+            .await
+            .expect("a node");
+        let host = asked().host;
+        let subject = Subject::of(host, ASKED_ID, TOY_MODEL);
+        let rate = 1.0 / 3.0;
+        let audits = &node.receipt_audits;
+        let note = |drawn: bool, awaited: bool, verdict: Verdict| {
+            let (sender, _receiver) = tokio::sync::oneshot::channel();
+            let turn = WatchedTurn {
+                node: node.clone(),
+                asked: asked(),
+                verdict: awaited.then_some(sender),
+                drawn,
+            };
+            turn.conclude(&subject, verdict, None);
+        };
+        // a new peer is unproven: every turn a plugin waits on is drawn
+        assert!(!audits.proven(&host, TOY_MODEL, rate));
+        assert_eq!(audits.draw_rate(&host, TOY_MODEL, rate, true), 1.0);
+        assert_eq!(
+            audits.draw_rate(&host, TOY_MODEL, rate, false),
+            rate,
+            "nobody waits"
+        );
+        // two passes in a row prove it at 1 in 3, and its turns are sampled
+        note(true, true, Verdict::Passed);
+        assert_eq!(audits.draw_rate(&host, TOY_MODEL, rate, true), 1.0);
+        note(true, true, Verdict::Passed);
+        assert!(audits.proven(&host, TOY_MODEL, rate));
+        assert_eq!(audits.draw_rate(&host, TOY_MODEL, rate, true), rate);
+        // where every turn is drawn anyway, there is nothing to earn
+        assert_eq!(audits.draw_rate(&peer(77), TOY_MODEL, 1.0, true), 1.0);
+        // turns that were not drawn, or that no plugin waits on, change nothing
+        note(false, true, Verdict::NotDrawn);
+        note(false, true, Verdict::no_audit("no usable name"));
+        note(
+            true,
+            false,
+            Verdict::unsettled("every audit worker is busy"),
+        );
+        assert!(audits.proven(&host, TOY_MODEL, rate));
+        // a drawn turn that did not pass, whoever caused that
+        note(
+            true,
+            true,
+            Verdict::no_audit("Hugging Face is out of reach"),
+        );
+        assert!(!audits.proven(&host, TOY_MODEL, rate));
+        assert!(!audits.demoted(&host, now_ms()), "this node's own trouble");
+        // turns that ended without a verdict for a reason a peer can cause
+        note(true, true, Verdict::Passed);
+        note(true, true, Verdict::unsettled("the node no longer held it"));
+        note(true, true, Verdict::unsettled("every audit worker is busy"));
+        assert!(!audits.proven(&host, TOY_MODEL, rate));
+        assert!(!audits.demoted(&host, now_ms()), "two are not three");
+        note(true, true, Verdict::unsettled("a commit past the budget"));
+        assert!(audits.demoted(&host, now_ms()));
+    }
+
+    /// A busy worker is counted against a peer only when audits of its own
+    /// turns hold workers: it may have made them busy.
+    #[test]
+    fn a_peer_holds_a_worker_while_an_audit_of_its_turn_waits_or_runs() {
+        let audits = crate::network::receipt_audit::Audits::default();
+        let (one, other) = (peer(1), peer(2));
+        assert!(!audits.holds_a_worker(&one));
+        audits.audit_queued(one);
+        audits.audit_queued(one);
+        assert!(audits.holds_a_worker(&one) && !audits.holds_a_worker(&other));
+        audits.audit_ended(&one);
+        assert!(audits.holds_a_worker(&one), "one of its audits is left");
+        audits.audit_ended(&one);
+        audits.audit_ended(&one);
+        assert!(!audits.holds_a_worker(&one));
+    }
+
+    /// A turn the VRF drew is known as drawn when its verdict is reached on
+    /// the request path: here its answer contradicts the request.
+    #[tokio::test]
+    async fn a_turn_settled_after_the_draw_counts_as_drawn() {
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
+            .await
+            .expect("a node");
+        let host = asked().host;
+        let watched = |shape| {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let turn = WatchedTurn {
+                node: node.clone(),
+                asked: Asked {
+                    rate: ALWAYS,
+                    ..asked()
+                },
+                verdict: Some(sender),
+                drawn: false,
+            };
+            let reply = Reply {
+                shape,
+                receipt: carried(&toy_turn(&client_key())),
+                ..Reply::default()
+            };
+            (receive(turn, Collected::Reply(reply)), receiver)
+        };
+        let prove = || {
+            let mut standing = node.receipt_audits.standing.lock().unwrap();
+            standing.passed(host, TOY_MODEL);
+        };
+        prove();
+        assert!(node.receipt_audits.proven(&host, TOY_MODEL, 0.5));
+        let (settling, verdict) = watched(Some("it called tools"));
+        settling
+            .expect("a strike is acted on off the request path")
+            .await
+            .unwrap();
+        assert_eq!(verdict.await, Ok(ReceiptAuditStatus::Failed));
+        assert!(
+            !node.receipt_audits.proven(&host, TOY_MODEL, 0.5),
+            "the drawn turn did not pass"
+        );
+    }
+
     /// From the collector's hand-off to the node's block store.
     #[tokio::test]
     async fn three_turns_without_a_receipt_block_a_peer_on_the_node() {
@@ -676,6 +822,7 @@ mod tests {
             node: node.clone(),
             asked,
             verdict: None,
+            drawn: false,
         };
         let host = asked().host;
         // what says nothing about the peer is logged, and that is all
@@ -916,6 +1063,7 @@ mod tests {
             node: node.clone(),
             asked: asked(),
             verdict: None,
+            drawn: false,
         };
         let counting = || {
             node.receipt_audits

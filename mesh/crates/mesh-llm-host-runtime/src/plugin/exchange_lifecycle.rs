@@ -23,7 +23,7 @@ mod exchange_terminal_outcome;
 
 // The audit performs its own challenge timing. A slow local model open or a
 // stopped worker must never keep a settlement callback pending indefinitely.
-const RECEIPT_AUDIT_TIMEOUT: Duration = Duration::from_secs(45);
+const RECEIPT_AUDIT_TIMEOUT: Duration = crate::network::receipt_audit::VERDICT_WAIT;
 
 #[derive(Default)]
 pub(super) struct ExchangeHealth {
@@ -697,6 +697,8 @@ impl ReceiptAuditCompletion {
         match tokio::time::timeout_at(self.deadline, self.verdict).await {
             Ok(Ok(ReceiptAuditStatus::Passed)) => ReceiptAuditStatus::Passed,
             Ok(Ok(ReceiptAuditStatus::Failed)) => ReceiptAuditStatus::Failed,
+            Ok(Ok(ReceiptAuditStatus::NotDrawn)) => ReceiptAuditStatus::NotDrawn,
+            Ok(Ok(ReceiptAuditStatus::NotAudited)) => ReceiptAuditStatus::NotAudited,
             _ => ReceiptAuditStatus::Unverified,
         }
     }

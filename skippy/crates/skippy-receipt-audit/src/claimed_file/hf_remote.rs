@@ -19,6 +19,31 @@ use skippy_receipts::sparse_copy::RangeFetch;
 
 use super::hf_file::{HfFile, is_commit};
 
+/// Hugging Face has no file of the name at the revision asked for. A node
+/// that names a commit of the right repo that does not hold the file it
+/// claims to serve names nothing that can be checked.
+#[derive(Debug)]
+pub struct NoSuchFile(String);
+
+impl NoSuchFile {
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self(reason.into())
+    }
+
+    /// Whether `error` is, or was caused by, a file that is not there.
+    pub fn caused(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| cause.is::<Self>())
+    }
+}
+
+impl std::fmt::Display for NoSuchFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NoSuchFile {}
+
 /// Redirects the resolver may send before it names the file's URL, and the
 /// file's server after.
 const MAX_REDIRECTS: usize = 5;
@@ -153,6 +178,11 @@ impl HfRemote {
             if status.is_success() {
                 size = size.or_else(|| response.content_length().filter(|&n| n > 0));
                 return Ok(Resolved { url, size, commit });
+            }
+            if status == StatusCode::NOT_FOUND {
+                return Err(anyhow::Error::new(NoSuchFile::new(format!(
+                    "Hugging Face has no such file: it answered {status} for {url}"
+                ))));
             }
             if !status.is_redirection() {
                 bail!("Hugging Face answered {status} for {url}");

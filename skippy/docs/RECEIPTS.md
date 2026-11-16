@@ -426,8 +426,12 @@ A turn gets no receipt when the stage cannot replay its prefix:
 
 The log line names the cause after `the turn's cached prefix is unknown`.
 
-Each stage pins the cells of a bound turn for 12 seconds, so a later
-request writes other cells while the cache has room. When a challenge
+Each stage pins the cells of a bound turn for its challenge window of 10
+minutes, so a later request writes other cells while the cache has room.
+The pin is firm for the first 12 seconds. After that the turn lingers:
+lingering turns pin a quarter of a stream at most, and the oldest lose
+their pin past that. A turn that lost its pin can still be opened until a
+request writes its cells. When a challenge
 arrives, the stage pins the turn again until the opening ends, for at
 most 20 seconds, because the opening reads the cells after the replay.
 After the opening, the pin stays until the client has its rows, for at
@@ -1179,7 +1183,8 @@ other than chat completions, because receipts cover chat completions
 only. See
 [Require verifiable receipts](../../mesh/docs/PROVIDER_SELECTION.md#require-verifiable-receipts).
 
-An audit runs on one worker thread, off the request path. It opens the
+An audit runs on a worker thread, off the request path. The node runs two
+by default, and `[receipts] audit_threads` sets from 1 to 16. It opens the
 challenge on the peer over the mesh, reads the claimed Hugging Face GGUF
 by range, and checks the opening on the CPU.
 
@@ -1289,10 +1294,11 @@ A pass does not clear a strike.
 | `which is not repo@commit/file on Hugging Face` | The receipt names a bare name or a local path |
 | `which is not a commit and can move to other bytes` | The receipt names a branch or a tag |
 | `the receipt is version` | The peer runs another release |
-| `the audit worker is busy` | Two drawn turns are in the queue |
-| `this node's audit worker is off` | The worker ended too many times, or its thread did not start. Start the node again |
+| `every audit worker is busy` | Every worker audits a turn and has eight more in its queue. Set `[receipts] audit_threads` higher, or `audit_one_in` higher |
+| `this node's audit workers are off` | The workers ended too many times, or their threads did not start. Start the node again |
 | `this node is shutting down` | The node stops |
-| `past the 10 s challenge window` | The node was not ready to send the challenge in time. The first audit of a model can cause this |
+| `past the 600 s challenge window` | The turn waited more than 10 minutes for a worker or for the claimed model to open |
+| `the node no longer held the turn` | The node sent the challenge more than 8 s after the receipt, and the peer had needed the room the turn took. A peer keeps a turn for sure for 12 s from its commit, and then while it has room |
 | `the attention rows were not checked` | The node was ready to ask for the rows later than 28 s after the challenge |
 | `this node could not open the claimed model` | Hugging Face is out of reach, or the file is over a limit |
 | `checks could not run here` | A check was not able to run on this machine |
@@ -1313,7 +1319,7 @@ A pass does not clear a strike.
   audit refused before a challenge. `skippy recheck-receipt` does not read
   that form.
 
-**The worker.** If the audit worker ends unexpectedly, the node logs an
+**The workers.** If an audit worker ends unexpectedly, the node logs an
 error and starts it again, at most three times. Then the log has `receipt
 audits are off until this node restarts`.
 
@@ -1446,8 +1452,7 @@ last idle goes next. A request past these limits gets 503 with
 `Retry-After: 2` and `retry_after_secs` in the body. The node does not
 sign this answer. The stage did not admit the challenge, so send it again
 after the retry time. `skippy audit-receipt` and the Mesh auditor do
-that until the challenge window ends. A stage that is still busy then
-gave no answer.
+that for 10 seconds. A stage that is still busy then gave no answer.
 
 A stage reads rows for at most 4 rows requests of one receipt. It keeps
 each answer, and answers the same request again from it, also after the
@@ -1509,8 +1514,8 @@ places:
 | `a stage with recurrent state cannot open the cached prefix of a turn` | A hybrid stage continued a sequence that it kept | None |
 | `the recurrent state the turn started from is unknown` | A hybrid stage could not read the state | Read the stage log for the native error |
 | `the turn recorded nothing` | No ubatch of the turn was recorded. The text after it gives the cause | Use the cause in the text |
-| `the stage keeps ... bytes of receipts that can still be challenged` | The receipts that clients can still challenge fill the 64 MiB | Send fewer bound requests at one time |
-| `bytes of turns a client can still challenge` | The turns that clients can still challenge fill the 1 GiB of a stage | Send fewer requests at one time, or wait for the challenge windows to end |
+| `the stage keeps ... bytes of receipts clients are challenging or may challenge at once` | The receipts of turns from the last 12 seconds, and of challenged turns, fill the 64 MiB | Send fewer bound requests at one time |
+| `bytes of turns a client is challenging or may challenge at once` | The turns from the last 12 seconds, and the challenged turns, fill the 1 GiB of a stage | Send fewer requests at one time |
 | `a ubatch the stage could not record ran during the turn` | A ubatch that the stage cannot record, for example of image embeddings, ran while the turn ran, and the turn continued a cached prefix | None. The next turn gets a receipt |
 | `names a turn of another client that can still be challenged` | The request used the receipt id of another client's open turn | Use a new `x-receipt-id` or `x-request-id` for each request |
 | `names a turn this client was signed a receipt for, which it can still challenge` | The request used the receipt id of an open turn of the same client key | Use a new `x-receipt-id` or `x-request-id` for each request |

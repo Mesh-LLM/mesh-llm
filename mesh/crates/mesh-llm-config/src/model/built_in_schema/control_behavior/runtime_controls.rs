@@ -44,6 +44,15 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
                 None,
             );
         }
+        "receipts.audit_threads" => {
+            set_numeric(
+                setting,
+                Some(1.0),
+                Some(f64::from(crate::model::receipts::MAX_AUDIT_THREADS)),
+                Some(1.0),
+                None,
+            );
+        }
         "mesh_requirements.min_node_version" | "mesh_requirements.max_node_version" => {
             set_text_format(setting, ConfigTextFormat::Semver);
             push_non_empty_constraint(setting);

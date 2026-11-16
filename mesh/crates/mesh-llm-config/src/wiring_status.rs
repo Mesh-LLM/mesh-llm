@@ -190,6 +190,7 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     receipts::REQUIRE,
     receipts::OFFLINE,
     receipts::AUDIT_ONE_IN,
+    receipts::AUDIT_THREADS,
     WiringEntry {
         path: "telemetry.enabled",
         status: WiringStatus::Wired,

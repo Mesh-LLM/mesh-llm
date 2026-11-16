@@ -68,6 +68,7 @@ mod peer_text;
 #[cfg(test)]
 mod policy_tests;
 mod requested_model;
+mod standing;
 mod strikes;
 #[cfg(test)]
 mod test_support;
@@ -75,6 +76,15 @@ mod test_support;
 pub(crate) mod two_node_seam;
 mod verdict;
 mod worker;
+mod worker_pool;
+
+/// How long the verdict of a watched turn may take from its response: a
+/// drawn turn may wait in the audit queue for the whole challenge window,
+/// and a peer can then hold its audit for a while. This node's own part of
+/// an audit has no bound, so a verdict later than this is not waited for.
+pub(crate) const VERDICT_WAIT: std::time::Duration = opener::CHALLENGE_WINDOW
+    .saturating_add(drawn_turn::PEER_HOLD)
+    .saturating_add(std::time::Duration::from_secs(25));
 
 /// Whether this node can tie the model name `name` to a Hugging Face file
 /// by its own word (`requested_model`), which an audit of a turn asked
@@ -127,6 +137,8 @@ pub(crate) struct WatchedTurn {
     node: mesh::Node,
     asked: Asked,
     verdict: Option<oneshot::Sender<ReceiptAuditStatus>>,
+    /// The VRF drew the turn for an audit.
+    drawn: bool,
 }
 
 impl WatchedTurn {
@@ -136,10 +148,63 @@ impl WatchedTurn {
         verdict: verdict::Verdict,
         runtime: Option<&tokio::runtime::Handle>,
     ) {
-        let status = verdict.status();
+        let status = verdict.status(self.drawn);
+        if self.verdict.is_some() && self.drawn {
+            self.note_drawn(subject, &verdict);
+        }
         enforcement::conclude_for(&self.node, subject, verdict, runtime);
         if let Some(sender) = self.verdict {
             let _ = sender.send(status);
+        }
+    }
+}
+
+impl WatchedTurn {
+    /// Counts the verdict of a drawn turn that a plugin waits on toward the
+    /// peer's standing (`standing`): a pass proves it a little more, and
+    /// anything else makes it unproven. A turn that ended without a verdict
+    /// for a reason a peer can cause is counted as well, and the peer
+    /// leaves the `receipts` tier on this node when it has as many of those
+    /// in a day as strikes would block it.
+    fn note_drawn(&self, subject: &enforcement::Subject, verdict: &verdict::Verdict) {
+        let audits = &self.node.receipt_audits;
+        let host = self.asked.host;
+        let mut standing = audits
+            .standing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(verdict, verdict::Verdict::Passed) {
+            standing.passed(host, &self.asked.model);
+            return;
+        }
+        standing.lapsed(&host, &self.asked.model);
+        drop(standing);
+        let verdict::Verdict::Unsettled(reason) = verdict else {
+            return;
+        };
+        let now_ms = crate::network::peer_blocks::now_ms();
+        let counted = audits
+            .unsettled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record(host, subject.strike(reason, now_ms));
+        if !matches!(counted, strikes::Count::Limit(_)) {
+            return;
+        }
+        let newly = audits
+            .auditability
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .demote(host, now_ms);
+        if newly {
+            tracing::warn!(
+                "peer {} does not satisfy the receipts trust tier on this node for {} h, or {} days when that happened within a week: {} of its drawn turns in {} h ended without a verdict, for reasons a peer can cause; the last: {reason}",
+                host.fmt_short(),
+                auditability::DEMOTION.as_secs() / 3600,
+                auditability::REPEAT_DEMOTION.as_secs() / 86_400,
+                strikes::STRIKE_LIMIT,
+                strikes::STRIKE_WINDOW.as_secs() / 3600
+            );
         }
     }
 }
@@ -213,16 +278,19 @@ pub(crate) async fn watch(
     // each attempt its own id, so no other turn, of this client or
     // another, holds it at the peer
     let receipt_id = uuid::Uuid::new_v4().hyphenated().to_string();
-    let rate = if require_verdict {
-        1.0
-    } else {
-        node.config_state
-            .lock()
-            .await
-            .config()
-            .receipts
-            .audit_rate()
+    // a turn that needs a verdict is drawn like any other: the peer cannot
+    // tell which turns the VRF will draw, and a turn it does not draw says so
+    let (rate, threads) = {
+        let config = node.config_state.lock().await;
+        let receipts = &config.config().receipts;
+        (receipts.audit_rate(), receipts.audit_threads())
     };
+    let rate = node
+        .receipt_audits
+        .draw_rate(&host, &parsed.model, rate, require_verdict);
+    node.receipt_audits
+        .threads
+        .store(threads, std::sync::atomic::Ordering::Relaxed);
     let asked = Asked {
         host,
         key,
@@ -247,6 +315,7 @@ pub(crate) async fn watch(
         node: node.clone(),
         asked,
         verdict,
+        drawn: false,
     };
     Ok(Some(Watch {
         request,
@@ -256,7 +325,7 @@ pub(crate) async fn watch(
     }))
 }
 
-/// This node's audits of its peers: the worker that runs them and the
+/// This node's audits of its peers: the workers that run them and the
 /// strikes they count. A node and its mesh memberships share one, so a
 /// peer's strikes count wherever it was asked.
 #[derive(Default)]
@@ -264,9 +333,20 @@ pub(crate) struct Audits {
     strikes: Mutex<strikes::Strikes>,
     auditability: Mutex<auditability::Auditability>,
     commits: Mutex<commit_budget::CommitBudget>,
-    worker: worker::Slot<drawn_turn::Job>,
-    /// Drawn turns not audited because the worker was busy.
+    /// Which peers' drawn turns passed, of those a plugin waited on.
+    standing: Mutex<standing::Standing>,
+    /// Drawn turns that ended without a verdict for a reason a peer can
+    /// cause, of those a plugin waited on: counted like strikes.
+    unsettled: Mutex<strikes::Strikes>,
+    workers: worker_pool::Pool<drawn_turn::Job>,
+    /// The workers that take drawn turns (`[receipts] audit_threads`), as
+    /// the last watched turn read the setting. Zero until one did.
+    threads: std::sync::atomic::AtomicU32,
+    /// Drawn turns not audited because every worker was busy.
     busy: std::sync::atomic::AtomicU64,
+    /// The audits each peer has waiting or running on the workers: a peer
+    /// whose own audits hold workers may be the reason one is busy.
+    queued: Mutex<std::collections::HashMap<EndpointId, u32>>,
     /// What the worker opens a claimed model with, in a test that audits
     /// the toy model (`two_node_seam`); Hugging Face otherwise.
     #[cfg(test)]
@@ -277,11 +357,70 @@ pub(crate) struct Audits {
 }
 
 impl Audits {
-    /// Ends the audits with the node: turns still waiting are dropped, the
+    /// Ends the audits with the node: turns still waiting are dropped, each
     /// worker ends after the step it is in and its claimed models are
     /// released. Later turns are no audit.
     pub(crate) async fn shut_down(&self) {
-        self.worker.shut_down().await;
+        self.workers.shut_down().await;
+    }
+
+    /// The share of `peer`'s turns the VRF draws, where `rate` is the
+    /// configured one. A peer earns that sampling: until its drawn turns
+    /// passed, every turn of it that a plugin waits on (`awaited`) is drawn
+    /// (`standing`).
+    fn draw_rate(&self, peer: &EndpointId, model: &str, rate: f64, awaited: bool) -> f64 {
+        match awaited && !self.proven(peer, model, rate) {
+            true => 1.0,
+            false => rate,
+        }
+    }
+
+    /// Whether `peer` earned that its turns of `model` are sampled at
+    /// `rate`.
+    fn proven(&self, peer: &EndpointId, model: &str, rate: f64) -> bool {
+        self.standing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .proven(peer, model, standing::proving_turns(rate))
+    }
+
+    /// An audit of a turn of `peer` was queued.
+    fn audit_queued(&self, peer: EndpointId) {
+        let mut queued = self
+            .queued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *queued.entry(peer).or_default() += 1;
+    }
+
+    /// A queued audit of a turn of `peer` ended.
+    fn audit_ended(&self, peer: &EndpointId) {
+        let mut queued = self
+            .queued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(audits) = queued.get_mut(peer) {
+            *audits = audits.saturating_sub(1);
+            if *audits == 0 {
+                queued.remove(peer);
+            }
+        }
+    }
+
+    /// Whether an audit of a turn of `peer` waits or runs on a worker.
+    fn holds_a_worker(&self, peer: &EndpointId) -> bool {
+        self.queued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(peer)
+    }
+
+    /// The workers that take drawn turns.
+    fn threads(&self) -> usize {
+        match self.threads.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => mesh_llm_config::DEFAULT_AUDIT_THREADS as usize,
+            threads => threads as usize,
+        }
     }
 
     /// Whether this node can audit a peer's turn: an audit replays it on the

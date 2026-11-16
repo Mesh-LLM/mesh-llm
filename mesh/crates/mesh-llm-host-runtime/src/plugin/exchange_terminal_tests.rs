@@ -191,6 +191,27 @@ async fn receipt_verdict_is_bound_to_the_selected_attempt_and_completed_delivery
             "failed",
         ),
         (
+            Some(ReceiptAuditStatus::NotDrawn),
+            "completed",
+            true,
+            true,
+            "not_drawn",
+        ),
+        (
+            Some(ReceiptAuditStatus::NotAudited),
+            "completed",
+            true,
+            true,
+            "not_audited",
+        ),
+        (
+            Some(ReceiptAuditStatus::NotDrawn),
+            "client_cancelled",
+            true,
+            true,
+            "unverified",
+        ),
+        (
             Some(ReceiptAuditStatus::Passed),
             "client_cancelled",
             true,

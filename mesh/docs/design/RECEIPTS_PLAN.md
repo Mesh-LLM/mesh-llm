@@ -50,7 +50,7 @@ milestone 1.
 | Serving budget: decode at most 3% slower, prefill at most 10% slower | Done on CUDA | On 2026-11-10, decode is about 1.5% slower (200.3 tok/s on, 203.4 tok/s off) and prefill about 3% slower, over 14 rounds on one RTX 5090. The decode rate depends on the idle states of the processor ([RECEIPTS_MEASUREMENTS.md](RECEIPTS_MEASUREMENTS.md#serving-cost-on-the-final-build)). Other backends and more than one lane are not measured on this build |
 | Replay only the turn, from copies of the KV cells that it read | Done | None |
 | Replay only the ubatches that hold a picked position | Done | None |
-| Pin the cells of a bound turn for the challenge window | Done | A full cache writes pinned cells, and the turn is then unopenable |
+| Pin the cells of a bound turn for the challenge window | Done | A full cache writes pinned cells, and the turn is then unopenable. Past its first 12 s a turn keeps its pin only while lingering turns pin less than a quarter of a stream |
 | Prefix cache: each stage commits a prefix root, and a turn from a cached prefix opens | Done | A hybrid stage gives no receipt for such a turn. A stage with a quantized KV cache gives no receipt at all |
 | Prefix check: a challenge picks two positions of the cached prefix, and the stage opens each by a replay of the ubatch that wrote it | Done | Not run on a real model. A turn whose prefix the stage cannot replay gets no receipt. A stage after the first keeps at most 1 GiB of input rows for these replays |
 | Exact replay of cached generated tokens | Done | It is off while receipts are on |
@@ -88,7 +88,7 @@ milestone 1.
 | `--claimed-model repo@revision/file`: read the header, the rows and the small tensors from Hugging Face by range | Done | The bytes are pinned by the commit. No LFS hash is checked |
 | Limits on every read of a claimed GGUF, and a strict header parser | Done | None |
 | Split GGUF named by its first shard | Done | None |
-| Verifier in the Mesh host runtime, on one worker thread that the node owns | Done | No automated test sends a challenge over a real mesh tunnel |
+| Verifier in the Mesh host runtime, on worker threads that the node owns | Done | No automated test sends a challenge over a real mesh tunnel |
 | Mesh audit against the file that the model name of the request stands for, not the file that the receipt names | Done | A bare runtime name, an alias, `local-gguf/sha256-...` and `owner/repo` without a selector cannot be audited. A `repo:selector` request that the node rewrote to the bare runtime name of a peer is usually not auditable |
 | Bounds on every answer of a peer, and escaped peer text in logs and block reasons | Done | None |
 | Output head check with a secret head key | Done | None |
@@ -97,11 +97,11 @@ milestone 1.
 | Rounding profiles for K-quants and the common types | Partial | Done for CPU and CUDA. Vulkan, Metal and ROCm have none. q4_1, q5_1 and the i-quants other than iq4_nl and iq4_xs have none |
 | CUDA K-quant profile for the block sums of the current llama.cpp pin | Done | The profiles must be measured again on real hardware after each change of the pin. CI has no GPU |
 | Attention combine tolerance that increases with the square root of the context | Done | The combination check is looser at long contexts. Backends other than CUDA are not measured at long contexts |
-| Audit 10% of turns with a 10-second challenge window | Done | None |
+| Audit 10% of turns with a 10-minute challenge window, of which the first 10 seconds are sure | Done | A late challenge can find the turn gone, which is no audit |
 | Four outcomes of an audit in Skippy (pass, fail, no audit, no answer) and four verdicts in Mesh (passed, failed, strike, no audit) | Done | None |
 | A receipt check on every watched turn of a peer that advertises receipts | Done | None |
 | Strike rule: three strikes in 24 hours block a peer for 7 days | Done | Strikes are in memory only. A node with `[receipts] offline` watches no turn and logs nothing per turn |
-| Act on the verdict in payments | Host and Lightning integration | Deploy the updated buyer host and payment plugin together. The initial admission remains upfront. |
+| Act on the verdict in payments | Host done | The host gives the verdict to exchange lifecycle plugins. The rule that withholds a final invoice is in the `pay-lightning` plugin |
 
 ## Milestone 4: consequences and trust tiers
 

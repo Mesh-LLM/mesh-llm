@@ -41,3 +41,11 @@ pub(super) const AUDIT_ONE_IN: WiringEntry = WiringEntry {
     reason: "",
     behavior: WiringBehavior::None,
 };
+
+pub(super) const AUDIT_THREADS: WiringEntry = WiringEntry {
+    path: "receipts.audit_threads",
+    status: WiringStatus::Wired,
+    owner: "n/a",
+    reason: "",
+    behavior: WiringBehavior::None,
+};

@@ -76,10 +76,10 @@ evidence is signed by the node or is public, so anyone can check it again.
 | Devices | Desktop first. The parameters must fit a phone | Desktop built. Phone not built |
 | Attention | Loose check only | Built |
 | Consequences | Block the peer locally. No gossip, no stake | Built |
-| Payments | Require a passed audit for new final usage payments | Host verdict and Lightning integration |
+| Payments | Do not pay the final invoice of a turn that failed its audit | The host gives the verdict to its plugins. The payment rule is in the `pay-lightning` plugin |
 | Node identities | Free. A blocked node can join again with a new key | Accepted risk |
 | Failures | Provable from signed and public data | Built for the checks that the node signs |
-| Audit rate | Ordinary audits sample 1 in 10 turns by default. `[receipts] audit_one_in` sets 1 in N. Receipt-required attempts observed by lifecycle plugins are always selected | Built in Mesh |
+| Audit rate | 1 in 10 turns by default; `[receipts] audit_one_in` sets 1 in N, also for the turns a payment waits on | Built in Mesh |
 | Audit shape | Four layers and four sampled tokens, drawn after the node commits | Built |
 | Agentic | Commit the positions that the turn computed, and the cached prefix by the leaves of the turns that computed it. Challenge immediately, in a short window | Built. A challenge picks two positions of the cached prefix |
 | Parameters | From the GGUF header and tables per backend, not per model | Built |
@@ -299,9 +299,16 @@ choose its nonce and make many valid signatures of one message. With the
 VRF, the client cannot draw again until the rare outliers of an honest node
 fail the audit.
 
-The challenge window is 10 seconds. A stage keeps the turn openable for 12
-seconds, and for 30 seconds after the opening so that the client can get
-its rows.
+The challenge window is 10 minutes. A client that challenges at once does
+so in the first 10 seconds, and a stage keeps a turn openable for 12
+seconds whatever room it takes. After that the turn lingers: the stage
+keeps it openable for the rest of the window while it has room, and
+answers "cannot open" once the room was needed (see the pins and the
+limits of a serving node under
+[Node: commitment and replay](#node-commitment-and-replay)). A client that audits many turns, as a
+Mesh node does, may have a queue of turns to challenge, and the longer
+window lets that queue drain. After an opening the stage keeps the turn
+for 30 seconds so that the client can get its rows.
 
 ### Opening
 
@@ -732,8 +739,8 @@ puts dummy tokens in the columns of the other lanes.
   stage before.
 
 **Replay of the turn only.** A replay from the first token of a
-conversation increases with the conversation, and a 10-second window
-cannot absorb it. So the node replays only the turn, on top of the KV
+conversation increases with the conversation, and a client that waits
+for the opening of every turn cannot absorb it. So the node replays only the turn, on top of the KV
 cells that the turn read. It mirrors which cell holds which position of
 which sequence. When it opens a turn, it stops the stage for a moment. It
 makes sure that those cells still hold what the turn read. Then it copies
@@ -778,12 +785,16 @@ receipt.
 **Pins.** Serving frees the cells of a turn when its response ends. A
 freed cell keeps its rows until a ubatch writes it. Each stage pins the
 cells of a bound turn for the challenge window, so a later request writes
-other cells while the cache has room. When a challenge of the turn
+other cells while the cache has room. The pin is firm for 12 s. After
+that it lingers for the rest of the 10 minutes: lingering turns pin a
+quarter of a stream at most, and past that the oldest lose their pin. A
+turn that lost its pin can still be opened until a request writes its
+cells. When a challenge of the turn
 arrives, the stage pins the turn again until the opening ends, for at
 most 20 s. The opening reads the cells after the replay, and the replay
 of a long prompt on a CPU takes seconds. Without this pin, a request that
-runs during the replay can write the cells of a turn whose 12 s pin ran
-out, and the stage answers "cannot open" to its own honest turn. A full
+runs during the replay can write the cells of a turn whose pin ran
+out or gave way, and the stage answers "cannot open" to its own honest turn. A full
 cache writes pinned cells anyway, and the turn can then no longer be
 opened.
 
@@ -859,9 +870,9 @@ drops a turn that a client can still challenge.
 
 | Limit | Value | When it is reached |
 |---|---|---|
-| Records of committed turns and logs of uncommitted turns, with their ubatches, position hashes, prefix cells and recurrent state | 1 GiB per stage | A turn that does not fit beside the turns inside their challenge window gets no receipt. Only turns past their window are dropped for room. A live log that outgrows the window is shed: its turn gets no receipt, and it keeps nothing more for that turn |
-| Input rows for prefix replays | 1 GiB per stage after the first | The rows of a turn inside its window are kept. Newer traffic loses its rows first, and a later turn whose prefix needs them gets no receipt |
-| Pinned cells | Half of a KV stream per client key, three quarters in total | The oldest pins give way. The new bound turn keeps its receipt |
+| Records of committed turns and logs of uncommitted turns, with their ubatches, position hashes, prefix cells and recurrent state | 1 GiB per stage | Turns past their window are dropped for room first, then lingering turns, oldest first. A turn that does not fit beside the turns held firmly (12 s after their commit, or challenged) gets no receipt. A live log that outgrows the window is shed: its turn gets no receipt, and it keeps nothing more for that turn |
+| Input rows for prefix replays | 1 GiB per stage after the first | The rows of a turn inside its window are kept, and those of a lingering turn while the turns held firmly leave room. Newer traffic loses its rows first, and a later turn whose prefix needs them gets no receipt |
+| Pinned cells | Half of a KV stream per client key, three quarters in total, a quarter for lingering turns | The oldest pins give way. The new bound turn keeps its receipt |
 | Openings and rows requests at work | 1 per stage | The others wait |
 | Requests that wait | 8 in total, 2 per client key, 8 s each | HTTP 503 with `Retry-After: 2`. The challenge is not admitted, so the client can send it again |
 | Rows requests that read rows | 4 per receipt | A repeated request gets the kept answer. A fifth new request is refused |
@@ -1054,7 +1065,7 @@ challenge. The correction needs authentication between stages.
 | Reasoning sampler statement | At most 256 bytes per tag, 8 end tags and 1,024 bytes of prefill | Bounds a hostile statement |
 | Recurrent tolerance | 1e-3 | A backend can sum the scan in other chunks |
 | Unchecked weights inside token-mixing ops | At most 1% of the weight bytes of a layer | Guard 2 of [RECEIPTS_GLUE.md](RECEIPTS_GLUE.md) |
-| Challenge window | 10 s. The stage pins a bound turn for 12 s, while a challenge of it waits and is opened (at most 20 s), and for 30 s after the opening | Agentic latency |
+| Challenge window | 10 minutes. The stage holds a bound turn firmly for 12 s and lets it linger for the rest of the window, pins it while a challenge of it waits and is opened (at most 20 s), and for 30 s after the opening | A client that challenges at once is always answered. One with a queue of audits is answered while the stage has room |
 | Challenges per receipt | 1 for a bound receipt, 4 for an unbound one | Bounds the replay work |
 | Challenge and row draw | ECVRF-EDWARDS25519-SHA512-TAI, a new client key per request | Decision |
 | Commitment hash | BLAKE3 | Throughput |
@@ -1294,7 +1305,8 @@ unauditable receipt.
 
 Then the VRF of the turn root draws one turn in ten, or one in
 `[receipts] audit_one_in` (an integer from 1 to 10,000). A turn that it
-does not draw is no audit.
+does not draw is no audit. A plugin that waits for the verdict of the turn
+is told that the turn was not drawn (see [Consequences](#consequences)).
 
 ### Unauditable receipts
 
@@ -1338,8 +1350,8 @@ budget is in memory.
 
 ### Drawn turns
 
-One worker thread audits the drawn turns off the request path. A drawn
-turn can add these strikes:
+Worker threads audit the drawn turns off the request path, two by default
+(see [The workers](#the-workers)). A drawn turn can add these strikes:
 
 - The peer gave no usable signed answer to the challenge, or to the
   request for rows.
@@ -1353,6 +1365,9 @@ turn can add these strikes:
 - The receipt is unauditable, and this node audited a receipt of the peer
   for the same model in the last 24 hours (see
   [Unauditable receipts](#unauditable-receipts)).
+- The request pinned no commit, and the commit that the receipt names is
+  on the branch but does not hold the file. Hugging Face answers 404 for
+  it.
 
 A drawn turn is no audit in these cases:
 
@@ -1360,8 +1375,12 @@ A drawn turn is no audit in these cases:
   file.
 - The receipt names no Hugging Face file at a commit: a bare name, a local
   path or a branch.
-- The worker is busy, off, or the node shuts down.
+- Every worker is busy, the workers are off, or the node shuts down. A
+  busy worker is counted against the peer for payments when audits of its
+  own turns hold workers (see [Consequences](#consequences)).
 - The challenge was not ready in the challenge window.
+- The challenge was sent more than 8 s after the receipt, and the peer
+  answered that it no longer holds the turn (404, 409 or 410).
 - The node was too late to ask for the attention rows. The opening was
   checked, and the rows were not.
 - The node was not able to open the claimed model, or a check was not able
@@ -1380,7 +1399,9 @@ The node must not take its own delay for the silence of a peer.
 
 | Step | Rule |
 |---|---|
-| Challenge window | 10 s after the receipt. The node checks the window when it sends the challenge, after the claimed model is open. A challenge that is too late is not sent |
+| Challenge window | 10 minutes after the receipt. The node checks the window when it sends the challenge, after the claimed model is open. A challenge that is too late is not sent |
+| Prompt window | 8 s after the receipt. A peer keeps a turn for sure for 12 s from its commit, which leaves 4 s for the response and the challenge to travel, and then while it has room. When the node sends the challenge later and the peer answers that the turn is gone, that is no audit. Sent in time, the same answer is a strike |
+| Busy peer | Asked again for 10 s from the first send of the challenge |
 | Wait for the opening | 15 s from each send of the challenge, also when the node sends it again to a busy peer. The time that a drawn turn waited in the queue of the node does not shorten it |
 | Request for rows | Not sent later than 28 s after the challenge |
 | Wait for the rows | 10 s |
@@ -1388,11 +1409,12 @@ The node must not take its own delay for the silence of a peer.
 The first audit of a model opens the claimed model and builds the head
 key. That time does not count against the peer: a late step is no audit.
 
-A peer can hold one audit for at most 35 s: the window when it answers
-"busy", the wait for the opening and the wait for the rows. The time to open the claimed model and to check the
+A peer can hold one audit for at most 48 s: the 10 s in which it answers
+"busy" to the challenge, the 28 s in which it answers "busy" to the request
+for rows, and the wait for the rows. The time to open the claimed model and to check the
 turn is the node's own, and has no bound. Each read from Hugging Face
 has a timeout of 120 s, and a turn that waited in the queue past the
-window is not opened. When one audit holds the worker for more than 35 s,
+window is not opened. When one audit holds a worker for more than 48 s,
 the log says so.
 
 ### Strikes
@@ -1441,16 +1463,26 @@ characters.
 - The node escapes each text that a peer chose and cuts it at 240
   characters before it logs the text or keeps it in a block reason.
 
-### The worker
+### The workers
 
-The node owns the worker thread. It starts with the first drawn turn and
-is joined at shutdown. The queue holds two turns. A drawn turn that finds
-the queue full is no audit, and the log gives the number of such turns
-since the node started. A panic in one audit does not end the worker: the
-turn is no audit, and the log says so. If the thread ends, the node starts it again, at
-most three times. Then audits are off until the node starts again, and
-the log says so. The worker keeps two claimed models open and releases a
-model after 10 minutes without an audit.
+The node owns its worker threads: two by default, and
+`[receipts] audit_threads` sets from 1 to 16. A worker starts with its
+first drawn turn and is joined at shutdown. Each audits one turn at a time
+and has a queue of eight. A drawn turn goes to the worker that holds the
+fewest turns, and to the first of those, so a node that audits one turn at
+a time uses one thread. A drawn turn that finds every queue full is no
+audit, and the log gives the number of such turns since the node started.
+A turn may wait in a queue for the whole challenge window; the last of a
+full queue still starts inside it when each audit before it takes the
+48 s a peer can make it take. A waiting turn holds its response, up to
+about 20 MiB, so a thread and its queue hold up to 180 MiB.
+
+A panic in one audit does not end its worker: the turn is no audit, and
+the log says so. If a thread ends, the node starts it again, at most three
+times. Then that worker is off until the node starts again, and the log
+says so. Each worker keeps two claimed models open and releases a model
+after 10 minutes without an audit. A loaded model stays on the thread that
+loaded it, so more threads hold more model data.
 
 ### Effects on honest serving nodes
 
@@ -1484,7 +1516,7 @@ node's limits turn away new turns first.
 A busy stage is the one answer the auditor asks for again. When the
 answer is 503 with a `Retry-After`, the auditor waits that long, at least
 1 s, and sends the same request again. It does so while the node still
-keeps what the request needs: 10 s after the receipt for a challenge, and
+keeps what the request needs: 10 s from the first send of a challenge, and
 28 s after the challenge for the attention rows. A stage that is still
 busy then gave no answer, and that is a strike. The busy answer is not
 signed, so a node could send it to every challenge it wants to avoid, and
@@ -1504,20 +1536,73 @@ an answer that cost nothing must not end an audit without a strike (see
 - **Evidence.** The node keeps the evidence of a failure under
   `receipt-evidence/` in its identity state directory. The rules of the
   store are below.
-- **Payments.** The host attempts an audit on every remote turn that requires
-  receipts and has an exchange lifecycle observer. The host publishes the
-  verdict to its
+- **Payments.** The host gives the verdict of a remote turn that requires
+  receipts to its
   [exchange lifecycle plugins](../plugins/openai-exchange-lifecycle.md#receipt-audit-evidence).
-  The updated Lightning client requires this evidence for new paid requests and
-  holds the final usage payment until that attempt passes. Set
-  `require = true` in `[receipts]`, or set `audit = true` and send
-  `x-mesh-trust: receipts` on the purchase request.
-  The initial admission payment is still paid before inference. Update the
-  buyer's host and payment plugin together. The seller's existing
-  outstanding-invoice policy still applies.
+  A payment plugin decides what each status means for the final usage
+  payment. The rule itself is in the `pay-lightning` plugin, not in this
+  repository. Set `require = true` in `[receipts]`, or set `audit = true`
+  and send `x-mesh-trust: receipts` on the purchase request.
 
-A missing verdict on an ordinary sampled turn has no audit consequence. For
-receipt-required settlement, the buyer needs an explicit pass.
+| Status | Meaning | Intended payment |
+|---|---|---|
+| `passed` | The VRF drew the turn, and its audit passed | Pay |
+| `not_drawn` | The receipt is the peer's, bound to the request and names the model asked for. The VRF did not draw the turn | Pay |
+| `not_audited` | The same receipt, and the VRF drew the turn. The node did not complete the audit, for a reason that is not in the receipt: its workers were busy, Hugging Face was out of reach, or the peer no longer held a turn that the node challenged late | Withhold |
+| `unverified` | The receipt supports no audit of what was asked for: it is missing or unusable, names another file, or states something the node cannot audit. Also a turn whose response did not end whole, and a verdict that did not arrive in time | Withhold |
+| `failed` | The audit failed, or the peer owed a receipt or an answer to a challenge and gave none | Withhold |
+
+**Why `not_audited` is not paid.** If a turn that was drawn and not
+audited were paid, nothing would depend on the audit: a peer would gain by
+keeping its audits from running, and a buyer whose audits never run would
+pay for work that nobody checked. So the buyer pays for a drawn turn only
+when its audit passed. The cost falls on an honest peer when the fault is
+the buyer's: a final invoice that stays unpaid is a debt at the seller, and
+the `pay-lightning` seller refuses a buyer that has three. A buyer whose
+audits do not run thus loses each seller after three drawn turns, until the
+operator of the seller forgives the debt. That is the pressure on a buyer to
+keep its audits running: enough `audit_threads`, and a path to Hugging
+Face. The status is told apart from `unverified` so that the operator of
+the buyer can see that the audit did not run, where `unverified` says that
+the receipt was not fit for one.
+
+A peer that makes a drawn turn end without a verdict is not paid for that
+turn. It can still be paid for the turns that the VRF does not draw. Three
+rules bound that:
+
+- **Sampling is earned.** Until a peer is proven for a model, the VRF draws
+  every turn of it that a plugin waits on. A peer is proven when as many of
+  its drawn turns in a row passed as one draw stands for: 9 at 1 in 10,
+  and at most 16. A drawn turn that does not pass, for any reason, makes
+  the peer unproven again. An honest peer is audited more often for a
+  while, and its turns pass. Standing is in memory, per peer and model, so
+  every peer is unproven after a restart.
+- **Unsettled turns are counted.** A drawn turn is unsettled when it ended
+  without a verdict for a reason that a peer can cause: the turn was gone
+  at a late challenge, the commit was past the budget, or every worker was
+  busy while audits of this peer's own turns held some of them. Three
+  unsettled turns of a peer in 24 hours take the peer out of the `receipts`
+  tier on this node for 24 hours, and for 7 days when that happens again
+  within a week. Only turns that a plugin waits on are counted. A cause on
+  the side of the node alone is not: Hugging Face out of reach, a slow
+  first open of a model, or workers that are busy with other peers.
+- **A commit without the file is a strike.** When the request pins no
+  commit, the peer chooses the one that its receipt names. A commit of the
+  right branch that does not hold the file opens nothing, so the audit of
+  a drawn turn that names one is a strike, not a turn without an audit.
+
+These rules bound the gain. They do not remove it. A proven peer that then
+serves another model is paid for its undrawn turns until the VRF draws one,
+which is 9 turns on average at 1 in 10. After three drawn turns in a day
+that ended unsettled the peer is out of the tier, so it is paid for about
+27 turns a day that it did not serve as claimed, per identity, buyer and
+model. The number grows with `audit_one_in`. An honest peer can be counted
+too: when the node challenges late because its own queue is long, and the
+peer needed the room that the turn took. A buyer that wants no turn paid
+without a pass sets `audit_one_in = 1`.
+
+Outside of payments, a turn without an audit has no consequence for the
+peer. An upgrade on one side thus does not block an honest node.
 
 **The evidence store.** Evidence holds the token ids of the prompt and
 activations of the turn, and a peer decides how large it is. So:
@@ -1767,12 +1852,12 @@ This is the single list for all receipts documents.
     The proposed correction is to plan the model and open the stage
     (`StageModel::open`) in a child process that the auditor can lose. A
     child that stops gives no audit. This is not built.
-25. **A stage busy for the whole window is a strike.** The Mesh auditor
-    asks a busy stage again until the challenge window ends, and counts a
-    stage that is still busy then as a strike. A stage opens one challenge
+25. **A stage busy for 10 s is a strike.** The Mesh auditor asks a busy
+    stage again for 10 s from its first challenge, and counts a stage
+    that is still busy then as a strike. A stage opens one challenge
     at a time and lets 8 wait. An honest node is struck only when
-    challenges keep its queue full for the 10 s after a receipt, which
-    takes a steady stream of bound turns from several client keys. A
+    challenges keep its queue full for those 10 s, which takes a steady
+    stream of challenges from several client keys. A
     signed busy answer, which could count as no audit up to a limit,
     needs a change of the wire format.
 26. **Per-key limits and Mesh keys.** The Mesh auditor uses a new client
@@ -1840,7 +1925,7 @@ This is the single list for all receipts documents.
 | Local peer block after a provable failure | Done | None |
 | Strikes for events that only the auditing node saw, and a block after three strikes in 24 hours | Done | Strikes are in memory only. The automated test over a real mesh tunnel uses a toy peer and the toy model |
 | Trust tier: a request policy that requires `receipts` | Done | Splits with remote stages do not qualify |
-| Payments: act on the audit verdict | Host and Lightning integration | Deploy a compatible Lightning plugin with the client host |
+| Payments: act on the audit verdict | Host done | The host gives the verdict to exchange lifecycle plugins. The rule that withholds a final invoice is in the `pay-lightning` plugin |
 | Phones: a verifier in the embedded client | Open | The embedded client has no peer blocks and no payments |
 
 The detail of each milestone is in [RECEIPTS_PLAN.md](RECEIPTS_PLAN.md).

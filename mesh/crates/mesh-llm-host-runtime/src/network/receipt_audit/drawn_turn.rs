@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use skippy_receipt_audit::chat_reply::ChatReply;
-use skippy_receipt_audit::claimed_file::{HfFile, NotOnBranch};
+use skippy_receipt_audit::claimed_file::{HfFile, NoSuchFile, NotOnBranch};
 use skippy_receipt_audit::claimed_model::ClaimedModel;
 use skippy_receipt_audit::turn_audit::{self, AuditOptions, ClaimedSetup, ReceivedTurn};
 use skippy_receipts::coverage;
@@ -26,7 +26,8 @@ use super::claimed_models::{self, ClaimedModels, MODEL_IDLE};
 use super::collector::Reply;
 use super::enforcement::Subject;
 use super::opener::{
-    CHALLENGE_WINDOW, Late, OPEN_WAIT, ROWS_WAIT, Transport, TunnelTransport, WindowedOpener,
+    BUSY_WINDOW, CHALLENGE_WINDOW, Late, ROWS_ASKED, ROWS_WAIT, Transport, TunnelTransport,
+    WindowedOpener,
 };
 use super::peer_text::shown_error;
 use super::verdict::Verdict;
@@ -34,23 +35,24 @@ use super::worker::Runner;
 use super::{Asked, WatchedTurn};
 use crate::network::peer_blocks::now_ms;
 
-/// The longest the peer can make one audit hold the worker: it is busy
-/// until the end of the window, answers the challenge sent then at the
-/// end of its wait, and the rows at the end of theirs. Time past it is
+/// The longest the peer can make one audit hold a worker: it is busy for
+/// as long as it is asked again and opens the challenge sent then, is
+/// busy again for as long as the rows are asked for, and answers the
+/// rows request sent then at the end of its wait. Time past it is
 /// this node's own: opening the claimed model, which reads it from
 /// Hugging Face the first time, and checking the turn. Neither has a
 /// bound here, so an audit that takes longer says so ([`held_too_long`]).
-const PEER_HOLD: Duration = CHALLENGE_WINDOW
-    .saturating_add(OPEN_WAIT)
+pub(super) const PEER_HOLD: Duration = BUSY_WINDOW
+    .saturating_add(ROWS_ASKED)
     .saturating_add(ROWS_WAIT);
 
-/// What the log says of an audit that held the worker for `held`, when
+/// What the log says of an audit that held its worker for `held`, when
 /// that is past what the peer can make it take ([`PEER_HOLD`]); turns
-/// drawn meanwhile were refused as busy.
+/// drawn meanwhile waited behind it.
 fn held_too_long(held: Duration) -> Option<String> {
     (held > PEER_HOLD).then(|| {
         format!(
-            "receipt audit: one audit held the audit worker for {} s, past the {} s a peer can make it take; turns drawn meanwhile were not audited (opening a claimed model the first time reads it from Hugging Face)",
+            "receipt audit: one audit held an audit worker for {} s, past the {} s a peer can make it take; turns drawn meanwhile waited behind it (opening a claimed model the first time reads it from Hugging Face)",
             held.as_secs(),
             PEER_HOLD.as_secs()
         )
@@ -178,6 +180,14 @@ pub(super) fn audit<O: Fn(&HfFile) -> Result<ClaimedSetup>>(
         Ok(setup) => setup,
         // the peer served a commit that is not of the model asked for
         Err(error) if NotOnBranch::caused(&error) => return Verdict::strike(shown_error(&error)),
+        // the peer chose the commit, of a repo this node just read the
+        // history of, and the file it claims to serve is not in it
+        Err(error) if turn.branch.is_some() && NoSuchFile::caused(&error) => {
+            return Verdict::strike(format!(
+                "the commit the peer named does not hold the file: {}",
+                shown_error(&error)
+            ));
+        }
         Err(error) => {
             return Verdict::no_audit(format!(
                 "this node could not open the claimed model: {}",
@@ -289,6 +299,10 @@ impl Runner for AuditRunner {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .audited(job.turn.asked.host, &job.turn.asked.model, now_ms());
         }
+        job.turn
+            .node
+            .receipt_audits
+            .audit_ended(&job.turn.asked.host);
         job.turn.conclude(&subject, verdict, Some(&job.runtime));
     }
 
@@ -308,9 +322,9 @@ mod tests {
 
     #[test]
     fn an_audit_that_holds_the_worker_past_what_a_peer_can_make_it_take_says_so() {
-        assert_eq!(PEER_HOLD, Duration::from_secs(35));
+        assert_eq!(PEER_HOLD, Duration::from_secs(48));
         assert_eq!(held_too_long(PEER_HOLD), None);
         let warning = held_too_long(Duration::from_secs(90)).expect("said");
-        assert!(warning.contains("90 s, past the 35 s"), "{warning}");
+        assert!(warning.contains("90 s, past the 48 s"), "{warning}");
     }
 }
