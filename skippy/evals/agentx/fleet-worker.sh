@@ -19,6 +19,24 @@ export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 THREADS="${THREADS:-20}"
 SMOKE_SCOPE="${SMOKE_SCOPE:-full}"
 
+# Ship files into the jy artifact dir loudly. Silent no-ops once lost a full
+# round of evidence: every copy (or its failure) must be visible in the log.
+SHIP_COUNT=0
+ship() {
+  if [ -z "${JIANYANG_ARTIFACT_DIR:-}" ] || [ ! -d "$JIANYANG_ARTIFACT_DIR" ]; then
+    echo "  SHIP_FAILED: artifact dir missing or not a directory (${JIANYANG_ARTIFACT_DIR:-unset})"
+    return 0
+  fi
+  for f in "$@"; do
+    if [ -f "$f" ] && cp "$f" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null; then
+      SHIP_COUNT=$((SHIP_COUNT+1))
+      echo "  shipped: $(basename "$f")"
+    else
+      echo "  SHIP_FAILED: $f"
+    fi
+  done
+}
+
 # ---- host guards (hardware placement; never node names) ----
 if [ "$BACKEND" = "cuda" ]; then
   [ "$(uname -m)" = "aarch64" ] || { echo NO_AARCH64_HOST; exit 33; }
@@ -175,7 +193,7 @@ PYEOF
     if [ "$READY" -lt 2 ]; then
       echo "-- $NAME: SERVER_START_FAILED; log tail:"
       tail -30 "$W/serve-$NAME.log" 2>/dev/null | sed 's/^/    /'
-      cp "$W/serve-$NAME.log" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
+      ship "$W/serve-$NAME.log"
       kill $PID 2>/dev/null || true; sleep 8
       return 1
     fi
@@ -282,8 +300,7 @@ NSYSPY
     kill $NPID 2>/dev/null || true; sleep 10; kill -9 $NPID 2>/dev/null || true; sleep 5
   done
   # Ship nsys reports
-  for f in "$W"/nsys-*.nsys-rep; do [ -f "$f" ] && cp "$f" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null; done
-  for f in "$W"/nsys-*.qdrep; do [ -f "$f" ] && cp "$f" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null; done
+  ship "$W"/nsys-*.nsys-rep "$W"/nsys-*.qdrep
 
   # ---- skippy profile WITHOUT prefix cache: isolates checkpoint export cost ----
   PORT=$((PORT+1))
@@ -336,7 +353,8 @@ SWEEPPY
     sleep 5
   done
   fi
-  cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
+  ship "$W"/serve-*.log
+  echo "shipped_artifacts=$SHIP_COUNT"
   echo SMOKE_DONE
   exit 0
 fi
