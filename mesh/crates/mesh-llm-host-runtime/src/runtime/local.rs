@@ -1452,8 +1452,8 @@ async fn start_local_package_v2_model(
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = None;
     // the receipts name the package's source GGUF, as a split's do
-    runtime_options.receipts =
-        receipts::receipts_options(&spec, &package.source_model_path, &model_name);
+    let source_gguf = &package.source_model_path;
+    runtime_options.receipts = receipts::receipts_options(&spec, source_gguf, &model_name);
     let hook_policy = spec.hook_policy.clone();
     let model_ref = model_name.clone();
     let reporter_model_ref = model_ref.clone();
@@ -1497,14 +1497,20 @@ async fn start_local_package_v2_model(
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     }
     let workload_class = handle.workload_class()?;
-    let receipts = receipts::advertised(
-        &spec,
-        &package.source_model_path,
-        &model_name,
-        &handle,
-        workload_class,
-    );
-    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
+    let receipts = receipts::advertised(&spec, source_gguf, &model_name, &handle, workload_class);
+    report_loaded_model_analytics(LoadedModel {
+        served_name: &model_ref,
+        source: ModelLoadSource::LayerPackage,
+        metadata: compact_meta,
+        path: None,
+        package_ref: Some(&package.package_ref),
+        dflash: None,
+        device: selected_device(
+            spec.pinned_gpu,
+            spec.device_override.as_deref(),
+            resolved.hardware.device.as_deref(),
+        ),
+    });
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
