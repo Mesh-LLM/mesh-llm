@@ -136,6 +136,7 @@
       "ci-controller-bootstrap",
       "ci-crate-lists",
       "ci-legacy-contracts",
+      "ci-reset-linker-traces",
       "ci-sccache-seed-build",
       "ci-shellcheck",
       "ci-snapshot-promotion-contracts",

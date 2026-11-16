@@ -34,3 +34,15 @@ For example, run `just with-lld cargo xtool repo-consistency ci-crate-lists`;
 interface `cargo run -p xtask --` remains compatible. Keep build and required
 validation entrypoints in their owning Just recipes. New repository automation
 belongs in typed Rust owners, not new Python tooling or generic shell policy.
+
+The Windows CI linker driver can delegate to `native windows-linker --lld PATH
+-- LINKER_ARGUMENTS` through the restored product-source executable. The opt-in
+metadata policy only suppresses PDB generation for matching non-primary
+proc-macro libraries; product links and response-file bytes stay unchanged.
+The linker never builds its own automation executable.
+
+Windows host CI runs `just ci-reset-linker-traces` after restoring target
+artifacts and before either build. It invokes the restored executable's
+`ci-ops reset-linker-traces` command, which removes only linker trace files
+under the checkout's `target` tree. Compiler outputs remain available for
+reuse; timing uploads require the reset to succeed.

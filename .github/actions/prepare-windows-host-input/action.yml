@@ -10,6 +10,10 @@ inputs:
     description: Use a minimal prepared UI tree instead of rebuilding the React console.
     required: false
     default: "false"
+  prior_cache_evidence_name:
+    description: Optional artifact name for compiler-cache counters before the host build; requires restored automation.
+    required: false
+    default: ""
   attestation_signing_key_file:
     description: Optional release-attestation signing key path.
     required: false
@@ -42,6 +46,11 @@ runs:
   steps:
     - id: layout
       uses: ./.github/actions/resolve-source-layout
+    - name: Capture prior compiler-cache evidence
+      if: ${{ !cancelled() && inputs.prior_cache_evidence_name != '' }}
+      uses: ./.github/actions/capture-sccache-stats
+      with:
+        artifact_name: ${{ inputs.prior_cache_evidence_name }}
     - name: Build and prepare immutable Windows host
       id: prepare
       shell: pwsh

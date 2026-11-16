@@ -258,6 +258,9 @@ function Configure-LldLinker {
         Show-LldInstallInstructions
     }
 
+    if ($env:MESH_CI_STABLE_PROC_MACRO_METADATA -eq "1") {
+        $linker = Join-Path $scriptDir "cargo-linker.cmd"
+    }
     $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
     $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = $linker
     Write-Host "Using Rust linker: $linker"
@@ -1052,7 +1055,7 @@ if ($HostOnly) {
             }
         }
         Set-BuildVersionStamp
-        $hostArgs = @("build")
+        $hostArgs = @("build", "--timings")
         $hostOutputProfile = "debug"
         if ($buildProfile -eq "release") {
             $hostArgs += "--release"
