@@ -1101,7 +1101,8 @@ as a GitHub pre-release: that is the release candidate. Versions carry no `-rc`
 or `-preview` suffix. Upload to a draft, then expose the complete candidate
 without marking it latest. `release-promote.yml` (Promote) rebuilds nothing: it
 requires a published, unpromoted candidate with every asset uploaded, every
-runtime archive its manifest lists present among those assets, and the full
+runtime archive its manifest lists present among those assets, the Linux
+x86_64 product archive that the crates.io jobs publish from, and the full
 native runtime matrix, marks it the latest stable release, and only then
 runs release notes, downstream packaging, and crates.io publication as
 separately rerunnable jobs. A rejected candidate is never promoted; the next

@@ -117,7 +117,7 @@ jobs:
             exit 1
           }
           gh api --paginate "$(jq -r '.assets_url' release.json)?per_page=100" \
-            --jq '.[] | {name, state}' > assets.json
+            --jq '.[] | {name, state, browser_download_url}' > assets.json
           gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
             --jq '.[] | select(.draft or .prerelease) | .tag_name' > unpromoted-tags.txt
       - name: Download the candidate runtime manifest

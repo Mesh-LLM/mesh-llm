@@ -20,6 +20,7 @@ struct Release {
 struct Asset {
     name: String,
     state: String,
+    browser_download_url: String,
 }
 
 #[derive(Deserialize)]
@@ -72,21 +73,34 @@ fn admit(tag: &str, release: &str, assets: &str, manifest: &str) -> Result<u64, 
             incomplete.join("\n")
         ));
     }
-    let uploaded: BTreeSet<&str> = assets.iter().map(|asset| asset.name.as_str()).collect();
+    // Promote's crates.io jobs download this archive from the release.
+    let archive = format!("mesh-llm-{tag}-x86_64-unknown-linux-gnu.tar.gz");
+    let absent: Vec<String> = [archive.clone(), format!("{archive}.sha256")]
+        .into_iter()
+        .filter(|name| assets.iter().all(|asset| asset.name != *name))
+        .collect();
+    if !absent.is_empty() {
+        return Err(format!(
+            "{tag} lacks release files that Promote publishes from:\n{}",
+            absent.join("\n")
+        ));
+    }
+    let uploaded: BTreeSet<&str> = assets
+        .iter()
+        .map(|asset| asset.browser_download_url.as_str())
+        .collect();
     let manifest: Manifest = serde_json::from_str(manifest)
         .map_err(|error| format!("Unable to read the runtime manifest of {tag}: {error}"))?;
     if manifest.artifacts.is_empty() {
         return Err(format!("{tag} lists no native runtimes."));
     }
-    let prefix = format!("/releases/download/{tag}/");
+    // The whole download URL must match, so a file of the same name in
+    // another repository or release does not count.
     let missing: Vec<&str> = manifest
         .artifacts
         .iter()
         .map(|artifact| artifact.url.as_str())
-        .filter(|url| {
-            url.rsplit_once(&prefix)
-                .is_none_or(|(_, name)| !uploaded.contains(name))
-        })
+        .filter(|url| !uploaded.contains(url))
         .collect();
     if !missing.is_empty() {
         return Err(format!(
@@ -135,14 +149,24 @@ mod tests {
 
     const TAG: &str = "v0.81.0";
     const RELEASE: &str = r#"{"id":42,"tag_name":"v0.81.0","draft":false,"prerelease":true}"#;
-    const ASSETS: &str = concat!(
-        r#"{"name":"native-runtimes.json","state":"uploaded"}"#,
-        "\n",
-        r#"{"name":"runtime-metal.tar.gz","state":"uploaded"}"#,
-        "\n",
-        r#"{"name":"runtime-cpu.tar.gz","state":"uploaded"}"#,
-        "\n",
-    );
+    const BASE: &str = "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.81.0";
+    const NAMES: [&str; 5] = [
+        "native-runtimes.json",
+        "runtime-metal.tar.gz",
+        "runtime-cpu.tar.gz",
+        "mesh-llm-v0.81.0-x86_64-unknown-linux-gnu.tar.gz",
+        "mesh-llm-v0.81.0-x86_64-unknown-linux-gnu.tar.gz.sha256",
+    ];
+
+    fn assets() -> String {
+        let line = |name: &&str| {
+            format!(
+                r#"{{"name":"{name}","state":"uploaded","browser_download_url":"{BASE}/{name}"}}"#
+            )
+        };
+        NAMES.iter().map(line).collect::<Vec<_>>().join("\n")
+    }
+
     const MANIFEST: &str = r#"{"artifacts":[
         {"url":"https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.81.0/runtime-metal.tar.gz"},
         {"url":"https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.81.0/runtime-cpu.tar.gz"}]}"#;
@@ -153,21 +177,22 @@ mod tests {
 
     #[test]
     fn release_candidate_admits_a_complete_unpromoted_candidate() {
-        assert_eq!(admit(TAG, RELEASE, ASSETS, MANIFEST), Ok(42));
+        assert_eq!(admit(TAG, RELEASE, &assets(), MANIFEST), Ok(42));
     }
 
     #[test]
     fn release_candidate_refuses_drafts_promoted_releases_and_other_tags() {
+        let assets = assets();
         let draft = RELEASE.replace(r#""draft":false"#, r#""draft":true"#);
         assert_eq!(
-            refusal(&draft, ASSETS, MANIFEST),
+            refusal(&draft, &assets, MANIFEST),
             "v0.81.0 is still a draft: its upload did not finish."
         );
         let promoted = RELEASE.replace(r#""prerelease":true"#, r#""prerelease":false"#);
-        assert!(refusal(&promoted, ASSETS, MANIFEST).starts_with("v0.81.0 is already promoted."));
+        assert!(refusal(&promoted, &assets, MANIFEST).starts_with("v0.81.0 is already promoted."));
         let other = RELEASE.replace("v0.81.0", "v0.80.0");
-        assert!(refusal(&other, ASSETS, MANIFEST).ends_with("GitHub returned v0.80.0"));
-        assert!(refusal("{}", ASSETS, MANIFEST).starts_with("Unable to resolve the release"));
+        assert!(refusal(&other, &assets, MANIFEST).ends_with("GitHub returned v0.80.0"));
+        assert!(refusal("{}", &assets, MANIFEST).starts_with("Unable to resolve the release"));
     }
 
     #[test]
@@ -176,7 +201,7 @@ mod tests {
             refusal(RELEASE, "", MANIFEST),
             "v0.81.0 has no release files."
         );
-        let unfinished = ASSETS.replacen("uploaded", "starter", 1);
+        let unfinished = assets().replacen("uploaded", "starter", 1);
         assert_eq!(
             refusal(RELEASE, &unfinished, MANIFEST),
             "v0.81.0 has incomplete uploads:\nnative-runtimes.json"
@@ -185,16 +210,35 @@ mod tests {
     }
 
     #[test]
+    fn release_candidate_refuses_a_release_without_the_archive_promote_publishes_from() {
+        let without_checksum = assets().replace("linux-gnu.tar.gz.sha256", "linux-gnu.other");
+        assert_eq!(
+            refusal(RELEASE, &without_checksum, MANIFEST),
+            "v0.81.0 lacks release files that Promote publishes from:\nmesh-llm-v0.81.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
+        );
+        let without_either = assets().replace("x86_64-unknown-linux-gnu", "aarch64-apple-darwin");
+        assert!(refusal(RELEASE, &without_either, MANIFEST).ends_with(
+            "linux-gnu.tar.gz\nmesh-llm-v0.81.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
+        ));
+    }
+
+    #[test]
     fn release_candidate_refuses_a_manifest_runtime_that_is_not_a_release_file() {
-        let removed = ASSETS.replace("runtime-cpu.tar.gz", "unrelated.txt");
+        let assets = assets();
+        let removed = assets.replace("runtime-cpu.tar.gz", "unrelated.txt");
         assert_eq!(
             refusal(RELEASE, &removed, MANIFEST),
             "v0.81.0 lists native runtimes that are not files of this release:\nhttps://github.com/Mesh-LLM/mesh-llm/releases/download/v0.81.0/runtime-cpu.tar.gz"
         );
         let other_tag = MANIFEST.replacen("v0.81.0/runtime-metal", "v0.80.0/runtime-metal", 1);
-        assert!(refusal(RELEASE, ASSETS, &other_tag).ends_with("v0.80.0/runtime-metal.tar.gz"));
+        assert!(refusal(RELEASE, &assets, &other_tag).ends_with("v0.80.0/runtime-metal.tar.gz"));
+        // Same tag and file name in another repository is not this release.
+        let foreign = MANIFEST.replacen("Mesh-LLM/mesh-llm", "Other/Repo", 1);
+        assert!(refusal(RELEASE, &assets, &foreign).ends_with(
+            "\nhttps://github.com/Other/Repo/releases/download/v0.81.0/runtime-metal.tar.gz"
+        ));
         assert_eq!(
-            refusal(RELEASE, ASSETS, r#"{"artifacts":[]}"#),
+            refusal(RELEASE, &assets, r#"{"artifacts":[]}"#),
             "v0.81.0 lists no native runtimes."
         );
     }
@@ -209,7 +253,7 @@ mod tests {
         };
         let mut args: Vec<String> = ["--tag", TAG, "--release"].map(str::to_owned).into();
         args.extend([path("release.json", RELEASE), "--assets".to_owned()]);
-        args.extend([path("assets.json", ASSETS), "--manifest".to_owned()]);
+        args.extend([path("assets.json", &assets()), "--manifest".to_owned()]);
         args.push(path("native-runtimes.json", MANIFEST));
         assert_eq!(run(&args), CheckReport::success("42\n".to_owned()));
         args[7] = directory.path().join("absent").to_str().unwrap().to_owned();
