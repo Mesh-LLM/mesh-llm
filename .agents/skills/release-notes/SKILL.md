@@ -228,16 +228,13 @@ reviewing a plan by hand or as the agent pass:
   the count. Keep a blank line after `<summary>` or GitHub will not render the
   Markdown inside it.
 
-## Improving Coverage
+## Optional classification hints
 
-Every entry the deterministic pass cannot classify is a commit that did not
-follow Conventional Commits. `scripts/hooks/commit-msg` rejects those locally
-(`just hooks-install`), `just check-commits` validates a range, and the
-`Check commit convention` step in the Quality lane enforces the pull request
-title in CI, which is the part that binds contributors who never install the
-hook. Because the
-repository squash-merges, the PR title becomes the commit subject, so the PR
-title is what has to be conventional.
+Conventional Commit prefixes are optional. No commit-message hook or CI title
+check requires them. The repository squash-merges, so a descriptive PR title
+is the main release-note input. Recognized prefixes select a section; every
+unclassified title is retained in Other changes. Reviewers may use
+`Release-Notes: <Section>` when a specific section matters.
 
 Coverage is a measurable property of a release:
 

@@ -4,37 +4,11 @@ use std::{error::Error, fs, path::Path};
 type TestResult = Result<(), Box<dyn Error>>;
 
 #[test]
-fn commit_validation_and_publication_keep_their_trust_and_approval_boundaries() -> TestResult {
+fn release_publication_keeps_its_approval_and_content_boundaries() -> TestResult {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .ok_or("root")?;
-    let workflow = fs::read_to_string(root.join(".github/workflows/ci-quality-slice.yml"))?;
-    let job = workflow
-        .split("  commit_convention:\n")
-        .nth(1)
-        .ok_or("job")?
-        .split("  runner_policy:\n")
-        .next()
-        .ok_or("job end")?;
-    assert!(!job.contains("needs:"));
-    assert!(job.contains("github.event_name == 'pull_request'"));
-    assert!(job.contains("ref: ${{ github.event.repository.default_branch }}"));
-    assert!(job.contains("persist-credentials: false"));
-    assert!(job.contains("PR_TITLE: ${{ github.event.pull_request.title }}"));
-    assert!(job.contains("repository conventional-commits --message \"$PR_TITLE\""));
-    for removed in [
-        "--trailers-only",
-        "PR_BODY:",
-        "PR_NUMBER:",
-        "GH_TOKEN:",
-        "gh api",
-    ] {
-        assert!(
-            !job.contains(removed),
-            "retired attribution scan: {removed}"
-        );
-    }
     let script = fs::read_to_string(root.join("scripts/release-notes-generate.sh"))?;
     let approval = script.find("RELEASE_NOTES_APPROVED").ok_or("approval")?;
     let publication = script.find("gh release edit").ok_or("publication")?;
@@ -55,16 +29,6 @@ fn commit_validation_and_publication_keep_their_trust_and_approval_boundaries() 
             < publication
     );
     assert!(script.contains("body.github.md"));
-    for path in [
-        "mesh/scripts/build-development-product.sh",
-        "mesh/scripts/build-windows.ps1",
-    ] {
-        assert!(fs::read_to_string(root.join(path))?.contains("core.hooksPath scripts/hooks"));
-    }
-    assert!(
-        fs::read_to_string(root.join("scripts/hooks/commit-msg"))?
-            .contains("repository conventional-commits")
-    );
     Ok(())
 }
 

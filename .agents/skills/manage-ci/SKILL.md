@@ -37,8 +37,7 @@ modes. Preserve exact bytes where a caller consumes or hashes them.
 
 `tools/ci-controller` owns CI planning (`ci plan`), lane result admission
 (`ci validate-lane`), the planner-side repository checks
-(`repository affected-crates`, `repository conventional-commits`, and
-`repository llama-upstream-pin`), and the shared `automation bootstrap` check.
+(`repository affected-crates` and `repository llama-upstream-pin`), and the shared `automation bootstrap` check.
 Its normal dependencies are limited to serde, serde_json, sha2, and hex. Full
 xtask keeps every command and delegates these to the library, so outputs, exit
 codes, and refusals match. `ci family-plan`, `ci validate-graph`, and all
@@ -126,7 +125,7 @@ they never rebuild it and never fall back to `prepare-automation`. Its artifact
 name carries a `product-` prefix, so it cannot collide with or stand in for the
 protected `authority_*` artifacts, and it retains for one day. Jobs that must
 not wait on a producer and only plan or validate (the entry planners through
-`compute-changes` and `plan-ci`, commit convention, and lane summaries) use
+`compute-changes` and `plan-ci`, and lane summaries) use
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
@@ -715,10 +714,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Workflow definition and dependencies
 
-- Commit convention checks validate Conventional Commit subjects only. Do not
-  blacklist contributor names, email addresses, bot accounts or relay domains
-  in attribution trailers. The PR gate checks the title without fetching branch
-  commit messages or scanning the PR body for attribution.
+- Commit and PR prose is not a CI gate. Do not install commit-message hooks,
+  enforce title grammar, or blacklist attribution identities. Release-note
+  classification may recognize conventional prefixes without requiring them;
+  unclassified titles remain in Other changes.
 
 - Declare least-privilege `permissions` explicitly. Default to
   `contents: read`; grant write or OIDC permissions only to the owning job.

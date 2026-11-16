@@ -586,24 +586,11 @@ commits have several distinct authors. Attribution identities are no longer
 blacklisted in hooks or CI; these source changes do not modify merge settings
 or repository rulesets.
 
-Conventional Commit subject validation remains:
-
-- `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
-  the first local development build on every platform. It invokes the Rust
-  `repository conventional-commits` command through `cargo xtool`.
-- The `commit_convention` job in `ci-quality-slice.yml` validates only the
-  pull request title against Conventional Commits. It does not fetch branch
-  messages, scan the PR body or receive a GitHub token for attribution checks.
-  It runs `repository conventional-commits` through the `ci-controller`
-  executable from `prepare-ci-controller`. It declares no `needs`, so it fails
-  within a minute rather than after a lane has compiled anything, and runs
-  only for `pull_request` events.
-  Pull-request-authored text reaches the script through environment variables
-  and is never interpolated into the shell.
-- Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
-  `squash_merge_commit_message=PR_BODY` since 2026-09-10, replacing
-  `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`. CI validates the title; reviewers
-  remain responsible for the body and accurate contributor credit.
+Commit-message hooks, title validation and attribution scans are removed.
+Builds do not install hooks, and the Quality slice has no commit-convention
+job. Release-note classification remains advisory: recognized prefixes select
+a section; unclassified titles remain in Other changes. Merge-message
+composition and repository rulesets are unchanged.
 
 The four `main` ruleset bypass actors remain deliberately: maintainers need a
 fast merge path. Required checks therefore do not bind them, and the CI check
@@ -2035,8 +2022,8 @@ run without its producer and an unplanned producer must be skipped.
 Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates

@@ -218,7 +218,9 @@ fn just_layout_import_reorder_and_default_change_are_refused() {
 fn just_layout_recipe_move_preserves_native_parse_but_refuses_wrong_owner() {
     let fixture = Fixture::new();
     let source = fs::read_to_string(repo().join("just/utilities.just")).unwrap();
-    let start = source.find("[unix]\nhooks-install:\n").unwrap();
+    let start = source
+        .find("[unix]\ndocker-build-client tag=\"mesh-llm:client\":\n")
+        .unwrap();
     let end = start + source[start..].find("\n\n").unwrap() + 2;
     let recipe = &source[start..end];
     fixture.replace("just/utilities.just", recipe, "");

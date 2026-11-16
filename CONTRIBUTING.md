@@ -253,59 +253,21 @@ The Rust MSVC toolchain needs the Visual Studio Build Tools with the
 
 ## Commit messages
 
-Commit subjects follow [Conventional Commits
-v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+Use clear, user-focused commit subjects and PR titles. Conventional Commit
+prefixes are optional release-note hints, not a hook or CI requirement.
 
-```
-<type>(<optional scope>)<optional !>: <description>
-```
+When present, `feat:` groups an entry under Added, `fix:` under Fixed,
+`perf:` under Changed, and `security:` under Security. Other titles remain
+in Other changes. `Release-Notes: <Section>` can override classification.
+The repository squash-merges, so the PR title becomes the subject on main.
 
-Install the hook that enforces it:
+Builds do not install Git hooks, and CI does not police titles or attribution
+identities. Existing clones pointing `core.hooksPath` at `scripts/hooks` need
+no migration: the retired commit-msg hook is no longer present. Custom hooks
+and repository merge settings are unchanged.
 
-```bash
-just hooks-install          # sets core.hooksPath to scripts/hooks
-just check-commits          # validates origin/main..HEAD
-```
-
-Git cannot activate a committed hook on clone — that would make `git clone` of
-any repository arbitrary code execution — so the hook needs one local opt-in.
-`just build` enables it for you on the first local development build, on every
-platform, unless you have already pointed `core.hooksPath` somewhere yourself.
-CI enforces the same rules regardless, so a clone that never builds is still
-covered.
-
-Valid types are `feat`, `fix`, `perf`, `security`, `revert`, `refactor`,
-`style`, `test`, `build`, `deps`, `ci`, `chore`, and `docs`. This is not
-bookkeeping: the release-notes job classifies each release entry from these
-subjects, so the type decides which section a change appears under. `feat`
-lands in Added, `fix` in Fixed, `perf` in Changed, `security` in Security, and
-the tooling types collapse into a folded Internal section. A subject that is
-not conventional cannot be classified and lands in "Other changes".
-
-Two overrides exist. `BREAKING CHANGE: <what>` in the body (or `!` after the
-type) moves the entry to Changed, whatever its type. `Release-Notes: <Section>` in the body wins
-outright — reach for it when the type cannot express the change, above all for
-a fix that closes a security exposure and belongs in Security rather than
-Fixed.
-
-Because the repository squash-merges, the PR title becomes the commit subject
-on `main`. Give the PR the conventional title, not just the branch commits.
-
-The hook is opt-in per clone, so CI is what actually enforces this. The Quality
-lane rejects a pull request whose title is not conventional. Branch commit
-*subjects* are not judged in CI -- messy work-in-progress subjects are fine,
-since only the title survives the squash.
-
-See [`.agents/skills/release-notes/SKILL.md`](.agents/skills/release-notes/SKILL.md)
-for the full pipeline.
-
-### Attribution trailers
-
-The hook and CI do not blacklist attribution identities. Human, agent, bot and
-relay-address trailers are accepted; Conventional Commit subject validation is
-unchanged. Credit contributions accurately. A squash merge takes its title and
-body from the pull request; review those before merging.
-
+See [the release-notes skill](.agents/skills/release-notes/SKILL.md) for
+classification details.
 
 ## CI / GitHub Actions
 

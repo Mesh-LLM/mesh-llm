@@ -394,14 +394,14 @@ skippy-api-rs-lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Verify, stage the API sources, and commit. Message must be a Conventional Commit.
+# Verify, stage the API sources, and commit with the supplied message.
 [unix]
 [positional-arguments]
 skippy-api-checkpoint message="" embed_model="" reranker_model="" causal_model="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${1:-}" ]]; then
-      printf '%s\n' 'usage: just skippy-api-checkpoint "<conventional commit subject>" [embed.gguf] [reranker.gguf] [causal.gguf]' >&2
+      printf '%s\n' 'usage: just skippy-api-checkpoint "<commit subject>" [embed.gguf] [reranker.gguf] [causal.gguf]' >&2
       exit 1
     fi
     subject="$1"
