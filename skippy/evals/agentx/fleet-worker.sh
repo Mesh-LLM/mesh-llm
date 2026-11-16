@@ -17,6 +17,7 @@ set -Eeuo pipefail
 W=$PWD
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 THREADS="${THREADS:-20}"
+SMOKE_SCOPE="${SMOKE_SCOPE:-full}"
 
 # ---- host guards (hardware placement; never node names) ----
 if [ "$BACKEND" = "cuda" ]; then
@@ -250,6 +251,7 @@ PYEOF
   for w in $(seq 1 12); do kill -0 $SP 2>/dev/null || break; sleep 5; done
   kill -9 $SP 2>/dev/null || true
   sleep 5
+  if [ "$SMOKE_SCOPE" != "quick" ]; then
   # ---- nsys CUDA timeline: one c1 prefill per engine ----
   echo "-- nsys profiles:"
   for ENGINE in llama skippy skippy-nocache; do
@@ -333,6 +335,7 @@ SWEEPPY
     kill -9 $SWPID 2>/dev/null || true
     sleep 5
   done
+  fi
   cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
   echo SMOKE_DONE
   exit 0

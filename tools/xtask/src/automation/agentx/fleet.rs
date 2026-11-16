@@ -45,6 +45,11 @@ pub(super) struct FleetCorpus {
 pub(super) struct FleetRun {
     pub model: String,
     pub backend: String,
+    /// Measurement scope for smoke mode: `full` runs every profile section,
+    /// `quick` keeps only the retention probe and the llama/skippy TTFT
+    /// comparison. Ignored in comparison mode.
+    #[serde(default)]
+    pub scope: Option<String>,
     #[serde(default)]
     pub probe: BTreeMap<String, u32>,
     /// Model pin overrides; missing fields resolve from the run's model key via
@@ -74,6 +79,11 @@ fn validate(manifest: &FleetManifest) -> DynResult<()> {
     for run in &manifest.runs {
         if !matches!(run.backend.as_str(), "cuda" | "metal") {
             return Err(format!("run {} backend must be cuda or metal", run.model).into());
+        }
+        if let Some(scope) = run.scope.as_deref()
+            && !matches!(scope, "full" | "quick")
+        {
+            return Err(format!("run {} scope must be full or quick", run.model).into());
         }
     }
     Ok(())
@@ -168,6 +178,7 @@ fn run_spec(
         "PROBE_TURNS": run.probe.get("turns").copied().unwrap_or(4).to_string(),
         "PROBE_BLOCK_CHARS": run.probe.get("block_chars").copied().unwrap_or(6300).to_string(),
         "PROBE_MAX_TOKENS": run.probe.get("max_tokens").copied().unwrap_or(96).to_string(),
+        "SMOKE_SCOPE": run.scope.clone().unwrap_or_else(|| "full".into()),
     });
     for (key, value) in probe.as_object_mut().unwrap() {
         env_obj.insert(key.clone(), json!(value));
@@ -386,6 +397,28 @@ mod tests {
     }
 
     #[test]
+    fn smoke_scope_defaults_to_full_and_passes_quick() {
+        let m = manifest();
+        let pins = BTreeMap::from([
+            ("MODEL_REPO".to_string(), "r".to_string()),
+            ("MODEL_REV".to_string(), "d".repeat(40).to_string()),
+            ("MODEL_FILE".to_string(), "f.gguf".to_string()),
+            ("MODEL_SHA".to_string(), "f".repeat(64).to_string()),
+            ("TOK_REPO".to_string(), "t".to_string()),
+            (
+                "TOK_REV".to_string(),
+                "cdbee75f17c01a7cc42f958dc650907174af0554".to_string(),
+            ),
+        ]);
+        let spec = run_spec(&m, &m.runs[0], "dzByaw==", &"c".repeat(64), &pins).unwrap();
+        assert_eq!(spec["runtime"]["env"]["SMOKE_SCOPE"], "full");
+        let mut quick = manifest();
+        quick.runs[0].scope = Some("quick".into());
+        let spec = run_spec(&quick, &quick.runs[0], "dzByaw==", &"c".repeat(64), &pins).unwrap();
+        assert_eq!(spec["runtime"]["env"]["SMOKE_SCOPE"], "quick");
+    }
+
+    #[test]
     fn comparison_requires_corpus_pins() {
         let mut m = manifest();
         m.mode = "comparison".into();
@@ -398,5 +431,12 @@ mod tests {
     #[test]
     fn smoke_manifest_accepts_without_corpus() {
         assert!(validate(&manifest()).is_ok());
+    }
+
+    #[test]
+    fn fleet_manifest_rejects_unknown_scope() {
+        let mut m = manifest();
+        m.runs[0].scope = Some("turbo".into());
+        assert!(validate(&m).is_err(), "unknown scope must fail validation");
     }
 }

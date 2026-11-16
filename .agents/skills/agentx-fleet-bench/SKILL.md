@@ -48,6 +48,12 @@ git commits, evidence by jy artifacts.
 Model references resolve to repo/rev/file/sha entries that live in
 `skippy/evals/kv-validation/models.json` plus the manifest's per-run overrides.
 
+A smoke run may set `"scope": "quick"` beside `backend` to keep only the
+retention probe and the llama/skippy TTFT/ITL profiles, skipping the no-cache
+pass, nsys capture, and prefill chunk sweep. Default is `full`. Use `quick`
+when validating a small perf change; use `full` when the evidence needs the
+prefill-overhead battery.
+
 ## Hard rules (learned expensively)
 
 1. **Placement is by hardware only.** Targets are `os: linux|macos` plus worker-side guards
