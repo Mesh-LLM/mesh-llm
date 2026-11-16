@@ -830,7 +830,18 @@ fn store_exact_radix_record_with_codec(
     // need a tighter bound set an explicit exact-state budget.
     let retention_floor = EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries);
     evict_exact_entries_over(radix, blobs, limits.soft_bytes, retention_floor)?;
-    if evict_exact_entries_over(radix, blobs, limits.hard_bytes, retention_floor)? > 0 {
+    // The hard cap must be able to hold the retention floor's working set.
+    // With the attention-derived estimate alone, a hybrid snapshot can exceed
+    // the configured hard cap by itself; the eviction passes then share the
+    // same floor and the hard pass can never evict — the cap is dead code and
+    // the blob store accumulates retained copies past it without bound. The
+    // effective backstop adapts to the largest snapshot actually stored, so
+    // it trims growth above the working set instead of against the floor.
+    let floor_bytes = logical_bytes
+        .max(1)
+        .saturating_mul(u64::try_from(retention_floor).unwrap_or(u64::MAX));
+    let effective_hard = limits.hard_bytes.max(floor_bytes);
+    if evict_exact_entries_over(radix, blobs, effective_hard, retention_floor)? > 0 {
         // Observable signal that the attention-derived estimate undercounts
         // this stage's snapshots: the exact-state catalog held more than the
         // hard limit even with the retention floor binding. Set an explicit
@@ -840,7 +851,7 @@ fn store_exact_radix_record_with_codec(
                 message: "exact-state catalog exceeded its hard byte limit at the retention floor"
                     .to_string(),
                 context: Some(format!(
-                    "soft_bytes={} hard_bytes={} floor_entries={retention_floor}",
+                    "soft_bytes={} hard_bytes={} effective_hard={effective_hard} floor_entries={retention_floor}",
                     limits.soft_bytes, limits.hard_bytes
                 )),
             },
