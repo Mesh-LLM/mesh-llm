@@ -829,6 +829,10 @@ unconfirmed.
 Bounded, explicitly unverified source checkpoints are retained after every coding
 turn and after supervised termination. Upload recovery before verbose evidence;
 never include the restored Python environment in the diagnostic upload.
+The native build supervisor freezes its running automation executable in a
+private directory outside both checkouts before launching the wrapper. Keep that
+copy alive through supervision and recovery: candidate Cargo builds may replace
+their own `target/debug/xtask`, but must not replace the admitted controller.
 If the recorded native base is unavailable, capture its complete tracked tree
 against an empty tree so committed repairs remain in the unverified checkpoint.
 
