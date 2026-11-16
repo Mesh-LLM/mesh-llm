@@ -1,55 +1,33 @@
 //! Extraction and shape checks for the paired GGUF tensors.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use half::f16;
-use runtimed_gguf::{GgufFile, MetaValue};
+use runtimed_gguf::GgufFile;
 
-pub(super) const WIDTH: usize = 2_048;
-pub(super) const TAPS: [u32; 8] = [2, 7, 12, 17, 23, 28, 33, 38];
-pub(super) const MASK_TOKEN: usize = 248_077;
-pub(super) const VOCAB: usize = 248_320;
+use crate::dflash::profile::DFlashProfile;
 
 pub(super) struct Pair {
     pub draft: GgufFile,
     pub target: GgufFile,
+    pub profile: DFlashProfile,
 }
 
 impl Pair {
     pub(super) fn open(draft: &Path, target: &Path) -> Result<Self> {
         let draft = GgufFile::open(draft).context("open paired DFlash GGUF")?;
         let target = GgufFile::open(target).context("open target GGUF")?;
-        let expected = [
-            ("dflash.block_count", 6),
-            ("dflash.embedding_length", WIDTH as u32),
-            ("dflash.attention.head_count", 32),
-            ("dflash.attention.head_count_kv", 8),
-            ("dflash.attention.key_length", 128),
-            ("dflash.attention.value_length", 128),
-            ("tokenizer.ggml.mask_token_id", MASK_TOKEN as u32),
-        ];
-        for (name, value) in expected {
-            if draft.metadata.get(name) != Some(&MetaValue::U32(value)) {
-                bail!("{name} does not match the paired Qwen3.6 DFlash checkpoint");
-            }
-        }
-        let taps = TAPS
-            .iter()
-            .map(|&value| MetaValue::I32(value as i32))
-            .collect();
-        if draft.metadata.get("dflash.target_layers") != Some(&MetaValue::Arr(taps)) {
-            bail!("DFlash target feature taps differ from the paired checkpoint");
-        }
-        if draft.meta_str("general.architecture") != Some("dflash")
-            || target.meta_str("general.architecture") != Some("qwen35moe")
-            || draft.tensor("markov_w1.weight").is_some()
-        {
-            bail!("GGUF architecture is not the paired Qwen3.6 DFlash model");
-        }
-        Ok(Self { draft, target })
+        let profile = DFlashProfile::from_gguf(&draft, &target)?;
+        validate_draft_tensors(&draft, &profile)?;
+        Ok(Self {
+            draft,
+            target,
+            profile,
+        })
     }
 
     pub(super) fn draft_tensor(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
@@ -60,8 +38,34 @@ impl Pair {
         load_tensor(&self.target, name, shape)
     }
 
+    pub(super) fn embedding_tensor(&self) -> Result<Vec<f32>> {
+        let shape = &[self.profile.vocabulary, self.profile.width];
+        if self.draft.tensor("token_embd.weight").is_some() {
+            self.draft_tensor("token_embd.weight", shape)
+        } else {
+            self.target_tensor("token_embd.weight", shape)
+        }
+    }
+
+    pub(super) fn output_tensor(&self) -> Result<Vec<f32>> {
+        let shape = &[self.profile.vocabulary, self.profile.width];
+        if self.draft.tensor("output.weight").is_some() {
+            self.draft_tensor("output.weight", shape)
+        } else if self.target.tensor("output.weight").is_some() {
+            self.target_tensor("output.weight", shape)
+        } else {
+            self.embedding_tensor()
+        }
+    }
+
     pub(super) fn target_embeddings(&self, path: &Path) -> Result<Vec<f32>> {
-        let values = self.target_tensor("token_embd.weight", &[VOCAB, WIDTH])?;
+        let profile = &self.profile;
+        let mut values = self.embedding_tensor()?;
+        if profile.embedding_scale != 1.0 {
+            for value in &mut values {
+                *value *= profile.embedding_scale;
+            }
+        }
         let mut writer = BufWriter::new(
             File::create(path).with_context(|| format!("create {}", path.display()))?,
         );
@@ -69,8 +73,51 @@ impl Pair {
             writer.write_all(&f16::from_f32(value).to_bits().to_le_bytes())?;
         }
         writer.flush()?;
-        Ok(values[MASK_TOKEN * WIDTH..(MASK_TOKEN + 1) * WIDTH].to_vec())
+        let start = profile.mask_token * profile.width;
+        Ok(values[start..start + profile.width].to_vec())
     }
+}
+
+fn validate_draft_tensors(draft: &GgufFile, profile: &DFlashProfile) -> Result<()> {
+    let mut allowed = HashSet::from([
+        "fc.weight".to_string(),
+        "enc.output_norm.weight".to_string(),
+        "output_norm.weight".to_string(),
+        "token_embd.weight".to_string(),
+        "output.weight".to_string(),
+    ]);
+    if profile.decoder == crate::dflash::profile::DecoderContract::Laguna {
+        allowed.insert("enc.aux_norm.weight".to_string());
+    }
+    for index in 0..profile.layers() {
+        for suffix in [
+            "attn_q.weight",
+            "attn_k.weight",
+            "attn_v.weight",
+            "attn_output.weight",
+            "ffn_gate.weight",
+            "ffn_up.weight",
+            "ffn_down.weight",
+            "attn_norm.weight",
+            "attn_q_norm.weight",
+            "attn_k_norm.weight",
+            "ffn_norm.weight",
+        ] {
+            allowed.insert(format!("blk.{index}.{suffix}"));
+        }
+        if profile.decoder == crate::dflash::profile::DecoderContract::Laguna {
+            allowed.insert(format!("blk.{index}.attn_gate.weight"));
+        }
+    }
+    for tensor in &draft.tensors {
+        if !allowed.contains(&tensor.name) {
+            bail!(
+                "ANE DFlash graph does not implement draft tensor {}",
+                tensor.name
+            );
+        }
+    }
+    Ok(())
 }
 
 fn load_tensor(file: &GgufFile, name: &str, shape: &[usize]) -> Result<Vec<f32>> {

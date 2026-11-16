@@ -16,9 +16,7 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL,
 };
 
-const FEATURE_WIDTH: usize = 16_384;
-const ANCHOR_WIDTH: usize = 2_048;
-const HEAD_WIDTH: usize = 128;
+use super::super::profile::DFlashProfile;
 
 /// The owning DFlash mutex serializes calls, including calls sharing an MLState.
 pub(super) struct CoreMlDraft {
@@ -26,10 +24,19 @@ pub(super) struct CoreMlDraft {
     states: Vec<Retained<MLState>>,
     context: usize,
     rows: usize,
+    feature_width: usize,
+    anchor_width: usize,
+    rotary_width: usize,
 }
 
 impl CoreMlDraft {
-    pub(super) fn open(path: &Path, lanes: usize, context: usize, rows: usize) -> Result<Self> {
+    pub(super) fn open(
+        path: &Path,
+        lanes: usize,
+        context: usize,
+        rows: usize,
+        profile: &DFlashProfile,
+    ) -> Result<Self> {
         if !NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
             majorVersion: 15,
             minorVersion: 0,
@@ -49,13 +56,18 @@ impl CoreMlDraft {
                 MLModel::modelWithContentsOfURL_configuration_error(&url, &configuration)
             }
             .map_err(|error| anyhow!("load Core ML draft: {error:?}"))?;
-            validate_shape(&model, context, rows)?;
+            validate_shape(&model, context, rows, profile)?;
             let states = (0..lanes).map(|_| unsafe { model.newState() }).collect();
             Ok(Self {
                 model,
                 states,
                 context,
                 rows,
+                feature_width: profile
+                    .feature_width()
+                    .context("invalid DFlash feature width")?,
+                anchor_width: profile.width,
+                rotary_width: profile.rotary_width,
             })
         })
     }
@@ -88,15 +100,18 @@ impl CoreMlDraft {
         let state = self.states.get(lane).context("ANE draft lane is invalid")?;
         let rows = self.rows;
         let context = self.context;
+        let feature_width = self.feature_width;
+        let anchor_width = self.anchor_width;
+        let rotary_width = self.rotary_width;
         autoreleasepool(|_| {
             let inputs = [
-                ("features", &[1, FEATURE_WIDTH, 1, rows][..], features),
+                ("features", &[1, feature_width, 1, rows][..], features),
                 ("write", &[rows, context], write),
-                ("ctx_cos", &[rows, HEAD_WIDTH], ctx_cos),
-                ("ctx_sin", &[rows, HEAD_WIDTH], ctx_sin),
-                ("anchor", &[1, ANCHOR_WIDTH, 1, 1], anchor),
-                ("q_cos", &[rows, HEAD_WIDTH], q_cos),
-                ("q_sin", &[rows, HEAD_WIDTH], q_sin),
+                ("ctx_cos", &[rows, rotary_width], ctx_cos),
+                ("ctx_sin", &[rows, rotary_width], ctx_sin),
+                ("anchor", &[1, anchor_width, 1, 1], anchor),
+                ("q_cos", &[rows, rotary_width], q_cos),
+                ("q_sin", &[rows, rotary_width], q_sin),
                 ("mask", &[rows, context + rows], mask),
             ];
             let names = inputs
@@ -229,11 +244,25 @@ fn array_value(shape: &[usize], data: &[u16]) -> Result<Retained<MLFeatureValue>
     Ok(unsafe { MLFeatureValue::featureValueWithMultiArray(&array) })
 }
 
-fn validate_shape(model: &MLModel, context: usize, rows: usize) -> Result<()> {
+fn validate_shape(
+    model: &MLModel,
+    context: usize,
+    rows: usize,
+    profile: &DFlashProfile,
+) -> Result<()> {
     let description = unsafe { model.modelDescription() };
     let inputs = unsafe { description.inputDescriptionsByName() };
+    let feature_width = profile
+        .feature_width()
+        .context("invalid DFlash feature width")?;
     for (name, expected) in [
-        ("features", &[1, FEATURE_WIDTH, 1, rows][..]),
+        ("features", &[1, feature_width, 1, rows][..]),
+        ("write", &[rows, context]),
+        ("ctx_cos", &[rows, profile.rotary_width]),
+        ("ctx_sin", &[rows, profile.rotary_width]),
+        ("anchor", &[1, profile.width, 1, 1]),
+        ("q_cos", &[rows, profile.rotary_width]),
+        ("q_sin", &[rows, profile.rotary_width]),
         ("mask", &[rows, context + rows][..]),
     ] {
         let feature = inputs

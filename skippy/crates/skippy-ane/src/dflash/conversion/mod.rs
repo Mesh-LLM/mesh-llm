@@ -1,4 +1,4 @@
-//! Offline Rust conversion of the paired Qwen3.6 DFlash GGUF to Core ML.
+//! Offline Rust conversion of a paired DFlash GGUF to Core ML.
 
 mod gguf;
 mod graph;
@@ -16,10 +16,10 @@ use mil_spec::write_mlpackage_stream;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use self::gguf::{Pair, TAPS};
+use self::gguf::Pair;
 use self::weights::Weights;
 
-/// Inputs and output paths for the paired Qwen3.6 DFlash Core ML conversion.
+/// Inputs and output paths for paired DFlash Core ML conversion.
 pub struct ConversionOptions {
     pub draft: PathBuf,
     pub target: PathBuf,
@@ -37,8 +37,8 @@ pub fn convert(args: &ConversionOptions) -> Result<()> {
     if args.out.extension().is_none_or(|ext| ext != "mlpackage") {
         bail!("--out must end in .mlpackage");
     }
-    if args.context < args.rows || args.rows != 7 {
-        bail!("the paired DFlash serving graph requires seven rows and context >= rows");
+    if args.rows < 2 || args.context < args.rows {
+        bail!("DFlash conversion requires at least two rows and context >= rows");
     }
     let compiled = args.out.with_extension("mlmodelc");
     let metadata = args.out.with_extension("json");
@@ -49,17 +49,27 @@ pub fn convert(args: &ConversionOptions) -> Result<()> {
     let package = staging.path().join("draft.mlpackage");
     let embeddings = staging.path().join("embeddings.f16");
     let pair = Pair::open(&args.draft, &args.target)?;
+    if args.rows > pair.profile.block_size {
+        bail!("ANE proposal rows exceed the draft's trained block size");
+    }
     let mask_embedding = pair.target_embeddings(&embeddings)?;
     let weight_path = package.join("Data/com.apple.CoreML/weights/weight.bin");
     std::fs::create_dir_all(weight_path.parent().expect("weight path has parent"))?;
     let mut weights = Weights::create(&pair, &weight_path)?;
-    let spec = graph::build(&mut weights, &mask_embedding, args.context, args.rows)?;
+    let spec = graph::build(
+        &mut weights,
+        &mask_embedding,
+        args.context,
+        args.rows,
+        &pair.profile,
+    )?;
     weights.finish()?;
     write_mlpackage_stream(&package, &spec, Some(&weight_path))?;
     let compiled_temp = compile_package(&package)?;
     #[cfg(target_os = "macos")]
     let placement = placement::inspect(&compiled_temp)?;
     let manifest = json!({
+        "format_version": 2,
         "draft_sha256": sha256_file(&args.draft)?,
         "target_sha256": sha256_file(&args.target)?,
         "embeddings_sha256": sha256_file(&embeddings)?,
@@ -68,7 +78,8 @@ pub fn convert(args: &ConversionOptions) -> Result<()> {
         "body_only": false,
         "int8": true,
         "token_output": true,
-        "taps": TAPS,
+        "taps": pair.profile.target_layers,
+        "profile": pair.profile,
         "compiled_model": compiled.file_name().context("compiled model has no name")?.to_string_lossy(),
     });
     #[cfg(target_os = "macos")]

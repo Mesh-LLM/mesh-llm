@@ -1,4 +1,4 @@
-//! Stateful draft execution and lane state for the paired DFlash graph.
+//! Stateful draft execution and lane state for a compiled DFlash profile.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -9,13 +9,7 @@ use half::f16;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const WIDTH: usize = 2048;
-const TAPS: usize = 8;
-const HEAD: usize = 128;
-const VOCAB: usize = 248_320;
-const ROWS: usize = 7;
-const MASK_TOKEN: i32 = 248_077;
-const ROPE_BASE: f32 = 10_000_000.0;
+use super::profile::DFlashProfile;
 
 #[path = "coreml.rs"]
 mod coreml;
@@ -34,12 +28,14 @@ struct Lane {
 
 #[derive(Deserialize)]
 struct PackageMetadata {
+    format_version: u32,
     draft_sha256: String,
     embeddings_sha256: String,
     context: usize,
     rows: usize,
     token_output: bool,
     taps: Vec<u32>,
+    profile: DFlashProfile,
 }
 
 /// One compiled model and one independent Core ML state per Skippy lane.
@@ -47,11 +43,18 @@ pub struct AneDraft {
     coreml: CoreMlDraft,
     embeddings: File,
     context: usize,
+    profile: DFlashProfile,
+    rows: usize,
     lanes: Vec<Lane>,
 }
 
 impl AneDraft {
-    pub fn from_env(lanes: usize, n_vocab: usize, draft_path: &Path) -> Result<Option<Self>> {
+    pub fn from_env(
+        lanes: usize,
+        n_vocab: usize,
+        mask_token: i32,
+        draft_path: &Path,
+    ) -> Result<Option<Self>> {
         let Ok(model) = std::env::var("SKIPPY_DFLASH_ANE_MODEL") else {
             return Ok(None);
         };
@@ -63,14 +66,21 @@ impl AneDraft {
                 .with_context(|| format!("read ANE draft metadata {}", metadata_path.display()))?,
         )
         .with_context(|| format!("parse ANE draft metadata {}", metadata_path.display()))?;
-        let context = metadata.context;
-        if n_vocab != VOCAB || context < ROWS || lanes == 0 {
-            bail!("ANE DFlash package requires the paired Qwen3.6 vocabulary and context");
+        if metadata.format_version != 2 {
+            bail!("ANE DFlash package format is incompatible with this runtime");
         }
-        if metadata.rows != ROWS
-            || !metadata.token_output
-            || metadata.taps != [2, 7, 12, 17, 23, 28, 33, 38]
+        let context = metadata.context;
+        let rows = metadata.rows;
+        let profile = metadata.profile;
+        if n_vocab != profile.vocabulary
+            || usize::try_from(mask_token).ok() != Some(profile.mask_token)
+            || context < rows
+            || rows < 2
+            || lanes == 0
         {
+            bail!("ANE DFlash package dimensions do not match the loaded draft");
+        }
+        if !metadata.token_output || metadata.taps != profile.target_layers {
             bail!("ANE DFlash package metadata does not match the paired draft graph");
         }
         if file_sha256(draft_path)? != metadata.draft_sha256 {
@@ -81,14 +91,16 @@ impl AneDraft {
         }
         let embeddings = File::open(&embeddings)
             .with_context(|| format!("open ANE target embeddings {embeddings}"))?;
-        if embeddings.metadata()?.len() != (VOCAB * WIDTH * 2) as u64 {
+        if embeddings.metadata()?.len() != (profile.vocabulary * profile.width * 2) as u64 {
             bail!("ANE target embeddings have the wrong size");
         }
-        let coreml = CoreMlDraft::open(Path::new(&model), lanes, context, ROWS)?;
+        let coreml = CoreMlDraft::open(Path::new(&model), lanes, context, rows, &profile)?;
         Ok(Some(Self {
             coreml,
             embeddings,
             context,
+            profile,
+            rows,
             lanes: (0..lanes)
                 .map(|_| Lane {
                     pending: Vec::new(),
@@ -96,6 +108,10 @@ impl AneDraft {
                 })
                 .collect(),
         }))
+    }
+
+    pub fn max_proposals(&self) -> usize {
+        self.rows - 1
     }
 
     fn lane(&mut self, seq_id: i32) -> Result<usize> {
@@ -109,7 +125,10 @@ impl AneDraft {
         if positions.is_empty() {
             return Ok(());
         }
-        let width = TAPS * WIDTH;
+        let width = self
+            .profile
+            .feature_width()
+            .context("invalid DFlash feature width")?;
         if features.len() != positions.len() * width {
             bail!("ANE DFlash feature rows have the wrong width");
         }
@@ -123,10 +142,13 @@ impl AneDraft {
                 values: values.to_vec(),
             });
         }
-        while self.lanes[lane].pending.len() > ROWS {
-            let rows = self.lanes[lane].pending.drain(..ROWS).collect::<Vec<_>>();
+        while self.lanes[lane].pending.len() > self.rows {
+            let rows = self.lanes[lane]
+                .pending
+                .drain(..self.rows)
+                .collect::<Vec<_>>();
             let after = rows.last().expect("nonempty chunk").position + 1;
-            self.run(lane, after, MASK_TOKEN, &rows)?;
+            self.run(lane, after, self.profile.mask_token as i32, &rows)?;
         }
         Ok(())
     }
@@ -138,8 +160,8 @@ impl AneDraft {
         anchor: i32,
         max_tokens: usize,
     ) -> Result<Vec<i32>> {
-        if max_tokens > ROWS - 1 {
-            bail!("ANE DFlash package supports at most six proposals");
+        if max_tokens > self.rows - 1 {
+            bail!("ANE DFlash proposal count exceeds the compiled block width");
         }
         if anchor_position < 0 {
             bail!("ANE DFlash anchor position is negative");
@@ -150,9 +172,9 @@ impl AneDraft {
         tokens.truncate(max_tokens);
         if tokens
             .iter()
-            .any(|&token| token < 0 || token as usize >= VOCAB)
+            .any(|&token| token < 0 || token as usize >= self.profile.vocabulary)
         {
-            bail!("ANE DFlash returned a token outside the paired vocabulary");
+            bail!("ANE DFlash returned a token outside the target vocabulary");
         }
         Ok(tokens)
     }
@@ -165,9 +187,16 @@ impl AneDraft {
         rows: &[FeatureRow],
     ) -> Result<Vec<i32>> {
         let context = self.context;
-        let mut features = vec![0u16; TAPS * WIDTH * ROWS];
-        let mut write = vec![0u16; ROWS * context];
-        let mut ctx_positions = [0i32; ROWS];
+        let block_rows = self.rows;
+        let mut features = vec![
+            0u16;
+            self.profile
+                .feature_width()
+                .context("invalid DFlash feature width")?
+                * block_rows
+        ];
+        let mut write = vec![0u16; block_rows * context];
+        let mut ctx_positions = vec![0i32; block_rows];
         let mut slots = self.lanes[lane].slots.clone();
         for (row, feature) in rows.iter().enumerate() {
             let position =
@@ -177,15 +206,25 @@ impl AneDraft {
             write[row * context + slot] = f16::ONE.to_bits();
             slots[slot] = Some(feature.position);
             for (channel, &value) in feature.values.iter().enumerate() {
-                features[channel * ROWS + row] = f16::from_f32(value).to_bits();
+                features[channel * block_rows + row] = f16::from_f32(value).to_bits();
             }
         }
-        let (ctx_cos, ctx_sin) = rope(&ctx_positions);
-        let query_positions = std::array::from_fn(|index| anchor_position + index as i32);
-        let (q_cos, q_sin) = rope(&query_positions);
-        let mut mask = vec![f16::MIN.to_bits(); ROWS * (context + ROWS)];
-        for row in 0..ROWS {
-            let offset = row * (context + ROWS);
+        let (ctx_cos, ctx_sin) = rope(
+            &ctx_positions,
+            self.profile.rotary_width,
+            self.profile.rope_base,
+        );
+        let query_positions = (0..block_rows)
+            .map(|index| anchor_position + index as i32)
+            .collect::<Vec<_>>();
+        let (q_cos, q_sin) = rope(
+            &query_positions,
+            self.profile.rotary_width,
+            self.profile.rope_base,
+        );
+        let mut mask = vec![f16::MIN.to_bits(); block_rows * (context + block_rows)];
+        for row in 0..block_rows {
+            let offset = row * (context + block_rows);
             for (slot, position) in slots.iter().enumerate() {
                 if position.is_some_and(|position| {
                     position < anchor_position && position >= anchor_position - context as i32
@@ -193,7 +232,12 @@ impl AneDraft {
                     mask[offset + slot] = f16::ZERO.to_bits();
                 }
             }
-            mask[offset + context..offset + context + ROWS].fill(f16::ZERO.to_bits());
+            let visible = if self.profile.causal {
+                row + 1
+            } else {
+                block_rows
+            };
+            mask[offset + context..offset + context + visible].fill(f16::ZERO.to_bits());
         }
         let anchor = self.embedding(anchor)?;
         let tokens = self.coreml.predict(
@@ -206,11 +250,11 @@ impl AneDraft {
     fn embedding(&mut self, token: i32) -> Result<Vec<u16>> {
         let token = usize::try_from(token)
             .ok()
-            .filter(|&token| token < VOCAB)
+            .filter(|&token| token < self.profile.vocabulary)
             .ok_or_else(|| anyhow!("ANE DFlash anchor token {token} is invalid"))?;
         self.embeddings
-            .seek(SeekFrom::Start((token * WIDTH * 2) as u64))?;
-        let mut bytes = [0u8; WIDTH * 2];
+            .seek(SeekFrom::Start((token * self.profile.width * 2) as u64))?;
+        let mut bytes = vec![0u8; self.profile.width * 2];
         self.embeddings.read_exact(&mut bytes)?;
         Ok(bytes
             .as_chunks::<2>()
@@ -248,13 +292,13 @@ impl AneDraft {
     }
 }
 
-fn rope(positions: &[i32; ROWS]) -> (Vec<u16>, Vec<u16>) {
-    let mut cosine = Vec::with_capacity(ROWS * HEAD);
-    let mut sine = Vec::with_capacity(ROWS * HEAD);
+fn rope(positions: &[i32], head_width: usize, base: f32) -> (Vec<u16>, Vec<u16>) {
+    let mut cosine = Vec::with_capacity(positions.len() * head_width);
+    let mut sine = Vec::with_capacity(positions.len() * head_width);
     for &position in positions {
-        for axis in 0..HEAD {
-            let exponent = -(((axis % (HEAD / 2)) * 2) as f32) / HEAD as f32;
-            let frequency = ROPE_BASE.powf(exponent);
+        for axis in 0..head_width {
+            let exponent = -(((axis % (head_width / 2)) * 2) as f32) / head_width as f32;
+            let frequency = base.powf(exponent);
             let angle = position as f32 * frequency;
             cosine.push(f16::from_f32(angle.cos()).to_bits());
             sine.push(f16::from_f32(angle.sin()).to_bits());

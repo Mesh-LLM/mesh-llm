@@ -33,27 +33,47 @@ impl<'a> Weights<'a> {
         self.matrix(graph, tensor, output, input, &values)
     }
 
+    pub(super) fn optional_draft_matrix(
+        &mut self,
+        graph: &mut Block,
+        tensor: &str,
+        input: usize,
+        allowed_outputs: &[usize],
+    ) -> Result<Option<(String, usize)>> {
+        let Some(info) = self.pair.draft.tensor(tensor) else {
+            return Ok(None);
+        };
+        let output = usize::try_from(*info.dims.get(1).context("attention gate is not a matrix")?)?;
+        if !allowed_outputs.contains(&output) {
+            bail!("{tensor} output width {output} does not match the draft attention layout");
+        }
+        let value = self.draft_matrix(graph, tensor, output, input)?;
+        Ok(Some((value, output)))
+    }
+
     pub(super) fn head(
         &mut self,
         graph: &mut Block,
         output: usize,
         input: usize,
-    ) -> Result<Vec<String>> {
-        let values = self.pair.target_tensor("output.weight", &[output, input])?;
-        let chunk = output / 8;
-        if !output.is_multiple_of(8) {
-            bail!("target vocabulary must divide into eight Core ML head chunks");
+    ) -> Result<Vec<(String, usize)>> {
+        let values = self.pair.output_tensor()?;
+        if values.len() != output * input {
+            bail!("DFlash output head does not match the paired vocabulary and hidden width");
         }
-        (0..8)
+        let chunk = output.div_ceil(8);
+        (0..output.div_ceil(chunk))
             .map(|part| {
                 let start = part * chunk * input;
-                self.matrix(
+                let count = chunk.min(output - part * chunk);
+                let weight = self.matrix(
                     graph,
                     &format!("output.weight.{part}"),
-                    chunk,
+                    count,
                     input,
-                    &values[start..start + chunk * input],
-                )
+                    &values[start..start + count * input],
+                )?;
+                Ok((weight, count))
             })
             .collect()
     }
@@ -104,6 +124,17 @@ impl<'a> Weights<'a> {
         shape: &[i64],
     ) -> Result<String> {
         let values = self.pair.draft_tensor(tensor, &[width])?;
+        self.vector(graph, tensor, &values, shape)
+    }
+
+    pub(super) fn draft_array(
+        &mut self,
+        graph: &mut Block,
+        tensor: &str,
+        dims: &[usize],
+        shape: &[i64],
+    ) -> Result<String> {
+        let values = self.pair.draft_tensor(tensor, dims)?;
         self.vector(graph, tensor, &values, shape)
     }
 

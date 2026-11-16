@@ -340,18 +340,22 @@ impl DFlashDraft {
         );
         #[cfg(target_os = "macos")]
         if std::env::var_os("SKIPPY_DFLASH_ANE_MODEL").is_some() {
-            if self.info.variant != DFlashVariant::DFlash
-                || self.info.target_layer_ids != [2, 7, 12, 17, 23, 28, 33, 38]
-                || self.info.max_draft_tokens > 6
-                || self.mask_token != 248_077
-            {
-                bail!("ANE DFlash package does not match this paired checkpoint");
+            if self.info.variant != DFlashVariant::DFlash {
+                bail!("ANE conversion is available only for plain DFlash drafts");
             }
             self.ane = AneDraft::from_env(
                 usize::try_from(self.lanes).context("negative ANE lane count")?,
                 self.n_vocab,
+                self.mask_token,
                 draft_path,
             )?;
+            if self
+                .ane
+                .as_ref()
+                .is_some_and(|ane| self.info.max_draft_tokens > ane.max_proposals())
+            {
+                bail!("ANE DFlash package has fewer proposal rows than the configured draft limit");
+            }
         }
         // The draft's model builder publishes whether its block attends
         // causally (a decoder contract that needs it sets the key even when

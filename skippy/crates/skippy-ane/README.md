@@ -27,7 +27,15 @@ flowchart LR
 ```
 
 The `dflash` module keeps its converter and runtime together because they share
-a fixed model shape and package contract. `dflash::conversion` is available as
+a model profile and package contract. The converter derives layer dimensions,
+feature taps, vocabulary, RoPE, and decoder behavior from the paired GGUFs.
+It generates standard and Laguna DFlash graphs; conversion rejects draft
+tensors whose operations are not implemented by the Core ML graph. The
+compiled package records the profile and source hashes, and an explicit ANE
+request fails loading if they do not match. Packages produced before profile
+format version 2 must be regenerated.
+
+`dflash::conversion` is available as
 a Rust library and through `skippy-ane-convert`; `dflash::AneDraft` is the macOS
 runtime entry point. Its `coreml` module contains the DFlash graph's Core ML
 inputs, outputs, and state handling. A future ANE workload can have a peer
