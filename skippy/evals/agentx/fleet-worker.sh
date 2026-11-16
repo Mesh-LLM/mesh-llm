@@ -115,6 +115,7 @@ def convo(i, turn):
     return [{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":history+f" Q{i}-{turn}: describe a sunset in one paragraph."}]
 def ask(pair):
     i, turn = pair
+    time.sleep(i)  # stagger concurrent conversation starts by 1s each
     body = json.dumps({"model":"m","messages":convo(i,turn),"max_tokens":MAXTOK,"temperature":0,"stream":False}).encode()
     t0=time.time(); err=None; pt=ct=comp=0
     # A freshly started server can refuse part of its first concurrent accept
@@ -164,6 +165,7 @@ PYEOF
   CTX=$((131072*PROBE_CONVERSATIONS))
   run_engine llama 120 "$W/repo/.deps/agentx-llama-build/bin/llama-server" --model "$MODEL" --alias m --host 127.0.0.1 --port $((PORT+1)) --parallel "$PROBE_CONVERSATIONS" --batch-size 2048 --ubatch-size 512 --n-gpu-layers 99 --cache-type-k f16 --cache-type-v f16 --flash-attn on --jinja --chat-template-kwargs '{"enable_thinking":false}' --ctx-size "$CTX" --cache-ram 8192 --no-kv-unified --threads "$THREADS" --threads-batch "$THREADS"
   run_engine skippy 180 "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$((PORT+1))" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers "$NGL" --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR"
+  cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
   echo SMOKE_DONE
   exit 0
 fi
