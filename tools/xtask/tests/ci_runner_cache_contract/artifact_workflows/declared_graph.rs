@@ -60,15 +60,33 @@ fn graph_platform_privacy_tests_are_declared_on_windows() {
 fn graph_platform_producers_and_consumers_keep_separate_responsibilities() {
     for platform in ["linux", "macos", "windows"] {
         let lane = document(&format!("ci-{platform}-lane.yml"));
-        let product = job(&lane, "runtime_product");
+        let product = job(
+            &lane,
+            if platform == "linux" {
+                "product_cpu"
+            } else {
+                "runtime_product"
+            },
+        );
         requires(
             text(product, "if").unwrap(),
             &[
                 "needs.hosts.result == 'success'",
-                "needs.native_runtimes.result == 'success'",
+                if platform == "linux" {
+                    "needs.native_runtime_cpu.result == 'success'"
+                } else {
+                    "needs.native_runtimes.result == 'success'"
+                },
             ],
         );
-        let runtime = job(&lane, "native_runtimes");
+        let runtime = job(
+            &lane,
+            if platform == "linux" {
+                "native_runtime_cpu"
+            } else {
+                "native_runtimes"
+            },
+        );
         assert!(!runtime.get("needs").unwrap().list().contains(&"hosts"));
         for (component, required, forbidden) in [
             (
@@ -303,6 +321,14 @@ fn graph_release_publication_keeps_cancellation_tag_and_token_boundaries() {
 #[test]
 fn graph_packaging_dispatch_checks_write_access_and_excludes_prereleases() {
     let doc = document("release.yml");
+    let identity = named(job(&doc, "publish"), "Record downstream packaging identity");
+    requires(
+        text(identity, "if").unwrap(),
+        &[
+            "needs.metadata.outputs.prerelease != 'true'",
+            "needs.metadata.outputs.skip_gpu_bundles != 'true'",
+        ],
+    );
     let dispatch = job(&doc, "dispatch_packaging_release");
     requires(
         text(dispatch, "if").unwrap(),
@@ -326,6 +352,11 @@ fn graph_packaging_dispatch_checks_write_access_and_excludes_prereleases() {
         run,
         &[
             ".permissions.push // false",
+            "expected_mesh_sha: $expected_mesh_sha",
+            "expected_manifest_sha256: $expected_manifest_sha256",
+            "correlation_id: $correlation_id",
+            "RELEASE_TAG_COMMIT",
+            "RELEASE_MANIFEST_SHA256",
             "dry_run: false",
             "publish_images: true",
             "publish_release_assets: true",
@@ -337,6 +368,159 @@ fn graph_packaging_dispatch_checks_write_access_and_excludes_prereleases() {
             < run
                 .find("\"repos/${TARGET_REPOSITORY}/dispatches\"")
                 .unwrap()
+    );
+}
+
+#[test]
+fn packaging_identity_resolves_published_tag_and_hashes_manifest() {
+    use std::process::Command;
+    let fixture = support::Fixture::new();
+    fixture.executable("git", r#"[[ "$*" == 'rev-parse refs/tags/v1.2.3^{commit}' ]] || exit 41; printf '%s\n' "$FIXTURE_SHA""#);
+    fixture.executable("sha256sum", r#"[[ "$*" == 'release-artifacts/native-runtimes.json' ]] || exit 42; printf '%s  %s\n' "$FIXTURE_DIGEST" "$1""#);
+    let doc = document("release.yml");
+    let script = text(
+        named(job(&doc, "publish"), "Record downstream packaging identity"),
+        "run",
+    )
+    .unwrap();
+    let commit = "a".repeat(40);
+    let digest = "b".repeat(64);
+    for (sha, hash, valid) in [
+        (commit.as_str(), digest.as_str(), true),
+        ("invalid", digest.as_str(), false),
+        (commit.as_str(), "", false),
+    ] {
+        let output_file = fixture.path().join("output");
+        if output_file.exists() {
+            fs::remove_file(&output_file).unwrap();
+        }
+        let mut command = Command::new("bash");
+        command
+            .args(["-c", script])
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    fixture.path().join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("RELEASE_TAG", "v1.2.3")
+            .env("FIXTURE_SHA", sha)
+            .env("FIXTURE_DIGEST", hash)
+            .env("GITHUB_OUTPUT", &output_file);
+        let output = fixture.run(command);
+        assert_eq!(output.status.success(), valid, "{output:?}");
+        if valid {
+            assert_eq!(
+                fs::read_to_string(output_file).unwrap(),
+                format!("tag_commit={commit}\nmanifest_sha256={digest}\n")
+            );
+        } else {
+            assert!(!output_file.exists());
+        }
+    }
+}
+
+#[test]
+fn packaging_dispatch_binds_the_complete_identity_and_rejects_invalid_values() {
+    use std::process::Command;
+    let fixture = support::Fixture::new();
+    fixture.executable(
+        "gh",
+        r#"if [[ "$*" == *"/dispatches"* ]]; then cat > "$CAPTURE"; else printf '{"permissions":{"push":true}}'; fi"#,
+    );
+    let doc = document("release.yml");
+    let script = text(
+        named(
+            job(&doc, "dispatch_packaging_release"),
+            "Dispatch verified release to mesh-packaging",
+        ),
+        "run",
+    )
+    .unwrap();
+    let commit = "a".repeat(40);
+    let digest = "b".repeat(64);
+    for (sha, hash, valid) in [
+        (commit.as_str(), digest.as_str(), true),
+        ("", digest.as_str(), false),
+        (commit.as_str(), "invalid", false),
+    ] {
+        let capture = fixture.path().join("dispatch.json");
+        if capture.exists() {
+            fs::remove_file(&capture).unwrap();
+        }
+        let mut command = Command::new("bash");
+        command
+            .args(["-c", script])
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    fixture.path().join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("CAPTURE", &capture)
+            .env("GITHUB_OUTPUT", fixture.path().join("dispatch-output"))
+            .env("GH_TOKEN", "test")
+            .env("TARGET_REPOSITORY", "Mesh-LLM/mesh-packaging")
+            .env("GITHUB_REPOSITORY", "Mesh-LLM/mesh-llm")
+            .env("GITHUB_RUN_ID", "123")
+            .env("GITHUB_RUN_ATTEMPT", "2")
+            .env("RELEASE_TAG", "v1.2.3")
+            .env("RELEASE_VERSION", "1.2.3")
+            .env("RELEASE_TAG_COMMIT", sha)
+            .env("RELEASE_MANIFEST_SHA256", hash);
+        let output = fixture.run(command);
+        assert_eq!(output.status.success(), valid, "{output:?}");
+        if valid {
+            let payload: serde_json::Value =
+                serde_json::from_slice(&fs::read(capture).unwrap()).unwrap();
+            assert_eq!(payload["client_payload"]["expected_mesh_sha"], commit);
+            assert_eq!(
+                payload["client_payload"]["expected_manifest_sha256"],
+                digest
+            );
+            assert_eq!(payload["client_payload"]["correlation_id"], "mesh-123-2");
+            assert_eq!(
+                fs::read_to_string(fixture.path().join("dispatch-output")).unwrap(),
+                "correlation_id=mesh-123-2\n"
+            );
+        } else {
+            assert!(!capture.exists());
+        }
+    }
+}
+
+#[test]
+fn packaging_wait_keeps_dispatch_identity_and_retry_boundary() {
+    let doc = document("release.yml");
+    let dispatch = job(&doc, "dispatch_packaging_release");
+    assert_eq!(
+        text(dispatch.get("outputs").unwrap(), "correlation_id").unwrap(),
+        "${{ steps.dispatch.outputs.correlation_id }}"
+    );
+    let waiter = job(&doc, "await_packaging_release");
+    requires(
+        text(waiter, "if").unwrap(),
+        &["needs.dispatch_packaging_release.result == 'success'"],
+    );
+    let step = named(waiter, "Wait for matching successful packaging receipt");
+    requires(
+        text(step, "run").unwrap(),
+        &[
+            "release packaging-receipt",
+            "--tag",
+            "--sha",
+            "--manifest",
+            "--correlation",
+            "--since",
+        ],
+    );
+    assert_eq!(
+        text(step.get("env").unwrap(), "CORRELATION_ID").unwrap(),
+        "${{ needs.dispatch_packaging_release.outputs.correlation_id }}"
     );
 }
 

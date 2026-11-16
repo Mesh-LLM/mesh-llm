@@ -124,8 +124,6 @@ pub struct OwnerRuntimeConfig {
     pub node_label: Option<String>,
     pub trust_store: TrustStore,
     pub trust_policy: TrustPolicy,
-    /// Other nodes that may serve this node's private requests.
-    pub private_nodes: Vec<EndpointId>,
     pub activity: mesh_llm_config::RuntimeActivityConfig,
     pub drain_timeout_secs: u64,
     pub drain_timeout_max_secs: u64,

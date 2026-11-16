@@ -23,8 +23,8 @@ pub use parser::{
     DiscoveryScope, DoctorCommand, GpuCommand, JoiningOptions, KvCacheCommand, KvCacheOptions,
     LoggingOptions, MeshDiscoveryMode, MeshGuardrailCliMode, MeshPolicyOptions, ModelPrepareArgs,
     NetworkOptions, NodeModeOptions, NormalizedRuntimeArgs, OwnerOptions, PlacementOptions,
-    PluginCommand, RuntimeSurface, ServingOptions, ServingStrategyCli, SetupArgs, SkillAgentArg,
-    SkillCommand, SpeculativeOptions, TrustCommand, TrustPolicy, UninstallArgs,
+    PluginCommand, PrivateCommand, RuntimeSurface, ServingOptions, ServingStrategyCli, SetupArgs,
+    SkillAgentArg, SkillCommand, SpeculativeOptions, TrustCommand, TrustPolicy, UninstallArgs,
     legacy_runtime_surface_warning, normalize_runtime_surface_args, raw_args_invoke_analytics,
     validate_discovery_mode_args,
 };

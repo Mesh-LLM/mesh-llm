@@ -58,7 +58,14 @@ fn artifact_quality_job_keeps_tooling_release_targets_and_client_dependency_vali
         &[
             "actionlint -config-file .github/actionlint.yaml",
             "just ci-legacy-contracts",
-            "cargo run -p xtask -- repo-consistency release-targets",
+        ],
+    );
+    let lane = doc(".github/workflows/ci-quality-lane.yml");
+    let consistency = lane.get("jobs").unwrap().get("consistency").unwrap();
+    contains(
+        &runs(consistency),
+        &[
+            "\"$MESH_LLM_AUTOMATION_BIN\" repo-consistency release-targets",
             "cargo tree -p mesh-llm-client",
         ],
     );

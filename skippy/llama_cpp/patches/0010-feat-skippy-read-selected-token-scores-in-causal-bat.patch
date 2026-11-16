@@ -1,7 +1,7 @@
-From 527096c225afeca0f942b6fb538ac9b87dd11803 Mon Sep 17 00:00:00 2001
+From 20bd1020fa04e7f55bdf30fa2201abbd20a53213 Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
-Subject: [PATCH 10/16] feat(skippy): read selected token scores in causal
+Subject: [PATCH 10/32] feat(skippy): read selected token scores in causal
  batches
 
 Keep full vocabulary logits on the terminal worker and read bounded
@@ -55,7 +55,7 @@ index 7098677d8..bf9fb497c 100644
  
  /**
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0a5980aaa..c7a99d16c 100644
+index 2bc7d6f6e..05108ad38 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -168,6 +168,10 @@ endif()
@@ -247,6 +247,3 @@ index 000000000..d33237d1a
 +    if (skippy_selected_log_probabilities(inf.data(), inf.size(), selected.data() + 1, 1, result.data())) return 8;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-

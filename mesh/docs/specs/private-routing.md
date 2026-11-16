@@ -20,22 +20,36 @@ requests do not reach the friend's node.
 
 ## Set up your nodes
 
-1. On each node you want to use, read its node id:
+On each node you send private requests to, list your other nodes:
 
-   ```bash
-   mesh-llm auth status          # prints "Node ID: …" (64 hex characters)
-   ```
+```bash
+mesh-llm private add studio      # a connected node's label or hostname
+mesh-llm private add mini
+mesh-llm private add 8a88e3dd…   # or its node id (64 hex characters)
+mesh-llm private list            # the list, and which nodes are connected
+mesh-llm private remove mini
+```
 
-   The console and `/api/status` show it too.
+The list is `[private] nodes` in `~/.mesh-llm/config.toml` (or the file
+`--config` / `MESH_LLM_CONFIG` names), so you can also edit it by hand:
 
-2. On each node you send private requests to, list the others:
+```toml
+[private]
+nodes = [
+  "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+]
+```
 
-   ```bash
-   mesh-llm serve --auto --private-node <studio-id> --private-node <mini-id>
-   ```
+Only node ids are saved. `add` looks a label or hostname up among the nodes
+the running node (console port `3131`, or `--port`) is connected to and
+writes that node's id; a name is never trusted when routing. `mesh-llm auth
+status` on a node prints its id, and the console and `/api/status` show it too.
 
-   A node reads its list at startup, so restart it after a change. An id
-   that is not 64 hex characters stops the node from starting.
+A running node notices the change within a few seconds; no restart is
+needed. An entry that is not a node id makes the file invalid: `mesh-llm
+config validate` says which, and a running node keeps private requests on
+itself until the file is fixed.
 
 Listing is one-way. If you also send private requests to your studio, list
 your other nodes on it too.

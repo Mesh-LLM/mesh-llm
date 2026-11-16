@@ -15,8 +15,8 @@ chacha20poly1305 = "0.11"
 futures-core = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 http-body = "1"
-skippy-guardrails = { path = "../skippy-guardrails", version = "0.79.0"  }
-skippy-events = { path = "../skippy-events", version = "0.79.0" }
+skippy-guardrails = { path = "../skippy-guardrails", version = "0.80.0"  }
+skippy-events = { path = "../skippy-events", version = "0.80.0" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

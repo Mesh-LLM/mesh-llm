@@ -1,7 +1,7 @@
-From ce6ec56ac8b9791f5fee939cb94ee64bc8a54dcb Mon Sep 17 00:00:00 2001
+From cd9d11ee766add664032e1b29966215260bc54e7 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 05/16] build(skippy): wire native runtime and backend support
+Subject: [PATCH 05/32] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
@@ -13,7 +13,7 @@ Subject: [PATCH 05/16] build(skippy): wire native runtime and backend support
  common/chat.cpp                            |  36 +-
  common/chat.h                              |   6 +-
  common/ngram-cache.cpp                     | 158 ++++-
- common/peg-parser.cpp                      | 337 ++++++++++
+ common/peg-parser.cpp                      | 337 +++++++++++
  common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 138 +++--
  common/reasoning-budget.h                  |  16 +-
@@ -30,11 +30,12 @@ Subject: [PATCH 05/16] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-device.m    | 482 ++++++++++++++-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
- src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 672 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.h                    |   1 +
  tools/mtmd/mtmd-helper.cpp                 |  47 +-
  tools/mtmd/mtmd-helper.h                   |  29 +
- 30 files changed, 3146 insertions(+), 152 deletions(-)
+ tools/mtmd/mtmd-subcontext.cpp             |   4 +
+ 31 files changed, 3142 insertions(+), 152 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -83,10 +84,10 @@ index b8b40e75f..f99407170 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 8e3c88dac..73e044e63 100644
+index e38485ca0..3c2b9b7ba 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -88,10 +88,7 @@ add_library(${TARGET}
+@@ -90,10 +90,7 @@ add_library(${TARGET}
      json-schema-to-grammar.cpp
      json-schema.cpp
      json-schema.h
@@ -97,7 +98,7 @@ index 8e3c88dac..73e044e63 100644
      log.h
      ngram-cache.cpp
      ngram-cache.h
-@@ -103,10 +100,10 @@ add_library(${TARGET}
+@@ -105,10 +102,10 @@ add_library(${TARGET}
      peg-parser.h
      preset.cpp
      preset.h
@@ -110,7 +111,7 @@ index 8e3c88dac..73e044e63 100644
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -145,6 +142,7 @@ endif()
+@@ -147,6 +144,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -118,7 +119,7 @@ index 8e3c88dac..73e044e63 100644
  
      # TODO: make fine-grained exports in the future
      set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-@@ -153,38 +151,6 @@ endif()
+@@ -155,38 +153,6 @@ endif()
  target_link_libraries(${TARGET} PUBLIC  llama-common-base)
  target_link_libraries(${TARGET} PRIVATE cpp-httplib)
  
@@ -287,10 +288,10 @@ index a7e370578..39ffa20f1 100644
  
      template_params params_content_only;
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index 21620a7a4..45b4099d1 100644
+index 968cbfa98..cf49e3cf0 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
-@@ -387,11 +387,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -393,11 +393,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
      }
  
      if (is_arg_name && current_tool) {
@@ -304,7 +305,7 @@ index 21620a7a4..45b4099d1 100644
          ++arg_count;
  
          auto & target = args_target();
-@@ -673,10 +674,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
+@@ -679,10 +680,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
          // Arguments — either wrapped in args_key or parsed directly
          common_peg_parser args_parser = eps();
          if (args_key.empty()) {
@@ -317,7 +318,7 @@ index 21620a7a4..45b4099d1 100644
          }
          inner_fields.push_back(args_parser);
  
-@@ -738,7 +739,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
+@@ -744,7 +745,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
          auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                            atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
@@ -326,7 +327,7 @@ index 21620a7a4..45b4099d1 100644
  
          auto nested_object = literal("{") + space() +
                              nested_name + space() + literal(",") + space() +
-@@ -794,7 +795,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -800,7 +801,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
  
      auto tool_choices    = choice();
      auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -337,7 +338,7 @@ index 21620a7a4..45b4099d1 100644
  
      for (size_t i = 0; i < tools.size(); i++) {
          const auto & tool_def = tools[i];
-@@ -808,7 +811,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -814,7 +817,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
          auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto tool_args_ = args_key_parser + space() + literal(":") + space() +
@@ -347,7 +348,7 @@ index 21620a7a4..45b4099d1 100644
          // Build ID parsers if keys are provided
          common_peg_parser id_parser = eps();
 diff --git a/common/chat-peg-parser.h b/common/chat-peg-parser.h
-index 114fa049f..7723d4e35 100644
+index b827b60b0..9272d698d 100644
 --- a/common/chat-peg-parser.h
 +++ b/common/chat-peg-parser.h
 @@ -5,6 +5,7 @@
@@ -358,7 +359,7 @@ index 114fa049f..7723d4e35 100644
  #include <vector>
  
  class common_chat_peg_mapper {
-@@ -106,7 +107,6 @@ class common_chat_peg_builder : public common_peg_parser_builder {
+@@ -118,7 +119,6 @@ class common_chat_peg_builder : public common_peg_parser_builder {
      common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
      common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
  
@@ -367,10 +368,10 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 5f956e64e..6910aa61a 100644
+index da29cd671..f2e3ad37b 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -203,6 +203,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+@@ -204,6 +204,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                  }
              }
          }
@@ -382,7 +383,7 @@ index 5f956e64e..6910aa61a 100644
      } else {
          jmsg["content"] = "";
      }
-@@ -368,6 +373,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -369,6 +374,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
  
              auto has_content    = message.contains("content");
              auto has_tool_calls = message.contains("tool_calls");
@@ -390,7 +391,7 @@ index 5f956e64e..6910aa61a 100644
              if (has_content) {
                  const auto & content = message.at("content");
                  if (content.is_string()) {
-@@ -390,7 +396,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -391,7 +397,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                          }
                          msg.content_parts.push_back(msg_part);
                      }
@@ -401,7 +402,7 @@ index 5f956e64e..6910aa61a 100644
                      throw std::invalid_argument("Invalid 'content' type: expected string or array, got " +
                                                  content.dump() +
                                                  " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
-@@ -426,11 +434,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -427,11 +435,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                      msg.tool_calls.push_back(tc);
                  }
              }
@@ -413,7 +414,7 @@ index 5f956e64e..6910aa61a 100644
              if (message.contains("reasoning_content")) {
                  msg.reasoning_content = message.at("reasoning_content");
              }
-@@ -796,6 +799,23 @@ std::string common_chat_format_example(const struct common_chat_templates *
+@@ -797,6 +800,23 @@ std::string common_chat_format_example(const struct common_chat_templates *
      "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
      "{%- endif -%}"
  
@@ -437,7 +438,7 @@ index 5f956e64e..6910aa61a 100644
  void common_chat_templates_free(struct common_chat_templates * tmpls) {
      delete tmpls;
  }
-@@ -904,6 +924,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+@@ -936,6 +956,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
      } else {
          default_template_src = chat_template_override;
      }
@@ -449,7 +450,7 @@ index 5f956e64e..6910aa61a 100644
          if (!template_tool_use_src.empty()) {
              default_template_src = template_tool_use_src;
 diff --git a/common/chat.h b/common/chat.h
-index ebfc80f51..585b55d25 100644
+index 304ccf9ec..0c7aa4971 100644
 --- a/common/chat.h
 +++ b/common/chat.h
 @@ -98,6 +98,9 @@ struct common_chat_msg {
@@ -1755,7 +1756,7 @@ index 000000000..c3362e2a7
 +    return skippy_common_success(out_error);
 +}
 diff --git a/ggml/cmake/common.cmake b/ggml/cmake/common.cmake
-index 42b65a580..956d453a7 100644
+index c8d232294..001c3c811 100644
 --- a/ggml/cmake/common.cmake
 +++ b/ggml/cmake/common.cmake
 @@ -99,8 +99,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
@@ -1813,7 +1814,7 @@ index afb86338a..0427fda49 100644
      // Backend registry
      //
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 961990f85..9123c0858 100644
+index b70d0d874..82e5eebc9 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -1486,14 +1486,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
@@ -1849,7 +1850,7 @@ index 961990f85..9123c0858 100644
      sched->ctx = ggml_init(params);
      if (sched->ctx == NULL) {
          GGML_ABORT("%s: failed to initialize context\n", __func__);
-@@ -2334,8 +2350,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
+@@ -2339,8 +2355,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
      sched->graph_size      = 0;
      sched->prev_graph_size = 0;
  
@@ -2124,10 +2125,10 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 162a7d28d..596c05226 100644
+index 28073a17f..4b4193075 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -11,6 +11,7 @@
+@@ -12,6 +12,7 @@
  #include "ggml-cuda/argsort.cuh"
  #include "ggml-cuda/batch-get.cuh"
  #include "ggml-cuda/binbcast.cuh"
@@ -2135,7 +2136,7 @@ index 162a7d28d..596c05226 100644
  #include "ggml-cuda/clamp.cuh"
  #include "ggml-cuda/col2im-1d.cuh"
  #include "ggml-cuda/concat.cuh"
-@@ -88,6 +89,7 @@
+@@ -90,6 +91,7 @@
  #include <map>
  #include <memory>
  #include <mutex>
@@ -2143,7 +2144,7 @@ index 162a7d28d..596c05226 100644
  #include <cstdarg>
  #include <cstdio>
  #include <cstdlib>
-@@ -6146,7 +6148,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -6451,7 +6453,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                  return false;
              }
          case GGML_OP_DUP:
@@ -2157,7 +2158,7 @@ index 162a7d28d..596c05226 100644
          case GGML_OP_ARGMAX:
          case GGML_OP_COUNT_EQUAL:
              return true;
-@@ -6505,7 +6512,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6810,7 +6817,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -2171,7 +2172,7 @@ index 162a7d28d..596c05226 100644
      #endif
  
      {
-@@ -6531,6 +6543,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6845,6 +6857,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -2501,7 +2502,7 @@ index 162a7d28d..596c05226 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -6556,6 +6891,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6870,6 +7205,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2514,7 +2515,7 @@ index 162a7d28d..596c05226 100644
  }
  
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
-index 0db8e97c9..82f05b88b 100644
+index da159dea1..23a2f7ba1 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h
 +++ b/ggml/src/ggml-cuda/vendors/hip.h
 @@ -30,6 +30,7 @@
@@ -2563,7 +2564,7 @@ index 4053a624e..56b795790 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 5e6099ce1..8c21125d5 100644
+index 0a07a76bf..9ab481093 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2889,7 +2890,7 @@ index 5e6099ce1..8c21125d5 100644
  
          [mtl_function release];
  
-@@ -1793,6 +1983,31 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1805,6 +1995,31 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -2921,7 +2922,7 @@ index 5e6099ce1..8c21125d5 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2762,3 +2977,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2780,3 +2995,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -3400,7 +3401,7 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 426c48741..0a5980aaa 100644
+index 426c48741..2bc7d6f6e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -1,4 +1,5 @@
@@ -3460,7 +3461,7 @@ index 426c48741..0a5980aaa 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,20 +105,649 @@ set_target_properties(llama PROPERTIES
+@@ -60,20 +105,641 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
@@ -3966,14 +3967,6 @@ index 426c48741..0a5980aaa 100644
 +        FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
 +
 +    add_test(
-+        NAME skippy_live_graph_kimi_linear_unfused
-+        COMMAND skippy-profile-residency
-+            "${SKIPPY_MODEL_FIXTURE_DIR}/kimi-linear-moe.gguf"
-+            unfused-gdn)
-+    set_tests_properties(skippy_live_graph_kimi_linear_unfused PROPERTIES
-+        FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
-+
-+    add_test(
 +        NAME skippy_generate_deepseek4_fixture
 +        COMMAND skippy-model-fixture-generator
 +            --arch deepseek4
@@ -4114,7 +4107,7 @@ index 426c48741..0a5980aaa 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index ba71913e0..b1f37748c 100644
+index 1175ad624..5ffeca401 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
 @@ -69,6 +69,7 @@ struct mtmd_audio_mel_config {
@@ -4126,7 +4119,7 @@ index ba71913e0..b1f37748c 100644
  
      const mtmd_audio_cache * cache = nullptr;
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index d86537e55..8830ba587 100644
+index aefe504b2..da2c782d6 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
 @@ -141,6 +141,11 @@ int32_t mtmd_helper_decode_image_chunk(
@@ -4219,10 +4212,10 @@ index d86537e55..8830ba587 100644
              LOG_ERR("failed to decode %s\n", name);
              return ret;
 diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
-index 8a1d3aae1..80e8ac893 100644
+index 7d72fdb99..4a5b6e5a6 100644
 --- a/tools/mtmd/mtmd-helper.h
 +++ b/tools/mtmd/mtmd-helper.h
-@@ -115,6 +115,35 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -128,6 +128,35 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                 bool logits_last,
                                                 llama_pos * new_n_past);
  
@@ -4259,9 +4252,10 @@ index 8a1d3aae1..80e8ac893 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
+index 7f13b7f62..64eb1b690 100644
 --- a/tools/mtmd/mtmd-subcontext.cpp
 +++ b/tools/mtmd/mtmd-subcontext.cpp
-@@ -362,6 +362,10 @@
+@@ -323,6 +323,10 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
          cur = ggml_add(ctx0,
                  ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
                  ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
@@ -4272,7 +4266,3 @@ diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
          if (config.use_magnitude) {
              cur = ggml_sqrt(ctx0, cur);
          }
-
--- 
-2.54.0 (Apple Git-157)
-

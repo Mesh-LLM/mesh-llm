@@ -139,6 +139,8 @@ pub(in crate::frontend) struct PreparedGenerationPrompt {
     /// loaded model and requires the resulting IDs to be an exact prefix of
     /// `text` before it can be used for recurrent-state caching.
     pub(in crate::frontend) recurrent_cache_prefix_text: Option<String>,
+    /// The request's coarse shape, for the generation-stats observer.
+    pub(in crate::frontend) shape: crate::generation_stats::RequestShape,
 }
 
 impl PreparedGenerationPrompt {
@@ -148,6 +150,7 @@ impl PreparedGenerationPrompt {
             media: Vec::new(),
             chat_parse_metadata: None,
             recurrent_cache_prefix_text: None,
+            shape: crate::generation_stats::RequestShape::default(),
         }
     }
 

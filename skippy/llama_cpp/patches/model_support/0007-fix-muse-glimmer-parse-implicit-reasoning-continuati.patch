@@ -1,7 +1,7 @@
-From 75c5d872a980d24f2610e235e7c539b5a05baa4b Mon Sep 17 00:00:00 2001
+From 9edb5541651b0a44d4e77442aeb2f9c20a7bb57f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 17 Oct 2026 03:37:10 +1100
-Subject: [PATCH 07/15] fix(muse-glimmer): parse implicit reasoning
+Subject: [PATCH 23/32] fix(muse-glimmer): parse implicit reasoning
  continuations
 
 ---
@@ -26,10 +26,10 @@ index 78ff50727..846264b60 100644
              p.rule("analysis", p.literal(" to=self<|message|>") + p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
          }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 98dfc4b65..f19c533b9 100644
+index 175a95150..303c53a78 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -7046,6 +7046,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -7191,6 +7191,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .expect(message_assist)
              .run();
  
@@ -42,6 +42,3 @@ index 98dfc4b65..f19c533b9 100644
          // A tool call as the first message of the turn: "<|start|>assistant" is the
          // generation prompt, so the output starts at " to=".
          tst.test(" to=special_function<|message|>" + call_markup)
--- 
-2.54.0 (Apple Git-157)
-

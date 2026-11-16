@@ -1514,6 +1514,7 @@ fn legacy_proto_config_to_mesh(
         },
         mesh_requirements,
         owner_control: Default::default(),
+        private: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),

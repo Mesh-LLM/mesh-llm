@@ -133,6 +133,17 @@ fn cleanup_invocation(run: &str) -> bool {
                 && direct_cleanup(frozen)
                 && direct_cleanup(facade)
         }
+        [selector, frozen, otherwise, refusal, facade, end]
+            if *selector == "if [[ -n \"${MESH_LLM_AUTOMATION_BIN:-}\" ]]; then"
+                && *otherwise == "else"
+                && *refusal == "test -z \"$PRODUCT_AUTOMATION\" || exit 1"
+                && *end == "fi" =>
+        {
+            frozen.starts_with("\"$MESH_LLM_AUTOMATION_BIN\" ")
+                && facade.starts_with("cargo xtool ")
+                && direct_cleanup(frozen)
+                && direct_cleanup(facade)
+        }
         _ => false,
     }
 }

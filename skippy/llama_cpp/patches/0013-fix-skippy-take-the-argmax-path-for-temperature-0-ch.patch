@@ -1,7 +1,7 @@
-From b5d55de3ea6bddf0b719c9749d6a1ab3367f3459 Mon Sep 17 00:00:00 2001
+From 3960653d9909ba978fb9735923d1563392968b38 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 29 Oct 2026 19:55:52 -0400
-Subject: [PATCH 13/16] fix(skippy): take the argmax path for temperature-0
+Subject: [PATCH 13/32] fix(skippy): take the argmax path for temperature-0
  chains that can only pick the top logit
 
 ---
@@ -17,7 +17,7 @@ Subject: [PATCH 13/16] fix(skippy): take the argmax path for temperature-0
  create mode 100644 src/skippy/sampling_argmax.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c7a99d16c..cd2b536f6 100644
+index 05108ad38..ead5ea4b4 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -50,6 +50,7 @@ add_library(llama
@@ -338,7 +338,7 @@ index 000000000..d06000f11
 +        int32_t n_vocab,
 +        const skippy_argmax_plan & plan);
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
-index 9e134586f..4100856f3 100644
+index b191ecf34..5ae8e15b4 100644
 --- a/src/skippy/tests/sampling_history.cpp
 +++ b/src/skippy/tests/sampling_history.cpp
 @@ -1,5 +1,7 @@
@@ -349,7 +349,7 @@ index 9e134586f..4100856f3 100644
  #include "../runtime_support.h"
  #include "llama-model.h"
  #include "../../../common/sampling.h"
-@@ -287,6 +289,108 @@ void penalty_restore(skippy_model * model, bool full) {
+@@ -290,6 +292,108 @@ void penalty_restore(skippy_model * model, bool full) {
      release(restored);
  }
  
@@ -458,7 +458,7 @@ index 9e134586f..4100856f3 100644
  
  int32_t stage_layers(skippy_session * session) {
      return session->stage_model->model->hparams.n_layer();
-@@ -441,6 +545,7 @@ void adapter_contracts(skippy_model * model) {
+@@ -444,6 +548,7 @@ void adapter_contracts(skippy_model * model) {
      error = nullptr;
  
      config = sampling_config();
@@ -466,7 +466,7 @@ index 9e134586f..4100856f3 100644
      config.ignore_eos = 1;
      config.logit_bias_count = 3;
      const auto * vocab = llama_model_get_vocab(model->model);
-@@ -476,7 +581,8 @@ int main(int argc, char ** argv) {
+@@ -479,7 +584,8 @@ int main(int argc, char ** argv) {
      CHECK(argc == 4);
      const bool grammar = std::strcmp(argv[2], "grammar") == 0;
      const bool state = std::strcmp(argv[2], "state") == 0;
@@ -476,7 +476,7 @@ index 9e134586f..4100856f3 100644
      CHECK(std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
      require_recurrent = std::strcmp(argv[3], "recurrent") == 0;
      auto config = skippy_runtime_config_default();
-@@ -491,6 +597,8 @@ int main(int argc, char ** argv) {
+@@ -494,6 +600,8 @@ int main(int argc, char ** argv) {
          // partial side payload is intentionally empty there.
          CHECK(require_recurrent);
          state_round_trip(model);
@@ -485,6 +485,3 @@ index 9e134586f..4100856f3 100644
      } else {
          for (const bool full : {false, true}) {
              if (grammar) {
--- 
-2.54.0 (Apple Git-157)
-

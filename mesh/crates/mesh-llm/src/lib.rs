@@ -175,7 +175,15 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     // Report a failed startup rather than returning through `?`, which would
     // leave `serve_started` queued and undelivered and hide exactly the
     // failures worth seeing.
-    if let Err(error) = mesh_llm_host_runtime::initialize_host_runtime_for_options(&options).await {
+    let initialized = mesh_llm_host_runtime::initialize_host_runtime_for_options(&options).await;
+    // After initialization, so the survey sees the native runtime it loaded
+    // (or, when that failed, the hardware this node actually ran on).
+    let hardware_profile = mesh_llm_commands::usage_reporting::report_hardware_profile();
+    if let Err(error) = initialized {
+        // Analytics shuts down next and drops anything captured after that,
+        // so give the survey a bounded chance to land first. A successful
+        // startup never waits for it.
+        let _ = tokio::time::timeout(Duration::from_secs(10), hardware_profile).await;
         session.finish(false);
         mesh_llm_commands::usage_reporting::shutdown().await;
         return Err(error);
@@ -551,7 +559,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         node_label: cli.owner.node_label,
         trust_policy: cli.owner.trust_policy.map(map_trust_policy),
         trust_owner: cli.owner.trust_owner,
-        private_nodes: cli.owner.private_node,
         nostr_discovery: cli.nostr_discovery,
         audit_log_path: cli.logging.audit_log_path,
         audit_log_format: cli.logging.audit_log_format,

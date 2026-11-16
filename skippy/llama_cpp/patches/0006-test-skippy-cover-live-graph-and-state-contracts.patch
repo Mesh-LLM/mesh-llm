@@ -1,12 +1,12 @@
-From ef2d1b306ec19009abb53f52f409917c9dc8a642 Mon Sep 17 00:00:00 2001
+From bf3f7c50c6f91dec75704e4c79bbe91f8f4542bb Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
+Subject: [PATCH 06/32] test(skippy): cover live graph and state contracts
 
 ---
  .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
- src/skippy/tests/graph_build_inputs.cpp       |  950 ++++++++++
+ src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
  src/skippy/tests/graph_contract_cases.cmake   |  120 ++
  src/skippy/tests/graph_contract_checks.h      |  138 ++
  src/skippy/tests/graph_contract_models.cpp    |  223 +++
@@ -16,7 +16,7 @@ Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
  src/skippy/tests/live_graph_reference.h       |  194 ++
  src/skippy/tests/log_gate.h                   |  138 ++
  src/skippy/tests/noalloc_graph_planning.cpp   | 1139 +++++++++++
- src/skippy/tests/profile_residency.cpp        |  260 +++
+ src/skippy/tests/profile_residency.cpp        |  232 +++
  .../tests/renamed_multishard_planning.cpp     | 1667 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  697 +++++++
@@ -24,11 +24,12 @@ Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1200 ++++++++++++
- tests/CMakeLists.txt                          |   31 +
+ tests/CMakeLists.txt                          |   35 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  189 +-
  tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-graph-contract-fixture.h           |  155 ++
+ tests/test-jinja.cpp                          |    5 +
  tests/test-llama-archs.cpp                    |  362 +++-
  tests/test-reasoning-budget.cpp               |   24 +
  tests/test-skippy-activation-validation.cpp   |   18 +
@@ -41,7 +42,7 @@ Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 37 files changed, 10293 insertions(+), 30 deletions(-)
+ 38 files changed, 10272 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
@@ -207,10 +208,10 @@ index 000000000..803489be0
 +}
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
 new file mode 100644
-index 000000000..c53c6b4b1
+index 000000000..f1a028195
 --- /dev/null
 +++ b/src/skippy/tests/graph_build_inputs.cpp
-@@ -0,0 +1,950 @@
+@@ -0,0 +1,948 @@
 +#include "llama-context.h"
 +#include "llama-graph.h"
 +#include "llama-kv-cache-msa.h"
@@ -782,8 +783,6 @@ index 000000000..c53c6b4b1
 +static const char * fused_op_name(llm_fused_op op) {
 +    switch (op) {
 +        case LLM_FUSED_OP_FLASH_ATTN:         return "flash attention";
-+        case LLM_FUSED_OP_GDN_AR:             return "Gated Delta Net (autoregressive)";
-+        case LLM_FUSED_OP_GDN_CH:             return "Gated Delta Net (chunked)";
 +        case LLM_FUSED_OP_LIGHTNING_INDEXER:  return "Lightning Indexer";
 +        case LLM_FUSED_OP_DSV4_HC_PRE:        return "DeepSeek V4 HC pre";
 +        case LLM_FUSED_OP_DSV4_HC_COMB:       return "DeepSeek V4 HC comb";
@@ -3376,10 +3375,10 @@ index 000000000..7470f3309
 +}
 diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
 new file mode 100644
-index 000000000..bfcff855d
+index 000000000..c63f518c6
 --- /dev/null
 +++ b/src/skippy/tests/profile_residency.cpp
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,232 @@
 +#include "skippy.h"
 +#include "log_gate.h"
 +static const skippy::log_gate::installer skippy_log_gate_installer{};
@@ -3418,8 +3417,7 @@ index 000000000..bfcff855d
 +};
 +
 +static int run(const char * path, bool integrated, mtp_receipt * receipt = nullptr,
-+        bool force_unfused_gdn = false, bool ordinary_reference = false,
-+        bool cross_sequence_geometry = false) {
++        bool ordinary_reference = false, bool cross_sequence_geometry = false) {
 +    fresh_graph_scope fresh(ordinary_reference);
 +    ggml_context * tensor_context = nullptr;
 +    const gguf_init_params inspect = {true, &tensor_context};
@@ -3455,7 +3453,7 @@ index 000000000..bfcff855d
 +    if (!model || (integrated && llama_model_n_layer_nextn(model.get()) == 0)) return 2;
 +    const int32_t layer_count = llama_model_n_layer(model.get());
 +    model.reset();
-+    const uint32_t prefill_capacity = force_unfused_gdn ? 34 : 8;
++    const uint32_t prefill_capacity = 8;
 +    const skippy_stage_planner_profile_v1 profiles[] = {
 +        {1, sizeof(skippy_stage_planner_profile_v1), "decode", 1, 1, 1, 0},
 +        {1, sizeof(skippy_stage_planner_profile_v1), "prefill", prefill_capacity, 1, prefill_capacity, 0},
@@ -3523,7 +3521,6 @@ index 000000000..bfcff855d
 +        if (found == runtime->model->tensors_by_name.end() || found->second == nullptr ||
 +                (found->second->data == nullptr && found->second->buffer == nullptr)) return 13;
 +    }
-+    if (force_unfused_gdn) runtime->ctx->set_fused_gdn_for_test(false, false);
 +    skippy_session * session = nullptr;
 +    if (skippy_session_create(runtime, &session, &error) != SKIPPY_STATUS_OK) return 9;
 +    const size_t mtp_depth = integrated ? llama_model_n_layer_nextn(llama_get_model(runtime->mtp_ctx)) : 0;
@@ -3542,9 +3539,7 @@ index 000000000..bfcff855d
 +        llama_memory_clear(llama_get_memory(runtime->ctx), true);
 +        if (integrated) llama_memory_clear(llama_get_memory(runtime->mtp_ctx), true);
 +    }
-+    std::vector<llama_token> execution_tokens = force_unfused_gdn
-+            ? std::vector<llama_token>{3, 7, 5, 9, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26}
-+            : std::vector<llama_token>{3, 7};
++    std::vector<llama_token> execution_tokens{3, 7};
 +    llama_batch batch = llama_batch_init(execution_tokens.size(), 0, 1);
 +    batch.n_tokens = execution_tokens.size();
 +    for (size_t row = 0; row < execution_tokens.size(); ++row) {
@@ -3558,19 +3553,7 @@ index 000000000..bfcff855d
 +    llama_batch_free(batch);
 +    if (rc != 0) return 10;
 +    if (!integrated) {
-+        if (force_unfused_gdn) {
-+            llama_batch step = llama_batch_init(1, 0, 1);
-+            step.n_tokens = 1;
-+            step.token[0] = 11;
-+            step.pos[0] = execution_tokens.size();
-+            step.n_seq_id[0] = 1;
-+            step.seq_id[0][0] = session->seq_id;
-+            step.logits[0] = 1;
-+            const auto step_rc = skippy_decode_batch(session, step, 1, -1, &error, nullptr);
-+            llama_batch_free(step);
-+            if (step_rc != 0) return 23;
-+        }
-+        if (receipt && (force_unfused_gdn || cross_sequence_geometry) &&
++        if (receipt && cross_sequence_geometry &&
 +                !live_graph_reference::snapshot(
 +                    runtime->ctx, session->seq_id, receipt->target)) return 25;
 +        skippy_session_free(session, &error);
@@ -3603,22 +3586,10 @@ index 000000000..bfcff855d
 +int main(int argc, char ** argv) {
 +    if (argc != 2 && argc != 3) return 64;
 +    llama_backend_init();
-+    const bool force_unfused_gdn = argc == 3 && std::string(argv[2]) == "unfused-gdn";
 +    const bool cross_sequence_geometry = argc == 3 && std::string(argv[2]) == "cross-sequence-geometry";
 +    if (cross_sequence_geometry) {
 +        mtp_receipt actual;
-+        int result = run(argv[1], false, &actual, false, false, true);
-+        if (result == 0) {
-+            mtp_receipt reference;
-+            result = run(argv[1], false, &reference, false, true, true);
-+            if (result == 0 && !live_graph_reference::compare_snapshots(actual.target, reference.target)) result = 26;
-+        }
-+        llama_backend_free();
-+        return result;
-+    }
-+    if (force_unfused_gdn) {
-+        mtp_receipt actual;
-+        int result = run(argv[1], false, &actual, true);
++        int result = run(argv[1], false, &actual, false, true);
 +        if (result == 0) {
 +            mtp_receipt reference;
 +            result = run(argv[1], false, &reference, true, true);
@@ -3632,7 +3603,7 @@ index 000000000..bfcff855d
 +    if (result == 0) result = run(argv[1], true, &actual);
 +    if (result == 0) {
 +        mtp_receipt reference;
-+        result = run(argv[1], true, &reference, false, true);
++        result = run(argv[1], true, &reference, true);
 +        if (result == 0 && (actual.tokens != reference.tokens ||
 +                !live_graph_reference::compare_snapshots(actual.target, reference.target) ||
 +                !live_graph_reference::compare_snapshots(actual.draft, reference.draft))) result = 19;
@@ -7842,7 +7813,7 @@ index 000000000..21f659cbd
 +    return result;
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 4224a15ae..f393c6edc 100644
+index 36e48a0f2..173b02c00 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -181,7 +181,16 @@ set(LLAMA_CONTEXT_TEST_SRC
@@ -7862,7 +7833,7 @@ index 4224a15ae..f393c6edc 100644
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
      llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
-@@ -253,6 +262,24 @@ set_tests_properties(test-generate-models PROPERTIES
+@@ -257,6 +266,24 @@ set_tests_properties(test-generate-models PROPERTIES
      FIXTURES_SETUP generate-models
  )
  
@@ -7887,7 +7858,18 @@ index 4224a15ae..f393c6edc 100644
  # Target model for test-speculative-rejection-sampling
  set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
  file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")
-@@ -299,6 +326,10 @@ llama_test_cmd(python3
+@@ -294,6 +321,10 @@ llama_build(test-fusion.cpp)
+ llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)
+ llama_build_and_test(test-jinja.cpp  LABEL behavior)
+ llama_test(test-jinja  NAME test-jinja-py  ARGS -py  LABEL "python behavior")
++# the reproducible build maps __FILE__ onto a virtual root; hand the python
++# reference script's real path to the test instead of embedding it in the binary
++set_tests_properties(test-jinja-py PROPERTIES
++    ENVIRONMENT "LLAMA_TTS_NORM_REF=${CMAKE_CURRENT_SOURCE_DIR}/../scripts/chat_tts_norm.py")
+ llama_test_cmd(python3
+     NAME test-conversion-fp8
+     LABEL "python behavior"
+@@ -309,6 +340,10 @@ llama_test_cmd(python3
  llama_build_and_test(test-json-schema.cpp  LABEL behavior)
  llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
  llama_build_and_test(test-chat-template.cpp  LABEL behavior)
@@ -7980,7 +7962,7 @@ index b9a407182..7cc5c57f6 100644
  
  static void test_cohere_reasoning_detection(testing & t) {
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 4d10815e5..4cc533f10 100644
+index 2c59d1222..4a15d1e71 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -453,6 +453,21 @@ static common_chat_tool special_function_tool{
@@ -8058,7 +8040,7 @@ index 4d10815e5..4cc533f10 100644
  }
  
  static void test_msg_token_delimiters_split() {
-@@ -2161,6 +2192,25 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
+@@ -2216,6 +2247,25 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
  
  }
  
@@ -8084,7 +8066,7 @@ index 4d10815e5..4cc533f10 100644
  static void test_template_output_peg_parsers(bool detailed_debug) {
      LOG_DBG("%s\n", __func__);
  
-@@ -4537,6 +4587,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4682,6 +4732,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
      {
          auto tst = peg_tester("models/templates/GLM-4.7-Flash.jinja", detailed_debug);
  
@@ -8100,7 +8082,7 @@ index 4d10815e5..4cc533f10 100644
          // Pure content (no reasoning)
          tst.test("Hello, world!\nWhat's up?")
              .enable_thinking(false)
-@@ -4563,6 +4622,70 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4708,6 +4767,70 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .expect_reconstruction()
              .run();
  
@@ -8171,7 +8153,7 @@ index 4d10815e5..4cc533f10 100644
          // Tool call with reasoning (forced-open mode)
          tst.test(
                 "I'm\nthinking</think>"
-@@ -4767,7 +4890,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4912,7 +5035,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                  "Thinking.\n"
                  "</think>"
                  "<tool_call>get_weather"
@@ -8180,7 +8162,7 @@ index 4d10815e5..4cc533f10 100644
                  "</tool_call>\n";
  
              bool got_runtime_error = false;
-@@ -7839,6 +7962,41 @@ static void test_template_generation_prompt() {
+@@ -8000,6 +8123,41 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
@@ -8222,7 +8204,7 @@ index 4d10815e5..4cc533f10 100644
  }
  
  // Test the developer role to system workaround with a simple mock template
-@@ -8452,6 +8610,7 @@ static void test_msg_diffs_compute() {
+@@ -8613,6 +8771,7 @@ static void test_msg_diffs_compute() {
  int main(int argc, char ** argv) {
      bool detailed_debug    = false;
      bool only_run_filtered = false;
@@ -8230,7 +8212,7 @@ index 4d10815e5..4cc533f10 100644
  
      // Check for --template and --detailed flags
      for (int i = 1; i < argc; i++) {
-@@ -8469,9 +8628,19 @@ int main(int argc, char ** argv) {
+@@ -8630,9 +8789,19 @@ int main(int argc, char ** argv) {
              g_force_reconstruction_test = true;
              only_run_filtered          = true;
          }
@@ -8505,6 +8487,22 @@ index 000000000..c45915888
 +    std::filesystem::resize_file(path, size);
 +    return 0;
 +}
+diff --git a/tests/test-jinja.cpp b/tests/test-jinja.cpp
+index c79b0d24b..285910263 100644
+--- a/tests/test-jinja.cpp
++++ b/tests/test-jinja.cpp
+@@ -2961,6 +2961,11 @@ sys.stdout.buffer.write(result.encode())
+ 
+ // python reference of the TTS normalization patterns, relative to this file
+ static std::string tts_norm_ref_path() {
++    // reproducible builds map __FILE__ onto a virtual root, so the ctest
++    // registration passes the on-disk reference path through the environment
++    if (const char * from_env = std::getenv("LLAMA_TTS_NORM_REF")) {
++        return from_env;
++    }
+     std::string path = __FILE__;
+     const size_t pos = path.find_last_of("/\\");
+     return (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../scripts/chat_tts_norm.py";
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
 index 1f4c8a46b..4f5fb29d6 100644
 --- a/tests/test-llama-archs.cpp
@@ -10928,6 +10926,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-

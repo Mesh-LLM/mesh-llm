@@ -1,7 +1,7 @@
 //! Fixed external research source admission for the existing source-dependent Rust gates.
 use super::{
     hf_certify::admission::{digest, read},
-    immutable_sdk_checkout,
+    immutable_research_checkout,
 };
 use crate::command::DynResult;
 use serde::Deserialize;
@@ -34,7 +34,7 @@ fn admit_pin(root: &Path, pin: &Pin) -> DynResult<PathBuf> {
     {
         return Err("external research source pin refused".into());
     }
-    let root = immutable_sdk_checkout::checkout(root, &pin.revision)?;
+    let root = immutable_research_checkout::checkout(root, &pin.revision)?;
     let bytes = read(&root.join("project-inputs.json"), 1048576)?;
     if digest(&bytes) != pin.manifest_sha256 {
         return Err("external research manifest digest refused".into());
@@ -44,7 +44,7 @@ fn admit_pin(root: &Path, pin: &Pin) -> DynResult<PathBuf> {
         return Err("external research manifest shape refused".into());
     }
     // The pinned converter source owns vocabulary GGUF fixtures up to 15,776,467 bytes.
-    immutable_sdk_checkout::research_files(&root, &manifest.files)?;
+    immutable_research_checkout::research_files(&root, &manifest.files)?;
     Ok(root)
 }
 

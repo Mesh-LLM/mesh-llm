@@ -45,6 +45,17 @@ pub struct GenerationStats {
     pub speculative_strategy: String,
     /// Whether the speculation gate let this request speculate.
     pub speculation_allowed: bool,
+    /// Why speculation stood down for this request, when it did.
+    pub speculation_stand_down: Option<SpeculationStandDown>,
+    /// Most draft tokens the active proposer may offer per verify window,
+    /// when the plan states one. `None` for a DFlash draft that uses its
+    /// trained block, and when nothing is planned.
+    pub draft_token_cap: Option<usize>,
+    /// Largest verify window the plan allows, in tokens.
+    pub verify_window_max_tokens: usize,
+    /// Run-ahead speculative-token budget this request ran with; zero is
+    /// fixed-depth admission.
+    pub runahead_budget_tokens: usize,
     /// Draft-model and N-gram verify windows.
     pub draft_windows: u64,
     pub draft_proposed_tokens: u64,
@@ -57,6 +68,72 @@ pub struct GenerationStats {
     pub activation_codec: Option<&'static str>,
     pub activation_prefill_bytes: u64,
     pub activation_decode_bytes: u64,
+    /// The coarse shape of the request: never its content.
+    pub request_shape: RequestShape,
+}
+
+/// Why a request ran without speculation although its plan had some.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpeculationStandDown {
+    /// The request asked for logprobs, which speculative paths do not record.
+    Logprobs,
+    /// The gate is measuring plain decode against speculation.
+    GateTrial,
+    /// The gate measured speculation losing on this deployment and kept it off.
+    GateMeasuredLoss,
+}
+
+impl SpeculationStandDown {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Logprobs => "logprobs",
+            Self::GateTrial => "gate_trial",
+            Self::GateMeasuredLoss => "gate_measured_loss",
+        }
+    }
+}
+
+/// What kind of request a generation served, from its structure alone.
+///
+/// Counts and flags only. Message text, tool names, and tool schemas are
+/// never read into this, so it cannot carry content.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RequestShape {
+    /// A chat request (messages) rather than a raw completion prompt.
+    pub chat: bool,
+    /// Tools were offered and `tool_choice` did not turn them off.
+    pub tools_offered: bool,
+    /// The history carries tool results, the mark of an agent loop.
+    pub tool_results: bool,
+    /// A `system` or `developer` message was present.
+    pub system_prompt: bool,
+    /// User messages in the history.
+    pub user_turns: u32,
+}
+
+impl RequestShape {
+    /// The shape of a chat request.
+    #[must_use]
+    pub fn of_chat(
+        request: &skippy_inference_api::generation::GenerationRequest,
+        tools_offered: bool,
+    ) -> Self {
+        let mut shape = Self {
+            chat: true,
+            tools_offered,
+            ..Self::default()
+        };
+        for message in &request.messages {
+            match message.role.as_str() {
+                "system" | "developer" => shape.system_prompt = true,
+                "tool" | "function" => shape.tool_results = true,
+                "user" => shape.user_turns = shape.user_turns.saturating_add(1),
+                _ => {}
+            }
+        }
+        shape
+    }
 }
 
 /// Receives every finished generation. Called on the generating thread, so
@@ -82,3 +159,7 @@ pub(crate) fn notify(stats: &GenerationStats) {
         observer.observe(stats);
     }
 }
+
+#[cfg(test)]
+#[path = "generation_stats/tests.rs"]
+mod tests;

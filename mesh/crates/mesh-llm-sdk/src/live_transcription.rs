@@ -1,9 +1,10 @@
-//! Live transcription through a node's `/v1/realtime` endpoint.
+//! Live transcription through native embedded channels or an explicit remote endpoint.
 //!
-//! The caller supplies audio (16-bit mono PCM at any sample rate, for example
+//! The caller supplies audio (16-bit mono PCM at 8000–96000 Hz, for example
 //! from a microphone) and reads transcript events as the speaker talks. Any
-//! node can host the session: the mesh relays it to a node serving a
-//! speech-recognition model.
+//! embedded node uses its local speech-recognition model without HTTP or
+//! WebSocket connections. Use [`LiveTranscription::start`] explicitly for a
+//! network session, including mesh relaying to a remote speech model.
 //!
 //! ```no_run
 //! # async fn example(node: &mesh_llm_sdk::MeshNode, frames: Vec<Vec<i16>>) -> anyhow::Result<()> {
@@ -32,7 +33,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+mod native;
 pub mod session;
+
+use native::{AudioTransport, EventTransport};
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
@@ -168,12 +172,12 @@ pub struct LiveTranscription {
 
 /// The sending half of a session. Dropping it closes the session.
 pub struct LiveTranscriptionAudio {
-    outbound: mpsc::Sender<Outbound>,
+    outbound: AudioTransport,
 }
 
 /// The receiving half of a session.
 pub struct LiveTranscriptionEvents {
-    inbound: mpsc::Receiver<LiveTranscriptionEvent>,
+    inbound: EventTransport,
     /// The last turn a pause ended. The node reports such a turn as stopped
     /// and then committed, and a turn ended by a commit as committed alone.
     paused_turn: Option<String>,
@@ -262,9 +266,11 @@ impl LiveTranscription {
             }
         });
         Ok(Self {
-            audio: LiveTranscriptionAudio { outbound },
+            audio: LiveTranscriptionAudio {
+                outbound: AudioTransport::Socket(outbound),
+            },
             events: LiveTranscriptionEvents {
-                inbound,
+                inbound: EventTransport::Socket(inbound),
                 paused_turn: None,
             },
         })
@@ -349,11 +355,23 @@ impl LiveTranscription {
 impl LiveTranscriptionAudio {
     /// Sends 16-bit mono PCM at the session's sample rate.
     pub async fn send_audio(&self, samples: &[i16]) -> Result<()> {
-        let bytes = samples
-            .iter()
-            .flat_map(|sample| sample.to_le_bytes())
-            .collect();
-        self.send(Outbound::Audio(bytes)).await
+        match &self.outbound {
+            AudioTransport::Native(audio) => {
+                audio
+                    .send(native::RealtimeInput::Audio(samples.to_vec()))
+                    .await
+            }
+            AudioTransport::Socket(outbound) => {
+                let bytes = samples
+                    .iter()
+                    .flat_map(|sample| sample.to_le_bytes())
+                    .collect();
+                outbound
+                    .send(Outbound::Audio(bytes))
+                    .await
+                    .map_err(|_| anyhow!("live transcription session has closed"))
+            }
+        }
     }
 
     /// Sends float PCM at the session's sample rate. Samples outside
@@ -368,28 +386,31 @@ impl LiveTranscriptionAudio {
 
     /// Ends the current turn now.
     pub async fn commit(&self) -> Result<()> {
-        let commit = json!({"type": "input_audio_buffer.commit"}).to_string();
-        self.send(Outbound::Event(commit)).await
+        match &self.outbound {
+            AudioTransport::Native(audio) => audio.send(native::RealtimeInput::Commit).await,
+            AudioTransport::Socket(outbound) => {
+                let commit = json!({"type": "input_audio_buffer.commit"}).to_string();
+                outbound
+                    .send(Outbound::Event(commit))
+                    .await
+                    .map_err(|_| anyhow!("live transcription session has closed"))
+            }
+        }
     }
 
     /// Closes the session without waiting for a final transcript. Dropping
     /// the sender does the same.
     pub async fn close(self) {
-        let _ = self.outbound.send(Outbound::Close).await;
-    }
-
-    async fn send(&self, message: Outbound) -> Result<()> {
-        self.outbound
-            .send(message)
-            .await
-            .map_err(|_| anyhow!("live transcription session has closed"))
+        if let AudioTransport::Socket(outbound) = &self.outbound {
+            let _ = outbound.send(Outbound::Close).await;
+        }
     }
 }
 
 impl LiveTranscriptionEvents {
     /// The next event, or `None` once the session has closed.
     pub async fn next_event(&mut self) -> Option<LiveTranscriptionEvent> {
-        let event = self.inbound.recv().await;
+        let event = self.inbound.next_event().await;
         if let Some(LiveTranscriptionEvent::SpeechStopped { item_id, .. }) = &event {
             self.paused_turn = Some(item_id.clone());
         }

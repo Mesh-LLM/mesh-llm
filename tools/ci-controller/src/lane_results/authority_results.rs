@@ -10,18 +10,21 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
     let linux = match lane {
         Lane::Quality => includes(jobs, &["quality"]),
         Lane::Website => includes(jobs, &["web"]),
-        Lane::Linux => includes(
-            jobs,
-            &[
-                "ui_artifact",
-                "static_abi",
-                "rust_tests",
-                "hosts",
-                "native_runtimes",
-                "runtime_product",
-                "kotlin_sdk_input",
-            ],
-        ),
+        Lane::Linux => {
+            super::linux_backends::consumes_automation(jobs)
+                || includes(
+                    jobs,
+                    &[
+                        "ui_artifact",
+                        "static_abi",
+                        "rust_tests",
+                        "hosts",
+                        "native_runtimes",
+                        "runtime_product",
+                        "kotlin_sdk_input",
+                    ],
+                )
+        }
         Lane::Macos | Lane::Windows => includes(jobs, &["ui_artifact"]),
     };
     let macos = lane == Lane::Macos
@@ -46,18 +49,30 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
             ],
         );
     let product_linux = lane == Lane::Linux
+        && (super::linux_backends::consumes_automation(jobs)
+            || includes(
+                jobs,
+                &[
+                    "static_abi",
+                    "rust_tests",
+                    "hosts",
+                    "native_runtimes",
+                    "runtime_product",
+                    "sdk_rust",
+                    "sdk_kotlin",
+                ],
+            ));
+    let product_native = (matches!(lane, Lane::Macos | Lane::Windows)
         && includes(
             jobs,
             &[
-                "static_abi",
-                "rust_tests",
                 "hosts",
                 "native_runtimes",
                 "runtime_product",
+                "product_smoke",
+                "swift_sdk_input",
             ],
-        );
-    let product_native = (matches!(lane, Lane::Macos | Lane::Windows)
-        && includes(jobs, &["hosts", "native_runtimes", "runtime_product"]))
+        ))
         || (lane == Lane::Macos && includes(jobs, &["sdk"]));
     for (required, job) in [
         (linux || macos || windows, "authority_source"),
@@ -109,6 +124,18 @@ fn every_audited_topic_requires_its_native_producer_and_protected_source() {
 fn product_source_automation_follows_only_the_jobs_that_restore_it() {
     for (lane, consumer, producer) in [
         (Lane::Linux, "static_abi", "product_automation_linux_x64"),
+        (Lane::Linux, "sdk_rust", "product_automation_linux_x64"),
+        (Lane::Linux, "sdk_kotlin", "product_automation_linux_x64"),
+        (
+            Lane::Macos,
+            "swift_sdk_input",
+            "product_automation_macos_arm64",
+        ),
+        (
+            Lane::Windows,
+            "product_smoke",
+            "product_automation_windows_x64",
+        ),
         (
             Lane::Linux,
             "native_runtimes",
@@ -131,8 +158,6 @@ fn product_source_automation_follows_only_the_jobs_that_restore_it() {
         assert!(jobs.contains(&producer), "{consumer}: {jobs:?}");
     }
     for (lane, consumer) in [
-        (Lane::Linux, "sdk"),
-        (Lane::Linux, "product_smoke"),
         (Lane::Macos, "platform_checks"),
         (Lane::Windows, "platform_checks"),
         (Lane::Quality, "quality"),

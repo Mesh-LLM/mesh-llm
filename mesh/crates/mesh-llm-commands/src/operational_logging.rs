@@ -154,7 +154,9 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         | Command::Status { .. }
         | Command::Stop
         | Command::ServiceHost => CliCommandFamily::Runtime,
-        Command::Config { .. } | Command::Analytics { .. } => CliCommandFamily::Configuration,
+        Command::Config { .. } | Command::Analytics { .. } | Command::Private { .. } => {
+            CliCommandFamily::Configuration
+        }
         Command::Doctor { .. } => CliCommandFamily::Diagnostics,
         Command::Discover(_) => CliCommandFamily::Discovery,
         Command::RotateKey | Command::Auth { .. } => CliCommandFamily::Identity,

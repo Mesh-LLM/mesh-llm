@@ -320,6 +320,14 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             )
             .hint("select"),
         ),
+        "private.nodes" => Some(sp(
+            "Private nodes",
+            "Other nodes this node may send private requests to, by node id (64 hex characters). Empty keeps private requests on this node.",
+            NETWORK_CATEGORY,
+            5,
+        )
+        .placeholder("<64 hex characters>")
+        .hint("text")),
         "owner_control.bind" => Some(sp(
             "Owner-control bind",
             "Local address used by the owner-control listener. Set this to the same port as the advertised control address when overriding owner-control discovery.",
@@ -350,7 +358,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             20,
         )
-        .placeholder("0.79.0")
+        .placeholder("0.80.0")
         .hint("text")),
         "mesh_requirements.min_protocol_version" => Some(sp(
             "Minimum protocol generation",
