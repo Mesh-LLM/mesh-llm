@@ -180,7 +180,10 @@ PYEOF
     fi
     echo "-- $NAME:"
     python3 "$W/smoke.py" "$PORT" "$PROBE_CONVERSATIONS" "$PROBE_TURNS" "$PROBE_BLOCK_CHARS" "$PROBE_MAX_TOKENS" || true
-    kill $PID 2>/dev/null || true; sleep 8
+    kill $PID 2>/dev/null || true
+    for w in $(seq 1 12); do kill -0 $PID 2>/dev/null || break; sleep 5; done
+    kill -9 $PID 2>/dev/null || true
+    sleep 5
   }
   echo "===== MODEL $MODEL_KEY ($BACKEND) ====="
   NGL=99; [ "$BACKEND" = "metal" ] && NGL=-1
@@ -232,7 +235,10 @@ PYEOF
   for i in $(seq 1 120); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
   echo "-- llama profile:"
   python3 "$W/profile.py" "$PORT" "$PROBE_CONVERSATIONS" 256 || true
-  kill $LP 2>/dev/null || true; sleep 8
+  kill $LP 2>/dev/null || true
+  for w in $(seq 1 12); do kill -0 $LP 2>/dev/null || break; sleep 5; done
+  kill -9 $LP 2>/dev/null || true
+  sleep 5
   PORT=$((PORT+1))
   SKIPPY_TELEMETRY_STDERR=1 \
   "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch 20 --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-prof.log" 2>  "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch 20 --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-prof.log" 2>&1 &1 &
@@ -240,7 +246,10 @@ PYEOF
   for i in $(seq 1 180); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
   echo "-- skippy profile:"
   python3 "$W/profile.py" "$PORT" "$PROBE_CONVERSATIONS" 256 || true
-  kill $SP 2>/dev/null || true; sleep 8
+  kill $SP 2>/dev/null || true
+  for w in $(seq 1 12); do kill -0 $SP 2>/dev/null || break; sleep 5; done
+  kill -9 $SP 2>/dev/null || true
+  sleep 5
   # ---- prefill chunk sweep: TTFT vs chunk size ----
   echo "-- prefill chunk sweep:"
   for CHUNK in 64 256 512 2048; do
@@ -276,7 +285,10 @@ for trial in range(3):
 avg = sum(ttfts)/len(ttfts) if ttfts else -1
 print(f"  SWEEP chunk={CHUNK} ttft_avg={avg:.3f}s (trials={len(ttfts)})", flush=True)
 SWEEPPY
-    kill $SWPID 2>/dev/null || true; sleep 8
+    kill $SWPID 2>/dev/null || true
+    for w in $(seq 1 12); do kill -0 $SWPID 2>/dev/null || break; sleep 5; done
+    kill -9 $SWPID 2>/dev/null || true
+    sleep 5
   done
   cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
   echo SMOKE_DONE
