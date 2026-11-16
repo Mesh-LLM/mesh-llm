@@ -72,7 +72,11 @@ PATH="$BUILD_PATH" cmake -B build -S . "${CMAKE_FLAGS[@]}" > "$W/baseline-cmake.
 PATH="$BUILD_PATH" cmake --build build --target llama-server -j "$THREADS" > "$W/baseline-build.log" 2>&1 || { tail -5 "$W/baseline-build.log"; echo BASELINE_BUILD_FAILED; exit 47; }
 mkdir -p "$W/repo/.deps/agentx-llama-build/bin" "$W/repo/.deps/agentx-llama-build/lib"
 cp build/bin/llama-server "$W/repo/.deps/agentx-llama-build/bin/"
-[ -d build/lib ] && cp build/lib/*.so* "$W/repo/.deps/agentx-llama-build/lib/" 2>/dev/null || true
+# Companion shared libs live beside the binary in build/bin and in build/lib;
+# collect both so the server finds libllama-server-impl.so and friends.
+for libdir in build/bin build/lib; do
+  [ -d "$libdir" ] && cp "$libdir"/*.so* "$W/repo/.deps/agentx-llama-build/lib/" 2>/dev/null || true
+done
 "$W/repo/.deps/agentx-llama-build/bin/llama-server" --version || { echo BASELINE_SERVER_BROKEN; exit 47; }
 
 # ---- link fixups for the pinned baseline (system ssl/crypto, $ORIGIN rpath) ----
