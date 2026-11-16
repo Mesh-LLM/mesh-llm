@@ -64,6 +64,7 @@ fn config_sync_full_config_roundtrip() {
             require: true,
             offline: true,
             audit_one_in: Some(3),
+            audit_threads: Some(4),
         },
         extra: Default::default(),
     };

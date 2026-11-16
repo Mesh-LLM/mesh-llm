@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use skippy_receipt_audit::claimed_file::{HfFile, NotOnBranch};
+use skippy_receipt_audit::claimed_file::{HfFile, NoSuchFile, NotOnBranch};
 use skippy_receipt_audit::claimed_model::{CacheTypes, ClaimedModel};
 use skippy_receipt_audit::turn_audit::ClaimedSetup;
 use skippy_receipts::glue::GlueEvaluator;
@@ -76,6 +76,14 @@ fn no_audit(verdict: &Verdict) -> String {
     match verdict {
         Verdict::NoAudit(why) => why.to_string(),
         other => panic!("not no audit: {other:?}"),
+    }
+}
+
+/// No audit, for a reason a peer can cause.
+fn unsettled(verdict: &Verdict) -> String {
+    match verdict {
+        Verdict::Unsettled(why) => why.to_string(),
+        other => panic!("not unsettled: {other:?}"),
     }
 }
 
@@ -364,6 +372,38 @@ fn a_commit_off_the_requested_branch_is_a_strike() {
     assert!(peer.asked.borrow().is_empty());
 }
 
+/// A peer that chooses the commit must name one that holds the file: a
+/// commit of the right branch from before the file was added opens nothing,
+/// and a peer could name it on every turn it wants no audit of. When the
+/// request pinned the commit itself, the missing file is not the peer's.
+#[test]
+fn a_commit_the_peer_chose_that_holds_no_such_file_is_a_strike() {
+    let asked = asked();
+    let peer = ToyPeer::new(toy_turn(&asked.key), Answers::Honest);
+    let turn_reply = reply(&peer.turn);
+    let file = HfFile::parse(TOY_MODEL).unwrap();
+    let audit_on = |branch: Option<&str>| {
+        let missing = |file: &HfFile| -> anyhow::Result<ClaimedSetup> {
+            Err(NoSuchFile::new(format!("Hugging Face has no such file: {file}")).into())
+        };
+        let mut models = ClaimedModels::checked_by(missing, |_, _| Ok(()));
+        let turn = DrawnTurn {
+            asked: &asked,
+            reply: &turn_reply,
+            receipt: &peer.turn.receipt,
+            file: &file,
+            branch,
+            received: peer.now.get(),
+        };
+        audit(&turn, &mut models, &peer, &|| peer.now.get())
+    };
+    let why = strike(&audit_on(Some("main")));
+    assert!(why.contains("does not hold the file"), "{why}");
+    let why = no_audit(&audit_on(None));
+    assert!(why.contains("could not open the claimed model"), "{why}");
+    assert!(peer.asked.borrow().is_empty());
+}
+
 #[test]
 fn a_turn_that_waited_past_the_window_is_not_challenged() {
     let state = tempfile::tempdir().unwrap();
@@ -387,7 +427,7 @@ fn a_turn_that_waited_past_the_window_is_not_challenged() {
     };
     peer.pass(CHALLENGE_WINDOW + Duration::from_millis(1));
     let why = no_audit(&audit(&turn, &mut models, &peer, &|| peer.now.get()));
-    assert!(why.contains("past the 10 s challenge window"), "{why}");
+    assert!(why.contains("past the 600 s challenge window"), "{why}");
     assert_eq!(opened.get(), 0);
     assert!(peer.asked.borrow().is_empty());
 }
@@ -397,28 +437,64 @@ fn the_first_audits_cost_does_not_count_against_the_peer() {
     let state = tempfile::tempdir().unwrap();
     let asked = asked();
     let peer = ToyPeer::new(toy_turn(&asked.key), Answers::Honest);
-    // opening the claimed model takes this node 11 s: the window is
-    // checked when the challenge is sent, and it is not sent
+    // opening the claimed model takes this node past the challenge window:
+    // the window is checked when the challenge is sent, and it is not sent
     let slow_open = |_: &HfFile| {
-        peer.pass(Duration::from_secs(11));
+        peer.pass(CHALLENGE_WINDOW + Duration::from_secs(1));
         Ok(toy_setup(state.path()))
     };
     let why = no_audit(&audit_with(&peer, &asked, &reply(&peer.turn), slow_open));
-    assert!(why.contains("11.0 s after the receipt"), "{why}");
+    assert!(why.contains("601.0 s after the receipt"), "{why}");
     assert!(
         peer.asked.borrow().is_empty(),
         "the peer was not challenged"
     );
     // an open that leaves time: the challenge is sent, and the peer has
-    // the whole wait to answer it
-    let peer = ToyPeer::new(toy_turn(&asked.key), Answers::Honest);
-    let open = |_: &HfFile| {
-        peer.pass(Duration::from_secs(6));
-        Ok(toy_setup(state.path()))
+    // the whole wait to answer it, also past the prompt window
+    for took in [6, 11, 590] {
+        let peer = ToyPeer::new(toy_turn(&asked.key), Answers::Honest);
+        let open = |_: &HfFile| {
+            peer.pass(Duration::from_secs(took));
+            Ok(toy_setup(state.path()))
+        };
+        let verdict = audit_with(&peer, &asked, &reply(&peer.turn), open);
+        assert!(matches!(verdict, Verdict::Passed), "{took} s: {verdict:?}");
+        assert_eq!(peer.asked.borrow()[0].1, OPEN_WAIT);
+    }
+}
+
+/// A peer keeps a turn for sure for the prompt window, and then while it has
+/// room. Its answer that the turn is gone is this node's lateness when the
+/// challenge was sent later, and the peer's silence when it was sent in time.
+#[test]
+fn a_turn_gone_at_a_late_challenge_is_no_audit_and_any_other_refusal_a_strike() {
+    let state = tempfile::tempdir().unwrap();
+    let asked = asked();
+    let late_audit = |answers: Answers, took: u64| {
+        let peer = ToyPeer::new(toy_turn(&asked.key), answers);
+        let open = |_: &HfFile| {
+            peer.pass(Duration::from_secs(took));
+            Ok(toy_setup(state.path()))
+        };
+        let verdict = audit_with(&peer, &asked, &reply(&peer.turn), open);
+        assert_eq!(peer.asked.borrow().len(), 1, "the peer was challenged once");
+        verdict
     };
-    let verdict = audit_with(&peer, &asked, &reply(&peer.turn), open);
-    assert!(matches!(verdict, Verdict::Passed), "{verdict:?}");
-    assert_eq!(peer.asked.borrow()[0].1, OPEN_WAIT);
+    let gone = |status| Answers::Status(status, br#"{"cannot_open":"expired"}"#.to_vec());
+    for status in [404, 409, 410] {
+        let why = unsettled(&late_audit(gone(status), 11));
+        assert!(why.contains("11.0 s after the receipt"), "{status}: {why}");
+        assert!(
+            why.contains("the node no longer held it"),
+            "{status}: {why}"
+        );
+        // sent inside the prompt window, the peer owed the opening
+        strike(&late_audit(gone(status), 8));
+        unsettled(&late_audit(gone(status), 9));
+    }
+    // a late challenge excuses no other answer
+    strike(&late_audit(Answers::Status(500, b"oops".to_vec()), 11));
+    strike(&late_audit(Answers::Silent, 11));
 }
 
 /// A node's audits as enforcement sees them: its strikes, its blocks and

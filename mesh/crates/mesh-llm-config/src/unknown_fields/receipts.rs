@@ -76,6 +76,7 @@ mod tests {
             require = true
             offline = true
             audit_one_in = 1
+            audit_threads = 4
             "#,
         );
 

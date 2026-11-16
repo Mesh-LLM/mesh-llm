@@ -268,6 +268,14 @@ pub enum ReceiptAuditStatus {
     Pending,
     Passed,
     Failed,
+    /// The receipt is the peer's and bound to this request, and the host's
+    /// draw did not pick the turn for an audit. The peer cannot predict or
+    /// influence the draw.
+    NotDrawn,
+    /// The receipt is the peer's, bound to this request and names the model
+    /// asked for; the draw picked the turn, and the host could not complete
+    /// its audit for a reason that is not in the receipt.
+    NotAudited,
     #[serde(other)]
     Unverified,
 }
@@ -355,6 +363,8 @@ mod event_tests {
             ("pending", ReceiptAuditStatus::Pending),
             ("passed", ReceiptAuditStatus::Passed),
             ("failed", ReceiptAuditStatus::Failed),
+            ("not_drawn", ReceiptAuditStatus::NotDrawn),
+            ("not_audited", ReceiptAuditStatus::NotAudited),
             ("unverified", ReceiptAuditStatus::Unverified),
             ("future_status", ReceiptAuditStatus::Unverified),
         ] {

@@ -41,6 +41,12 @@ pub(super) fn receipts_presentation(rendered: &str) -> Option<SettingPresentatio
             RECEIPTS_CATEGORY,
             50,
         )),
+        "receipts.audit_threads" => Some(sp(
+            "Audit threads",
+            "Audit drawn turns on this many threads, from 1 to 16. Each audits one turn at a time and keeps the models it audited against open. Unset, 2.",
+            RECEIPTS_CATEGORY,
+            60,
+        )),
         _ => None,
     }
 }

@@ -64,7 +64,7 @@ impl<O: Fn(&HfFile) -> Result<ClaimedSetup>> ClaimedModels<O> {
         Self::checked_by(open, claimed_file::check_on_branch)
     }
 
-    fn checked_by(open: O, on_branch: OnBranch) -> Self {
+    pub(super) fn checked_by(open: O, on_branch: OnBranch) -> Self {
         Self {
             open,
             on_branch,

@@ -44,6 +44,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         receipts_request_setting("receipts.require"),
         receipts_request_setting("receipts.offline"),
         receipts_dynamic_setting("receipts.audit_one_in", ConfigValueSchema::Integer),
+        receipts_dynamic_setting("receipts.audit_threads", ConfigValueSchema::Integer),
         private_nodes_setting(),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),

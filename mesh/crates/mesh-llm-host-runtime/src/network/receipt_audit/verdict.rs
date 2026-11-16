@@ -48,6 +48,14 @@ pub(super) enum Verdict {
     },
     Strike(Shown),
     NoAudit(Shown),
+    /// No audit of a drawn turn, for a reason a peer can cause: the peer
+    /// no longer held a turn challenged late, it named a commit past this
+    /// node's budget, or its own audits held every worker. It says nothing
+    /// against the peer by itself, and is counted for a turn a plugin
+    /// waits on (`standing`).
+    Unsettled(Shown),
+    /// The receipt is usable and the VRF did not draw the turn.
+    NotDrawn,
     /// No audit for a reason in the receipt of the peer's turn for the
     /// requested model `model`.
     Unauditable {
@@ -59,13 +67,21 @@ pub(super) enum Verdict {
 }
 
 impl Verdict {
-    pub(super) fn status(&self) -> ReceiptAuditStatus {
+    /// What a plugin is told of the turn; `drawn` when the VRF drew it. A
+    /// turn that got no audit before the draw has a receipt that supports
+    /// none: it is missing, unusable, or names something else than was
+    /// asked for. After the draw, the receipt was fit for an audit and this
+    /// node did not complete one.
+    pub(super) fn status(&self, drawn: bool) -> ReceiptAuditStatus {
         match self {
             Self::Passed => ReceiptAuditStatus::Passed,
             Self::Failed { .. } | Self::Strike(_) => ReceiptAuditStatus::Failed,
-            Self::NoAudit(_) | Self::Unauditable { .. } | Self::AnotherModel(_) => {
-                ReceiptAuditStatus::Unverified
-            }
+            Self::NotDrawn => ReceiptAuditStatus::NotDrawn,
+            Self::NoAudit(_) | Self::Unsettled(_) if drawn => ReceiptAuditStatus::NotAudited,
+            Self::NoAudit(_)
+            | Self::Unsettled(_)
+            | Self::Unauditable { .. }
+            | Self::AnotherModel(_) => ReceiptAuditStatus::Unverified,
         }
     }
 
@@ -75,6 +91,23 @@ impl Verdict {
 
     pub(super) fn no_audit(reason: impl AsRef<str>) -> Self {
         Self::NoAudit(Shown::of(reason.as_ref()))
+    }
+
+    pub(super) fn unsettled(reason: impl AsRef<str>) -> Self {
+        Self::Unsettled(Shown::of(reason.as_ref()))
+    }
+
+    /// No audit because this node was late with a request. Its own delay
+    /// made it so when it was not ready to send the challenge in the
+    /// window, or to ask for the rows: opening the model and checking the
+    /// opening are its own work, and a full queue drains inside the window.
+    /// A peer that says a turn is gone at a late challenge may have dropped
+    /// it for no reason, which is counted.
+    fn late(late: Late) -> Self {
+        match late {
+            Late::Gone(_) => Self::unsettled(late.to_string()),
+            Late::Challenge(_) | Late::Rows(_) => Self::no_audit(late.to_string()),
+        }
     }
 
     pub(super) fn unauditable(reason: impl AsRef<str>, model: &str) -> Self {
@@ -90,7 +123,7 @@ impl Verdict {
     pub(super) fn of(audit: TurnAudit, late: Option<Late>) -> Self {
         match (audit, late) {
             (TurnAudit::NoAudit(output), _) => Self::no_audit(output.reason),
-            (TurnAudit::Unanswered(_), Some(late)) => Self::no_audit(late.to_string()),
+            (TurnAudit::Unanswered(_), Some(late)) => Self::late(late),
             (TurnAudit::Unanswered(output), None) => Self::strike(format!(
                 "no usable signed answer to /v1/receipts/{}: {}",
                 output.request, output.reason
@@ -123,7 +156,7 @@ impl Verdict {
         }
         match (output.outcome, late) {
             (Outcome::Pass, _) => Self::Passed,
-            (_, Some(late)) => Self::no_audit(late.to_string()),
+            (_, Some(late)) => Self::late(late),
             (Outcome::Unanswered, None) => {
                 Self::strike("no usable signed answer to /v1/receipts/rows")
             }
@@ -163,6 +196,27 @@ mod tests {
             assert!(why.contains(&format!("/v1/receipts/{request}")), "{why}");
             assert!(why.ends_with("503: busy\\nAUDIT PASS"), "{why}");
         }
+    }
+
+    /// What a plugin is told. A turn with no audit before the draw has a
+    /// receipt that supports none, and is unverified; after the draw the
+    /// receipt was fit and this node did not complete the audit.
+    #[test]
+    fn a_plugin_is_told_whether_the_receipt_or_this_node_stood_in_the_way() {
+        use ReceiptAuditStatus::{Failed, NotAudited, NotDrawn, Passed, Unverified};
+        let unauditable = || Verdict::unauditable("a quantized KV cache", "toy");
+        for drawn in [false, true] {
+            assert_eq!(Verdict::Passed.status(drawn), Passed);
+            assert_eq!(Verdict::strike("no answer").status(drawn), Failed);
+            assert_eq!(Verdict::NotDrawn.status(drawn), NotDrawn);
+            // what the receipt itself says is the peer's, drawn or not
+            assert_eq!(unauditable().status(drawn), Unverified);
+            let another = Verdict::AnotherModel(Shown::of("another repo"));
+            assert_eq!(another.status(drawn), Unverified);
+        }
+        assert_eq!(Verdict::no_audit("another file").status(false), Unverified);
+        assert_eq!(Verdict::no_audit("no runtime").status(true), NotAudited);
+        assert_eq!(Verdict::unsettled("gone").status(true), NotAudited);
     }
 
     /// What this node did not ask for in time, the peer did not fail to

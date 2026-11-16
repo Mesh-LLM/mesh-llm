@@ -15,7 +15,7 @@ pub use built_in_schema::{
 pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
 pub use private::{PrivateConfig, is_node_id};
-pub use receipts::ReceiptsConfig;
+pub use receipts::{DEFAULT_AUDIT_THREADS, MAX_AUDIT_THREADS, ReceiptsConfig};
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,

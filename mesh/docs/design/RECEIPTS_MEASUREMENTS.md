@@ -638,6 +638,51 @@ split planner refuses it on this tree), Metal, and two Mesh nodes.
 Older numbers for some of these cases are in
 [Earlier builds](#earlier-builds).
 
+### Late challenges, 2026-11-16
+
+On 2026-11-16 the challenge window grew from 10 seconds to 10 minutes. A
+stage holds a turn firmly for 12 s, as before, and lets it linger for the
+rest of the window. The runs below are on the llama.cpp pin 8954f194, a
+two-stage Qwen3-4B Q8_0 split on the CPU with a context of 4,096. The
+client was `skippy audit-receipt` with a local change that waits before it
+sends its challenge. That change is not in the tree.
+
+| Case | Result |
+|---|---|
+| Challenge at once, one greedy and one sampled turn | 2 of 2 audits passed |
+| Challenge 20 s and 45 s after the receipt, a greedy turn, a sampled turn and a turn on a cached prefix | 3 of 3 passed. With the 12 s hold of before, the stage no longer pinned these turns |
+| Challenge 90 s after the receipt, while 5 other bound turns of about 320 tokens ran and were audited | Passed. The 5 other turns passed |
+| Challenge 200 s after the receipt, while 15 other bound turns ran and were audited, about 4,800 tokens in all | Passed. The 15 other turns passed |
+
+No run made a stage answer that a turn was gone. The serving path writes
+the cells that a finished request freed before it writes others, so the
+cells of the old turn were not written in these runs. The answer for a turn
+that is gone is covered by unit tests only.
+
+**Cost of the lingering pins.** Lingering turns pin a quarter of a stream
+at most, and a later request reads every pinned cell as a masked row. The
+table gives the time of one unbound greedy request of 318 prompt tokens and
+48 new tokens. Before it, each server served the same four requests of
+about 320 tokens, 12 s apart. On one server they were unbound, so nothing
+was pinned. On the other they were bound and not yet challenged, so they
+lingered.
+
+| Round | Nothing pinned | Lingering pins | Change |
+|---|---|---|---|
+| 1 | 5.81 s | 7.40 s | 27% slower |
+| 2 | 5.86 s | 6.27 s | 7% slower |
+| 3 | 6.01 s | 6.18 s | 3% slower |
+
+The machine ran other jobs, and three rounds do not separate the cost from
+that noise. The median is 7%. The context is small here: a quarter of
+4,096 cells is about three times the cells of the timed request. A request
+that fills more of its context reads fewer masked rows for each row of its
+own. A greedy request can also give another answer beside pinned cells
+than alone, because the rounding of attention depends on the cells of the
+cache: in an earlier round the same prompt gave 9 tokens on one server and
+48 on the other. That was already so with the 12 s pins. The audits above
+passed on turns that were served beside a lingering turn.
+
 ## Earlier builds
 
 Every number below is from a build before the rebase onto the current
