@@ -1686,6 +1686,25 @@ immutable PR SHA. Control-plane planning/required summaries, credential-
 bearing smokes, `gpu-nvidia` hardware work, and any Intel macOS row without a
 Depot-equivalent remain on their approved providers.
 
+### Windows release ABI prewarming
+
+The trusted `windows-warm-caches.yml` workflow warms the existing small SM75
+CI build plus the exact multi-architecture Windows CUDA 12 and CUDA 13 release
+configurations. It uses the same native preparation, exact restore and verified
+save actions as release. Toolkit selection, architecture lists, installer
+packages and artifact major must match the release matrix; Rust contracts guard
+that parity. CUDA 13 includes its separate `crt` and `nvvm` packages.
+
+Main native-input or release-workflow changes warm these rows before a later
+release. Manual `all` includes them; focused `cpu` remains CPU-only. Pruning
+retains the configured number of generations separately for CI CUDA, release
+CUDA 12 and release CUDA 13 architecture sets, so a newer CI entry cannot evict
+a release variant merely because both use CUDA. CPU, ROCm and Vulkan behavior is
+unchanged. Source, toolkit and hosted-image changes still require an exact new
+cache; prewarming moves that compilation ahead of release and never weakens ABI
+checks or supplies a missing within-run artifact. There is no scheduled image
+refresh, and an already-running release does not repeat its cache lookup.
+
 ### PR cache audit and rerun behavior
 
 GitHub-hosted PR runs may restore caches from their PR merge ref and the base

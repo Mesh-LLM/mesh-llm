@@ -642,6 +642,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
   warm or cold. A slow warm Windows lane is expected while the pin holds, not a
   cache regression. Lift the pin once an upstream fix is released and a Windows
   lane passes with it.
+- The trusted Windows ABI warmer keeps the small CI CUDA row and also warms
+  both complete release CUDA configurations. Match each release row's toolkit,
+  architecture set, installer packages and artifact major; contract tests must
+  reject drift. Apply CUDA cache retention separately to each architecture set,
+  not to one shared CUDA backend bucket. Keep exact source/image/toolchain cache
+  identities and native verification unchanged.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad

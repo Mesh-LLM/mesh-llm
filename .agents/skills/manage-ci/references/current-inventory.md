@@ -1276,6 +1276,20 @@ The macOS Metal unit ABI key includes the prepared patched llama SHA and both
 legacy and extracted patch-queue paths; a cache hit is verified against the
 prepared checkout before unit tests run.
 
+`windows-warm-caches.yml` warms the small CUDA CI row (SM75) and both full
+Windows release CUDA rows: CUDA 12 targets 61/75/80/86/89/90, and CUDA 13.1.2
+targets 75/80/86/89/90/100/103/120. The CUDA 12 release row shares release's
+repository-version override and 12.9.2 fallback; the CI fallback stays 12.6.3.
+CUDA 13 includes the separate `crt` and `nvvm` installer packages and declares
+artifact major 13. Existing CPU, ROCm and Vulkan warming remains intact.
+Native-input and release-workflow changes on main trigger warming; manual
+`all` and focused `cpu` dispatch remain available. CUDA retention defaults to
+two source/image/toolchain generations per configured architecture set, rather
+than two entries shared by every CUDA variant. Exact ABI cache keys, stamp
+verification and save/lookup verification remain unchanged. Matrix-parity and
+finite pruning fixtures run in the existing Rust cache-contract suite; actual
+Windows compilation is separate live evidence.
+
 PR Rust-test, host, native-runtime, product, platform-check, and full Swift
 target matrices receive `fail_fast: true`; main/manual and release pass
 `false`. Quality matrices remain

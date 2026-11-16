@@ -1,4 +1,4 @@
-name: Warm Windows ABI CI caches
+name: Warm Windows ABI CI and release caches
 
 on:
   push:
@@ -37,11 +37,12 @@ on:
       - '.github/actions/save-and-verify-actions-cache/action.yml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/pr_windows.yml'
+      - '.github/workflows/release.yml'
       - '.github/workflows/windows-warm-caches.yml'
   workflow_dispatch:
     inputs:
       retention:
-        description: 'Number of warmed Windows ABI cache versions to keep'
+        description: 'Versions to keep per backend, separately per architecture set for CUDA'
         required: false
         default: ''
       workload:
@@ -165,13 +166,25 @@ jobs:
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-${{ matrix.backend }}
+      WINDOWS_CUDA_VERSION: ${{ matrix.cuda_version || vars.CUDA_VERSION || '12.6.3' }}
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version || vars.CUDA_VERSION || '12.6.3' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: CUDA
+          - name: CUDA CI
             backend: cuda
             build_args: "75"
+          - name: CUDA 12 release
+            backend: cuda
+            build_args: '61;75;80;86;89;90'
+            cuda_version: ${{ vars.CUDA_VERSION || '12.9.2' }}
+          - name: CUDA 13 release
+            backend: cuda
+            build_args: '75;80;86;89;90;100;103;120'
+            cuda_version: '13.1.2'
+            cuda_major: '13'
+            cuda_sub_packages: '["nvcc", "crt", "nvvm", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
           - name: ROCm
             backend: rocm
             build_args: "gfx1100"
@@ -213,7 +226,7 @@ jobs:
         with:
           cuda: ${{ env.WINDOWS_CUDA_VERSION }}
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
+          sub-packages: ${{ matrix.cuda_sub_packages || '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]' }}
           use-github-cache: true
           use-local-cache: true
           log-file-suffix: windows-cuda
@@ -270,6 +283,7 @@ jobs:
         env:
           LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.backend == 'cuda' && matrix.build_args || '' }}
           LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.backend == 'rocm' && matrix.build_args || '' }}
+          MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major || '12' }}
         uses: ./.github/actions/prepare-native-runtime-input
         with:
           backend: ${{ matrix.backend }}
@@ -338,7 +352,9 @@ jobs:
             const ref = process.env.TARGET_REF;
             const prefixes = [
               `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cpu-`,
-              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cuda-`,
+              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cuda-75-`,
+              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cuda-61_75_80_86_89_90-`,
+              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cuda-75_80_86_89_90_100_103_120-`,
               `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-rocm-`,
               `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-vulkan-`,
             ];
