@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Mon Nov 17 08:10:00 2026 +1100
+Subject: [PATCH] perf(skippy): defer batch synchronization to export time
+
+The batch execution path synchronized the CUDA context immediately
+after llama_decode, forcing the CPU to idle while the GPU finished.
+Moving the sync to just before the export loop (where results are
+actually consumed) lets the CPU return to the scheduler and prepare
+the next chunk while the GPU still executes this one.
+
+---
+ src/skippy/execution-batch.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 0000000..0000001 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -464,7 +464,6 @@
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+     skippy_mark_context_work_pending(first->stage_model);
+-    skippy_synchronize_context_if_pending(first->stage_model);
+ 
+     // exports, readouts and sampling, request by request
+     skippy_trace::scope outputs_trace("skippy.batch_outputs", "requests", static_cast<int64_t>(request_count));
+@@ -471,6 +470,9 @@
+     // once every request's outputs are recorded
+     std::vector<skippy_sample_request> samples;
+     std::vector<size_t> sample_request_indexes;
++    // Defer synchronization to the point where GPU results are actually
++    // consumed: the CPU returns to the scheduler and can prepare and launch
++    // the next chunk while the GPU still executes this one.
++    skippy_synchronize_context_if_pending(first->stage_model);
+     for (size_t request_index = 0; request_index < request_count; ++request_index) {
+         const auto & request = requests[request_index];
+         status = skippy_copy_batched_exports(
