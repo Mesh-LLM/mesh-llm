@@ -12,12 +12,8 @@ case "$tool" in
             'rev-parse HEAD'|'rev-parse origin/main') printf '%s\n' "$FIXTURE_HEAD" ;;
             'rev-parse -q --verify refs/tags/'*) exit 1 ;;
             'ls-remote --exit-code --tags origin refs/tags/'*) exit 2 ;;
-            'show origin/main:Cargo.toml') printf '[workspace.package]\nversion = "%s"\n' "$FIXTURE_VERSION" ;;
             *) echo 'unowned Git operation denied' >&2; exit 91 ;;
         esac ;;
-    cargo)
-        [[ "$#" == 5 && "$1" == xtool && "$2" == release && "$3" == version-at-least && "$4" == 0.1.0 && "$5" == "$FIXTURE_VERSION" ]] || exit 92
-        exit 0 ;;
     date)
         [[ "$#" == 2 && "$1" == -u && "$2" == '+%Y-%m-%dT%H:%M:%SZ' ]] || exit 93
         printf '%s\n' "$FIXTURE_START" ;;

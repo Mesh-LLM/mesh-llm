@@ -561,11 +561,12 @@ GitHub-generated release notes, uploads to a draft, and exposes the complete
 candidate as a pre-release that is not marked latest.
 The comparison base is selected by `cargo xtool release notes-base` from the
 highest stable `vMAJOR.MINOR.PATCH` tag below the target; suffixed historical
-tags are excluded.
+tags and tags GitHub still lists as pre-releases are excluded.
 
 `release-promote.yml` takes a candidate tag. Its `candidate` job requires a
 published, unpromoted release with every asset uploaded and a checksum-valid
-native runtime manifest covering the full release matrix, then records the tag
+native runtime manifest that lists only assets of this release and covers the
+full release matrix (`cargo xtool release candidate` owns these rules), then records the tag
 commit, manifest digest, and notes base. Its `promote` job clears the
 pre-release flag. Every later job depends only on that flip and is rerun on its
 own. The crates.io preflight and publisher each download the versioned Linux x86_64 release

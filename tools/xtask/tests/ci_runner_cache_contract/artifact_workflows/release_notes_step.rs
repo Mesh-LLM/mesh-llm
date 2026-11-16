@@ -13,7 +13,7 @@ git() {
   printf '%s' "$FIXTURE_TAGS"
 }
 cargo() {
-  [[ $# == 4 && "$1" == xtool && "$2" == release && "$3" == notes-base ]] || return 92
+  [[ $# == 6 && "$1" == xtool && "$2" == release && "$3" == notes-base ]] || return 92
   printf '%s\n' "$@" >> "$NATIVE_CALLS"
   "$XTASK" "${@:2}"
 }
@@ -38,7 +38,9 @@ fn run(
     script: &str,
     target: &str,
     tag_status: &str,
+    unpromoted: &str,
 ) -> process::RawProcessReport {
+    fs::write(f.path().join("unpromoted-tags"), unpromoted).unwrap();
     let mut environment = BTreeMap::new();
     for (key, value) in [
         ("PATH", std::ffi::OsString::from("/usr/bin:/bin")),
@@ -48,6 +50,10 @@ fn run(
         ("RELEASE_TAG", target.into()),
         ("FIXTURE_TAGS", TAGS.into()),
         ("TAG_STATUS", tag_status.into()),
+        (
+            "UNPROMOTED_TAGS",
+            f.path().join("unpromoted-tags").into_os_string(),
+        ),
         ("source_sha", SHA.into()),
         ("XTASK", env!("CARGO_BIN_EXE_xtask").into()),
         (
@@ -113,19 +119,24 @@ fn clean(raw: &process::RawProcessReport) {
 #[test]
 fn graph_release_notes_base_actual_metadata_slice_publishes_selection_and_refuses_failure() {
     let script = tail();
-    for (target, tag_status, expected) in [
-        ("v0.76.1", "0", Some("v0.76.0")),
-        ("v0.76.1-rc.1", "0", Some("v0.76.0")),
-        ("v0.75.1", "0", Some("")),
-        ("invalid-target", "0", None),
-        ("v0.76.1", "42", None),
+    for (target, tag_status, unpromoted, expected) in [
+        ("v0.76.1", "0", "", Some("v0.76.0")),
+        // A candidate that was cut but never promoted is not a release.
+        ("v0.76.1", "0", "v0.76.0-rc.1\nv0.76.0\n", Some("v0.75.1")),
+        ("v0.76.1-rc.1", "0", "", Some("v0.76.0")),
+        ("v0.75.1", "0", "", Some("")),
+        ("invalid-target", "0", "", None),
+        ("v0.76.1", "42", "", None),
     ] {
         let f = support::Fixture::new();
-        let raw = run(&f, &script, target, tag_status);
+        let raw = run(&f, &script, target, tag_status, unpromoted);
         clean(&raw);
         assert_eq!(
             fs::read_to_string(f.path().join("native-calls")).unwrap(),
-            format!("xtool\nrelease\nnotes-base\n{target}\n")
+            format!(
+                "xtool\nrelease\nnotes-base\n{target}\n--unpromoted\n{}\n",
+                f.path().join("unpromoted-tags").display()
+            )
         );
         let output = f.path().join("github-output");
         if let Some(base) = expected {

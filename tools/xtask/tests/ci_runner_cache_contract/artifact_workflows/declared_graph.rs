@@ -341,8 +341,9 @@ fn graph_packaging_dispatch_checks_write_access_and_follows_promotion() {
     // The identity is only recorded for a complete candidate: an unpromoted,
     // fully uploaded release whose manifest covers the whole matrix.
     let order = [
-        "Require a complete unpromoted candidate",
+        "Read the candidate release",
         "Download the candidate runtime manifest",
+        "Require a complete unpromoted candidate",
         "Require the full release matrix",
         "Record downstream packaging identity",
     ]
@@ -353,6 +354,18 @@ fn graph_packaging_dispatch_checks_write_access_and_follows_promotion() {
             .unwrap_or_else(|| panic!("missing {name}"))
     });
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+    // GitHub is read in one step; the typed command owns the admission rules.
+    let admission = named(candidate, "Require a complete unpromoted candidate");
+    assert!(admission.get("env").unwrap().get("GH_TOKEN").is_none());
+    let admission = text(admission, "run").unwrap();
+    for required in [
+        "\"${MESH_LLM_AUTOMATION_BIN:?}\" release candidate",
+        "--assets \"$RUNNER_TEMP/candidate/assets.json\"",
+        "--manifest release-artifacts/native-runtimes.json",
+        "printf 'release_id=%s\\n' \"$release_id\" >> \"$GITHUB_OUTPUT\"",
+    ] {
+        assert!(admission.contains(required), "{required}");
+    }
     let matrix = text(named(candidate, "Require the full release matrix"), "run").unwrap();
     let required = matrix
         .lines()

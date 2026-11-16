@@ -41,42 +41,6 @@ semver_from_arg() {
     printf '%s\n' "$version"
 }
 
-ensure_version_format() {
-    local version="$1"
-    local context="$2"
-    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-        die "$context version '$version' is not a supported semantic version"
-    fi
-}
-
-read_workspace_version() {
-    perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s' Cargo.toml
-}
-
-ensure_target_version_not_older() {
-    local current="$1"
-    local target="$2"
-    local compare_status
-
-    if cargo xtool release version-at-least "$current" "$target"
-    then
-        compare_status=0
-    else
-        compare_status="$?"
-    fi
-
-    case "$compare_status" in
-        0)
-            ;;
-        1)
-            die "target version $target must not be older than current workspace version $current"
-            ;;
-        *)
-            die "failed to compare current version $current and target version $target"
-            ;;
-    esac
-}
-
 ensure_clean_worktree() {
     if [[ -n "$(git status --porcelain)" ]]; then
         git status --short >&2
@@ -118,16 +82,15 @@ ensure_github_release_preflight() {
 confirm_release() {
     local tag="$1"
     local version="$2"
-    local current_version="$3"
-    local skip_gpu_bundles="$4"
-    local canary="$5"
-    local promote="$6"
+    local skip_gpu_bundles="$3"
+    local canary="$4"
+    local promote="$5"
     local answer
 
     cat <<EOF
 This will:
   - verify the current branch is clean, local main, and equal to origin/main
-  - dispatch .github/workflows/release.yml for $tag (main records $current_version and is not changed)
+  - dispatch .github/workflows/release.yml for $tag (main is not changed)
   - watch the GitHub Actions release run until it succeeds or fails
   - for a non-canary run, publish $tag as a pre-release candidate after all release checks pass
   - with promote, make that candidate the latest stable release and publish packages
@@ -255,8 +218,6 @@ main() {
 
     require_command gh
     require_command git
-    require_command perl
-    require_command cargo
 
     local version
     local tag
@@ -266,18 +227,15 @@ main() {
     ensure_clean_worktree
     ensure_main_is_current
 
-    local current_version
-    current_version="$(read_workspace_version)"
-    [[ -n "$current_version" ]] || die "could not read workspace version from Cargo.toml"
-    ensure_version_format "$current_version" "current workspace"
-    ensure_target_version_not_older "$current_version" "$version"
+    # The version comes only from this command. The version recorded on main
+    # does not admit or reject a cut; an existing tag does.
     ensure_github_release_preflight "$tag"
 
     if [[ "$promote" == "true" && "$skip_gpu_bundles" == "true" ]]; then
         die "a candidate without GPU bundles cannot be promoted"
     fi
 
-    confirm_release "$tag" "$version" "$current_version" "$skip_gpu_bundles" "$canary" "$promote"
+    confirm_release "$tag" "$version" "$skip_gpu_bundles" "$canary" "$promote"
 
     local dispatch_sha
     local dispatch_started_at

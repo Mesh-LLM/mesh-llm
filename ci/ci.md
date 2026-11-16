@@ -857,15 +857,18 @@ generated SwiftPM/binding and SDK console resources needed by the immutable
 release tag, publishes the assets, and enables GitHub-generated release notes.
 The metadata job runs `cargo xtool release notes-base` to select the highest
 stable `vMAJOR.MINOR.PATCH` tag below the target as the explicit comparison base.
-It excludes every tag with a suffix, so historical release candidates never
-become a baseline. The release is uploaded as a draft and exposed as a
+It excludes every tag with a suffix and every tag GitHub still lists as a
+pre-release, so neither a historical release candidate nor a candidate that was
+cut and never promoted becomes a baseline. The release is uploaded as a draft and exposed as a
 pre-release only when every file is present; it is never marked latest by Cut.
 
 Promote's `candidate` job requires a published, unpromoted release for the tag
-with every asset uploaded, a native runtime manifest that matches its checksum
-and covers the full release matrix, and resolves the tag commit and manifest
+with every asset uploaded, a native runtime manifest that matches its checksum,
+lists only archives that are assets of this release and covers the full release
+matrix, and resolves the tag commit and manifest
 digest that downstream packaging binds. A candidate cut with `skip_gpu_bundles`
-therefore cannot be promoted. The `promote` job then clears the pre-release flag
+therefore cannot be promoted. The workflow reads GitHub; `cargo xtool release
+candidate` applies the admission rules. The `promote` job then clears the pre-release flag
 and lets GitHub select the latest release. Each later job depends only on that
 flip, so a failed job is rerun on its own without rebuilding or repeating the
 others. `release.yml` calls Promote directly when dispatched with `promote`.

@@ -2,12 +2,14 @@
 //! read-only evidence, with independent candidate/workspace identities and
 //! bounded children; it never classifies, builds or publishes a release.
 //!
+//! - `candidate` owns the rules that admit a published candidate to Promote.
 //! - `notes-base` replaces `scripts/select-release-notes-base.py`.
 //! - `notes-link` replaces `scripts/release-notes-link.py`; its `git` and `gh`
 //!   calls go through [`link_host::ReleaseHost`].
 //! - `notes-classify` replaces `scripts/release-notes-classify.py`; its `git log`
 //!   goes through the same host.
 
+mod candidate;
 mod classify;
 mod classify_argv;
 mod classify_rules;
@@ -22,7 +24,6 @@ mod link_gh;
 mod link_host;
 mod notes_base;
 mod packaging_receipt;
-mod preflight;
 mod regroup;
 mod regroup_argv;
 mod regroup_body;
@@ -40,13 +41,13 @@ use std::io::Read as _;
 /// A `release` subcommand.
 #[derive(Clone, Copy)]
 pub(crate) enum ReleaseCommand {
+    Candidate,
     PackagingReceipt,
     Inventory,
     Base,
     Link,
     Classify,
     Regroup,
-    VersionAtLeast,
     SwiftManifestText,
     SwiftManifest,
     SwiftPrivacy,
@@ -56,13 +57,13 @@ pub(crate) enum ReleaseCommand {
 impl ReleaseCommand {
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
+            "candidate" => Some(Self::Candidate),
             "packaging-receipt" => Some(Self::PackagingReceipt),
             "inventory" => Some(Self::Inventory),
             "notes-base" => Some(Self::Base),
             "notes-link" => Some(Self::Link),
             "notes-classify" => Some(Self::Classify),
             "notes-regroup" => Some(Self::Regroup),
-            "version-at-least" => Some(Self::VersionAtLeast),
             "swift-manifest-text" => Some(Self::SwiftManifestText),
             "swift-manifest" => Some(Self::SwiftManifest),
             "swift-privacy" => Some(Self::SwiftPrivacy),
@@ -74,6 +75,7 @@ impl ReleaseCommand {
 
 pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
     let report = match command {
+        ReleaseCommand::Candidate => candidate::run(args),
         ReleaseCommand::PackagingReceipt => return packaging_receipt::run(args),
         ReleaseCommand::Inventory => return inventory::run(args).map_err(Into::into),
         ReleaseCommand::Base => notes_base::run(args, || {
@@ -83,7 +85,6 @@ pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
         ReleaseCommand::Link => link::run(args, &mut link_host::SystemHost),
         ReleaseCommand::Classify => classify::run(args, &mut link_host::SystemHost),
         ReleaseCommand::Regroup => regroup::run(args),
-        ReleaseCommand::VersionAtLeast => preflight::run(args),
         ReleaseCommand::SwiftManifestText => swift_manifest::run(args),
         ReleaseCommand::SwiftManifest => swift_checksum::run(args),
         ReleaseCommand::SwiftPrivacy => return swift_privacy::adapter::run(args),

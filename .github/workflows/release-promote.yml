@@ -26,7 +26,8 @@ on:
         required: false
 
 concurrency:
-  group: release-promote-${{ github.repository }}-${{ inputs.tag }}
+  # `0.81.0` and `v0.81.0` name the same release, so they share one group.
+  group: release-promote-${{ github.repository }}-${{ startsWith(inputs.tag, 'v') && inputs.tag || format('v{0}', inputs.tag) }}
   cancel-in-progress: false
 
 permissions:
@@ -101,43 +102,24 @@ jobs:
           runner-profile: hosted-bare
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "false"
-      - name: Require a complete unpromoted candidate
-        id: release
+      - name: Read the candidate release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")" || {
+          # Reads only. The admission rules live in `release candidate`.
+          mkdir -p "$RUNNER_TEMP/candidate"
+          cd "$RUNNER_TEMP/candidate"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > release.json || {
             echo "No published candidate exists for $RELEASE_TAG. Cut it with the Release workflow first." >&2
             exit 1
           }
-          release_id="$(jq -r '.id' <<<"$release")"
-          if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
-            echo "Unable to resolve the release for $RELEASE_TAG" >&2
-            exit 1
-          fi
-          if [[ "$(jq -r '.draft' <<<"$release")" != "false" ]]; then
-            echo "$RELEASE_TAG is still a draft: its upload did not finish." >&2
-            exit 1
-          fi
-          if [[ "$(jq -r '.prerelease' <<<"$release")" != "true" ]]; then
-            echo "$RELEASE_TAG is already promoted. Re-run the failed jobs of its Promote run instead of promoting it again." >&2
-            exit 1
-          fi
-          assets="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.state, .name] | @tsv')"
-          if [[ -z "$assets" ]]; then
-            echo "$RELEASE_TAG has no release files." >&2
-            exit 1
-          fi
-          incomplete="$(awk -F '\t' '$1 != "uploaded" { print $2 }' <<<"$assets")"
-          if [[ -n "$incomplete" ]]; then
-            echo "$RELEASE_TAG has incomplete uploads:" >&2
-            printf '%s\n' "$incomplete" >&2
-            exit 1
-          fi
-          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+          gh api --paginate "$(jq -r '.assets_url' release.json)?per_page=100" \
+            --jq '.[] | {name, state}' > assets.json
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.draft or .prerelease) | .tag_name' > unpromoted-tags.txt
       - name: Download the candidate runtime manifest
         shell: bash
         env:
@@ -151,6 +133,21 @@ jobs:
             cd release-artifacts
             sha256sum --check native-runtimes.json.sha256
           )
+      - name: Require a complete unpromoted candidate
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_id="$(
+            "${MESH_LLM_AUTOMATION_BIN:?}" release candidate \
+              --tag "$RELEASE_TAG" \
+              --release "$RUNNER_TEMP/candidate/release.json" \
+              --assets "$RUNNER_TEMP/candidate/assets.json" \
+              --manifest release-artifacts/native-runtimes.json
+          )"
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
       - name: Require the full release matrix
         shell: bash
         run: |
@@ -200,7 +197,8 @@ jobs:
           set -euo pipefail
           release_notes_base="$(
             git tag --list 'v*' |
-              "${MESH_LLM_AUTOMATION_BIN:?}" release notes-base "$RELEASE_TAG"
+              "${MESH_LLM_AUTOMATION_BIN:?}" release notes-base "$RELEASE_TAG" \
+                --unpromoted "$RUNNER_TEMP/candidate/unpromoted-tags.txt"
           )"
           echo "release_notes_base=$release_notes_base" >> "$GITHUB_OUTPUT"
 

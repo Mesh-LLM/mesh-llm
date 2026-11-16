@@ -303,17 +303,8 @@ fn release_script_actual_main_routes_url_or_correlated_fallback_to_numeric_watch
                 .iter()
                 .any(|call| call == &["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"])
         );
-        assert_eq!(
-            named(&calls, &["cargo"])[0].as_slice(),
-            [
-                "cargo",
-                "xtool",
-                "release",
-                "version-at-least",
-                "0.1.0",
-                VERSION
-            ]
-        );
+        // The version recorded on main neither admits nor rejects a cut.
+        assert!(named(&calls, &["cargo"]).is_empty());
     }
 }
 #[test]

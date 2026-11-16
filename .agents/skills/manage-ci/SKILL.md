@@ -625,7 +625,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
   before its first compiler probe, because `.cargo/config.toml` makes sccache
-  the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
+  the repository-wide `rustc` wrapper. A job that runs in a pinned runner image
+  uses the sccache binary baked into that image, so it needs only
+  `configure-sccache-gha`. Only composition-only jobs skip it, and
   they stay cargo-free. `tools/xtask` rejects a cargo caller without
   initialization and any cargo call inside a composition-only job, because a
   canary cannot exercise the canary-skipped jobs.
@@ -1098,8 +1100,13 @@ with the final `MAJOR.MINOR.PATCH` version and publishes it under the final tag
 as a GitHub pre-release: that is the release candidate. Versions carry no `-rc`
 or `-preview` suffix. Upload to a draft, then expose the complete candidate
 without marking it latest. `release-promote.yml` (Promote) rebuilds nothing: it
-requires a published, unpromoted candidate with every asset uploaded and the
-full native runtime matrix, marks it the latest stable release, and only then
+requires a published, unpromoted candidate with every asset uploaded, every
+runtime archive its manifest lists present among those assets, and the full
+native runtime matrix, marks it the latest stable release, and only then
 runs release notes, downstream packaging, and crates.io publication as
 separately rerunnable jobs. A rejected candidate is never promoted; the next
 cut takes the next patch version. Keep candidate tags and downloads immutable.
+The workflow only reads GitHub; `cargo xtool release candidate` owns the
+admission rules. An unpromoted candidate keeps a `vX.Y.Z` tag without being a
+release, so both workflows pass the unpromoted tags to `release notes-base`,
+which never selects one as the comparison base.

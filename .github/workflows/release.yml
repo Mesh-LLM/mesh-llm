@@ -238,11 +238,22 @@ jobs:
         with:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "false"
+      - name: List unpromoted release candidates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A candidate that was cut but never promoted keeps its vX.Y.Z tag
+          # without being a release, so it is not a release-notes base.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.draft or .prerelease) | .tag_name' > "$RUNNER_TEMP/unpromoted-tags.txt"
       - name: Prepare canonical release source
         id: source
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          UNPROMOTED_TAGS: ${{ runner.temp }}/unpromoted-tags.txt
         run: |
           set -euo pipefail
           # The frozen main commit is the release source. Every producer
@@ -257,7 +268,7 @@ jobs:
 
           release_notes_base="$(
             git tag --list 'v*' |
-              cargo xtool release notes-base "$RELEASE_TAG"
+              cargo xtool release notes-base "$RELEASE_TAG" --unpromoted "$UNPROMOTED_TAGS"
           )"
           if [[ -n "$release_notes_base" ]]; then
             echo "GitHub release notes will compare $release_notes_base...$RELEASE_TAG."

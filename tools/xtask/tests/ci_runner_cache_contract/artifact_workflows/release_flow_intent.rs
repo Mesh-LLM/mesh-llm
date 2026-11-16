@@ -186,7 +186,9 @@ fn graph_release_metadata_trust_and_canonical_version_precede_runner_selection()
         text(outputs, "release_notes_base"),
         Some("${{ steps.source.outputs.release_notes_base }}")
     );
-    assert!(run.contains("cargo xtool release notes-base \"$RELEASE_TAG\""));
+    assert!(run.contains(
+        "cargo xtool release notes-base \"$RELEASE_TAG\" --unpromoted \"$UNPROMOTED_TAGS\""
+    ));
     let publish = job(&doc, "publish");
     let checkout = steps(publish)
         .iter()
@@ -555,7 +557,7 @@ fn graph_release_candidate_version_and_notes_base_outputs_bind_actual_native_sel
         run,
         &[
             "git tag --list 'v*'",
-            "cargo xtool release notes-base \"$RELEASE_TAG\"",
+            "cargo xtool release notes-base \"$RELEASE_TAG\" --unpromoted \"$UNPROMOTED_TAGS\"",
             "echo \"release_notes_base=$release_notes_base\"",
         ],
     );
