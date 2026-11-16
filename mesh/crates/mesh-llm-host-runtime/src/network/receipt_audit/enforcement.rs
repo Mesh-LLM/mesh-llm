@@ -44,8 +44,17 @@ impl Subject {
         }
     }
 
-    fn turn(&self) -> String {
+    pub(super) fn turn(&self) -> String {
         format!("receipt {} from {}", self.receipt_id, self.host.fmt_short())
+    }
+
+    /// What is counted against the peer for this turn, for `reason`.
+    pub(super) fn strike(&self, reason: &Shown, now_ms: u64) -> Strike {
+        Strike {
+            at_ms: now_ms,
+            receipt_id: self.receipt_id.as_str().to_owned(),
+            reason: reason.as_str().to_owned(),
+        }
     }
 }
 
@@ -94,9 +103,13 @@ impl Enforcement<'_> {
         let turn = subject.turn();
         match verdict {
             Verdict::Passed => out.say(Level::Info, format!("{turn}: audit passed")),
-            Verdict::NoAudit(reason) => {
+            Verdict::NoAudit(reason) | Verdict::Unsettled(reason) => {
                 out.say(Level::Info, format!("{turn}: no audit: {reason}"));
             }
+            Verdict::NotDrawn => out.say(
+                Level::Info,
+                format!("{turn}: no audit: the VRF did not draw the turn"),
+            ),
             Verdict::Unauditable { reason, model } => {
                 self.unauditable(subject, &reason, &model, now_ms, &mut out);
             }

@@ -9,9 +9,14 @@
 //! the audits of the others:
 //!
 //! - The node keeps a turn's replay state for the challenge window after
-//!   the receipt. The window is checked when the challenge is sent, after
-//!   the claimed model is open. A challenge this node is too late to send
-//!   is not sent, and that is no audit ([`Late::Challenge`]).
+//!   the receipt ([`CHALLENGE_WINDOW`]): for sure at first
+//!   ([`PROMPT_WINDOW`]), then while it has room for it. The window is
+//!   checked when the challenge is sent, after the claimed model is open.
+//!   A challenge this node is too late to send is not sent, and that is no
+//!   audit ([`Late::Challenge`]). Nor is a challenge sent past the prompt
+//!   window to a node that says it no longer holds the turn
+//!   ([`Late::Gone`]): a drawn turn may wait in this node's audit queue,
+//!   and that wait is not the peer's fault.
 //! - The answer to a challenge may take [`OPEN_WAIT`] from the moment the
 //!   challenge is sent, no more, also when it is sent again to a busy
 //!   peer: a peer that slow-walks its answer costs this node one such
@@ -26,7 +31,8 @@
 //!   (`answer_limits`).
 //! - A stage that has too many openings waiting answers 503 with a
 //!   `Retry-After` and admits nothing, so the same request can be sent
-//!   again. This node sends it again after that pause, as long as the node
+//!   again. This node sends it again after that pause, for [`BUSY_WINDOW`]
+//!   from the first time it sent a challenge and as long as the node
 //!   still keeps what the request needs. A peer that is still busy then
 //!   gave no answer, like one that stayed silent: a busy answer is not
 //!   signed, so a peer could send it to every challenge it wants to avoid.
@@ -45,18 +51,30 @@ use super::http_answer::{Answer, read_answer};
 use super::peer_text::shown_bytes;
 use crate::mesh;
 
-/// A challenge sent later than this after the receipt may find the node's
-/// replay state gone.
-pub(super) const CHALLENGE_WINDOW: Duration = Duration::from_secs(10);
-/// How long past the window an opening may still be on its way.
-pub(super) const OPEN_GRACE: Duration = Duration::from_secs(5);
+/// A challenge is not sent later than this after the receipt: the node
+/// keeps no turn's replay state for longer.
+pub(super) const CHALLENGE_WINDOW: Duration = Duration::from_secs(600);
+/// A challenge sent this long after the receipt reaches a node that still
+/// keeps the turn's replay state whatever room it takes: the node does so
+/// for 12 s from its commit, which leaves 4 s for the end of the response
+/// to reach this node and the challenge to reach the node. Later the node
+/// keeps the turn while it has room, so a challenge sent later may find it
+/// gone.
+pub(super) const PROMPT_WINDOW: Duration = Duration::from_secs(8);
 /// How long the answer to a challenge may take, from the moment the
-/// challenge is sent: as long as a challenge sent at the receipt gets.
-pub(super) const OPEN_WAIT: Duration = CHALLENGE_WINDOW.saturating_add(OPEN_GRACE);
+/// challenge is sent.
+pub(super) const OPEN_WAIT: Duration = Duration::from_secs(15);
+/// How long a busy peer is asked again, from the first time this node sent
+/// the challenge. A busy answer is not signed, so a peer must not be able
+/// to hold an audit worker for the whole challenge window with it.
+pub(super) const BUSY_WINDOW: Duration = Duration::from_secs(10);
 /// How long a peer has to answer the request for attention rows.
 pub(super) const ROWS_WAIT: Duration = Duration::from_secs(10);
 /// The part of [`ROWS_PIN`] left for the rows request to reach the node.
 const ROWS_TRANSIT: Duration = Duration::from_secs(2);
+/// How long after its challenge this node asks for the attention rows, and
+/// asks a busy peer for them again.
+pub(super) const ROWS_ASKED: Duration = ROWS_PIN.saturating_sub(ROWS_TRANSIT);
 /// The shortest pause before a busy peer is asked again, whatever its
 /// `Retry-After` says.
 const MIN_BUSY_PAUSE: Duration = Duration::from_secs(1);
@@ -66,6 +84,9 @@ const MIN_BUSY_PAUSE: Duration = Duration::from_secs(1);
 pub(super) enum Late {
     /// The challenge was ready this long after the receipt.
     Challenge(Duration),
+    /// The challenge was sent this long after the receipt, past the prompt
+    /// window, and the node said it no longer holds the turn.
+    Gone(Duration),
     /// The rows request was ready this long after the challenge was sent.
     Rows(Duration),
 }
@@ -78,6 +99,12 @@ impl std::fmt::Display for Late {
                 "this node was ready to send the challenge {:.1} s after the receipt, past the {} s challenge window",
                 waited.as_secs_f64(),
                 CHALLENGE_WINDOW.as_secs()
+            ),
+            Self::Gone(waited) => write!(
+                f,
+                "this node sent the challenge {:.1} s after the receipt, past the {} s in which a node is sure to hold the turn, and the node no longer held it",
+                waited.as_secs_f64(),
+                PROMPT_WINDOW.as_secs()
             ),
             Self::Rows(waited) => write!(
                 f,
@@ -168,6 +195,10 @@ impl<'a> WindowedOpener<'a> {
             }
             let refusal = format!("{}: {}", answer.status, shown_bytes(&answer.body));
             let Some(pause) = busy_pause(&answer) else {
+                let waited = sent.saturating_duration_since(self.received);
+                if action == "open" && waited > PROMPT_WINDOW && turn_gone(&answer) {
+                    self.late.set(Some(Late::Gone(waited)));
+                }
                 bail!(refusal);
             };
             // compared as durations: a peer-supplied pause can be too large
@@ -178,6 +209,13 @@ impl<'a> WindowedOpener<'a> {
             self.transport.pause(pause);
         }
     }
+}
+
+/// Whether the peer answered that it no longer holds the turn: the stage
+/// dropped its record (404), its replay state left the opening window
+/// (410), or a later request wrote or changed cells the opening reads (409).
+fn turn_gone(answer: &Answer) -> bool {
+    matches!(answer.status, 404 | 409 | 410)
 }
 
 /// The pause a busy peer asks for before it takes the request again: a 503
@@ -198,8 +236,8 @@ impl OpenChallenge for WindowedOpener<'_> {
             bail!("the challenge was not sent");
         }
         // a challenge is sent within the window; its answer gets the whole
-        // wait from each send
-        let until = self.received + CHALLENGE_WINDOW;
+        // wait from each send, and a busy peer is asked again for a while
+        let until = (now + BUSY_WINDOW).min(self.received + CHALLENGE_WINDOW);
         let max_body = self.limits.opening(challenge);
         let (answer, sent) = self.ask("open", challenge, max_body, until, OPEN_WAIT)?;
         // the node opened no earlier than this request was sent
@@ -217,11 +255,11 @@ impl OpenChallenge for WindowedOpener<'_> {
         let now = (self.clock)();
         let challenged = self.challenged.get().unwrap_or(now);
         let since = now.saturating_duration_since(challenged);
-        if since > ROWS_PIN - ROWS_TRANSIT {
+        if since > ROWS_ASKED {
             self.late.set(Some(Late::Rows(since)));
             bail!("the attention rows were not asked for");
         }
-        let until = challenged + (ROWS_PIN - ROWS_TRANSIT);
+        let until = challenged + ROWS_ASKED;
         let max_body = self.limits.rows(blocks);
         let (answer, sent) = self.ask("rows", blocks, max_body, until, ROWS_WAIT)?;
         let rows = serde_json::from_slice(&answer.body).context("decode the attention rows")?;
@@ -401,11 +439,12 @@ mod tests {
     #[test]
     fn a_challenge_this_node_is_late_to_send_is_not_sent() {
         let peer = Scripted::new(Duration::from_secs(1));
-        let (result, late) = opened(&peer, Duration::from_millis(10_001));
+        let waited = CHALLENGE_WINDOW + Duration::from_millis(1);
+        let (result, late) = opened(&peer, waited);
         assert!(result.is_err());
-        assert_eq!(late, Some(Late::Challenge(Duration::from_millis(10_001))));
+        assert_eq!(late, Some(Late::Challenge(waited)));
         assert!(peer.asked.borrow().is_empty(), "nothing was asked");
-        assert!(late.unwrap().to_string().contains("past the 10 s"));
+        assert!(late.unwrap().to_string().contains("past the 600 s"));
     }
 
     #[test]
@@ -465,9 +504,10 @@ mod tests {
         assert!(error.starts_with("503: "), "{error}");
         assert!(error.contains("still busy"), "{error}");
         assert_eq!(late, None, "the peer never opened; this node was not late");
-        // asked at 0, 2, 4, 6, 8 and 10 s, and not past the window
+        // asked at 0, 2, 4, 6, 8 and 10 s, and no longer: a busy answer is
+        // not signed, and must not hold this node for the challenge window
         assert_eq!(peer.asked.borrow().len(), 6);
-        assert_eq!(peer.now.get() - started, CHALLENGE_WINDOW);
+        assert_eq!(peer.now.get() - started, BUSY_WINDOW);
     }
 
     #[test]

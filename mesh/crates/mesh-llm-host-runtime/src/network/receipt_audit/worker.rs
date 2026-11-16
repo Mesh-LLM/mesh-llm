@@ -1,6 +1,6 @@
-//! The audit worker: one thread with a short queue, so audits never take
-//! more than one core from serving, and a turn that would wait too long is
-//! refused instead.
+//! An audit worker: one thread with a short queue, so a turn that would
+//! wait too long is refused instead. A node runs a few of them
+//! (`worker_pool`).
 //!
 //! The thread belongs to the node's audits ([`Slot`]), not to the process:
 //!
@@ -16,13 +16,16 @@
 //!   release what it holds for the next one.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Jobs waiting for the worker; a full queue refuses the newest.
-const QUEUE: usize = 2;
+/// Jobs waiting for the worker; a full queue refuses the newest. A job
+/// holds the response it audits, and each may take as long as a peer can
+/// make an audit take, so the last of a full queue still starts inside
+/// the challenge window.
+pub(super) const QUEUE: usize = 8;
 /// How often an idle worker tells its runner that it is idle.
 const IDLE_TICK: Duration = Duration::from_secs(60);
 /// Times a worker that ended unexpectedly is started again.
@@ -72,6 +75,8 @@ pub(super) struct Slot<J> {
     state: Mutex<State<J>>,
     restarts: Mutex<u32>,
     idle_tick: Duration,
+    /// The jobs the worker holds: the one it runs and those waiting.
+    held: Arc<AtomicUsize>,
 }
 
 impl<J> Default for Slot<J> {
@@ -86,7 +91,13 @@ impl<J> Slot<J> {
             state: Mutex::new(State::NotStarted),
             restarts: Mutex::new(0),
             idle_tick,
+            held: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// How many jobs the worker holds: the one it runs and those waiting.
+    pub(super) fn held(&self) -> usize {
+        self.held.load(Ordering::Acquire)
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State<J>> {
@@ -110,7 +121,10 @@ impl<J: Send + 'static> Slot<J> {
             State::Disabled => return Err(Refused::Disabled(job)),
             State::NotStarted => job,
             State::Running(running) => match running.queue.try_send(job) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    self.held.fetch_add(1, Ordering::AcqRel);
+                    return Ok(());
+                }
                 Err(TrySendError::Full(job)) => return Err(Refused::Busy(job)),
                 // the thread is gone: another takes the job, or none does
                 Err(TrySendError::Disconnected(job)) => job,
@@ -132,6 +146,9 @@ impl<J: Send + 'static> Slot<J> {
                 TrySendError::Full(job) => Refused::Busy(job),
                 TrySendError::Disconnected(job) => Refused::Disabled(job),
             });
+        if queued.is_ok() {
+            self.held.fetch_add(1, Ordering::AcqRel);
+        }
         *state = State::Running(running);
         queued
     }
@@ -165,10 +182,19 @@ impl<J: Send + 'static> Slot<J> {
         let stop = Arc::new(AtomicBool::new(false));
         let (ending, ended) = tokio::sync::oneshot::channel();
         let (stopping, idle_tick) = (stop.clone(), self.idle_tick);
+        // a worker that ended took the jobs it held with it
+        self.held.store(0, Ordering::Release);
+        let held = self.held.clone();
         let thread = std::thread::Builder::new()
             .name("receipt-audit".into())
             .spawn(move || {
-                run(runner(stopping.clone()), &jobs, &stopping, idle_tick);
+                let work = Work {
+                    jobs: &jobs,
+                    stop: &stopping,
+                    idle_tick,
+                    held: &held,
+                };
+                run(runner(stopping.clone()), &work);
                 // dropped last: whoever waits for the end sees the jobs gone
                 drop(ending);
             });
@@ -190,7 +216,7 @@ impl<J: Send + 'static> Slot<J> {
 
     /// Stops the worker: no job is taken after this, and the one running
     /// ends at its next step. Returns the worker to wait for, if one ran.
-    fn stop(&self) -> Option<Stopping> {
+    pub(super) fn stop(&self) -> Option<Stopping> {
         let running = match std::mem::replace(&mut *self.state(), State::ShutDown) {
             State::Running(running) => running,
             State::NotStarted | State::ShutDown | State::Disabled => return None,
@@ -203,7 +229,8 @@ impl<J: Send + 'static> Slot<J> {
     }
 
     /// Ends the worker, and joins its thread when it ends in time.
-    pub(super) async fn shut_down(&self) {
+    #[cfg(test)]
+    async fn shut_down(&self) {
         if let Some(stopping) = self.stop() {
             stopping.wait().await;
         }
@@ -211,13 +238,13 @@ impl<J: Send + 'static> Slot<J> {
 }
 
 /// A worker that was told to stop.
-struct Stopping {
+pub(super) struct Stopping {
     ended: tokio::sync::oneshot::Receiver<()>,
     thread: std::thread::JoinHandle<()>,
 }
 
 impl Stopping {
-    async fn wait(self) {
+    pub(super) async fn wait(self) {
         match tokio::time::timeout(SHUTDOWN_WAIT, self.ended).await {
             Ok(_) => {
                 if self.thread.join().is_err() {
@@ -231,9 +258,17 @@ impl Stopping {
     }
 }
 
-fn run<R: Runner>(mut runner: R, jobs: &Receiver<R::Job>, stop: &AtomicBool, idle_tick: Duration) {
+/// What a worker thread works from.
+struct Work<'a, J> {
+    jobs: &'a Receiver<J>,
+    stop: &'a AtomicBool,
+    idle_tick: Duration,
+    held: &'a AtomicUsize,
+}
+
+fn run<R: Runner>(mut runner: R, work: &Work<'_, R::Job>) {
     loop {
-        let job = match jobs.recv_timeout(idle_tick) {
+        let job = match work.jobs.recv_timeout(work.idle_tick) {
             Ok(job) => job,
             Err(RecvTimeoutError::Timeout) => {
                 runner.idle();
@@ -241,11 +276,13 @@ fn run<R: Runner>(mut runner: R, jobs: &Receiver<R::Job>, stop: &AtomicBool, idl
             }
             Err(RecvTimeoutError::Disconnected) => return,
         };
-        if stop.load(Ordering::Acquire) {
+        if work.stop.load(Ordering::Acquire) {
             return;
         }
         // a panic in one audit must not end the audits after it
-        if catch_unwind(AssertUnwindSafe(|| runner.run(job))).is_err() {
+        let ran = catch_unwind(AssertUnwindSafe(|| runner.run(job)));
+        work.held.fetch_sub(1, Ordering::AcqRel);
+        if ran.is_err() {
             tracing::error!("a receipt audit panicked; its turn is not audited");
             runner.recover();
         }
@@ -384,7 +421,7 @@ mod tests {
         let slot = Slot::default();
         let (release, held) = channel();
         submit(&slot, Job::Hold(held), &tx, false).unwrap();
-        // the queue holds two more while the first runs; how many it takes
+        // the queue holds a few more while the first runs; how many it takes
         // depends on whether the worker took the first yet
         let mut queued = 0;
         let refused = loop {

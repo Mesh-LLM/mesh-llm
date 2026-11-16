@@ -256,8 +256,9 @@ A node sets the `receipts` flag only when all of these are true:
 | `audit` | The node audits the turns of peers also for requests without the tier. Under the tier, the node audits with `audit` off too. It audits `/v1/messages` and `/v1/responses` turns on the chat completion of the peer, before it translates them |
 | `offline` | The node does no audit and does not contact Hugging Face for receipts. No peer satisfies the tier |
 | `audit_one_in` | The node audits 1 in N of the turns of peers that it watches. The default is 10, and the value is an integer from 1 to 10,000 |
+| `audit_threads` | The node audits drawn turns on this many threads. The default is 2, and the value is an integer from 1 to 16 |
 
-The node reads `audit`, `audit_one_in`, `require` and `offline` from its
+The node reads `audit`, `audit_one_in`, `audit_threads`, `require` and `offline` from its
 loaded configuration for each request. A change that the owner applies through
 owner control takes effect at the next request, without a restart. An
 edit of the TOML file takes effect when the node restarts, because the

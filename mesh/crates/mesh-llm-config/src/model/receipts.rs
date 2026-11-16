@@ -27,12 +27,22 @@ pub struct ReceiptsConfig {
     /// [`DEFAULT_AUDIT_ONE_IN`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_one_in: Option<u32>,
+    /// The threads this node audits drawn turns on, from 1 to
+    /// [`MAX_AUDIT_THREADS`]. Each audits one turn at a time and keeps the
+    /// claimed models it audited against open. Unset:
+    /// [`DEFAULT_AUDIT_THREADS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_threads: Option<u32>,
 }
 
 /// The share of receipted turns audited when `audit_one_in` is unset.
 pub const DEFAULT_AUDIT_ONE_IN: u32 = 10;
 /// The rarest audit `audit_one_in` may ask for.
 pub const MAX_AUDIT_ONE_IN: u32 = 10_000;
+/// The audit threads a node runs when `audit_threads` is unset.
+pub const DEFAULT_AUDIT_THREADS: u32 = 2;
+/// The most audit threads `audit_threads` may ask for.
+pub const MAX_AUDIT_THREADS: u32 = 16;
 
 impl ReceiptsConfig {
     pub fn is_default(&self) -> bool {
@@ -54,6 +64,22 @@ impl ReceiptsConfig {
         let one_in = self.audit_one_in?;
         (!(1..=MAX_AUDIT_ONE_IN).contains(&one_in)).then(|| {
             format!("receipts.audit_one_in must be from 1 to {MAX_AUDIT_ONE_IN}, got {one_in}")
+        })
+    }
+
+    /// The threads this node audits drawn turns on: `audit_threads`, kept
+    /// in its range.
+    pub fn audit_threads(&self) -> u32 {
+        self.audit_threads
+            .unwrap_or(DEFAULT_AUDIT_THREADS)
+            .clamp(1, MAX_AUDIT_THREADS)
+    }
+
+    /// Why `audit_threads` is out of its range, when it is.
+    pub fn audit_threads_problem(&self) -> Option<String> {
+        let threads = self.audit_threads?;
+        (!(1..=MAX_AUDIT_THREADS).contains(&threads)).then(|| {
+            format!("receipts.audit_threads must be from 1 to {MAX_AUDIT_THREADS}, got {threads}")
         })
     }
 }
@@ -94,5 +120,29 @@ mod tests {
         let config: crate::MeshConfig =
             toml::from_str("[receipts]\naudit_one_in = 10001\n").unwrap();
         assert!(config.receipts.audit_one_in_problem().is_some());
+    }
+
+    #[test]
+    fn the_audit_threads_are_the_setting_inside_its_range() {
+        let threads = |threads| {
+            ReceiptsConfig {
+                audit_threads: threads,
+                ..ReceiptsConfig::default()
+            }
+            .audit_threads()
+        };
+        assert_eq!(threads(None), DEFAULT_AUDIT_THREADS);
+        assert_eq!(threads(Some(1)), 1);
+        assert_eq!(threads(Some(MAX_AUDIT_THREADS)), MAX_AUDIT_THREADS);
+        for (threads, valid) in [(0, false), (1, true), (16, true), (17, false)] {
+            let config: crate::MeshConfig =
+                toml::from_str(&format!("[receipts]\naudit_threads = {threads}\n")).unwrap();
+            let diagnostics = crate::validate::validate_config_diagnostics(&config);
+            let reported = diagnostics.iter().any(|d| {
+                d.message
+                    .contains("receipts.audit_threads must be from 1 to 16")
+            });
+            assert_eq!(reported, !valid, "{threads}");
+        }
     }
 }
