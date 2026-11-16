@@ -182,7 +182,7 @@ impl StageReceipts {
             Some(_) => 1,
             None => MAX_REPLAYS_PER_RECEIPT as usize,
         };
-        if !turn.admit(challenge, limit) {
+        if !turn.admit(challenge, limit, Instant::now()) {
             bail!("receipt {id} was already challenged");
         }
         turn.turn_root = turn.turn_root.or(root);

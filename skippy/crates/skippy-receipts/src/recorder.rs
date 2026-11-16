@@ -72,7 +72,7 @@ pub use cells::{KvCell, KvStreams, MemoryOp, PrefixCell};
 use event_log::Event;
 use leaves::PositionLeaves;
 use openings::OpeningCache;
-pub use pins::{CHALLENGE_PIN, OPENING_PIN};
+pub use pins::{CHALLENGE_PIN, FIRM_PIN, OPENING_PIN};
 pub use replay::{
     AnchorValue, ReplayAnchor, ReplayScope, ReplaySeed, ReplayStep, ReplayedLayer, ReplayedMatmul,
     ReplayedMixing, ReplayedPosition, Replayer, StoredRows,
@@ -382,8 +382,9 @@ impl RecorderState {
 
     /// Keeps what the recorder holds within `window` bytes as far as it may:
     /// logs nobody committed go first, then committed turns no client can
-    /// still challenge, oldest first. A turn inside its challenge window
-    /// ([`pins::Pin::holds`]) is never dropped for room; a new turn that
+    /// still challenge, then turns that linger in their challenge window
+    /// ([`pins::Pin::lingers`]), each oldest first. A turn held firmly
+    /// ([`pins::Pin::firm`]) is never dropped for room; a new turn that
     /// does not fit beside them gets no receipt ([`Self::make_room`]), and
     /// a live log that does not fit is shed ([`Self::shed_live`]).
     fn enforce_window(&mut self, window: usize, now: Instant) {
@@ -391,7 +392,10 @@ impl RecorderState {
             if self.drop_oldest_retired() {
                 continue;
             }
-            let Some(index) = self.committed.iter().position(|t| !t.pin.holds(now)) else {
+            let unheld = self.committed.iter().position(|t| !t.pin.holds(now));
+            let droppable =
+                unheld.or_else(|| self.committed.iter().position(|t| t.pin.lingers(now)));
+            let Some(index) = droppable else {
                 break;
             };
             if let Some(old) = self.committed.remove(index) {
@@ -431,25 +435,28 @@ impl RecorderState {
     }
 
     /// Makes room for a turn of `bytes` within `window`, or fails, dropping
-    /// nothing a client can still challenge.
+    /// no turn held firmly for a challenge.
     fn make_room(&mut self, window: usize, bytes: usize, now: Instant) -> anyhow::Result<()> {
         self.enforce_window(window.saturating_sub(bytes), now);
         let held = self.held_bytes();
         if held + bytes > window {
             anyhow::bail!(
-                "the stage holds {held} bytes of turns a client can still challenge, of \
-                 {window} at most; this turn of {bytes} bytes gets no receipt"
+                "the stage holds {held} bytes of turns a client is challenging or may \
+                 challenge at once, of {window} at most; this turn of {bytes} bytes gets no \
+                 receipt"
             );
         }
         Ok(())
     }
 
-    /// The runs whose ubatches the lineage budget keeps: those a turn a
-    /// client can still challenge replays a prefix position from.
+    /// The runs whose ubatches the lineage budget keeps: those a turn held
+    /// firmly for a challenge replays a prefix position from. The runs of a
+    /// turn that lingers are kept like any other, while the budget has
+    /// room: kept past it, they would cost a newer turn its receipt.
     fn lineage_in_window(&self, now: Instant) -> BTreeSet<u64> {
         self.committed
             .iter()
-            .filter(|turn| turn.pin.holds(now))
+            .filter(|turn| turn.pin.firm(now))
             .flat_map(|turn| turn.lineage_runs.iter().copied())
             .collect()
     }

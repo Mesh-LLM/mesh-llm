@@ -9,6 +9,15 @@
 //! waits and is opened, and once opened, until the client has the rows of
 //! its attention blocks.
 //!
+//! A client may challenge a turn for [`CHALLENGE_PIN`], and most do at
+//! once. So a turn is held firmly for [`FIRM_PIN`]: nothing but the caps
+//! below takes its pin, and no room is made at its cost. After that it
+//! lingers: it stays pinned and openable while that costs later requests
+//! little, and gives way, oldest first, when lingering turns pin more than
+//! [`LINGERING_SHARE`] of a stream or the stage needs the memory they hold.
+//! A client that challenges a lingering turn that gave way gets a signed
+//! answer that says so.
+//!
 //! Pins are capped, so a client that sends bound long-prompt turns cannot
 //! keep the cache pinned at no cost: a client key pins at most
 //! [`PINNED_SHARE_PER_KEY`] of a stream's cells, and all turns together
@@ -27,10 +36,17 @@ use super::{
 };
 use crate::attention::opening::ROWS_PIN;
 
-/// How long after its commit an unchallenged turn stays pinned: the
-/// client's 10-second challenge window, and 2 seconds for the response to
-/// reach it and the challenge to come back.
-pub const CHALLENGE_PIN: Duration = Duration::from_secs(12);
+/// How long after its commit an unchallenged turn stays pinned, at most:
+/// the client's 10-minute challenge window, and 2 seconds for the response
+/// to reach it and the challenge to come back. A client that audits many
+/// turns may have a queue of them to challenge.
+pub const CHALLENGE_PIN: Duration = Duration::from_secs(602);
+
+/// How long after its commit an unchallenged turn is held whatever room it
+/// takes: the 10 seconds in which a client that challenges at once does,
+/// and 2 seconds for the response to reach it and the challenge to come
+/// back. From then until [`CHALLENGE_PIN`] the turn lingers.
+pub const FIRM_PIN: Duration = Duration::from_secs(12);
 
 /// How long a turn stays pinned, at most, from the moment a challenge of
 /// it arrives until its opening ends ([`Recorder::hold_for_opening`]): the
@@ -47,6 +63,10 @@ pub const PINNED_SHARE: (u64, u64) = (3, 4);
 /// The share of a stream's KV cells the pinned turns of one client key may
 /// hold, so one key cannot take the whole of [`PINNED_SHARE`].
 pub const PINNED_SHARE_PER_KEY: (u64, u64) = (1, 2);
+/// The share of a stream's KV cells that lingering turns may pin: what a
+/// late challenge is worth to the requests served meanwhile, which read
+/// every pinned cell as a masked row.
+pub const LINGERING_SHARE: (u64, u64) = (1, 4);
 
 /// Whether a committed turn's cells are pinned.
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +99,29 @@ impl Pin {
 
     pub(super) fn holds(&self, now: Instant) -> bool {
         self.expiry().is_some_and(|expiry| now < expiry)
+    }
+
+    /// Whether the pin holds and nothing may take it for room: a client
+    /// challenged the turn, or may still do so at once.
+    pub(super) fn firm(&self, now: Instant) -> bool {
+        self.holds(now) && (self.challenged() || now < self.committed_at + FIRM_PIN)
+    }
+
+    /// Whether the pin holds past [`FIRM_PIN`] with no challenge: it gives
+    /// way when what the turn holds is needed.
+    pub(super) fn lingers(&self, now: Instant) -> bool {
+        self.holds(now) && !self.firm(now)
+    }
+
+    /// When the pin next changes by itself, while it holds: it starts to
+    /// linger, or runs out.
+    fn next_change(&self, now: Instant) -> Option<Instant> {
+        let expiry = self.expiry().filter(|expiry| now < *expiry)?;
+        let lingers_from = self.committed_at + FIRM_PIN;
+        Some(match !self.challenged() && now < lingers_from {
+            true => lingers_from.min(expiry),
+            false => expiry,
+        })
     }
 
     /// A challenge of the turn arrived: its cells are pinned until the
@@ -122,6 +165,15 @@ impl Pin {
         self.released = true;
     }
 
+    /// Makes the pin `by` older, as if its turn was committed that long ago.
+    #[cfg(test)]
+    pub(super) fn age(&mut self, by: Duration) {
+        self.committed_at = self
+            .committed_at
+            .checked_sub(by)
+            .expect("a clock that started before the turn");
+    }
+
     /// When the pin stops holding by itself, while it holds.
     fn expiry(&self) -> Option<Instant> {
         // a turn being opened holds its pin whatever happened to it before
@@ -144,6 +196,7 @@ impl Recorder {
     /// request writes other cells while it fits there.
     pub fn pinned_cells(&self, now: Instant) -> Vec<KvCell> {
         let mut state = self.lock();
+        state.shed_lingering_pins(now);
         let pinned: BTreeSet<KvCell> = state
             .committed
             .iter()
@@ -197,6 +250,7 @@ impl Recorder {
                     turn.pin.release();
                 }
             }
+            state.shed_lingering_pins(now);
             state.drop_unpinned_states(now);
         }
         if let Some(turn) = turn_mut(&mut state.committed, receipt_id) {
@@ -211,15 +265,14 @@ impl Recorder {
         self.lock().pins.clear();
     }
 
-    /// When the next pinned turn's pin runs out, so the stage can pin anew
-    /// then and not hold the turn's cells until its next commit. `None`
-    /// when no turn is pinned.
+    /// When the next pinned turn's pin runs out or starts to linger, so the
+    /// stage can pin anew then and not hold the turn's cells until its next
+    /// commit. `None` when no turn is pinned.
     pub fn next_pin_expiry(&self, now: Instant) -> Option<Instant> {
         self.lock()
             .committed
             .iter()
-            .filter(|turn| turn.pin.holds(now))
-            .filter_map(|turn| turn.pin.expiry())
+            .filter_map(|turn| turn.pin.next_change(now))
             .min()
     }
 
@@ -252,6 +305,55 @@ impl Recorder {
             turn.pin.opening_ended();
         }
         state.drop_unpinned_states(Instant::now());
+    }
+}
+
+impl super::RecorderState {
+    /// Releases the pins of lingering turns, oldest first, while they pin
+    /// more than [`LINGERING_SHARE`] of a stream's cells beside what the
+    /// turns held firmly pin: a cell a firm turn pins costs nothing more
+    /// when a lingering turn reads it too. A lingering turn none of whose
+    /// cells still holds what it wrote is released as well: nothing is left
+    /// to pin for it, and it would be looked at again at every pin.
+    pub(super) fn shed_lingering_pins(&mut self, now: Instant) {
+        let budget = u64::from(self.pin_budget);
+        if budget == 0 || !self.committed.iter().any(|turn| turn.pin.lingers(now)) {
+            return;
+        }
+        let mut pinned: BTreeSet<KvCell> = self
+            .committed
+            .iter()
+            .filter(|turn| turn.pin.firm(now))
+            .flat_map(|turn| turn_pin_cells(&self.cells, turn))
+            .collect();
+        let (num, den) = LINGERING_SHARE;
+        let mut lingering: BTreeMap<u32, u64> = BTreeMap::new();
+        let mut released = Vec::new();
+        // newest first, so the turns that fit the share are the newest
+        for (index, turn) in self.committed.iter().enumerate().rev() {
+            if !turn.pin.lingers(now) {
+                continue;
+            }
+            let cells: Vec<KvCell> = turn_pin_cells(&self.cells, turn).collect();
+            let mut added: BTreeMap<u32, u64> = BTreeMap::new();
+            for cell in cells.iter().filter(|cell| !pinned.contains(cell)) {
+                *added.entry(cell.stream).or_default() += 1;
+            }
+            let over = added.iter().any(|(stream, more)| {
+                (lingering.get(stream).copied().unwrap_or(0) + more) * den > budget * num
+            });
+            if cells.is_empty() || over {
+                released.push(index);
+                continue;
+            }
+            for (stream, more) in added {
+                *lingering.entry(stream).or_default() += more;
+            }
+            pinned.extend(cells);
+        }
+        for index in released {
+            self.committed[index].pin.release();
+        }
     }
 }
 
