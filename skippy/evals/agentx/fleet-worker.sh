@@ -36,12 +36,10 @@ fi
 command -v cargo >/dev/null || curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 command -v just >/dev/null || cargo install just --locked
 # Fresh machine: a cold sccache adds failure modes (CUDA cubin outputs are not
-# cacheable) with no cache benefit. Build with a sccache-free PATH.
+# cacheable) with no cache benefit. Use the build script's own off switch.
+export LLAMA_STAGE_USE_SCCACHE=0
+export SKIPPY_USE_SCCACHE=0
 BUILD_PATH="$PATH"
-if command -v sccache >/dev/null 2>&1; then
-  SCC_DIR="$(dirname "$(command -v sccache)")"
-  BUILD_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$SCC_DIR$" | paste -sd: -)"
-fi
 
 # ---- product source at the pinned commit ----
 echo "== cloning $REPO_URL @ ${PRODUCT_COMMIT:0:12}"
