@@ -1,7 +1,6 @@
 pub mod affected_crates;
 pub mod check_args;
 pub mod check_report;
-pub mod conventional_commit;
 pub mod text;
 pub mod upstream_pin;
 

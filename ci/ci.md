@@ -112,8 +112,7 @@ compiling. The default image profile keeps its verification and cache setup.
 Metadata-only Cargo discovery remains permitted. Composition-only release
 jobs still consume immutable automation and never compile.
 
-Quality commit convention and environment-mutation checks use Rust repository
-owners. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
+Quality environment-mutation checks use the Rust repository owner. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
 summaries use `ci-ops registry-pulls`, with jq producing the observation JSON.
 Runtime-seed preflight, restore verification, measurement and summary use
 `ci-ops runtime-seed`. Its automation build precedes measurement and uses
@@ -973,9 +972,10 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 ## Planner and profiles
 
-The local `scripts/hooks/commit-msg` hook now invokes the Rust
-`repository conventional-commits` command through the repository Cargo alias.
-The workflow commit check, planner and five lane summaries use Rust owners
+Commit subjects, PR titles and attribution identities are not CI gates.
+Builds do not install commit-message hooks. Release notes still classify
+recognized conventional prefixes and retain other titles in Other changes.
+The planner and five lane summaries use Rust owners
 through `prepare-ci-controller`. Lane summaries use the protected revision frozen
 by `authority_source`, keeping validation stable across default-branch updates
 while producers run. When that producer is skipped, summaries retain the
@@ -2454,8 +2454,8 @@ run without its producer and an unplanned producer must be skipped.
 Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates

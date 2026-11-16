@@ -57,7 +57,7 @@ fn artifact_quality_job_keeps_tooling_release_targets_and_client_dependency_vali
         &run,
         &[
             "actionlint -config-file .github/actionlint.yaml",
-            "just ci-legacy-contracts",
+            "just ci-automation-contracts",
         ],
     );
     let lane = doc(".github/workflows/ci-quality-lane.yml");

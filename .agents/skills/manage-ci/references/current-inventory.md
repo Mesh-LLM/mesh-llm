@@ -581,42 +581,16 @@ Merge settings as of 2026-09-10: `allow_merge_commit=false`,
 `squash_merge_commit_title=PR_TITLE`, and
 `squash_merge_commit_message=PR_BODY`. The title and body settings were
 changed from `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES` on that date.
-`COMMIT_MESSAGES` composed the squash body from the branch commit messages,
-which carried agent and bot `Co-authored-by:` trailers onto `main` even when
-the pull request title was clean. Composing from the title and body instead
-means the squash commit contains only text CI has validated. GitHub may still
-add its own `Co-authored-by:` trailer for a pull request whose commits have
-several distinct authors; no message-level control prevents that.
+GitHub may add its own `Co-authored-by:` trailer for a pull request whose
+commits have several distinct authors. Attribution identities are no longer
+blacklisted in hooks or CI; these source changes do not modify merge settings
+or repository rulesets.
 
-Attribution-trailer enforcement is CI plus merge-message composition, not a
-ruleset. A negated `commit_message_pattern` ruleset was created, measured and
-deleted on 2026-09-10. Rulesets accept commit-metadata rules on any plan and
-report them `active`, but GitHub gates metadata restrictions to Enterprise
-organizations and this organization is on Team, so the rule was never
-evaluated. Four pushes carrying the denied literal were accepted: branch
-creation and branch update, with both the `regex` and `contains` operators,
-from a ruleset reporting `current_user_can_bypass: "never"`. Do not re-add a
-commit-metadata rule here expecting it to enforce anything.
-
-What enforces the convention instead:
-
-- `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
-  the first local development build on every platform. It invokes the Rust
-  `repository conventional-commits` command through `cargo xtool`.
-- The `commit_convention` job in `ci-quality-slice.yml`, which validates the
-  pull request title against Conventional Commits and scans every branch
-  commit message plus the pull request body for denied attribution trailers.
-  It runs `repository conventional-commits` through the `ci-controller`
-  executable from `prepare-ci-controller`. It declares no `needs`, so it fails
-  within a minute rather than after a lane has compiled anything, and runs
-  only for `pull_request` events.
-  Pull-request-authored text reaches the script through environment variables
-  and is never interpolated into the shell.
-- Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
-  `squash_merge_commit_message=PR_BODY` since 2026-09-10, replacing
-  `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`. The squash commit is built from
-  the title and body that CI validated, so a branch commit that skipped the
-  hook cannot carry a trailer onto `main`.
+Commit-message hooks, title validation and attribution scans are removed.
+Builds do not install hooks, and the Quality slice has no commit-convention
+job. Release-note classification remains advisory: recognized prefixes select
+a section; unclassified titles remain in Other changes. Merge-message
+composition and repository rulesets are unchanged.
 
 The four `main` ruleset bypass actors remain deliberately: maintainers need a
 fast merge path. Required checks therefore do not bind them, and the CI check
@@ -1615,6 +1589,14 @@ product-version input defaults to the host version, never the runtime release.
 The product manifest records required and supplied ABI plus runtime release.
 No workflow dispatch, runner, or publication permissions change.
 
+Linux native packaging coalesces identical regular `.so` aliases after relocation
+through `native deduplicate-linux-libraries`; system tar stores their hard links.
+The product tar writer independently coalesces equal library bytes and modes
+within each `lib` directory, preserving names and manifest hashes even after
+composition copies. Ustar link targets longer than 100 bytes keep regular payloads.
+Windows ZIP, macOS libraries, workflow topology and publication identities do not
+change; cache importers may expand aliases back into separate files.
+
 Product schema coverage compares the composer's emitted root, host and runtime
 field sets with `schemas/product-v2.schema.json`, including required/supplied ABI
 and runtime release. Default bundled startup additionally verifies the complete
@@ -2066,8 +2048,8 @@ run without its producer and an unplanned producer must be skipped.
 Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates

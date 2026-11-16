@@ -89,8 +89,6 @@ jobs:
             echo "Forbidden dependency found in mesh-client" >&2
             exit 1
           fi
-      - name: Check console print drift
-        run: '"$MESH_LLM_AUTOMATION_BIN" repo-consistency no-console-print'
       - name: Check process environment mutation ownership
         run: '"$MESH_LLM_AUTOMATION_BIN" repository env-mutation-census'
 

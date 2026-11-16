@@ -25,7 +25,6 @@ From the workspace root, run the repository checks through `just`:
 just ci-crate-lists
 just publish-crates
 just check-release
-just no-console-print
 ```
 
 The canonical direct interface is `cargo xtool <domain> <command> [options]`.
