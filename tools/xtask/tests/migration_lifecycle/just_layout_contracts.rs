@@ -2,6 +2,7 @@
 const PRIVATE_RECIPES: &[&str] = &[
     "with-lld",
     "automation-run",
+    "ci-reset-linker-traces",
     "research-source-admit",
     "skippy-layer-package-inspect",
     "skippy-package-reference",

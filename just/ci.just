@@ -9,6 +9,12 @@ ci-sccache-seed-build:
     CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run
     cargo clippy --locked -p xtask --all-targets -- -D warnings
 
+# Clear restored timing evidence through the verified CI automation executable.
+[private]
+[windows]
+ci-reset-linker-traces:
+    pwsh -NoProfile -Command '$ErrorActionPreference = "Stop"; & $env:MESH_LLM_AUTOMATION_BIN ci-ops reset-linker-traces; exit $LASTEXITCODE'
+
 # Validate CI definitions, planner fixtures, and repository consistency.
 ci-validate:
     actionlint -config-file .github/actionlint.yaml
@@ -17,6 +23,14 @@ ci-validate:
     just ci-crate-lists
     just check-release
     just publish-crates
+
+# Required native ownership for the former Windows Python contract modules.
+# The ordered quality caller retains this recipe; actual Windows execution stays in
+# the existing selected Windows unit workflow (23 methods plus the wrapper test).
+ci-legacy-contracts:
+    just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --features automation-contracts --test ci_runner_cache_contract windows_ -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --features automation-contracts --test migration_lifecycle windows_ -- --test-threads=1
 
 # Native whole-session cohort fixtures use the pinned Parquet reader and codecs.
 agentic-trajectory-reader-contracts:

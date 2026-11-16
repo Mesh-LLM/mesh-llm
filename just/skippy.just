@@ -30,7 +30,7 @@ skippy-cli-build:
 
 [windows]
 skippy-cli-build:
-    @cargo build --locked -p skippy-cli --bin skippy --features dynamic-native-runtime
+    @cargo build --locked --timings -p skippy-cli --bin skippy --features dynamic-native-runtime
 
 [unix]
 skippy-cli-release-build:
@@ -38,7 +38,7 @@ skippy-cli-release-build:
 
 [windows]
 skippy-cli-release-build:
-    @cargo build --release --locked -p skippy-cli --bin skippy --features dynamic-native-runtime
+    @cargo build --release --locked --timings -p skippy-cli --bin skippy --features dynamic-native-runtime
 
 # Build the complete Skippy release product for the current platform.
 [unix]
