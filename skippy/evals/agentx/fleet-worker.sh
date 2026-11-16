@@ -117,12 +117,19 @@ def ask(pair):
     i, turn = pair
     body = json.dumps({"model":"m","messages":convo(i,turn),"max_tokens":MAXTOK,"temperature":0,"stream":False}).encode()
     t0=time.time(); err=None; pt=ct=comp=0
-    try:
-        r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions",data=body,headers={"Content-Type":"application/json"}),timeout=2400)
-        out=json.load(r); u=out.get("usage",{}); d=u.get("prompt_tokens_details",{}) or {}
-        pt, ct, comp = u.get("prompt_tokens",0), d.get("cached_tokens",0), u.get("completion_tokens",0)
-    except urllib.error.HTTPError as e: err=f"HTTP {e.code}: {e.read()[:120]}"
-    except Exception as e: err=f"{type(e).__name__}: {e}"
+    # A freshly started server can refuse part of its first concurrent accept
+    # burst while its listener finishes warming up; retry briefly instead of
+    # failing the whole conversation.
+    for attempt in range(6):
+        try:
+            r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions",data=body,headers={"Content-Type":"application/json"}),timeout=2400)
+            out=json.load(r); u=out.get("usage",{}); d=u.get("prompt_tokens_details",{}) or {}
+            pt, ct, comp = u.get("prompt_tokens",0), d.get("cached_tokens",0), u.get("completion_tokens",0)
+            err=None; break
+        except urllib.error.HTTPError as e: err=f"HTTP {e.code}: {e.read()[:120]}"; break
+        except Exception as e:
+            err=f"{type(e).__name__}: {e}"
+            if attempt < 5: time.sleep(5)
     return (i, turn, pt, ct, comp, time.time()-t0, err)
 turns=[]
 for turn in range(1, TURNS+1):
