@@ -9,6 +9,12 @@ ci-sccache-seed-build:
     CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run
     cargo clippy --locked -p xtask --all-targets -- -D warnings
 
+# Clear restored timing evidence through the verified CI automation executable.
+[private]
+[windows]
+ci-reset-linker-traces:
+    pwsh -NoProfile -Command '$ErrorActionPreference = "Stop"; & $env:MESH_LLM_AUTOMATION_BIN ci-ops reset-linker-traces; exit $LASTEXITCODE'
+
 # Validate CI definitions, planner fixtures, and repository consistency.
 ci-validate:
     actionlint -config-file .github/actionlint.yaml

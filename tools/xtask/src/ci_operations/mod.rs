@@ -46,6 +46,7 @@ mod evidence_timestamp;
 mod identity_text;
 pub(crate) mod json_access;
 pub(crate) mod json_decode;
+mod linker_traces;
 mod performance_history;
 mod prepared_images;
 mod registry_pulls;
@@ -92,6 +93,7 @@ pub(crate) enum CiOperationsCommand {
     ChatDisplay,
     RuntimeSeed,
     ConfigureCanaryCache,
+    ResetLinkerTraces,
 }
 
 impl CiOperationsCommand {
@@ -110,6 +112,7 @@ impl CiOperationsCommand {
             "chat-display" => Some(Self::ChatDisplay),
             "runtime-seed" => Some(Self::RuntimeSeed),
             "configure-canary-cache" => Some(Self::ConfigureCanaryCache),
+            "reset-linker-traces" => Some(Self::ResetLinkerTraces),
             _ => None,
         }
     }
@@ -122,6 +125,9 @@ pub(crate) fn run(
     args: &[String],
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
+    if matches!(command, CiOperationsCommand::ResetLinkerTraces) {
+        return linker_traces::run(args, root);
+    }
     if matches!(command, CiOperationsCommand::ConfigureCanaryCache) {
         return cache_configuration_command::run(args);
     }
@@ -132,6 +138,7 @@ pub(crate) fn run(
         return runner_cleanup::command::run(args);
     }
     let report = match command {
+        CiOperationsCommand::ResetLinkerTraces => unreachable!(),
         CiOperationsCommand::ConfigureCanaryCache => unreachable!(),
         CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::ChatDisplay => unreachable!(),

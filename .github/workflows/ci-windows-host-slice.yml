@@ -170,6 +170,10 @@ jobs:
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt', 'scripts/cargo-linker.cmd', 'mesh/scripts/build-windows.ps1', 'tools/xtask/src/native_policy/windows_linker.rs', '.github/workflows/ci-windows-host-slice.yml') }}
           shared-key: ci-host-windows-${{ inputs.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+      - name: Reset cached linker timing evidence
+        id: linker_traces
+        shell: pwsh
+        run: just ci-reset-linker-traces
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
@@ -221,7 +225,7 @@ jobs:
         with:
           artifact_name: windows-host-cache-${{ matrix.host.architecture }}-${{ github.run_attempt }}
       - name: Upload Windows compilation timings
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.linker_traces.outcome == 'success' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: windows-host-timings-${{ matrix.host.architecture }}-${{ github.run_attempt }}

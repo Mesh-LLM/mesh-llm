@@ -1520,6 +1520,10 @@ same daemon's counters.
 Both product steps set `LINK=--time-trace` and retain LLVM's per-output
 `.time-trace.json` files in the timing artifact. These measure linker work
 separately without adding Rust codegen flags or success-output warnings.
+After target-cache restoration, `just ci-reset-linker-traces` uses restored
+Rust automation to remove old linker traces before either build. It preserves
+compiler outputs, and timing upload requires the reset to succeed. Cached
+traces therefore cannot enter a later attempt's timing artifact.
 Both host compilations set `SOURCE_DATE_EPOCH=0` and opt into the Rust-owned
 native Windows linker adapter. Only matching non-primary proc-macro libraries
 omit PDB generation: the PDB command records a random rustc export-file path,

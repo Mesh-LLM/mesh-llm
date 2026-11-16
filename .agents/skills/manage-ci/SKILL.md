@@ -652,6 +652,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   The two product steps also set `LINK=--time-trace` so LLVM writes one trace
   beside each actual linker output. Upload those traces with Cargo timings;
   they measure linker work separately without changing Rust codegen flags.
+  After target-cache restoration and before either product build, run the
+  restored automation's `ci-ops reset-linker-traces` through Just. It removes
+  old `.time-trace.json` files from `target` while preserving compiler outputs.
+  Upload timing evidence only after that reset succeeds, so restored traces
+  cannot be attributed to the current attempt.
 - Windows host builds set `SOURCE_DATE_EPOCH=0` and opt into
   the Rust-owned `native windows-linker` adapter through the existing linker
   driver. Only matching non-primary proc-macro libraries receive `/DEBUG:NONE`:

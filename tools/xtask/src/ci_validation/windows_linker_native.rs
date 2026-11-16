@@ -131,6 +131,56 @@ impl LinkerFixture {
         );
     }
 
+    fn timing_reset_recipe_preserves_compiler_outputs(&self) {
+        let repo = self.driver.parent().unwrap().parent().unwrap();
+        let source = fs::read_to_string(repo.join("just/ci.just")).unwrap();
+        let recipe = source
+            .lines()
+            .skip_while(|line| *line != "ci-reset-linker-traces:")
+            .skip(1)
+            .take_while(|line| line.starts_with("    "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!recipe.is_empty());
+        fs::write(
+            self.root.join("Justfile"),
+            format!("[windows]\nci-reset-linker-traces:\n{recipe}\n"),
+        )
+        .unwrap();
+        fs::create_dir_all(self.root.join("tools/xtask")).unwrap();
+        fs::write(self.root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(
+            self.root.join("tools/xtask/Cargo.toml"),
+            "[package]\nname='xtask'\nversion='0.0.0'\n",
+        )
+        .unwrap();
+        let directory = self.root.join("target/release/build/cached/out");
+        fs::create_dir_all(&directory).unwrap();
+        let old = directory.join("old.time-trace.json");
+        let fresh = directory.join("fresh.time-trace.json");
+        let binary = directory.join("build-script.exe");
+        fs::write(&old, "cached attempt").unwrap();
+        fs::write(&binary, "compiler output").unwrap();
+        let invoke = format!(
+            "& just --justfile {} ci-reset-linker-traces",
+            quote(self.root.join("Justfile").to_str().unwrap())
+        );
+        let body = format!(
+            "$ErrorActionPreference='Stop'; $env:MESH_LLM_AUTOMATION_BIN={}; {invoke}; if ($LASTEXITCODE -ne 0) {{ throw 'trace reset failed' }}; [IO.File]::WriteAllText({},'current attempt'); Remove-Item Env:MESH_LLM_AUTOMATION_BIN; {invoke}; if ($LASTEXITCODE -eq 0) {{ throw 'missing helper must fail' }}; exit 0",
+            quote(self.helper.to_str().unwrap()),
+            quote(fresh.to_str().unwrap())
+        );
+        let report = execute(&body, &self.root);
+        assert!(report.success(), "{report:?}");
+        assert!(
+            String::from_utf8_lossy(&report.stdout.bytes_retained)
+                .contains("cleared_linker_traces=1")
+        );
+        assert!(!old.exists());
+        assert_eq!(fs::read_to_string(binary).unwrap(), "compiler output");
+        assert_eq!(fs::read_to_string(fresh).unwrap(), "current attempt");
+    }
+
     fn mesh_host_selects_adapter_only_with_opt_in(&self) {
         let llvm = self
             .sysroot
@@ -186,4 +236,5 @@ fn native_windows_linker_metadata_preserves_product_links_and_failure() {
         );
     }
     fixture.missing_helper_refuses_without_fallback();
+    fixture.timing_reset_recipe_preserves_compiler_outputs();
 }

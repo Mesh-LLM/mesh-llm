@@ -1172,6 +1172,9 @@ with it.
   profiles, and do not enter immutable host/product inputs.
   Both product steps set `LINK=--time-trace`; their timing artifact also retains
   LLVM's per-output `.time-trace.json` files for independent linker evidence.
+  Restored Rust automation resets old linker traces after target-cache restore
+  and before both builds. Timing upload requires a successful reset, keeping
+  each attempt's evidence separate from cached traces.
   Both compilations set `SOURCE_DATE_EPOCH=0` and enable the Rust-owned native
   Windows linker adapter for non-primary proc-macro libraries only. Those
   build-time DLLs omit PDBs whose GUID otherwise hashes a random rustc `.def`
