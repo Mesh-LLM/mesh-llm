@@ -80,6 +80,74 @@ fn pinned(recorder: &Recorder, id: &str, now: Instant) -> bool {
     turn(&state.committed, id).is_some_and(|turn| turn.pin.holds(now))
 }
 
+/// Makes the turn `id` as old as one no client challenged at once: it lingers.
+fn linger(recorder: &Recorder, id: &str) {
+    let mut state = recorder.lock();
+    let turn = turn_mut(&mut state.committed, id).expect("a committed turn");
+    turn.pin.age(FIRM_PIN);
+}
+
+// A turn nobody challenged at once is still held for a late challenge, and
+// gives way when a new turn needs its room. A turn a client challenged does
+// not, and when only such turns are left the new turn gets no receipt.
+#[test]
+fn a_lingering_turn_gives_way_to_a_new_turn_and_a_challenged_one_stays() {
+    let measure = Recorder::new(1, STAGES[1].clone(), "cpu");
+    commit_turn(&measure, 1, "one").unwrap();
+    let turn = measure.lock().committed_bytes;
+    let recorder =
+        Recorder::new(1, STAGES[1].clone(), "cpu").with_window_bytes(2 * turn + turn / 2);
+    commit_turn(&recorder, 1, "old").unwrap();
+    commit_turn(&recorder, 2, "challenged").unwrap();
+    linger(&recorder, "old");
+    linger(&recorder, "challenged");
+    let now = Instant::now();
+    recorder.hold_for_opening("challenged", now);
+    assert!(pinned(&recorder, "old", now) && pinned(&recorder, "challenged", now));
+
+    commit_turn(&recorder, 3, "third").unwrap();
+    assert!(!recorder.holds_turn("old"), "the lingering turn gave way");
+    assert!(recorder.holds_turn("challenged") && recorder.holds_turn("third"));
+    let error = commit_turn(&recorder, 4, "fourth").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("gets no receipt"),
+        "{error:#}"
+    );
+    assert!(recorder.holds_turn("challenged") && recorder.holds_turn("third"));
+}
+
+// Lingering turns pin a quarter of a stream at most: past it the oldest
+// lose their pin, and stay openable until a request writes their cells.
+#[test]
+fn lingering_turns_pin_a_quarter_of_a_stream_and_the_oldest_give_way() {
+    let recorder = Recorder::new(1, STAGES[1].clone(), "cpu");
+    // a stream of 24 cells: lingering turns pin 6, and a turn has 3
+    recorder.set_pin_budget(24);
+    let now = Instant::now();
+    for (seq, id) in [(1, "l1"), (2, "l2"), (3, "l3")] {
+        commit_turn(&recorder, seq, id).unwrap();
+        recorder.admit_pin(id, [seq as u8; 32], now).unwrap();
+    }
+    // held firmly, every turn keeps its pin
+    assert_eq!(recorder.pinned_cells(now).len(), 9);
+    for id in ["l1", "l2", "l3"] {
+        linger(&recorder, id);
+    }
+    let now = Instant::now();
+    assert_eq!(recorder.pinned_cells(now).len(), 6);
+    let pins: Vec<bool> = ["l1", "l2", "l3"]
+        .iter()
+        .map(|id| pinned(&recorder, id, now))
+        .collect();
+    assert_eq!(pins, [false, true, true]);
+    assert!(recorder.holds_turn("l1"), "still openable");
+    // a new turn is pinned beside them: it is held firmly
+    commit_turn(&recorder, 4, "new").unwrap();
+    recorder.admit_pin("new", [4; 32], now).unwrap();
+    assert_eq!(recorder.pinned_cells(now).len(), 9);
+    assert!(pinned(&recorder, "new", now) && pinned(&recorder, "l2", now));
+}
+
 // A client that sends bound long turns cannot keep the cache pinned, and no
 // turn loses its receipt for it: past its key's share the oldest pin of the
 // key gives way, past the share of all keys the oldest pin of any key.

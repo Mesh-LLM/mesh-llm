@@ -2,13 +2,16 @@
 //! receipt itself, on every stage what admitting a challenge of the turn
 //! takes (the client key it is bound to, the challenges admitted so far).
 //!
-//! A record that a client can still challenge is never dropped to make
-//! room: a bound turn is protected for its challenge window
-//! ([`CHALLENGE_PIN`]) and, once opened, until its rows can no longer be
-//! asked for ([`ROWS_PIN`]). Records past that go oldest first, when there
-//! are more than [`UNPROTECTED_TURNS`] of them or the byte budget is
-//! reached. When protected records alone fill the budget, a new turn gets
-//! no receipt; no turn loses its own inside its window.
+//! A client can challenge a bound turn for its challenge window
+//! ([`CHALLENGE_PIN`]) and, once it opened it, ask for its rows for
+//! [`ROWS_PIN`]. A record is protected, never dropped to make room, while
+//! its turn is held firmly: for [`FIRM_PIN`] after it was kept, while a
+//! challenge of it is opened ([`OPENING_PIN`] at most), and for its rows.
+//! For the rest of its window the record lingers: it is kept while the byte budget has room. Records
+//! past their window go oldest first, when there are more than
+//! [`UNPROTECTED_TURNS`] of them or the byte budget is reached; then the
+//! lingering ones, oldest first. When protected records alone fill the
+//! budget, a new turn gets no receipt; no turn loses a protected record.
 //!
 //! A receipt id names one turn. A turn that reuses an id replaces the
 //! record, and with it every challenge admitted for the old turn, unless
@@ -24,7 +27,7 @@ use std::time::Instant;
 use anyhow::{Result, bail};
 use skippy_receipts::attention::opening::ROWS_PIN;
 use skippy_receipts::commitment::Hash;
-use skippy_receipts::recorder::CHALLENGE_PIN;
+use skippy_receipts::recorder::{CHALLENGE_PIN, FIRM_PIN, OPENING_PIN};
 use skippy_receipts::wire::{Challenge, Receipt, StageCommitment};
 
 /// Bytes of records a stage keeps, at most.
@@ -73,6 +76,8 @@ pub(super) struct KeptTurn {
     pub opened: Option<Hash>,
     pub later: LaterStages,
     kept_at: Instant,
+    /// When the latest challenge of the turn was admitted.
+    challenged_at: Option<Instant>,
     opened_at: Option<Instant>,
     bytes: usize,
     /// Tells this record from an older one of the same id in `order`.
@@ -81,8 +86,8 @@ pub(super) struct KeptTurn {
 
 impl KeptTurn {
     /// Whether a client can still challenge the turn, or ask for its rows.
-    /// A turn being committed is protected until it is settled.
-    fn protected(&self, now: Instant) -> bool {
+    /// A turn being committed counts until it is settled.
+    fn challengeable(&self, now: Instant) -> bool {
         if matches!(self.outcome, Outcome::Committing) {
             return true;
         }
@@ -96,22 +101,37 @@ impl KeptTurn {
         now < until
     }
 
+    /// Whether the record is never dropped to make room: its turn is being
+    /// committed, a challenge of it is being opened, it was opened and its
+    /// rows may be asked for, or a client may still challenge it at once.
+    /// A challenge whose opening failed protects the record no longer than
+    /// an opening may take, so challenges cannot fill the budget with
+    /// records that nothing may drop.
+    fn protected(&self, now: Instant) -> bool {
+        let held_firmly = matches!(self.outcome, Outcome::Committing)
+            || self.opened_at.is_some()
+            || self.challenged_at.is_some_and(|at| now < at + OPENING_PIN)
+            || now < self.kept_at + FIRM_PIN;
+        held_firmly && self.challengeable(now)
+    }
+
     /// The stage opened the turn: its rows may be asked for from now.
     pub(super) fn mark_opened(&mut self, digest: Option<Hash>, now: Instant) {
         self.opened = digest.or(self.opened);
         self.opened_at = Some(now);
     }
 
-    /// Admits `challenge` as one of the turn's, at most `limit` of them.
-    /// `false` when the turn already has that many others.
-    pub(super) fn admit(&mut self, challenge: &Challenge, limit: usize) -> bool {
-        if self.challenges.contains(challenge) {
-            return true;
+    /// Admits `challenge`, which arrived at `now`, as one of the turn's, at
+    /// most `limit` of them. `false` when the turn already has that many
+    /// others.
+    pub(super) fn admit(&mut self, challenge: &Challenge, limit: usize, now: Instant) -> bool {
+        if !self.challenges.contains(challenge) {
+            if self.challenges.len() >= limit {
+                return false;
+            }
+            self.challenges.push(challenge.clone());
         }
-        if self.challenges.len() >= limit {
-            return false;
-        }
-        self.challenges.push(challenge.clone());
+        self.challenged_at = Some(now);
         true
     }
 }
@@ -187,7 +207,7 @@ impl KeptTurns {
         now: Instant,
     ) -> Result<Reservation> {
         if let Some(old) = self.by_id.get(id)
-            && old.protected(now)
+            && old.challengeable(now)
         {
             if old.client_key != client_key {
                 bail!(
@@ -219,6 +239,7 @@ impl KeptTurns {
                 opened: None,
                 later: LaterStages::default(),
                 kept_at: now,
+                challenged_at: None,
                 opened_at: None,
                 bytes,
                 generation: self.generations,
@@ -276,38 +297,48 @@ impl KeptTurns {
     }
 
     /// Drops records no client can challenge any more, oldest first, until
-    /// `bytes` more fit and at most [`UNPROTECTED_TURNS`] of them are left.
-    /// Fails when the protected ones leave no room.
+    /// `bytes` more fit and at most [`UNPROTECTED_TURNS`] of them are left;
+    /// then, while `bytes` more do not fit, the lingering ones, oldest
+    /// first. Fails when the protected ones leave no room.
     fn make_room(&mut self, bytes: usize, now: Instant) -> Result<()> {
         let by_id = &self.by_id;
         self.order
             .retain(|(generation, id)| by_id.get(id).is_some_and(|k| k.generation == *generation));
-        let mut unprotected = self
+        let mut past = self
             .by_id
             .values()
-            .filter(|kept| !kept.protected(now))
+            .filter(|kept| !kept.challengeable(now))
             .count();
-        let mut kept_order = VecDeque::with_capacity(self.order.len());
-        while let Some((generation, id)) = self.order.pop_front() {
-            let over = unprotected >= UNPROTECTED_TURNS || self.bytes + bytes > self.budget;
-            let evict = over && self.by_id.get(&id).is_some_and(|kept| !kept.protected(now));
-            if evict {
-                self.remove(&id);
-                unprotected -= 1;
-            } else {
-                kept_order.push_back((generation, id));
-            }
-        }
-        self.order = kept_order;
+        self.drop_oldest(|turns, kept| {
+            let over = past >= UNPROTECTED_TURNS || turns.bytes + bytes > turns.budget;
+            let evict = over && !kept.challengeable(now);
+            past -= usize::from(evict);
+            evict
+        });
+        self.drop_oldest(|turns, kept| turns.bytes + bytes > turns.budget && !kept.protected(now));
         if self.bytes + bytes > self.budget {
             bail!(
-                "the stage keeps {} bytes of receipts that can still be challenged, of {} at \
-                 most; this turn gets none",
+                "the stage keeps {} bytes of receipts clients are challenging or may challenge \
+                 at once, of {} at most; this turn gets none",
                 self.bytes,
                 self.budget
             );
         }
         Ok(())
+    }
+
+    /// Drops the records `evict` names, asked oldest first with what is
+    /// kept so far.
+    fn drop_oldest(&mut self, mut evict: impl FnMut(&Self, &KeptTurn) -> bool) {
+        let mut kept_order = VecDeque::with_capacity(self.order.len());
+        while let Some((generation, id)) = self.order.pop_front() {
+            if self.by_id.get(&id).is_some_and(|kept| evict(self, kept)) {
+                self.remove(&id);
+            } else {
+                kept_order.push_back((generation, id));
+            }
+        }
+        self.order = kept_order;
     }
 
     #[cfg(test)]
@@ -440,6 +471,36 @@ mod tests {
         assert!(turns.get("a").is_none() && turns.get("d").is_some());
     }
 
+    // Past the time a client challenges at once, a record lingers: it is
+    // kept while there is room, and the oldest gives way to a new turn. One
+    // a client challenged stays.
+    #[test]
+    fn a_lingering_record_gives_way_to_a_new_turn_and_a_challenged_one_stays() {
+        let start = Instant::now();
+        let mut sized = KeptTurns::default();
+        keep(&mut sized, "one", Some(OTHER), start).unwrap();
+        let mut turns = KeptTurns::new(3 * sized.bytes() + sized.bytes() / 2);
+        for id in ["a", "b", "c"] {
+            keep(&mut turns, id, Some(OTHER), start).unwrap();
+        }
+        let lingering = start + FIRM_PIN;
+        let being_opened = turns.get_mut("a").unwrap();
+        assert!(being_opened.admit(&challenge("a", 1), 1, lingering));
+        keep(&mut turns, "d", Some(VICTIM), lingering).unwrap();
+        assert!(turns.get("a").is_some(), "being opened");
+        assert!(turns.get("b").is_none(), "the oldest lingering record");
+        assert!(turns.get("c").is_some() && turns.get("d").is_some());
+        // and its id stays its client's for the whole window
+        let error = turns.reserve("c", Some(VICTIM), lingering).unwrap_err();
+        assert!(format!("{error:#}").contains("another client"), "{error:#}");
+        // a challenge whose opening never ended protects its record no
+        // longer than an opening may take: challenges cannot fill the budget
+        let later = lingering + OPENING_PIN;
+        keep(&mut turns, "e", Some(VICTIM), later).unwrap();
+        assert!(turns.get("a").is_none(), "its opening did not end in time");
+        assert!(turns.get("e").is_some());
+    }
+
     // A reused id names the new turn, with none of the old turn's
     // challenges, once the old one is past its window. Inside it, the new
     // turn gets no receipt, whoever asks: a signed receipt stays openable.
@@ -449,8 +510,8 @@ mod tests {
         let start = Instant::now();
         keep(&mut turns, "r", Some(VICTIM), start).unwrap();
         let kept = turns.get_mut("r").unwrap();
-        assert!(kept.admit(&challenge("r", 1), 1));
-        assert!(!kept.admit(&challenge("r", 2), 1), "one challenge");
+        assert!(kept.admit(&challenge("r", 1), 1, start));
+        assert!(!kept.admit(&challenge("r", 2), 1, start), "one challenge");
         kept.mark_opened(Some([7; 32]), start);
 
         for shadow in [Some(OTHER), None] {
@@ -474,7 +535,7 @@ mod tests {
         keep(&mut turns, "r", Some(VICTIM), after).unwrap();
         let kept = turns.get_mut("r").unwrap();
         assert!(kept.challenges.is_empty() && kept.opened.is_none());
-        assert!(kept.admit(&challenge("r", 2), 1));
+        assert!(kept.admit(&challenge("r", 2), 1, after));
 
         // a turn settles only the record it reserved: an unbound turn
         // under an id nobody can challenge is replaced

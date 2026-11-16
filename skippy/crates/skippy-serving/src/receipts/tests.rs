@@ -15,8 +15,8 @@ use skippy_receipts::layer_tensors::{
     GGML_F32, TensorColumn, TensorKind, UbatchColumns, f32_bytes,
 };
 use skippy_receipts::recorder::{
-    CHALLENGE_PIN, KvCell, MemoryOp, PrefixCell, Recorder, ReplayScope, ReplaySeed, ReplayStep,
-    ReplayedLayer, ReplayedPosition, Replayer, StoredRows, TurnId, UbatchRecord,
+    CHALLENGE_PIN, FIRM_PIN, KvCell, MemoryOp, PrefixCell, Recorder, ReplayScope, ReplaySeed,
+    ReplayStep, ReplayedLayer, ReplayedPosition, Replayer, StoredRows, TurnId, UbatchRecord,
 };
 use skippy_receipts::wire::{CannotOpen, CannotOpenReason, Challenge, Pick, Receipt};
 
@@ -702,8 +702,11 @@ fn pins_are_given_up_when_they_run_out() {
     bound_turn(&stage0, "bound", &[1]);
     assert!(probe.pinned() > 0);
     let now = Instant::now();
-    let due = stage0.run_upkeep(now).expect("a pin to give up");
-    assert!(probe.pinned() > 0 && due > now && due <= now + CHALLENGE_PIN);
+    // the stage looks again when the pin starts to linger, and when it ends
+    let lingers = stage0.run_upkeep(now).expect("a pin that will linger");
+    assert!(probe.pinned() > 0 && lingers > now && lingers <= now + FIRM_PIN);
+    let due = stage0.run_upkeep(lingers).expect("a pin to give up");
+    assert!(probe.pinned() > 0 && due > lingers && due <= now + CHALLENGE_PIN);
     assert_eq!(stage0.run_upkeep(due), None, "nothing is pinned any more");
     assert_eq!(probe.pinned(), 0);
 }

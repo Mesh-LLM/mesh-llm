@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::attention::opening::{AttentionPick, BlockChallenge, BlockPick, RowProof, RowsOpening};
+use crate::attention::opening::{
+    AttentionPick, BlockChallenge, BlockPick, ROWS_PIN, RowProof, RowsOpening,
+};
 use crate::attention::{AttentionLayout, AttentionOp, BLOCK_POSITIONS, Window};
 use crate::attention_check::{
     block_challenge, block_passed, check_blocks, check_partials, verify_rows,
@@ -59,8 +61,8 @@ fn open_and_check(
     challenge.attention = vec![pick.clone()];
     let stage = recorder.open(&challenge, replayer).unwrap();
     assert_eq!(stage.attention.len(), 1);
-    // past the challenge window, an opened turn stays pinned for its rows
-    let later = std::time::Instant::now() + CHALLENGE_PIN;
+    // an opened turn stays pinned until its rows can no longer be asked for
+    let later = std::time::Instant::now() + ROWS_PIN - std::time::Duration::from_secs(1);
     assert!(!recorder.pinned_cells(later).is_empty());
     let opening = Opening {
         receipt_id: challenge.receipt_id.clone(),
@@ -317,7 +319,7 @@ fn a_challenge_turned_away_keeps_the_pin_of_one_being_opened() {
     recorder.commit("r1", 1, TurnId::default(), 0..2).unwrap();
     let now = std::time::Instant::now();
     let past_window = now + CHALLENGE_PIN;
-    let arrived = now + std::time::Duration::from_secs(10);
+    let arrived = past_window - std::time::Duration::from_secs(2);
     // the first is being replayed when a duplicate arrives and is refused
     recorder.hold_for_opening("r1", arrived);
     recorder.hold_for_opening("r1", arrived);
@@ -340,7 +342,7 @@ fn a_turn_being_opened_stays_pinned_past_its_challenge_pin() {
     let past_window = now + CHALLENGE_PIN;
     assert!(recorder.pinned_cells(past_window).is_empty());
 
-    let arrived = now + std::time::Duration::from_secs(10);
+    let arrived = past_window - std::time::Duration::from_secs(2);
     recorder.hold_for_opening("r1", arrived);
     assert_eq!(cells(&recorder, past_window), vec![4, 5]);
     assert_eq!(
