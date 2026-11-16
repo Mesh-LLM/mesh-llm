@@ -240,6 +240,43 @@ PYEOF
   echo "-- skippy profile:"
   python3 "$W/profile.py" "$PORT" "$PROBE_CONVERSATIONS" 256 || true
   kill $SP 2>/dev/null || true; sleep 8
+  # ---- prefill chunk sweep: TTFT vs chunk size ----
+  echo "-- prefill chunk sweep:"
+  for CHUNK in 64 256 512 2048; do
+    PORT=$((PORT+1))
+    "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --prefill-chunk-size "$CHUNK" --prefill-chunk-policy fixed --runtime-bundle "$RUNTIME_DIR" > "$W/serve-sweep-$CHUNK.log" 2>&1 &
+    SWPID=$!
+    for i in $(seq 1 180); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
+    if ! kill -0 $SWPID 2>/dev/null; then
+      echo "  SWEEP chunk=$CHUNK SERVER_DIED"
+      continue
+    fi
+    python3 - "$PORT" "$CHUNK" <<'SWEEPPY'
+import json, sys, time, urllib.request
+PORT, CHUNK = int(sys.argv[1]), sys.argv[2]
+filler = "Session sweep stable context block. " * 220
+msgs = [{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":filler + " Write one paragraph about mountains."}]
+body = json.dumps({"model":"m","messages":msgs,"max_tokens":64,"temperature":0,"stream":True}).encode()
+ttfts = []
+for trial in range(3):
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions",data=body,headers={"Content-Type":"application/json"})
+    t0 = time.time(); first = None; n = 0
+    r = urllib.request.urlopen(req, timeout=120)
+    for line in r:
+        if not line.startswith(b"data: "): continue
+        p = line[6:].strip()
+        if p == b"[DONE]": break
+        try: c = json.loads(p)
+        except Exception: continue
+        if c.get("choices",[{}])[0].get("delta",{}).get("content"):
+            if first is None: first = time.time()
+            n += 1
+    if first: ttfts.append(first - t0)
+avg = sum(ttfts)/len(ttfts) if ttfts else -1
+print(f"  SWEEP chunk={CHUNK} ttft_avg={avg:.3f}s (trials={len(ttfts)})", flush=True)
+SWEEPPY
+    kill $SWPID 2>/dev/null || true; sleep 8
+  done
   cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
   echo SMOKE_DONE
   exit 0
