@@ -1,10 +1,38 @@
 # skippy-ane
 
-Apple Neural Engine support for the paired Qwen3.6 DFlash drafter. This crate
-owns GGUF to Core ML conversion, compiled-model placement checks, and stateful
-Core ML draft execution. `skippy-runtime` owns speculative decoding and target
-verification; it calls this crate's draft API on macOS. The crate does not
-depend on MeshLLM or a Skippy runtime crate.
+`skippy-ane` owns Skippy's integration with Apple Neural Engine through Core ML.
+Its first workload is the paired Qwen3.6 DFlash drafter. The crate owns the
+workload's model conversion, Core ML execution, and hardware placement check.
+`skippy-runtime` owns speculative decoding, target execution, and verification.
+This crate has no dependency on MeshLLM or Skippy runtime crates.
+
+```mermaid
+flowchart LR
+    draft[Paired draft GGUF] --> convert
+    target[Target GGUF] --> convert
+    subgraph ane[skippy-ane]
+        subgraph dflash[DFlash workload]
+            convert[conversion library] --> package[Core ML package + compiled model]
+            convert --> embeddings[Target embeddings + manifest]
+            runtime[Stateful draft runtime] --> coreml[Core ML adapter]
+        end
+    end
+    cli[skippy-ane-convert CLI] --> convert
+    package --> coreml
+    embeddings --> runtime
+    skippy[skippy-runtime speculative decoding] --> runtime
+    runtime --> skippy
+    coreml --> hardware[Apple Neural Engine]
+    skippy --> verify[Target verification]
+```
+
+The `dflash` module keeps its converter and runtime together because they share
+a fixed model shape and package contract. `dflash::conversion` is available as
+a Rust library and through `skippy-ane-convert`; `dflash::AneDraft` is the macOS
+runtime entry point. Its `coreml` module contains the DFlash graph's Core ML
+inputs, outputs, and state handling. A future ANE workload can have a peer
+module with its own package and runtime contract. Shared Core ML code belongs
+at the crate level only when more than one workload uses it.
 
 Convert from the workspace root with `just dflash-ane-convert`. The executable
 is `skippy-ane-convert`; it accepts `--draft`, `--target`, `--out`,
@@ -12,7 +40,7 @@ is `skippy-ane-convert`; it accepts `--draft`, `--target`, `--out`,
 conversion without a child process:
 
 ```rust,no_run
-use skippy_ane::conversion::{ConversionOptions, convert};
+use skippy_ane::dflash::conversion::{ConversionOptions, convert};
 
 let options = ConversionOptions {
     draft: "draft.gguf".into(),

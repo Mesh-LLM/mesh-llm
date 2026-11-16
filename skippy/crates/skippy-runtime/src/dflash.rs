@@ -39,7 +39,7 @@ use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
 use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 #[cfg(target_os = "macos")]
-use skippy_ane::draft::AneDraft;
+use skippy_ane::dflash::AneDraft;
 
 pub use context::DFlashHealth;
 pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};

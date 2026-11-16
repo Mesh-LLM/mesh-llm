@@ -1,4 +1,4 @@
-//! Stateful Core ML execution of the paired Qwen3.6 DFlash neural graph.
+//! Stateful draft execution and lane state for the paired DFlash graph.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

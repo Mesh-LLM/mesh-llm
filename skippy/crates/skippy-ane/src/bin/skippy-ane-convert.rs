@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use skippy_ane::conversion::{ConversionOptions, convert};
+use skippy_ane::dflash::conversion::{ConversionOptions, convert};
 
 #[derive(Parser)]
 struct Args {

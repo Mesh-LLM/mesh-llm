@@ -1,7 +1,3 @@
-//! Apple Neural Engine conversion and draft execution for paired DFlash models.
+//! Apple Neural Engine integration for Skippy workloads.
 
-#[cfg(feature = "conversion")]
-pub mod conversion;
-
-#[cfg(target_os = "macos")]
-pub mod draft;
+pub mod dflash;
