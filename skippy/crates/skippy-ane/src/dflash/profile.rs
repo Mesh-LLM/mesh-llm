@@ -58,6 +58,7 @@ impl DFlashProfile {
         if draft.meta_str("general.architecture") != Some("dflash") {
             bail!("draft GGUF must have the dflash architecture");
         }
+        validate_supported_metadata(draft)?;
         let layers = positive(draft, "dflash.block_count")?;
         let width = positive(draft, "dflash.embedding_length")?;
         let query_heads = per_layer(draft, "dflash.attention.head_count", layers)?;
@@ -178,6 +179,24 @@ impl DFlashProfile {
             activation,
         })
     }
+}
+
+#[cfg(feature = "conversion")]
+fn validate_supported_metadata(draft: &GgufFile) -> Result<()> {
+    for key in draft.metadata.keys() {
+        let unsupported_rope = key.starts_with("dflash.rope.")
+            && key != "dflash.rope.freq_base"
+            && key != "dflash.rope.dimension_count";
+        let unsupported_attention = key.starts_with("dflash.attention.sliding_window");
+        let unsupported_output = matches!(
+            key.as_str(),
+            "dflash.logit_scale" | "dflash.final_logit_softcapping"
+        );
+        if unsupported_rope || unsupported_attention || unsupported_output {
+            bail!("ANE DFlash graph does not implement GGUF metadata {key}");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "conversion")]
@@ -381,5 +400,25 @@ mod tests {
         assert_eq!(profile.feature_width(), Some(192));
         assert_eq!(profile.vocabulary, 100);
         assert!(profile.causal);
+    }
+
+    #[test]
+    fn rejects_rope_scaling_before_converting_a_mismatched_graph() {
+        let temp = tempfile::tempdir().unwrap();
+        let draft = temp.path().join("draft.gguf");
+        let target = temp.path().join("target.gguf");
+        gguf(
+            &draft,
+            &[
+                ("general.architecture", MetaValue::Str("dflash".into())),
+                ("dflash.rope.scaling.factor", MetaValue::F32(2.0)),
+            ],
+            None,
+        );
+        gguf(&target, &[], Some((8, 12)));
+        let draft = GgufFile::open(&draft).unwrap();
+        let target = GgufFile::open(&target).unwrap();
+        let error = DFlashProfile::from_gguf(&draft, &target).unwrap_err();
+        assert!(error.to_string().contains("dflash.rope.scaling.factor"));
     }
 }

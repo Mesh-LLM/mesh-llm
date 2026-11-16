@@ -33,7 +33,13 @@ feature taps, vocabulary, RoPE, and decoder behavior from the paired GGUFs.
 It generates standard and Laguna DFlash graphs, including optional attention
 and FFN post norms and per-layer output scaling. Conversion rejects draft
 tensors whose operations are not implemented by the Core ML graph. The
-compiled package records the profile and source hashes, and an explicit ANE
+supported graph still requires a separate V projection and ordinary RoPE;
+attention sinks, learned RoPE frequencies, sliding window attention, reduced
+vocabularies, and DSpark/DFlash2/LiliCorr variants need additional graph work.
+RoPE scaling and output-logit metadata that the graph cannot reproduce fail
+conversion explicitly. Thus `general.architecture = dflash` alone does not
+guarantee ANE compatibility. The compiled package records the profile and
+source hashes, and an explicit ANE
 request fails loading if they do not match. Packages produced before profile
 format version 2 must be regenerated.
 
