@@ -16,6 +16,9 @@ fn setup_command_parses_without_plugin_fallback() {
         Command::Setup(SetupArgs {
             yes,
             no_interactive,
+            plugin_set,
+            skip_plugin_install,
+            no_default_plugins,
             service,
             no_service,
             skip_runtime,
@@ -23,6 +26,9 @@ fn setup_command_parses_without_plugin_fallback() {
         }) => {
             assert!(yes);
             assert!(no_interactive);
+            assert!(plugin_set.is_none());
+            assert!(!skip_plugin_install);
+            assert!(!no_default_plugins);
             assert!(!service);
             assert!(!no_service);
             assert!(skip_runtime);

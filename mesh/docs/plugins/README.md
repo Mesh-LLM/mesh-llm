@@ -27,7 +27,7 @@ Plugin-specific documentation:
 The main goals are:
 
 - keep `mesh-llm` decoupled from specific plugins
-- let installed plugins be registered without special-casing product behavior
+- let catalog plugin sets be offered without special-casing product behavior
 - make MCP and HTTP first-class host projections
 - support large request and response bodies without blocking control traffic
 - keep plugin author boilerplate low
@@ -560,23 +560,102 @@ only when a newer compatible version exists.
 plugin installed but prevents host startup from launching it. `delete` removes
 the installed archive, extracted files, and local plugin metadata.
 
-## Capsules
+## Plugin Sets
 
-`capsules` is a reviewed plugin that keeps a signed record of each request this
-node serves, on the node's own disk. By default it keeps SHA-256 digests of the
-request and response, never their text; it sees no OpenAI exchange text.
+The catalog publishes named **plugin sets**: a name, a description, and a list
+of catalog plugin names. `recommended` is the set setup and update offer; it
+contains `capsules` today. Membership lives in the catalog, so adding or
+removing a member needs no host rebuild, and installing a set installs its
+current eligible members **once** — a later membership change never installs
+or uninstalls anything on an existing machine. Sets grant no permissions and
+never enable, disable, or update an installed plugin.
+
+- `mesh-llm plugins sets list` — discover named sets. Read-only; needs no
+  running node.
+- `mesh-llm plugins sets show NAME` — membership, descriptions, resolved
+  versions, and platform availability. Unavailable platforms and releases
+  incompatible with the host display as unavailable.
+- `mesh-llm plugins sets install NAME` — install the set's current missing
+  members. Idempotent: already-installed members (whatever their state) are
+  skipped, disabled state, settings, and data are preserved, and a partial
+  failure reports every per-plugin result and exits nonzero.
+- `mesh-llm setup` offers the `recommended` set when attended, defaulting to
+  skip; `--plugin-set NAME` selects any catalog set explicitly (and suppresses
+  the prompt), and `--skip-plugin-install` skips optional installation. An
+  optional install that fails never fails setup: it warns and shows the retry
+  command.
+- `mesh-llm update --plugin-set NAME` / `--skip-plugin-install` /
+  `--no-interactive` carry the same choices on the host upgrade. Unattended
+  runs install no optional plugins and never read input. When Windows must
+  hand off to its host installer, an explicit `--plugin-set` is rejected before
+  plugin repairs or host replacement. Update without that flag, then run
+  `mesh-llm plugins sets install NAME` after the installer finishes.
+
+Unknown set names report `Unknown plugin set 'missing'`, never an empty
+success. The standalone set command fails; setup and update report optional
+installation as incomplete while preserving their completed core result and
+showing a retry command.
+
+### Installed-plugin upgrade checks
+
+Every path that replaces the host runs the same check and repairs on **every
+installed plugin**, against the target host version, whatever its set
+membership or origin (`mesh_llm_plugin_manager::upgrade_gate`):
+
+- `mesh-llm update` checks before replacing the host.
+- The automatic update at node start (`--auto-update`) checks after its other
+  preflights and before replacing the host. A refusal keeps the running host,
+  prints why, and the node starts on the version it has.
+- The bootstrap scripts replace the host and then run `mesh-llm setup`, which
+  checks against the host now installed, before the optional plugin phase. The
+  host is already replaced, so a refusal is reported with the retry command
+  (`mesh-llm update`) and setup continues.
+
+| Installed plugin state | Attended upgrade | Unattended upgrade |
+|---|---|---|
+| Compatible, current | Keep version | Keep version |
+| Compatible, newer release available | Keep version; show update notice and command | Keep version |
+| Incompatible, compatible update available | Automatically update; explain why | Automatically update; log why |
+| Incompatible, no usable update | Report failed repair; do not activate the plugin | Same; never prompt |
+| Compatibility unknown | Report unknown status and apply existing checks | Same |
+
+Automatic repair uses only verified catalog pins: platform checksum,
+package identity, and target-host compatibility are checked before anything
+is replaced, and settings, data, and enabled state are preserved (a repaired
+disabled plugin stays disabled). A required repair that cannot be made stops
+the managed upgrade before the new host is activated. Compatible plugins are
+never updated automatically — attended upgrades list them with
+`mesh-llm plugins update NAME`. If the catalog is unavailable, an upgrade
+continues only when compatibility is established locally from what the
+installed records retain; otherwise it stays unapplied with an explanation.
+A node start never installs a missing set member; a plugin known to be
+incompatible with the running host is not launched and reports the reason.
+
+Release-specific compatibility metadata travels with the catalog entry (for
+the pinned release) and the packaged `plugin.toml` (`min_host_version` /
+`max_host_version`), and an install retains its effective bounds. An explicit
+package bound takes precedence over the corresponding catalog bound; an
+omitted package bound keeps the catalog declaration.
+Missing metadata means **unknown**, not incompatible: legacy installs keep
+running under the host's existing checks.
+
+### Legacy default installations
+
+Earlier MeshLLM releases bundled default plugins in `plugins/` beside the
+host and installed them from a compiled-in pin list. That system is retired:
+distributions carry no plugin archives, `plugins install-defaults` is a stub
+that points at sets, and surviving default-managed records migrate to normal
+managed records on first use — keeping their verified identity, settings,
+data, enabled/disabled state, and exact surface grants (no silent grant
+expansion). `--no-default-plugins` remains accepted as a deprecated alias of
+`--skip-plugin-install`, and `MESH_LLM_NO_DEFAULT_PLUGINS=1` still skips
+optional plugin installation; neither suppresses a required repair.
+
+`capsules` keeps a signed record of each request this node serves, on
+the node's own disk. By default it keeps SHA-256 digests of the request and
+response, never their text; its default entry does not allow the OpenAI
+exchange hook, so mesh-llm passes it no exchange text.
 It makes no network calls unless the operator configures a witness URL.
-Install it like any plugin:
-
-```bash
-mesh-llm plugins install capsules
-```
-
-Installed plugins start when the host loads them; a bare `[[plugin]]` entry
-that only holds settings configures the installed copy, and a broken install
-never stops the node: it is reported as an inactive plugin instead. MeshLLM
-ships no bundled plugins; see [#2971](https://github.com/Mesh-LLM/mesh-llm/issues/2971)
-for the planned catalog-defined plugin sets.
 
 ## Hugging Face Plugin Catalog
 
@@ -611,10 +690,11 @@ Required fields:
 Pin fields, required to install an entry by name. An entry without them stays
 searchable, but `mesh-llm plugins install <name>` refuses it:
 
-| Field     | Meaning                                                                                                   |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| `version` | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                  |
-| `sha256`  | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.      |
+| Field             | Meaning                                                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `version`         | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                   |
+| `sha256`          | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.       |
+| `compatibility` | Optional **inclusive** `{"min": "0.81.0", "max": "0.90.0"}` bounds (either may be absent) declaring which MeshLLM host versions the pinned release works with. `max: "0.90.0"` includes `0.90.0`, but excludes `0.90.1`. Installs refuse a release that excludes the target host; upgrades retain the value with the installed record as `host_compatibility`. Absent means unknown, never incompatible. |
 
 ```json
 {
@@ -628,7 +708,8 @@ searchable, but `mesh-llm plugins install <name>` refuses it:
     "aarch64-apple-darwin": "<64 hex>",
     "x86_64-unknown-linux-gnu": "<64 hex>",
     "aarch64-unknown-linux-gnu": "<64 hex>"
-  }
+  },
+  "compatibility": { "min": "0.81.0", "max": "0.90.0" }
 }
 ```
 
@@ -641,9 +722,36 @@ whoever controls a repository can replace a release, its assets, and the digests
 it reports, so a rewritten release is refused instead of launched. An entry that
 pins no version, or no digest for your platform, installs nothing.
 
+A catalog set names plugins without pinning them: sets carry no releases or
+checksums of their own, so the entry's pin is always the authority.
+
+### Set records: `plugin-sets.jsonl`
+
+Set records live in their own file, `plugin-sets.jsonl`, next to
+`plugins.jsonl` in the same dataset directory — never inside `plugins.jsonl`,
+so hosts built before sets existed keep parsing the plugin catalog they
+already know. A host derives the sets URL by replacing the `plugins.jsonl`
+file name; a missing sets file means no sets are offered, never a failed
+catalog read.
+
+```json
+{"name": "recommended", "description": "Recommended plugins for MeshLLM", "plugins": ["capsules"]}
+```
+
+Set rules:
+
+- one set per JSONL line; `name`, `description`, and `plugins` are required
+- set names use plugin-name characters; a set name must be unique
+- `plugins` names catalog entries only (no nested sets), each unique, and
+  every referenced name must exist in `plugins.jsonl` — otherwise the whole
+  sets file is refused with an actionable error
+- membership changes need no host rebuild, and installing a set installs its
+  current members once: later membership changes never touch installed
+  machines
+
 Catalog rules:
 
-- one plugin per JSONL line
+- one plugin per JSONL line in `plugins.jsonl`
 - `name` must be unique within the catalog
 - unknown extra fields are ignored for forward compatibility
 - catalog lookup never downloads native binaries from Hugging Face
@@ -677,11 +785,11 @@ mesh-llm plugins install https://github.com/mesh-llm/cool-plugin
 
 ## Core Principles
 
-### 1. Plugins Are Explicit
+### 1. Bundled Plugins Are Allowed
 
-MeshLLM ships no bundled plugins: a plugin reaches a node only when its
-operator installs it with `mesh-llm plugins install`. That keeps the release
-decoupled from specific plugins.
+Plugins shipped in this source tree may be auto-registered by the host.
+
+That is acceptable coupling.
 
 What is not acceptable is embedding one plugin's runtime behavior directly into core mesh logic. Core mesh transport and state should stay generic.
 
@@ -1142,7 +1250,7 @@ Examples:
 - resource: `blackboard://snapshot`
 - prompt: `blackboard.status_brief`
 
-Friendly aliases may be added for installed plugins, but the canonical identity should remain namespaced to avoid collisions.
+Friendly aliases may be added for well-known plugins, but the canonical identity should remain namespaced to avoid collisions.
 
 ### MCP Streaming
 
@@ -1458,7 +1566,9 @@ local to this node, like the rest of `/api/status`: nothing is gossiped.
 The host advertises the `plugin_status.v1` host capability in its
 `InitializeRequest`. Against a host without it, `publish_status` fails at once;
 a plugin that cannot run without it declares `.required(true)` and then refuses
-to initialize there.
+to initialize there. A plugin installed by the retired bundled-default system keeps its
+declaration only when its retained legacy grants allow
+`Surface::StatusContributions`.
 
 ## Local Inference Observation
 
@@ -1476,7 +1586,9 @@ allow_inference_observation = true
 and it calls `PluginContext::subscribe_inference_observation()`, from
 `on_initialized` or any task holding an owned context. Without the declaration
 or the opt-in the host refuses the subscription and sends nothing. The setting
-is read when the plugin subscribes.
+is read when the plugin subscribes. A plugin installed by the retired
+bundled-default system keeps the declaration only if its retained legacy
+grants allow `Surface::InferenceObservation`.
 
 **What it covers.** The host composes an adapter into the lifecycle observer of
 each local inference frontend, so the feed has what this node executes: local
@@ -1545,7 +1657,6 @@ initialize there.
 The host is responsible for:
 
 - launching plugins
-- registering installed plugins
 - validating plugin identity
 - keeping the control session alive
 - stream negotiation and cleanup
@@ -1593,7 +1704,6 @@ The following are intentionally left open for implementation design:
 
 ## Architecture Baseline
 
-- installed plugins are registered by the host
 - core mesh logic remains plugin-agnostic
 - MCP and HTTP are first-class host projections
 - product APIs depend on capabilities, not plugin IDs

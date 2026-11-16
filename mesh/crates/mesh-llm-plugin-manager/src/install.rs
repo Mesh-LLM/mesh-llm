@@ -5,10 +5,17 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use sha2::Digest;
 
+mod package;
+
+use package::{
+    build_installed_metadata, compatibility_from_package, extract_for_install,
+    retained_remote_install, retained_surfaces, unchanged_install,
+};
+
 use crate::{
-    archive::{ExtractedPluginArchive, stage_plugin_archive},
-    catalog::PluginCatalog,
+    catalog::{CatalogEntry, PluginCatalog},
     catalog_pin::CatalogPin,
+    compatibility::{self as compat, HostCompatibility},
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     infer_plugin_asset, select_plugin_asset,
     source_ref::{
@@ -20,6 +27,15 @@ use crate::{
 
 pub const DEFAULT_CATALOG_URL: &str =
     "https://huggingface.co/datasets/meshllm/plugin-catalog/resolve/main/plugins.jsonl";
+
+/// The HTTP client every catalog read uses. A request timeout so a stalled
+/// catalog server can never hang an install, update, or host upgrade.
+fn catalog_client() -> Result<Client> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("build plugin catalog client")
+}
 
 pub trait PluginProgressReporter {
     fn report(&mut self, event: PluginProgressEvent);
@@ -77,6 +93,12 @@ pub enum PluginProgressEvent {
         name: String,
         version: String,
     },
+    /// A condition worth telling the operator about that does not stop the
+    /// operation, such as falling back from an unavailable catalog to a
+    /// plugin's GitHub releases.
+    Warning {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +107,9 @@ pub struct PluginInstallOptions {
     pub install_root: PathBuf,
     pub catalog_url: String,
     pub target: PluginTarget,
+    /// The MeshLLM host version compatibility is judged against: the plain
+    /// release version of the running host, without a build suffix.
+    pub host_version: String,
 }
 
 impl PluginInstallOptions {
@@ -97,6 +122,7 @@ impl PluginInstallOptions {
             store_root,
             catalog_url,
             target: PluginTarget::current()?,
+            host_version: mesh_llm_build_info::RELEASE_VERSION.to_string(),
         })
     }
 }
@@ -114,7 +140,7 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    install_resolved_plugin(resolved, &options.host_version, options, progress, None).await
 }
 
 pub fn install_plugin_archive(
@@ -147,7 +173,14 @@ pub fn install_plugin_archive(
     });
     let store = PluginStore::new(&options.store_root);
     let current = store.load_optional(name)?;
-    let extracted = extract_for_install(&archive_path, archive_ext, name, options)?;
+    let extracted = extract_for_install(
+        &archive_path,
+        archive_ext,
+        name,
+        options,
+        None,
+        &options.host_version,
+    )?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("local:{}", archive_path.display()),
@@ -156,9 +189,12 @@ pub fn install_plugin_archive(
         downloaded_asset_name: asset_name,
         install_path: extracted.install_path,
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
+        default_managed: false,
+        host_compatibility: compatibility_from_package(&extracted.plugin_toml, None),
+        allowed_surfaces: retained_surfaces(current.as_ref()),
         manifest: extracted.manifest,
-        last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
-        last_status: current.as_ref().and_then(|item| item.last_status.clone()),
+        last_protocol_version: None,
+        last_status: None,
         last_error: None,
         verified_sha256: None,
     };
@@ -170,25 +206,6 @@ pub fn install_plugin_archive(
         metadata,
         changed: true,
     })
-}
-
-/// Every install path extracts through here, so the executable it checks is
-/// named for `options.target`, as `InstalledPluginMetadata::executable_path`
-/// names the one the host launches.
-pub(crate) fn extract_for_install(
-    archive_path: &std::path::Path,
-    archive_ext: ArchiveExt,
-    name: &str,
-    options: &PluginInstallOptions,
-) -> Result<ExtractedPluginArchive> {
-    let staged = stage_plugin_archive(
-        archive_path,
-        archive_ext,
-        options.target.executable_suffix(),
-        name,
-        &options.install_root,
-    )?;
-    staged.commit()
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -212,14 +229,197 @@ pub async fn update_plugin(
 ) -> Result<InstallOutcome> {
     let store = PluginStore::new(&options.store_root);
     let current = store.load(name)?;
+    // A catalog entry is the verified source: its pin is immutable and its
+    // release declares which host versions it works with. An explicit update
+    // takes that release when it supports this host, and refuses an
+    // incompatible one rather than installing it. A plugin outside the
+    // catalog updates from its GitHub releases as before, with the digest
+    // GitHub reports as the only cross-check.
+    match catalog_update_entry(&current, options).await {
+        Ok(Some(entry)) => {
+            return install_pinned_entry(
+                &current,
+                &entry,
+                &options.host_version,
+                options,
+                progress,
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(catalog_error) => {
+            progress.report(PluginProgressEvent::Warning {
+                message: format!(
+                    "Catalog unavailable ({catalog_error:#}); updating {name} from its GitHub \
+                     releases without a catalog pin"
+                ),
+            });
+        }
+    }
     let source = GitHubPluginSource::from_url(&current.source_repository)?;
     let resolved = ResolvedInstallSource {
         plugin_name: current.name.clone(),
         source,
         version: None,
         pin: None,
+        compatibility: None,
     };
-    install_resolved_plugin(resolved, options, progress, Some(current)).await
+    install_resolved_plugin(
+        resolved,
+        &options.host_version,
+        options,
+        progress,
+        Some(current),
+    )
+    .await
+}
+
+/// Update (or repair) `current` to the release its catalog entry pins, when
+/// that release is available for the platform and supports `host_version`.
+/// This is the only update source an automatic repair may use: the pin and
+/// its digest are immutable, and the release's own compatibility declaration
+/// is checked before anything is downloaded.
+pub async fn update_plugin_from_catalog(
+    current: &InstalledPluginMetadata,
+    host_version: &str,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let client = catalog_client()?;
+    let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
+    let entry = catalog.find_exact(&current.name).with_context(|| {
+        format!(
+            "'{}' has no catalog entry, so there is no verified update source for it",
+            current.name
+        )
+    })?;
+    install_pinned_entry(current, entry, host_version, options, progress).await
+}
+
+/// A verified update source for this installed package, not just its name.
+/// A missing or different-source entry leaves explicit updates on their own
+/// repository; an unavailable catalog is reported separately.
+async fn catalog_update_entry(
+    current: &InstalledPluginMetadata,
+    options: &PluginInstallOptions,
+) -> Result<Option<CatalogEntry>> {
+    let client = catalog_client()?;
+    let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
+    Ok(catalog
+        .find_exact(&current.name)
+        .filter(|entry| source_matches(entry, current))
+        .cloned())
+}
+
+/// Whether the package `entry` names is the package `installed` came from.
+/// A name alone is not identity: a fork or a locally installed archive can
+/// carry a catalog plugin's name, and updating it from the catalog would
+/// silently replace the operator's package. Only a matching GitHub
+/// repository establishes identity; a legacy bundled install of a reviewed
+/// legacy default is the one exception, because the retired bundled system
+/// associated that name with its release repository itself.
+pub(crate) fn source_matches(entry: &CatalogEntry, installed: &InstalledPluginMetadata) -> bool {
+    if installed.source_repository.starts_with("bundled:") {
+        return crate::legacy_defaults::is_known_legacy_default(&installed.name);
+    }
+    if installed.source_repository.starts_with("local:") {
+        // A locally installed archive has no verifiable update source; it
+        // must not be replaced from the catalog by name alone.
+        return false;
+    }
+    let (Ok(installed_source), Ok(entry_source)) = (
+        GitHubPluginSource::from_url(&installed.source_repository),
+        GitHubPluginSource::from_url(&entry.github_url),
+    ) else {
+        return false;
+    };
+    // GitHub owner and repository names are case-insensitive.
+    installed_source
+        .repo_slug()
+        .eq_ignore_ascii_case(&entry_source.repo_slug())
+}
+
+/// Install the release `entry` pins, refusing when the platform has no
+/// pinned archive or the pinned release does not support `host_version`.
+pub(crate) async fn install_pinned_entry(
+    current: &InstalledPluginMetadata,
+    entry: &CatalogEntry,
+    host_version: &str,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    if !source_matches(entry, current) {
+        bail!(
+            "'{}' is installed from {}, which is not the catalog entry's repository {}; \
+             refusing to replace a different package by name",
+            current.name,
+            current.source_repository,
+            entry.github_url
+        );
+    }
+    let resolved = pinned_entry_source(entry, host_version, options)?;
+    install_resolved_plugin(
+        resolved,
+        host_version,
+        options,
+        progress,
+        Some(current.clone()),
+    )
+    .await
+}
+
+/// Install a plugin not yet installed, from its catalog entry's pinned
+/// release, under the same pin and compatibility checks as an update.
+pub async fn install_catalog_entry(
+    entry: &CatalogEntry,
+    host_version: &str,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let resolved = pinned_entry_source(entry, host_version, options)?;
+    install_resolved_plugin(resolved, host_version, options, progress, None).await
+}
+
+/// The resolved catalog-pinned source for `entry`, refusing when the platform
+/// has no pinned archive or the pinned release does not support
+/// `host_version`.
+fn pinned_entry_source(
+    entry: &CatalogEntry,
+    host_version: &str,
+    options: &PluginInstallOptions,
+) -> Result<ResolvedInstallSource> {
+    let pin = CatalogPin::for_entry(entry, options.target.triple())?;
+    ensure_compatible_for_host(entry, pin.version().as_str(), host_version)?;
+    let source = GitHubPluginSource::from_url(&entry.github_url)?;
+    Ok(ResolvedInstallSource {
+        plugin_name: entry.name.clone(),
+        source,
+        version: Some(pin.version().clone()),
+        pin: Some(pin),
+        compatibility: entry.compatibility.clone(),
+    })
+}
+
+/// Refuse a pinned release whose compatibility declaration excludes
+/// `host_version`. Unknown compatibility is allowed through: the runtime's
+/// own checks still guard it, and legacy metadata must not make an install
+/// impossible.
+pub(crate) fn ensure_compatible_for_host(
+    entry: &CatalogEntry,
+    pin_version: &str,
+    host_version: &str,
+) -> Result<()> {
+    if let Some(compat::Verdict::Incompatible(reason)) = entry
+        .compatibility
+        .as_ref()
+        .map(|declared| compat::evaluate(Some(declared), host_version))
+    {
+        bail!(
+            "catalog entry '{}' {pin_version} does not support MeshLLM {host_version}: {reason}",
+            entry.name
+        );
+    }
+    Ok(())
 }
 
 struct ResolvedInstallSource {
@@ -233,6 +433,10 @@ struct ResolvedInstallSource {
     /// reference names no catalog entry, so there is nothing to bind it to.
     /// When this is set, `version` is the pin's own version.
     pin: Option<CatalogPin>,
+    /// The pinned release's host compatibility, retained with the installed
+    /// record so upgrades can judge it without re-deriving it from the
+    /// catalog. A GitHub reference names no catalog entry, so there is none.
+    compatibility: Option<HostCompatibility>,
 }
 
 async fn resolve_install_source(
@@ -243,7 +447,7 @@ async fn resolve_install_source(
     match parsed {
         PluginInstallRef::Catalog { name, version } => {
             progress.report(PluginProgressEvent::ResolvingCatalog { name: name.clone() });
-            let client = Client::new();
+            let client = catalog_client()?;
             let catalog = PluginCatalog::fetch(&client, &options.catalog_url).await?;
             let entry = catalog
                 .find_exact(&name)
@@ -251,11 +455,13 @@ async fn resolve_install_source(
             let source = GitHubPluginSource::from_url(&entry.github_url)?;
             let pin = CatalogPin::for_entry(entry, options.target.triple())?;
             pin.ensure_matches_request(version.as_ref())?;
+            ensure_compatible_for_host(entry, pin.version().as_str(), &options.host_version)?;
             Ok(ResolvedInstallSource {
                 plugin_name: entry.name.clone(),
                 source,
                 version: Some(pin.version().clone()),
                 pin: Some(pin),
+                compatibility: entry.compatibility.clone(),
             })
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
@@ -263,12 +469,14 @@ async fn resolve_install_source(
             source,
             version,
             pin: None,
+            compatibility: None,
         }),
     }
 }
 
 async fn install_resolved_plugin(
     resolved: ResolvedInstallSource,
+    host_version: &str,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
     current: Option<InstalledPluginMetadata>,
@@ -284,17 +492,12 @@ async fn install_resolved_plugin(
     if let Some(pin) = resolved.pin.as_ref() {
         pin.ensure_release_is_pinned(&release.tag_name)?;
     }
-    if let Some(current) = &current
-        && current.installed_version == release.tag_name
-    {
+    if let Some(outcome) = unchanged_install(current.as_ref(), &release.tag_name, host_version)? {
         progress.report(PluginProgressEvent::AlreadyCurrent {
-            name: current.name.clone(),
-            version: current.installed_version.clone(),
+            name: outcome.metadata.name.clone(),
+            version: outcome.metadata.installed_version.clone(),
         });
-        return Ok(InstallOutcome {
-            metadata: current.clone(),
-            changed: false,
-        });
+        return Ok(outcome);
     }
 
     progress.report(PluginProgressEvent::SelectingAsset {
@@ -325,6 +528,14 @@ async fn install_resolved_plugin(
         }
         Err(error) => return Err(error),
     };
+    let current = match current {
+        Some(metadata) => Some(metadata),
+        None => retained_remote_install(
+            &PluginStore::new(&options.store_root),
+            &resolved.plugin_name,
+            &resolved.source,
+        )?,
+    };
     let asset = release
         .asset_by_name(&selected.name)
         .with_context(|| format!("selected asset '{}' missing from release", selected.name))?;
@@ -347,8 +558,11 @@ async fn install_resolved_plugin(
         options.target.archive_ext(),
         &resolved.plugin_name,
         options,
-    )?;
+        resolved.compatibility.as_ref(),
+        host_version,
+    );
     let _ = fs::remove_file(&archive_path);
+    let extracted = extracted?;
 
     let metadata = build_installed_metadata(
         &resolved,
@@ -377,31 +591,6 @@ async fn install_resolved_plugin(
         metadata,
         changed: true,
     })
-}
-
-fn build_installed_metadata(
-    resolved: &ResolvedInstallSource,
-    release_tag: &str,
-    asset: &GitHubReleaseAsset,
-    target: &PluginTarget,
-    extracted: ExtractedPluginArchive,
-    current: Option<&InstalledPluginMetadata>,
-    verified_sha256: Option<String>,
-) -> InstalledPluginMetadata {
-    InstalledPluginMetadata {
-        name: resolved.plugin_name.clone(),
-        source_repository: resolved.source.url(),
-        installed_version: release_tag.to_string(),
-        target_triple: target.triple().to_string(),
-        downloaded_asset_name: asset.name.clone(),
-        install_path: extracted.install_path,
-        enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
-        manifest: extracted.manifest,
-        last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
-        last_status: current.and_then(|metadata| metadata.last_status.clone()),
-        last_error: None,
-        verified_sha256,
-    }
 }
 
 /// Download the asset and verify it against the catalog pin when there is one,
@@ -498,6 +687,73 @@ fn verify_asset_sha256(asset_name: &str, expected: &str, hasher: sha2::Sha256) -
         bail!("plugin asset checksum mismatch for {asset_name}: expected {expected}, got {actual}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod source_matches_tests {
+    use super::*;
+    use crate::catalog::PluginCatalog;
+    use crate::store::InstalledPluginMetadata;
+
+    fn entry() -> crate::catalog::CatalogEntry {
+        PluginCatalog::parse_jsonl(
+            r#"{"name":"capsules","description":"Audit","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM"}"#,
+        )
+        .unwrap()
+        .find_exact("capsules")
+        .unwrap()
+        .clone()
+    }
+
+    pub(super) fn installed_from(source: &str) -> InstalledPluginMetadata {
+        let store = PluginStore::new(std::env::temp_dir().join("source-matches-test"));
+        InstalledPluginMetadata {
+            name: "capsules".into(),
+            source_repository: source.into(),
+            installed_version: "v0.1.0".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            downloaded_asset_name: "capsules.tar.gz".into(),
+            install_path: store.root().join("capsules"),
+            enabled: true,
+            default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
+            manifest: None,
+            last_protocol_version: None,
+            last_status: None,
+            last_error: None,
+            verified_sha256: None,
+        }
+    }
+
+    #[test]
+    fn repository_identity_is_case_insensitive_and_name_alone_is_not_enough() {
+        assert!(source_matches(
+            &entry(),
+            &installed_from("https://github.com/Mesh-LLM/Capsules")
+        ));
+        assert!(!source_matches(
+            &entry(),
+            &installed_from("https://github.com/acme/capsules")
+        ));
+        assert!(!source_matches(
+            &entry(),
+            &installed_from("local:/tmp/capsules.tar.gz")
+        ));
+    }
+
+    #[test]
+    fn a_reviewed_legacy_bundled_install_matches_its_associated_entry() {
+        let mut legacy = installed_from("bundled:/opt/plugins/capsules-0.1.4.tar.gz");
+        legacy.name = "capsules".into();
+        assert!(source_matches(&entry(), &legacy));
+        let mut other = installed_from("bundled:/opt/plugins/other-1.0.0.tar.gz");
+        other.name = "other".into();
+        assert!(
+            !source_matches(&entry(), &other),
+            "a bundled install of an unreviewed name has no catalog association"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -745,6 +1001,7 @@ mod tests {
             source: GitHubPluginSource::from_url("https://github.com/mesh-llm/demo").unwrap(),
             version: None,
             pin: None,
+            compatibility: None,
         };
         let asset = GitHubReleaseAsset {
             name: "demo-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
@@ -850,6 +1107,7 @@ mod tests {
             install_root: temp.path().join("installed"),
             catalog_url: "unused".to_string(),
             target: PluginTarget::current().unwrap(),
+            host_version: "0.90.0".to_string(),
         };
         let mut events = Vec::new();
 
@@ -955,6 +1213,7 @@ mod tests {
             install_root: root.join("installed"),
             catalog_url: "unused".to_string(),
             target: PluginTarget::from_os_arch(os, arch).unwrap(),
+            host_version: "0.90.0".to_string(),
         }
     }
 
@@ -1083,6 +1342,7 @@ mod tests {
             install_root: root.join("installed"),
             catalog_url: serve_catalog(catalog_body),
             target: PluginTarget::from_os_arch("macos", "aarch64").unwrap(),
+            host_version: "0.90.0".to_string(),
         };
         let parsed = parse_install_ref(name).unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -1107,6 +1367,27 @@ mod tests {
             .recv_timeout(Duration::from_secs(30))
             .expect("catalog resolution returned")
             .map_err(|error| format!("{error:#}"))
+    }
+
+    #[tokio::test]
+    async fn explicit_updates_select_a_catalog_pin_only_for_the_installed_repository() {
+        let root = TempDir::new().unwrap();
+        for (source, catalog_selected) in [
+            ("https://github.com/acme/demo", false),
+            ("local:/tmp/demo.tar.gz", false),
+            ("https://github.com/MESH-LLM/DEMO", true),
+        ] {
+            let mut current = super::source_matches_tests::installed_from(source);
+            current.name = "demo".into();
+            let mut options = options_for(root.path(), "macos", "aarch64");
+            options.catalog_url = serve_catalog(PINNED_CATALOG_LINE);
+            let entry = catalog_update_entry(&current, &options).await.unwrap();
+            assert_eq!(entry.is_some(), catalog_selected, "{source}");
+            assert_eq!(
+                current.source_repository, source,
+                "the operator's source is retained"
+            );
+        }
     }
 
     #[test]

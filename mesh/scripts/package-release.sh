@@ -408,7 +408,6 @@ resolve_release_target() {
 
     STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
     # Plugins are built per target, not per backend flavor.
-    PLUGIN_TARGET_TRIPLE="$TARGET_TRIPLE"
     TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
     return 0
@@ -564,6 +563,7 @@ main() {
             "$version" \
             "$(effective_release_flavor)"
     fi
+
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"

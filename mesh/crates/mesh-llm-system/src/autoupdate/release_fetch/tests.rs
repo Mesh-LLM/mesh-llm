@@ -663,6 +663,30 @@ fn test_collect_bundle_files_rejects_product_v2_without_manifest() {
 }
 
 #[test]
+fn test_collect_bundle_files_preserves_plugins_for_the_older_host() {
+    // An explicit downgrade must retain the archives the selected host needs.
+    // This only stages its bundle; it does not install a plugin into the store.
+    let dir = temp_dir("self-update-legacy-plugins-dir");
+    std::fs::create_dir_all(dir.join("native-runtimes").join("runtime")).unwrap();
+    std::fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::fs::write(dir.join(mesh_binary_name()), b"binary").unwrap();
+    std::fs::write(dir.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+    std::fs::write(
+        dir.join("plugins").join("capsules-0.1.4.tar.gz"),
+        b"archive",
+    )
+    .unwrap();
+
+    let staged = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap();
+    assert!(
+        staged.iter().any(|name| name == "plugins"),
+        "the selected older host needs its bundled archives: {staged:?}"
+    );
+    assert_eq!(staged.first(), Some(&mesh_binary_name()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn test_collect_bundle_files_rejects_unexpected_directory() {
     let dir = temp_dir("self-update-unexpected-dir");
     std::fs::create_dir_all(dir.join("surprise")).unwrap();

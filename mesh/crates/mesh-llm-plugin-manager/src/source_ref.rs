@@ -127,6 +127,28 @@ impl fmt::Display for PluginVersion {
     }
 }
 
+/// Whether the release `candidate` is strictly newer than `installed`,
+/// comparing dotted numeric segments with an optional `v` prefix on either.
+/// A version that cannot be parsed is never newer, so an odd tag never
+/// masquerades as an update.
+pub fn version_string_newer(candidate: &str, installed: &str) -> bool {
+    let (Some(candidate), Some(installed)) =
+        (numeric_segments(candidate), numeric_segments(installed))
+    else {
+        return false;
+    };
+    candidate > installed
+}
+
+fn numeric_segments(version: &str) -> Option<Vec<u64>> {
+    let trimmed = version.trim().trim_start_matches('v');
+    let segments: Option<Vec<u64>> = trimmed
+        .split('.')
+        .map(|segment| segment.parse::<u64>().ok())
+        .collect();
+    segments.filter(|segments| !segments.is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRefParseError {
     input: String,

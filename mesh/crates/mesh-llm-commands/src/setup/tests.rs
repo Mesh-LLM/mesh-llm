@@ -36,7 +36,7 @@ fn interactive_unix_enter_accepts_default_yes_service_prompt() {
     };
     let mut prompter = FakePrompter::with_replies([None]);
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.runtime, SetupRuntimePlan::InstallAndPrune);
     assert_eq!(plan.service, SetupServicePlan::Install);
@@ -61,7 +61,7 @@ fn interactive_unix_explicit_no_skips_service_prompt() {
     };
     let mut prompter = FakePrompter::with_replies([Some(false)]);
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Skip);
     assert_eq!(
@@ -83,7 +83,7 @@ fn non_interactive_unix_never_prompts_and_prints_service_guidance() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::PrintGuidance);
     assert_eq!(
@@ -113,7 +113,7 @@ fn service_flag_installs_service_without_prompt() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Install);
     assert!(prompter.prompts.is_empty());
@@ -131,7 +131,7 @@ fn no_service_flag_skips_service_without_prompt() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Skip);
     assert!(prompter.prompts.is_empty());
@@ -149,7 +149,7 @@ fn windows_service_flag_plans_the_service_install() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Install);
     assert!(prompter.prompts.is_empty());
@@ -163,7 +163,7 @@ fn windows_interactive_setup_offers_the_service() {
     };
     let mut prompter = FakePrompter::with_replies([Some(true)]);
 
-    let plan = plan_setup(SetupOptions::default(), environment, &mut prompter)
+    let plan = plan_setup(&SetupOptions::default(), &environment, &mut prompter)
         .expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Install);
@@ -183,7 +183,7 @@ fn skip_runtime_omits_install_and_prune_steps() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.runtime, SetupRuntimePlan::Skip);
     assert_eq!(plan.core_steps, vec![SetupStep::InstallService]);
@@ -201,7 +201,7 @@ fn yes_skips_core_prompts_and_github_star_prompt() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Install);
     assert_eq!(
@@ -224,7 +224,7 @@ fn yes_and_no_service_keeps_explicit_service_skip_without_prompt() {
     };
     let mut prompter = FakePrompter::default();
 
-    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
+    let plan = plan_setup(&options, &environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.service, SetupServicePlan::Skip);
     assert_eq!(

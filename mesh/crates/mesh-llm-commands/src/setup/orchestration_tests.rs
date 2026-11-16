@@ -82,3 +82,88 @@ async fn run_setup_service_failure_is_core_fatal_and_skips_github() {
     assert_eq!(actions.steps, vec![SetupStep::InstallService]);
     assert!(actions.github.is_empty());
 }
+
+// Bootstrap scripts replace the host and then run `mesh-llm setup`, so setup
+// owes installed plugins the same check and repairs `mesh-llm update` runs.
+// It must run on every setup, after core steps and before the optional
+// plugin phase, whatever the plugin flags say.
+#[tokio::test]
+async fn run_setup_checks_installed_plugins_after_core_steps_and_before_the_optional_phase() {
+    for skip_plugin_install in [false, true] {
+        let options = SetupOptions {
+            no_interactive: true,
+            skip_plugin_install,
+            ..SetupOptions::default()
+        };
+        let environment = SetupEnvironment {
+            platform: SetupPlatform::Linux,
+            interactive: false,
+        };
+        let mut prompter = FakePrompter::default();
+        let mut actions = RecordingActions::default();
+
+        run_setup(options, environment, &mut prompter, &mut actions)
+            .await
+            .expect("setup should succeed");
+
+        let checks = actions
+            .order
+            .iter()
+            .filter(|action| **action == "plugin-check")
+            .count();
+        assert_eq!(checks, 1, "skip_plugin_install={skip_plugin_install}");
+        let check = actions.order.iter().position(|a| *a == "plugin-check");
+        let install = actions.order.iter().position(|a| *a == "plugin-install");
+        let last_step = actions.order.iter().rposition(|a| *a == "step");
+        assert!(last_step < check && check < install, "{:?}", actions.order);
+    }
+}
+
+#[tokio::test]
+async fn run_setup_does_not_check_plugins_when_core_setup_fails() {
+    let options = SetupOptions {
+        no_interactive: true,
+        ..SetupOptions::default()
+    };
+    let environment = SetupEnvironment {
+        platform: SetupPlatform::Linux,
+        interactive: false,
+    };
+    let mut prompter = FakePrompter::default();
+    let mut actions = RecordingActions::failing_on(SetupStep::InstallRuntime);
+
+    run_setup(options, environment, &mut prompter, &mut actions)
+        .await
+        .expect_err("core failure is fatal");
+
+    assert!(!actions.order.contains(&"plugin-check"));
+}
+
+// The host is already replaced when setup runs, so an error from the plugin
+// check is reported and setup carries on to the optional phase.
+#[tokio::test]
+async fn run_setup_continues_when_the_plugin_check_errors() {
+    let options = SetupOptions {
+        no_interactive: true,
+        ..SetupOptions::default()
+    };
+    let environment = SetupEnvironment {
+        platform: SetupPlatform::Linux,
+        interactive: false,
+    };
+    let mut prompter = FakePrompter::default();
+    let mut actions = RecordingActions::default();
+    actions.plugin_check_fails = true;
+
+    run_setup(options, environment, &mut prompter, &mut actions)
+        .await
+        .expect("a failed plugin check must not fail setup");
+
+    assert!(actions.order.contains(&"plugin-check"));
+    assert!(
+        actions.order.contains(&"plugin-install"),
+        "{:?}",
+        actions.order
+    );
+    assert_eq!(actions.github.len(), 1);
+}
