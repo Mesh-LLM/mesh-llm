@@ -161,12 +161,17 @@ impl LinkerFixture {
         let binary = directory.join("build-script.exe");
         fs::write(&old, "cached attempt").unwrap();
         fs::write(&binary, "compiler output").unwrap();
+        let just = std::env::split_paths(&std::env::var_os("PATH").expect("Windows tool PATH"))
+            .map(|path| path.join("just.exe"))
+            .find(|path| path.is_file())
+            .expect("existing Windows automation preparation must provide Just");
         let invoke = format!(
-            "& just --justfile {} ci-reset-linker-traces",
+            "& {} --justfile {} ci-reset-linker-traces",
+            quote(just.to_str().unwrap()),
             quote(self.root.join("Justfile").to_str().unwrap())
         );
         let body = format!(
-            "$ErrorActionPreference='Stop'; $env:MESH_LLM_AUTOMATION_BIN={}; {invoke}; if ($LASTEXITCODE -ne 0) {{ throw 'trace reset failed' }}; [IO.File]::WriteAllText({},'current attempt'); Remove-Item Env:MESH_LLM_AUTOMATION_BIN; {invoke}; if ($LASTEXITCODE -eq 0) {{ throw 'missing helper must fail' }}; exit 0",
+            "$ErrorActionPreference='Stop'; $env:PATHEXT='.COM;.EXE;.BAT;.CMD'; $env:MESH_LLM_AUTOMATION_BIN={}; {invoke}; if ($LASTEXITCODE -ne 0) {{ throw 'trace reset failed' }}; [IO.File]::WriteAllText({},'current attempt'); Remove-Item Env:MESH_LLM_AUTOMATION_BIN; {invoke}; if ($LASTEXITCODE -eq 0) {{ throw 'missing helper must fail' }}; exit 0",
             quote(self.helper.to_str().unwrap()),
             quote(fresh.to_str().unwrap())
         );
