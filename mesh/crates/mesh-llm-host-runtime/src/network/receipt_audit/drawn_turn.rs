@@ -289,7 +289,7 @@ impl Runner for AuditRunner {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .audited(job.turn.asked.host, &job.turn.asked.model, now_ms());
         }
-        super::enforcement::conclude_for(&job.turn.node, &subject, verdict, Some(&job.runtime));
+        job.turn.conclude(&subject, verdict, Some(&job.runtime));
     }
 
     fn idle(&mut self) {

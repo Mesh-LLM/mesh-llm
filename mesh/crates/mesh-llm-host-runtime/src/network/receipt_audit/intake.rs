@@ -48,7 +48,7 @@ use skippy_receipts::wire::{RECEIPT_VERSION, Receipt};
 use super::collector::{Collected, Reply};
 use super::commit_budget::COMMITS_PER_DAY;
 use super::drawn_turn::{AuditRunner, Job};
-use super::enforcement::{self, Subject};
+use super::enforcement::Subject;
 use super::peer_text::shown;
 use super::requested_model::{self, Catalog, Claim, RequestedModel};
 use super::verdict::Verdict;
@@ -384,11 +384,11 @@ fn settle(turn: WatchedTurn, subject: Subject, verdict: Verdict) -> Settling {
         ) => {
             let handle = runtime.clone();
             Some(runtime.spawn_blocking(move || {
-                enforcement::conclude_for(&turn.node, &subject, verdict, Some(&handle));
+                turn.conclude(&subject, verdict, Some(&handle));
             }))
         }
         (_, runtime) => {
-            enforcement::conclude_for(&turn.node, &subject, verdict, runtime.as_ref());
+            turn.conclude(&subject, verdict, runtime.as_ref());
             None
         }
     }
@@ -675,6 +675,7 @@ mod tests {
         let watched = |asked: Asked| WatchedTurn {
             node: node.clone(),
             asked,
+            verdict: None,
         };
         let host = asked().host;
         // what says nothing about the peer is logged, and that is all
@@ -914,6 +915,7 @@ mod tests {
         let watched = || WatchedTurn {
             node: node.clone(),
             asked: asked(),
+            verdict: None,
         };
         let counting = || {
             node.receipt_audits

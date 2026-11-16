@@ -42,8 +42,10 @@
 use std::sync::{Arc, Mutex};
 
 use iroh::EndpointId;
+use mesh_llm_plugin::openai_exchange::ReceiptAuditStatus;
 use skippy_receipts::sampler_request::RequestedSampling;
 use skippy_receipts::vrf;
+use tokio::sync::oneshot;
 
 use crate::mesh;
 use chat_request::ChatRequest;
@@ -124,6 +126,22 @@ struct Asked {
 pub(crate) struct WatchedTurn {
     node: mesh::Node,
     asked: Asked,
+    verdict: Option<oneshot::Sender<ReceiptAuditStatus>>,
+}
+
+impl WatchedTurn {
+    fn conclude(
+        self,
+        subject: &enforcement::Subject,
+        verdict: verdict::Verdict,
+        runtime: Option<&tokio::runtime::Handle>,
+    ) {
+        let status = verdict.status();
+        enforcement::conclude_for(&self.node, subject, verdict, runtime);
+        if let Some(sender) = self.verdict {
+            let _ = sender.send(status);
+        }
+    }
 }
 
 /// What forwarding a watched request needs: the request naming this node's
@@ -133,6 +151,13 @@ pub(crate) struct Watch {
     pub(crate) request: Vec<u8>,
     pub(crate) receipt_id: String,
     pub(crate) observer: Arc<dyn skippy_inference_api::wire_bytes::WireBytesObserver>,
+    /// Present only when the exchange lifecycle needs an authoritative verdict.
+    pub(crate) verdict: Option<oneshot::Receiver<ReceiptAuditStatus>>,
+}
+
+/// A receipt requested with the caller's key cannot prove a local audit.
+pub(crate) fn can_watch_with_host_key(request: &[u8]) -> bool {
+    matches!(ChatRequest::read(request), Ok(Some(_)))
 }
 
 /// When this node audits the turn `request` asks `host` for: the request
@@ -148,12 +173,22 @@ pub(crate) async fn watch(
     host: EndpointId,
     request: &[u8],
     tier: bool,
+    require_verdict: bool,
 ) -> Result<Option<Watch>, String> {
     if !crate::network::request_trust::audits_turn(node, request).await {
-        return Ok(None);
+        return if require_verdict {
+            Err("this node cannot audit the selected attempt".into())
+        } else {
+            Ok(None)
+        };
     }
     let parsed = match ChatRequest::read(request) {
         Ok(Some(parsed)) => parsed,
+        Ok(None) if require_verdict => {
+            return Err(
+                "this request cannot carry a receipt bound to this node's audit key".into(),
+            );
+        }
         Ok(None) => return Ok(None),
         Err(why) if tier => return Err(why.to_owned()),
         Err(why) => {
@@ -178,6 +213,16 @@ pub(crate) async fn watch(
     // each attempt its own id, so no other turn, of this client or
     // another, holds it at the peer
     let receipt_id = uuid::Uuid::new_v4().hyphenated().to_string();
+    let rate = if require_verdict {
+        1.0
+    } else {
+        node.config_state
+            .lock()
+            .await
+            .config()
+            .receipts
+            .audit_rate()
+    };
     let asked = Asked {
         host,
         key,
@@ -190,22 +235,24 @@ pub(crate) async fn watch(
         shaped_answer: parsed.shaped_answer,
         advertised,
         tier,
-        rate: node
-            .config_state
-            .lock()
-            .await
-            .config()
-            .receipts
-            .audit_rate(),
+        rate,
+    };
+    let (verdict, receiver) = if require_verdict {
+        let (sender, receiver) = oneshot::channel();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
     };
     let turn = WatchedTurn {
         node: node.clone(),
         asked,
+        verdict,
     };
     Ok(Some(Watch {
         request,
         receipt_id,
         observer: Arc::new(collector::Collector::new(turn)),
+        verdict: receiver,
     }))
 }
 
