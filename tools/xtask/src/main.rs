@@ -287,6 +287,10 @@ fn run() -> DynResult<()> {
                 cli::RepositoryCommand::TestAllCoverage => {
                     repo_consistency::check_test_all_coverage_command(root)
                 }
+                cli::RepositoryCommand::RetiredNoConsolePrint => {
+                    println!("no-console-print gate retired; nothing to check");
+                    Ok(())
+                }
             }
         }
     }

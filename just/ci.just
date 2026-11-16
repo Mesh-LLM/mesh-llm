@@ -66,6 +66,10 @@ automation-run *ARGS:
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
 
+# Retired gate. The main-pinned Quality slice still calls it until this merges.
+ci-legacy-contracts:
+    @echo "ci-legacy-contracts retired; nothing to run"
+
 # Shellcheck the explicitly supplied changed shell scripts.
 ci-shellcheck *scripts:
     shellcheck {{ scripts }}

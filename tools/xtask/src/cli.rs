@@ -223,6 +223,8 @@ pub(crate) enum RepositoryCommand<'a> {
     CiCrateLists,
     PublishCrates,
     TestAllCoverage,
+    /// Retired gate; accepted until the main-pinned Quality lane stops calling it.
+    RetiredNoConsolePrint,
 }
 
 impl<'a> Cli<'a> {
@@ -511,6 +513,9 @@ impl<'a> Cli<'a> {
                 if domain == "repo-consistency" && scope == "test-all-rust-crate-coverage" =>
             {
                 CliCommand::Repository(RepositoryCommand::TestAllCoverage)
+            }
+            [domain, scope] if domain == "repo-consistency" && scope == "no-console-print" => {
+                CliCommand::Repository(RepositoryCommand::RetiredNoConsolePrint)
             }
             [domain, scope, rest @ ..] if domain == "ci" && scope == "plan" => {
                 CliCommand::CiPlan(rest)

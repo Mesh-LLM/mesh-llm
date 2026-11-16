@@ -135,6 +135,7 @@
       "ci-automation-contracts",
       "ci-controller-bootstrap",
       "ci-crate-lists",
+      "ci-legacy-contracts",
       "ci-sccache-seed-build",
       "ci-shellcheck",
       "ci-snapshot-promotion-contracts",
