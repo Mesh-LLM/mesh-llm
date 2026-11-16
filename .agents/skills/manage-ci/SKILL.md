@@ -374,7 +374,8 @@ retired parser behavior, and source review still owns semantic emulation.
   `mesh/scripts/build-windows.ps1`. Its tests require `platform-windows`
   ownership for `tools/xtask/src/native_policy/windows_linker_tests.rs` and
   `tools/xtask/src/ci_validation/windows_linker_native.rs`, so their changes
-  select the Windows unit row. Land missing entries in the protected catalog
+  select the Windows unit row for ready PRs. Draft PRs keep row matrices empty
+  unless all rows are forced. Land missing entries in the protected catalog
   before the dependent implementation. Documenting these requirements does not
   activate routing or relax the catalog comparison.
 - Supported profiles are semantic and closed: draft PR, ready PR, exhaustive

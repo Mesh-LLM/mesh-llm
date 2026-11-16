@@ -2001,7 +2001,8 @@ ownership for `scripts/cargo-linker.cmd`,
 `mesh/scripts/build-windows.ps1`. The test paths
 `tools/xtask/src/native_policy/windows_linker_tests.rs` and
 `tools/xtask/src/ci_validation/windows_linker_native.rs` require
-`platform-windows` ownership to select the Windows unit row. Land missing
+`platform-windows` ownership to select the Windows unit row for ready PRs.
+Draft PRs keep row matrices empty unless all rows are forced. Land missing
 entries in the protected catalog before the dependent implementation;
 documenting these requirements does not activate routing or bypass the catalog
 comparison. The gate qualifies only a planner-selected Windows unit row; an
