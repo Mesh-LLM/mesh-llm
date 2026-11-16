@@ -187,6 +187,59 @@ PYEOF
   CTX=$((131072*PROBE_CONVERSATIONS))
   run_engine llama 120 "$W/repo/.deps/agentx-llama-build/bin/llama-server" --model "$MODEL" --alias m --host 127.0.0.1 --port $((PORT+1)) --parallel "$PROBE_CONVERSATIONS" --batch-size 2048 --ubatch-size 512 --n-gpu-layers 99 --cache-type-k f16 --cache-type-v f16 --flash-attn on --jinja --chat-template-kwargs '{"enable_thinking":false}' --ctx-size "$CTX" --cache-ram 8192 --no-kv-unified --threads "$THREADS" --threads-batch "$THREADS"
   run_engine skippy 180 "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$((PORT+1))" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers "$NGL" --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR"
+  # ---- decode profile: streaming pass with per-token timestamps ----
+  cat > "$W/profile.py" <<'PYEOF'
+import json, sys, time, urllib.request
+PORT, NCONV, MAXTOK = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+def convo(i):
+    filler = f"Session {i} stable context block. " * 220
+    return [{"role":"system","content":"You are a helpful assistant."},
+            {"role":"user","content":filler + f" Q{i}: write a vivid paragraph about the ocean."}]
+def profile_one(i):
+    body = json.dumps({"model":"m","messages":convo(i),"max_tokens":MAXTOK,"temperature":0,"stream":True}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions",data=body,headers={"Content-Type":"application/json"})
+    stamps = []
+    t0 = time.time()
+    r = urllib.request.urlopen(req, timeout=600)
+    for line in r:
+        if not line.startswith(b"data: "): continue
+        payload = line[6:].strip()
+        if payload == b"[DONE]": break
+        try: chunk = json.loads(payload)
+        except Exception: continue
+        delta = chunk.get("choices",[{}])[0].get("delta",{})
+        if delta.get("content"): stamps.append(time.time())
+    ttft = stamps[0]-t0 if stamps else -1
+    itls = [b-a for a,b in zip(stamps, stamps[1:])] if len(stamps)>1 else []
+    return {"conv":i,"ttft_s":round(ttft,4),"tokens":len(stamps),
+            "itl_ms_p50":round(sorted(itls)[len(itls)//2]*1000,2) if itls else -1,
+            "itl_ms_mean":round(sum(itls)/len(itls)*1000,2) if itls else -1,
+            "tok_s":round(len(stamps)/(stamps[-1]-t0),2) if len(stamps)>1 else -1}
+import concurrent.futures
+for nconc in ([1] if NCONV==1 else [1, NCONV]):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=nconc) as ex:
+        results = list(ex.map(profile_one, range(nconc)))
+    tok_s = sum(r["tok_s"] for r in results if r["tok_s"]>0)
+    itl = [r["itl_ms_p50"] for r in results if r["itl_ms_p50"]>0]
+    line = {"concurrency":nconc,"aggregate_tok_s":round(tok_s,1),
+            "itl_p50_ms":round(sum(itl)/len(itl),2) if itl else -1,
+            "per_conv":results}
+    print("PROFILE " + json.dumps(line), flush=True)
+PYEOF
+  PORT=$((PORT+1))
+  "$W/repo/.deps/agentx-llama-build/bin/llama-server" --model "$MODEL" --alias m --host 127.0.0.1 --port $PORT --parallel 4 --batch-size 2048 --ubatch-size 512 --n-gpu-layers 99 --cache-type-k f16 --cache-type-v f16 --flash-attn on --jinja --chat-template-kwargs '{"enable_thinking":false}' --ctx-size 524288 --cache-ram 8192 --no-kv-unified --threads "$THREADS" --threads-batch "$THREADS" > "$W/serve-llama-prof.log" 2>&1 &
+  LP=$!
+  for i in $(seq 1 120); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
+  echo "-- llama profile:"
+  python3 "$W/profile.py" "$PORT" "$PROBE_CONVERSATIONS" 256 || true
+  kill $LP 2>/dev/null || true; sleep 8
+  PORT=$((PORT+1))
+  "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch 20 --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-prof.log" 2>&1 &
+  SP=$!
+  for i in $(seq 1 180); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
+  echo "-- skippy profile:"
+  python3 "$W/profile.py" "$PORT" "$PROBE_CONVERSATIONS" 256 || true
+  kill $SP 2>/dev/null || true; sleep 8
   cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
   echo SMOKE_DONE
   exit 0
