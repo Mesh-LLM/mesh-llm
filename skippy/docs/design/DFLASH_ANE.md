@@ -9,18 +9,21 @@ continues on Metal. The host still selects tokens and manages speculative
 acceptance. Core ML's compute plan must confirm ANE placement of the costly
 operations; choosing `cpuAndNeuralEngine` alone does not establish that.
 
-The ANE package is an optional, versioned derivative of the existing pinned
-GGUF pair. Keep the GGUF drafter as the fallback. Never route another DFlash,
-DFlash2, or DSpark checkpoint to this package by architecture name alone.
+The ANE package is a versioned derivative of a paired GGUF draft and target.
+The converter derives the graph from the draft profile and rejects tensor
+operations it cannot represent. Explicit ANE placement is a load directive:
+conversion, compilation, or placement failure fails model loading.
 
 ## Implementation status
 
-The [Rust converter](../../evals/dflash_ane/README.md) builds the six-layer
+The [Rust converter](../../evals/dflash_ane/README.md) builds a profile-driven
 Core ML graph from the paired GGUFs, including stateful feature injection,
 block attention, an INT8 output head, and token readout. The macOS Skippy
-runtime invokes Core ML through Rust `objc2` bindings when the compiled package
-and target embeddings are supplied
-through `SKIPPY_DFLASH_ANE_MODEL` and `SKIPPY_DFLASH_ANE_EMBEDDINGS`.
+runtime invokes Core ML through Rust `objc2` bindings. A Mesh model can set
+`speculative.draft_device = "ANE"` with `speculative.strategy = "dflash"` to
+convert its local paired GGUF at load and require ANE. This currently requires
+a single-stage target GGUF. The original precompiled-package environment path
+remains available for standalone experiments.
 It verifies the source draft and embedding hashes before attaching. The
 compiled package is about 854 MiB and the fp16 embedding file about 970 MiB;
 these generated artifacts are not committed to the repository.

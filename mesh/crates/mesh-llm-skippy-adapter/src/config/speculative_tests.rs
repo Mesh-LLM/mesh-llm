@@ -769,7 +769,7 @@ model = "Qwen/Qwen3-0.6B:Q4_K_M"
 draft_model = {}
 draft_acceptance_threshold = 0.7
 draft_split_probability = 0.8
-draft_device = "CUDA0"
+draft_device = "ANE"
 draft_threads = 6
 draft_cache_type_k = "q8_0"
 draft_cache_type_v = "q4_0"
@@ -796,7 +796,7 @@ draft_cache_type_v = "q4_0"
     assert_eq!(args.draft_model_path.as_deref(), Some(draft_file.path()));
     assert_eq!(args.speculative.draft_acceptance_threshold, 0.7);
     assert_eq!(args.speculative.draft_split_probability, 0.8);
-    assert_eq!(args.speculative.draft_device.as_deref(), Some("CUDA0"));
+    assert_eq!(args.speculative.draft_device.as_deref(), Some("ANE"));
     assert_eq!(args.speculative.draft_threads, Some(6));
     assert_eq!(args.speculative.draft_cache_type_k, "q8_0");
     assert_eq!(args.speculative.draft_cache_type_v, "q4_0");
@@ -1252,7 +1252,7 @@ fn dropping_the_default_keeps_an_explicit_dflash_draft() {
     let (_directory, model_path) = default_dflash_target();
     let draft = temp_model_file_with_architecture("dflash");
     let config = format!(
-        "[defaults.speculative]\nstrategy = \"dflash\"\ndraft_model_path = {}\ndraft_max_tokens = 5",
+        "[defaults.speculative]\nstrategy = \"dflash\"\ndraft_model_path = {}\ndraft_max_tokens = 5\ndraft_device = \"ANE\"",
         toml_path(draft.path())
     );
     let mut resolved =
@@ -1263,6 +1263,7 @@ fn dropping_the_default_keeps_an_explicit_dflash_draft() {
     resolved.speculative.drop_default_dflash();
     let args = resolved.to_embedded_openai_args(0, false).unwrap();
     let dflash = args.speculative.dflash.expect("explicit DFlash plan");
+    assert_eq!(args.speculative.draft_device.as_deref(), Some("ANE"));
     assert_eq!(dflash.draft_model_path, draft.path());
     assert_eq!(dflash.max_draft_tokens, Some(5));
 }

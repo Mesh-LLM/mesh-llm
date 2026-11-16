@@ -316,7 +316,7 @@ configuration should use typed per-model `topology`; explicit `--model` and
 |---|---|---|---|---|---|---|
 | `speculative.strategy` | string | `auto` | both | model reload | wired | none |
 | `speculative.mode` | enum | `auto` (default), `disabled`, `draft` | both | model reload | wired (legacy draft-model and standalone N-gram compatibility path; prefer `strategy` for native-MTP and package selection) | none |
-| `speculative.draft_model` | path | unset | both | model reload | wired (resolves an explicit path/model reference) | none |
+| `speculative.draft_model` | path | unset | both | model reload | wired (resolves an explicit model identifier; local GGUF paths use the legacy `draft_model_path` key) | none |
 | `speculative.draft_hf_repo`<br>`speculative.draft_hf_file` | string | unset | both | model reload | wired (resolves a Hugging Face repo/file pair) | none |
 | `speculative.draft_selection_policy` | enum | `manual`, `auto` | both | model reload | wired (`manual` uses the configured source; `auto` may select a sibling draft/EAGLE GGUF) | none |
 | `speculative.pairing_fault` | enum | `warn_disable`, `fail-open`/`fail_open`, `fail-closed`/`fail_closed` | both | model reload | wired | none |
@@ -325,7 +325,7 @@ configuration should use typed per-model `topology`; explicit `--model` and
 | `speculative.draft_acceptance_threshold` | float | `0.0`–`1.0` | both | model reload | wired (minimum verified draft acceptance ratio; `0.0` keeps exact-token verification) | none |
 | `speculative.draft_split_probability` | float | `0.0`–`1.0` | both | model reload | wired (deterministic per-window probability for splitting draft verification spans) | none |
 | `speculative.draft_gpu_layers` | integer | planner or runtime default | both | model reload | wired (may propagate on the staged draft path) | none |
-| `speculative.draft_device`<br>`speculative.draft_threads` | string / integer | target device / runtime default | both | model reload | wired (overrides the draft model's native loader device and thread counts) | none |
+| `speculative.draft_device`<br>`speculative.draft_threads` | string / integer | target device / runtime default | both | model reload | wired (`draft_device = "ANE"` requires Apple Neural Engine for a single-stage plain DFlash GGUF pair and fails model loading if unavailable; other values select the native draft device) | none |
 | `speculative.draft_cache_type_k`<br>`speculative.draft_cache_type_v` | enum (dtype) | `auto`, `f32`, `f16` (default), `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1` | both | model reload | wired (draft-model KV cache dtypes) | none |
 | `speculative.ngram_min`<br>`speculative.ngram_max` | integer | required for a direct N-gram plan; `0 < min <= max` | both | model reload | wired | none |
 | `speculative.ngram_proposer` | enum | `cache` (default), `suffix` | both | model reload | wired | none |

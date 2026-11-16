@@ -2,6 +2,9 @@
 
 mod gguf;
 mod graph;
+#[cfg(test)]
+mod graph_tests;
+mod normalization;
 #[cfg(target_os = "macos")]
 mod placement;
 mod weights;

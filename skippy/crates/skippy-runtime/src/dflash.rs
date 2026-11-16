@@ -40,6 +40,9 @@ use draft_batch::{DraftBatch, target_feature_row};
 use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 #[cfg(target_os = "macos")]
 use skippy_ane::dflash::AneDraft;
+#[cfg(target_os = "macos")]
+#[path = "dflash/ane.rs"]
+mod ane;
 
 pub use context::DFlashHealth;
 pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
@@ -90,8 +93,11 @@ pub struct DFlashDraftOptions {
     pub max_draft_tokens: Option<usize>,
     /// Draft layers offloaded to the accelerator. Defaults to the target's.
     pub n_gpu_layers: Option<i32>,
-    /// Backend device name for the draft. Defaults to the target's device.
+    /// Backend device name for the draft, or `ANE` to require Core ML conversion.
+    /// Defaults to the target's device.
     pub device: Option<String>,
+    /// Local target GGUF used to convert a draft when `device` is `ANE`.
+    pub ane_target_path: Option<std::path::PathBuf>,
 }
 
 /// Facts about an attached draft that callers use for policy and telemetry.
@@ -339,24 +345,7 @@ impl DFlashDraft {
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
         #[cfg(target_os = "macos")]
-        if std::env::var_os("SKIPPY_DFLASH_ANE_MODEL").is_some() {
-            if self.info.variant != DFlashVariant::DFlash {
-                bail!("ANE conversion is available only for plain DFlash drafts");
-            }
-            self.ane = AneDraft::from_env(
-                usize::try_from(self.lanes).context("negative ANE lane count")?,
-                self.n_vocab,
-                self.mask_token,
-                draft_path,
-            )?;
-            if self
-                .ane
-                .as_ref()
-                .is_some_and(|ane| self.info.max_draft_tokens > ane.max_proposals())
-            {
-                bail!("ANE DFlash package has fewer proposal rows than the configured draft limit");
-            }
-        }
+        ane::attach(self, options, config, draft_path)?;
         // The draft's model builder publishes whether its block attends
         // causally (a decoder contract that needs it sets the key even when
         // the file does not).
@@ -838,10 +827,19 @@ fn load_draft(
     lanes: i32,
 ) -> Result<LoadedDraft> {
     let path = path_to_cstring(path, "DFlash draft model path")?;
-    let device_name = options
-        .device
-        .as_deref()
-        .or(config.selected_backend_device.as_deref());
+    let ane_requested = options.device.as_deref() == Some("ANE");
+    #[cfg(not(target_os = "macos"))]
+    if ane_requested {
+        bail!("ANE DFlash requires macOS and Apple Neural Engine");
+    }
+    let device_name = if ane_requested {
+        None
+    } else {
+        options
+            .device
+            .as_deref()
+            .or(config.selected_backend_device.as_deref())
+    };
     let device_name = device_name
         .map(|name| CString::new(name).context("draft device name contains a NUL byte"))
         .transpose()?;
@@ -856,7 +854,7 @@ fn load_draft(
     let mut model_params: LlamaModelParams = unsafe { (api.model_default_params)() };
     model_params.n_gpu_layers = options.n_gpu_layers.unwrap_or(config.n_gpu_layers);
     #[cfg(target_os = "macos")]
-    if std::env::var_os("SKIPPY_DFLASH_ANE_MODEL").is_some() {
+    if ane_requested || std::env::var_os("SKIPPY_DFLASH_ANE_MODEL").is_some() {
         model_params.n_gpu_layers = 0;
     }
     if !devices.is_empty() {

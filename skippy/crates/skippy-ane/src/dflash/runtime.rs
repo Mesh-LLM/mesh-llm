@@ -42,13 +42,56 @@ struct PackageMetadata {
 pub struct AneDraft {
     coreml: CoreMlDraft,
     embeddings: File,
+    #[cfg(feature = "conversion")]
+    _package_dir: Option<tempfile::TempDir>,
     context: usize,
     profile: DFlashProfile,
     rows: usize,
     lanes: Vec<Lane>,
 }
 
+/// Local GGUF pair and Core ML graph dimensions for load-time conversion.
+#[cfg(feature = "conversion")]
+pub struct PairedGguf<'a> {
+    pub draft: &'a Path,
+    pub target: &'a Path,
+    pub context: usize,
+    pub rows: usize,
+}
+
 impl AneDraft {
+    /// Converts one paired GGUF into a private package and loads it on ANE.
+    #[cfg(feature = "conversion")]
+    pub fn from_pair(
+        lanes: usize,
+        n_vocab: usize,
+        mask_token: i32,
+        pair: PairedGguf<'_>,
+    ) -> Result<Self> {
+        let package_dir = tempfile::tempdir().context("create ANE draft package directory")?;
+        let model = package_dir.path().join("draft.mlpackage");
+        let embeddings = package_dir.path().join("embeddings.f16");
+        super::conversion::convert(&super::conversion::ConversionOptions {
+            draft: pair.draft.to_path_buf(),
+            target: pair.target.to_path_buf(),
+            out: model.clone(),
+            embeddings_out: embeddings.clone(),
+            context: pair.context,
+            rows: pair.rows,
+        })?;
+        let compiled = model.with_extension("mlmodelc");
+        let mut draft = Self::open(
+            &compiled,
+            &embeddings,
+            lanes,
+            n_vocab,
+            mask_token,
+            pair.draft,
+        )?;
+        draft._package_dir = Some(package_dir);
+        Ok(draft)
+    }
+
     pub fn from_env(
         lanes: usize,
         n_vocab: usize,
@@ -60,6 +103,25 @@ impl AneDraft {
         };
         let embeddings = std::env::var("SKIPPY_DFLASH_ANE_EMBEDDINGS")
             .context("SKIPPY_DFLASH_ANE_EMBEDDINGS must name the paired target embeddings")?;
+        Self::open(
+            Path::new(&model),
+            Path::new(&embeddings),
+            lanes,
+            n_vocab,
+            mask_token,
+            draft_path,
+        )
+        .map(Some)
+    }
+
+    fn open(
+        model: &Path,
+        embeddings_path: &Path,
+        lanes: usize,
+        n_vocab: usize,
+        mask_token: i32,
+        draft_path: &Path,
+    ) -> Result<Self> {
         let metadata_path = Path::new(&model).with_extension("json");
         let metadata: PackageMetadata = serde_json::from_slice(
             &std::fs::read(&metadata_path)
@@ -86,18 +148,20 @@ impl AneDraft {
         if file_sha256(draft_path)? != metadata.draft_sha256 {
             bail!("ANE DFlash package was generated from a different draft GGUF");
         }
-        if file_sha256(Path::new(&embeddings))? != metadata.embeddings_sha256 {
+        if file_sha256(embeddings_path)? != metadata.embeddings_sha256 {
             bail!("ANE DFlash target embeddings do not match the package metadata");
         }
-        let embeddings = File::open(&embeddings)
-            .with_context(|| format!("open ANE target embeddings {embeddings}"))?;
+        let embeddings = File::open(embeddings_path)
+            .with_context(|| format!("open ANE target embeddings {}", embeddings_path.display()))?;
         if embeddings.metadata()?.len() != (profile.vocabulary * profile.width * 2) as u64 {
             bail!("ANE target embeddings have the wrong size");
         }
-        let coreml = CoreMlDraft::open(Path::new(&model), lanes, context, rows, &profile)?;
-        Ok(Some(Self {
+        let coreml = CoreMlDraft::open(model, lanes, context, rows, &profile)?;
+        Ok(Self {
             coreml,
             embeddings,
+            #[cfg(feature = "conversion")]
+            _package_dir: None,
             context,
             profile,
             rows,
@@ -107,7 +171,7 @@ impl AneDraft {
                     slots: vec![None; context],
                 })
                 .collect(),
-        }))
+        })
     }
 
     pub fn max_proposals(&self) -> usize {

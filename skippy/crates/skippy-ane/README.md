@@ -1,8 +1,9 @@
 # skippy-ane
 
 `skippy-ane` owns Skippy's integration with Apple Neural Engine through Core ML.
-Its first workload is the paired Qwen3.6 DFlash drafter. The crate owns the
-workload's model conversion, Core ML execution, and hardware placement check.
+Its first workload is a paired DFlash drafter, initially validated with Qwen3.6.
+The crate owns the workload's model conversion, Core ML execution, and hardware
+placement check.
 `skippy-runtime` owns speculative decoding, target execution, and verification.
 This crate has no dependency on MeshLLM or Skippy runtime crates.
 
@@ -29,11 +30,18 @@ flowchart LR
 The `dflash` module keeps its converter and runtime together because they share
 a model profile and package contract. The converter derives layer dimensions,
 feature taps, vocabulary, RoPE, and decoder behavior from the paired GGUFs.
-It generates standard and Laguna DFlash graphs; conversion rejects draft
+It generates standard and Laguna DFlash graphs, including optional attention
+and FFN post norms and per-layer output scaling. Conversion rejects draft
 tensors whose operations are not implemented by the Core ML graph. The
 compiled package records the profile and source hashes, and an explicit ANE
 request fails loading if they do not match. Packages produced before profile
 format version 2 must be regenerated.
+
+Mesh can request conversion at model load with
+`speculative.draft_device = "ANE"` and a DFlash speculative strategy. The
+private compiled package stays alive for the loaded model. Conversion or
+hardware placement failure fails that model load; this path currently needs a
+single-stage target GGUF.
 
 `dflash::conversion` is available as
 a Rust library and through `skippy-ane-convert`; `dflash::AneDraft` is the macOS

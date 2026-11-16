@@ -9,3 +9,5 @@ mod runtime;
 
 #[cfg(target_os = "macos")]
 pub use runtime::AneDraft;
+#[cfg(all(target_os = "macos", feature = "conversion"))]
+pub use runtime::PairedGguf;

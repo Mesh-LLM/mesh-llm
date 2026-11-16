@@ -102,6 +102,9 @@ fn validate_draft_tensors(draft: &GgufFile, profile: &DFlashProfile) -> Result<(
             "attn_q_norm.weight",
             "attn_k_norm.weight",
             "ffn_norm.weight",
+            "post_attention_norm.weight",
+            "post_ffw_norm.weight",
+            "layer_output_scale.weight",
         ] {
             allowed.insert(format!("blk.{index}.{suffix}"));
         }

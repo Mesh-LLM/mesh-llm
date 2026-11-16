@@ -843,7 +843,17 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.draft_gpu_layers"),
             ConfigValueSchema::Integer,
         ),
-        basic_setting(&format!("{prefix}.draft_device"), ConfigValueSchema::String),
+        {
+            let mut setting = basic_setting(
+                &format!("{prefix}.draft_device"),
+                one_of([ConfigValueSchema::String, string_enum(["ANE"])]),
+            );
+            setting.description = Some(
+                "Native draft device, or ANE to require Apple Neural Engine for a plain DFlash GGUF pair"
+                    .to_string(),
+            );
+            setting
+        },
         basic_setting(
             &format!("{prefix}.draft_threads"),
             ConfigValueSchema::Integer,

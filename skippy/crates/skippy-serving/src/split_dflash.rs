@@ -243,6 +243,9 @@ pub(crate) fn attach_split_dflash(
     overrides: &RuntimeLaunchOverrides,
     plan: &SplitDFlashStage,
 ) -> Result<Option<SplitDFlashAttached>> {
+    if plan.draft_device.as_deref() == Some("ANE") {
+        anyhow::bail!("ANE DFlash currently requires a single-stage target GGUF");
+    }
     if config.downstream.is_none() {
         let Some(path) = plan.draft_model_path.as_deref() else {
             return Ok(None);
@@ -260,6 +263,7 @@ pub(crate) fn attach_split_dflash(
             max_draft_tokens: plan.max_draft_tokens,
             n_gpu_layers: plan.draft_n_gpu_layers,
             device: draft_device_on_this_node(plan.draft_device.as_deref()),
+            ane_target_path: None,
         };
         let info = runtime
             .model

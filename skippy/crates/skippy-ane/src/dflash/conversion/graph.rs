@@ -3,6 +3,7 @@
 use anyhow::Result;
 use mil_spec::{Block, DType, Feature, ModelMeta, NVT, TensorType, ValueType, encode_model};
 
+use super::normalization::rms;
 use super::weights::Weights;
 use crate::dflash::profile::{DFlashProfile, DecoderContract, HiddenActivation};
 
@@ -19,6 +20,9 @@ struct Layer {
     k_norm: String,
     ffn_norm: String,
     attn_gate: Option<(String, usize)>,
+    attn_post_norm: Option<String>,
+    ffn_post_norm: Option<String>,
+    output_scale: Option<String>,
 }
 
 struct Fusion<'a> {
@@ -275,6 +279,24 @@ fn layer_weights(
         } else {
             None
         },
+        attn_post_norm: weights.optional_draft_vector(
+            b,
+            &format!("{prefix}post_attention_norm.weight"),
+            width,
+            &[1, width as i64, 1, 1],
+        )?,
+        ffn_post_norm: weights.optional_draft_vector(
+            b,
+            &format!("{prefix}post_ffw_norm.weight"),
+            width,
+            &[1, width as i64, 1, 1],
+        )?,
+        output_scale: weights.optional_draft_vector(
+            b,
+            &format!("{prefix}layer_output_scale.weight"),
+            1,
+            &[1],
+        )?,
     })
 }
 
@@ -464,6 +486,19 @@ fn draft_block(
             rows,
         };
         let projected = draft_attention(b, &x, layer, &history[index], &geometry, &p);
+        let projected = if let Some(weight) = &layer.attn_post_norm {
+            rms(
+                b,
+                &projected,
+                weight,
+                &[1, width as i64, 1, rows],
+                1,
+                &format!("{p}_attn_post_norm"),
+                profile.rms_epsilon,
+            )
+        } else {
+            projected
+        };
         x = b.add(
             &x,
             &projected,
@@ -471,12 +506,33 @@ fn draft_block(
             &format!("{p}_attn_residual"),
         );
         let down = draft_ffn(b, &x, layer, rows, &p, profile, index);
+        let down = if let Some(weight) = &layer.ffn_post_norm {
+            rms(
+                b,
+                &down,
+                weight,
+                &[1, width as i64, 1, rows],
+                1,
+                &format!("{p}_ffn_post_norm"),
+                profile.rms_epsilon,
+            )
+        } else {
+            down
+        };
         x = b.add(
             &x,
             &down,
             &[1, width as i64, 1, rows],
             &format!("{p}_ffn_residual"),
         );
+        if let Some(weight) = &layer.output_scale {
+            x = b.mul(
+                &x,
+                weight,
+                &[1, width as i64, 1, rows],
+                &format!("{p}_output_scaled"),
+            );
+        }
     }
     x
 }
@@ -897,42 +953,6 @@ fn rope(b: &mut Block, x: &str, cos: &str, sin: &str, shape: RopeShape, name: &s
             &format!("{name}_full"),
         )
     }
-}
-
-fn rms(
-    b: &mut Block,
-    x: &str,
-    weight: &str,
-    shape: &[i64],
-    axis: i32,
-    name: &str,
-    epsilon_value: f32,
-) -> String {
-    let mut reduced = shape.to_vec();
-    reduced[axis as usize] = 1;
-    let absolute = b.abs(x, shape, &format!("{name}_abs"));
-    let maximum = b.reduce_max(&absolute, &[axis], true, &reduced, &format!("{name}_max"));
-    let inverse = b.inverse(&maximum, 1e-4, &reduced, &format!("{name}_inverse"));
-    let scaled = b.mul(x, &inverse, shape, &format!("{name}_scaled"));
-    let square = b.mul(&scaled, &scaled, shape, &format!("{name}_square"));
-    let mean = b.reduce_mean(&square, &[axis], true, &reduced, &format!("{name}_mean"));
-    let epsilon = b.konst_f16(&format!("{name}_epsilon"), epsilon_value);
-    let scaled_inverse = b.mul(
-        &inverse,
-        &epsilon,
-        &reduced,
-        &format!("{name}_scaled_inverse"),
-    );
-    let epsilon = b.mul(
-        &inverse,
-        &scaled_inverse,
-        &reduced,
-        &format!("{name}_scaled_epsilon"),
-    );
-    let denominator = b.add(&mean, &epsilon, &reduced, &format!("{name}_denominator"));
-    let reciprocal = b.rsqrt(&denominator, 1e-7, &reduced, &format!("{name}_reciprocal"));
-    let normalized = b.mul(&scaled, &reciprocal, shape, &format!("{name}_normalized"));
-    b.mul(&normalized, weight, shape, name)
 }
 
 fn feature(name: &str, shape: &[i64], dtype: DType, is_state: bool) -> Feature {

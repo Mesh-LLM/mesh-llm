@@ -33,4 +33,4 @@ tokio = { version = "1", features = ["sync"] }
 tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-skippy-ane = { path = "../skippy-ane", version = "0.79.0", default-features = false }
+skippy-ane = { path = "../skippy-ane", version = "0.79.0" }

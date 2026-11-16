@@ -127,6 +127,20 @@ impl<'a> Weights<'a> {
         self.vector(graph, tensor, &values, shape)
     }
 
+    pub(super) fn optional_draft_vector(
+        &mut self,
+        graph: &mut Block,
+        tensor: &str,
+        width: usize,
+        shape: &[i64],
+    ) -> Result<Option<String>> {
+        if self.pair.draft.tensor(tensor).is_some() {
+            Ok(Some(self.draft_vector(graph, tensor, width, shape)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(super) fn draft_array(
         &mut self,
         graph: &mut Block,

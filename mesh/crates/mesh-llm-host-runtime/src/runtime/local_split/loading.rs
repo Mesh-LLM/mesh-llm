@@ -1089,6 +1089,9 @@ pub(super) async fn split_generation_load_settings_with<'a>(
     // Stage zero replaces this placeholder with its graph-observed output
     // boundary after the native runtime has been constructed.
     let mut embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    if resolved.speculative.decode.draft_device.as_deref() == Some("ANE") {
+        anyhow::bail!("ANE DFlash currently requires a single-stage target GGUF");
+    }
     let live_request_defaults = spec.node.live_request_defaults.clone();
     embedded_openai.live_defaults_scope = live_request_defaults.scope();
     let live_defaults_generation = live_request_defaults.track_model(
