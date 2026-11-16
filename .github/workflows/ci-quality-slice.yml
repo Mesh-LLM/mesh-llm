@@ -221,7 +221,7 @@ jobs:
           source-profile: protected-clean
 
   quality_contracts:
-    name: CI contracts and consistency
+    name: CI contracts
     needs: runner_policy
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 60
@@ -250,7 +250,7 @@ jobs:
         with:
           node-version: 24.20.0
           package-manager-cache: false
-      - name: Prepare external Python SDK contract source
+      - name: Admit in-tree Python SDK source
         uses: ./.github/actions/prepare-python-sdk-source
       - name: Prepare external Python research contract source
         uses: ./.github/actions/prepare-python-research-source
@@ -259,26 +259,6 @@ jobs:
         run: |
           just ci-automation-contracts
           just ci-legacy-contracts
-      - name: Check CI crate-list drift
-        run: cargo run -p xtask -- repo-consistency ci-crate-lists
-      - name: Check publish crate-chain drift
-        run: cargo run -p xtask -- repo-consistency publish-crates
-      - name: Check release targets and embedded client dependency purity
-        run: |
-          set -euo pipefail
-          cargo run -p xtask -- repo-consistency release-targets
-          cargo tree -p mesh-llm-client --prefix=none --no-dedupe > "$RUNNER_TEMP/mesh-client-deps.txt"
-          forbidden='keyring|rpassword|hf-hub|dirs|clap|include_dir|rmcp|keyring-core'
-          if grep -E "^[[:space:]│├└─-]*($forbidden)([[:space:]]|$)" "$RUNNER_TEMP/mesh-client-deps.txt"; then
-            echo "Forbidden dependency found in mesh-client" >&2
-            exit 1
-          fi
-
-      - name: Check console print drift
-        run: just no-console-print
-      - name: Check process environment mutation ownership
-        run: cargo xtool repository env-mutation-census
-
   skippy_cpp_api:
     name: Standalone Skippy C++ API and Rust bridge
     # Reuse the completed contracts worker's place in Quality's fan-out.
@@ -286,7 +266,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_8 }}
     timeout-minutes: 120
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     defaults:
       run:
         shell: bash

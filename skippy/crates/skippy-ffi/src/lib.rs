@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 79;
+pub const ABI_VERSION_PATCH: u32 = 80;
 
 // The facade constants are parsed without compiling; tie them to the generated
 // bindings' view of the native ABI version at compile time so a common.h bump
@@ -111,7 +111,7 @@ pub use model::{
 };
 pub use multimodal::{
     MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo, MtmdGenAudioType,
-    MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperBitmapWrapper, MtmdHelperDecodeBudget, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
     MtmdHelperGenAudioOutputMode, MtmdHelperGenAudioOutputType, MtmdHelperInitOpt, MtmdHelperVideo,
     MtmdHelperVideoInitParams, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
 };
@@ -163,19 +163,20 @@ pub use dynamic::{
     mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
     mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
     mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
-    mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
-    mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
-    mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
-    mtmd_input_chunk_get_tokens_image, mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type,
-    mtmd_input_chunks_free, mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size,
-    mtmd_tokenize, native_runtime_loaded, skippy_abi_features_optional,
-    skippy_apply_chat_template_json, skippy_asr_decode_audio, skippy_asr_model_free,
-    skippy_asr_model_info_v1, skippy_asr_model_open, skippy_asr_result_duration_seconds,
-    skippy_asr_result_free, skippy_asr_result_language, skippy_asr_result_segment_count,
-    skippy_asr_result_segment_v1, skippy_asr_samples_free, skippy_asr_transcribe,
-    skippy_backend_device_at, skippy_backend_device_count, skippy_clef_model_decision_metadata,
-    skippy_clef_model_free, skippy_clef_model_info_v1, skippy_clef_model_open, skippy_clef_plan,
-    skippy_clef_read, skippy_decode_batch_sampled, skippy_decode_step_frame_batch_sampled,
+    mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_decode_budget, mtmd_helper_get_n_pos,
+    mtmd_helper_get_n_tokens, mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default,
+    mtmd_helper_log_set, mtmd_helper_video_free, mtmd_init_from_file,
+    mtmd_input_chunk_get_n_tokens, mtmd_input_chunk_get_tokens_image,
+    mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type, mtmd_input_chunks_free,
+    mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size, mtmd_tokenize,
+    native_runtime_loaded, skippy_abi_features_optional, skippy_apply_chat_template_json,
+    skippy_asr_decode_audio, skippy_asr_model_free, skippy_asr_model_info_v1,
+    skippy_asr_model_open, skippy_asr_result_duration_seconds, skippy_asr_result_free,
+    skippy_asr_result_language, skippy_asr_result_segment_count, skippy_asr_result_segment_v1,
+    skippy_asr_samples_free, skippy_asr_transcribe, skippy_backend_device_at,
+    skippy_backend_device_count, skippy_clef_model_decision_metadata, skippy_clef_model_free,
+    skippy_clef_model_info_v1, skippy_clef_model_open, skippy_clef_plan, skippy_clef_read,
+    skippy_decode_batch_sampled, skippy_decode_step_frame_batch_sampled,
     skippy_decode_step_frame_sampled, skippy_decode_step_frame_sampled_mtp,
     skippy_decode_step_sampled, skippy_decode_step_sampled_mtp, skippy_decode_step_sampled_mtp_fn,
     skippy_detokenize, skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
@@ -232,12 +233,13 @@ pub use static_bindings::{
     mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
     mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
     mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
-    mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
-    mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
-    mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
-    mtmd_input_chunk_get_tokens_image, mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type,
-    mtmd_input_chunks_free, mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size,
-    mtmd_tokenize, skippy_abi_features, skippy_apply_chat_template_json, skippy_asr_decode_audio,
+    mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_decode_budget, mtmd_helper_get_n_pos,
+    mtmd_helper_get_n_tokens, mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default,
+    mtmd_helper_log_set, mtmd_helper_video_free, mtmd_init_from_file,
+    mtmd_input_chunk_get_n_tokens, mtmd_input_chunk_get_tokens_image,
+    mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type, mtmd_input_chunks_free,
+    mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size, mtmd_tokenize,
+    skippy_abi_features, skippy_apply_chat_template_json, skippy_asr_decode_audio,
     skippy_asr_model_free, skippy_asr_model_info_v1, skippy_asr_model_open,
     skippy_asr_result_duration_seconds, skippy_asr_result_free, skippy_asr_result_language,
     skippy_asr_result_segment_count, skippy_asr_result_segment_v1, skippy_asr_samples_free,

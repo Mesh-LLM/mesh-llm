@@ -274,6 +274,9 @@ fn owner_config(config: &ServingMembershipConfig) -> Result<crate::mesh::OwnerRu
         drain_timeout_secs: 30,
         drain_timeout_max_secs: 30,
         public_mesh: false,
+        // A membership serves one local GGUF and runs no stage loop, so it
+        // never fetches model bytes for a peer.
+        peer_model_downloads: false,
     })
 }
 

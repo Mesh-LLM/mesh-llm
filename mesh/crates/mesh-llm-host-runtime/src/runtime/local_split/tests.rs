@@ -26,6 +26,7 @@ mod activation_codec;
 mod capacity_budget;
 mod content_attestation;
 mod coordinator_takeover;
+mod peer_model_downloads;
 
 fn lifecycle_config() -> plugin::MeshConfig {
     toml::from_str(
@@ -1458,11 +1459,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
             let (request, resp) = match command {
-                skippy::StageControlCommand::Execute {
-                    request,
-                    requester: _,
-                    resp,
-                } => (request, resp),
+                skippy::StageControlCommand::Execute { request, resp, .. } => (request, resp),
                 skippy::StageControlCommand::ValidateLoad { resp, .. } => {
                     let _ = resp.send(None);
                     continue;

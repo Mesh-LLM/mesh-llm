@@ -120,7 +120,7 @@ impl ProgressPlan {
         Some(Self {
             adapter,
             model_id: route.model_id.clone(),
-            completion_id: format!("chatcmpl-moa-{}", short_hex_nanos()),
+            completion_id: format!("chatcmpl-virtual-{}", short_hex_nanos()),
             created_at: unix_secs(),
             lines: route.progress_lines.clone(),
         })
@@ -425,7 +425,7 @@ mod tests {
 
     fn route(progress_lines: Vec<String>) -> VirtualModelRoute {
         VirtualModelRoute {
-            plugin_name: "mesh-moa".into(),
+            plugin_name: "test-virtual-model".into(),
             model_id: "mesh".into(),
             handler: "chat".into(),
             input_modalities: vec!["text".into()],
@@ -499,7 +499,7 @@ mod tests {
             proxy::ResponseAdapter::OpenAiChatCompletionsStream,
             "Routing through mesh…\n",
             "mesh",
-            "chatcmpl-moa-abc",
+            "chatcmpl-virtual-abc",
             "msg_7",
             1,
         );
@@ -507,7 +507,7 @@ mod tests {
         let ProgressFrame::Chat(chunk) = frame else {
             panic!("chat-completions drips a chat chunk");
         };
-        assert_eq!(chunk["id"], "chatcmpl-moa-abc");
+        assert_eq!(chunk["id"], "chatcmpl-virtual-abc");
         assert_eq!(chunk["model"], "mesh");
         assert_eq!(
             chunk["choices"][0]["delta"]["reasoning_content"],
@@ -522,7 +522,7 @@ mod tests {
             proxy::ResponseAdapter::OpenAiResponsesStream,
             "Comparing responses…\n",
             "mesh",
-            "chatcmpl-moa-abc",
+            "chatcmpl-virtual-abc",
             "msg_7",
             3,
         );
@@ -543,7 +543,7 @@ mod tests {
             proxy::ResponseAdapter::AnthropicMessagesStream,
             "Routing through mesh…\n",
             "mesh",
-            "chatcmpl-moa-abc",
+            "chatcmpl-virtual-abc",
             "msg_7",
             1,
         );
@@ -559,9 +559,9 @@ mod tests {
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}}],
         });
 
-        align_committed_body(&mut body, "chatcmpl-moa-abc", 42);
+        align_committed_body(&mut body, "chatcmpl-virtual-abc", 42);
 
-        assert_eq!(body["id"], "chatcmpl-moa-abc");
+        assert_eq!(body["id"], "chatcmpl-virtual-abc");
         assert_eq!(body["created"], 42);
         assert_eq!(progress_item_id(42), "msg_42");
     }

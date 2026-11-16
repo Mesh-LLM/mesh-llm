@@ -4,6 +4,7 @@ pub(crate) use skippy_ffi::TensorRole;
 
 mod activation;
 mod capability_probe;
+mod chat_sampling_metadata;
 mod checkpoint;
 pub mod clef;
 mod config;

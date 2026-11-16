@@ -53,6 +53,23 @@ pub(super) fn format_analytics(
     }
 }
 
+pub(super) fn format_private(
+    command: &mesh_llm_cli::PrivateCommand,
+    assembly: &mut SummaryAssembly,
+) {
+    // Node ids and names identify machines, so they are not logged.
+    match command {
+        mesh_llm_cli::PrivateCommand::Add { .. } => assembly.command.push_str(" private add"),
+        mesh_llm_cli::PrivateCommand::Remove { .. } => {
+            assembly.command.push_str(" private remove");
+        }
+        mesh_llm_cli::PrivateCommand::List { json, .. } => {
+            assembly.command.push_str(" private list");
+            assembly.flag("json", *json);
+        }
+    }
+}
+
 pub(super) fn format_doctor(
     command: Option<&mesh_llm_cli::DoctorCommand>,
     json: bool,

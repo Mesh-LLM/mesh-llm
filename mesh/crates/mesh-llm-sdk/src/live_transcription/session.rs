@@ -5,14 +5,13 @@
 
 use super::{LiveTranscription, LiveTranscriptionEvent};
 use anyhow::{Context, Result};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 enum Command {
     Audio(Vec<i16>, oneshot::Sender<Result<()>>),
     FloatAudio(Vec<f32>, oneshot::Sender<Result<()>>),
     Commit(oneshot::Sender<Result<()>>),
     Stop(oneshot::Sender<Result<Vec<LiveTranscriptionEvent>>>),
-    Close(oneshot::Sender<()>),
 }
 
 /// A thread-safe live session with independent audio and event operations.
@@ -20,6 +19,7 @@ enum Command {
 pub struct LiveTranscriptionSession {
     commands: mpsc::Sender<Command>,
     events: Mutex<mpsc::Receiver<LiveTranscriptionEvent>>,
+    shutdown: watch::Sender<bool>,
 }
 
 impl LiveTranscriptionSession {
@@ -27,10 +27,20 @@ impl LiveTranscriptionSession {
     pub fn new(live: LiveTranscription) -> Self {
         let (commands, receiver) = mpsc::channel(32);
         let (events, inbound) = mpsc::channel(256);
-        tokio::spawn(run_session(live, receiver, events));
+        let (shutdown, mut closing) = watch::channel(false);
+        tokio::spawn(async move {
+            // Close must interrupt a blocked send or a stop waiting for its final
+            // transcript, rather than queue behind that operation.
+            tokio::select! {
+                biased;
+                _ = closing.changed() => {},
+                _ = run_session(live, receiver, events) => {},
+            }
+        });
         Self {
             commands,
             events: Mutex::new(inbound),
+            shutdown,
         }
     }
 
@@ -86,10 +96,8 @@ impl LiveTranscriptionSession {
 
     /// Close without waiting for a transcript. Calling this after closure is safe.
     pub async fn close(&self) {
-        let (reply, closed) = oneshot::channel();
-        if self.commands.send(Command::Close(reply)).await.is_ok() {
-            let _ = closed.await;
-        }
+        self.shutdown.send_replace(true);
+        self.commands.closed().await;
     }
 
     async fn send(&self, command: Command) -> Result<()> {
@@ -121,7 +129,6 @@ async fn run_session(
                     let _ = reply.send(result);
                     return;
                 }
-                Some(Command::Close(reply)) => { let _ = reply.send(()); break; }
                 None => break,
             },
             permit = events.reserve(), if pending.is_some() => match permit {
@@ -153,9 +160,11 @@ mod tests {
         let (input, inbound) = mpsc::channel(400);
         (
             LiveTranscription {
-                audio: LiveTranscriptionAudio { outbound },
+                audio: LiveTranscriptionAudio {
+                    outbound: crate::live_transcription::native::AudioTransport::Socket(outbound),
+                },
                 events: LiveTranscriptionEvents {
-                    inbound,
+                    inbound: crate::live_transcription::native::EventTransport::Socket(inbound),
                     paused_turn: None,
                 },
             },
@@ -279,5 +288,42 @@ mod tests {
         );
         assert!(writes.recv().await.is_none());
         session.close().await;
+    }
+
+    #[tokio::test]
+    async fn close_interrupts_a_blocked_send() {
+        let (live, mut writes, _input) = fake_live();
+        // Fill the transport before the binding's command pump attempts to send.
+        for _ in 0..32 {
+            live.commit().await.unwrap();
+        }
+        let session = LiveTranscriptionSession::new(live);
+        let mut sending = std::pin::pin!(session.send_audio(vec![1]));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(sending.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), session.close())
+            .await
+            .unwrap();
+        assert!(sending.await.is_err());
+        while writes.recv().await.is_some() {}
+    }
+
+    #[tokio::test]
+    async fn close_interrupts_a_stop_waiting_for_the_final_transcript() {
+        let (live, mut writes, _input) = fake_live();
+        let session = Arc::new(LiveTranscriptionSession::new(live));
+        let stopping = {
+            let session = session.clone();
+            tokio::spawn(async move { session.stop().await })
+        };
+        assert!(matches!(writes.recv().await, Some(Outbound::Event(_))));
+        tokio::time::timeout(Duration::from_secs(5), session.close())
+            .await
+            .unwrap();
+        assert!(stopping.await.unwrap().is_err());
+        assert!(writes.recv().await.is_none());
     }
 }

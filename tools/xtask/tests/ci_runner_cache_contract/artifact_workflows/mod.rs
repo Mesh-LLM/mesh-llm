@@ -48,6 +48,7 @@ fn assert_mutation_rejected(file: &str, from: &str, to: &str, check: impl Fn(&No
 mod cache_flow_intent;
 mod declared_graph;
 mod lane_policy_intent;
+mod linker_traces;
 mod release_flow_intent;
 mod release_node_step;
 mod release_notes_step;

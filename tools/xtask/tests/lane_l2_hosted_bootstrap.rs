@@ -43,6 +43,7 @@ fn hosted_profile_rejects_nonhosted_and_unknown_contexts() -> TestResult {
         let output = Command::new("/bin/bash")
             .args(["-c", &body])
             .env("AUTOMATION_PROFILE", profile)
+            .env("AUTOMATION_TOOL", "xtask")
             .env("RUNNER_OS", os)
             .env("RUNNER_ENVIRONMENT", environment)
             .output()?;
@@ -91,6 +92,7 @@ esac
             format!("{}:/usr/bin:/bin", sandbox.path().display()),
         )
         .env("AUTOMATION_PROFILE", "hosted-bare")
+        .env("AUTOMATION_TOOL", "xtask")
         .env("RUNNER_TEMP", sandbox.path())
         .env("GITHUB_OUTPUT", &output_file)
         .env("GITHUB_ENV", &environment_file)
@@ -143,6 +145,7 @@ fn hosted_cache_hit_runs_the_restored_binary_and_never_invokes_cargo() -> TestRe
                 format!("{}:/usr/bin:/bin", sandbox.path().display()),
             )
             .env("AUTOMATION_PROFILE", "hosted-bare")
+            .env("AUTOMATION_TOOL", "xtask")
             .env("AUTOMATION_CACHE_HIT", hit)
             .env("RUNNER_TEMP", sandbox.path())
             .env("GITHUB_OUTPUT", &output_file)

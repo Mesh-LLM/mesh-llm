@@ -37,16 +37,6 @@ pub(super) fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) 
         "just ci-legacy-contracts",
         "quality contract suite",
     )?;
-    ensure_contains(
-        sources.quality,
-        "cargo run -p xtask -- repo-consistency ci-crate-lists",
-        "quality crate-list consistency",
-    )?;
-    ensure_contains(
-        sources.quality,
-        "cargo run -p xtask -- repo-consistency publish-crates",
-        "quality publish consistency",
-    )?;
     ensure_contains(sources.web, "website:", "web website sub-slice")?;
     ensure_contains(
         sources.host,

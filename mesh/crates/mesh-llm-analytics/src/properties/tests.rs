@@ -28,6 +28,7 @@ fn base_properties_describe_the_build_and_platform() {
         "os",
         "arch",
         "exec_env",
+        "internal",
         "$lib",
         "$lib_version",
     ] {
@@ -41,7 +42,7 @@ fn base_properties_carry_no_free_text() {
     // label; nothing here can carry an arbitrary string from the environment.
     for (key, value) in base_properties().entries() {
         match value {
-            Value::Static(_) => {}
+            Value::Static(_) | Value::Bool(_) => {}
             Value::Text(label) => assert!(
                 crate::Label::sanitize(label.as_str()).is_some() || label.as_str() == "redacted",
                 "{key} holds an unsanitized value",
@@ -69,4 +70,13 @@ fn exec_env_is_from_the_fixed_set() {
 #[test]
 fn an_empty_marker_variable_does_not_count() {
     assert!(!env_is_set("MESH_LLM_DEFINITELY_UNSET_MARKER_FOR_TESTS"));
+}
+
+#[test]
+fn internal_traffic_is_development_builds_ci_or_an_explicit_marker() {
+    assert!(!is_internal(BuildChannel::Release, "plain", false));
+    assert!(!is_internal(BuildChannel::Prerelease, "service", false));
+    assert!(is_internal(BuildChannel::Release, "plain", true));
+    assert!(is_internal(BuildChannel::Development, "plain", false));
+    assert!(is_internal(BuildChannel::Release, "ci", false));
 }

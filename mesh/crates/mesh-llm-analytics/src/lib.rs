@@ -33,16 +33,21 @@ mod event;
 mod install_id;
 mod notice;
 mod properties;
+mod serving_hardware;
 mod version_state;
 
 pub use consent::{
     ConfigPreference, ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS,
-    ENV_DO_NOT_TRACK, ENV_POSTHOG_HOST, ENV_POSTHOG_KEY, ingestion_host, project_key,
+    ENV_ANALYTICS_INTERNAL, ENV_DO_NOT_TRACK, ENV_POSTHOG_HOST, ENV_POSTHOG_KEY, ingestion_host,
+    project_key,
 };
 pub use event::{Event, Label, Properties, Value, bucket_count, bucket_duration_secs, gigabytes};
 pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
 pub use notice::{NOTICE, NOTICE_MARKER_FILE};
 pub use properties::{BuildChannel, LIB_NAME, base_properties, exec_env};
+pub use serving_hardware::{
+    ServingHardware, backend_of_device, serving_hardware, set_serving_hardware,
+};
 pub use version_state::{PendingVersion, VERSION_FILE, VersionTransition};
 
 /// Environment variable the self-updater sets on the binary it `exec`s.

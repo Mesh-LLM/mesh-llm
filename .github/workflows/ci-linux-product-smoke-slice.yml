@@ -7,10 +7,18 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: true
+        type: string
       original_event_name:
         description: Original event used for model-cache publication policy.
         required: false
         default: ''
+        type: string
+      backend:
+        description: Backend product consumed by this call.
+        required: true
         type: string
       runtime_matrix:
         description: JSON Linux runtime/product rows from the versioned CI plan.
@@ -46,10 +54,11 @@ env:
 jobs:
   core:
     name: Core inference smoke
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    if: ${{ inputs.backend == 'cpu' && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       mesh_binary_target: ${{ inputs.binary_target }}
@@ -60,10 +69,11 @@ jobs:
 
   two_node_client:
     name: Two-node client smoke
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-client') }}
+    if: ${{ inputs.backend == 'cpu' && contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-client') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
@@ -76,10 +86,11 @@ jobs:
 
   two_node_split:
     name: KV caching smoke (dense + recurrent)
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-split') }}
+    if: ${{ inputs.backend == 'cpu' && contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-split') }}
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
@@ -97,10 +108,11 @@ jobs:
 
   core_cuda:
     name: CUDA inference smoke
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
+    if: ${{ inputs.backend == 'cuda' && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
+      product_automation: ${{ inputs.product_automation }}
       artifact_name: ci-product-linux-amd64-cuda
       artifact_path: ci-artifacts/linux-cuda
       mesh_binary_target: ${{ inputs.binary_target }}
@@ -110,7 +122,7 @@ jobs:
 
   model_download:
     name: Model download smoke
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'model-download') }}
+    if: ${{ inputs.backend == 'cpu' && contains(fromJson(inputs.smoke_matrix).*.id, 'model-download') }}
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -120,7 +132,7 @@ jobs:
 
   laya_cpu:
     name: Laya smoke (Linux CPU)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cpu') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    if: ${{ inputs.backend == 'cpu' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cpu') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
@@ -130,6 +142,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-cpu
@@ -142,7 +166,7 @@ jobs:
 
   laya_cuda:
     name: Laya smoke (Linux CUDA)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cuda') && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
+    if: ${{ inputs.backend == 'cuda' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cuda') && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes > 100 && inputs.timeout_minutes || 100 }}
     env:
@@ -152,6 +176,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare source-bound native cleanup before managed work
         timeout-minutes: 20
         env:
@@ -160,8 +196,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-          report="$(just automation-bootstrap)"
-          binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+          binary="$MESH_LLM_AUTOMATION_BIN"
           [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
           sha="$(sha256sum "$binary" | awk '{print $1}')"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1
@@ -222,7 +257,7 @@ jobs:
   # reaches main.
   gpu_runner_gate:
     name: GPU runner gate
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}
+    if: ${{ (inputs.backend == 'rocm' || inputs.backend == 'vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}
     runs-on: ubuntu-24.04
     outputs:
       vulkan_enabled: ${{ steps.check.outputs.vulkan_enabled }}
@@ -253,8 +288,8 @@ jobs:
       # row from the normalized decision, with the reason it did not run.
       - name: Report GPU rows without a qualified runner
         env:
-          VULKAN_PLANNED: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}
-          ROCM_PLANNED: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') }}
+          VULKAN_PLANNED: ${{ inputs.backend == 'vulkan' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}
+          ROCM_PLANNED: ${{ inputs.backend == 'rocm' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') }}
           VULKAN_ENABLED: ${{ steps.check.outputs.vulkan_enabled }}
           ROCM_ENABLED: ${{ steps.check.outputs.rocm_enabled }}
         run: |
@@ -286,7 +321,7 @@ jobs:
   laya_vulkan:
     name: Laya smoke (Linux Vulkan)
     needs: [gpu_runner_gate]
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true' }}
+    if: ${{ inputs.backend == 'vulkan' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes > 100 && inputs.timeout_minutes || 100 }}
     env:
@@ -297,6 +332,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare source-bound native cleanup before managed work
         timeout-minutes: 20
         env:
@@ -305,8 +352,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-          report="$(just automation-bootstrap)"
-          binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+          binary="$MESH_LLM_AUTOMATION_BIN"
           [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
           sha="$(sha256sum "$binary" | awk '{print $1}')"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1
@@ -356,7 +402,7 @@ jobs:
   laya_rocm:
     name: Laya smoke (Linux ROCm)
     needs: [gpu_runner_gate]
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.rocm_enabled == 'true' }}
+    if: ${{ inputs.backend == 'rocm' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.rocm_enabled == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-amd, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes > 100 && inputs.timeout_minutes || 100 }}
     env:
@@ -366,6 +412,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare source-bound native cleanup before managed work
         timeout-minutes: 20
         env:
@@ -374,8 +432,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$SOURCE_SHA"
-          report="$(just automation-bootstrap)"
-          binary="$(printf '%s\n' "$report" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+          binary="$MESH_LLM_AUTOMATION_BIN"
           [[ "$binary" == /* && -f "$binary" && ! -L "$binary" && -x "$binary" ]] || exit 1
           sha="$(sha256sum "$binary" | awk '{print $1}')"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1

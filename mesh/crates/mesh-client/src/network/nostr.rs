@@ -8,9 +8,10 @@ pub const MESH_SERVICE_KIND: u16 = 31990;
 pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
-    "wss://relay.nostr.band",
-    "wss://nostr.land",
-    "wss://nostr.wine",
+    "wss://relay.ditto.pub",
+    "wss://relay.primal.net",
+    "wss://relay.nostr.net",
+    "wss://nostr.oxtr.dev",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -539,6 +539,12 @@ pub struct Cli {
     #[command(flatten)]
     pub kv_cache: KvCacheOptions,
 
+    /// Refuse peer split-stage requests that need model files not already on
+    /// this node. Local and configured models still load and serve. Same as
+    /// `runtime.peer_model_downloads = false`.
+    #[arg(long)]
+    pub no_peer_model_downloads: bool,
+
     #[command(flatten)]
     pub owner: OwnerOptions,
 
@@ -633,6 +639,11 @@ pub enum Command {
     Analytics {
         #[command(subcommand)]
         command: AnalyticsCommand,
+    },
+    /// Choose the other nodes this node's private requests may go to.
+    Private {
+        #[command(subcommand)]
+        command: PrivateCommand,
     },
     /// Diagnose local mesh, runtime, and split-readiness problems.
     Doctor {
@@ -806,6 +817,39 @@ pub enum AnalyticsCommand {
     Enable,
     /// Turn usage reporting off by writing `[analytics] enabled = false`.
     Disable,
+}
+
+/// `mesh-llm private`: edit `[private] nodes` in the config file. A running
+/// node reads the list again when the file changes.
+#[derive(Subcommand, Debug)]
+pub enum PrivateCommand {
+    /// Let private requests go to a node, by node id or by the label or
+    /// hostname of a node this one is connected to.
+    Add {
+        /// A node id (64 hex characters), or a connected node's label or hostname.
+        node: String,
+        /// Console/API port of the running mesh-llm instance, for label lookup.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
+    /// Stop private requests going to a node.
+    Remove {
+        /// A node id from `mesh-llm private list`, a unique prefix of one, or a
+        /// connected node's label or hostname.
+        node: String,
+        /// Console/API port of the running mesh-llm instance, for label lookup.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
+    /// Show the nodes private requests may go to, and which are connected.
+    List {
+        /// Console/API port of the running mesh-llm instance.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

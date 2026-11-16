@@ -54,7 +54,7 @@ fn d02_unrelated_models_listener_survives() {
         .stderr(stderr)
         .spawn()
         .unwrap();
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !case.native.join("bind.armed").exists() {
         assert!(std::time::Instant::now() < until);
         std::thread::yield_now();

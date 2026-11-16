@@ -61,7 +61,9 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: true,
+        private_routing_supported: true,
         persistent_lane_marker_supported: true,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -119,6 +121,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     assert!(roundtripped.stage_status_list_supported);
     assert!(roundtripped.stage_protocol_generation_supported);
     assert!(roundtripped.plugin_origin_signature_supported);
+    assert!(roundtripped.private_routing_supported);
     assert!(roundtripped.persistent_lane_marker_supported);
     let mut legacy = proto_pa.clone();
     for subprotocol in &mut legacy.subprotocols {
@@ -237,7 +240,9 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -467,7 +472,9 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -759,7 +766,9 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1168,7 +1177,9 @@ fn claimed_log_head_test_announcement(
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1283,7 +1294,9 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,

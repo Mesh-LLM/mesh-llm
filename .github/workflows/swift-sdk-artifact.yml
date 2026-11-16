@@ -28,6 +28,11 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: false
+        default: ''
+        type: string
       original_event_name:
         description: Original event used for protected runner and cache policy.
         required: false
@@ -248,7 +253,21 @@ jobs:
       # and build-xcframework.sh never shell out to just (CONTRIBUTING.md: no per-job tools).
       # It must follow rust-cache: on a restore-key (partial) hit rust-cache
       # pre-cleans target/ and deletes target/debug/xtask (release run 40804094970).
+      - name: Restore product automation
+        if: ${{ inputs.product_automation != '' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - name: Prepare automation
+        if: ${{ inputs.product_automation == '' }}
         uses: ./.github/actions/prepare-automation
 
       - name: Restore exact Swift target native ABI cache
@@ -372,6 +391,23 @@ jobs:
           # the same build recipe, directory, and exact key. Trusted main can
           # therefore warm a PR without a restore prefix or cross-target reuse.
           key: ${{ format('mesh-llm-swift-sdk-target-{0}-{1}-{2}-{3}-{4}', 'aarch64-apple-darwin', runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'sdk/swift/scripts/build-host-macos-xcframework.sh', 'mesh/sdk/swift/scripts/build-host-macos-xcframework.sh', 'sdk/swift/scripts/build-xcframework.sh', 'mesh/sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'skippy/llama_cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'skippy/llama_cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
+
+      - name: Restore product automation
+        if: ${{ inputs.product_automation != '' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
+      - name: Prepare standalone assembly automation
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
 
       - name: Prepare dispatched release version
         if: ${{ inputs.prepare_release_version }}

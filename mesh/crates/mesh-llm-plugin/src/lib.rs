@@ -15,6 +15,7 @@ pub mod models;
 pub mod openai_exchange;
 pub mod operation_binding;
 pub mod plugin_status;
+pub mod request_transform;
 mod runtime;
 mod simple_plugin;
 mod virtual_model;
@@ -126,6 +127,9 @@ pub mod host_capabilities {
     /// `local` to the other local plugins declaring that channel, and to no
     /// peer (see [`crate::manifest::local_channel`]).
     pub const LOCAL_CHANNELS: &str = "local_channels.v1";
+    /// The host calls request transforms on inference requests at ingress
+    /// (see [`crate::request_transform`]).
+    pub const REQUEST_TRANSFORM: &str = crate::request_transform::REQUEST_TRANSFORM_CAPABILITY;
 
     /// Why a plugin with `manifest` cannot run on this host: a capability its
     /// manifest requires that the host does not list.
@@ -164,6 +168,14 @@ pub mod host_capabilities {
             && !host_supports(LOCAL_CHANNELS)
         {
             return Some("host does not support required local_channels.v1 channels");
+        }
+        if manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == REQUEST_TRANSFORM)
+            && !host_supports(REQUEST_TRANSFORM)
+        {
+            return Some("host does not support required request_transform.v1 transforms");
         }
         None
     }

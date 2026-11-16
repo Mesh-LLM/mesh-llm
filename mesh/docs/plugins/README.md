@@ -17,6 +17,7 @@ Plugin-specific documentation:
 - [DwarfStar (ds4)](dwarfstar.md) - run ds4 models (DeepSeek V4 Flash and others) on Apple Silicon with a bundled alternative engine
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
+- [Request transforms](request-transform.md) - draft `request_transform.v1`: rewrite an inference request at its ingress node, after normalization and before routing
 - [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
 - [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
 - [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts

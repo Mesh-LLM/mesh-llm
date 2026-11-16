@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "source_checkpoint": "0357f19f02cc3c2769ab46b0299af027e07049c1",
+  "mesh_source": "e819fd4fe8d3d87517708faa0f2589c05aa48d80",
+  "generator": {
+    "uniffi": "0.32.0",
+    "mode": "library-metadata",
+    "udl": "mesh/crates/mesh-llm-ffi/src/mesh_ffi.udl",
+    "bridge": "explicit-prebuilt-input",
+    "cdylib_name": "uniffi",
+    "api_checksums": "SDK lazy loader before cache"
+  },
+  "files": {
+    ".gitignore": "9133db7aee1394939cbc137290a230621018b4e08389333944dca090df949df9",
+    "LICENSE": "44459b86c2e96fdbfd8a6b5c33d30d4b04b5293fcb2ec96fe4dcc4e0f90b8962",
+    "README.md": "75c1e809ff8fa8cb99d494e0d81b5e1cf700306252f2c869c01443e37bc545e1",
+    "ci/canary-python/pyproject.toml": "7e8b046d436deebcf245ff17cd7ca35d151657cc5b6f3fc15b0463f2e4461268",
+    "ci/canary-python/uv.lock": "eebb16892847f3545c1c4993d5e916cfb3dec97bb123bd67c6b40e6ba14fab5a",
+    "ci/required-sdk-python/pyproject.toml": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
+    "ci/required-sdk-python/requirements.lock": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
+    "ci/required-sdk-python/uv.lock": "c83abb8b07ea1ab8f84267c87fd136182596c1bbb626321e1aff90783eeb00e6",
+    "hatch_build.py": "7d8ac98389c67a42492003170f7433fa42544752dd064969615abd809998ebe4",
+    "pyproject.toml": "bf84f04cc4aa3d5c0bbb2eb2ebe972e18bd049a55285e21618544ae78cfb7062",
+    "scripts/build-native.sh": "f4f8b70cf10b8a1d177dde3d4545de08a1fe0941cdedf9e8fa1b62c4fcc1bd06",
+    "scripts/ci-langchain-openai-smoke.py": "7860ed9da36262d1ff92ba841cd1ed4779b699c76f74f2d4acea3f6351f735fb",
+    "scripts/ci-litellm-smoke.py": "917a171b8b4c96f72477e07a9d9f40bb2a1cdfb1780d8eb21089e849a265564c",
+    "scripts/ci-openai-embeddings-smoke.py": "f771c1ec1f870c64080d2aa9e1bc68dff8118bebbab957e2f33b172ed8c29dd7",
+    "scripts/ci-openai-python-smoke.py": "d9136d2f73e9f2d7f835810fcc327865427118401724237143d1b5d1a29cb636",
+    "scripts/generate-python-bindings.sh": "6a36750ef5d47984e215cf161e5955c93d83c4a9e1f6f73c8d18b47b4c988088",
+    "scripts/import-compatibility.py": "595a7cb19aab27cc55606d25bb231d20fb36b683fcfc4b423fb7d42ea23b6783",
+    "scripts/import-embedding.py": "174d20b4c015a80fc9bdaabf3c658e68fdb99cf4053142bdf59ba331b8dc7f32",
+    "src/meshllm/__init__.py": "d9523406155f6dea03fc0fd5af34745623f5094bf5df80dac9fa011087691dfe",
+    "src/meshllm/_binding.py": "48ffbd34bd72bc3ac6ac7a7afafd092b54c76fd9dbf02081c2f7db3c8e648b33",
+    "src/meshllm/_generated/.gitignore": "d1ed744637de88057038edbb22a0411c08f751390472304b747257687fb5dbe5",
+    "src/meshllm/_generated/__init__.py": "eba30075c4d139a19472bcbe1195b1adfd94182b3ee5fd5131fc5865d49a918c",
+    "src/meshllm/_generated/mesh_ffi.py": "0263fffaf814ddefb343ccfba09e6de4568e05d410d248dd893ff15c1e5b606b",
+    "src/meshllm/client.py": "2d3ab9843657371855ee1e1b742b6989da97acd519bcfc58ec3d0d183586ad57",
+    "src/meshllm/types.py": "43e80058ce8859341604cd8ea28fe3930895b1b975fac753e5e81e212322a967",
+    "tests/test_binding.py": "81ba8f430d987675931049bda54efe4dce64c107d51db990713d066283d8ed19",
+    "tests/test_client.py": "cd2fa705820ee262bbe1ace6f9f940d8c7cb85ab687ea24f3977e160e186bd5a",
+    "uniffi.toml": "1bae43ad0481c024429b2fe21068231f4268f6c3f62e31134f2dbb1f72dfe68d"
+  }
+}

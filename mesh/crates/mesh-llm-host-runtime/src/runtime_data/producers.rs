@@ -119,8 +119,16 @@ impl RuntimeDataProducer {
         self.collector.replace_llama_metrics_snapshot(snapshot)
     }
 
+    pub(crate) fn publish_runtime_instance_registered(&self, model: &str, instance: &str) {
+        self.collector.register_runtime_instance(model, instance);
+    }
+
+    pub(crate) fn publish_runtime_instance_unregistered(&self, instance: &str) {
+        self.collector.unregister_runtime_instance(instance);
+    }
+
     pub(crate) fn publish_llama_slots_snapshot(&self, snapshot: RuntimeLlamaSlotsSnapshot) -> bool {
-        self.collector.replace_llama_slots_snapshot(snapshot)
+        self.collector.replace_active_llama_slots_snapshot(snapshot)
     }
 
     pub(crate) fn publish_plugin_summary(&self, summary: PluginSummary) -> bool {

@@ -496,3 +496,80 @@ async fn bootstrap_proxy_not_spawned_for_standalone_serve() {
         "standalone serve without join candidates must not spawn bootstrap proxy"
     );
 }
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_shutdown_during_the_join_delay_saves_no_mesh_id() {
+    let home = tempfile::tempdir().expect("tempdir should exist");
+    let _home = EnvVarGuard::set(
+        "MESH_LLM_TEST_HOME",
+        home.path().to_str().expect("tempdir path should be UTF-8"),
+    );
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("test node should start");
+    node.set_mesh_id("eeeeeeeeeeeeeeee".into()).await;
+    let saver = tokio::spawn(super::super::auto_join::save_last_mesh_id_after_join(
+        node.clone(),
+        node.subscribe_mesh_id_changes(),
+        std::time::Duration::from_secs(60),
+    ));
+
+    node.endpoint.close().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), saver)
+        .await
+        .expect("the task should end once the endpoint closes")
+        .expect("the task should not panic");
+    assert_eq!(mesh::load_last_mesh_id(), None);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn the_saved_rejoin_preference_follows_a_later_mesh_id_convergence() {
+    const LOW: &str = "1111111111111111";
+    const HIGH: &str = "eeeeeeeeeeeeeeee";
+    let home = tempfile::tempdir().expect("tempdir should exist");
+    let _home = EnvVarGuard::set(
+        "MESH_LLM_TEST_HOME",
+        home.path().to_str().expect("tempdir path should be UTF-8"),
+    );
+    let mut node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("test node should start");
+    node.public_mesh = true;
+
+    // As at startup: the node takes an ID and saves it, then keeps
+    // following changes. Subscribing after HIGH leaves no notification
+    // pending, so only the later change can move the saved ID.
+    node.set_mesh_id(HIGH.into()).await;
+    mesh::save_last_mesh_id(HIGH).expect("initial save should succeed");
+    let changes = node.subscribe_mesh_id_changes();
+    let follower = tokio::spawn(super::super::auto_join::save_last_mesh_id_on_change(
+        node.clone(),
+        changes,
+    ));
+
+    node.set_mesh_id(LOW.into()).await;
+    assert_eq!(node.mesh_id().await.as_deref(), Some(LOW));
+    let saved = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if mesh::load_last_mesh_id().as_deref() == Some(LOW) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    assert!(
+        saved.is_ok(),
+        "the rejoin preference should move to the converged ID, still {:?}",
+        mesh::load_last_mesh_id()
+    );
+
+    // A stopped runtime closes the node's endpoint, which ends the task.
+    node.endpoint.close().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), follower)
+        .await
+        .expect("the task should end once the endpoint closes")
+        .expect("the task should not panic");
+}

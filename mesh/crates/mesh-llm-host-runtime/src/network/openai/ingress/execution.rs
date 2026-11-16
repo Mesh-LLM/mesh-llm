@@ -35,6 +35,7 @@ pub(super) async fn execute_peer_request(
         affinity: ctx.affinity,
         plugin_manager: ctx.plugin_manager,
         requested_by_node_id: ctx.requested_by_node_id.clone(),
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: ctx.exchange_channel,
     };

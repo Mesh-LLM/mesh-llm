@@ -32,6 +32,16 @@ function buildModel(overrides: Partial<ModelSummary> = {}): ModelSummary {
 }
 
 describe('ModelCatalog', () => {
+  it.each([undefined, false, true])('does not label architecture for moe=%s', (moe) => {
+    render(<ModelCatalog models={[buildModel({ moe })]} />)
+
+    expect(screen.queryByText('Dense')).not.toBeInTheDocument()
+    expect(screen.queryByText('MoE')).not.toBeInTheDocument()
+    expect(screen.getByText('Ready')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Filter models/i }))
+    expect(screen.queryByText('Architecture')).not.toBeInTheDocument()
+  })
+
   it('shows the display name without exposing a routing hash, and selects the original model', () => {
     const model = buildModel({ name: 'gguf:0123456789abcdef', fullId: 'gguf:0123456789abcdef', displayName: 'Gemma 4' })
     const onSelect = vi.fn()

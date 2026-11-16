@@ -89,6 +89,7 @@ export default [
     links: [
       ["Join the public mesh", "/docs/pages/public-mesh/"],
       ["Your own mesh", "/docs/pages/private-meshes/"],
+      ["Private routing", "/docs/pages/private-routing/"],
       ["One model across meshes", "/docs/pages/shared-serving/"],
       ["Publish mesh", "/docs/pages/publish-mesh/"]
     ]

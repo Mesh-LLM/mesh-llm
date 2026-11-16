@@ -71,6 +71,14 @@ async fn oversized_snapshots_complete_real_quic_exchanges_in_both_directions() {
     // the round count without assuming a particular encoded record size.
     let mut progress = Vec::new();
     for _ in 0..ORIGIN_COUNT {
+        // Each page is a full reply; the responder spaces those by the
+        // reply interval (#3070), so rewind it instead of sleeping.
+        for (responder, remote) in [(&receiver, &sender), (&sender, &receiver)] {
+            responder.gossip_reply_limiter.age_for_tests(
+                remote.id(),
+                crate::mesh::gossip::reply_limit::FULL_REPLY_INTERVAL,
+            );
+        }
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
             sender.initiate_gossip_inner(connection.clone(), receiver.id(), false),
@@ -104,6 +112,55 @@ async fn oversized_snapshots_complete_real_quic_exchanges_in_both_directions() {
     );
     drop(state);
     assert!(sender.state.lock().await.peers.contains_key(&receiver.id()));
+    sender.close_endpoint().await;
+    receiver.close_endpoint().await;
+    for listener in listeners {
+        tokio::time::timeout(std::time::Duration::from_secs(2), listener)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn inbound_gossip_repeats_get_own_announcement_only_over_real_quic() {
+    let sender = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let receiver = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    receive(&receiver, 0xf1, vec![unsigned_worker(0xf2, "third-party")], Vec::new()).await;
+    let mut listeners = Vec::new();
+    let accepting = receiver.clone();
+    listeners.push(tokio::spawn(async move { accepting.accept_loop().await }));
+    receiver.start_accepting();
+    let socket = receiver
+        .endpoint
+        .bound_sockets()
+        .into_iter()
+        .find(|addr| addr.is_ipv4())
+        .unwrap();
+    let address = EndpointAddr::new(receiver.id()).with_ip_addr(socket);
+    let connection = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        sender.endpoint.connect(address, crate::protocol::ALPN_V1),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let mut replies = Vec::new();
+    for _ in 0..4 {
+        let ((announcements, _), _) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            sender.gossip_round_trip(&connection, receiver.id()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        replies.push(announcements.len());
+    }
+    assert!(
+        replies[..3].iter().all(|count| *count > 1),
+        "the first replies in the window are the full table: {replies:?}"
+    );
+    assert_eq!(replies[3], 1, "past the allowance: own announcement only: {replies:?}");
     sender.close_endpoint().await;
     receiver.close_endpoint().await;
     for listener in listeners {

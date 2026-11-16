@@ -1,6 +1,22 @@
 use super::*;
 
+/// One inference attempt as [`Node::record_inference_attempt_report`] takes it.
+pub(crate) struct InferenceAttemptReport {
+    pub(crate) queue_wait: std::time::Duration,
+    pub(crate) attempt_time: std::time::Duration,
+    /// What routing metrics score; `None` leaves the attempt out of them.
+    pub(crate) metrics_outcome: Option<crate::network::metrics::AttemptOutcome>,
+    /// What analytics reports.
+    pub(crate) route_outcome: crate::inference_analytics::RouteOutcome,
+    pub(crate) completion_tokens: Option<u64>,
+}
+
 impl Node {
+    /// Record an attempt scored the same way by routing metrics and
+    /// analytics. Production paths go through
+    /// [`Node::record_inference_attempt_report`], which can tell a client
+    /// disconnect or a failed stream apart.
+    #[cfg(test)]
     pub fn record_inference_attempt(
         &self,
         model: Option<&str>,
@@ -10,6 +26,34 @@ impl Node {
         outcome: crate::network::metrics::AttemptOutcome,
         completion_tokens: Option<u64>,
     ) {
+        self.record_inference_attempt_report(
+            model,
+            target,
+            InferenceAttemptReport {
+                queue_wait,
+                attempt_time,
+                metrics_outcome: Some(outcome),
+                route_outcome: outcome.into(),
+                completion_tokens,
+            },
+        );
+    }
+
+    /// Record an attempt whose analytics outcome is finer than its routing
+    /// metrics outcome, or that routing metrics do not score at all.
+    pub(crate) fn record_inference_attempt_report(
+        &self,
+        model: Option<&str>,
+        target: &crate::inference::election::InferenceTarget,
+        report: InferenceAttemptReport,
+    ) {
+        let InferenceAttemptReport {
+            queue_wait,
+            attempt_time,
+            metrics_outcome,
+            route_outcome,
+            completion_tokens,
+        } = report;
         let attempt_target = match target {
             crate::inference::election::InferenceTarget::Local(port) => {
                 crate::network::metrics::AttemptTarget::Local(format!("127.0.0.1:{port}"))
@@ -31,10 +75,15 @@ impl Node {
                 target: &attempt_target,
                 queue_wait,
                 attempt_time,
-                outcome,
+                outcome: route_outcome,
                 completion_tokens,
             },
         );
+        // A client that went away says nothing about the target, so routing
+        // metrics do not score it; analytics still counts the attempt.
+        let Some(outcome) = metrics_outcome else {
+            return;
+        };
         self.routing_metrics.record_attempt(
             model,
             attempt_target.clone(),
@@ -73,7 +122,7 @@ impl Node {
                 target: &attempt_target,
                 queue_wait,
                 attempt_time,
-                outcome,
+                outcome: outcome.into(),
                 completion_tokens,
             },
         );

@@ -120,6 +120,7 @@ async fn route_observed(
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
     request.exchange_observation_id = observation_id;
     route_model_request(
@@ -130,6 +131,7 @@ async fn route_observed(
         &request,
         RouteModelRequestContext {
             local_execution_only: false,
+            automatic_retry: None,
             required_tokens: None,
             affinity: &affinity,
             route_observer: OpenAiRouteObserver::default(),

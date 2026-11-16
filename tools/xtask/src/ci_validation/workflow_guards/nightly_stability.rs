@@ -14,7 +14,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     ownership(
         workflows
             .get("nightly-kv-coverage.yml")
-            .ok_or("KV ownership schedule missing")?,
+            .ok_or("KV ownership workflow missing")?,
     )?;
     let workflow = workflows
         .get("nightly-stability-run.yml")
@@ -119,6 +119,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
 }
 
 fn wrapper(document: &Node) -> DynResult<()> {
+    manual_only(document)?;
     let job = h::job(document, "stability")?;
     h::binding(job, "uses", "./.github/workflows/nightly-stability-run.yml")?;
     let inputs = h::member(
@@ -143,18 +144,7 @@ fn wrapper(document: &Node) -> DynResult<()> {
 }
 
 fn ownership(document: &Node) -> DynResult<()> {
-    let events = h::member(document, "on")?;
-    h::member(events, "workflow_dispatch")?;
-    if events.get("pull_request").is_some() || events.get("push").is_some() {
-        return Err("KV ownership certification must remain schedule/manual only".into());
-    }
-    let Node::Seq(schedule) = h::member(events, "schedule")? else {
-        return Err("KV ownership schedule missing".into());
-    };
-    if schedule.len() != 1 {
-        return Err("KV ownership schedule is ambiguous".into());
-    }
-    h::binding(&schedule[0], "cron", "23 6 * * *")?;
+    manual_only(document)?;
     let job = h::job(document, "ownership-state-machines")?;
     h::binding(job, "runs-on", "ubuntu-24.04")?;
     let steps = h::steps(job)?;
@@ -180,6 +170,15 @@ fn ownership(document: &Node) -> DynResult<()> {
         return Err(
             "KV ownership must preserve compiler wrapper and credential-free execution".into(),
         );
+    }
+    Ok(())
+}
+
+fn manual_only(document: &Node) -> DynResult<()> {
+    let events = h::member(document, "on")?;
+    h::member(events, "workflow_dispatch")?;
+    if events.entries().len() != 1 {
+        return Err("paused nightly certification must remain manual-only".into());
     }
     Ok(())
 }
@@ -222,6 +221,24 @@ mod tests {
     #[test]
     fn nightly_native_owner_preserves_independent_failures_and_uploaded_evidence() {
         check(&documents(SOURCE)).unwrap();
+    }
+
+    #[test]
+    fn paused_nightly_entrypoints_reject_automatic_triggers() {
+        for name in ["nightly-stability.yml", "nightly-kv-coverage.yml"] {
+            for event in ["schedule", "push", "pull_request", "workflow_run"] {
+                let mut workflows = documents(SOURCE);
+                let Node::Map(root) = workflows.get_mut(name).unwrap() else {
+                    panic!("workflow must be a map");
+                };
+                let (_, Node::Map(events)) = root.iter_mut().find(|(key, _)| key == "on").unwrap()
+                else {
+                    panic!("workflow events must be a map");
+                };
+                events.push((event.into(), Node::Scalar(String::new())));
+                assert!(check(&workflows).is_err(), "{name} accepted {event}");
+            }
+        }
     }
     #[test]
     fn nightly_kv_ownership_rejects_untrusted_or_incomplete_certification() {

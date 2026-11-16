@@ -94,6 +94,9 @@ pub(crate) struct PendingConfigApply {
     /// This apply changes request defaults, so models are swapped (or at least
     /// tried) and a failed persist has to put them back.
     request_defaults_changed: bool,
+    /// This apply changes `[private] nodes`, which the running node rereads
+    /// from the written file, so it always takes effect live.
+    private_nodes_changed: bool,
     /// Something outside the settings this apply can take live changed, so the
     /// saved config stays staged even when every live part took effect.
     changes_staged_settings: bool,
@@ -104,10 +107,28 @@ pub(crate) struct PendingConfigApply {
             AppliedRequestDefaults<<ScopedServingBackends as RequestDefaultsBackends>::Previous>,
         >,
     >,
+    /// Held until this apply is written and done, so no other writer of the
+    /// file edits it between the read in `prepare_apply` and that write.
+    _file_lock: mesh_llm_config::ConfigFileLock,
+    /// The file as `prepare_apply` read it (`None`: missing). A hand edit does
+    /// not take the lock, so `persist` refuses to write over a file that has
+    /// changed since.
+    file_on_read: Option<Vec<u8>>,
+}
+
+/// The config file's bytes, or `None` when it cannot be read (missing).
+fn read_config_file(path: &Path) -> Option<Vec<u8>> {
+    std::fs::read(path).ok()
 }
 
 impl PendingConfigApply {
     pub(crate) fn persist(&self) -> ConfigPersistence {
+        if read_config_file(&self.config_path) != self.file_on_read {
+            return ConfigPersistence::PersistError(
+                "the config file changed while this apply was prepared; reload and apply again"
+                    .into(),
+            );
+        }
         if let Err(error) = ConfigStore::open(self.config_path.clone()).save(&self.config) {
             return ConfigPersistence::PersistError(format!("failed to write config: {error}"));
         }
@@ -199,7 +220,8 @@ impl PendingConfigApply {
     ) -> bool {
         let attempted = self.dynamic_logging_only
             || self.dynamic_kv_disk_changed
-            || self.request_defaults_changed;
+            || self.request_defaults_changed
+            || self.private_nodes_changed;
         attempted
             && (!self.dynamic_logging_only || logging_applied)
             && (!self.dynamic_kv_disk_changed || kv_disk_applied)
@@ -438,8 +460,11 @@ fn changes_outside_live_settings(
         }
         // A section that only holds unset values is the same as an absent one,
         // and the file-format `version` marker configures nothing at runtime.
+        // `[private] nodes` is always live: the running node rereads it from
+        // the written file (`mesh::private_nodes`).
         if let Some(root) = value.as_object_mut() {
             root.remove("version");
+            root.remove("private");
         }
         prune_unset(&mut value);
         value
@@ -563,6 +588,36 @@ impl ConfigState {
         expected_revision: u64,
     ) -> ConfigApplyPreparation {
         record_config_operational_event(ConfigOperationalEvent::ApplyStarted);
+        // `mesh-llm private` changes `[private]` in the file without telling
+        // this state. Holding the file's lock from this read until the pending
+        // apply is written and dropped keeps such an edit from landing in
+        // between, where this write would undo it.
+        let file_lock = match mesh_llm_config::lock_config_file(&self.config_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+                return ConfigApplyPreparation::Immediate(ApplyResult::PersistError(format!(
+                    "{error:#}"
+                )));
+            }
+        };
+        let file_on_read = read_config_file(&self.config_path);
+        // An apply that leaves the list as this state knew it keeps the file's
+        // current list, so a stale snapshot cannot bring back a removed node.
+        // A file that cannot be read gives no current list to keep, and
+        // writing this state's could restore a removed node, so the apply is
+        // refused until the file is fixed.
+        if new_config.private == self.config.private {
+            match load_config(Some(&self.config_path)) {
+                Ok(on_disk) => new_config.private = on_disk.private,
+                Err(error) => {
+                    record_config_operational_event(ConfigOperationalEvent::ApplyRejected);
+                    return ConfigApplyPreparation::Immediate(ApplyResult::PersistError(format!(
+                        "cannot read the current config file: {error:#}"
+                    )));
+                }
+            }
+        }
         new_config.source_directory = self.config.source_directory.clone().or_else(|| {
             std::path::absolute(&self.config_path)
                 .ok()
@@ -629,6 +684,8 @@ impl ConfigState {
             request_defaults_changed,
         );
 
+        let private_nodes_changed = self.config.private != new_config.private;
+
         ConfigApplyPreparation::Pending(Box::new(PendingConfigApply {
             config: new_config,
             config_path: self.config_path.clone(),
@@ -642,9 +699,12 @@ impl ConfigState {
             kv_disk_requires_restart,
             dynamic_kv_disk_changed,
             request_defaults_changed,
+            private_nodes_changed,
             changes_staged_settings,
             live_request_defaults: std::sync::Arc::clone(&self.live_request_defaults),
             request_defaults_undo: std::sync::Mutex::new(None),
+            _file_lock: file_lock,
+            file_on_read,
         }))
     }
 

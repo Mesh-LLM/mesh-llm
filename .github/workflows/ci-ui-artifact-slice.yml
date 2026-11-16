@@ -108,7 +108,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     container:
-      image: ${{ inputs.release_tag != '' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ff53048ee7a87b3244ccbfa1b2888fde5db31a73d0dfa42f283d25dde0115307' || 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:37dc12322bd2efaefc59e51ad58d8cd3284974cb23721d13f0ff3564715037bb' }}
+      image: ${{ inputs.release_tag != '' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:857e6641d78868318d81a353c13d5a021187dec8694ffc4a2ecdf6c34b84de0f' || 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:2334fa4c8d338759e746f49328381a368bd6e8587b373aed56c087fa6d1b4c6e' }}
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -177,7 +177,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
     timeout-minutes: 20
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:

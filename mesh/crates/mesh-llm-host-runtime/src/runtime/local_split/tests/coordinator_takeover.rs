@@ -47,6 +47,7 @@ async fn send_claim(
         .send(skippy::StageControlCommand::Execute {
             request: skippy::StageControlRequest::Claim(claim),
             requester,
+            source_fetch: skippy::StageSourceFetch::Allowed,
             resp,
         })
         .expect("stage control accepts the claim");

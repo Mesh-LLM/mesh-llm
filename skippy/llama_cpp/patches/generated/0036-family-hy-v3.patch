@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/hy-v3.cpp b/src/models/hy-v3.cpp
-index 3fce6a24682d352e84ebaf7aa3769a64d8bd9716..b471373641b9101c1bea38a700dcedcbe117101f 100644
+index c47c373f89ea7bb4af831ec0a521d792df5bee8b..f83f45bdb512fa2d493bc9ec8900cf7dbdf6af95 100644
 --- a/src/models/hy-v3.cpp
 +++ b/src/models/hy-v3.cpp
 @@ -112,6 +112,8 @@ llama_model_hy_v3::graph::graph(const llm_graph_params & params) : llm_graph_con
