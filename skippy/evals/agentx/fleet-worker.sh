@@ -155,7 +155,25 @@ PYEOF
     PORT=$((PORT+1))
     "$@" > "$W/serve-$NAME.log" 2>&1 &
     PID=$!
-    for i in $(seq 1 "$RT"); do sleep 5; curl -s --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break; done
+    READY=0
+    for i in $(seq 1 "$RT"); do
+      sleep 5
+      kill -0 $PID 2>/dev/null || break
+      # Require the full API surface, not just a bound port: /v1/models
+      # answers only once the server has finished loading and its slots exist.
+      if curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; then
+        READY=$((READY+1)); [ "$READY" -ge 2 ] && break
+      else
+        READY=0
+      fi
+    done
+    if [ "$READY" -lt 2 ]; then
+      echo "-- $NAME: SERVER_START_FAILED; log tail:"
+      tail -30 "$W/serve-$NAME.log" 2>/dev/null | sed 's/^/    /'
+      cp "$W/serve-$NAME.log" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
+      kill $PID 2>/dev/null || true; sleep 8
+      return 1
+    fi
     echo "-- $NAME:"
     python3 "$W/smoke.py" "$PORT" "$PROBE_CONVERSATIONS" "$PROBE_TURNS" "$PROBE_BLOCK_CHARS" "$PROBE_MAX_TOKENS" || true
     kill $PID 2>/dev/null || true; sleep 8
