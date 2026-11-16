@@ -258,9 +258,11 @@ fn graph_release_dispatch_permissions_and_supported_node_targets_are_bounded() {
     let grant = doc.get("permissions").unwrap();
     assert_eq!(text(grant, "contents"), Some("read"));
     assert_eq!(text(grant, "packages"), Some("read"));
-    for name in ["metadata", "publish"] {
+    // Only the publisher writes: it pushes the tag and creates the candidate.
+    // A cut never writes main, so metadata reads.
+    for (name, contents) in [("metadata", "read"), ("publish", "write")] {
         let grant = job(&doc, name).get("permissions").unwrap();
-        assert_eq!(text(grant, "contents"), Some("write"));
+        assert_eq!(text(grant, "contents"), Some(contents));
         assert_ne!(text(grant, "packages"), Some("write"));
     }
     let node = job(&doc, "build_node_sdk_addon");
@@ -319,23 +321,56 @@ fn graph_release_publication_keeps_cancellation_tag_and_token_boundaries() {
     }
 }
 #[test]
-fn graph_packaging_dispatch_checks_write_access_and_excludes_prereleases() {
-    let doc = document("release.yml");
-    let identity = named(job(&doc, "publish"), "Record downstream packaging identity");
-    requires(
-        text(identity, "if").unwrap(),
-        &[
-            "needs.metadata.outputs.prerelease != 'true'",
-            "needs.metadata.outputs.skip_gpu_bundles != 'true'",
-        ],
+fn graph_packaging_dispatch_checks_write_access_and_follows_promotion() {
+    // Downstream publication belongs to Promote. A cut publishes a candidate
+    // and has no job that reaches packaging or crates.io.
+    let cut = document("release.yml");
+    for name in [
+        "release_notes",
+        "dispatch_packaging_release",
+        "await_packaging_release",
+        "publish_crates_preflight",
+        "publish_crates",
+    ] {
+        assert!(cut.get("jobs").unwrap().get(name).is_none(), "{name}");
+    }
+    let doc = document("release-promote.yml");
+    let candidate = job(&doc, "candidate");
+    let identity = named(candidate, "Record downstream packaging identity");
+    assert!(identity.get("if").is_none());
+    // The identity is only recorded for a complete candidate: an unpromoted,
+    // fully uploaded release whose manifest covers the whole matrix.
+    let order = [
+        "Require a complete unpromoted candidate",
+        "Download the candidate runtime manifest",
+        "Require the full release matrix",
+        "Record downstream packaging identity",
+    ]
+    .map(|name| {
+        steps(candidate)
+            .iter()
+            .position(|s| text(s, "name") == Some(name))
+            .unwrap_or_else(|| panic!("missing {name}"))
+    });
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+    let matrix = text(named(candidate, "Require the full release matrix"), "run").unwrap();
+    let required = matrix
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('"') && line.ends_with('"') && !line.contains(' '))
+        .collect::<Vec<_>>();
+    assert_eq!(required.len(), 14, "{required:?}");
+    assert!(matrix.contains("validator_args+=(--required-target \"$target\")"));
+    let flip = job(&doc, "promote");
+    assert_eq!(flip.get("needs").unwrap().list(), ["candidate"]);
+    assert_eq!(
+        text(flip.get("permissions").unwrap(), "contents"),
+        Some("write")
     );
     let dispatch = job(&doc, "dispatch_packaging_release");
-    requires(
-        text(dispatch, "if").unwrap(),
-        &[
-            "needs.metadata.outputs.prerelease != 'true'",
-            "needs.metadata.outputs.skip_gpu_bundles != 'true'",
-        ],
+    assert_eq!(
+        text(dispatch, "if"),
+        Some("${{ needs.promote.result == 'success' }}")
     );
     let step = named(dispatch, "Dispatch verified release to mesh-packaging");
     let env = step.get("env").unwrap();
@@ -377,9 +412,12 @@ fn packaging_identity_resolves_published_tag_and_hashes_manifest() {
     let fixture = support::Fixture::new();
     fixture.executable("git", r#"[[ "$*" == 'rev-parse refs/tags/v1.2.3^{commit}' ]] || exit 41; printf '%s\n' "$FIXTURE_SHA""#);
     fixture.executable("sha256sum", r#"[[ "$*" == 'release-artifacts/native-runtimes.json' ]] || exit 42; printf '%s  %s\n' "$FIXTURE_DIGEST" "$1""#);
-    let doc = document("release.yml");
+    let doc = document("release-promote.yml");
     let script = text(
-        named(job(&doc, "publish"), "Record downstream packaging identity"),
+        named(
+            job(&doc, "candidate"),
+            "Record downstream packaging identity",
+        ),
         "run",
     )
     .unwrap();
@@ -430,7 +468,7 @@ fn packaging_dispatch_binds_the_complete_identity_and_rejects_invalid_values() {
         "gh",
         r#"if [[ "$*" == *"/dispatches"* ]]; then cat > "$CAPTURE"; else printf '{"permissions":{"push":true}}'; fi"#,
     );
-    let doc = document("release.yml");
+    let doc = document("release-promote.yml");
     let script = text(
         named(
             job(&doc, "dispatch_packaging_release"),
@@ -495,7 +533,7 @@ fn packaging_dispatch_binds_the_complete_identity_and_rejects_invalid_values() {
 
 #[test]
 fn packaging_wait_keeps_dispatch_identity_and_retry_boundary() {
-    let doc = document("release.yml");
+    let doc = document("release-promote.yml");
     let dispatch = job(&doc, "dispatch_packaging_release");
     assert_eq!(
         text(dispatch.get("outputs").unwrap(), "correlation_id").unwrap(),

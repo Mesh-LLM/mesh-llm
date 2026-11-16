@@ -30,7 +30,6 @@ mod product_chains;
 mod quality_consistency;
 mod quality_contracts;
 mod registry_canary;
-mod rolling_preview;
 
 mod replay;
 mod replay_admission;

@@ -41,6 +41,8 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
     let release_package_source = fs::read_to_string(repo_root.join("just/release-bundle.just"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
+    let promote_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/release-promote.yml"))?;
     let pr_workflows = ["quality", "website", "linux", "macos", "windows"]
         .into_iter()
         .map(|lane| {
@@ -121,6 +123,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     check_workflow_invariants(
         &release_workflow,
+        &promote_workflow,
         &pr_workflows,
         &main_workflows,
         &website_pages,
@@ -147,7 +150,9 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     check_release_dispatch_version_preparation(&release_workflow, &native_sdk, &swift_sdk)?;
     release_compilation::check(repo_root, &release_workflow)?;
+    release_compilation::check(repo_root, &promote_workflow)?;
     check_release_container_contracts(&release_workflow, &configure_sccache)?;
+    check_release_container_contracts(&promote_workflow, &configure_sccache)?;
     check_windows_dynamic_runtime_contract(
         &host,
         &runtime_and_product,

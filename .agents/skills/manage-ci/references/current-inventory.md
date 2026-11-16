@@ -141,7 +141,8 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and identity-bound downstream `mesh-packaging` dispatch and readiness verification |
+| `release.yml` (`Release`, Cut) | dispatch on the default branch | Stamps the dispatched final version on the frozen `main` commit without writing `main`, release-only signing, assets, and publication of the complete candidate under the final tag as a GitHub pre-release; calls `release-promote.yml` when dispatched with `promote` |
+| `release-promote.yml` (`Release · Promote`) | dispatch on the default branch, `workflow_call` from `release.yml` | Requires a complete unpromoted candidate with the full native runtime matrix, marks it the latest stable release without rebuilding, then runs release-notes regrouping, identity-bound downstream `mesh-packaging` dispatch and readiness verification, and crates.io preflight and publication as separately rerunnable jobs |
 | `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; grants `packages: read` to pull its pinned GHCR runner image; workflow-commit controller validates locked historical metadata and the source's literal roster through Rust, then publishes from the immutable release source |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `dflash-pairings-publish.yml` (`Publish DFlash pairing index`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**`, dispatch on `main` | Publishes the checked-in DFlash pairing index to Hugging Face `meshllm/dflash-pairings` with `HF_TOKEN`: uploads `index/<sha256>.json` only when absent (never overwritten or deleted; an existing copy must hash to its name), refreshes the human-facing root `index.json` and `README.md`, then re-downloads and hashes the published file. Releases pin the index by `DFLASH_PAIRING_INDEX_SHA256`. GitHub-hosted with the pinned `public cpu` image for the `hf` CLI; one non-cancelling concurrency group per commit, so no pending publication is replaced; only the run whose pairings still match `main` refreshes the root copies |
@@ -540,11 +541,13 @@ No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level
 non-cancelling concurrency group serializes canary runs, not individual families.
 
-For a non-canary manual dispatch, `release.yml` runs the checked-in
-`scripts/release-version.sh`, creates one linear release-source commit when the
-tracked version surface changes, and fast-forwards `main` before any release
-build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. Canary dispatches never update `main` or publish. Release tags
+For every dispatch, `release.yml` metadata runs the checked-in
+`scripts/release-version.sh` against the frozen dispatch commit and requires a
+clean format and whitespace check before any release build starts. It holds
+`contents: read`, commits nothing, and never writes `main`; the release does
+not read the version recorded on `main`. Versions are `MAJOR.MINOR.PATCH` only.
+`just release` is a preflight and synchronous dispatcher for that
+same workflow. Canary dispatches never publish. Release tags
 and releases are immutable on the manual release path: a non-canary dispatch
 refuses an already-existing tag and fails closed if it cannot verify the
 remote tag state. The release workflow is dispatch-only, so re-pushing a tag
@@ -553,19 +556,27 @@ example a different glibc floor) under the same version. The publish job
 checks all four supported Node addon archives and checksum sidecars before
 creating the GitHub release, matching the downstream npm assembly matrix. It
 creates only the release-specific tag commit
-for generated Swift/SDK resources and enables GitHub-generated release notes.
+for the version stamp and generated Swift/SDK resources, enables
+GitHub-generated release notes, uploads to a draft, and exposes the complete
+candidate as a pre-release that is not marked latest.
 The comparison base is selected by `cargo xtool release notes-base` from the
-highest stable `vMAJOR.MINOR.PATCH` tag below the target; prerelease tags are
-excluded so RC and final notes use the same stable baseline.
-The stable crates.io preflight and publisher each download the versioned Linux x86_64 release
-archive and checksum sidecar after GitHub release publication, verifies the
+highest stable `vMAJOR.MINOR.PATCH` tag below the target; suffixed historical
+tags are excluded.
+
+`release-promote.yml` takes a candidate tag. Its `candidate` job requires a
+published, unpromoted release with every asset uploaded and a checksum-valid
+native runtime manifest covering the full release matrix, then records the tag
+commit, manifest digest, and notes base. Its `promote` job clears the
+pre-release flag. Every later job depends only on that flip and is rerun on its
+own. The crates.io preflight and publisher each download the versioned Linux x86_64 release
+archive and checksum sidecar from the promoted release, verifies the
 checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
 `libllama.so`), then supplies that library directory to Cargo's package
 verification. The resume workflow uses the same release-archive contract.
 
 The `release_notes` job initializes the Rust toolchain and sccache with both
 remote caches disabled before invoking its Cargo-backed notes helper. It runs
-after a successful stable publish with
+in `release-promote.yml` after promotion with
 `contents: write` and regroups that published body into Keep a Changelog
 sections through `scripts/release-notes-generate.sh`, which calls `cargo xtool
 release notes-link`, `notes-classify`, and `notes-regroup`. The deterministic
@@ -2125,12 +2136,3 @@ The protected ownership catalog retains its historical `skippy-bench` domain
 entries: PR admission requires byte-for-byte equality with main. Removing a
 workspace member does not require changing these domain mappings; catalog
 cleanup must follow the separate protected-catalog rollout procedure.
-
-## Rolling preview distribution
-
-`rolling-preview.yml` is a main-only manual dispatcher (schedule commented out) of `release.yml` with `preview=true`, the full GPU matrix and
-hosted runners. Unique run/attempt preview versions leave main unchanged. Release
-producers check out the metadata source SHA; publication stages a draft before
-exposing the complete immutable prerelease, never marking it latest. Stable
-package channels are untouched; retention is currently indefinite and unchanged
-source is not skipped. No runner settings or secrets are added.

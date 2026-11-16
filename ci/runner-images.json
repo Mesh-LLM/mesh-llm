@@ -788,7 +788,7 @@
       "scope": "release",
       "bindings": [
         {
-          "workflow": "release.yml",
+          "workflow": "release-promote.yml",
           "job": "publish_crates_preflight",
           "matrix_selector": null,
           "image_expression": "{image}",
@@ -801,7 +801,7 @@
       "scope": "release",
       "bindings": [
         {
-          "workflow": "release.yml",
+          "workflow": "release-promote.yml",
           "job": "publish_crates",
           "matrix_selector": null,
           "image_expression": "{image}",

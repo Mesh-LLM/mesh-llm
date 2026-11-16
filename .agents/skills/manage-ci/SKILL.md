@@ -620,7 +620,7 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
-- Every `release.yml` job that can reach cargo — directly, or through
+- Every `release.yml` and `release-promote.yml` job that can reach cargo — directly, or through
   `scripts/release-version.sh`, `scripts/publish-crates.sh`, or
   `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
@@ -705,8 +705,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   workflows. Every CI invocation of `mesh-llm` includes `--log-format json`.
 - Release and packaging wrap the same producers with signing, attestation,
   publication, and retention. They do not fork the underlying build commands.
-- Stable downstream packaging dispatch carries the published tag commit, native
-  runtime release manifest digest, and a run-attempt correlation ID. The tag
+- Downstream packaging dispatch belongs to Promote. It carries the published
+  tag commit, native runtime release manifest digest, and a run-attempt
+  correlation ID, all resolved from the published candidate. The tag
   commit can differ from the build source after release resources are generated.
   A separate wait job requires the matching successful downstream receipt and
   every requested channel. Its two-hour deadline fails closed. The downstream
@@ -786,10 +787,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
-- When protected `main` requires pull requests and checks, prepare the complete
-  version update with `scripts/release-version.sh` in a reviewed PR before
-  dispatching a release. The workflow must reapply it idempotently. Do not
-  bypass branch rules to make its version-preparation push succeed.
+- A release never writes `main` and never reads the version recorded there.
+  Every producer stamps the dispatched version with
+  `scripts/release-version.sh` and the publisher commits the stamped source
+  under the tag. Do not add a version pull request, a push to `main`, or a
+  branch-rule bypass to the release path.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
@@ -1089,12 +1091,15 @@ plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')
 it twice — once on a branch without the fix it is meant to catch (expected
 red) and once with it (expected green) — and link both runs in the PR.
 
-## Rolling previews
+## Cut and Promote
 
-The main-only rolling-preview dispatcher reuses the canonical release pipeline,
-never a parallel packaging implementation. Preview versions must contain
-`-preview.` and leave main unchanged; all producer checkouts use metadata's
-frozen source SHA. Publish verified assets as a draft before exposing the
-complete prerelease, without marking it latest or invoking stable registries.
-Keep immutable preview tags and previous downloads; no automated deletion is
-part of the initial rollout. The Tuesday/Friday 03:23 UTC schedule is commented out; dispatch manually.
+A release is two workflows. `release.yml` (Cut) builds the frozen `main` commit
+with the final `MAJOR.MINOR.PATCH` version and publishes it under the final tag
+as a GitHub pre-release: that is the release candidate. Versions carry no `-rc`
+or `-preview` suffix. Upload to a draft, then expose the complete candidate
+without marking it latest. `release-promote.yml` (Promote) rebuilds nothing: it
+requires a published, unpromoted candidate with every asset uploaded and the
+full native runtime matrix, marks it the latest stable release, and only then
+runs release notes, downstream packaging, and crates.io publication as
+separately rerunnable jobs. A rejected candidate is never promoted; the next
+cut takes the next patch version. Keep candidate tags and downloads immutable.

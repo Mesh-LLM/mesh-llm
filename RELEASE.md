@@ -1,55 +1,90 @@
 # Releasing mesh-llm
 
-## Prepare protected main, then dispatch
+## Cut, test, promote
 
-When `main` requires pull requests and successful checks, prepare the release
-version in a PR before dispatching the **Release** workflow
-(`.github/workflows/release.yml`). `scripts/release-version.sh` is the single
-version authority. From a release-preparation branch, run:
+A release is two buttons. **Cut** builds the release once. **Promote** makes
+that same build the real release. Nothing is rebuilt in between, and nothing
+needs a pull request first.
 
-```bash
-scripts/release-version.sh v0.79.0-rc1
-cargo fmt --all --check
-just check-release
-just ci-validate
-```
-
-Review the complete generated version diff, run the additional checks required
-by the changed files, and merge the PR after its required checks pass. Then
-update a clean local `main` and dispatch the release:
+### 1. Cut a candidate
 
 ```bash
 git pull --ff-only
-just release 0.79.0-rc1
+just release 0.81.0
 ```
 
-Use the same preparation process for the final version, such as `0.79.0`.
-The workflow reapplies the version script before building. With the complete
-version update already on `main`, this is idempotent and its main push is
-up to date. An unprepared version makes the workflow attempt a new version
-commit, which protected branch rules can reject with `GH013`. Prepare and
-merge the version PR instead of bypassing those rules.
+or run the **Release** workflow (`.github/workflows/release.yml`) from `main`
+in the Actions UI with `version` set to `0.81.0`.
 
-The GitHub Actions UI can dispatch the same workflow from `main` with the
-prepared version input. The workflow builds and verifies the platform bundles,
-then prepares the SwiftPM manifest and SDK console assets. It creates and
-pushes the release tag, publishes the GitHub release, and asks GitHub to generate
-the release notes against the highest stable SemVer tag below the target. RC tags
-are never selected as the comparison base, so every RC includes all changes
-since the previous stable release, and the final release repeats that complete
-range plus any post-RC changes. The `just release <version>` recipe performs
-local preflight and dispatches this same workflow; it does not maintain a second
-version-bump path.
-Canary dispatches build the requested version without changing `main` or
-publishing. After a complete
-stable, non-canary release with the full GPU matrix succeeds, it dispatches
-`Mesh-LLM/mesh-packaging` to package the verified release archives, publish the
-native package release assets, publish the supported GHCR image matrix, and
-assemble and publish the Node SDK to npm. Prereleases publish their immutable
-GitHub Release inputs without invoking downstream publication. Dispatch inputs
-include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
-without publishing). Releases that intentionally skip GPU bundles do not
-dispatch the full packaging matrix.
+The workflow freezes the `main` commit it was dispatched from, stamps the
+version on it with `scripts/release-version.sh`, builds and verifies every
+platform bundle, pushes the tag `v0.81.0`, and publishes the GitHub release as
+a **pre-release**. That pre-release is the release candidate: it already has
+the final version, the final files and the final download URLs.
+
+- The version is always plain `MAJOR.MINOR.PATCH`. There are no `-rc` or
+  `-preview` versions.
+- A cut never writes `main` and never reads the version recorded on `main`,
+  so branch rules cannot stop it. `main` keeps whatever version it last
+  recorded; the release version comes only from the workflow input.
+- Nobody is moved onto a candidate. Installers and auto-update follow GitHub's
+  **latest** release, and a candidate is not latest.
+- SwiftPM reads git tags, so a Swift consumer who asks for `0.81.0` can resolve
+  a candidate before it is promoted.
+
+### 2. Test the candidate
+
+```bash
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --pre-release
+```
+
+`install.ps1 -PreRelease` and `MESH_LLM_INSTALL_PRERELEASE=1` do the same.
+They install the newest published pre-release.
+
+### 3. Promote it
+
+```bash
+gh workflow run release-promote.yml --ref main --raw-field tag=v0.81.0
+```
+
+or run **Release · Promote** from `main` in the Actions UI. Promote takes
+minutes. It checks that the candidate is complete (published, every file
+uploaded, every CPU and GPU runtime present), marks it the latest stable
+release, and then runs three independent follow-ups:
+
+- regroup the release notes;
+- dispatch `Mesh-LLM/mesh-packaging` for the native package assets, the GHCR
+  image matrix and the Node SDK on npm, and wait for its receipt;
+- publish the Rust SDK crate chain to crates.io.
+
+If one follow-up fails, the release is still out. Use **Re-run failed jobs** on
+that Promote run; it repeats only the failed job. Do not dispatch Promote again
+for the same tag.
+
+### One step instead of two
+
+```bash
+just release 0.81.0 --promote
+```
+
+or tick `promote` on the Release workflow. Promote then runs as soon as the
+candidate is published.
+
+### A bad candidate
+
+Do not promote it. Fix `main` and cut the next patch version, such as
+`0.81.1`. Tags and their files are never replaced. The rejected candidate
+stays on the Releases page as a pre-release; delete it there if it should not
+be installable with `--pre-release`.
+
+### Other inputs
+
+`canary` builds and smoke-tests everything without publishing a tag or a
+release. `skip_gpu_bundles` cuts a candidate without the GPU bundles; such a
+candidate cannot be promoted.
+
+GitHub generates the release notes against the highest stable release below
+the target version.
 
 Do not use GitHub's bare **Draft a new release** form as an alternate release
 path. It bypasses the verified artifact graph. The Release workflow is the only
@@ -265,16 +300,16 @@ Verify:
 
 ## Publish
 
-The dispatched release workflow owns release archive production, but it does
+The Release workflow owns release archive production, but it does
 not publish OCI images.
 `Mesh-LLM/mesh-packaging` is the canonical package, GHCR, and npm producer. It
-starts only after a stable GitHub release and its complete CPU/GPU archive set
-have published successfully. Prereleases never dispatch it. The upstream
+starts only when Promote marks a candidate with the complete CPU/GPU archive
+set as the stable release. An unpromoted candidate never dispatches it. The upstream
 `docker.yml` workflow performs Dockerfile validation only and is not a
 distribution channel.
 
 The dispatch binds the published tag commit and native runtime manifest digest
-to an upstream run-attempt correlation ID. A separate job waits up to two hours
+to a Promote run-attempt correlation ID. A separate job waits up to two hours
 for the matching downstream run and successful readiness receipt. It checks
 every requested publication result and fails on ambiguous or stale evidence.
 Retrying the wait job does not dispatch packaging again.
@@ -286,7 +321,7 @@ failed dispatch job. A repository secret's presence does not prove that its
 credential can write the target repository. Do not put the token in workflow
 logs or command output.
 
-On non-prerelease tags, the release workflow also publishes the Rust SDK crate
+Promote also publishes the Rust SDK crate
 chain to crates.io in dependency order:
 
 ```bash
@@ -324,7 +359,7 @@ The chain currently publishes:
 10. `mesh-llm-node`
 11. `mesh-llm-api-server`
 
-Run the consistency check and dry-run before cutting a GA tag after changing
+Run the consistency check and dry-run before cutting a release after changing
 SDK crate manifests or workspace-internal SDK dependencies. The consistency
 check keeps the scripted publish order, workspace path dependency versions,
 publish metadata, bundled file includes, and CI release preflight in sync. On
@@ -333,9 +368,10 @@ validates packages whose registry dependencies already exist and reports
 downstream packages that will be fully verified during the real sequential
 publish after their upstream crates land.
 
-If crates.io rate-limits the non-prerelease publish chain after some crates
-have already uploaded, rerun `scripts/publish-crates.sh` for the same checked
-out release tag instead of recutting the GitHub release or moving the tag. The
+If crates.io rate-limits the publish chain after some crates
+have already uploaded, re-run the failed crates.io job of the Promote run, or
+rerun `scripts/publish-crates.sh` for the same checked
+out release tag, instead of recutting the GitHub release or moving the tag. The
 script relies on `cargo publish` to report crate versions that were already
 uploaded, continues past those already-uploaded crates, and retries HTTP 429
 new-crate rate-limit responses using the retry time from crates.io when one is
@@ -354,33 +390,3 @@ self-hosting path.
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
-
-## Rolling downloadable previews
-
-`rolling-preview.yml` dispatches the canonical Release workflow on manual
-dispatch only (the schedule is commented out). Unique versions use
-`v<workspace-core>-preview.<run-id>.<attempt>`. It builds the full existing release
-matrix including bundled native runtimes, without publishing npm, crates.io,
-containers or downstream installers. Preview mode leaves main unchanged.
-All producers check out the release run's frozen source SHA and prepare the
-version locally. The publisher prepares an immutable tag, uploads to a draft,
-then exposes the complete prerelease without marking it latest.
-
-After merging, start the first run with:
-
-```bash
-gh workflow run rolling-preview.yml --ref main
-```
-
-Completed previews appear on the repository Releases page with a **Rolling
-preview** title. Choose the MeshLLM archive for your OS, architecture and backend,
-verify the adjacent SHA-256 checksum and extract the entire archive. Keep
-`native-runtimes` beside the executable. Model weights and GPU drivers remain
-separate prerequisites. Existing release smoke gates apply; publication is not
-proof of hardware inference on every GPU backend. The first live run and a real
-download-to-inference check remain required activation evidence.
-
-Failed uploads leave an unpublished draft for diagnosis; use a fresh version
-rather than overwriting tags. Previous previews remain available for rollback.
-This initial implementation neither deletes old releases nor skips unchanged
-source; there is no moving tag or automatic stable-user upgrade.

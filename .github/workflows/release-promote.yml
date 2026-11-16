@@ -1,0 +1,548 @@
+name: Release · Promote
+
+# Promote a published candidate to the latest stable release. Nothing is
+# rebuilt: the candidate cut by release.yml already carries the final version,
+# files and download URLs. A failed job here is rerun on its own.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published candidate tag to promote, for example v0.81.0
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: Published candidate tag to promote, for example v0.81.0
+        required: true
+        type: string
+    # Optional so that a missing credential fails only the job that needs it,
+    # after the candidate is already promoted, instead of refusing the call.
+    secrets:
+      MESH_AGENT_IMAGES_DISPATCH_TOKEN:
+        required: false
+      CARGO_REGISTRY_TOKEN:
+        required: false
+
+concurrency:
+  group: release-promote-${{ github.repository }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+  CACHE_NAMESPACE: mesh-llm
+  SCCACHE_DIR: ${{ github.workspace }}/../.sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+  SCCACHE_MULTILEVEL_CHAIN: disk,gha
+  SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore
+
+jobs:
+  candidate:
+    name: Verify the candidate
+    if: github.repository == 'Mesh-LLM/mesh-llm'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      tag_commit: ${{ steps.packaging_identity.outputs.tag_commit }}
+      manifest_sha256: ${{ steps.packaging_identity.outputs.manifest_sha256 }}
+      release_notes_base: ${{ steps.notes.outputs.release_notes_base }}
+    steps:
+      - name: Require the trusted release ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Promotion must be dispatched from refs/heads/main, not $GITHUB_REF." >&2
+            exit 1
+          fi
+      - id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="v${INPUT_TAG#v}"
+          version="${tag#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $INPUT_TAG (expected vMAJOR.MINOR.PATCH)" >&2
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          # The candidate tag commit and every earlier release tag.
+          fetch-depth: 0
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Prepare candidate verification
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Require a complete unpromoted candidate
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")" || {
+            echo "No published candidate exists for $RELEASE_TAG. Cut it with the Release workflow first." >&2
+            exit 1
+          }
+          release_id="$(jq -r '.id' <<<"$release")"
+          if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
+            echo "Unable to resolve the release for $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.draft' <<<"$release")" != "false" ]]; then
+            echo "$RELEASE_TAG is still a draft: its upload did not finish." >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.prerelease' <<<"$release")" != "true" ]]; then
+            echo "$RELEASE_TAG is already promoted. Re-run the failed jobs of its Promote run instead of promoting it again." >&2
+            exit 1
+          fi
+          assets="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.state, .name] | @tsv')"
+          if [[ -z "$assets" ]]; then
+            echo "$RELEASE_TAG has no release files." >&2
+            exit 1
+          fi
+          incomplete="$(awk -F '\t' '$1 != "uploaded" { print $2 }' <<<"$assets")"
+          if [[ -n "$incomplete" ]]; then
+            echo "$RELEASE_TAG has incomplete uploads:" >&2
+            printf '%s\n' "$incomplete" >&2
+            exit 1
+          fi
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+      - name: Download the candidate runtime manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-artifacts \
+            --pattern native-runtimes.json --pattern native-runtimes.json.sha256
+          (
+            cd release-artifacts
+            sha256sum --check native-runtimes.json.sha256
+          )
+      - name: Require the full release matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Stable channels serve every backend, so a candidate cut with
+          # skip_gpu_bundles cannot be promoted.
+          required_native_targets=(
+            "macos/aarch64/metal"
+            "linux/x86_64/cpu"
+            "linux/aarch64/cpu"
+            "windows/x86_64/cpu"
+            "linux/aarch64/cuda12"
+            "linux/aarch64/cuda13"
+            "linux/x86_64/cuda12"
+            "linux/x86_64/cuda13"
+            "linux/x86_64/rocm"
+            "linux/x86_64/vulkan"
+            "windows/x86_64/cuda12"
+            "windows/x86_64/cuda13"
+            "windows/x86_64/rocm"
+            "windows/x86_64/vulkan"
+          )
+          validator_args=(--manifest release-artifacts/native-runtimes.json)
+          for target in "${required_native_targets[@]}"; do
+            validator_args+=(--required-target "$target")
+          done
+          "${MESH_LLM_AUTOMATION_BIN:?}" native release-matrix "${validator_args[@]}"
+      - name: Record downstream packaging identity
+        id: packaging_identity
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          manifest_sha256="$(sha256sum release-artifacts/native-runtimes.json | cut -d ' ' -f 1)"
+          if [[ ! "$tag_commit" =~ ^[0-9a-f]{40}$ || ! "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid published tag commit or native manifest digest" >&2
+            exit 1
+          fi
+          printf 'tag_commit=%s\nmanifest_sha256=%s\n' "$tag_commit" "$manifest_sha256" >> "$GITHUB_OUTPUT"
+      - name: Select the release notes base
+        id: notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_notes_base="$(
+            git tag --list 'v*' |
+              "${MESH_LLM_AUTOMATION_BIN:?}" release notes-base "$RELEASE_TAG"
+          )"
+          echo "release_notes_base=$release_notes_base" >> "$GITHUB_OUTPUT"
+
+  promote:
+    name: Mark the candidate as a stable release
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Promote the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.candidate.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `legacy` lets GitHub pick the latest release by creation date and
+          # version, so promoting an older patch line does not displace a
+          # newer release.
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F prerelease=false -f make_latest=legacy \
+            --jq '"Promoted \(.tag_name): prerelease=\(.prerelease)"'
+          if [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq '.prerelease')" != "false" ]]; then
+            echo "$RELEASE_TAG is still marked as a pre-release" >&2
+            exit 1
+          fi
+
+  release_notes:
+    name: Regroup release notes
+    needs: [candidate, promote]
+    if: ${{ needs.promote.result == 'success' && needs.candidate.outputs.release_notes_base != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      # The link pass reads pull requests to recover entries GitHub credited
+      # only to the roll-up that carried them in.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.candidate.outputs.tag_commit }}
+          persist-credentials: false
+          # The deterministic pass classifies entries from the commit range
+          # between the comparison base and this tag.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+
+      - name: Regroup published release notes
+        id: regroup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_NOTES_BASE: ${{ needs.candidate.outputs.release_notes_base }}
+          # Explicit, reviewable approval for this job to edit the release it
+          # just published. The script grants no implicit CI bypass.
+          RELEASE_NOTES_APPROVED: "true"
+          # Unset until a runner provides the agent CLI and credentials; the
+          # deterministic pass publishes on its own until then.
+          AGENT_MODEL: ${{ vars.RELEASE_NOTES_AGENT_MODEL }}
+          RELEASE_NOTES_WORKDIR: ${{ runner.temp }}/release-notes
+        run: scripts/release-notes-generate.sh
+
+      - name: Upload release-notes evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-notes-${{ needs.candidate.outputs.tag }}
+          path: ${{ runner.temp }}/release-notes
+          retention-days: 90
+          if-no-files-found: warn
+
+  dispatch_packaging_release:
+    name: Dispatch package and image publishing
+    needs: [candidate, promote]
+    if: ${{ needs.promote.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ steps.dispatch.outputs.correlation_id }}
+    steps:
+      - name: Dispatch verified release to mesh-packaging
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
+          RELEASE_TAG_COMMIT: ${{ needs.candidate.outputs.tag_commit }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.candidate.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN:-}" ]] || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to Mesh-LLM/mesh-packaging for cross-repository dispatch" >&2
+            exit 1
+          }
+          target_permissions="$(gh api "repos/${TARGET_REPOSITORY}")" || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN cannot access ${TARGET_REPOSITORY}; update the secret with a credential that grants Contents write access" >&2
+            exit 1
+          }
+          [[ "$(jq -r '.permissions.push // false' <<<"$target_permissions")" == "true" ]] || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
+            exit 1
+          }
+          gh api "repos/${TARGET_REPOSITORY}/actions/workflows/images-release.yml/runs?per_page=1" > /dev/null || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Actions read access to ${TARGET_REPOSITORY}" >&2
+            exit 1
+          }
+          [[ "$RELEASE_TAG_COMMIT" =~ ^[0-9a-f]{40}$ && "$RELEASE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Missing or invalid published release identity" >&2
+            exit 1
+          }
+          correlation_id="mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg ref "$RELEASE_TAG" \
+            --arg version "$RELEASE_VERSION" \
+            --arg expected_mesh_sha "$RELEASE_TAG_COMMIT" \
+            --arg expected_manifest_sha256 "$RELEASE_MANIFEST_SHA256" \
+            --arg correlation_id "$correlation_id" \
+            '{
+              event_type: "mesh-llm-release",
+              client_payload: {
+                repository: $repository,
+                ref: $ref,
+                version: $version,
+                expected_mesh_sha: $expected_mesh_sha,
+                expected_manifest_sha256: $expected_manifest_sha256,
+                correlation_id: $correlation_id,
+                dry_run: false,
+                publish_images: true,
+                publish_release_assets: true,
+                publish_npm: true
+              }
+            }' |
+            gh api \
+              --method POST \
+              "repos/${TARGET_REPOSITORY}/dispatches" \
+              --input -
+          printf 'correlation_id=%s\n' "$correlation_id" >> "$GITHUB_OUTPUT"
+
+  await_packaging_release:
+    name: Verify package and image publishing
+    needs: [candidate, promote, dispatch_packaging_release]
+    if: ${{ needs.dispatch_packaging_release.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Prepare packaging receipt verifier
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Resolve upstream run start
+        id: start
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          started="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          [[ "$started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          printf 'created_at=%s\n' "$started" >> "$GITHUB_OUTPUT"
+      - name: Wait for matching successful packaging receipt
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_TAG_COMMIT: ${{ needs.candidate.outputs.tag_commit }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.candidate.outputs.manifest_sha256 }}
+          CORRELATION_ID: ${{ needs.dispatch_packaging_release.outputs.correlation_id }}
+          RUN_CREATED_AT: ${{ steps.start.outputs.created_at }}
+        run: |
+          set -euo pipefail
+          "${MESH_LLM_AUTOMATION_BIN:?}" release packaging-receipt \
+            --tag "$RELEASE_TAG" --sha "$RELEASE_TAG_COMMIT" \
+            --manifest "$RELEASE_MANIFEST_SHA256" --correlation "$CORRELATION_ID" \
+            --since "$RUN_CREATED_AT"
+
+  publish_crates_preflight:
+    name: Preflight crates.io packages
+    needs: [candidate, promote]
+    if: ${{ needs.promote.result == 'success' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
+    env:
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_MULTILEVEL_CHAIN: disk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.candidate.outputs.tag }}
+          persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Check crates.io publish-chain consistency
+        run: cargo run -p xtask -- repo-consistency publish-crates
+      - name: Restore verified release runtime libraries
+        id: runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
+          mkdir -p "$runtime_root"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive.sha256" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          (
+            cd "$runtime_root"
+            sha256sum --check "$archive.sha256"
+            tar --extract --gzip --file "$archive"
+          )
+          lib_dir="$(
+            find "$runtime_root" \
+              -type d \
+              -path '*/native-runtimes/*/lib' \
+              -print \
+              -quit
+          )"
+          if [[ -z "$lib_dir" ]]; then
+            echo "release archive does not contain a native runtime library directory" >&2
+            exit 1
+          fi
+          for library in libmtmd.so libllama-common.so libllama.so; do
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "release runtime is missing $library" >&2
+              exit 1
+            fi
+          done
+          printf 'lib_dir=%s\n' "$lib_dir" >> "$GITHUB_OUTPUT"
+      - name: Dry-run crates.io package chain
+        env:
+          LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-preflight-crates-native-verify
+          LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}
+        run: scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0
+
+  publish_crates:
+    name: Publish crates.io packages
+    needs: [candidate, promote, publish_crates_preflight]
+    if: ${{ needs.promote.result == 'success' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
+    env:
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_MULTILEVEL_CHAIN: disk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.candidate.outputs.tag }}
+          persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Restore verified release runtime libraries
+        id: runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
+          mkdir -p "$runtime_root"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive.sha256" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          (
+            cd "$runtime_root"
+            sha256sum --check "$archive.sha256"
+            tar --extract --gzip --file "$archive"
+          )
+          lib_dir="$(
+            find "$runtime_root" \
+              -type d \
+              -path '*/native-runtimes/*/lib' \
+              -print \
+              -quit
+          )"
+          if [[ -z "$lib_dir" ]]; then
+            echo "release archive does not contain a native runtime library directory" >&2
+            exit 1
+          fi
+          for library in libmtmd.so libllama-common.so libllama.so; do
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "release runtime is missing $library" >&2
+              exit 1
+            fi
+          done
+          printf 'lib_dir=%s\n' "$lib_dir" >> "$GITHUB_OUTPUT"
+      - name: Publish crates.io package chain
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-publish-crates-native-verify
+          LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}
+        run: scripts/publish-crates.sh

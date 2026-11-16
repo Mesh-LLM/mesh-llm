@@ -13,7 +13,7 @@ use std::{
 };
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 const START: &str = "2026-08-14T12:00:00Z";
-const VERSION: &str = "0.1.1-rc1";
+const VERSION: &str = "0.1.1";
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -134,10 +134,15 @@ impl Fixture {
         }
     }
     fn main(&self, route: &str, failure: &str, canary: bool) -> Output {
-        let mut args = vec!["scripts/release.sh", VERSION, "--skip-gpu-bundles"];
+        let mut flags = vec!["--skip-gpu-bundles"];
         if canary {
-            args.push("--canary");
+            flags.push("--canary");
         }
+        self.release(VERSION, &flags, route, failure)
+    }
+    fn release(&self, version: &str, flags: &[&str], route: &str, failure: &str) -> Output {
+        let mut args = vec!["scripts/release.sh", version];
+        args.extend_from_slice(flags);
         // The parent child has closed stdin; only this finite wrapper supplies confirmation.
         self.run("printf 'yes\\n' | bash \"$@\"", &args, route, failure)
     }
@@ -262,7 +267,9 @@ fn release_script_actual_main_routes_url_or_correlated_fallback_to_numeric_watch
                 "--ref",
                 "main",
                 "--raw-field",
-                "version=v0.1.1-rc1",
+                "version=v0.1.1",
+                "--raw-field",
+                "promote=false",
                 "--raw-field",
                 "skip_gpu_bundles=true",
                 "--raw-field",
@@ -334,5 +341,62 @@ fn release_script_dispatch_lookup_and_watch_failure_never_report_release_success
         if failure == "dispatch" {
             assert!(named(&calls, &["gh", "run", "list"]).is_empty());
         }
+    }
+}
+#[test]
+fn release_script_cut_publishes_a_candidate_and_only_promote_reports_a_release() {
+    for (flags, promote) in [(&[][..], "false"), (&["--promote"][..], "true")] {
+        let fixture = Fixture::new();
+        let output = fixture.release(VERSION, flags, "url", "");
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        let calls = fixture.calls();
+        let dispatch = named(&calls, &["gh", "workflow", "run"]);
+        assert_eq!(dispatch.len(), 1);
+        assert_eq!(
+            &dispatch[0][6..],
+            [
+                "--raw-field",
+                "version=v0.1.1",
+                "--raw-field",
+                &format!("promote={promote}"),
+                "--raw-field",
+                "skip_gpu_bundles=false",
+                "--raw-field",
+                "canary=false"
+            ]
+        );
+        // A cut never reads or writes the version recorded on main.
+        assert!(named(&calls, &["git", "show"]).is_empty());
+        assert!(named(&calls, &["git", "push"]).is_empty());
+        let complete = output.stdout.contains("Release complete: v0.1.1");
+        let candidate = output.stdout.contains("Candidate published: v0.1.1");
+        assert_eq!(
+            (complete, candidate),
+            (promote == "true", promote == "false")
+        );
+        assert_eq!(
+            output
+                .stdout
+                .contains("gh workflow run release-promote.yml --ref main --raw-field tag=v0.1.1"),
+            promote == "false"
+        );
+    }
+}
+#[test]
+fn release_script_rejects_suffixed_versions_and_partial_promotions_before_dispatch() {
+    for (version, flags, expected) in [
+        ("0.1.1-rc1", &[][..], "expected MAJOR.MINOR.PATCH"),
+        ("0.1.1-preview.1", &[][..], "expected MAJOR.MINOR.PATCH"),
+        (
+            VERSION,
+            &["--promote", "--skip-gpu-bundles"][..],
+            "a candidate without GPU bundles cannot be promoted",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let output = fixture.release(version, flags, "url", "");
+        assert_ne!(output.code, 0, "{version} {flags:?}");
+        assert!(output.stderr.contains(expected), "{}", output.stderr);
+        assert!(named(&fixture.calls(), &["gh", "workflow", "run"]).is_empty());
     }
 }

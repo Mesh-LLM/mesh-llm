@@ -793,27 +793,31 @@ Release efficiency TODOs:
   canary. QA: verify all host/runtime hashes, no-driver readiness, SDK resources,
   and per-phase timings on Linux amd64/arm64, macOS, and Windows.
 
-Protected `main` requires the complete version update to land through a PR
-with successful checks before dispatch. The workflow reapplies the same script
-idempotently and pushes the unchanged commit. If version preparation has not
-landed, branch rules can reject the workflow's new version commit; the release
-process does not bypass those rules.
+A release is two workflows. `release.yml` (Cut) builds the frozen `main`
+commit with the final `MAJOR.MINOR.PATCH` version and publishes it under the
+final tag as a GitHub pre-release: the release candidate. `release-promote.yml`
+(Promote) rebuilds nothing and turns that candidate into the latest stable
+release. A release never writes `main` and never reads the version recorded
+there, so no version pull request precedes a dispatch and branch rules cannot
+stop one.
 
 `scripts/release-version.sh` is the single owner of the tracked release-version
 surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
 every release job that can reach cargo — including `metadata`, which runs on
-canary dispatches too, and the canary-skipped `publish` and `release_notes`
-jobs — initializes sccache before its first cargo call. The artifact-only
+canary dispatches too, the canary-skipped `publish` job, and Promote's
+`release_notes` and crates.io jobs — initializes sccache before its first cargo
+call. The artifact-only
 composition jobs never call cargo, and `tools/xtask` enforces both halves. The
 Cargo-reach check recognizes direct `cargo` invocations and the named helpers
 `release-version.sh`, `publish-crates.sh`, `release-notes-generate.sh` and
 `package-release.sh`; other scripts that invoke Cargo are not covered unless the
-validator is extended to detect them. On a non-canary `release.yml` dispatch,
-metadata reapplies the prepared version. If a diff remains, it attempts a new
-release-source commit and main push; protected `main` rejects that unreviewed
-update before the build graph begins. `just release` only
+validator is extended to detect them. On every `release.yml` dispatch,
+metadata applies the dispatched version to the frozen dispatch commit and
+requires a clean format and whitespace check before the build graph begins. It
+holds `contents: read` and commits nothing; each producer applies the same
+stamp and the publisher commits it under the tag. `just release` only
 performs local preflight, dispatches that workflow, and waits for its result.
-Canary dispatches do not mutate `main` or publish. Release tags and releases are immutable on
+Canary dispatches do not publish. Release tags and releases are immutable on
 the manual release path: a non-canary dispatch refuses an already-existing tag
 and fails closed if it cannot verify the remote tag state. The release
 workflow is dispatch-only, so re-pushing a tag does not start a second release
@@ -853,13 +857,20 @@ generated SwiftPM/binding and SDK console resources needed by the immutable
 release tag, publishes the assets, and enables GitHub-generated release notes.
 The metadata job runs `cargo xtool release notes-base` to select the highest
 stable `vMAJOR.MINOR.PATCH` tag below the target as the explicit comparison base.
-It excludes every prerelease tag, so release candidates and their final stable
-release use the same stable baseline;
-the final notes retain the RC changes and add any post-RC changes.
-The workflow-scoped token push does not fan out another main CI run; the release
-graph is the evidence for that version-only source commit.
+It excludes every tag with a suffix, so historical release candidates never
+become a baseline. The release is uploaded as a draft and exposed as a
+pre-release only when every file is present; it is never marked latest by Cut.
 
-After a stable release publishes, the `release_notes` job regroups the
+Promote's `candidate` job requires a published, unpromoted release for the tag
+with every asset uploaded, a native runtime manifest that matches its checksum
+and covers the full release matrix, and resolves the tag commit and manifest
+digest that downstream packaging binds. A candidate cut with `skip_gpu_bundles`
+therefore cannot be promoted. The `promote` job then clears the pre-release flag
+and lets GitHub select the latest release. Each later job depends only on that
+flip, so a failed job is rerun on its own without rebuilding or repeating the
+others. `release.yml` calls Promote directly when dispatched with `promote`.
+
+After promotion, the `release_notes` job regroups the
 GitHub-generated body into Keep a Changelog sections through the Rust `cargo
 xtool release` notes-link, notes-classify and notes-regroup commands. The job
 uses the pinned Rust toolchain and job-local sccache initialized before the
@@ -874,11 +885,10 @@ Every agent failure mode -- absent CLI, missing credentials, failed probe,
 exhausted quota, blown budget, or an invalid plan -- keeps the deterministic
 notes and leaves the job green. `RELEASE_NOTES_AGENT_MODEL` is unset, so the
 pipeline is deterministic-only until a runner provides the agent CLI and
-credentials. Prereleases are skipped because RC notes are regenerated for the
-final release. Work products upload as `release-notes-<tag>` evidence for 90
+credentials. Work products upload as `release-notes-<tag>` evidence for 90
 days.
 
-After a stable release with the full GPU matrix succeeds, the downstream
+After promotion, the downstream
 `mesh-packaging` dispatch job first checks that its
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository
 and probes the Actions run-list endpoint. Because that endpoint is public,
@@ -888,30 +898,28 @@ That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
 The dispatch binds the published tag commit, native runtime manifest SHA-256,
-and upstream run-attempt correlation ID. A separate job waits for the matching
+and Promote run-attempt correlation ID. A separate job waits for the matching
 run and validates its readiness receipt and requested channels. Retrying the
 wait job does not dispatch another packaging run.
 
-The non-canary path below assumes the version-preparation PR has merged.
-
 ```mermaid
 flowchart TD
-    JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch"]
+    JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch (Cut)"]
     UI["GitHub Actions UI"] --> DISPATCH
-    DISPATCH --> META["Resolve version and highest prior stable notes tag"]
-    META --> PATH{"Canary?"}
-    PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update main"]
-    PATH -- "non-canary dispatch" --> BUMP["Reapply release-version.sh"]
-    BUMP --> VERSION_COMMIT["Use prepared main SHA<br/>unchanged main push"]
-    CANARY --> BUILD["Build, compose, and smoke artifact matrix"]
-    VERSION_COMMIT --> BUILD
+    DISPATCH --> META["Resolve version and highest prior stable notes tag<br/>prove the version stamp applies to the frozen main commit"]
+    META --> BUILD["Build, compose, and smoke artifact matrix"]
     BUILD --> PUBLISHABLE{"Canary?"}
     PUBLISHABLE -- "yes" --> CANARY_DONE["Stop without tag or publication"]
     PUBLISHABLE -- "no" --> PREPARE_TAG["Add generated SDK resources<br/>create and push immutable tag"]
-    PREPARE_TAG --> RELEASE["Publish GitHub release<br/>notes compare from prior stable tag"]
-    RELEASE --> KIND{"Prerelease?"}
-    KIND -- "yes" --> RC_DONE["Stop after GitHub prerelease"]
-    KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
+    PREPARE_TAG --> RELEASE["Upload to a draft<br/>expose the complete candidate as a pre-release"]
+    RELEASE --> AUTO{"promote input?"}
+    AUTO -- "no" --> CANDIDATE_DONE["Stop: candidate is testable<br/>install.sh --pre-release"]
+    AUTO -- "yes" --> VERIFY
+    PROMOTE_DISPATCH["Release · Promote dispatch<br/>tag"] --> VERIFY["Require a complete unpromoted candidate<br/>full native runtime matrix"]
+    VERIFY --> FLIP["Mark latest stable release"]
+    FLIP --> NOTES["Regroup release notes"]
+    FLIP --> PACKAGING["Dispatch packages, images, and npm<br/>wait for the matching receipt"]
+    FLIP --> CRATES["crates.io preflight and publish"]
 ```
 
 The stable crates.io preflight and publisher each verify the checksummed Linux
@@ -2500,12 +2508,3 @@ configuration or prescribe attention/recurrent cache representations. Loaded
 native graphs and memory exporters own cache admission. Split correctness still
 uses genuine planner output and binary stage servers. Cache-hit assertions run
 on immediate repeated requests without publication sleeps or retries.
-
-## Rolling preview distribution
-
-`rolling-preview.yml` is a main-only manual dispatcher (schedule commented out) of `release.yml` with `preview=true`, the full GPU matrix and
-hosted runners. Unique run/attempt preview versions leave main unchanged. Release
-producers check out the metadata source SHA; publication stages a draft before
-exposing the complete immutable prerelease, never marking it latest. Stable
-package channels are untouched; retention is currently indefinite and unchanged
-source is not skipped. No runner settings or secrets are added.

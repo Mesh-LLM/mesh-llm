@@ -4,14 +4,18 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/release.sh <version|vversion> [--skip-gpu-bundles] [--canary]
+usage: scripts/release.sh <version|vversion> [--promote] [--skip-gpu-bundles] [--canary]
 
-Runs a synchronous release from main:
+Cuts a release candidate from main:
   1. verifies gh and the local git state
   2. dispatches .github/workflows/release.yml
-  3. lets the workflow commit and push the canonical version bump
-  4. watches the GitHub Actions run until it succeeds or fails
-  5. verifies the release and origin/main version
+  3. watches the GitHub Actions run until it succeeds or fails
+  4. verifies the candidate is published as a pre-release
+
+The workflow stamps the version itself; main is not changed and needs no
+version pull request. Promote the candidate later with
+.github/workflows/release-promote.yml, or pass --promote to promote it as soon
+as it is published.
 
 The command requires the current branch to be main and up to date with
 origin/main before it starts.
@@ -31,8 +35,8 @@ require_command() {
 semver_from_arg() {
     local raw="$1"
     local version="${raw#v}"
-    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-        die "invalid version '$raw'; expected 0.72.1, v0.72.1, 0.72.1-rc1, etc."
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        die "invalid version '$raw'; expected MAJOR.MINOR.PATCH such as 0.72.1 or v0.72.1"
     fi
     printf '%s\n' "$version"
 }
@@ -117,18 +121,19 @@ confirm_release() {
     local current_version="$3"
     local skip_gpu_bundles="$4"
     local canary="$5"
+    local promote="$6"
     local answer
 
     cat <<EOF
 This will:
   - verify the current branch is clean, local main, and equal to origin/main
-  - dispatch .github/workflows/release.yml for $tag
-  - for a non-canary release, let the workflow update source files from $current_version to $version
-  - for a non-canary release, let the workflow commit and push "$tag: prepare release source" to origin/main
+  - dispatch .github/workflows/release.yml for $tag (main records $current_version and is not changed)
   - watch the GitHub Actions release run until it succeeds or fails
-  - publish $tag with GitHub-generated release notes after all release checks pass
+  - for a non-canary run, publish $tag as a pre-release candidate after all release checks pass
+  - with promote, make that candidate the latest stable release and publish packages
 
 Options:
+  - promote: $promote
   - skip GPU bundles: $skip_gpu_bundles
   - canary: $canary
 
@@ -148,11 +153,13 @@ dispatch_release_workflow() {
     local tag="$1"
     local skip_gpu_bundles="$2"
     local canary="$3"
+    local promote="$4"
 
     echo "Dispatching Release workflow for $tag..." >&2
     gh workflow run release.yml \
         --ref main \
         --raw-field "version=$tag" \
+        --raw-field "promote=$promote" \
         --raw-field "skip_gpu_bundles=$skip_gpu_bundles" \
         --raw-field "canary=$canary"
 }
@@ -221,9 +228,13 @@ main() {
 
     local skip_gpu_bundles="false"
     local canary="false"
+    local promote="false"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --promote)
+                promote="true"
+                ;;
             --skip-gpu-bundles)
                 skip_gpu_bundles="true"
                 ;;
@@ -262,7 +273,11 @@ main() {
     ensure_target_version_not_older "$current_version" "$version"
     ensure_github_release_preflight "$tag"
 
-    confirm_release "$tag" "$version" "$current_version" "$skip_gpu_bundles" "$canary"
+    if [[ "$promote" == "true" && "$skip_gpu_bundles" == "true" ]]; then
+        die "a candidate without GPU bundles cannot be promoted"
+    fi
+
+    confirm_release "$tag" "$version" "$current_version" "$skip_gpu_bundles" "$canary" "$promote"
 
     local dispatch_sha
     local dispatch_started_at
@@ -270,7 +285,7 @@ main() {
     local run_id
     dispatch_sha="$(git rev-parse origin/main)"
     dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    run_url="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary")"
+    run_url="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary" "$promote")"
     run_id="$(workflow_run_id_from_url "$run_url")"
     if [[ -z "$run_id" ]]; then
         run_id="$(find_dispatched_release_run_id "$dispatch_sha" "$dispatch_started_at")"
@@ -285,14 +300,15 @@ main() {
     fi
 
     wait_for_release "$tag"
-    git fetch origin main
 
-    local remote_version
-    remote_version="$(git show origin/main:Cargo.toml | perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s')"
-    [[ "$remote_version" == "$version" ]] || die "release succeeded, but origin/main reports version ${remote_version:-unknown} instead of $version"
+    if [[ "$promote" == "true" ]]; then
+        echo "Release complete: $tag is the latest stable release."
+        return
+    fi
 
-    echo "Release complete: $tag; origin/main is version $remote_version"
-    echo "Local main can now be fast-forwarded with: git pull --ff-only"
+    echo "Candidate published: $tag is a pre-release with the final version and files."
+    echo "Test it with: install.sh --pre-release"
+    echo "Promote it with: gh workflow run release-promote.yml --ref main --raw-field tag=$tag"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
