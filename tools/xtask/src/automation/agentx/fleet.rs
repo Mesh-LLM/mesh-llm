@@ -20,32 +20,23 @@ pub(super) const FLEET_USAGE: &str =
 pub(super) struct FleetManifest {
     pub campaign: String,
     pub product_source_commit: String,
+    /// Product repository; defaults to the public mesh-llm repository.
+    #[serde(default = "default_repo_url")]
+    pub repo_url: String,
     pub mode: String,
-    pub kit: FleetKit,
+    pub corpus: Option<FleetCorpus>,
     pub runs: Vec<FleetRun>,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct FleetKit {
-    pub url_base: String,
-    pub cuda_chunks: Option<FleetChunkSet>,
-    pub llama_chunks: Option<FleetChunkSet>,
-    pub metal_kit: Option<FleetArtifact>,
+fn default_repo_url() -> String {
+    "https://github.com/Mesh-LLM/mesh-llm".to_string()
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct FleetChunkSet {
-    pub prefix: String,
-    pub count: u32,
-    pub sha256: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct FleetArtifact {
-    pub key: String,
+pub(super) struct FleetCorpus {
+    pub repo: String,
+    pub rev: String,
     pub sha256: String,
 }
 
@@ -77,56 +68,30 @@ fn validate(manifest: &FleetManifest) -> DynResult<()> {
     if manifest.runs.is_empty() {
         return Err("fleet manifest needs at least one run".into());
     }
+    if manifest.mode == "comparison" && manifest.corpus.is_none() {
+        return Err("comparison mode requires corpus pins".into());
+    }
     for run in &manifest.runs {
         if !matches!(run.backend.as_str(), "cuda" | "metal") {
             return Err(format!("run {} backend must be cuda or metal", run.model).into());
-        }
-        if run.backend == "metal" && manifest.kit.metal_kit.is_none() {
-            return Err(format!(
-                "run {} is metal but the kit has no metal artifact",
-                run.model
-            )
-            .into());
-        }
-        if run.backend == "cuda" && manifest.kit.cuda_chunks.is_none() {
-            return Err(format!("run {} is cuda but the kit has no cuda chunks", run.model).into());
         }
     }
     Ok(())
 }
 
-/// Kit URLs a manifest depends on, for pre-flight. Returns (url, label) pairs.
-fn kit_urls(manifest: &FleetManifest) -> Vec<(String, String)> {
-    let base = manifest.kit.url_base.trim_end_matches('/');
-    let mut urls = Vec::new();
-    if let Some(cuda) = manifest.kit.cuda_chunks.as_ref() {
-        for index in 0..cuda.count {
-            urls.push((
-                format!("{base}/{}{index:02}", cuda.prefix),
-                format!("cuda chunk {index:02}"),
-            ));
-        }
-    }
-    if let Some(llama) = manifest.kit.llama_chunks.as_ref() {
-        for index in 0..llama.count {
-            urls.push((
-                format!("{base}/{}{index:02}", llama.prefix),
-                format!("llama chunk {index:02}"),
-            ));
-        }
-    }
-    if let Some(metal) = manifest.kit.metal_kit.as_ref() {
-        urls.push((format!("{base}/{}", metal.key), "metal kit".to_string()));
-    }
-    urls
+/// Pre-flight: the pinned product commit must exist in the product repository
+/// before any job is generated or submitted.
+fn commit_exists(repo_url: &str, commit: &str) -> DynResult<bool> {
+    let output = std::process::Command::new("git")
+        .args(["ls-remote", repo_url])
+        .output()
+        .map_err(|e| format!("git ls-remote {repo_url}: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text.contains(commit))
 }
 
-fn worker_script(root: &Path, mode: &str) -> DynResult<String> {
-    let script = match mode {
-        "smoke" => "fleet-smoke-worker.sh",
-        _ => "fleet-worker.sh",
-    };
-    let path = root.join("skippy/evals/agentx").join(script);
+fn worker_script(root: &Path) -> DynResult<String> {
+    let path = root.join("skippy/evals/agentx/fleet-worker.sh");
     std::fs::read_to_string(&path)
         .map_err(|_| format!("fleet worker script missing: {}", path.display()))?
         .lines()
@@ -175,7 +140,8 @@ fn run_spec(
     let mut env = json!({
         "WORKER_B64": worker_b64,
         "WORKER_SHA": worker_sha,
-        "KIT_URL_BASE": manifest.kit.url_base.trim_end_matches('/'),
+        "MODE": manifest.mode,
+        "REPO_URL": manifest.repo_url,
         "BACKEND": run.backend,
         "CAMPAIGN": manifest.campaign,
         "PRODUCT_COMMIT": manifest.product_source_commit,
@@ -189,22 +155,13 @@ fn run_spec(
         "THREADS".into(),
         json!(run.probe.get("threads").copied().unwrap_or(20).to_string()),
     );
-    if let Some(cuda) = manifest.kit.cuda_chunks.as_ref() {
-        if !hex64(&cuda.sha256) {
-            return Err("cuda chunk sha256 must be 64-hex".into());
+    if let Some(corpus) = manifest.corpus.as_ref() {
+        if !hex64(&corpus.sha256) {
+            return Err("corpus sha256 must be 64-hex".into());
         }
-        env_obj.insert("CUDA_KEY_PREFIX".into(), json!(cuda.prefix));
-        env_obj.insert("CUDA_CHUNKS".into(), json!(cuda.count.to_string()));
-        env_obj.insert("CUDA_TGZ_SHA".into(), json!(cuda.sha256));
-    }
-    if let Some(llama) = manifest.kit.llama_chunks.as_ref() {
-        env_obj.insert("LLAMA_KEY_PREFIX".into(), json!(llama.prefix));
-        env_obj.insert("LLAMA_CHUNKS".into(), json!(llama.count.to_string()));
-        env_obj.insert("LLAMA_TGZ_SHA".into(), json!(llama.sha256));
-    }
-    if let Some(metal) = manifest.kit.metal_kit.as_ref() {
-        env_obj.insert("METAL_KIT_KEY".into(), json!(metal.key));
-        env_obj.insert("METAL_KIT_SHA".into(), json!(metal.sha256));
+        env_obj.insert("CORPUS_REPO".into(), json!(corpus.repo));
+        env_obj.insert("CORPUS_REV".into(), json!(corpus.rev));
+        env_obj.insert("CORPUS_SHA".into(), json!(corpus.sha256));
     }
     let mut probe = json!({
         "PROBE_CONVERSATIONS": run.probe.get("conversations").copied().unwrap_or(4).to_string(),
@@ -263,7 +220,7 @@ fn submit(root: &Path, manifest_path: &Path) -> DynResult<()> {
         &crate::automation::receipt_files::bounded(manifest_path, 1024 * 1024)?,
     )?;
     validate(&manifest)?;
-    let script = worker_script(root, &manifest.mode)?;
+    let script = worker_script(root)?;
     use sha2::{Digest, Sha256};
     let worker_sha = hex(&Sha256::digest(script.as_bytes()));
     let worker_b64 = {
@@ -272,12 +229,13 @@ fn submit(root: &Path, manifest_path: &Path) -> DynResult<()> {
     };
     let run_root = root.join("target/agentx-fleet").join(&manifest.campaign);
     std::fs::create_dir_all(&run_root)?;
-    // Pre-flight every kit URL before generating or submitting anything.
-    for (url, label) in kit_urls(&manifest) {
-        let status = crate::command::probe_url_range(&url)?;
-        if status != 206 {
-            return Err(format!("pre-flight failed for {label}: HTTP {status} from {url} (fresh uploads can take minutes to propagate)").into());
-        }
+    if !commit_exists(&manifest.repo_url, &manifest.product_source_commit)? {
+        return Err(format!(
+            "pre-flight failed: commit {} not found in {}",
+            &manifest.product_source_commit[..12.min(manifest.product_source_commit.len())],
+            manifest.repo_url
+        )
+        .into());
     }
     let mut resolved = Vec::new();
     for run in &manifest.runs {
@@ -372,9 +330,6 @@ mod tests {
             "campaign": "test-20260101",
             "product_source_commit": "e821ec38b1479cc2dd41da40e1b46e90b4a29850",
             "mode": "smoke",
-            "kit": {"url_base": "https://cdn.example/x",
-                    "cuda_chunks": {"prefix": "cuda5-", "count": 2, "sha256": "a".repeat(64)},
-                    "llama_chunks": {"prefix": "llama-", "count": 1, "sha256": "b".repeat(64)}},
             "runs": [{"model": "qwen3-4b", "backend": "cuda"}]
         }))
         .unwrap()
@@ -422,14 +377,26 @@ mod tests {
             spec["target"].get("nodes").is_none(),
             "hardware targeting only"
         );
-        assert_eq!(spec["runtime"]["env"]["CUDA_CHUNKS"], "2");
+        assert_eq!(spec["runtime"]["env"]["MODE"], "smoke");
+        assert_eq!(
+            spec["runtime"]["env"]["REPO_URL"],
+            "https://github.com/Mesh-LLM/mesh-llm"
+        );
         assert_eq!(spec["runtime"]["env"]["PROBE_TURNS"], "4");
     }
 
     #[test]
-    fn preflight_urls_cover_every_chunk() {
-        let urls = kit_urls(&manifest());
-        assert_eq!(urls.len(), 3, "2 cuda chunks + 1 llama chunk");
-        assert!(urls[0].0.ends_with("/cuda5-00"));
+    fn comparison_requires_corpus_pins() {
+        let mut m = manifest();
+        m.mode = "comparison".into();
+        assert!(
+            validate(&m).is_err(),
+            "comparison without corpus pins must fail"
+        );
+    }
+
+    #[test]
+    fn smoke_manifest_accepts_without_corpus() {
+        assert!(validate(&manifest()).is_ok());
     }
 }

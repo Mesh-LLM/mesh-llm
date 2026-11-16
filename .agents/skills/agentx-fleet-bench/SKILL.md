@@ -23,8 +23,12 @@ All verbs live under `cargo xtool automation agentx`:
 | `mlflow-export` / `mlflow-publish` | Publication (existing) |
 
 The fleet worker script is repo-owned at `skippy/evals/agentx/fleet-worker.sh` and embedded by
-SHA; never edit a copy in a run directory. Models are pinned by repo/rev/sha256 in the manifest.
-Kits are pinned by CDN URL + sha256 (chunks reassembled and verified on the worker).
+SHA; never edit a copy in a run directory. Models and the corpus are pinned by repo/rev/sha256
+in the manifest. The worker clones the product repository at the manifest commit, builds the
+native runtime, skippy CLI and the unpatched llama-server baseline from pinned source, and
+moves every result and evidence file through jy artifacts (the daemon uploads
+$JIANYANG_ARTIFACT_DIR). There is no external object storage in the flow: distribution is by
+git commits, evidence by jy artifacts.
 
 ## Manifest
 
@@ -32,12 +36,9 @@ Kits are pinned by CDN URL + sha256 (chunks reassembled and verified on the work
 {
   "campaign": "agentx-prNNNN-YYYYMMDD",
   "product_source_commit": "<full40>",
+  "repo_url": "https://github.com/Mesh-LLM/mesh-llm",
   "mode": "smoke",
-  "kit": {
-    "cuda_chunks": {"prefix": "cuda5-chunk-...-", "count": 22, "sha256": "...", "url_base": "https://dist.../agentx-prNNNN"},
-    "llama_chunks": {"prefix": "llama-chunk-...-", "count": 9, "sha256": "...", "url_base": "..."},
-    "metal_kit": {"key": "metalkit9-....tgz", "sha256": "...", "url_base": "..."}
-  },
+  "corpus": {"repo": "...", "rev": "...", "sha256": "64-hex"},
   "runs": [
     {"model": "qwen3.5-4b", "backend": "cuda", "probe": {"conversations": 4, "turns": 4, "block_chars": 6300}}
   ]
@@ -58,9 +59,10 @@ Model references resolve to repo/rev/file/sha entries that live in
 4. **Guard-exits requeue; real errors diagnose.** `NO_PYTHON312`/`NO_AARCH64_HOST`/placement
    bounces: `jy requeue <job>` (submit dedupes identical specs). Anything else: read
    `jy logs <job> | tail -30` first.
-5. **`fleet` pre-flights every kit URL** (range GET) before submitting. Freshly uploaded chunks
-   can take minutes to propagate to every CDN edge; never submit right after an upload without
-   the pre-flight.
+5. **`fleet` pre-flights the pinned commit** (`git ls-remote`) before submitting, and the
+   worker builds everything from that commit. Never distribute binaries through external object
+   storage: source pins + jy artifacts only. The historical CDN path-keyed negative-cache
+   (404s pinned for hours per URL path) is exactly why.
 6. **A/B experiments must target the intended budget knob.** `AGENTX_SKIPPY_PREFIX_CACHE_BUDGET`
    (exact-state catalog cap) is distinct from `AGENTX_SKIPPY_PREFIX_CACHE_RAM` (resident
    checkpoint RAM).
