@@ -1445,8 +1445,8 @@ async fn start_local_package_v2_model(
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = None;
     // the receipts name the package's source GGUF, as a split's do
-    runtime_options.receipts =
-        receipts::receipts_options(&spec, &package.source_model_path, &model_name);
+    let source_gguf = &package.source_model_path;
+    runtime_options.receipts = receipts::receipts_options(&spec, source_gguf, &model_name);
     let hook_policy = spec.hook_policy.clone();
     let model_ref = model_name.clone();
     let reporter_model_ref = model_ref.clone();
@@ -1490,13 +1490,7 @@ async fn start_local_package_v2_model(
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     }
     let workload_class = handle.workload_class()?;
-    let receipts = receipts::advertised(
-        &spec,
-        &package.source_model_path,
-        &model_name,
-        &handle,
-        workload_class,
-    );
+    let receipts = receipts::advertised(&spec, source_gguf, &model_name, &handle, workload_class);
     report_loaded_model_analytics(LoadedModel {
         served_name: &model_ref,
         source: ModelLoadSource::LayerPackage,
