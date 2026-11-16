@@ -1161,6 +1161,25 @@ with it.
 
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
+- The Windows host slice retains Cargo timing HTML for its existing standalone
+  Skippy and Mesh compilations in a separate one-day architecture/attempt
+  artifact. Fingerprint diagnostics explain invalidations in the job log;
+  the existing statistics action retains cumulative counters after each phase.
+  The host job disables sccache idle expiry across long uncached links.
+  The shared Windows host action's optional prebuild snapshot keeps the
+  standalone producer/upload/host sequence contiguous.
+  These observations add no compilation, change no product features or
+  profiles, and do not enter immutable host/product inputs.
+  Both product steps set `LINK=--time-trace`; their timing artifact also retains
+  LLVM's per-output `.time-trace.json` files for independent linker evidence.
+  Both compilations set `SOURCE_DATE_EPOCH=0` and enable the Rust-owned native
+  Windows linker adapter for non-primary proc-macro libraries only. Those
+  build-time DLLs omit PDBs whose GUID otherwise hashes a random rustc `.def`
+  path. Mesh's HostOnly configuration selects the CMD driver only with the
+  opt-in; default builds still select LLVM directly. Other links retain their
+  flags. The archive prefix binds adapter, Mesh configuration and workflow
+  sources. Archive identities remain reusable across runs within that
+  compatibility cohort; timing artifacts retain Cargo HTML and linker traces.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
@@ -1987,7 +2006,7 @@ consumed by the 27 existing audit steps, which retain their published immutable
 pin. Switching those steps requires a reviewed published replacement action.
 No hosted execution or cross-platform native qualification is recorded here.
 
-The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
+The existing Windows unit platform row prepares the repository automation tool and selects 23 exact native xtask binary methods: three build/path, one linker-metadata, seven installer-helper, eight whole-installer-consumer, two private-state handle-lock, one directory-DACL and one POSIX-path test. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of 23. It prebuilds the real xtask executable and inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This adds no runner or planner row and does not replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
 Windows row selection is conditional. The owning workflow maps through
 `ci-control` to all platform rows, and main/manual-full profiles select all rows.

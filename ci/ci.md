@@ -1509,6 +1509,31 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+The Windows host slice uploads Cargo HTML timings from its existing standalone
+Skippy and Mesh compilations as a separate one-day architecture/attempt
+artifact. Each phase also records Cargo fingerprint diagnostics and cumulative
+sccache counters through the existing statistics action. These reports separate
+compiler work, invalidation and cache behavior without adding a build or
+changing product features, profiles or immutable host/product inputs.
+The host job disables sccache idle expiry so long uncached links retain the
+same daemon's counters.
+Both product steps set `LINK=--time-trace` and retain LLVM's per-output
+`.time-trace.json` files in the timing artifact. These measure linker work
+separately without adding Rust codegen flags or success-output warnings.
+Both host compilations set `SOURCE_DATE_EPOCH=0` and opt into the Rust-owned
+native Windows linker adapter. Only matching non-primary proc-macro libraries
+omit PDB generation: the PDB command records a random rustc export-file path,
+whose hash reaches the DLL's GUID and downstream sccache keys. Shipping targets
+and other links keep their flags and release profile. The existing restored
+product-source automation runs the adapter; it has no compiler fallback.
+Mesh's HostOnly linker configuration selects the CMD driver only with the
+opt-in, preserving its default direct LLVM path. The native fixture executes
+that configuration for both target variables with the opt-in enabled and unset.
+The host archive prefix binds the adapter, Mesh configuration and workflow
+sources to exclude older nondeterministic build-tool DLLs. Archive identities
+remain reusable across runs within that compatibility cohort. Timing artifacts
+retain Cargo HTML and linker traces.
+
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
@@ -2368,7 +2393,7 @@ consumed by the 27 existing audit steps, which retain their published immutable
 pin. Switching those steps requires a reviewed published replacement action.
 No hosted execution or cross-platform native qualification is recorded here.
 
-The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
+The existing Windows unit platform row prepares the repository automation tool and selects 23 exact native xtask binary methods: three build/path, one linker-metadata, seven installer-helper, eight whole-installer-consumer, two private-state handle-lock, one directory-DACL and one POSIX-path test. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of 23. It prebuilds the real xtask executable and inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This adds no runner or planner row and does not replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
 Windows row selection is conditional. The owning workflow maps through
 `ci-control` to all platform rows, and main/manual-full profiles select all rows.

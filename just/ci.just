@@ -22,7 +22,7 @@ ci-validate:
 
 # Required native ownership for the former Windows Python contract modules.
 # The ordered quality caller retains this recipe; actual Windows execution stays in
-# the existing selected Windows unit workflow (21 methods plus wrapper1).
+# the existing selected Windows unit workflow (23 methods plus the wrapper test).
 ci-legacy-contracts:
     just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
     just with-lld cargo test --locked -p xtask --features automation-contracts --test ci_runner_cache_contract windows_ -- --test-threads=1

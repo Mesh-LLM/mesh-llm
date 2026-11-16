@@ -26,5 +26,14 @@ if "%~1"=="--mesh-probe" (
 )
 
 setlocal DisableDelayedExpansion
+if defined MESH_CI_STABLE_PROC_MACRO_METADATA goto stable_proc_macro_metadata
 "%MESH_LLD%" %MESH_LLD_FLAVOR% %*
+exit /b %ERRORLEVEL%
+
+:stable_proc_macro_metadata
+if not defined MESH_LLM_AUTOMATION_BIN (
+  >&2 echo Error: stable proc-macro linking requires restored product-source automation.
+  exit /b 1
+)
+"%MESH_LLM_AUTOMATION_BIN%" --repo-root "%~dp0.." native windows-linker --lld "%MESH_LLD%" -- %MESH_LLD_FLAVOR% %*
 exit /b %ERRORLEVEL%

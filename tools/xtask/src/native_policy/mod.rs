@@ -32,6 +32,7 @@ mod toolchain;
 mod windows_deps;
 mod windows_deps_pe;
 mod windows_deps_policy;
+mod windows_linker;
 
 use crate::command::DynResult;
 use std::path::PathBuf;
@@ -57,6 +58,7 @@ pub(crate) enum NativeCommand {
     VerifyRuntimePackage,
     PackageSourceVersion,
     RuntimeManifestWrite,
+    WindowsLinker,
 }
 
 impl NativeCommand {
@@ -70,6 +72,7 @@ impl NativeCommand {
             "verify-runtime-package" => Some(Self::VerifyRuntimePackage),
             "package-source-version" => Some(Self::PackageSourceVersion),
             "runtime-manifest-write" => Some(Self::RuntimeManifestWrite),
+            "windows-linker" => Some(Self::WindowsLinker),
             _ => None,
         }
     }
@@ -83,6 +86,7 @@ pub(crate) fn run(
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
     let report = match command {
+        NativeCommand::WindowsLinker => return windows_linker::run(args),
         NativeCommand::RuntimeManifestWrite => return runtime_manifest_writer::run(args),
         NativeCommand::PackageSourceVersion => package_version_command::run(args),
         NativeCommand::SelectRuntime => select_runtime::run(args),

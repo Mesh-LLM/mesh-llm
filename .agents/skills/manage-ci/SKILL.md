@@ -642,6 +642,32 @@ checked-in expiry are the maintainer-controlled approval boundary.
   warm or cold. A slow warm Windows lane is expected while the pin holds, not a
   cache regression. Lift the pin once an upstream fix is released and a Windows
   lane passes with it.
+- Windows host producers retain Cargo HTML timings from the existing standalone
+  Skippy and Mesh host compilations, plus cumulative sccache evidence after each
+  phase. Disable the job's sccache idle timeout so a long uncached link does not
+  expire the daemon and erase those counters. Capture does not run another
+  build or change product features/profiles.
+  Timing artifacts use architecture and run-attempt identities and retain for
+  one day; cache counters use the existing statistics action and its retention.
+  The two product steps also set `LINK=--time-trace` so LLVM writes one trace
+  beside each actual linker output. Upload those traces with Cargo timings;
+  they measure linker work separately without changing Rust codegen flags.
+- Windows host builds set `SOURCE_DATE_EPOCH=0` and opt into
+  the Rust-owned `native windows-linker` adapter through the existing linker
+  driver. Only matching non-primary proc-macro libraries receive `/DEBUG:NONE`:
+  their otherwise unused PDB records a random rustc temporary export-file path
+  in the DLL's GUID. Shipping Skippy, Mesh, runtime DLLs and build scripts retain
+  their existing link flags, optimization, panic behavior and debug settings.
+  Mesh's HostOnly linker configuration selects that same CMD driver when opted
+  in; its ordinary direct LLVM selection remains the default. Require restored
+  product-source automation; never compile a helper from a linker invocation.
+  Its archive prefix binds the adapter, Mesh configuration and workflow sources
+  so older nondeterministic build-tool DLLs cannot be restored.
+  Archive identities remain reusable across runs within that compatibility
+  cohort.
+  The existing Windows unit row selects 23 exact nonignored native methods,
+  including the CMD/adapter contract for scope, unchanged response files,
+  inherited streams, native exit codes and missing-helper refusal.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
