@@ -250,6 +250,16 @@ PYEOF
   for w in $(seq 1 12); do kill -0 $SP 2>/dev/null || break; sleep 5; done
   kill -9 $SP 2>/dev/null || true
   sleep 5
+  # ---- skippy profile WITHOUT prefix cache: isolates checkpoint export cost ----
+  PORT=$((PORT+1))
+  "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache off --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-nocache.log" 2>&1 &
+  NP=$!
+  for i in $(seq 1 180); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
+  kill -0 $NP 2>/dev/null && echo "-- skippy nocache profile:" && python3 "$W/profile.py" "$PORT" "$PROBE_CONVERSATIONS" 256 || echo "-- skippy nocache: SERVER_DIED"
+  kill $NP 2>/dev/null || true
+  for w in $(seq 1 12); do kill -0 $NP 2>/dev/null || break; sleep 5; done
+  kill -9 $NP 2>/dev/null || true
+  sleep 5
   # ---- prefill chunk sweep: TTFT vs chunk size ----
   echo "-- prefill chunk sweep:"
   for CHUNK in 64 256 512 2048; do
