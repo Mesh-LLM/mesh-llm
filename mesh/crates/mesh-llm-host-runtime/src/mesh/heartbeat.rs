@@ -319,6 +319,9 @@ impl Node {
         match displaced {
             Ok(displaced) => {
                 state.connections.insert(peer_id, new_conn.clone());
+                state
+                    .redial_backoff
+                    .connected(peer_id, std::time::Instant::now());
                 Ok(displaced)
             }
             Err((endpoint,)) => {

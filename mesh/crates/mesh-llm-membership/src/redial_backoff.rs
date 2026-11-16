@@ -4,19 +4,31 @@
 //! drop. When the peer closes again soon after each redial (a remote that
 //! refuses or drops every connection after one gossip exchange, as in #3070),
 //! redialing at once becomes a loop: each round is a handshake and a full
-//! gossip exchange, many times a second. A redial that follows another one
-//! to the same peer within [`STABLE_AFTER`] therefore waits, doubling from
-//! [`FIRST_DELAY`] up to [`MAX_DELAY`] with some jitter. A connection that
-//! stayed up past [`STABLE_AFTER`] starts the count again.
+//! gossip exchange, many times a second. A connection that closes less than
+//! [`STABLE_AFTER`] after it was put in place therefore makes the next redial
+//! wait, doubling from [`FIRST_DELAY`] up to [`MAX_DELAY`] with some jitter.
+//! A connection that stayed up past [`STABLE_AFTER`] starts the count again.
 //!
 //! Success here is a connection that lasts, not a completed gossip exchange:
-//! in that loop every exchange completes before the close.
+//! in that loop every exchange completes before the close. A connection's
+//! lifetime runs from [`RedialBackoff::connected`], called wherever one is put
+//! in place, inbound replacements included, to the close that asks for a
+//! redial.
+//!
+//! Each close hands out a [`RedialTicket`]; only the latest ticket for a peer
+//! may still dial once its wait is over ([`RedialBackoff::may_redial`]), so a
+//! replacement that closes while an older wait is pending does not leave two
+//! recoveries dialing the same peer.
+//!
+//! Scope: this paces the closed-connection recovery loop only. Request-driven
+//! dials (`connection_to_peer`), discovery joins and heartbeat reconnects do
+//! not consult it.
 
 use iroh::EndpointId;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// A redial at least this long after the previous one counts as a fresh drop.
+/// A connection that lasted at least this long counts as a fresh drop.
 pub const STABLE_AFTER: Duration = Duration::from_secs(60);
 /// Delay before the second redial in a row.
 pub const FIRST_DELAY: Duration = Duration::from_secs(1);
@@ -24,10 +36,11 @@ pub const FIRST_DELAY: Duration = Duration::from_secs(1);
 pub const MAX_DELAY: Duration = Duration::from_secs(60);
 /// Each delay is spread by up to this share either way.
 const JITTER: f64 = 0.2;
-/// Peers tracked at once; the oldest entry goes first beyond it.
+/// Peers tracked at once; the least recently touched entry goes first beyond it.
 const MAX_PEERS: usize = 1024;
 
-/// Recent redials per peer. Lives in [`crate::state::MembershipState`].
+/// Recent connections and redials per peer. Lives in
+/// [`crate::state::MembershipState`].
 #[derive(Debug, Default)]
 pub struct RedialBackoff {
     peers: HashMap<EndpointId, RedialRecord>,
@@ -35,53 +48,100 @@ pub struct RedialBackoff {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RedialRecord {
-    /// When the previous redial to this peer was (or will be) made.
-    redialed_at: Instant,
-    /// Redials in a row, each within [`STABLE_AFTER`] of the previous one.
+    /// When the latest connection to this peer was put in place, if seen.
+    connected_at: Option<Instant>,
+    /// When the latest redial to this peer was decided.
+    closed_at: Option<Instant>,
+    /// Quick closes in a row, each less than [`STABLE_AFTER`] after the
+    /// connection or redial before it.
     quick_redials: u32,
+    /// Bumped by every close; the recovery holding it may dial.
+    generation: u64,
+    /// For eviction: the latest call that touched this entry.
+    touched_at: Instant,
+}
+
+/// What a close gets back: how long to wait, and the right to dial after it
+/// while no newer close for the same peer has replaced it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RedialTicket {
+    pub delay: Duration,
+    generation: u64,
 }
 
 impl RedialBackoff {
+    /// Record that a connection to `peer` was put in place at `now`.
+    pub fn connected(&mut self, peer: EndpointId, now: Instant) {
+        let record = self.entry(peer, now);
+        record.connected_at = Some(now);
+        record.touched_at = now;
+    }
+
     /// How long to wait before redialing `peer`, whose connection just
-    /// closed at `now`, and record that redial. Zero for an isolated drop.
-    /// `jitter_unit` is uniform in [0, 1).
+    /// closed at `now`. Zero for an isolated drop. The returned ticket
+    /// replaces any earlier one for this peer. `jitter_unit` is uniform in
+    /// [0, 1).
     pub fn delay_before_redial(
         &mut self,
         peer: EndpointId,
         now: Instant,
         jitter_unit: f64,
-    ) -> Duration {
-        let quick_redials = quick_redials_after(self.peers.get(&peer).copied(), now);
-        let delay = with_jitter(base_delay(quick_redials), jitter_unit);
+    ) -> RedialTicket {
+        let record = self.entry(peer, now);
+        record.quick_redials = quick_redials_after(record, now);
+        record.closed_at = Some(now);
+        record.touched_at = now;
+        record.generation = record.generation.wrapping_add(1);
+        RedialTicket {
+            delay: with_jitter(base_delay(record.quick_redials), jitter_unit),
+            generation: record.generation,
+        }
+    }
+
+    /// Whether the recovery holding `ticket` may still dial `peer`: no close
+    /// for that peer has handed out a newer ticket since.
+    pub fn may_redial(&self, peer: EndpointId, ticket: RedialTicket) -> bool {
+        self.peers
+            .get(&peer)
+            .is_some_and(|record| record.generation == ticket.generation)
+    }
+
+    fn entry(&mut self, peer: EndpointId, now: Instant) -> &mut RedialRecord {
         if !self.peers.contains_key(&peer)
             && self.peers.len() >= MAX_PEERS
             && let Some(oldest) = self
                 .peers
                 .iter()
-                .min_by_key(|(_, record)| record.redialed_at)
+                .min_by_key(|(_, record)| record.touched_at)
                 .map(|(id, _)| *id)
         {
             self.peers.remove(&oldest);
         }
-        self.peers.insert(
-            peer,
-            RedialRecord {
-                redialed_at: now + delay,
-                quick_redials,
-            },
-        );
-        delay
+        self.peers.entry(peer).or_insert(RedialRecord {
+            connected_at: None,
+            closed_at: None,
+            quick_redials: 0,
+            generation: 0,
+            touched_at: now,
+        })
     }
 }
 
-/// Redials in a row once this one is made: one more than before when the
-/// previous redial is recent, none otherwise.
-fn quick_redials_after(previous: Option<RedialRecord>, now: Instant) -> u32 {
-    match previous {
-        Some(record) if now.saturating_duration_since(record.redialed_at) < STABLE_AFTER => {
-            record.quick_redials.saturating_add(1)
-        }
-        _ => 0,
+/// Quick closes in a row once this close at `now` counts: one more than before
+/// when the connection that just closed was short-lived, none otherwise. The
+/// connection's start is the later of its recorded connect and the previous
+/// close, so a close with no connect seen since the previous one is measured
+/// from that previous close.
+fn quick_redials_after(record: &RedialRecord, now: Instant) -> u32 {
+    let since = match (record.connected_at, record.closed_at) {
+        (Some(connected), Some(closed)) => connected.max(closed),
+        (Some(at), None) | (None, Some(at)) => at,
+        (None, None) => return 0,
+    };
+    if now.saturating_duration_since(since) < STABLE_AFTER {
+        record.quick_redials.saturating_add(1)
+    } else {
+        0
     }
 }
 
@@ -107,33 +167,34 @@ fn with_jitter(base: Duration, unit: f64) -> Duration {
 mod tests {
     use super::*;
 
-    fn record(redialed_at: Instant, quick_redials: u32) -> RedialRecord {
-        RedialRecord {
-            redialed_at,
-            quick_redials,
-        }
-    }
-
     fn peer() -> EndpointId {
         iroh::SecretKey::generate().public()
     }
 
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
     #[test]
     fn an_isolated_drop_is_redialed_at_once() {
-        let now = Instant::now();
-        assert_eq!(quick_redials_after(None, now), 0);
-        assert_eq!(base_delay(0), Duration::ZERO);
-        // A previous redial past the stable window starts the count again.
-        let long_ago = now - STABLE_AFTER - Duration::from_secs(1);
-        assert_eq!(quick_redials_after(Some(record(long_ago, 7)), now), 0);
+        let mut backoff = RedialBackoff::default();
+        let peer = peer();
+        let start = Instant::now();
+        assert_eq!(
+            backoff.delay_before_redial(peer, start, 0.5).delay,
+            Duration::ZERO
+        );
+        // A connection that then stays up past the window starts the count again.
+        backoff.connected(peer, start + secs(1));
+        let later = start + secs(1) + STABLE_AFTER;
+        assert_eq!(
+            backoff.delay_before_redial(peer, later, 0.5).delay,
+            Duration::ZERO
+        );
     }
 
     #[test]
     fn a_peer_that_keeps_closing_waits_longer_each_time_up_to_the_cap() {
-        let now = Instant::now();
-        let just_now = now - Duration::from_millis(50);
-        assert_eq!(quick_redials_after(Some(record(just_now, 0)), now), 1);
-        assert_eq!(quick_redials_after(Some(record(just_now, 3)), now), 4);
         let delays: Vec<u64> = (1..=8).map(|n| base_delay(n).as_secs()).collect();
         assert_eq!(delays, [1, 2, 4, 8, 16, 32, 60, 60]);
         assert_eq!(base_delay(u32::MAX), MAX_DELAY);
@@ -141,10 +202,10 @@ mod tests {
 
     #[test]
     fn jitter_stays_within_its_share_and_under_the_cap() {
-        let base = Duration::from_secs(10);
-        assert_eq!(with_jitter(base, 0.0), Duration::from_secs(8));
-        assert_eq!(with_jitter(base, 0.5), Duration::from_secs(10));
-        assert!(with_jitter(base, 0.999_999) <= Duration::from_secs(12));
+        let base = secs(10);
+        assert_eq!(with_jitter(base, 0.0), secs(8));
+        assert_eq!(with_jitter(base, 0.5), secs(10));
+        assert!(with_jitter(base, 0.999_999) <= secs(12));
         assert_eq!(with_jitter(MAX_DELAY, 0.999), MAX_DELAY);
         assert_eq!(with_jitter(Duration::ZERO, 0.7), Duration::ZERO);
     }
@@ -154,12 +215,14 @@ mod tests {
         let mut backoff = RedialBackoff::default();
         let peer = peer();
         let mut now = Instant::now();
-        // Twenty closes, each 50 ms after the redial that preceded it, with
-        // the smallest jitter so the bound below holds for any draw.
+        // Twenty rounds of: close, wait, redial that connects, close 50 ms
+        // later; the smallest jitter so the bound below holds for any draw.
         let delays: Vec<Duration> = (0..20)
             .map(|_| {
-                let delay = backoff.delay_before_redial(peer, now, 0.0);
-                now += delay + Duration::from_millis(50);
+                let delay = backoff.delay_before_redial(peer, now, 0.0).delay;
+                now += delay;
+                backoff.connected(peer, now);
+                now += Duration::from_millis(50);
                 delay
             })
             .collect();
@@ -168,10 +231,61 @@ mod tests {
         assert!(delays.iter().all(|delay| *delay <= MAX_DELAY));
         let total: Duration = delays.iter().sum();
         // Without backoff these twenty redials took one second.
-        assert!(total > Duration::from_secs(300), "total {total:?}");
+        assert!(total > secs(300), "total {total:?}");
         // A connection that stays up past the window redials at once again.
-        now += STABLE_AFTER + MAX_DELAY;
-        assert_eq!(backoff.delay_before_redial(peer, now, 0.5), Duration::ZERO);
+        backoff.connected(peer, now);
+        now += STABLE_AFTER;
+        assert_eq!(
+            backoff.delay_before_redial(peer, now, 0.5).delay,
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn a_replacement_that_closes_during_an_older_wait_leaves_one_dialer() {
+        // Saruman's case on #3095: A waits until t=60; an inbound replacement
+        // arrives at t=1 and closes at t=2, starting B. Only B may dial.
+        let mut backoff = RedialBackoff::default();
+        let peer = peer();
+        let t0 = Instant::now();
+        backoff.delay_before_redial(peer, t0 - secs(1), 0.5);
+        let a = backoff.delay_before_redial(peer, t0, 0.5);
+        assert!(a.delay > Duration::ZERO);
+        backoff.connected(peer, t0 + secs(1));
+        let b = backoff.delay_before_redial(peer, t0 + secs(2), 0.5);
+
+        assert!(
+            !backoff.may_redial(peer, a),
+            "the older recovery must stand down"
+        );
+        assert!(backoff.may_redial(peer, b));
+    }
+
+    #[test]
+    fn a_replacement_that_lasted_past_the_window_is_a_fresh_drop() {
+        // A wait scheduled at t=0 for t=60 is skipped because an inbound
+        // connection arrived at t=1; it closes at t=62 after 61 seconds up.
+        let mut backoff = RedialBackoff::default();
+        let peer = peer();
+        let t0 = Instant::now();
+        for n in (1..=8).rev() {
+            backoff.delay_before_redial(peer, t0 - Duration::from_millis(50 * n), 0.5);
+        }
+        assert!(backoff.delay_before_redial(peer, t0, 0.5).delay > secs(30));
+        backoff.connected(peer, t0 + secs(1));
+
+        assert_eq!(
+            backoff.delay_before_redial(peer, t0 + secs(62), 0.5).delay,
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn a_ticket_for_an_unknown_or_evicted_peer_may_not_dial() {
+        let mut backoff = RedialBackoff::default();
+        let known = peer();
+        let ticket = backoff.delay_before_redial(known, Instant::now(), 0.5);
+        assert!(!backoff.may_redial(peer(), ticket));
     }
 
     #[test]
@@ -180,6 +294,7 @@ mod tests {
         let now = Instant::now();
         for _ in 0..(MAX_PEERS + 10) {
             backoff.delay_before_redial(peer(), now, 0.5);
+            backoff.connected(peer(), now);
         }
         assert_eq!(backoff.peers.len(), MAX_PEERS);
     }

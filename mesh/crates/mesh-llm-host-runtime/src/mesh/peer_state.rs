@@ -1131,6 +1131,9 @@ impl Node {
             return;
         }
         state.connections.insert(dead_id, new_conn.clone());
+        state
+            .redial_backoff
+            .connected(dead_id, std::time::Instant::now());
         drop(state);
         let node = self.clone();
         tokio::spawn(async move {

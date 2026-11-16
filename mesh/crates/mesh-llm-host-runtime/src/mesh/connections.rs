@@ -712,6 +712,9 @@ impl Node {
             ));
         }
         let replaced = state.connections.insert(remote, conn.clone());
+        state
+            .redial_backoff
+            .connected(remote, std::time::Instant::now());
         drop(state);
         if let Some(replaced) = replaced
             && replaced.stable_id() != conn.stable_id()
@@ -797,23 +800,26 @@ impl Node {
     }
 
     /// Wait out the backoff for a peer whose connections keep closing (#3081).
-    /// `false` when the peer reconnected on its own meanwhile, so no redial.
+    /// `false` when no redial is ours to make after the wait: the peer
+    /// reconnected meanwhile, or a later close of a replacement connection
+    /// started a newer recovery, which owns the redial.
     async fn wait_before_redial(&self, remote: EndpointId) -> bool {
-        let delay = self.state.lock().await.redial_backoff.delay_before_redial(
+        let ticket = self.state.lock().await.redial_backoff.delay_before_redial(
             remote,
             std::time::Instant::now(),
             rand::random::<f64>(),
         );
-        if delay.is_zero() {
+        if ticket.delay.is_zero() {
             return true;
         }
         tracing::info!(
-            delay_ms = delay.as_millis() as u64,
+            delay_ms = ticket.delay.as_millis() as u64,
             "Connection to {} keeps closing; waiting before the redial",
             remote.fmt_short()
         );
-        tokio::time::sleep(delay).await;
-        !self.state.lock().await.connections.contains_key(&remote)
+        tokio::time::sleep(ticket.delay).await;
+        let state = self.state.lock().await;
+        state.redial_backoff.may_redial(remote, ticket) && !state.connections.contains_key(&remote)
     }
 
     pub(crate) async fn remove_closed_connection(
@@ -878,6 +884,9 @@ impl Node {
             {
                 let mut state = self.state.lock().await;
                 state.connections.insert(remote, new_conn.clone());
+                state
+                    .redial_backoff
+                    .connected(remote, std::time::Instant::now());
             }
             let node = self.clone();
             tokio::spawn(async move {
@@ -1486,6 +1495,9 @@ impl Node {
             state.dead_peers.remove(&peer_id);
             state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
+            state
+                .redial_backoff
+                .connected(peer_id, std::time::Instant::now());
         }
 
         let node_for_dispatch = self.clone();
