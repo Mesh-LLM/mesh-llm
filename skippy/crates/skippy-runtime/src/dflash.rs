@@ -249,6 +249,8 @@ impl DFlashDraft {
         markov: bool,
         draft_path: &Path,
     ) -> Result<()> {
+        #[cfg(not(target_os = "macos"))]
+        let _ = draft_path;
         let api = self.api;
         let architecture =
             unsafe { skippy_ffi::llama_model_meta_val_str(self.model, "general.architecture") };

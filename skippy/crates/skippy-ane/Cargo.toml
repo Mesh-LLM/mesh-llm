@@ -4,6 +4,8 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Apple Neural Engine conversion and drafting for paired DFlash models"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [features]
 default = ["conversion"]

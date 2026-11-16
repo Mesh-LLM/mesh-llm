@@ -405,6 +405,7 @@ publish_crates=(
     mesh-llm-node
     mesh-llm-api-server
     skippy-hardware-profile
+    skippy-ane
     skippy-runtime
     skippy-scheduler
     skippy-inference-api
