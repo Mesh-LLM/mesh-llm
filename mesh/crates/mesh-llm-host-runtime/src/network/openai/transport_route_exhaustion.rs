@@ -22,6 +22,17 @@ pub(super) async fn finish_exhausted_route_model_request(
     state: &RouteModelState,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteDispatchOutcome {
+    // A resume that found no target to commit: the caller's stream is open,
+    // so end it rather than writing a second response head into it.
+    if crate::network::openai::response::stream_resume::continuation().is_some() {
+        let mut tcp_stream = tcp_stream;
+        close_held_stream(&mut tcp_stream).await;
+        record_route_model_unavailable(node, model, state.attempts);
+        return RouteDispatchOutcome::FailedWithStatus {
+            status_code: 200,
+            reason: "upstream_stream_incomplete",
+        };
+    }
     let status = state.exhausted_status();
     let reason = format!("all {} target(s) for model '{model}' failed", total_targets);
     let result = send_error_observed(tcp_stream, status, &reason, route_observer).await;
