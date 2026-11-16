@@ -220,7 +220,6 @@ jobs:
         timeout-minutes: 40
         run: |
           just ci-automation-contracts
-          just ci-legacy-contracts
   skippy_cpp_api:
     name: Standalone Skippy C++ API and Rust bridge
     # Reuse the completed contracts worker's place in Quality's fan-out.

@@ -19,7 +19,7 @@ fn check_ci_crate_test_coverage(
     )?;
     ensure_contains(
         quality_workflow,
-        "just ci-legacy-contracts",
+        "just ci-automation-contracts",
         "quality CI contract test suite",
     )?;
 

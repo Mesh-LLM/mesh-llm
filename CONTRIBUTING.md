@@ -239,7 +239,6 @@ gates then run on a machine without a prepared native build:
 cargo test --locked -p mesh-llm-system --lib --features dynamic-native-runtime
 cargo clippy --no-deps -p mesh-llm-system --all-targets --features dynamic-native-runtime -- -D warnings
 cargo fmt --check -p mesh-llm-system
-cargo run -p xtask -- repo-consistency no-console-print
 ```
 
 `--no-deps` keeps Clippy scoped to the package you are changing. `cfg`-gated

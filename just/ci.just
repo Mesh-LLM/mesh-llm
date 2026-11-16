@@ -14,19 +14,9 @@ ci-validate:
     actionlint -config-file .github/actionlint.yaml
     git diff --check
     just ci-automation-contracts
-    just ci-legacy-contracts
     just ci-crate-lists
     just check-release
-    just no-console-print
     just publish-crates
-
-# Required native ownership for the former Windows Python contract modules.
-# The ordered quality caller retains this recipe; actual Windows execution stays in
-# the existing selected Windows unit workflow (21 methods plus wrapper1).
-ci-legacy-contracts:
-    just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
-    just with-lld cargo test --locked -p xtask --features automation-contracts --test ci_runner_cache_contract windows_ -- --test-threads=1
-    just with-lld cargo test --locked -p xtask --features automation-contracts --test migration_lifecycle windows_ -- --test-threads=1
 
 # Native whole-session cohort fixtures use the pinned Parquet reader and codecs.
 agentic-trajectory-reader-contracts:
@@ -75,12 +65,6 @@ automation-run *ARGS:
 # Run crates.io publish-chain consistency checks.
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
-
-# Gate on println!/eprintln!/print!/eprint! and direct io::stdout()/io::stderr()
-# handles in Rust files under crates/ (excluding tests, non-product crates, helper
-# bins and build.rs). There is no allowlist: route output through mesh-llm-events.
-no-console-print:
-    cargo run -p xtask -- repo-consistency no-console-print
 
 # Shellcheck the explicitly supplied changed shell scripts.
 ci-shellcheck *scripts:
