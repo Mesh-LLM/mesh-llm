@@ -62,7 +62,7 @@ pub fn convert(args: &ConversionOptions) -> Result<()> {
     let compiled_temp = compile_package(&package)?;
     #[cfg(target_os = "macos")]
     let placement = placement::inspect(&compiled_temp)?;
-    let mut manifest = json!({
+    let manifest = json!({
         "draft_sha256": sha256_file(&args.draft)?,
         "target_sha256": sha256_file(&args.target)?,
         "embeddings_sha256": sha256_file(&embeddings)?,
@@ -75,7 +75,8 @@ pub fn convert(args: &ConversionOptions) -> Result<()> {
         "compiled_model": compiled.file_name().context("compiled model has no name")?.to_string_lossy(),
     });
     #[cfg(target_os = "macos")]
-    {
+    let manifest = {
+        let mut manifest = manifest;
         let fields = manifest.as_object_mut().expect("manifest is an object");
         fields.insert(
             "neural_operations".into(),
@@ -85,7 +86,8 @@ pub fn convert(args: &ConversionOptions) -> Result<()> {
             "neural_operations_on_ane".into(),
             json!(placement.neural_operations_on_ane),
         );
-    }
+        manifest
+    };
     std::fs::rename(&package, &args.out).context("install ANE model package")?;
     std::fs::rename(&compiled_temp, &compiled).context("install compiled ANE model")?;
     std::fs::rename(&embeddings, &args.embeddings_out).context("install ANE embeddings")?;
