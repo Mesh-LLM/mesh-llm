@@ -3,7 +3,22 @@ use crate::process;
 use serde_json::json;
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
-fn invoke(executable: &str, root: &Path, args: &[&str]) -> process::ProcessReport {
+fn invoke(
+    executable: &str,
+    root: &Path,
+    args: &[&str],
+    automation: Option<&Path>,
+) -> process::ProcessReport {
+    let mut environment = BTreeMap::from([(
+        "PATH".into(),
+        process::Value::Public("/usr/bin:/bin:/opt/homebrew/bin".into()),
+    )]);
+    if let Some(path) = automation {
+        environment.insert(
+            "MESH_LLM_AUTOMATION_BIN".into(),
+            process::Value::Public(path.into()),
+        );
+    }
     let spec = process::ProcessSpec {
         executable: executable.into(),
         cwd: root.into(),
@@ -11,10 +26,7 @@ fn invoke(executable: &str, root: &Path, args: &[&str]) -> process::ProcessRepor
             .iter()
             .map(|s| process::Value::Public((*s).into()))
             .collect(),
-        environment: BTreeMap::from([(
-            "PATH".into(),
-            process::Value::Public("/usr/bin:/bin:/opt/homebrew/bin".into()),
-        )]),
+        environment,
     };
     let result = process::supervise(
         &spec,
@@ -36,7 +48,7 @@ fn invoke(executable: &str, root: &Path, args: &[&str]) -> process::ProcessRepor
 fn git(root: &Path, args: &[&str]) -> String {
     let executable = std::env::var("MIGRATION_TEST_GIT")
         .expect("set MIGRATION_TEST_GIT to an absolute Git executable");
-    let result = invoke(&executable, root, args);
+    let result = invoke(&executable, root, args, None);
     assert!(result.success(), "{result:?}");
     String::from_utf8(result.stdout.bytes_retained)
         .unwrap()
@@ -108,6 +120,7 @@ fn actual_build_dispatch_uses_frozen_controller_wrapper_and_preserves_selected_s
                 "--input",
                 path.to_str().unwrap(),
             ],
+            None,
         );
         assert!(!result.success());
         assert!(
@@ -134,4 +147,73 @@ fn actual_build_dispatch_uses_frozen_controller_wrapper_and_preserves_selected_s
         fs::remove_file(controller.join("wrapper-context")).unwrap();
         fs::remove_file(selected.join("battery-admitted")).unwrap();
     }
+}
+
+#[test]
+fn actual_build_keeps_checkpoint_controller_alive_when_candidate_replaces_its_binary() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let controller = root.join("controller");
+    let revision = checkout(&controller);
+    fs::create_dir_all(controller.join("scripts")).unwrap();
+    fs::create_dir_all(controller.join("ci/llama-canary")).unwrap();
+    fs::create_dir_all(controller.join("target/debug")).unwrap();
+    fs::copy(
+        super::support::repository()
+            .join("tools/xtask/tests/fixtures/family_evidence/synthetic-manifest.json"),
+        controller.join("ci/llama-canary/family-certified.json"),
+    )
+    .unwrap();
+    fs::write(
+        controller.join("scripts/skippy-family-battery.sh"),
+        "set -eu\n",
+    )
+    .unwrap();
+    fs::write(
+        controller.join("scripts/llama-canary-agent-repair.sh"),
+        r#"set -eu
+original="$CANARY_SOURCE_ROOT/target/debug/xtask"
+printf '#!/bin/sh\nexit 99\n' > "$original.rebuilt"
+chmod +x "$original.rebuilt"
+mv "$original.rebuilt" "$original"
+mkdir -p "$CANARY_RECOVERY_DIR"
+"$MESH_LLM_AUTOMATION_BIN" automation canary-receipts recover-source \
+  --root "$CANARY_SOURCE_ROOT" --base "$CANARY_CONTROLLER_SHA" \
+  --output "$CANARY_RECOVERY_DIR/turn"
+printf '%s\n' "$MESH_LLM_AUTOMATION_BIN" > controller-path
+exit 73
+"#,
+    )
+    .unwrap();
+    let original = controller.join("target/debug/xtask");
+    fs::copy(env!("CARGO_BIN_EXE_xtask"), &original).unwrap();
+    let evidence = root.join("evidence");
+    let export = root.join("export");
+    let input = json!({"controller_root":controller,"source_root":controller,"controller_revision":revision,"selected_revision":revision,"mesh_source":"","upstream_revision":"a".repeat(40),"mode":"repair-build","pass_id":"repair-1","run_id":"123","run_attempt":"1","previous":null,"evidence":evidence,"export":export,"agent_timeout_seconds":1,"verification_timeout_seconds":1});
+    let request = root.join("request.json");
+    fs::write(&request, serde_json::to_vec(&input).unwrap()).unwrap();
+    let result = invoke(
+        original.to_str().unwrap(),
+        &root,
+        &[
+            "automation",
+            "canary-receipts",
+            "build",
+            "--input",
+            request.to_str().unwrap(),
+        ],
+        Some(&original),
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr.bytes_retained).contains("exit code Some(73)"),
+        "{result:?}"
+    );
+    let checkpoint: serde_json::Value =
+        serde_json::from_slice(&fs::read(evidence.join("recovery/turn/manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(checkpoint["verified"], false);
+    let frozen = fs::read_to_string(controller.join("controller-path")).unwrap();
+    assert!(!Path::new(frozen.trim()).starts_with(&controller));
+    assert!(!Path::new(frozen.trim()).exists());
+    assert!(!export.exists());
 }
