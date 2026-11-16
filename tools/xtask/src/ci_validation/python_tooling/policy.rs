@@ -14,6 +14,17 @@ pub(super) struct Policy {
     pub(super) external_source_descriptors: Vec<ExternalSourceDescriptor>,
     pub(super) external_script_pins: Vec<ExternalScriptPin>,
     pub(super) allowed_invocations: Vec<AllowedInvocation>,
+    pub(super) in_tree_python_component: InTreePythonComponent,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InTreePythonComponent {
+    pub(super) root: String,
+    pub(super) manifest_path: String,
+    pub(super) source_files: Vec<String>,
+    pub(super) package_inputs: Vec<String>,
+    purpose: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,11 +100,42 @@ pub(super) fn validate_policy_shape(policy: &Policy) -> DynResult<()> {
                 .map(|item| &item.descriptor_path),
         )
         .chain(policy.external_script_pins.iter().map(|item| &item.path))
+        .chain(std::iter::once(
+            &policy.in_tree_python_component.manifest_path,
+        ))
+        .chain(policy.in_tree_python_component.source_files.iter())
+        .chain(policy.in_tree_python_component.package_inputs.iter())
     {
         if !safe_relative_path(path) || !exact_paths.insert(path.as_str()) {
             return Err(
                 format!("invalid or duplicate Python tooling exception path `{path}`").into(),
             );
+        }
+    }
+
+    let component = &policy.in_tree_python_component;
+    let component_prefix = format!("{}/", component.root);
+    if component.root != "mesh/sdk/python"
+        || component.manifest_path != format!("{}sdk-inputs.json", component_prefix)
+        || component.purpose.trim().is_empty()
+        || !safe_relative_path(&component.root)
+        || !safe_relative_path(&component.manifest_path)
+        || component.source_files.is_empty()
+        || component.package_inputs.is_empty()
+    {
+        return Err("in-tree Python SDK component declaration refused".into());
+    }
+    for path in &component.source_files {
+        if !path.starts_with(&component_prefix)
+            || Path::new(path).extension().and_then(|value| value.to_str()) != Some("py")
+            || !safe_relative_path(path)
+        {
+            return Err(format!("invalid in-tree Python SDK source `{path}`").into());
+        }
+    }
+    for path in &component.package_inputs {
+        if !path.starts_with(&component_prefix) || !safe_relative_path(path) {
+            return Err(format!("invalid in-tree Python SDK package input `{path}`").into());
         }
     }
 

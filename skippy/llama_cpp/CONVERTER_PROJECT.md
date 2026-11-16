@@ -12,7 +12,7 @@ uv run --locked --no-sync python convert_hf_to_gguf.py /absolute/checkpoint \
   --outtype f16 --outfile /absolute/output/model.gguf
 ```
 
-Both extracted projects are published; fresh anonymous restore and native source admission passed for the [research descriptor](../../ci/python-research-source.json) and [SDK descriptor](../../ci/required-sdk-python/sdk-source.json). Hosted workflows and installed SDK/native/model qualification remain separate. The conversion command preserves the upstream interface; it does not download a checkpoint or qualify converted model accuracy merely by preparing dependencies.
+The extracted research project is published; fresh anonymous restore and native source admission passed for its [research descriptor](../../ci/python-research-source.json). Hosted workflows and installed SDK/native/model qualification remain separate. The conversion command preserves the upstream interface; it does not download a checkpoint or qualify converted model accuracy merely by preparing dependencies.
 
 The four owning patches were reconstructed without their Python diffs. Clean queue replay compares every non-Python path by Git mode and blob identity against the former full queue; all native C++ sources, installed headers, ABI constants, build files and native tests are unchanged. The upstream pin and ABI version remain unchanged. Upstream Python modules may still exist in the generated dependency checkout, but Mesh no longer modifies or advertises them as the source of these family converter additions.
 

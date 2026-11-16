@@ -2,14 +2,14 @@
 //!
 //! `FieldId` is deliberately keyed at `RuntimeDataDirty`'s scope
 //! granularity (the collector's actual publish-path funnel point in
-//! `collector::update_snapshots`), not at the granularity of the eleven
+//! `collector::update_snapshots`), not at the granularity of the thirteen
 //! individual `RuntimeDataProducer` write methods enumerated in the task 5
 //! plan bullet — several of those methods publish under the same dirty
 //! scope (`mark_status_dirty`, `publish_runtime_status`, and
 //! `publish_local_processes` all publish under `STATUS`), so the scope is
 //! the only place a single generation authority can be enforced without
 //! duplicating bookkeeping per method. See `producer_write_methods.rs` for
-//! the full eleven-method → scope mapping the plan's matrix column needs.
+//! the full thirteen-method → scope mapping the plan's matrix column needs.
 
 use super::super::subscriptions::RuntimeDataDirty;
 

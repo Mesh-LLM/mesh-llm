@@ -5,8 +5,9 @@
 //! decides the scope once and runs the rest of that request inside
 //! [`with_private_scope`].
 //!
-//! The scope is this node plus the node ids it was given with
-//! `--private-node`. With none, a private request never leaves this node.
+//! The scope is this node plus the node ids in its `[private] nodes` config
+//! list (see [`super::private_nodes`]). With none, a private request never
+//! leaves this node.
 //! While the scope is set:
 //!
 //! - [`Node::routable_peers`] and [`Node::models_being_served`] only see listed
@@ -257,7 +258,7 @@ impl super::Node {
     pub(crate) fn entry_private_scope(&self) -> PrivateScope {
         PrivateScope::of(
             std::iter::once(self.local_scope_node_id())
-                .chain(self.private_nodes.iter().map(node_key)),
+                .chain(self.private_nodes.current().iter().map(node_key)),
         )
     }
 }

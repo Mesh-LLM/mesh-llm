@@ -1,3 +1,5 @@
+//! Response and tool-call identifiers shared by HTTP and native chat adapters.
+
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -31,7 +33,8 @@ fn chat_completion_json_seed(object: &Map<String, Value>) -> String {
         .unwrap_or_else(|| synthetic_id_seed().to_string())
 }
 
-pub(super) fn normalize_chat_completion_json_body(body: &[u8]) -> Option<Vec<u8>> {
+/// Fill missing tool-call IDs without rewriting producer-assigned identifiers.
+pub fn normalize_chat_completion_json_body(body: &[u8]) -> Option<Vec<u8>> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let object = value.as_object_mut()?;
     let seed = chat_completion_json_seed(object);
@@ -72,9 +75,11 @@ fn normalize_chat_completion_json_tool_call_ids(
     }
 }
 
+/// One response's identifiers, retained across every kind of stream chunk.
 #[derive(Debug, Default)]
-pub(super) struct ChatStreamNormalizationState {
+pub struct ChatStreamNormalizationState {
     completion_id: Option<String>,
+    created: Option<u64>,
     tool_call_ids: HashMap<u64, String>,
     synthetic_seed: Option<u128>,
 }
@@ -114,19 +119,36 @@ impl ChatStreamNormalizationState {
         id
     }
 
-    pub(super) fn normalize_data(&mut self, data: &str) -> String {
+    /// Normalize an SSE data payload, passing non-object payloads through unchanged.
+    pub fn normalize_data(&mut self, data: &str) -> String {
         let Ok(mut value) = serde_json::from_str::<Value>(data) else {
             return data.to_string();
         };
-        let Some(object) = value.as_object_mut() else {
+        if !value.is_object() {
             return data.to_string();
+        }
+        self.normalize_chunk(&mut value);
+        serde_json::to_string(&value).unwrap_or_else(|_| data.to_string())
+    }
+
+    /// Preserve response identity and correlate tool-call fragments in a decoded chunk.
+    pub fn normalize_chunk(&mut self, value: &mut Value) {
+        let Some(object) = value.as_object_mut() else {
+            return;
         };
 
         let completion_id = self.completion_id(object);
         object.insert("id".into(), Value::String(completion_id));
+        if let Some(created) = self
+            .created
+            .or_else(|| object.get("created").and_then(Value::as_u64))
+        {
+            self.created = Some(created);
+            object.insert("created".into(), Value::from(created));
+        }
 
         let Some(choices) = object.get_mut("choices").and_then(Value::as_array_mut) else {
-            return serde_json::to_string(&value).unwrap_or_else(|_| data.to_string());
+            return;
         };
         for choice in choices {
             let Some(tool_calls) = choice
@@ -149,8 +171,6 @@ impl ChatStreamNormalizationState {
                 tool_call_object.insert("id".into(), Value::String(id));
             }
         }
-
-        serde_json::to_string(&value).unwrap_or_else(|_| data.to_string())
     }
 }
 
@@ -317,6 +337,9 @@ mod tests {
         assert_eq!(first["id"], "chatcmpl-first");
         assert_eq!(second["id"], "chatcmpl-first");
         assert_eq!(third["id"], "chatcmpl-first");
+        assert_eq!(first["created"], 1);
+        assert_eq!(second["created"], 1);
+        assert_eq!(third["created"], 1);
         assert_eq!(
             second["choices"][0]["delta"]["tool_calls"][0]["id"],
             "call_mesh_7_0"

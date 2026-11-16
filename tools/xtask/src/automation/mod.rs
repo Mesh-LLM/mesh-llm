@@ -64,7 +64,7 @@ pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
 pub(crate) mod hf_converted_artifact;
 pub(crate) mod hf_xet_smoke;
-mod immutable_sdk_checkout;
+mod immutable_research_checkout;
 pub(crate) mod native_contracts;
 pub(crate) mod native_generator;
 mod private_state;

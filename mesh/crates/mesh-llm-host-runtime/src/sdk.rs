@@ -23,6 +23,7 @@ use std::time::Instant;
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
+pub mod capacity;
 mod embedded_config;
 #[cfg(test)]
 mod embedded_lifecycle_tests;

@@ -799,6 +799,25 @@ unsafe extern "C" {
         opt: mtmd_helper_init_opt,
     ) -> mtmd_helper_bitmap_wrapper;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct mtmd_helper_resampler {
+    _unused: [u8; 0],
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_resampler_init(rate_in: i32, rate_out: i32) -> *mut mtmd_helper_resampler;
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_resampler_free(ctx: *mut mtmd_helper_resampler);
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_resampler_process(
+        ctx: *mut mtmd_helper_resampler,
+        in_: *const f32,
+        n_in: usize,
+        out: *mut *const f32,
+    ) -> i64;
+}
 unsafe extern "C" {
     pub fn mtmd_helper_get_n_tokens(chunks: *const mtmd_input_chunks) -> usize;
 }

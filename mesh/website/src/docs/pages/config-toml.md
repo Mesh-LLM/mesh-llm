@@ -49,6 +49,21 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 - `bind` — address and port for the owner-control endpoint. The inference API remains on `9337` unless changed by the runtime surface.
 - `advertise_addr` — address and port announced to peers. Auto-detected when unset; set it explicitly for NAT or Docker setups, with the same port as `bind`.
 
+## Private nodes
+
+The other nodes this node's private requests (`@private`, `@incognito`,
+`x-mesh-scope: private` or `/private/v1`) may go to, by node id.
+
+```toml
+[private]
+nodes = ["8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"]
+```
+
+- `nodes` — node ids, 64 hex characters each, as `mesh-llm auth status` prints them. Empty or absent keeps private requests on this node.
+- `mesh-llm private add <name or id>`, `list` and `remove` edit this list; `add` resolves a connected node's label or hostname to its id.
+- A running node rereads the list when the file changes, without a restart.
+- `mesh-llm private` takes the config file's lock, so its edits never collide with a running node saving a console change. A text editor does not: the node refuses to save over an edit it sees, but an edit landing in the instant before its save can be lost. While a node is running, prefer `mesh-llm private`.
+
 ## Payments
 
 Paid inference is not part of the node and has no `config.toml` section. Payment

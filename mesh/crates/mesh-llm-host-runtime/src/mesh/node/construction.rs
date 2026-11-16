@@ -2,6 +2,7 @@
 
 use super::startup::*;
 use super::*;
+use crate::mesh::private_nodes::PrivateNodes;
 
 pub(crate) struct ScopedNodeIdentity {
     pub key: SecretKey,
@@ -91,7 +92,6 @@ impl Node {
             bind_discoverable_endpoint(secret_key.clone(), relay, quic_bind).await?;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
-        let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
@@ -118,12 +118,7 @@ impl Node {
         let config_revision_init = config_state_init.revision();
         let live_request_defaults = config_state_init.live_request_defaults();
         let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
-        let runtime_data_producer =
-            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
-                scope: "routing",
-                plugin_data_key: None,
-                plugin_endpoint_key: None,
-            });
+        let runtime_data_producer = routing_runtime_data_producer(&runtime_data_collector);
 
         let owner_keypair = owner_config
             .as_ref()
@@ -165,10 +160,12 @@ impl Node {
             identity_state_dir: identity.as_ref().map(|identity| identity.state_dir.clone()),
             full_model_only: identity.is_some(),
             mesh_id: Arc::new(Mutex::new(None)),
+            mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
+            gossip_reply_limiter: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -183,7 +180,7 @@ impl Node {
             peer_change_tx,
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            inflight_change_tx,
+            inflight_change_tx: watch::channel(0u64).0,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
             cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
@@ -216,7 +213,7 @@ impl Node {
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
             trust_policy: owner_runtime.trust_policy,
-            private_nodes: private_node_set(owner_config.as_ref()),
+            private_nodes: PrivateNodes::kept_current(config, config_path, identity.is_none()),
             enumerate_host,
             gpu_name: hardware.gpu_name,
             hostname: hardware.hostname,
@@ -298,13 +295,6 @@ fn hardware_for_identity(
     hardware
 }
 
-/// The nodes besides this one that may serve its private requests.
-fn private_node_set(
-    owner: Option<&OwnerRuntimeConfig>,
-) -> Arc<std::collections::HashSet<EndpointId>> {
-    Arc::new(owner.iter().flat_map(|c| c.private_nodes.clone()).collect())
-}
-
 struct StartupPolicies {
     activity: crate::runtime::activity_policy::ActivityPolicyGuard,
     public_mesh: bool,
@@ -358,4 +348,14 @@ async fn bind_discoverable_endpoint(
     // of the externally visible NAT-mapped address.
     let public_addr = Node::startup_public_addr(&endpoint, relay).await;
     Ok((endpoint, public_addr))
+}
+
+fn routing_runtime_data_producer(
+    collector: &crate::runtime_data::RuntimeDataCollector,
+) -> crate::runtime_data::RuntimeDataProducer {
+    collector.producer(crate::runtime_data::RuntimeDataSource {
+        scope: "routing",
+        plugin_data_key: None,
+        plugin_endpoint_key: None,
+    })
 }

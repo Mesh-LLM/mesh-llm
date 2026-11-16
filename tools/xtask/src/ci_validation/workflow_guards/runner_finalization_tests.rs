@@ -265,9 +265,15 @@ fn prepared_cleanup_requires_private_copy_effective_source_and_ready_before_effe
 fn prepared_cleanup_binds_each_job_to_its_bootstrap_recipe() {
     for (workflow, name) in prepared_jobs() {
         let (bound, swapped) = if name == "trusted_runner_image" {
-            ("just runner-cleanup-bootstrap", "just automation-bootstrap")
+            (
+                "report=\"$(just runner-cleanup-bootstrap)\"",
+                "report=\"$(just automation-bootstrap)\"",
+            )
         } else {
-            ("just automation-bootstrap", "just runner-cleanup-bootstrap")
+            (
+                "binary=\"$MESH_LLM_AUTOMATION_BIN\"",
+                "report=\"$(just automation-bootstrap)\"",
+            )
         };
         let mut workflows = actual();
         let prepare = named_step_mut(
@@ -275,10 +281,7 @@ fn prepared_cleanup_binds_each_job_to_its_bootstrap_recipe() {
             "Prepare source-bound native cleanup before managed work",
         );
         let source = field(prepare, "run").unwrap().to_owned();
-        assert!(
-            source.contains(&format!("report=\"$({bound})\"")),
-            "{workflow}/{name}"
-        );
+        assert!(source.contains(bound), "{workflow}/{name}");
         *field_mut(prepare, "run") = Node::Scalar(source.replace(bound, swapped));
         assert!(check(&workflows).is_err(), "{workflow}/{name}: {swapped}");
     }

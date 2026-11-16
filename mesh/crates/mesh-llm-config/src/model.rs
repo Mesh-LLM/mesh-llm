@@ -1,5 +1,6 @@
 mod built_in_schema;
 mod multimodal;
+mod private;
 mod profile;
 mod receipts;
 mod runtime;
@@ -13,6 +14,7 @@ pub use built_in_schema::{
 };
 pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
+pub use private::{PrivateConfig, is_node_id};
 pub use receipts::ReceiptsConfig;
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
@@ -43,6 +45,9 @@ pub struct MeshConfig {
     pub mesh_requirements: MeshRequirementsConfig,
     #[serde(default)]
     pub owner_control: OwnerControlConfig,
+    /// `[private]`: the other nodes this node's private requests may reach.
+    #[serde(default, skip_serializing_if = "PrivateConfig::is_empty")]
+    pub private: PrivateConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
@@ -1228,6 +1233,8 @@ struct RawMeshConfig {
     #[serde(default)]
     owner_control: OwnerControlConfig,
     #[serde(default)]
+    private: PrivateConfig,
+    #[serde(default)]
     telemetry: TelemetryConfig,
     #[serde(default)]
     analytics: AnalyticsConfig,
@@ -1357,6 +1364,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             gpu: raw.gpu,
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
+            private: raw.private,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
             updates: raw.updates,

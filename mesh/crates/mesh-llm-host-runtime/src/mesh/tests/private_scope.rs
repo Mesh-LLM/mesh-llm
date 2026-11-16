@@ -25,7 +25,7 @@ async fn node_with_mine_and_theirs() -> (Node, EndpointId, EndpointId) {
         .unwrap();
     let (mine, theirs) = (host(61), host(62));
     let ids = (mine.id, theirs.id);
-    node.private_nodes = std::sync::Arc::new([mine.id].into());
+    node.private_nodes = crate::mesh::private_nodes::PrivateNodes::of([mine.id]);
     for peer in [mine, theirs] {
         node.insert_test_peer_without_liveness(peer).await;
     }
@@ -78,7 +78,7 @@ async fn a_listed_peer_without_private_routing_gets_no_private_request() {
     let mut old = host(64);
     old.private_routing_supported = false;
     let old_id = old.id;
-    node.private_nodes = std::sync::Arc::new([mine, old_id].into());
+    node.private_nodes = crate::mesh::private_nodes::PrivateNodes::of([mine, old_id]);
     node.insert_test_peer_without_liveness(old).await;
     let scope = Some(node.entry_private_scope());
     let private = with_private_scope(scope.clone(), node.hosts_for_model(MODEL)).await;

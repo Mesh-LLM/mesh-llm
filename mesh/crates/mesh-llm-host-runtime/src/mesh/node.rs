@@ -22,6 +22,7 @@ pub(crate) use membership::{
 
 pub(crate) use local_request_metrics::LocalRequestMetricsSampler;
 pub use local_request_metrics::LocalRequestMetricsSnapshot;
+pub(crate) use routing_telemetry::InferenceAttemptReport;
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
@@ -92,6 +93,7 @@ pub struct Node {
     pub(crate) state: Arc<Mutex<MembershipState>>,
     pub(crate) gossip_verification: Arc<super::signed_records::VerificationGate>,
     pub(crate) gossip_encoder: Arc<crate::protocol::GossipFrameEncoder>,
+    pub(crate) gossip_reply_limiter: Arc<super::gossip::reply_limit::GossipReplyLimiter>,
     pub(crate) plugin_message_history: Arc<Mutex<super::plugin_mesh::PluginMessageHistory>>,
     /// Relay-disabled same-identity endpoints that own recovered direct connections.
     /// See [`super::direct_rescue`] for the ownership and shutdown rules.
@@ -127,6 +129,9 @@ pub struct Node {
     /// An attachment to a host-owned full-model backend, never a GPU participant.
     pub(crate) full_model_only: bool,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
+    /// Ticks whenever `mesh_id` is stored, so the runtime can keep the saved
+    /// rejoin preference on the current ID.
+    pub(crate) mesh_id_changed: Arc<tokio::sync::watch::Sender<()>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
     pub(crate) bootstrap_token: Arc<Mutex<Option<crate::SignedBootstrapToken>>>,
@@ -202,7 +207,7 @@ pub struct Node {
     pub(crate) trust_store: Arc<Mutex<TrustStore>>,
     pub(crate) trust_policy: TrustPolicy,
     /// Nodes besides this one that may serve its private requests.
-    pub(crate) private_nodes: Arc<std::collections::HashSet<EndpointId>>,
+    pub(crate) private_nodes: super::private_nodes::PrivateNodes,
     pub enumerate_host: bool,
     pub gpu_name: Option<String>,
     pub hostname: Option<String>,
@@ -768,10 +773,12 @@ impl Node {
             identity_state_dir: None,
             full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
+            mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
+            gossip_reply_limiter: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -820,7 +827,7 @@ impl Node {
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
-            private_nodes: Arc::default(),
+            private_nodes: Default::default(),
             enumerate_host: false,
             gpu_name: None,
             hostname: None,
@@ -1321,6 +1328,12 @@ impl Node {
         self.mesh_id.lock().await.clone()
     }
 
+    /// Notified each time the node stores a mesh ID: when it first takes
+    /// one and when it later converges on a lower one.
+    pub(crate) fn subscribe_mesh_id_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.mesh_id_changed.subscribe()
+    }
+
     pub async fn first_joined_mesh_ts(&self) -> Option<u64> {
         *self.first_joined_mesh_ts.lock().await
     }
@@ -1335,8 +1348,15 @@ impl Node {
         }
     }
 
-    /// Set the mesh identity. If None was set, adopts the given ID (from gossip).
-    /// If already set, ignores (originator's ID wins).
+    /// Adopt a mesh ID announced by a direct peer.
+    ///
+    /// With no ID yet, the node takes the announced one. A node in an
+    /// unrestricted public mesh then moves to any lower ID it hears, so a mesh
+    /// whose nodes each started with their own ID settles on one ID.
+    /// Requirement-aware meshes keep their policy-derived ID, and private
+    /// meshes keep first-heard adoption: an SDK membership in one keeps a fixed
+    /// ID and refuses peers that announce another, so moving would cut a worker
+    /// off from it.
     pub async fn set_mesh_id(&self, id: String) {
         if let Some(state) = self.requirement_mesh_state.lock().await.clone()
             && state.mesh_id != id
@@ -1348,10 +1368,8 @@ impl Node {
             );
             return;
         }
-        let mut current = self.mesh_id.lock().await;
-        if current.is_none() {
-            *current = Some(id);
-            drop(current);
+        if self.adopt_announced_mesh_id(id).await {
+            self.mesh_id_changed.send_replace(());
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
                 None,
@@ -1359,6 +1377,24 @@ impl Node {
             )
             .await;
         }
+    }
+
+    /// Store `id` when the node has none, or when it is a lower ID of an
+    /// unrestricted public mesh. Returns whether the stored ID changed.
+    async fn adopt_announced_mesh_id(&self, id: String) -> bool {
+        let converges = self.public_mesh
+            && !self.is_membership
+            && self.local_mesh_requirements.is_unrestricted();
+        let mut current = self.mesh_id.lock().await;
+        match current.as_deref() {
+            None => {}
+            Some(ours) if converges && id.as_str() < ours => {
+                tracing::info!("mesh ID converged from {ours} to {id}");
+            }
+            Some(_) => return false,
+        }
+        *current = Some(id);
+        true
     }
 
     /// Set mesh ID unconditionally (for originator).
@@ -1370,6 +1406,7 @@ impl Node {
             );
         }
         *self.mesh_id.lock().await = Some(id);
+        self.mesh_id_changed.send_replace(());
         self.emit_plugin_mesh_event(
             crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
             None,

@@ -31,6 +31,7 @@ pub(crate) struct PluginEndpointKey {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeStatusSnapshot {
+    pub active_runtime_instances: BTreeMap<String, String>,
     pub primary_model: Option<String>,
     pub primary_backend: Option<String>,
     pub is_host: bool,

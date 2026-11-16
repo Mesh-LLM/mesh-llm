@@ -709,8 +709,8 @@ jobs:
             toolchain_epoch: mesh-llm-cuda-runner-sha256-6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
           - cuda_version: '13.1.2'
             cuda_major: '13'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c8f292d963298509f086a88c877613bf51a7224c9128699d65785571a026ddce
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-c8f292d963298509f086a88c877613bf51a7224c9128699d65785571a026ddce
     container:
       image: ${{ matrix.runner_image }}
       credentials:
@@ -776,8 +776,8 @@ jobs:
             cuda_architectures_cache: '61_75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c8f292d963298509f086a88c877613bf51a7224c9128699d65785571a026ddce
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-c8f292d963298509f086a88c877613bf51a7224c9128699d65785571a026ddce
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
@@ -858,7 +858,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_16 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:e82f0e51557d53e0bd4d4feaf79ea42681d3801fb4d0aeeeef3fa54e4e3e8184
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:7e372a123d9a3cc66e6837fa547a5d0d91fe7856d9bbf4d1ed2aa0ca0a950739
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -881,7 +881,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-e82f0e51557d53e0bd4d4feaf79ea42681d3801fb4d0aeeeef3fa54e4e3e8184
+          pinned_epoch: mesh-llm-cuda-runner-sha256-7e372a123d9a3cc66e6837fa547a5d0d91fe7856d9bbf4d1ed2aa0ca0a950739
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -1187,7 +1187,7 @@ jobs:
           - cuda_version: '12.9.2'
           - cuda_version: '13.1.2'
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1267,7 +1267,7 @@ jobs:
           - cuda_version: '13.1.2'
             cuda_major: '13'
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1341,7 +1341,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1411,7 +1411,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1966,6 +1966,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      tag_commit: ${{ steps.packaging_identity.outputs.tag_commit }}
+      manifest_sha256: ${{ steps.packaging_identity.outputs.manifest_sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -2181,6 +2184,21 @@ jobs:
           gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false \
             --title "Rolling preview $RELEASE_TAG (source $SOURCE_SHA)"
 
+      - name: Record downstream packaging identity
+        id: packaging_identity
+        if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          manifest_sha256="$(sha256sum release-artifacts/native-runtimes.json | cut -d ' ' -f 1)"
+          if [[ ! "$tag_commit" =~ ^[0-9a-f]{40}$ || ! "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid published tag commit or native manifest digest" >&2
+            exit 1
+          fi
+          printf 'tag_commit=%s\nmanifest_sha256=%s\n' "$tag_commit" "$manifest_sha256" >> "$GITHUB_OUTPUT"
+
   release_notes:
     name: Regroup release notes
     needs: [metadata, publish]
@@ -2241,13 +2259,18 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      correlation_id: ${{ steps.dispatch.outputs.correlation_id }}
     steps:
       - name: Dispatch verified release to mesh-packaging
+        id: dispatch
         env:
           GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
           TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_TAG_COMMIT: ${{ needs.publish.outputs.tag_commit }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.publish.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
           [[ -n "${GH_TOKEN:-}" ]] || {
@@ -2262,16 +2285,31 @@ jobs:
             echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
             exit 1
           }
+          gh api "repos/${TARGET_REPOSITORY}/actions/workflows/images-release.yml/runs?per_page=1" > /dev/null || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Actions read access to ${TARGET_REPOSITORY}" >&2
+            exit 1
+          }
+          [[ "$RELEASE_TAG_COMMIT" =~ ^[0-9a-f]{40}$ && "$RELEASE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Missing or invalid published release identity" >&2
+            exit 1
+          }
+          correlation_id="mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg ref "$RELEASE_TAG" \
             --arg version "$RELEASE_VERSION" \
+            --arg expected_mesh_sha "$RELEASE_TAG_COMMIT" \
+            --arg expected_manifest_sha256 "$RELEASE_MANIFEST_SHA256" \
+            --arg correlation_id "$correlation_id" \
             '{
               event_type: "mesh-llm-release",
               client_payload: {
                 repository: $repository,
                 ref: $ref,
                 version: $version,
+                expected_mesh_sha: $expected_mesh_sha,
+                expected_manifest_sha256: $expected_manifest_sha256,
+                correlation_id: $correlation_id,
                 dry_run: false,
                 publish_images: true,
                 publish_release_assets: true,
@@ -2282,6 +2320,56 @@ jobs:
               --method POST \
               "repos/${TARGET_REPOSITORY}/dispatches" \
               --input -
+          printf 'correlation_id=%s\n' "$correlation_id" >> "$GITHUB_OUTPUT"
+
+  await_packaging_release:
+    name: Verify package and image publishing
+    needs: [metadata, publish, dispatch_packaging_release]
+    if: ${{ needs.dispatch_packaging_release.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Prepare packaging receipt verifier
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+      - name: Resolve upstream run start
+        id: start
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          started="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          [[ "$started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          printf 'created_at=%s\n' "$started" >> "$GITHUB_OUTPUT"
+      - name: Wait for matching successful packaging receipt
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_TAG_COMMIT: ${{ needs.publish.outputs.tag_commit }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.publish.outputs.manifest_sha256 }}
+          CORRELATION_ID: ${{ needs.dispatch_packaging_release.outputs.correlation_id }}
+          RUN_CREATED_AT: ${{ steps.start.outputs.created_at }}
+        run: |
+          set -euo pipefail
+          "${MESH_LLM_AUTOMATION_BIN:?}" release packaging-receipt \
+            --tag "$RELEASE_TAG" --sha "$RELEASE_TAG_COMMIT" \
+            --manifest "$RELEASE_MANIFEST_SHA256" --correlation "$CORRELATION_ID" \
+            --since "$RUN_CREATED_AT"
 
   publish_crates_preflight:
     name: Preflight crates.io packages
@@ -2289,7 +2377,7 @@ jobs:
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     env:
       SCCACHE_GHA_ENABLED: "false"
       SCCACHE_MULTILEVEL_CHAIN: disk
@@ -2363,7 +2451,7 @@ jobs:
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
     env:
       SCCACHE_GHA_ENABLED: "false"
       SCCACHE_MULTILEVEL_CHAIN: disk

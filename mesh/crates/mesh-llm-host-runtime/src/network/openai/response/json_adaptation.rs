@@ -12,9 +12,9 @@ use super::relay::relay_error_response;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_adapter;
-use crate::network::openai::tool_call_ids::normalize_chat_completion_json_body;
 use anyhow::{Result, anyhow};
 use mesh_llm_events::logging::identifiers::RequestId;
+use skippy_inference_api::chat::identifiers::normalize_chat_completion_json_body;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 

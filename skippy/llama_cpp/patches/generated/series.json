@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "046c0272984ff94c3c1bf7d4dc63fd99560149351b7a2952a77ecb04c15ecd30",
+  "full_patch_sha256": "6496654e8f850f8874b23513b45aed737c4a1e76fbe279217c455b6d29e43c32",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -434,7 +434,7 @@
         "kimi-linear"
       ],
       "file": "0043-family-kimi-linear.patch",
-      "sha256": "94a74b644377ed957e8bb41740a2e29fec1b52b62d7f611a4a60d0cc4f43098a",
+      "sha256": "bded431df5ff138ac8409adb2cf60e057144067f138e31599055e03ae9616f00",
       "sources": [
         "src/models/kimi-linear.cpp"
       ]
@@ -711,7 +711,7 @@
         "qwen35"
       ],
       "file": "0070-family-qwen35.patch",
-      "sha256": "b89b5540b2034e10983310ba9cc024313baf0963afb2b76a1a41f65759348135",
+      "sha256": "c735bcd982763fe3a331022a4baeb14bb306b557d2b97ac5c6c6cdadc9bd3714",
       "sources": [
         "src/models/qwen35.cpp"
       ]
@@ -721,7 +721,7 @@
         "qwen35moe"
       ],
       "file": "0071-family-qwen35moe.patch",
-      "sha256": "d9c96563d3b7a7b29884d7bb78684b58c3f2c26bf79e2bfa7195e16aa8389a79",
+      "sha256": "6aad03baa130f344a261e6e8f290f485cc7157ffc1e392d0a985fb954316346b",
       "sources": [
         "src/models/qwen35moe.cpp"
       ]
@@ -741,7 +741,7 @@
         "qwen4exp"
       ],
       "file": "0073-family-qwen4exp.patch",
-      "sha256": "26e3854bc052d8e988f7a151714c81e596d882e21daa84d1100e8cd7c38451db",
+      "sha256": "a53aefb3bfb8b46c26e29b98a643bccc187d0820954e3195af3ae2e0965ec6cb",
       "sources": [
         "src/models/qwen4exp.cpp"
       ]
@@ -820,7 +820,7 @@
     {
       "families": [],
       "file": "0081-family-unmapped.patch",
-      "sha256": "662ff6edc56bc4117607616485838b1746e54a689d4e9feb60c960200c6a640a",
+      "sha256": "e322c733e8195fe913854c35ff2b2c8685fdcedffc6b5bd6802c820d7a8934a0",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",

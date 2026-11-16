@@ -15,7 +15,7 @@ pub(super) fn case(plan: &Plan) -> Case {
 
 pub(super) fn command(case: &Case) -> std::process::Command {
     let mut arguments = case.arguments();
-    arguments[5] = "3".into();
+    arguments[5] = "15".into();
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_xtask"));
     command
         .current_dir(crate::support::repository())
@@ -203,12 +203,12 @@ scenario!(
 scenario!(
     d14_slow_headers,
     |plan: &mut Plan| plan.behavior = Behavior::SlowHeaders,
-    Some("deadline expired")
+    Some("models_transfer_failed")
 );
 scenario!(
     d14_slow_body,
     |plan: &mut Plan| plan.behavior = Behavior::SlowBody,
-    Some("deadline expired")
+    Some("models_transfer_failed")
 );
 scenario!(
     d14_flood,

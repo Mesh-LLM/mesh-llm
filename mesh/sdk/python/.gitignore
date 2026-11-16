@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+src/meshllm/_generated/libuniffi.dylib
+src/meshllm/_generated/libuniffi.so
+src/meshllm/_generated/uniffi.dll
