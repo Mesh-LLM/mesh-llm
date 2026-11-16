@@ -3,7 +3,7 @@ description: >
   Build only the narrow ci-controller executable on a GitHub-hosted Linux
   runner and export its absolute path as MESH_CI_CONTROLLER_BIN. It owns CI
   planning, lane result admission, and the planner-side repository checks
-  (affected-crates, conventional-commits, llama-upstream-pin). It uses the
+  (affected-crates, llama-upstream-pin). It uses the
   pinned stable Rust toolchain and locked Cargo without just or compiler
   caches, restores an exact-key cached release executable, and compiles only
   on a miss; `automation bootstrap` then proves the executable is Cargo's build

@@ -21,26 +21,6 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
-# Git never activates a committed hook on clone, so enable the repository hooks
-# on the first local development build. Skipped in CI, and never overrides a
-# hooks path the developer chose themselves.
-function Enable-RepoGitHooks {
-    if ($env:CI) { return }
-    try {
-        $current = & git -C $repoRoot config --get core.hooksPath 2>$null
-        if ($LASTEXITCODE -eq 0 -and $current) { return }
-        & git -C $repoRoot config core.hooksPath scripts/hooks 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "enabled repository git hooks (core.hooksPath=scripts/hooks); commit messages are now checked locally"
-        }
-    } catch {
-        # A missing or unusual git installation must never fail a build.
-    }
-    $global:LASTEXITCODE = 0
-}
-
-Enable-RepoGitHooks
-
 $meshUiDir = Join-Path $repoRoot "mesh\crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null
@@ -258,6 +238,9 @@ function Configure-LldLinker {
         Show-LldInstallInstructions
     }
 
+    if ($env:MESH_CI_STABLE_PROC_MACRO_METADATA -eq "1") {
+        $linker = Join-Path $scriptDir "cargo-linker.cmd"
+    }
     $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
     $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = $linker
     Write-Host "Using Rust linker: $linker"
@@ -1052,7 +1035,7 @@ if ($HostOnly) {
             }
         }
         Set-BuildVersionStamp
-        $hostArgs = @("build")
+        $hostArgs = @("build", "--timings")
         $hostOutputProfile = "debug"
         if ($buildProfile -eq "release") {
             $hostArgs += "--release"

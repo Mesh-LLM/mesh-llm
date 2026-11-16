@@ -37,8 +37,7 @@ modes. Preserve exact bytes where a caller consumes or hashes them.
 
 `tools/ci-controller` owns CI planning (`ci plan`), lane result admission
 (`ci validate-lane`), the planner-side repository checks
-(`repository affected-crates`, `repository conventional-commits`, and
-`repository llama-upstream-pin`), and the shared `automation bootstrap` check.
+(`repository affected-crates` and `repository llama-upstream-pin`), and the shared `automation bootstrap` check.
 Its normal dependencies are limited to serde, serde_json, sha2, and hex. Full
 xtask keeps every command and delegates these to the library, so outputs, exit
 codes, and refusals match. `ci family-plan`, `ci validate-graph`, and all
@@ -126,7 +125,7 @@ they never rebuild it and never fall back to `prepare-automation`. Its artifact
 name carries a `product-` prefix, so it cannot collide with or stand in for the
 protected `authority_*` artifacts, and it retains for one day. Jobs that must
 not wait on a producer and only plan or validate (the entry planners through
-`compute-changes` and `plan-ci`, commit convention, and lane summaries) use
+`compute-changes` and `plan-ci`, and lane summaries) use
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
@@ -644,6 +643,37 @@ checked-in expiry are the maintainer-controlled approval boundary.
   warm or cold. A slow warm Windows lane is expected while the pin holds, not a
   cache regression. Lift the pin once an upstream fix is released and a Windows
   lane passes with it.
+- Windows host producers retain Cargo HTML timings from the existing standalone
+  Skippy and Mesh host compilations, plus cumulative sccache evidence after each
+  phase. Disable the job's sccache idle timeout so a long uncached link does not
+  expire the daemon and erase those counters. Capture does not run another
+  build or change product features/profiles.
+  Timing artifacts use architecture and run-attempt identities and retain for
+  one day; cache counters use the existing statistics action and its retention.
+  The two product steps also set `LINK=--time-trace` so LLVM writes one trace
+  beside each actual linker output. Upload those traces with Cargo timings;
+  they measure linker work separately without changing Rust codegen flags.
+  After target-cache restoration and before either product build, run the
+  restored automation's `ci-ops reset-linker-traces` through Just. It removes
+  old `.time-trace.json` files from `target` while preserving compiler outputs.
+  Upload timing evidence only after that reset succeeds, so restored traces
+  cannot be attributed to the current attempt.
+- Windows host builds set `SOURCE_DATE_EPOCH=0` and opt into
+  the Rust-owned `native windows-linker` adapter through the existing linker
+  driver. Only matching non-primary proc-macro libraries receive `/DEBUG:NONE`:
+  their otherwise unused PDB records a random rustc temporary export-file path
+  in the DLL's GUID. Shipping Skippy, Mesh, runtime DLLs and build scripts retain
+  their existing link flags, optimization, panic behavior and debug settings.
+  Mesh's HostOnly linker configuration selects that same CMD driver when opted
+  in; its ordinary direct LLVM selection remains the default. Require restored
+  product-source automation; never compile a helper from a linker invocation.
+  Its archive prefix binds the adapter, Mesh configuration and workflow sources
+  so older nondeterministic build-tool DLLs cannot be restored.
+  Archive identities remain reusable across runs within that compatibility
+  cohort.
+  The existing Windows unit row selects 23 exact nonignored native methods,
+  including the CMD/adapter contract for scope, unchanged response files,
+  inherited streams, native exit codes and missing-helper refusal.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
@@ -717,6 +747,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   not dispatch another publication.
 
 ## Workflow definition and dependencies
+
+- Commit and PR prose is not a CI gate. Do not install commit-message hooks,
+  enforce title grammar, or blacklist attribution identities. Release-note
+  classification may recognize conventional prefixes without requiring them;
+  unclassified titles remain in Other changes.
 
 - Declare least-privilege `permissions` explicitly. Default to
   `contents: read`; grant write or OIDC permissions only to the owning job.
@@ -833,6 +868,10 @@ unconfirmed.
 Bounded, explicitly unverified source checkpoints are retained after every coding
 turn and after supervised termination. Upload recovery before verbose evidence;
 never include the restored Python environment in the diagnostic upload.
+The native build supervisor freezes its running automation executable in a
+private directory outside both checkouts before launching the wrapper. Keep that
+copy alive through supervision and recovery: candidate Cargo builds may replace
+their own `target/debug/xtask`, but must not replace the admitted controller.
 If the recorded native base is unavailable, capture its complete tracked tree
 against an empty tree so committed repairs remain in the unverified checkpoint.
 

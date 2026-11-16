@@ -858,6 +858,11 @@ collect_linux_cuda_dependencies
 rewrite_macos_runtime_paths
 rewrite_linux_runtime_paths
 
+# Relocation is complete: retain every loader name but archive identical bytes once.
+if [[ "$runtime_os" == linux ]]; then
+    xtool native deduplicate-linux-libraries "$stage_dir/lib"
+fi
+
 primary_library="lib/$primary_name"
 runtime_release_version="$(skippy_runtime_version)"
 abi_version="$(skippy_abi_version)"

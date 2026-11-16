@@ -112,8 +112,7 @@ compiling. The default image profile keeps its verification and cache setup.
 Metadata-only Cargo discovery remains permitted. Composition-only release
 jobs still consume immutable automation and never compile.
 
-Quality commit convention and environment-mutation checks use Rust repository
-owners. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
+Quality environment-mutation checks use the Rust repository owner. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
 summaries use `ci-ops registry-pulls`, with jq producing the observation JSON.
 Runtime-seed preflight, restore verification, measurement and summary use
 `ci-ops runtime-seed`. Its automation build precedes measurement and uses
@@ -984,9 +983,10 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 ## Planner and profiles
 
-The local `scripts/hooks/commit-msg` hook now invokes the Rust
-`repository conventional-commits` command through the repository Cargo alias.
-The workflow commit check, planner and five lane summaries use Rust owners
+Commit subjects, PR titles and attribution identities are not CI gates.
+Builds do not install commit-message hooks. Release notes still classify
+recognized conventional prefixes and retain other titles in Other changes.
+The planner and five lane summaries use Rust owners
 through `prepare-ci-controller`. Lane summaries use the protected revision frozen
 by `authority_source`, keeping validation stable across default-branch updates
 while producers run. When that producer is skipped, summaries retain the
@@ -1519,6 +1519,35 @@ keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
+
+The Windows host slice uploads Cargo HTML timings from its existing standalone
+Skippy and Mesh compilations as a separate one-day architecture/attempt
+artifact. Each phase also records Cargo fingerprint diagnostics and cumulative
+sccache counters through the existing statistics action. These reports separate
+compiler work, invalidation and cache behavior without adding a build or
+changing product features, profiles or immutable host/product inputs.
+The host job disables sccache idle expiry so long uncached links retain the
+same daemon's counters.
+Both product steps set `LINK=--time-trace` and retain LLVM's per-output
+`.time-trace.json` files in the timing artifact. These measure linker work
+separately without adding Rust codegen flags or success-output warnings.
+After target-cache restoration, `just ci-reset-linker-traces` uses restored
+Rust automation to remove old linker traces before either build. It preserves
+compiler outputs, and timing upload requires the reset to succeed. Cached
+traces therefore cannot enter a later attempt's timing artifact.
+Both host compilations set `SOURCE_DATE_EPOCH=0` and opt into the Rust-owned
+native Windows linker adapter. Only matching non-primary proc-macro libraries
+omit PDB generation: the PDB command records a random rustc export-file path,
+whose hash reaches the DLL's GUID and downstream sccache keys. Shipping targets
+and other links keep their flags and release profile. The existing restored
+product-source automation runs the adapter; it has no compiler fallback.
+Mesh's HostOnly linker configuration selects the CMD driver only with the
+opt-in, preserving its default direct LLVM path. The native fixture executes
+that configuration for both target variables with the opt-in enabled and unset.
+The host archive prefix binds the adapter, Mesh configuration and workflow
+sources to exclude older nondeterministic build-tool DLLs. Archive identities
+remain reusable across runs within that compatibility cohort. Timing artifacts
+retain Cargo HTML and linker traces.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
@@ -2150,6 +2179,10 @@ rerun, without starting an agent for the transient failure.
 
 Every coding turn saves an explicitly unverified source checkpoint; the native
 outer supervisor also attempts recovery after termination and cancellation.
+That supervisor gives the wrapper a private copy of its running automation
+executable outside both checkouts and retains it through final recovery. A
+candidate rebuild of `target/debug/xtask` cannot replace that controller; the
+wrapper's existing digest guards remain mandatory.
 When the native base commit is unavailable, recovery captures the complete
 tracked tree against an empty tree. Candidate processes cannot inherit GitHub
 workflow-control paths, and local repair uses a private home without Git credentials.
@@ -2379,7 +2412,7 @@ consumed by the 27 existing audit steps, which retain their published immutable
 pin. Switching those steps requires a reviewed published replacement action.
 No hosted execution or cross-platform native qualification is recorded here.
 
-The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
+The existing Windows unit platform row prepares the repository automation tool and selects 23 exact native xtask binary methods: three build/path, one linker-metadata, seven installer-helper, eight whole-installer-consumer, two private-state handle-lock, one directory-DACL and one POSIX-path test. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of 23. It prebuilds the real xtask executable and inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This adds no runner or planner row and does not replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
 Windows row selection is conditional. The owning workflow maps through
 `ci-control` to all platform rows, and main/manual-full profiles select all rows.
@@ -2432,8 +2465,8 @@ run without its producer and an unplanned producer must be skipped.
 Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates

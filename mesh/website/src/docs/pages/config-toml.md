@@ -52,7 +52,7 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 ## Private nodes
 
 The other nodes this node's private requests (`@private`, `@incognito`,
-`x-mesh-scope: private` or `/private/v1`) may go to, by node id.
+`x-mesh-scope: private` or `/private/v1`) may go to, by node id. See [Private routing](/docs/pages/private-routing/).
 
 ```toml
 [private]
