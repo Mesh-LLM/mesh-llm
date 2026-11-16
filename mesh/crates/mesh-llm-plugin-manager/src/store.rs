@@ -22,6 +22,8 @@ pub use control_behavior::{
 };
 
 const METADATA_FILE: &str = "plugin-install.json";
+/// Marks a default plugin the operator turned off while it was not installed.
+const DEFAULT_OFF_FILE: &str = "default-off";
 pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,6 +295,24 @@ pub struct InstalledPluginMetadata {
     pub downloaded_asset_name: String,
     pub install_path: PathBuf,
     pub enabled: bool,
+    /// Legacy: whether this record was installed by the retired
+    /// bundled-default system. New installs are never default-managed;
+    /// `migrate_legacy_defaults` rewrites surviving records to normal managed
+    /// ones while keeping their verified identity and recorded grants.
+    #[serde(default)]
+    pub default_managed: bool,
+    /// The host-version compatibility the installed release declared, kept
+    /// from install time so an upgrade judges the installed version rather
+    /// than re-deriving it from the catalog. `None` for legacy installs:
+    /// compatibility is then unknown, not excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_compatibility: Option<crate::compatibility::HostCompatibility>,
+    /// The host surfaces a legacy default-managed install was reviewed to
+    /// use, stored as surface keys and enforced at launch. `None` for a
+    /// plugin whose whole package is trusted as installed (the disclosure at
+    /// install time is the grant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_surfaces: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub manifest: Option<InstalledPluginManifestMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -424,6 +444,30 @@ impl PluginStore {
         Ok(metadata)
     }
 
+    /// Rewrite surviving legacy default-managed records to normal managed
+    /// ones. The bundled-default system that installed them is retired, so
+    /// the flag no longer means anything; what the operator had keeps its
+    /// verified identity, settings, data, enabled state, and effective
+    /// grants (the legacy surface allowlist, recorded now so it survives).
+    /// Never expands grants and never enables or disables anything. Returns
+    /// the names that were migrated; empty once nothing is left to migrate.
+    pub fn migrate_legacy_defaults(&self) -> Result<Vec<String>> {
+        let mut migrated = Vec::new();
+        for metadata in self.list()? {
+            if !metadata.default_managed {
+                continue;
+            }
+            let mut migrated_metadata = metadata.clone();
+            migrated_metadata.default_managed = false;
+            migrated_metadata.allowed_surfaces.get_or_insert_with(|| {
+                crate::legacy_defaults::migrated_allows_keys(&metadata.name)
+            });
+            self.save(&migrated_metadata)?;
+            migrated.push(metadata.name);
+        }
+        Ok(migrated)
+    }
+
     pub fn delete(&self, name: &str) -> Result<()> {
         validate_plugin_name(name)?;
         let metadata = self.load(name).ok();
@@ -440,6 +484,30 @@ impl PluginStore {
                 .with_context(|| format!("delete plugin metadata {}", plugin_dir.display()))?;
         }
         Ok(())
+    }
+
+    /// Record whether a default plugin is turned off: while it is, the
+    /// installers and `mesh-llm update` do not install it. This works when
+    /// the plugin is not installed: `plugins delete` leaves this record for a
+    /// default, and `plugins disable` leaves it for a default not installed.
+    pub fn set_default_turned_off(&self, name: &str, off: bool) -> Result<()> {
+        validate_plugin_name(name)?;
+        let marker = self.plugin_dir(name).join(DEFAULT_OFF_FILE);
+        if off {
+            let plugin_dir = self.plugin_dir(name);
+            fs::create_dir_all(&plugin_dir).with_context(|| {
+                format!("create plugin metadata directory {}", plugin_dir.display())
+            })?;
+            fs::write(&marker, b"").with_context(|| format!("write {}", marker.display()))?;
+        } else if marker.exists() {
+            fs::remove_file(&marker).with_context(|| format!("remove {}", marker.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Whether `plugins disable` turned this default off while it was not installed.
+    pub fn default_turned_off(&self, name: &str) -> bool {
+        is_valid_name(name) && self.plugin_dir(name).join(DEFAULT_OFF_FILE).exists()
     }
 
     fn plugin_dir(&self, name: &str) -> PathBuf {
@@ -530,6 +598,9 @@ mod tests {
             downloaded_asset_name: "blackboard-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
+            default_managed: false,
+            host_compatibility: None,
+            allowed_surfaces: None,
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 operation_bindings: Vec::new(),
@@ -621,6 +692,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["blackboard", "notes"]
         );
+    }
+
+    #[test]
+    fn legacy_migration_preserves_explicit_grants_and_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+        for allowed in [None, Some(Vec::new()), Some(vec!["web_ui".to_string()])] {
+            let mut old = metadata("capsules");
+            old.default_managed = true;
+            old.enabled = false;
+            old.allowed_surfaces = allowed.clone();
+            store.save(&old).unwrap();
+
+            assert_eq!(store.migrate_legacy_defaults().unwrap(), ["capsules"]);
+            let migrated = store.load("capsules").unwrap();
+            assert!(!migrated.default_managed);
+            assert!(!migrated.enabled);
+            assert_eq!(
+                migrated.allowed_surfaces,
+                allowed.or_else(|| Some(crate::legacy_defaults::migrated_allows_keys("capsules")))
+            );
+            assert_eq!(migrated.last_protocol_version, old.last_protocol_version);
+            assert!(store.migrate_legacy_defaults().unwrap().is_empty());
+        }
     }
 
     #[test]

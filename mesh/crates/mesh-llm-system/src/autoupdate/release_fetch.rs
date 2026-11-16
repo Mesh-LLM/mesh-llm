@@ -19,6 +19,10 @@ use release_integrity::{
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
+
+/// Older hosts need their bundled plugin archives when explicitly downgrading.
+/// Staging these files does not install any plugin into the user's store.
+const LEGACY_BUNDLED_PLUGINS_DIR_NAME: &str = "plugins";
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
@@ -45,6 +49,24 @@ pub(super) struct ReleaseInfo {
     pub(super) tag: String,
     pub(super) version: String,
     assets: Vec<ReleaseAsset>,
+}
+
+#[cfg(test)]
+impl ReleaseInfo {
+    /// A release publishing exactly the named assets, for update-flow tests.
+    pub(super) fn with_assets(tag: &str, version: &str, asset_names: &[String]) -> Self {
+        Self {
+            tag: tag.to_string(),
+            version: version.to_string(),
+            assets: asset_names
+                .iter()
+                .map(|name| ReleaseAsset {
+                    name: name.clone(),
+                    sha256: "a".repeat(64),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -668,7 +690,7 @@ mod zip_tests {
 ///   mesh-llm binary.
 /// - composed product-v2 bundles (v0.75.0 and newer): the mesh-llm binary plus
 ///   product-manifest.json, host-imports.json, and a native-runtimes/ directory
-///   holding the packaged runtime tree. It installs with the host.
+///   holding the packaged runtime tree.
 ///
 /// The returned paths are relative to the extracted bundle root, sorted so the
 /// mesh binary installs first.
@@ -694,6 +716,12 @@ fn collect_bundle_files(
             files.push(name);
         }
     }
+
+    // The selected older host, not this updater, consumes its bundled archives.
+    let has_legacy_plugins = dirs
+        .iter()
+        .any(|name| name == LEGACY_BUNDLED_PLUGINS_DIR_NAME);
+    dirs.retain(|name| name != LEGACY_BUNDLED_PLUGINS_DIR_NAME);
 
     anyhow::ensure!(!files.is_empty(), "Downloaded bundle was empty");
     anyhow::ensure!(
@@ -721,6 +749,9 @@ fn collect_bundle_files(
     let mut staged = files;
     if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
         staged.push(NATIVE_RUNTIMES_DIR_NAME.to_string());
+    }
+    if has_legacy_plugins {
+        staged.push(LEGACY_BUNDLED_PLUGINS_DIR_NAME.to_string());
     }
     // The mesh binary must install first so a mid-install failure can never
     // leave the new runtime tree beside an old host.

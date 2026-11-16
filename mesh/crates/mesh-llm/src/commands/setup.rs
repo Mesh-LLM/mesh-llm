@@ -25,6 +25,9 @@ fn setup_command_args<'a>(
     let Command::Setup(SetupArgs {
         yes,
         no_interactive,
+        plugin_set,
+        skip_plugin_install,
+        no_default_plugins,
         service,
         no_service,
         skip_runtime,
@@ -42,6 +45,9 @@ fn setup_command_args<'a>(
             no_service: *no_service,
             skip_runtime: *skip_runtime,
             verbose: *verbose,
+            plugin_set: plugin_set.clone(),
+            skip_plugin_install: *skip_plugin_install || *no_default_plugins,
+            legacy_no_default_plugins: mesh_llm_plugin_manager::default_plugins_opted_out(),
         },
         environment: SetupEnvironment {
             platform: current_setup_platform()?,
@@ -74,6 +80,9 @@ mod tests {
             &Command::Setup(SetupArgs {
                 yes: true,
                 no_interactive: false,
+                plugin_set: None,
+                skip_plugin_install: false,
+                no_default_plugins: false,
                 service: true,
                 no_service: false,
                 skip_runtime: true,
@@ -92,6 +101,9 @@ mod tests {
                 no_service: false,
                 skip_runtime: true,
                 verbose: true,
+                plugin_set: None,
+                skip_plugin_install: false,
+                legacy_no_default_plugins: false,
             }
         );
     }

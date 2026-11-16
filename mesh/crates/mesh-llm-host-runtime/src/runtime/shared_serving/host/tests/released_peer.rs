@@ -33,7 +33,6 @@ pub(super) async fn exercise(binary: &Path, directory: &Path) -> Result<()> {
             "--console",
             &console_port.to_string(),
             "--headless",
-            "--no-default-plugins",
             "--disable-iroh-relays",
             "--mesh-discovery-mode",
             "mdns",
@@ -47,7 +46,6 @@ pub(super) async fn exercise(binary: &Path, directory: &Path) -> Result<()> {
         // keystore or asking their OS keychain for credentials.
         .arg(state.join("absent-owner.json"))
         .env("MESH_LLM_ANALYTICS", "0")
-        .env("MESH_LLM_NO_DEFAULT_PLUGINS", "1")
         .env("MESH_LLM_DATA_DIR", state.join("data"))
         .env("MESH_LLM_RUNTIME_ROOT", state.join("runtime"))
         .env("HF_HUB_CACHE", state.join("hf-cache"))
