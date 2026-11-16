@@ -21,6 +21,8 @@ const UNVERIFIED: &[&str] = &[
     "skippy-package-builder",
     "skippy-quantize",
     "skippy-runtime",
+    // Core ML execution is macOS-only; Windows runtime behavior is not qualified.
+    "skippy-ane",
     // Current divergent owners split from the already-unverified skippy-server.
     "skippy-serving",
     "skippy-api",

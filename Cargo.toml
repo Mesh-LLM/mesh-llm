@@ -59,6 +59,7 @@ members = [
     "skippy/crates/skippy-inference-api",
     "skippy/crates/skippy-ffi",
     "skippy/crates/skippy-runtime",
+    "skippy/crates/skippy-ane",
     "skippy/crates/skippy-scheduler",
     "skippy/crates/skippy-serving",
     "skippy/crates/skippy-cli",

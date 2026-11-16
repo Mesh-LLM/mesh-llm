@@ -38,6 +38,8 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
 use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
+#[cfg(target_os = "macos")]
+use skippy_ane::draft::AneDraft;
 
 pub use context::DFlashHealth;
 pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
@@ -167,10 +169,13 @@ pub(crate) struct DFlashDraft {
     mrope: bool,
     layout: BlockLayout,
     batch: DraftBatch,
+    #[cfg(target_os = "macos")]
+    ane: Option<AneDraft>,
 }
 
-// The draft model and context are only touched behind the owning Mutex, and
-// Skippy serializes target-context use on the runtime worker.
+// The draft model, context, and Core ML states are only touched behind the
+// owning Mutex. Skippy serializes target-context use on the runtime worker,
+// including every prediction that uses a Core ML state.
 unsafe impl Send for DFlashDraft {}
 
 struct LoadedDraft {
@@ -228,9 +233,11 @@ impl DFlashDraft {
             mrope: false,
             layout: BlockLayout::BonusAnchor,
             batch: DraftBatch::default(),
+            #[cfg(target_os = "macos")]
+            ane: None,
         };
         // From here the Drop impl owns the native handles.
-        draft.configure(target_model, options, config, tensors.markov)?;
+        draft.configure(target_model, options, config, tensors.markov, path)?;
         Ok(draft)
     }
 
@@ -240,6 +247,7 @@ impl DFlashDraft {
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
         markov: bool,
+        draft_path: &Path,
     ) -> Result<()> {
         let api = self.api;
         let architecture =
@@ -328,6 +336,21 @@ impl DFlashDraft {
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("SKIPPY_DFLASH_ANE_MODEL").is_some() {
+            if self.info.variant != DFlashVariant::DFlash
+                || self.info.target_layer_ids != [2, 7, 12, 17, 23, 28, 33, 38]
+                || self.info.max_draft_tokens > 6
+                || self.mask_token != 248_077
+            {
+                bail!("ANE DFlash package does not match this paired checkpoint");
+            }
+            self.ane = AneDraft::from_env(
+                usize::try_from(self.lanes).context("negative ANE lane count")?,
+                self.n_vocab,
+                draft_path,
+            )?;
+        }
         // The draft's model builder publishes whether its block attends
         // causally (a decoder contract that needs it sets the key even when
         // the file does not).
@@ -410,6 +433,13 @@ impl DFlashDraft {
         if positions.is_empty() {
             return Ok(());
         }
+        #[cfg(target_os = "macos")]
+        if self.ane.is_some() {
+            let features = self.gather_features(first_row, positions, remote)?;
+            if let Some(ane) = self.ane.as_mut() {
+                return ane.ingest(seq_id, &features, positions);
+            }
+        }
         let layers = self.feature_layers(first_row, positions.len(), remote)?;
         let n_embd = self.n_embd_target;
         self.inject_rows(seq_id, positions, |row| {
@@ -491,6 +521,10 @@ impl DFlashDraft {
         if positions.is_empty() {
             return Ok(());
         }
+        #[cfg(target_os = "macos")]
+        if let Some(ane) = self.ane.as_mut() {
+            return ane.ingest(seq_id, features, positions);
+        }
         let row_len = features.len() / positions.len();
         self.inject_rows(seq_id, positions, |row| {
             features[row * row_len..(row + 1) * row_len].iter().copied()
@@ -522,6 +556,11 @@ impl DFlashDraft {
 
     /// Drops draft cache entries at or after `position` for one lane.
     pub(crate) fn truncate(&mut self, seq_id: i32, position: i32) {
+        #[cfg(target_os = "macos")]
+        if let Some(ane) = self.ane.as_mut() {
+            ane.truncate(seq_id, position);
+            return;
+        }
         unsafe {
             let memory = (self.api.get_memory)(self.ctx);
             (self.api.memory_seq_rm)(memory, seq_id, position.max(0), -1);
@@ -530,6 +569,11 @@ impl DFlashDraft {
 
     /// Drops every lane's draft cache.
     fn clear_all(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(ane) = self.ane.as_mut() {
+            ane.clear_all();
+            return;
+        }
         unsafe {
             let memory = (self.api.get_memory)(self.ctx);
             (self.api.memory_seq_rm)(memory, -1, -1, -1);
@@ -537,6 +581,11 @@ impl DFlashDraft {
     }
 
     pub(crate) fn clear(&mut self, seq_id: i32) {
+        #[cfg(target_os = "macos")]
+        if let Some(ane) = self.ane.as_mut() {
+            ane.clear(seq_id);
+            return;
+        }
         unsafe {
             let memory = (self.api.get_memory)(self.ctx);
             (self.api.memory_seq_rm)(memory, seq_id, -1, -1);
@@ -555,6 +604,11 @@ impl DFlashDraft {
         let draft_tokens = max_tokens.min(self.info.max_draft_tokens);
         if draft_tokens == 0 {
             return Ok(Vec::new());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(ane) = self.ane.as_mut() {
+            ane.truncate(seq_id, anchor_position);
+            return ane.propose(seq_id, anchor_position, anchor, draft_tokens);
         }
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
         // Rows a split final stage verified past the anchor are still cached.
@@ -795,6 +849,10 @@ fn load_draft(
     }
     let mut model_params: LlamaModelParams = unsafe { (api.model_default_params)() };
     model_params.n_gpu_layers = options.n_gpu_layers.unwrap_or(config.n_gpu_layers);
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("SKIPPY_DFLASH_ANE_MODEL").is_some() {
+        model_params.n_gpu_layers = 0;
+    }
     if !devices.is_empty() {
         model_params.devices = devices.as_mut_ptr().cast();
     }

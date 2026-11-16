@@ -389,6 +389,7 @@
         "skippy/crates/skippy-correctness/**",
         "skippy/crates/skippy-package-builder/**",
         "skippy/crates/skippy-runtime/**",
+        "skippy/crates/skippy-ane/**",
         "skippy/crates/skippy-serving/**",
         "skippy/crates/skippy-cli/**",
         "skippy/crates/skippy-commands/**",

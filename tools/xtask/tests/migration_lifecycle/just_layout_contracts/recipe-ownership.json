@@ -45,6 +45,7 @@
       "competitive-inputs-prefetch",
       "competitive-inputs-prefetch-fixture",
       "decisions-smoke",
+      "dflash-ane-convert",
       "family-certify",
       "generic-conversion-jobs-release-build",
       "grammar-process-control-build",

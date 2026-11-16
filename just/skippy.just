@@ -195,6 +195,11 @@ spec-bench target draft *ARGS:
     just with-lld env LLAMA_STAGE_BUILD_DIR=".deps/llama-build/build-stage-abi-static" cargo build -p llama-spec-bench
     LLAMA_STAGE_BUILD_DIR=".deps/llama-build/build-stage-abi-static" target/debug/llama-spec-bench --target-model-path "{{ target }}" --draft-model-path "{{ draft }}" {{ ARGS }}
 
+# Convert the paired Qwen3.6 DFlash GGUF into a stateful Core ML ANE package.
+dflash-ane-convert draft target out embeddings *ARGS:
+    just with-lld cargo build -p skippy-ane --bin skippy-ane-convert
+    target/debug/skippy-ane-convert --draft "{{ draft }}" --target "{{ target }}" --out "{{ out }}" --embeddings-out "{{ embeddings }}" {{ ARGS }}
+
 # Smoke a standalone skippy OpenAI frontend stage.
 skippy-openai-smoke *ARGS:
     just with-lld scripts/skippy-openai-smoke.sh {{ ARGS }}
