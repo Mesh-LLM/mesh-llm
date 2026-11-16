@@ -57,6 +57,8 @@ selected phase names the backend in `target` and, for a remote peer, carries
 `target_peer_id`: the peer's endpoint id as lowercase hex, the same encoding the
 serving node's `request_received` and terminal events use for
 `requested_by_node_id`. It is absent for a local or URL backend.
+When the selected model descriptor is unambiguous, `required_model_channels`
+lists the Mesh channel names that its backend requires.
 
 When a mesh route has several candidates, a `deny` at the selected phase rules
 out that candidate only: the host asks about the next one, with the next
@@ -120,6 +122,25 @@ boolean fields `evidence_complete` and `observer_evidence_complete`. An absent
 field means unknown, rather than false. The old `evidence_completeness` string
 field is retained for SDK source compatibility but is not emitted by v1 hosts.
 The raw payload remains available for additive fields outside the typed view.
+
+### Receipt audit evidence
+
+On the requesting node, a remote attempt using the `receipts` trust policy
+carries `receipt_audit: "pending"` at `backend_selected` when the host can
+audit the attempt with its own key. At
+`exchange_finished`, the host reports `passed`, `failed`, or `unverified` for
+the selected attempt. `unverified` covers an audit the host could not complete,
+including missing evidence and timeouts. Both phases carry the same
+host-generated `receipt_audit_attempt_id` and authenticated `target_peer_id`.
+The field reports the local verifier's result, which peers cannot set.
+
+A settlement plugin can record the requirement at selection and use the
+terminal result when deciding whether to make the final usage payment. Match
+the event to the recorded local exchange, authenticated peer, and audit
+attempt ID. Only an explicit `passed` for that attempt authorizes a gated
+payment. Keep it withheld if the verdict is absent, unknown, or arrives after
+settlement state has expired. Admission and final usage have separate rules.
+This evidence carries no invoice, wallet, or payment-rail data.
 
 Final client cancellation, timeout, or transport failure takes precedence over
 the admission outcome. The optional `admission_denied` and

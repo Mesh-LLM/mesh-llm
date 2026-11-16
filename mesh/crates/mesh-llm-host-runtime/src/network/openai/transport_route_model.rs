@@ -462,23 +462,26 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         // rejecting it here turned a served answer into "all eligible
         // automatic models exhausted" (CI smoke, max_tokens 4, 2026-11-08).
         retry_policy.response_quality = idx + 1 < total_targets;
-        match super::super::exchange_admission::admit_selected_candidate(
-            &node,
-            &mut tcp_stream,
-            request,
-            Some(model),
-            "mesh",
-            super::super::exchange_admission::SelectedRouteTarget::Mesh(&target),
-            idx + 1,
-            idx + 1 < total_targets,
-        )
-        .await
-        {
-            SelectedRouteAdmission::Proceed => {}
-            // A plugin said no to this peer, not to the request: try the next.
-            SelectedRouteAdmission::NextCandidate => continue,
-            SelectedRouteAdmission::Rejected(outcome) => return outcome,
-        }
+        let receipt_audit_attempt_id =
+            match super::super::exchange_admission::admit_selected_candidate(
+                &node,
+                &mut tcp_stream,
+                request,
+                Some(model),
+                "mesh",
+                super::super::exchange_admission::SelectedRouteTarget::Mesh(&target),
+                idx + 1,
+                idx + 1 < total_targets,
+            )
+            .await
+            {
+                SelectedRouteAdmission::Proceed {
+                    receipt_audit_attempt_id,
+                } => receipt_audit_attempt_id,
+                // A plugin said no to this peer, not to the request: try the next.
+                SelectedRouteAdmission::NextCandidate => continue,
+                SelectedRouteAdmission::Rejected(outcome) => return outcome,
+            };
         // Only a contacted candidate is an attempt: a skipped one must not
         // turn an all-timeouts route into a 503 or inflate attempt metrics.
         state.attempts += 1;
@@ -497,6 +500,14 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
                 served_by: served_by_header,
                 peer_capsule_id,
                 trust: request.trust,
+                receipt_audit: receipt_audit_attempt_id
+                    .zip(request.exchange_observation_id.as_deref())
+                    .map(|(attempt_id, observation_id)| {
+                        super::super::response::ReceiptAuditAttempt {
+                            observation_id,
+                            attempt_id,
+                        }
+                    }),
             },
         )
         .await;

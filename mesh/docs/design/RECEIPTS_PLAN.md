@@ -101,7 +101,7 @@ milestone 1.
 | Four outcomes of an audit in Skippy (pass, fail, no audit, no answer) and four verdicts in Mesh (passed, failed, strike, no audit) | Done | None |
 | A receipt check on every watched turn of a peer that advertises receipts | Done | None |
 | Strike rule: three strikes in 24 hours block a peer for 7 days | Done | Strikes are in memory only. A node with `[receipts] offline` watches no turn and logs nothing per turn |
-| Act on the verdict in payments | Open | Payments are in the `pay-lightning` plugin. No plugin seam carries the verdict. A failed audit blocks the peer and does not withhold an invoice |
+| Act on the verdict in payments | Host and Lightning integration | Deploy the updated buyer host and payment plugin together. The initial admission remains upfront. |
 
 ## Milestone 4: consequences and trust tiers
 

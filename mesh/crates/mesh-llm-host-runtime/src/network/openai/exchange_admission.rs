@@ -3,6 +3,7 @@ use super::workload_routing::unambiguous_descriptor_for_request;
 use super::{client_stream::ClientStream, transport};
 use crate::inference::election::InferenceTarget;
 use crate::mesh;
+use mesh_llm_plugin::openai_exchange::ReceiptAuditStatus;
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 
@@ -17,7 +18,9 @@ pub(super) enum SelectedRouteTarget<'a> {
 
 /// What the `backend_selected` admission hook decided for one candidate.
 pub(super) enum SelectedRouteAdmission {
-    Proceed,
+    Proceed {
+        receipt_audit_attempt_id: Option<uuid::Uuid>,
+    },
     /// A plugin denied this candidate and the caller has another to try. Nothing
     /// was written to the client and the denial's headers were not attached.
     NextCandidate,
@@ -41,7 +44,7 @@ pub(super) async fn admit_selected_route(
     .await
     {
         SelectedRouteAdmission::Rejected(outcome) => Some(outcome),
-        SelectedRouteAdmission::Proceed | SelectedRouteAdmission::NextCandidate => None,
+        SelectedRouteAdmission::Proceed { .. } | SelectedRouteAdmission::NextCandidate => None,
     }
 }
 
@@ -59,34 +62,49 @@ pub(super) async fn admit_selected_candidate(
     attempt: usize,
     more_candidates: bool,
 ) -> SelectedRouteAdmission {
+    let proceed = SelectedRouteAdmission::Proceed {
+        receipt_audit_attempt_id: None,
+    };
     let Some(manager) = node.plugin_manager().await else {
-        return SelectedRouteAdmission::Proceed;
+        return proceed;
     };
     if !manager.has_exchange_hooks().await {
-        return SelectedRouteAdmission::Proceed;
+        return proceed;
     }
-    let model_identity = match (&target, model) {
+    let model_descriptor = match (&target, model) {
         (SelectedRouteTarget::Mesh(target), Some(model)) => {
-            selected_model_identity(node, target, model, &request.client_path).await
+            selected_model_descriptor(node, target, model, &request.client_path).await
         }
         _ => None,
     };
-    let event = match selected_route_event(
+    let mut event = match selected_route_event(
         request,
         model,
         provider,
         target,
-        model_identity.as_ref(),
+        model_descriptor
+            .as_ref()
+            .map(|descriptor| &descriptor.identity),
         attempt,
     ) {
         Ok(Some(event)) => event,
-        Ok(None) => return SelectedRouteAdmission::Proceed,
+        Ok(None) => return proceed,
         Err(error) => {
             tracing::warn!(%error, "cannot observe effective OpenAI request entity");
             stream.record_exchange_outcome("internal_hook_failure");
             return SelectedRouteAdmission::Rejected(send_selected_route_denial(stream, 503).await);
         }
     };
+    if event.get("target_peer_id").is_some()
+        && let Some(descriptor) = &model_descriptor
+    {
+        let channels: std::collections::BTreeSet<_> = descriptor
+            .requires
+            .iter()
+            .map(|requirement| requirement.channel.as_str())
+            .collect();
+        event["required_model_channels"] = json!(channels);
+    }
     apply_selected_route_policy(&manager, request, stream, event, more_candidates).await
 }
 
@@ -99,12 +117,12 @@ pub(super) async fn admit_selected_candidate(
 /// descriptor that serves the endpoint at `path`; with none or several
 /// candidates it reports nothing. For a local target the weights digest is
 /// kept only if it belongs to the selected runtime instance.
-pub(super) async fn selected_model_identity(
+async fn selected_model_descriptor(
     node: &mesh::Node,
     target: &InferenceTarget,
     model: &str,
     path: &str,
-) -> Option<mesh::ServedModelIdentity> {
+) -> Option<mesh::ServedModelDescriptor> {
     let descriptors = match target {
         InferenceTarget::Local(_) => node.served_model_descriptors().await,
         InferenceTarget::Remote(peer_id) => {
@@ -116,14 +134,24 @@ pub(super) async fn selected_model_identity(
         }
         InferenceTarget::None => return None,
     };
-    let mut identity = unambiguous_descriptor_for_request(model, path, &descriptors)?
-        .identity
-        .clone();
+    let mut descriptor = unambiguous_descriptor_for_request(model, path, &descriptors)?.clone();
     if let InferenceTarget::Local(port) = target {
-        node.scope_weights_digest_to_port(&mut identity, *port)
+        node.scope_weights_digest_to_port(&mut descriptor.identity, *port)
             .await;
     }
-    Some(identity)
+    Some(descriptor)
+}
+
+#[cfg(test)]
+pub(super) async fn selected_model_identity(
+    node: &mesh::Node,
+    target: &InferenceTarget,
+    model: &str,
+    path: &str,
+) -> Option<mesh::ServedModelIdentity> {
+    selected_model_descriptor(node, target, model, path)
+        .await
+        .map(|descriptor| descriptor.identity)
 }
 
 async fn apply_selected_route_policy(
@@ -133,6 +161,9 @@ async fn apply_selected_route_policy(
     event: serde_json::Value,
     more_candidates: bool,
 ) -> SelectedRouteAdmission {
+    let receipt_audit_attempt_id = event["receipt_audit_attempt_id"]
+        .as_str()
+        .and_then(|id| uuid::Uuid::parse_str(id).ok());
     let result = match &request.exchange_observation_id {
         Some(id) => {
             manager
@@ -151,7 +182,9 @@ async fn apply_selected_route_policy(
         Some(status) => {
             SelectedRouteAdmission::Rejected(send_selected_route_denial(stream, status).await)
         }
-        None => SelectedRouteAdmission::Proceed,
+        None => SelectedRouteAdmission::Proceed {
+            receipt_audit_attempt_id,
+        },
     }
 }
 
@@ -183,6 +216,14 @@ fn selected_route_event(
     event["target"] = json!(public_target(&target));
     if let Some(peer) = target_peer_id(&target) {
         event["target_peer_id"] = json!(peer);
+        if request.exchange_observation_id.is_some()
+            && request.trust.requires_receipts()
+            && request.trust.audits_peers()
+            && crate::network::receipt_audit::can_watch_with_host_key(&request.raw)
+        {
+            event["receipt_audit"] = json!(ReceiptAuditStatus::Pending);
+            event["receipt_audit_attempt_id"] = json!(uuid::Uuid::new_v4().to_string());
+        }
     }
     if let Some(identity) = model_identity {
         if let Some(canonical_ref) = &identity.canonical_ref {
@@ -256,6 +297,41 @@ fn exchange_endpoint(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn receipt_audit_selection_needs_a_host_owned_watch() {
+        use crate::network::request_trust::RequestTrust;
+
+        let peer = InferenceTarget::Remote(iroh::SecretKey::from_bytes(&[7; 32]).public());
+        for (header, expect_pending) in [("", true), ("x-receipt-client-key: external\r\n", false)]
+        {
+            let (mut reader, mut writer) = tokio::io::duplex(1024);
+            let body = r#"{"model":"toy/model"}"#;
+            let wire = format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{header}Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            writer.write_all(wire.as_bytes()).await.unwrap();
+            let mut request = transport::read_http_request(&mut reader).await.unwrap();
+            request.exchange_observation_id = Some("local-observation".into());
+            request.trust = RequestTrust::Receipts { audit: true };
+            let event = selected_route_event(
+                &request,
+                Some("toy/model"),
+                "mesh",
+                SelectedRouteTarget::Mesh(&peer),
+                None,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(event["receipt_audit"] == "pending", expect_pending);
+            assert_eq!(
+                event.get("receipt_audit_attempt_id").is_some(),
+                expect_pending
+            );
+        }
+    }
 
     #[test]
     fn route_metadata_never_exposes_url_credentials() {

@@ -76,10 +76,10 @@ evidence is signed by the node or is public, so anyone can check it again.
 | Devices | Desktop first. The parameters must fit a phone | Desktop built. Phone not built |
 | Attention | Loose check only | Built |
 | Consequences | Block the peer locally. No gossip, no stake | Built |
-| Payments | Do not pay the final invoice of a failed turn | Not built |
+| Payments | Require a passed audit for new final usage payments | Host verdict and Lightning integration |
 | Node identities | Free. A blocked node can join again with a new key | Accepted risk |
 | Failures | Provable from signed and public data | Built for the checks that the node signs |
-| Audit rate | 1 in 10 turns by default; `[receipts] audit_one_in` sets 1 in N | Built in Mesh |
+| Audit rate | Ordinary audits sample 1 in 10 turns by default. `[receipts] audit_one_in` sets 1 in N. Receipt-required attempts observed by lifecycle plugins are always selected | Built in Mesh |
 | Audit shape | Four layers and four sampled tokens, drawn after the node commits | Built |
 | Agentic | Commit the positions that the turn computed, and the cached prefix by the leaves of the turns that computed it. Challenge immediately, in a short window | Built. A challenge picks two positions of the cached prefix |
 | Parameters | From the GGUF header and tables per backend, not per model | Built |
@@ -1504,14 +1504,20 @@ an answer that cost nothing must not end an audit without a strike (see
 - **Evidence.** The node keeps the evidence of a failure under
   `receipt-evidence/` in its identity state directory. The rules of the
   store are below.
-- **Payments: not built.** A failed audit does not withhold an invoice.
-  Payments are in the `pay-lightning` plugin, and no plugin seam carries
-  the audit verdict to it. The first design let the client withhold the
-  final invoice of a failed turn, and let the seller treat a challenged
-  final invoice as pending. Neither exists in this repository.
+- **Payments.** The host attempts an audit on every remote turn that requires
+  receipts and has an exchange lifecycle observer. The host publishes the
+  verdict to its
+  [exchange lifecycle plugins](../plugins/openai-exchange-lifecycle.md#receipt-audit-evidence).
+  The updated Lightning client requires this evidence for new paid requests and
+  holds the final usage payment until that attempt passes. Set
+  `require = true` in `[receipts]`, or set `audit = true` and send
+  `x-mesh-trust: receipts` on the purchase request.
+  The initial admission payment is still paid before inference. Update the
+  buyer's host and payment plugin together. The seller's existing
+  outstanding-invoice policy still applies.
 
-A turn without an audit has no consequence. An upgrade on one side thus
-does not block an honest node.
+A missing verdict on an ordinary sampled turn has no audit consequence. For
+receipt-required settlement, the buyer needs an explicit pass.
 
 **The evidence store.** Evidence holds the token ids of the prompt and
 activations of the turn, and a peer decides how large it is. So:
@@ -1834,7 +1840,7 @@ This is the single list for all receipts documents.
 | Local peer block after a provable failure | Done | None |
 | Strikes for events that only the auditing node saw, and a block after three strikes in 24 hours | Done | Strikes are in memory only. The automated test over a real mesh tunnel uses a toy peer and the toy model |
 | Trust tier: a request policy that requires `receipts` | Done | Splits with remote stages do not qualify |
-| Payments: act on the audit verdict | Open | A plugin seam for the verdict, and the pending state in the payment plugin |
+| Payments: act on the audit verdict | Host and Lightning integration | Deploy a compatible Lightning plugin with the client host |
 | Phones: a verifier in the embedded client | Open | The embedded client has no peer blocks and no payments |
 
 The detail of each milestone is in [RECEIPTS_PLAN.md](RECEIPTS_PLAN.md).
