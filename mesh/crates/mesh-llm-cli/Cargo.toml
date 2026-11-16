@@ -17,10 +17,10 @@ workspace = true
 dynamic-native-runtime = ["skippy-commands/dynamic-native-runtime"]
 
 [dependencies]
-skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.79.0" }
+skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.80.0" }
 anyhow.workspace = true
 clap.workspace = true
 mesh-llm-build-info.workspace = true
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.79.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.80.0" }
 serde.workspace = true
 serde_json.workspace = true

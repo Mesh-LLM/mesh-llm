@@ -1989,7 +1989,24 @@ No hosted execution or cross-platform native qualification is recorded here.
 
 The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
-Windows row selection is conditional. This owning workflow edit maps through ci-control to all platform rows, and main/manual-full profiles select all rows. Standalone future changes under tools/xtask, just, Justfile or install.ps1 are not guaranteed to select Windows unit under the protected ownership catalog. The gate qualifies only a planner-selected Windows unit row; an unselected row records no native evidence. This proposal changes no protected catalog and adds no routing bypass.
+Windows row selection is conditional. The owning workflow maps through
+`ci-control` to all platform rows, and main/manual-full profiles select all rows.
+Standalone changes under `tools/xtask`, `just`, `Justfile`, or `install.ps1`
+are not guaranteed to select Windows unit unless an explicit protected catalog
+entry owns that selection.
+
+Windows linker/cache policy requires both `ci-control` and `platform-windows`
+ownership for `scripts/cargo-linker.cmd`,
+`tools/xtask/src/native_policy/windows_linker.rs`, and
+`mesh/scripts/build-windows.ps1`. The test paths
+`tools/xtask/src/native_policy/windows_linker_tests.rs` and
+`tools/xtask/src/ci_validation/windows_linker_native.rs` require
+`platform-windows` ownership to select the Windows unit row for ready PRs.
+Draft PRs keep row matrices empty unless all rows are forced. Land missing
+entries in the protected catalog before the dependent implementation;
+documenting these requirements does not activate routing or bypass the catalog
+comparison. The gate qualifies only a planner-selected Windows unit row; an
+unselected row records no native evidence.
 
 ## Same-run product-source automation
 
