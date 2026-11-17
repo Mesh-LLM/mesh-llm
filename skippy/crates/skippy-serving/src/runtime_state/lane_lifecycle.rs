@@ -163,7 +163,10 @@ impl RuntimeState {
                 positions: &[],
                 sampling: None,
                 input: None,
-                sample_last: false,
+                // Real prefill chunks sample their final row: the graph the
+                // reservation must cover includes the output head, which a
+                // consumerless warmup iteration omits entirely.
+                sample_last: true,
                 phase: IterationBatchPhase::Prefill,
             };
             StageSession::iteration_batch_sampled(&mut [request]).map(|_| ())
@@ -199,7 +202,9 @@ impl RuntimeState {
                 positions: &[],
                 sampling: None,
                 input: None,
-                sample_last: false,
+                // Decode steps sample every iteration; warm the shape that
+                // includes the sampler's logits row.
+                sample_last: true,
                 phase: IterationBatchPhase::Decode,
             });
         }
