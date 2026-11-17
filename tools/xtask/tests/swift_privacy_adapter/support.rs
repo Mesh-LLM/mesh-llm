@@ -150,9 +150,11 @@ impl Fixture {
         bytes
     }
 
+    /// Waits until `name` has content: its writer creates the file first.
     pub fn await_file(&self, name: &str, child: &mut Child) {
         let deadline = Instant::now() + Duration::from_secs(4);
-        while !self.root.path().join(name).exists() {
+        let path = self.root.path().join(name);
+        while std::fs::metadata(&path).map_or(true, |metadata| metadata.len() == 0) {
             assert!(
                 child.try_wait().unwrap().is_none(),
                 "child exited before {name}"

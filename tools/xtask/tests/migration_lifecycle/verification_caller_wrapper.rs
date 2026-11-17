@@ -424,14 +424,8 @@ fn copied_real_logged_verify_cancellation_cleans_owned_descendant_and_request_di
     let signal_file = owner.clone();
     let signal = std::thread::spawn(move || {
         let until = Instant::now() + Duration::from_secs(8);
-        while !signal_file.exists() && Instant::now() < until {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let pid = fs::read_to_string(signal_file)
-            .unwrap()
-            .trim()
-            .parse::<i32>()
-            .unwrap();
+        let pid = crate::support::wait_for_pid(&signal_file, until)
+            .expect("timeout owner PID before the deadline");
         assert!(pid > 1);
         assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
     });

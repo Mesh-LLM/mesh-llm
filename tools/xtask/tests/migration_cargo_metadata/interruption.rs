@@ -161,11 +161,17 @@ fn owned_tree_stops_when_failure_is_injected_before_pid_handshake() {
     let root = workspace("signal-tree");
     let mut scenario = launch(root.path());
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !root.path().join("leader.pid").exists() {
+    // The fixture creates leader.pid before it writes the PID into it.
+    let leader = loop {
+        match std::fs::read_to_string(root.path().join("leader.pid")) {
+            Ok(leader) if !leader.is_empty() => break leader,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("leader.pid: {error}"),
+        }
         assert!(Instant::now() < deadline, "fixture launch deadline");
         std::thread::park_timeout(Duration::from_millis(10));
-    }
-    let leader = std::fs::read_to_string(root.path().join("leader.pid")).unwrap();
+    };
     let descendant = std::fs::read_to_string(root.path().join("descendant.pid")).unwrap();
     let sentinel = scenario.sentinel.id().to_string();
 
