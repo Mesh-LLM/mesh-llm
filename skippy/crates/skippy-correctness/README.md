@@ -30,6 +30,10 @@ against recompute.
 
 ## Commands
 
+The checks start `skippy` stage servers. Without `--stage-server-bin` they use
+the `skippy` next to `skippy-correctness`, else `target/debug/skippy` when it
+exists, else the one on `PATH`.
+
 ```bash
 skippy-correctness single-step \
   --model model.gguf \

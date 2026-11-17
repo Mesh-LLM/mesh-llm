@@ -478,6 +478,10 @@ just skippy-quantize-standalone-release-build
 cargo build --release --locked -p skippy-package-builder
 ```
 
+Without `--skippy-model-package-bin` the command uses the
+`skippy-package-builder` next to `skippy-quantize`, else
+`target/release/skippy-package-builder` when it exists, else the one on `PATH`.
+
 The command validates the source split, writes the package artifacts from the
 BF16 GGUF source, quantizes each artifact in place, then runs package preflight.
 It does not materialize a complete quantized GGUF repo first. By default, the
