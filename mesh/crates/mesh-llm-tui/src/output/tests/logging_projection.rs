@@ -404,7 +404,14 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
     let canonical_pretty = pretty
         .format(&canonical)
         .expect("canonical pretty projection");
-    for forbidden in ["private", "secret-token", home.as_str()] {
+    // Credentials stay redacted in every projection. Canonical lines are
+    // composed from a fixed vocabulary plus curated metadata (model,
+    // route, status, duration) and never render the raw error text, so
+    // the home path is absent from the canonical pretty line by
+    // construction, not by redaction. The native-log projections below
+    // do render message text, through this crate's terminal sanitizer,
+    // where the operator's path is deliberately visible (see privacy.rs).
+    for forbidden in ["private", "secret-token"] {
         assert!(
             !canonical_json.contains(forbidden),
             "canonical JSON leaked {forbidden:?}"
@@ -414,6 +421,10 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
             "canonical pretty leaked {forbidden:?}"
         );
     }
+    assert!(
+        !canonical_pretty.contains(home.as_str()),
+        "canonical pretty line never renders the raw error text"
+    );
     assert!(canonical_json.contains(&request_id_text));
     assert!(canonical_pretty.contains(&request_id_text));
 
@@ -423,7 +434,6 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
         for forbidden in [
             "private",
             "secret-token",
-            home.as_str(),
             request_id_text.as_str(),
             "tokens",
         ] {
@@ -433,6 +443,14 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
                 "pretty leaked {forbidden:?}"
             );
         }
+        assert!(
+            json_line.contains(home.as_str()),
+            "native JSON projection should keep the operator's path visible: {json_line:?}"
+        );
+        assert!(
+            pretty_line.contains(home.as_str()),
+            "native pretty projection should keep the operator's path visible: {pretty_line:?}"
+        );
         assert!(pretty_line.chars().count() <= 1_100);
     }
 }

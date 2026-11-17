@@ -30,12 +30,7 @@ pub(super) fn sanitize_map(mut fields: Map<String, Value>) -> Map<String, Value>
 }
 
 pub(super) fn sanitize_text(input: &str) -> String {
-    sanitize_text_with_home(input, operator_home().as_deref())
-}
-
-fn sanitize_text_with_home(input: &str, home: Option<&str>) -> String {
-    let input = mask_operator_home(input, home);
-    let normalized = redact_sensitive_fragments(&redact_url_query_values(&input));
+    let normalized = redact_sensitive_fragments(&redact_url_query_values(input));
     if normalized.chars().count() <= MAX_PRESENTATION_CHARS {
         normalized
     } else {
@@ -50,9 +45,15 @@ fn sanitize_text_with_home(input: &str, home: Option<&str>) -> String {
 }
 
 /// Keep the useful error category and surrounding diagnostic text while
-/// replacing only the sensitive value or local path. Fatal output used to
-/// collapse an entire message to `[REDACTED]`, which made ordinary startup
-/// failures impossible to diagnose.
+/// replacing only credential-shaped values. Terminal projections render on
+/// the operator's own screen, where command output already prints local
+/// paths verbatim (cache locations, config paths, keystores), so absolute
+/// paths stay visible here too: redacting them only in event text turned
+/// actionable guidance — a `--config` path the operator just typed, or the
+/// corrected command the legacy-surface warning suggests — into
+/// `[REDACTED_PATH]`. Durable artifacts keep the stricter path redaction
+/// of the host logging policy; this terminal layer mirrors only its
+/// credential rules.
 fn redact_sensitive_fragments(input: &str) -> String {
     let mut redact_next = false;
     let mut sensitive_key_pending = false;
@@ -80,8 +81,6 @@ fn redact_sensitive_fragments(input: &str) -> String {
             if matches!(normalized.as_str(), "bearer" | "basic") {
                 redact_next = true;
                 output.push(word.to_owned());
-            } else if is_private_absolute_path(trimmed) {
-                output.push(redact_word(word, "[REDACTED_PATH]"));
             } else if is_credential_value(trimmed) {
                 output.push(redact_word(word, "[REDACTED]"));
             } else if !trimmed.contains(['?', '&'])
@@ -182,64 +181,6 @@ fn safe_param_key(key: &str) -> bool {
         && !normalized.contains("path")
         && !normalized.contains("url")
         && !normalized.contains("id")
-}
-
-fn is_private_absolute_path(word: &str) -> bool {
-    // A bare `/` is the separator in text such as `runtime 0.76.1 / ABI 0.1.71`;
-    // revealing the filesystem root is no leak.
-    (word.starts_with('/') && word != "/")
-        || word.to_ascii_lowercase().starts_with("file://")
-        || is_windows_absolute_path(word)
-        || word.contains(HOME_SENTINEL)
-}
-
-/// Stands in for the operator's home directory from before the text is split
-/// into words until the word that held it is redacted whole, so a home with a
-/// space (`C:\Users\Jane Doe`) cannot fall across two words. A private-use
-/// character: log text does not carry it, and punctuation trimming keeps it.
-const HOME_SENTINEL: &str = "\u{E000}";
-
-fn mask_operator_home(input: &str, home: Option<&str>) -> String {
-    let Some(home) = home.filter(|home| !home.is_empty()) else {
-        return input.to_owned();
-    };
-    // Windows paths compare regardless of case. ASCII folding keeps every
-    // byte offset, so matches found in the folded text map back to `input`.
-    let (text, needle) = if cfg!(windows) {
-        (input.to_ascii_lowercase(), home.to_ascii_lowercase())
-    } else {
-        (input.to_owned(), home.to_owned())
-    };
-    let mut masked = String::with_capacity(input.len());
-    let mut copied = 0;
-    for (start, _) in text.match_indices(&needle) {
-        masked.push_str(&input[copied..start]);
-        masked.push_str(HOME_SENTINEL);
-        copied = start + needle.len();
-    }
-    masked.push_str(&input[copied..]);
-    masked
-}
-
-/// The operator's home directory: `HOME`, or `USERPROFILE` on Windows, where
-/// `HOME` is usually unset. Only an absolute path counts, so a Git Bash
-/// `HOME` such as `/c/Users/name` falls through to `USERPROFILE`.
-fn operator_home() -> Option<String> {
-    ["HOME", "USERPROFILE"].into_iter().find_map(|variable| {
-        let home = std::env::var(variable).ok()?;
-        (!home.is_empty() && std::path::Path::new(&home).is_absolute()).then_some(home)
-    })
-}
-
-fn is_windows_absolute_path(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let drive_root = bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'\\' | b'/');
-    let unc_or_device =
-        value.starts_with("\\\\") || value.starts_with("//") || value.starts_with("\\??\\");
-    drive_root || unc_or_device
 }
 
 /// Apply the host logging policy's query-value rule before projecting text.
@@ -359,51 +300,52 @@ fn is_credential_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{operator_home, safe_native_params, sanitize_text, sanitize_text_with_home};
+    use super::{safe_native_params, sanitize_text};
     use serde_json::json;
 
     #[test]
-    fn redacts_a_home_directory_that_contains_a_space() {
+    fn preserves_local_paths_including_homes_with_spaces() {
+        // Paths render on the operator's own terminal, where command output
+        // already prints them verbatim; redacting them only in event text
+        // made failure guidance unactionable (see the T-002 regression pins
+        // below).
         let home = r"C:\Users\Jane Doe";
         for input in [
             format!(r"path={home}\models\model.gguf"),
             format!(r"failed to open {home}\cache\index.json"),
         ] {
-            let sanitized = sanitize_text_with_home(&input, Some(home));
-            assert!(
-                !sanitized.contains("Jane") && !sanitized.contains("Doe"),
-                "sanitized output leaked part of the home directory: {sanitized:?}"
-            );
-            assert!(sanitized.contains("[REDACTED_PATH]"), "{sanitized:?}");
+            assert_eq!(sanitize_text(&input), input);
         }
     }
 
-    #[cfg(windows)]
     #[test]
-    fn redacts_the_home_directory_in_any_case_on_windows() {
-        let sanitized = sanitize_text_with_home(
-            r"path=c:\users\jane\models\model.gguf",
-            Some(r"C:\Users\Jane"),
+    fn keeps_paths_after_benign_keys_while_redacting_after_sensitive_keys() {
+        let sanitized = sanitize_text("path=/home/operator/model.gguf token=supersecret");
+
+        assert!(
+            sanitized.contains("path=/home/operator/model.gguf"),
+            "{sanitized:?}"
         );
-        assert!(!sanitized.contains("jane"), "{sanitized:?}");
+        assert!(sanitized.contains("token=[REDACTED]"), "{sanitized:?}");
+        assert!(!sanitized.contains("supersecret"), "{sanitized:?}");
     }
 
     #[test]
-    fn redacts_the_operator_home_inside_a_word() {
-        // A home path at the start of a word is caught as an absolute path;
-        // after `key=` or `key:` only the home check sees it. On Windows that
-        // check has to read USERPROFILE, since HOME is usually unset there.
-        let home = operator_home().expect("HOME or USERPROFILE should be set");
-        let separator = std::path::MAIN_SEPARATOR;
-        for input in [
-            format!("path={home}{separator}models{separator}model.gguf"),
-            format!("cache dir:{home}{separator}cache"),
-        ] {
-            let sanitized = sanitize_text(&input);
-            assert!(
-                !sanitized.contains(&home),
-                "sanitized output leaked the home directory: {sanitized:?}"
-            );
+    fn preserves_the_operators_own_paths_in_cli_guidance_and_errors() {
+        // T-002 regression pins from the 2026-11-17 behavioral campaign:
+        // every one of these message shapes came back from the terminal
+        // projection with `[REDACTED_PATH]` where the operator's own
+        // argument or path belonged.
+        let cases = [
+            "top-level serving flags now map to `mesh-llm serve`. Please use: mesh-llm serve --model /models/qwen.gguf --console 3131",
+            "Invalid config /home/operator/.mesh-llm/config.toml failed to parse config TOML",
+            "reading owner-control credential from /home/operator/.mesh-llm/owner-control-token-v2",
+            "mesh-llm update only works for release-bundle installs. Current executable: /usr/local/bin/mesh-llm",
+            "Eager startup model '/models/qwen.gguf' failed to resolve after daemon surfaces became ready",
+        ];
+
+        for input in cases {
+            assert_eq!(sanitize_text(input), input);
         }
     }
 
@@ -492,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn redacts_unix_windows_unc_and_device_paths() {
+    fn preserves_unix_windows_unc_and_device_paths() {
         let cases = [
             "/Users/operator/.mesh-llm/config.toml",
             r"C:\Users\operator\.mesh-llm\config.toml",
@@ -501,32 +443,30 @@ mod tests {
         ];
 
         for path in cases {
-            assert_eq!(
-                sanitize_text(&format!("startup failed at {path}")),
-                "startup failed at [REDACTED_PATH]"
-            );
+            let input = format!("startup failed at {path}");
+            assert_eq!(sanitize_text(&input), input);
         }
     }
 
     #[test]
-    fn keeps_a_slash_separator_but_redacts_paths_next_to_it() {
+    fn keeps_slash_separators_and_adjacent_paths() {
         assert_eq!(
             sanitize_text("no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"),
             "no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"
         );
         assert_eq!(
             sanitize_text("copied / to /srv/private/model.gguf"),
-            "copied / to [REDACTED_PATH]"
+            "copied / to /srv/private/model.gguf"
         );
         assert_eq!(
             sanitize_text("startup failed at (/home/operator/x)"),
-            "startup failed at ([REDACTED_PATH])"
+            "startup failed at (/home/operator/x)"
         );
     }
 
     #[test]
-    fn redacts_the_operator_logging_privacy_corpus() {
-        let mut cases = vec![
+    fn redacts_the_operator_logging_privacy_credential_corpus() {
+        let cases = [
             (
                 "provider endpoint https://provider.example/v1?access_token=secret-access&model=qwen"
                     .to_string(),
@@ -544,22 +484,7 @@ mod tests {
                 "credential sk-supersecret-key".to_string(),
                 "sk-supersecret-key".to_string(),
             ),
-            (
-                r#"native error at C:\Users\operator\.mesh-llm\config.toml"#.to_string(),
-                r#"C:\Users\operator"#.to_string(),
-            ),
-            (
-                r#"native error at \\server\private\model.gguf"#.to_string(),
-                r#"\\server\private"#.to_string(),
-            ),
-            (
-                r#"native error at \\?\C:\private\model.gguf"#.to_string(),
-                r#"\\?\C:\private"#.to_string(),
-            ),
         ];
-        if let Some(home) = operator_home() {
-            cases.push((format!("native error at {home}/.mesh-llm/token"), home));
-        }
 
         for (input, secret) in cases {
             let sanitized = sanitize_text(&input);
@@ -571,22 +496,15 @@ mod tests {
     }
 
     #[test]
-    fn preserves_fatal_context_while_selectively_redacting_credentials_and_paths() {
-        let mut cases = vec![
-            r"startup failed opening C:\Users\operator\config.toml".to_owned(),
-            r"startup failed opening \\server\private\config.toml".to_owned(),
-            "startup failed: authorization Bearer secret-token".to_owned(),
-        ];
-        if let Some(home) = operator_home() {
-            cases.push(format!(
-                "startup failed opening {home}/.mesh-llm/config.toml"
-            ));
-        }
-        for input in cases {
-            let sanitized = sanitize_text(&input);
-            assert_ne!(sanitized, "[REDACTED]");
-            assert!(sanitized.contains("startup failed"));
-        }
+    fn preserves_fatal_context_and_local_paths_while_redacting_credentials() {
+        let sanitized = sanitize_text("startup failed opening /home/operator/config.toml");
+        assert_eq!(
+            sanitized,
+            "startup failed opening /home/operator/config.toml"
+        );
+
+        let sanitized = sanitize_text("startup failed: authorization Bearer secret-token");
+        assert_eq!(sanitized, "startup failed: authorization Bearer [REDACTED]");
     }
 
     #[test]

@@ -804,7 +804,9 @@ fn startup_history_sanitizes_complete_event_summaries() {
         .summary
         .as_str();
     assert!(summary.contains("startup failed"));
-    assert!(!summary.contains("/Users/operator"));
+    // The operator's own path renders (terminal projection); the Bearer
+    // credential next to it does not.
+    assert!(summary.contains("/Users/operator/.mesh-llm/config.toml"));
     assert!(!summary.contains("private-token"));
 }
 

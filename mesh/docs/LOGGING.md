@@ -208,8 +208,12 @@ TUI presentation stays on stderr. The projection retains only bounded local
 `request_id`, `event_id`, replay `channel` and `sequence`, terminal `outcome`,
 HTTP `status`, `duration`, and numeric `tokens` when present. It excludes
 prompts, completions, artifact bodies, credentials, URLs, and free-form
-payload/error detail. Fatal startup projection redacts credentials and private
-paths selectively, retaining the surrounding diagnostic category. These local correlation IDs do not cross mesh/network or
+payload/error detail. Fatal startup projection redacts credentials and
+URL-embedded secrets selectively, retaining the surrounding diagnostic
+category and the operator's local paths, which render verbatim on the
+operator's own terminal; durable artifacts keep the stricter path
+redaction of the host runtime's logging policy
+(`mesh-llm-host-runtime`). These local correlation IDs do not cross mesh/network or
 OTLP telemetry boundaries, and the CLI stream remains a process-observation
 projection rather than a replacement for the trusted-local ledger.
 
