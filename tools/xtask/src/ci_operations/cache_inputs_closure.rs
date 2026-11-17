@@ -44,62 +44,75 @@ fn check_tables(
     workspace: &toml::Value,
     admitted: &BTreeSet<PathBuf>,
 ) -> DynResult<()> {
-    for kind in ["dependencies", "build-dependencies"] {
-        if let Some(table) = manifest.get(kind).and_then(toml::Value::as_table) {
-            for (name, dependency) in table {
-                let inherited =
-                    dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true);
-                let source = if inherited {
-                    workspace
-                        .get("workspace")
-                        .and_then(|v| v.get("dependencies"))
-                        .and_then(|v| v.get(name))
-                        .ok_or_else(|| format!("missing workspace dependency {name}"))?
-                } else {
-                    dependency
-                };
-                // Optional dependencies are feature-controlled. Refuse newly activated local
-                // features below rather than treating every optional tool as compiled.
-                if source.get("path").is_some()
-                    && dependency.get("optional").and_then(toml::Value::as_bool) == Some(true)
-                {
-                    check_optional(manifest, name)?;
-                    continue;
-                }
-                if let Some(path) = source.get("path").and_then(toml::Value::as_str) {
-                    let base = if inherited {
-                        workspace_root(directory)?
-                    } else {
-                        directory.to_path_buf()
-                    };
-                    let resolved = base.join(path).canonicalize()?;
-                    if !admitted.contains(&resolved) {
-                        return Err(format!(
-                            "{}: cache inventory omits dependency {name} ({})",
-                            directory.display(),
-                            resolved.display()
-                        )
-                        .into());
-                    }
-                    if let Some(features) =
-                        dependency.get("features").and_then(toml::Value::as_array)
-                    {
-                        let child: toml::Value =
-                            toml::from_str(&std::fs::read_to_string(resolved.join("Cargo.toml"))?)?;
-                        for feature in features.iter().filter_map(toml::Value::as_str) {
-                            check_feature(&child, feature, &mut BTreeSet::new())?;
-                        }
-                    }
+    check_feature(manifest, "default", workspace, &mut BTreeSet::new())?;
+    for (name, dependency) in production_dependencies(manifest) {
+        let inherited = dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true);
+        let source = if inherited {
+            workspace
+                .get("workspace")
+                .and_then(|v| v.get("dependencies"))
+                .and_then(|v| v.get(name))
+                .ok_or_else(|| format!("missing workspace dependency {name}"))?
+        } else {
+            dependency
+        };
+        // Activated optional local dependencies were refused using the full manifest above.
+        if dependency.get("optional").and_then(toml::Value::as_bool) == Some(true) {
+            continue;
+        }
+        if let Some(path) = source.get("path").and_then(toml::Value::as_str) {
+            let base = if inherited {
+                workspace_root(directory)?
+            } else {
+                directory.to_path_buf()
+            };
+            let resolved = base.join(path).canonicalize()?;
+            if !admitted.contains(&resolved) {
+                return Err(format!(
+                    "{}: cache inventory omits dependency {name} ({})",
+                    directory.display(),
+                    resolved.display()
+                )
+                .into());
+            }
+            for features in dependency
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .chain(
+                    inherited
+                        .then(|| source.get("features").and_then(toml::Value::as_array))
+                        .flatten(),
+                )
+            {
+                let child: toml::Value =
+                    toml::from_str(&std::fs::read_to_string(resolved.join("Cargo.toml"))?)?;
+                for feature in features.iter().filter_map(toml::Value::as_str) {
+                    check_feature(&child, feature, workspace, &mut BTreeSet::new())?;
                 }
             }
         }
     }
-    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
-        for target in targets.values() {
-            check_tables(directory, target, workspace, admitted)?;
-        }
-    }
     Ok(())
+}
+
+fn production_dependencies(
+    manifest: &toml::Value,
+) -> impl Iterator<Item = (&String, &toml::Value)> {
+    std::iter::once(manifest)
+        .chain(
+            manifest
+                .get("target")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flat_map(|targets| targets.values()),
+        )
+        .flat_map(|table| {
+            ["dependencies", "build-dependencies"]
+                .into_iter()
+                .filter_map(move |kind| table.get(kind).and_then(toml::Value::as_table))
+                .flat_map(|dependencies| dependencies.iter())
+        })
 }
 
 fn workspace_root(directory: &Path) -> DynResult<PathBuf> {
@@ -115,34 +128,10 @@ fn workspace_root(directory: &Path) -> DynResult<PathBuf> {
     Err("workspace root missing".into())
 }
 
-fn check_optional(manifest: &toml::Value, name: &str) -> DynResult<()> {
-    let Some(features) = manifest.get("features").and_then(toml::Value::as_table) else {
-        return Ok(());
-    };
-    let mut pending = vec!["default"];
-    let mut visited = BTreeSet::new();
-    while let Some(feature) = pending.pop() {
-        if !visited.insert(feature) {
-            continue;
-        }
-        if let Some(values) = features.get(feature).and_then(toml::Value::as_array) {
-            for value in values.iter().filter_map(toml::Value::as_str) {
-                if value == name
-                    || value == format!("dep:{name}")
-                    || value.starts_with(&format!("{name}/"))
-                {
-                    return Err(format!("default feature activates optional dependency {name}; declare its cache closure").into());
-                }
-                pending.push(value);
-            }
-        }
-    }
-    Ok(())
-}
-
 fn check_feature(
     manifest: &toml::Value,
     feature: &str,
+    workspace: &toml::Value,
     visited: &mut BTreeSet<String>,
 ) -> DynResult<()> {
     if !visited.insert(feature.into()) {
@@ -156,23 +145,40 @@ fn check_feature(
         return Ok(());
     };
     for value in values.iter().filter_map(toml::Value::as_str) {
-        let dependency = value
+        let dependency_name = value
             .strip_prefix("dep:")
             .unwrap_or(value)
             .split('/')
             .next()
-            .unwrap_or(value);
-        if manifest
-            .get("dependencies")
-            .and_then(|v| v.get(dependency))
-            .is_some_and(|dep| {
-                dep.get("path").is_some()
-                    && dep.get("optional").and_then(toml::Value::as_bool) == Some(true)
-            })
+            .unwrap_or(value)
+            .trim_end_matches('?');
+        for (name, dependency) in
+            production_dependencies(manifest).filter(|(name, _)| name.as_str() == dependency_name)
         {
-            return Err(format!("feature {feature} activates optional local dependency {dependency}; declare its cache closure").into());
+            let source = if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true)
+            {
+                workspace
+                    .get("workspace")
+                    .and_then(|v| v.get("dependencies"))
+                    .and_then(|v| v.get(name))
+                    .ok_or_else(|| format!("missing workspace dependency {name}"))?
+            } else {
+                dependency
+            };
+            if source.get("path").is_some() {
+                if value.contains('/') {
+                    return Err(format!("feature {feature} forwards local dependency feature {value}; declare its cache closure").into());
+                }
+                if dependency.get("optional").and_then(toml::Value::as_bool) == Some(true) {
+                    return Err(format!("feature {feature} activates optional local dependency {name}; declare its cache closure").into());
+                }
+            }
         }
-        check_feature(manifest, value, visited)?;
+        check_feature(manifest, value, workspace, visited)?;
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "cache_inputs_closure_tests.rs"]
+mod tests;

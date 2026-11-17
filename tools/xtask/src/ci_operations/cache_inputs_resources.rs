@@ -251,24 +251,23 @@ impl<'ast> Visit<'ast> for Audit<'_> {
             .iter()
             .any(|name| mac.path.is_ident(name))
         {
+            self.visit_nested_tokens(mac.tokens.clone());
             return;
         }
         let result = (|| -> DynResult<()> {
             let expr = syn::parse2::<syn::Expr>(mac.tokens.clone())?;
             match include_path(&expr)? {
-                Include::Relative(path) => covered(
-                    self.root,
+                Include::Relative(path) => self.audit_include(
                     &self
                         .file
                         .parent()
                         .ok_or("include parent missing")?
                         .join(path),
-                    self.patterns,
+                    mac.path.is_ident("include"),
                 ),
-                Include::Manifest(path) => covered(
-                    self.root,
+                Include::Manifest(path) => self.audit_include(
                     &self.package.join(path.trim_start_matches('/')),
-                    self.patterns,
+                    mac.path.is_ident("include"),
                 ),
                 Include::Generated => {
                     // Reviewed generator boundary: prost reads the complete admitted proto tree.
@@ -295,6 +294,49 @@ impl<'ast> Visit<'ast> for Audit<'_> {
                 )
                 .into(),
             );
+        }
+    }
+}
+
+impl Audit<'_> {
+    fn audit_include(&mut self, path: &Path, rust_source: bool) -> DynResult<()> {
+        if rust_source {
+            audit_file(self.root, self.package, path, self.patterns, self.visited)
+        } else {
+            covered(self.root, path, self.patterns)
+        }
+    }
+
+    fn visit_nested_tokens(&mut self, tokens: proc_macro2::TokenStream) {
+        use proc_macro2::TokenTree;
+        let tokens: Vec<_> = tokens.into_iter().collect();
+        let mut index = 0;
+        while index < tokens.len() && self.error.is_none() {
+            if let [
+                TokenTree::Ident(name),
+                TokenTree::Punct(bang),
+                TokenTree::Group(_),
+                ..,
+            ] = &tokens[index..]
+                && bang.as_char() == '!'
+                && matches!(
+                    name.to_string().as_str(),
+                    "include" | "include_str" | "include_bytes"
+                )
+            {
+                let nested: proc_macro2::TokenStream =
+                    tokens[index..index + 3].iter().cloned().collect();
+                match syn::parse2::<syn::Macro>(nested) {
+                    Ok(mac) => self.visit_macro(&mac),
+                    Err(error) => self.error = Some(error.into()),
+                }
+                index += 3;
+            } else {
+                if let TokenTree::Group(group) = &tokens[index] {
+                    self.visit_nested_tokens(group.stream());
+                }
+                index += 1;
+            }
         }
     }
 }
@@ -352,6 +394,51 @@ fn include_path(expr: &syn::Expr) -> DynResult<Include> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recursive_rust_includes_cannot_hide_external_resources() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(root.join("src/main.rs"), "include!(\"included.rs\");")?;
+        std::fs::write(
+            root.join("src/included.rs"),
+            "const DATA: &str = include_str!(\"../resource.txt\");",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn macro_arguments_cannot_hide_external_resources() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn main() { println!(\"{}\", include_str!(\"../resource.txt\")); }",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
 
     #[test]
     fn external_include_additions_require_admission_and_admitted_mutations_remain_covered()
