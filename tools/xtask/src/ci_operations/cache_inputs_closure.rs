@@ -17,6 +17,21 @@ pub(super) fn check(root: &Path, inventory: Inventory) -> DynResult<()> {
         .collect::<Result<_, _>>()?;
     let workspace: toml::Value =
         toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml"))?)?;
+    for (registry, patches) in workspace
+        .get("patch")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        for (name, patch) in patches.as_table().into_iter().flatten() {
+            if let Some(path) = patch.get("path").and_then(toml::Value::as_str) {
+                return Err(format!(
+                    "root [patch.{registry}] local override {name} ({path}) is unsupported: cache closure cannot prove registry/transitive selection or patched feature closure without Cargo metadata"
+                )
+                .into());
+            }
+        }
+    }
     for package in packages {
         let directory = root.join(package);
         let manifest: toml::Value =
@@ -137,14 +152,17 @@ fn check_feature(
     if !visited.insert(feature.into()) {
         return Ok(());
     }
-    let Some(values) = manifest
+    let values = manifest
         .get("features")
         .and_then(|v| v.get(feature))
-        .and_then(toml::Value::as_array)
-    else {
-        return Ok(());
-    };
-    for value in values.iter().filter_map(toml::Value::as_str) {
+        .and_then(toml::Value::as_array);
+    // Optional dependencies also define implicit features without a [features] entry.
+    for value in values
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .chain(values.is_none().then_some(feature))
+    {
         let dependency_name = value
             .strip_prefix("dep:")
             .unwrap_or(value)

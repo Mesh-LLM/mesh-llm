@@ -87,6 +87,75 @@ fn requested_features_require_ownership_of_workspace_optional_dependencies() -> 
 }
 
 #[test]
+fn requested_implicit_features_refuse_optional_local_dependencies() -> DynResult<()> {
+    for declaration in ["path='../leaf'", "workspace=true"] {
+        for table in ["dependencies", "target.'cfg(unix)'.build-dependencies"] {
+            for features in ["", "[features]\nunrelated=[]\n"] {
+                let sandbox = fixture()?;
+                std::fs::write(
+                    sandbox.path().join("tools/xtask/Cargo.toml"),
+                    "[package]\nname='xtask'\n[dependencies]\ncontroller={path='../ci-controller',features=['leaf']}\n",
+                )?;
+                std::fs::write(
+                    sandbox.path().join("tools/ci-controller/Cargo.toml"),
+                    format!(
+                        "[package]\nname='ci-controller'\n{features}[{table}]\nleaf={{{declaration},optional=true}}\n"
+                    ),
+                )?;
+                let error = check(sandbox.path(), Inventory::HostedXtask)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("optional local dependency leaf"), "{error}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn root_local_patches_are_refused_even_for_admitted_directories() -> DynResult<()> {
+    for registry in ["crates-io", "https://example.invalid/registry"] {
+        for path in ["tools/leaf", "tools/ci-controller"] {
+            // Registry metadata is absent: leaf may be direct, transitive, or unused.
+            for dependency in ["leaf", "upstream"] {
+                let sandbox = fixture()?;
+                std::fs::write(
+                    sandbox.path().join("Cargo.toml"),
+                    format!(
+                        "[workspace]\nmembers=[]\n[patch.'{registry}']\nreplacement={{package='leaf',path='{path}'}}\n"
+                    ),
+                )?;
+                std::fs::write(
+                    sandbox.path().join("tools/ci-controller/Cargo.toml"),
+                    format!("[package]\nname='ci-controller'\n[dependencies]\n{dependency}='1'\n"),
+                )?;
+                let error = check(sandbox.path(), Inventory::HostedController)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains("local override replacement")
+                        && error.contains(path)
+                        && error.contains("unsupported")
+                        && error.contains("without Cargo metadata"),
+                    "{error}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn remote_root_patches_remain_accepted() -> DynResult<()> {
+    let sandbox = fixture()?;
+    std::fs::write(
+        sandbox.path().join("Cargo.toml"),
+        "[workspace]\nmembers=[]\n[patch.crates-io]\nleaf={git='https://example.invalid/leaf',rev='frozen'}\n",
+    )?;
+    check(sandbox.path(), Inventory::HostedController)
+}
+
+#[test]
 fn inactive_local_forwarding_and_registry_forwarding_remain_accepted() -> DynResult<()> {
     let sandbox = fixture()?;
     std::fs::write(

@@ -98,6 +98,17 @@ fn audit_file(
     patterns: &[glob::Pattern],
     visited: &mut BTreeSet<PathBuf>,
 ) -> DynResult<()> {
+    audit_rust_file(root, package, file, patterns, visited, false)
+}
+
+fn audit_rust_file(
+    root: &Path,
+    package: &Path,
+    file: &Path,
+    patterns: &[glob::Pattern],
+    visited: &mut BTreeSet<PathBuf>,
+    included: bool,
+) -> DynResult<()> {
     let file = file.canonicalize()?;
     if !visited.insert(file.clone()) {
         return Ok(());
@@ -105,10 +116,11 @@ fn audit_file(
     covered(root, &file, patterns)?;
     let syntax = syn::parse_file(&std::fs::read_to_string(&file)?)?;
     let parent = file.parent().ok_or("module parent missing")?;
-    let directory = if matches!(
-        file.file_name().and_then(|s| s.to_str()),
-        Some("lib.rs" | "main.rs" | "mod.rs")
-    ) {
+    let directory = if included
+        || matches!(
+            file.file_name().and_then(|s| s.to_str()),
+            Some("lib.rs" | "main.rs" | "mod.rs")
+        ) {
         parent.to_path_buf()
     } else {
         parent.join(file.file_stem().ok_or("module stem missing")?)
@@ -247,13 +259,10 @@ impl<'ast> Visit<'ast> for Audit<'_> {
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        if !["include_str", "include_bytes", "include"]
-            .iter()
-            .any(|name| mac.path.is_ident(name))
-        {
+        let Some(rust_source) = include_macro(&mac.path) else {
             self.visit_nested_tokens(mac.tokens.clone());
             return;
-        }
+        };
         let result = (|| -> DynResult<()> {
             let expr = syn::parse2::<syn::Expr>(mac.tokens.clone())?;
             match include_path(&expr)? {
@@ -263,17 +272,15 @@ impl<'ast> Visit<'ast> for Audit<'_> {
                         .parent()
                         .ok_or("include parent missing")?
                         .join(path),
-                    mac.path.is_ident("include"),
+                    rust_source,
                 ),
                 Include::Manifest(path) => self.audit_include(
                     &self.package.join(path.trim_start_matches('/')),
-                    mac.path.is_ident("include"),
+                    rust_source,
                 ),
                 Include::Generated => {
                     // Reviewed generator boundary: prost reads the complete admitted proto tree.
-                    if mac.path.is_ident("include")
-                        && self.package.ends_with("skippy/crates/skippy-protocol")
-                    {
+                    if rust_source && self.package.ends_with("skippy/crates/skippy-protocol") {
                         covered(self.root, &self.package.join("build.rs"), self.patterns)?;
                         covered(
                             self.root,
@@ -301,7 +308,14 @@ impl<'ast> Visit<'ast> for Audit<'_> {
 impl Audit<'_> {
     fn audit_include(&mut self, path: &Path, rust_source: bool) -> DynResult<()> {
         if rust_source {
-            audit_file(self.root, self.package, path, self.patterns, self.visited)
+            audit_rust_file(
+                self.root,
+                self.package,
+                path,
+                self.patterns,
+                self.visited,
+                true,
+            )
         } else {
             covered(self.root, path, self.patterns)
         }
@@ -338,6 +352,25 @@ impl Audit<'_> {
                 index += 1;
             }
         }
+    }
+}
+
+fn include_macro(path: &syn::Path) -> Option<bool> {
+    let mut segments = path.segments.iter();
+    let first = segments.next()?;
+    let name = match segments.next() {
+        None => &first.ident,
+        Some(last)
+            if (first.ident == "std" || first.ident == "core") && segments.next().is_none() =>
+        {
+            &last.ident
+        }
+        Some(_) => return None,
+    };
+    match name.to_string().as_str() {
+        "include" => Some(true),
+        "include_str" | "include_bytes" => Some(false),
+        _ => None,
     }
 }
 
@@ -394,6 +427,55 @@ fn include_path(expr: &syn::Expr) -> DynResult<Include> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qualified_standard_includes_require_resource_ownership() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        for prefix in ["std::", "core::", "::std::", "::core::"] {
+            std::fs::write(
+                root.join("src/main.rs"),
+                format!("const DATA: &str = {prefix}include_str!(\"../resource.txt\");"),
+            )?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("resource.txt"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn included_modules_use_the_included_files_parent() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir_all(root.join("src/included"))?;
+        std::fs::write(root.join("src/main.rs"), "include!(\"included.rs\");")?;
+        std::fs::write(root.join("src/included.rs"), "mod child;")?;
+        std::fs::write(root.join("src/included/child.rs"), "const SAFE: u8 = 0;")?;
+        std::fs::write(
+            root.join("src/child.rs"),
+            "const DATA: &str = include_str!(\"../resource.txt\");",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
 
     #[test]
     fn recursive_rust_includes_cannot_hide_external_resources() -> DynResult<()> {
