@@ -29,10 +29,10 @@ fn migration_cli_repo_root_and_nested_invocations_match() -> TestResult {
     // Given: the checkout and a nested directory in the same workspace.
     let root = root();
     // When: the same repository check runs from both directories.
-    let top = run(&root, &["repo-consistency", "no-console-print"])?;
+    let top = run(&root, &["repo-consistency", "release-targets"])?;
     let nested = run(
         &root.join("tools/xtask"),
-        &["repo-consistency", "no-console-print"],
+        &["repo-consistency", "release-targets"],
     )?;
     // Then: both invocations return the same status and output.
     assert!(
@@ -56,7 +56,7 @@ fn migration_cli_explicit_root_works_outside_checkout() -> TestResult {
             "--repo-root",
             root.to_str().ok_or("non-UTF8 checkout")?,
             "repo-consistency",
-            "no-console-print",
+            "release-targets",
         ],
     )?;
     // Then: the repository check succeeds without relying on the build checkout.
@@ -79,7 +79,7 @@ fn migration_cli_relative_explicit_root_resolves_from_cwd() -> TestResult {
             "--repo-root",
             "../..",
             "repo-consistency",
-            "no-console-print",
+            "release-targets",
         ],
     )?;
     // Then: root selection succeeds without using the build-time manifest path.
@@ -97,7 +97,7 @@ fn migration_cli_outside_checkout_does_not_fall_back_to_build_root() -> TestResu
     // When: a repository-owned command runs there without an explicit root.
     let output = run(
         &std::env::temp_dir(),
-        &["repo-consistency", "no-console-print"],
+        &["repo-consistency", "release-targets"],
     )?;
     // Then: it fails on stderr with no success output.
     assert_eq!(output.status.code(), Some(1));
@@ -117,7 +117,7 @@ fn migration_cli_invalid_explicit_root_never_falls_back() -> TestResult {
             "--repo-root",
             "/this-xtask-root-does-not-exist",
             "repo-consistency",
-            "no-console-print",
+            "release-targets",
         ],
     )?;
     // Then: it fails instead of using the checkout cwd.
@@ -151,7 +151,7 @@ fn migration_cli_unicode_path_with_spaces_is_not_reparsed() -> TestResult {
             "--repo-root",
             path.to_str().ok_or("non-UTF8 fixture")?,
             "repo-consistency",
-            "no-console-print",
+            "release-targets",
         ],
     )?;
     // Then: validation reports the exact path, never falling back to cwd.

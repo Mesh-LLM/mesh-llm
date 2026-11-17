@@ -10,6 +10,9 @@ Name a model to route to it directly, or send `"model": "mesh"` to let Mesh
 choose how to serve the request — see [Automatic routing](/docs/pages/automatic-routing/).
 `"model": "auto"` is a deprecated alias for `"mesh"`.
 
+Add `@private` to a model name (`"qwen3-32b@private"`, `"mesh@private"`) to keep
+the request on your own nodes — see [Private routing](/docs/pages/private-routing/).
+
 ## Base URL
 
 ```text

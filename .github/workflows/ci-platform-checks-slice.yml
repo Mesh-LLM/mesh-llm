@@ -509,6 +509,7 @@ jobs:
             "ci_validation::windows_runtime::tests::native::native_windows_build_directory_tracks_prepared_pin_and_explicit_override",
             "ci_validation::windows_runtime::tests::native::native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_wsl",
             "ci_validation::windows_runtime::tests::native::native_windows_relative_llama_override_is_bound_to_repo_not_process_directory",
+            "ci_validation::windows_runtime::tests::native::linker_metadata::native_windows_linker_metadata_preserves_product_links_and_failure",
             "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_interactive_runs_setup_and_warns_for_legacy_flavor",
             "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_noninteractive_prints_setup_and_installs_runtime",
             "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_no_setup_prints_command_without_executing_setup",
@@ -529,7 +530,7 @@ jobs:
             "automation::private_state::windows_privacy::tests::migration_lifecycle_windows_directory_has_only_current_user_inheritable_dacl",
             "product::posix_path::tests::windows_paths_keep_drive_and_share_roots"
           )
-          if ($expected.Count -ne 22 -or @($expected | Select-Object -Unique).Count -ne 22) { throw "native Windows contract roster must contain twenty-two distinct methods" }
+          if ($expected.Count -ne 23 -or @($expected | Select-Object -Unique).Count -ne 23) { throw "native Windows contract roster must contain twenty-three distinct methods" }
           $verified = 0
           foreach ($method in $expected) {
             $listing = @(just with-lld cargo test --locked -p xtask --bin xtask $method -- --exact --list)
@@ -543,7 +544,7 @@ jobs:
             if (@($result | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows method must pass without an ignored test: $method" }
             $verified++
           }
-          if ($verified -ne 22) { throw "all twenty-two native Windows methods must be verified" }
+          if ($verified -ne 23) { throw "all twenty-three native Windows methods must be verified" }
           $wrapper = "ci_validation::windows_runtime::tests::with_lld::windows_with_lld_propagates_native_failure_and_success"
           $wrapperListing = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --list)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

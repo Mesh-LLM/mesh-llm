@@ -34,7 +34,7 @@ pub(super) fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) 
     }
     ensure_contains(
         sources.quality,
-        "just ci-legacy-contracts",
+        "just ci-automation-contracts",
         "quality contract suite",
     )?;
     ensure_contains(sources.web, "website:", "web website sub-slice")?;

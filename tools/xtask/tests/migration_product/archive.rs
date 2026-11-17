@@ -56,6 +56,56 @@ fn composed(source: &Path, host: &str) -> TestResult {
 }
 
 #[test]
+fn migration_product_archive_library_aliases_survive_composition_extraction_and_verification()
+-> TestResult {
+    let scratch = Scratch::new()?;
+    let source = scratch.path().join("mesh-bundle");
+    let libraries = source.join("native-runtimes/rt/lib");
+    fs::create_dir_all(&libraries)?;
+    let names = ["libcuda.so", "libcuda.so.0", "libcuda.so.0.29.0"];
+    for name in names {
+        // Composition may expand hard links, so the writer must compare bytes.
+        fs::write(libraries.join(name), b"inert library payload")?;
+    }
+    host_fixture(&source.join("mesh-llm"), "host")?;
+    composed(&source, "mesh-llm")?;
+    let archive = scratch.path().join("aliases.tar.gz");
+    let written = command(scratch.path(), "archive-write", &source, &archive, "tar.gz")?;
+    assert!(written.status.success(), "{:?}", written);
+    let mut reader = tar::Archive::new(GzDecoder::new(fs::File::open(&archive)?));
+    let mut links = 0;
+    for member in reader.entries()? {
+        if member?.header().entry_type().is_hard_link() {
+            links += 1;
+        }
+    }
+    assert_eq!(links, 2);
+    let destination = scratch.path().join("extracted");
+    let extraction = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["artifact", "extract-tar"])
+        .args([&archive, &destination])
+        .output()?;
+    assert!(extraction.status.success(), "{:?}", extraction);
+    let bundle = destination.join("mesh-bundle");
+    for name in names {
+        let path = bundle.join("native-runtimes/rt/lib").join(name);
+        assert!(fs::symlink_metadata(&path)?.is_file());
+        assert_eq!(fs::read(path)?, b"inert library payload");
+    }
+    let verified = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["product", "compose", "--bundle"])
+        .arg(&bundle)
+        .arg("--host")
+        .arg(bundle.join("mesh-llm"))
+        .arg("--runtime")
+        .arg(bundle.join("native-runtimes/rt"))
+        .args(["--version", "1.0", "--backend", "cpu", "--check"])
+        .output()?;
+    assert!(verified.status.success(), "{:?}", verified);
+    Ok(())
+}
+
+#[test]
 fn migration_product_archive_preserves_composed_members_bytes_modes_and_checksum() -> TestResult {
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");

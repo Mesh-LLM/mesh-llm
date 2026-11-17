@@ -306,16 +306,8 @@ fn invocation(command: &str, targets: &[String]) -> DynResult<()> {
 }
 fn local(source: &str) -> DynResult<()> {
     let calls = body(source, "ci-validate")?;
-    let rust = calls
-        .iter()
-        .position(|l| *l == "just ci-automation-contracts")
-        .ok_or("local Rust coverage omitted")?;
-    let legacy = calls
-        .iter()
-        .position(|l| *l == "just ci-legacy-contracts")
-        .ok_or("surviving legacy coverage omitted")?;
-    if rust >= legacy {
-        return Err("Rust contracts must precede legacy contracts".into());
+    if !calls.contains(&"just ci-automation-contracts") {
+        return Err("local Rust coverage omitted".into());
     }
     Ok(())
 }
@@ -356,8 +348,8 @@ fn quality(workflow: &Node) -> DynResult<()> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
-    if calls != ["just ci-automation-contracts", "just ci-legacy-contracts"] {
-        return Err("execute canonical Rust coverage then surviving legacy coverage".into());
+    if calls != ["just ci-automation-contracts"] {
+        return Err("execute canonical Rust contract coverage".into());
     }
     Ok(())
 }

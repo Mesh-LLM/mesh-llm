@@ -15,7 +15,6 @@ mod fixture_paths;
 mod installer_fixtures;
 mod model_registry;
 mod native_policy;
-mod no_console_print;
 mod prepared_input;
 mod product;
 mod publish_consistency;
@@ -288,8 +287,9 @@ fn run() -> DynResult<()> {
                 cli::RepositoryCommand::TestAllCoverage => {
                     repo_consistency::check_test_all_coverage_command(root)
                 }
-                cli::RepositoryCommand::NoConsolePrint(rest) => {
-                    no_console_print::check_no_console_print_command(root, rest)
+                cli::RepositoryCommand::RetiredNoConsolePrint => {
+                    println!("no-console-print gate retired; nothing to check");
+                    Ok(())
                 }
             }
         }

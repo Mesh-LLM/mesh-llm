@@ -233,7 +233,12 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             region,
             auto,
             relay,
+            // resolved through cli.effective_mesh_discovery_mode()
+            mesh_discovery_mode: _,
         }) => {
+            // The runtime surfaces enforce their own relay constraint at
+            // startup; only discover's own relay rule applies here.
+            mesh_llm_cli::validate_discovery_mode_args(cli)?;
             run_discover(DiscoverOptions {
                 name: name.clone(),
                 model: model.clone(),
@@ -241,7 +246,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
                 region: region.clone(),
                 auto_join: *auto,
                 relays: relay.clone(),
-                discovery_mode: cli.joining.mesh_discovery_mode,
+                discovery_mode: cli.effective_mesh_discovery_mode(),
                 supplied_join_tokens: cli.joining.join.clone(),
             })
             .await
@@ -391,5 +396,42 @@ fn plugin_runtime_options_from_cli(cli: &Cli) -> mesh_llm_host_runtime::RuntimeO
         publish: cli.mesh_policy.publish,
         nostr_discovery: cli.nostr_discovery,
         ..mesh_llm_host_runtime::RuntimeOptions::default()
+    }
+}
+
+#[cfg(test)]
+mod discovery_mode_dispatch_tests {
+    use super::dispatch_general_command;
+    use clap::Parser;
+    use mesh_llm_cli::{Cli, Command};
+
+    #[tokio::test]
+    async fn discover_dispatch_rejects_relays_in_mdns_mode_before_any_discovery() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "discover",
+            "--mesh-discovery-mode",
+            "mdns",
+            "--relay",
+            "wss://relay.example",
+        ]);
+        let command = cli.command.as_ref().expect("discover subcommand");
+        assert!(matches!(command, Command::Discover { .. }));
+
+        // Guards the failure mode, not the happy path: an unwired validator
+        // falls through to a real LAN mDNS browse (~seconds) before failing.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            dispatch_general_command(&cli, command),
+        )
+        .await
+        .expect("dispatch must return quickly; a timeout means the validator was unwired and discovery ran");
+
+        let err = outcome
+            .expect_err("dispatch must enforce the relay/mode constraint before discovering");
+        assert!(
+            err.to_string().contains("discover --relay"),
+            "error should name the discover relay constraint: {err}"
+        );
     }
 }

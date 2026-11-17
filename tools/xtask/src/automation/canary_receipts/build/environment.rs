@@ -1,7 +1,31 @@
 use super::contract::Input;
 use super::package::Identity;
+use crate::command::DynResult;
 use crate::process::Value;
-use std::{collections::BTreeMap, ffi::OsString, path::Path};
+use std::{collections::BTreeMap, ffi::OsString, fs, path::Path};
+
+pub(super) fn freeze_controller(
+    input: &Input,
+    environment: &mut BTreeMap<OsString, Value>,
+) -> DynResult<tempfile::TempDir> {
+    // Candidate Cargo builds can replace target/debug/xtask. Retain the running
+    // admitted controller outside both checkouts until supervision and recovery finish.
+    let directory = tempfile::Builder::new()
+        .prefix("llama-build-controller-")
+        .tempdir_in(
+            input
+                .evidence
+                .parent()
+                .ok_or("build evidence has no parent")?,
+        )?;
+    let executable = directory.path().join("xtask");
+    fs::copy(std::env::current_exe()?, &executable)?;
+    environment.insert(
+        "MESH_LLM_AUTOMATION_BIN".into(),
+        Value::Public(executable.into()),
+    );
+    Ok(directory)
+}
 
 pub(super) fn wrapper(
     input: &Input,
