@@ -201,6 +201,17 @@ impl RuntimeState {
             ..SamplingConfig::default()
         };
         for lane in lanes.iter_mut() {
+            // Real requests configure chat sampling through the frontend
+            // before their first iteration; that configuration is what
+            // attaches the backend sampler and grows the reservation. Walk
+            // the same entry here so the sampler-aware reservation is built
+            // at startup instead of on the first request.
+            if let Err(error) = lane
+                .session
+                .configure_chat_sampling("", 0, Some(&warmup_sampling))
+            {
+                tracing::warn!(?error, "serving warmup could not configure chat sampling");
+            }
             requests.push(IterationBatchRequest {
                 session: &mut lane.session,
                 token_ids: std::slice::from_ref(&token_id),
