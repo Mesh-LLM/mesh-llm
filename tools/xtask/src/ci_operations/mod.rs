@@ -12,6 +12,7 @@ mod build_cache_values;
 mod cache_configuration;
 mod cache_configuration_command;
 mod cache_home;
+pub(crate) mod cache_inputs;
 mod catalog_contracts;
 mod catalog_release_pair;
 mod catalog_validation;
@@ -94,6 +95,7 @@ pub(crate) enum CiOperationsCommand {
     RuntimeSeed,
     ConfigureCanaryCache,
     ResetLinkerTraces,
+    CacheInputs,
 }
 
 impl CiOperationsCommand {
@@ -113,6 +115,7 @@ impl CiOperationsCommand {
             "runtime-seed" => Some(Self::RuntimeSeed),
             "configure-canary-cache" => Some(Self::ConfigureCanaryCache),
             "reset-linker-traces" => Some(Self::ResetLinkerTraces),
+            "cache-inputs" => Some(Self::CacheInputs),
             _ => None,
         }
     }
@@ -125,6 +128,9 @@ pub(crate) fn run(
     args: &[String],
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
+    if matches!(command, CiOperationsCommand::CacheInputs) {
+        return cache_inputs::run(&root()?, args);
+    }
     if matches!(command, CiOperationsCommand::ResetLinkerTraces) {
         return linker_traces::run(args, root);
     }
@@ -138,6 +144,7 @@ pub(crate) fn run(
         return runner_cleanup::command::run(args);
     }
     let report = match command {
+        CiOperationsCommand::CacheInputs => unreachable!(),
         CiOperationsCommand::ResetLinkerTraces => unreachable!(),
         CiOperationsCommand::ConfigureCanaryCache => unreachable!(),
         CiOperationsCommand::RunnerCleanup => unreachable!(),

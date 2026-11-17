@@ -120,7 +120,10 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     authority_sources::documentation(&std::fs::read_to_string(
         root.join("ci/DEPOT_MIGRATION.md"),
     )?)?;
-    cpu_runtime_cache::check(&workflows)?;
+    cpu_runtime_cache::check_with_key(
+        &workflows,
+        &crate::ci_operations::cache_inputs::Inventory::LinuxRuntime.expression(),
+    )?;
     cache_consumers::check(&workflows)?;
     cache_callers::check(&workflows)?;
     cache_boundaries::check(&workflows)?;

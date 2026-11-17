@@ -1053,6 +1053,17 @@ fail-open policy.
 
 ## Artifact and cache owners
 
+`ci-ops cache-inputs` owns the checked-in hosted executable and Linux CPU
+runtime key projections. Version 2 keys include the shared linker driver and
+the runtime packaging implementation. Hosted executable keys bind `ImageOS`
+and `ImageVersion` separately from Rust's toolchain cache key. Conservative
+production source trees include embedded resources; uncompiled integration
+tests and READMEs no longer invalidate hosted executables. The packaged runtime
+inventory includes `skippy-package-builder` and its local dependency closure.
+
+These source contracts require candidate and post-merge execution evidence;
+they do not establish a measured speedup or production retention qualification.
+
 `native runtime-manifest-write` owns Windows ROCm target admission after the
 shell copies SDK kernels. For configured targets with a declared `rocblas.dll`,
 it hashes staged rocBLAS `.co`/`.hsaco` files into `runtime.files` and advertises
@@ -2061,34 +2072,20 @@ by its `authority_source` job, so a default-branch update cannot change validati
 while producers run. If no authority producer is selected, the summary retains
 the protected default-branch checkout. Linux validation also admits the preceding
 grouped layout for in-flight workflows, identified by dependency names. Mixed
-layouts fail and every planned job must still succeed. Its exact-key cache entry
-(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
-`Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
-drivers) is separate from the xtask entry. A miss runs `cargo build --locked
---release -p ci-controller --bin ci-controller` without Just or sccache and
-saves the result.
+layouts fail and every planned job must still succeed. Its exact-key cache entry uses the version 2 hosted-controller inventory and
+binds OS, architecture, Rust toolchain and hosted system image. A miss builds
+locked release ci-controller without Just or sccache and saves the result.
 
-Other jobs that must not wait on a producer keep `prepare-automation`: the
-release UI stamp and the
-Windows unit platform-check jobs, independent release SDK and smoke callers, canary, nightly, Docker and warm-cache
-workflows. The `hosted-bare` profile now restores a release executable from an
-exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
-`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
-`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/runner-cleanup/**`,
-`tools/trajectory-reader/**`,
-`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/authority-automation/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, and `tools/runner-cleanup/**` because xtask
-compiles those libraries. Only the
-default `tool: xtask` restores or saves that entry. The image
-profile never restores or saves an executable. The protected authority producers
-pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
-run from the frozen protected source. A first run after any hashed input changes
-is a cold miss. Pull requests execute main's reusable workflows, so none of this
-applies to a PR until it is merged. No hosted execution is recorded here.
+Other jobs without a producer use prepare-automation. Its hosted-bare profile
+restores the exact version 2 xtask inventory, compiles on a miss and saves on a
+miss. The inventory covers every local production dependency, build script,
+reviewed included resource and linker recipe; normal contract validation checks
+both the dependency closure and checked-in key projections. Only tool: xtask
+uses this cache. Image profiles never restore executables, and protected
+producers keep reuse-hosted-binary: false to compile their frozen source in-run.
+A changed compiled input or hosted image starts a new exact cohort. There are
+no restore prefixes. PRs may execute protected-main workflow definitions;
+candidate and production qualification must identify the definition that ran.
 
 ## Python SDK component and admission
 

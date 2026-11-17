@@ -30,6 +30,7 @@ use release_dispatch::check_release_dispatch_version_preparation;
 use windows_runtime::check_windows_dynamic_runtime_contract;
 
 pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
+    crate::ci_operations::cache_inputs::check(repo_root)?;
     workflow_guards::check(repo_root)?;
     platform_member_filter::check(repo_root)?;
     check_current_ci_invariants(repo_root)

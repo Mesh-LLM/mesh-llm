@@ -216,3 +216,83 @@ printf '["fixture"]\n'
     assert_eq!(fs::read_to_string(output_path)?, "crates=[\"fixture\"]\n");
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn hosted_image_identity_refuses_missing_and_malformed_system_images() -> TestResult {
+    for action in ["prepare-automation", "prepare-ci-controller"] {
+        let source =
+            fs::read_to_string(root().join(format!(".github/actions/{action}/action.yml")))?;
+        let body = script(&source, "- name: Resolve hosted system image\n")?;
+        for (os, version, accepted) in [
+            ("ubuntu24", "20261116.1", true),
+            ("", "20261116.1", false),
+            ("ubuntu24", "", false),
+            ("ubuntu24", "bad\nidentity", false),
+        ] {
+            let sandbox = tempfile::tempdir()?;
+            let output_file = sandbox.path().join("output");
+            let output = Command::new("bash")
+                .args(["-c", &body])
+                .env("ImageOS", os)
+                .env("ImageVersion", version)
+                .env("GITHUB_OUTPUT", &output_file)
+                .output()?;
+            assert_eq!(
+                output.status.success(),
+                accepted,
+                "{action}: {os:?}/{version:?}"
+            );
+            if accepted {
+                assert_eq!(
+                    fs::read_to_string(output_file)?,
+                    "identity=ubuntu24-20261116.1\n"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn controller_warm_hit_runs_restored_binary_without_cargo_build() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = tempfile::tempdir()?;
+    let release = sandbox.path().join("target/release");
+    fs::create_dir_all(&release)?;
+    let binary = release.join("ci-controller");
+    fs::write(
+        &binary,
+        "#!/bin/sh\ntest \"$*\" = 'automation bootstrap' || exit 98\nprintf 'binary_path=%s/target/release/ci-controller\\n' \"$PWD\"\n",
+    )?;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+    let cargo = sandbox.path().join("cargo");
+    fs::write(&cargo, "#!/bin/sh\nexit 99\n")?;
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+    let source =
+        fs::read_to_string(root().join(".github/actions/prepare-ci-controller/action.yml"))?;
+    let body = script(&source, "- name: Build CI controller\n")?;
+    for (hit, accepted) in [("true", true), ("false", false), ("", false)] {
+        let environment = sandbox.path().join(format!("env-{hit}"));
+        let output = Command::new("bash")
+            .args(["-c", &body])
+            .current_dir(sandbox.path())
+            .env(
+                "PATH",
+                format!("{}:{}", sandbox.path().display(), std::env::var("PATH")?),
+            )
+            .env("CONTROLLER_CACHE_HIT", hit)
+            .env("RUNNER_TEMP", sandbox.path())
+            .env("GITHUB_OUTPUT", sandbox.path().join(format!("out-{hit}")))
+            .env("GITHUB_ENV", &environment)
+            .output()?;
+        assert_eq!(output.status.success(), accepted, "hit={hit:?}");
+        if accepted {
+            assert!(fs::read_to_string(environment)?.starts_with("MESH_CI_CONTROLLER_BIN="));
+        } else {
+            assert!(!environment.exists());
+        }
+    }
+    Ok(())
+}
