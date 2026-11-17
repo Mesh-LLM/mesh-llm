@@ -195,15 +195,22 @@ impl RuntimeState {
             return;
         }
         let mut requests = Vec::with_capacity(lanes.len());
+        let warmup_sampling = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            ..SamplingConfig::default()
+        };
         for lane in lanes.iter_mut() {
             requests.push(IterationBatchRequest {
                 session: &mut lane.session,
                 token_ids: std::slice::from_ref(&token_id),
                 positions: &[],
-                sampling: None,
+                // Real decode steps sample every iteration; warm the shape
+                // that includes the sampler's logits row, and attach the
+                // samplers so the sampler-aware graph reservation happens
+                // here rather than on the first request.
+                sampling: Some(&warmup_sampling),
                 input: None,
-                // Decode steps sample every iteration; warm the shape that
-                // includes the sampler's logits row.
                 sample_last: true,
                 phase: IterationBatchPhase::Decode,
             });

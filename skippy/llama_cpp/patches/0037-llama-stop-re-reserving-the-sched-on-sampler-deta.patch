@@ -1,0 +1,99 @@
+From fd5b9feefc02e130c2393fdf5d822e08fa6c9c6c Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Tue, 17 Nov 2026 18:35:00 +1100
+Subject: [PATCH] perf(llama): stop re-reserving the sched on sampler detach
+
+Every backend-sampler attach and detach armed a worst-case scheduler
+re-reserve, and serving attaches and detaches a sampler per request,
+so each request's first decode paid a ~300ms graph rebuild and buffer
+realloc on CUDA. A reservation built with samplers attached covers
+every later attach/detach cycle: arming on attach now only until a
+sampler-aware reservation exists, and detaching - which only shrinks
+what the reservation must cover - never arms a re-reserve.
+---
+ src/llama-context.cpp | 23 ++++++++++++++++-------
+ src/llama-context.h   |  6 +++++-
+ 2 files changed, 21 insertions(+), 8 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index d54291e76..dd87949d6 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -996,6 +996,11 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+         }
+     }
+ 
++    // Remember whether this reservation was built with backend samplers
++    // attached: a reservation that already covers sampler-augmented graphs
++    // stays valid through later sampler attach/detach cycles.
++    sched_reserved_with_samplers = !sampling.samplers.empty();
++
+     {
+         const bool diff = n_nodes_pp != n_nodes_tg || n_splits_pp != n_splits_tg ||
+                           n_inputs_pp != n_inputs_tg || n_input_tensors_pp != n_input_tensors_tg;
+@@ -1718,7 +1723,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+             warned = true;
+         }
+         if (sampling.samplers.count(seq_id) > 0) {
+-            sched_need_reserve = true;
++            // Detaching only shrinks what the reservation must cover; a
++            // detach must not force the next request to re-reserve.
+         }
+         sampling.samplers.erase(seq_id);
+         return false;
+@@ -1737,7 +1743,11 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+ 
+         sampling.samplers[seq_id] = sampler;
+ 
+-        sched_need_reserve = true;
++        // Attaching can grow what the reservation must cover, but a
++        // reservation already built with samplers attached covers every
++        // later attach/detach cycle; per-request sampler churn must not
++        // re-reserve worst-case graphs each time.
++        sched_need_reserve = !sched_reserved_with_samplers;
+ 
+         return true;
+     }
+@@ -1745,10 +1755,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+     if (sampler && !can_offload) {
+         LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler), seq_id);
+ 
+-        if (sampling.samplers.count(seq_id) > 0) {
+-            sched_need_reserve = true;
+-        }
+-
++        // Detaching only shrinks what the reservation must cover; a detach
++        // must not force the next request to re-reserve.
+         sampling.samplers.erase(seq_id);
+ 
+         return false;
+@@ -1756,7 +1764,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+ 
+     sampling.samplers.erase(seq_id);
+ 
+-    sched_need_reserve = true;
++    // Detaching only shrinks what the reservation must cover; a detach must
++    // not force the next request to re-reserve.
+ 
+     return true;
+ }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 919813ac8..08cfbdae9 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -485,7 +485,11 @@ private:
+     ggml_backend_sched_ptr sched;
+ 
+     bool sched_need_reserve = true;
+-    uint64_t sched_reserve_count = 0;
++    // Whether the current scheduler reservation was built while at least one
++    // backend sampler was attached. Attaching a sampler can require more from
++    // the reservation; detaching one never does. Per-request sampler cycles
++    // re-reserve only until a sampler-aware reservation exists.
++    bool sched_reserved_with_samplers = false;    uint64_t sched_reserve_count = 0;
+ 
+     // whether the reserve graph has a logits tensor, set in sched_reserve()
+     // true until then, because the first output_reserve() runs before any graph is reserved
+-- 
+2.56.0
+
