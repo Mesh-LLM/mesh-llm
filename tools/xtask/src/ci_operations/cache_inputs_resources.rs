@@ -96,7 +96,7 @@ fn audit_file(
     package: &Path,
     file: &Path,
     patterns: &[glob::Pattern],
-    visited: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<(PathBuf, bool)>,
 ) -> DynResult<()> {
     audit_rust_file(root, package, file, patterns, visited, false)
 }
@@ -106,15 +106,15 @@ fn audit_rust_file(
     package: &Path,
     file: &Path,
     patterns: &[glob::Pattern],
-    visited: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<(PathBuf, bool)>,
     included: bool,
 ) -> DynResult<()> {
     let file = file.canonicalize()?;
-    if !visited.insert(file.clone()) {
+    if !visited.insert((file.clone(), included)) {
         return Ok(());
     }
     covered(root, &file, patterns)?;
-    let syntax = syn::parse_file(&std::fs::read_to_string(&file)?)?;
+    let source = std::fs::read_to_string(&file)?;
     let parent = file.parent().ok_or("module parent missing")?;
     let directory = if included
         || matches!(
@@ -134,7 +134,11 @@ fn audit_rust_file(
         visited,
         error: None,
     };
-    audit.visit_file(&syntax);
+    match syn::parse_file(&source) {
+        Ok(syntax) => audit.visit_file(&syntax),
+        Err(_) if included => audit.visit_expr(&syn::parse_str::<syn::Expr>(&source)?),
+        Err(error) => return Err(error.into()),
+    }
     match audit.error {
         Some(error) => Err(error),
         None => Ok(()),
@@ -147,7 +151,7 @@ struct Audit<'a> {
     file: &'a Path,
     directory: PathBuf,
     patterns: &'a [glob::Pattern],
-    visited: &'a mut BTreeSet<PathBuf>,
+    visited: &'a mut BTreeSet<(PathBuf, bool)>,
     error: Option<crate::command::DynError>,
 }
 
@@ -427,6 +431,77 @@ fn include_path(expr: &syn::Expr) -> DynResult<Include> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_source_is_audited_in_both_resolution_contexts() -> DynResult<()> {
+        for (source, unsafe_child) in [
+            ("mod shared; include!(\"shared.rs\");", "src/child.rs"),
+            (
+                "include!(\"shared.rs\"); mod shared;",
+                "src/shared/child.rs",
+            ),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().canonicalize()?;
+            std::fs::create_dir_all(root.join("src/shared"))?;
+            std::fs::write(root.join("src/main.rs"), source)?;
+            std::fs::write(root.join("src/shared.rs"), "mod child;")?;
+            for child in ["src/child.rs", "src/shared/child.rs"] {
+                std::fs::write(root.join(child), "const SAFE: u8 = 0;")?;
+            }
+            std::fs::write(root.join("resource.txt"), "data")?;
+            std::fs::write(
+                root.join(unsafe_child),
+                "const DATA: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/resource.txt\"));",
+            )?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("resource.txt"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn expression_includes_admit_owned_and_reject_unowned_resources() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(
+            root.join("src/main.rs"),
+            "const DATA: &str = include!(\"expression.rs\");",
+        )?;
+        std::fs::write(
+            root.join("src/expression.rs"),
+            "include_str!(\"../resource.txt\")",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[
+                glob::Pattern::new("src/**")?,
+                glob::Pattern::new("resource.txt")?,
+            ],
+            &mut BTreeSet::new(),
+        )?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
 
     #[test]
     fn qualified_standard_includes_require_resource_ownership() -> DynResult<()> {
