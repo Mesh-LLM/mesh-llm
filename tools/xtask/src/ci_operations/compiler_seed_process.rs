@@ -101,6 +101,19 @@ impl Runner {
 
     fn execute(&self, program: &str, args: &[&str], evidence: &Path) -> DynResult<Vec<u8>> {
         let executable = executable(program, &self.environment)?;
+        let mut environment: BTreeMap<_, _> = self
+            .environment
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::Public(value.clone())))
+            .collect();
+        // Container checkouts can be owned by the host runner's different UID.
+        for (key, value) in [
+            ("GIT_CONFIG_COUNT", OsString::from("1")),
+            ("GIT_CONFIG_KEY_0", OsString::from("safe.directory")),
+            ("GIT_CONFIG_VALUE_0", self.root.as_os_str().to_owned()),
+        ] {
+            environment.insert(key.into(), Value::Public(value));
+        }
         let spec = ProcessSpec {
             executable,
             cwd: self.root.clone(),
@@ -108,11 +121,7 @@ impl Runner {
                 .iter()
                 .map(|arg| Value::Public((*arg).into()))
                 .collect(),
-            environment: self
-                .environment
-                .iter()
-                .map(|(key, value)| (key.clone(), Value::Public(value.clone())))
-                .collect(),
+            environment,
         };
         let remaining = self
             .deadline

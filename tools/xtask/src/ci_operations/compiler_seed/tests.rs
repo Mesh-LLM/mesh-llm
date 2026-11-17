@@ -210,6 +210,42 @@ fn compiler_seed_supervisor_preserves_nonzero_exit_and_failure_receipt() {
     assert!(evidence.with_extension("stderr.log").is_file());
 }
 
+#[test]
+fn compiler_seed_git_admits_only_its_checkout_with_foreign_ownership() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let mut environment = environment(&root, &root.join("cache"), &root.join("target"));
+    environment.insert("GIT_TEST_ASSUME_DIFFERENT_OWNER".into(), "1".into());
+    let runner = Runner {
+        root: root.clone(),
+        environment,
+        cancellation: Cancellation::default(),
+        deadline: Instant::now() + Duration::from_secs(30),
+    };
+    runner
+        .command("git", &["init", "--quiet"], &root.join("init"))
+        .unwrap();
+    let result = runner
+        .command(
+            "git",
+            &["rev-parse", "--is-inside-work-tree"],
+            &root.join("admission"),
+        )
+        .unwrap();
+    assert_eq!(String::from_utf8(result).unwrap().trim(), "true");
+    let config = runner
+        .command(
+            "git",
+            &["config", "--get", "safe.directory"],
+            &root.join("config"),
+        )
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(config).unwrap().trim(),
+        root.to_str().unwrap()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn compiler_seed_fixture_phases_retain_failures_and_run_both_fresh_consumers() {
