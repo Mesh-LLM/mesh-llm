@@ -31,6 +31,24 @@ Streaming is available through `node.inference.stream_chat_completions(...)`
 and `stream_responses(...)`; each event carries the original SSE data and raw
 frame. See [native runtime guidance](../SDK.md#native-runtime-artifacts).
 
+## Local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```python
+capacity = await node.runtime_capacity("exact-serving-id")
+if capacity is not None:
+    print(capacity.execution_lanes, capacity.context_tokens_per_lane,
+          capacity.context_pool_tokens, capacity.captured_at_unix_ms)
+```
+
+`LaneCapacity` fields are unsigned 64-bit values preserved as Python `int`.
+This reads the latest native observation, including busy lanes, without HTTP
+or a reservation. Unknown, unsupported, unavailable or incomplete capacity
+returns `None`; stopped nodes raise the native error. The timestamp is the
+oldest observation in Unix milliseconds; callers choose the freshness policy.
+The total pool is not a per-request context limit.
+
 ## Thinking effort levels
 
 `list_models()` reports the reasoning effort levels each advertised model

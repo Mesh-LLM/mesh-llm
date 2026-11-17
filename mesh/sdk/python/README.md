@@ -9,6 +9,24 @@ The `serve` role serves local models; `combined` also permits mesh inference.
 Client mode starts no native serving runtime. Supply a Mesh LLM owner keystore
 path through `ownerKeyPath`/`owner_key_path` if owner identity is required.
 
+## Local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```python
+capacity = await node.runtime_capacity("exact-serving-id")
+if capacity is not None:
+    print(capacity.execution_lanes, capacity.context_tokens_per_lane,
+          capacity.context_pool_tokens, capacity.captured_at_unix_ms)
+```
+
+`LaneCapacity` fields are unsigned 64-bit values preserved as Python `int`.
+This reads the latest native observation, including busy lanes, without HTTP
+or a reservation. Unknown, unsupported, unavailable or incomplete capacity
+returns `None`; stopped nodes raise the native error. The timestamp is the
+oldest observation in Unix milliseconds; callers choose the freshness policy.
+The total pool is not a per-request context limit.
+
 ## Component tests
 
 From the repository root, use an existing Python 3.10 or newer interpreter:
