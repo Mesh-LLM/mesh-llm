@@ -42,19 +42,34 @@ fn push_paths(document: &Node) -> DynResult<Vec<String>> {
         .collect()
 }
 
-/// Key inputs no push path covers. A path covers an input it equals or
-/// matches as a glob (`scripts/**` covers `scripts/lib/lld.sh` and
-/// `tools/xtask/src/**` covers `tools/xtask/src/native_policy/**`).
+/// Key inputs no push path covers, judged conservatively: a path covers an
+/// input it equals, or that sits under its literal directory when the path is
+/// `<dir>/**` (`scripts/**` covers `scripts/lib/lld.sh` and
+/// `tools/xtask/src/**` covers `tools/xtask/src/native_policy/**`). Any other
+/// glob covers only its own text, since matching one pattern's text against
+/// another says nothing about the files GitHub filters. Ordered `!` exclusions
+/// are refused rather than evaluated.
 fn unwatched(inputs: &BTreeSet<String>, watched: &[String]) -> DynResult<Vec<String>> {
-    let patterns = watched
-        .iter()
-        .map(|path| glob::Pattern::new(path))
-        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(exclusion) = watched.iter().find(|path| path.starts_with('!')) {
+        return Err(format!(
+            "{WARMER}: on.push.paths exclusion {exclusion:?} is not supported by the key coverage check"
+        )
+        .into());
+    }
     Ok(inputs
         .iter()
-        .filter(|input| !patterns.iter().any(|pattern| pattern.matches(input)))
+        .filter(|input| !watched.iter().any(|path| covers(path, input)))
         .cloned()
         .collect())
+}
+
+fn covers(path: &str, input: &str) -> bool {
+    path == input
+        || path.strip_suffix("**").is_some_and(|directory| {
+            directory.ends_with('/')
+                && !directory.contains(['*', '?', '[', ']', '!', '{', '}'])
+                && input.starts_with(directory)
+        })
 }
 
 #[cfg(test)]

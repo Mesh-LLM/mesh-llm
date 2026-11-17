@@ -1519,8 +1519,9 @@ existing build path and a hit retains its existing verification.
 The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`, and
 `windows-warm-caches.yml` is the only job that saves it on `main`, so the
 contract gate also checks that the warmer's `push` paths cover every input of
-that key: an input it does not watch would move the key on `main` with no
-warmed entry, and the next Windows runtime run of each PR would build cold.
+that key, by equality or a literal `<dir>/**`, and refuses `!` exclusions there:
+an input it does not watch would move the key on `main` with no warmed entry,
+and the next Windows runtime run of each PR would build cold.
 
 Windows ABI retention runs in the existing warmer maintenance job. Rust derives
 the active compatibility roster from CI, release and warmer consumers and

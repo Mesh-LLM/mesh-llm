@@ -38,6 +38,35 @@ fn windows_warmer_paths_report_each_unwatched_input() {
 }
 
 #[test]
+fn windows_warmer_paths_narrower_glob_does_not_cover_nested_inputs() {
+    // GitHub's `scripts/*` does not filter `scripts/lib/lld.sh`.
+    let missing = unwatched(
+        &inputs(&["scripts/**", "scripts/lib/lld.sh"]),
+        &watched(&["scripts/*"]),
+    )
+    .unwrap();
+    assert_eq!(missing, ["scripts/**", "scripts/lib/lld.sh"]);
+    let missing = unwatched(
+        &inputs(&["scripts/lib/lld.sh"]),
+        &watched(&["scripts/*/**", "script**"]),
+    )
+    .unwrap();
+    assert_eq!(missing, ["scripts/lib/lld.sh"]);
+}
+
+#[test]
+fn windows_warmer_paths_refuse_ordered_exclusions() {
+    let mut paths = watched(&["Cargo.lock", "scripts/**"]);
+    assert!(
+        unwatched(&inputs(&["Cargo.lock"]), &paths)
+            .unwrap()
+            .is_empty()
+    );
+    paths.push("!Cargo.lock".into());
+    assert!(unwatched(&inputs(&["Cargo.lock"]), &paths).is_err());
+}
+
+#[test]
 fn windows_warmer_paths_need_a_push_path_list() {
     for source in [
         "on:\n  workflow_dispatch: {}\n",
