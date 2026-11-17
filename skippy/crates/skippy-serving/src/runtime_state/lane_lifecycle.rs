@@ -200,16 +200,22 @@ impl RuntimeState {
             temperature: 0.0,
             ..SamplingConfig::default()
         };
+        // An empty metadata string clears chat sampling instead of
+        // configuring it (the native entry's early-out), so the attach the
+        // warmup exists to provoke never happened. A minimal grammar-free
+        // metadata document reaches the real configure path.
+        const WARMUP_SAMPLING_METADATA: &str = r#"{"grammar":""}"#;
         for lane in lanes.iter_mut() {
             // Real requests configure chat sampling through the frontend
             // before their first iteration; that configuration is what
             // attaches the backend sampler and grows the reservation. Walk
             // the same entry here so the sampler-aware reservation is built
             // at startup instead of on the first request.
-            if let Err(error) = lane
-                .session
-                .configure_chat_sampling("", 0, Some(&warmup_sampling))
-            {
+            if let Err(error) = lane.session.configure_chat_sampling(
+                WARMUP_SAMPLING_METADATA,
+                0,
+                Some(&warmup_sampling),
+            ) {
                 tracing::warn!(?error, "serving warmup could not configure chat sampling");
             }
             requests.push(IterationBatchRequest {
@@ -264,7 +270,7 @@ impl RuntimeState {
         };
         let converged = lane
             .session
-            .configure_chat_sampling("", 0, Some(&warmup_sampling))
+            .configure_chat_sampling(WARMUP_SAMPLING_METADATA, 0, Some(&warmup_sampling))
             .and_then(|_| lane.session.decode_step(token_id))
             .and_then(|_| lane.session.reset());
         if let Err(error) = self.finish_generation_warmup(lane, converged, idle_index.is_some()) {
