@@ -241,6 +241,38 @@ impl RuntimeState {
                 tracing::warn!(?error, "serving decode-wave warmup cleanup failed");
             }
         }
+        // Converge the sampler-aware reservation: sampling attaches happen
+        // after an iteration's decode, so the warmup so far can end with
+        // the re-reserve armed (or never consumed) and the reservation
+        // still sampler-less; the first request would then pay a
+        // worst-case graph re-reserve. One decode with a sampler attached
+        // guarantees the reservation is rebuilt sampler-aware (or confirmed
+        // already covering) before traffic arrives.
+        let idle_index = self
+            .idle_sessions
+            .iter()
+            .position(|idle| idle.resident_prefix.is_none());
+        let mut lane = match idle_index {
+            Some(index) => self.idle_sessions.swap_remove(index),
+            None => match self.create_lane_session() {
+                Ok(lane) => lane,
+                Err(error) => {
+                    tracing::warn!(?error, "sampler-aware warmup could not borrow a lane");
+                    return;
+                }
+            },
+        };
+        let converged = lane
+            .session
+            .configure_chat_sampling("", 0, Some(&warmup_sampling))
+            .and_then(|_| lane.session.decode_step(token_id))
+            .and_then(|_| lane.session.reset());
+        if let Err(error) = self.finish_generation_warmup(lane, converged, idle_index.is_some()) {
+            tracing::warn!(
+                ?error,
+                "sampler-aware warmup failed; keeping lazy reservation"
+            );
+        }
     }
 
     fn finish_generation_warmup(
