@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 
 from ._binding import native
 from .types import (
+    LaneCapacity,
     Model,
     OpenAIRequestError,
     OpenAIResponse,
@@ -308,6 +309,21 @@ class Node:
 
     async def join_token(self, token: str) -> None:
         await asyncio.to_thread(self._handle.join_token, token)
+
+    async def runtime_capacity(self, model: str) -> LaneCapacity | None:
+        """Latest local capacity for an exact serving ID; ``None`` when unavailable.
+
+        Raises the native error when the node is stopped.
+        """
+        value = await asyncio.to_thread(self._handle.runtime_capacity, model)
+        if value is None:
+            return None
+        return LaneCapacity(
+            execution_lanes=value.execution_lanes,
+            context_tokens_per_lane=value.context_tokens_per_lane,
+            context_pool_tokens=value.context_pool_tokens,
+            captured_at_unix_ms=value.captured_at_unix_ms,
+        )
 
     async def __aenter__(self) -> Node:
         await self.start()

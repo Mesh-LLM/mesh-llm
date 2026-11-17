@@ -96,19 +96,31 @@ fn audit_file(
     package: &Path,
     file: &Path,
     patterns: &[glob::Pattern],
-    visited: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<(PathBuf, bool)>,
+) -> DynResult<()> {
+    audit_rust_file(root, package, file, patterns, visited, false)
+}
+
+fn audit_rust_file(
+    root: &Path,
+    package: &Path,
+    file: &Path,
+    patterns: &[glob::Pattern],
+    visited: &mut BTreeSet<(PathBuf, bool)>,
+    included: bool,
 ) -> DynResult<()> {
     let file = file.canonicalize()?;
-    if !visited.insert(file.clone()) {
+    if !visited.insert((file.clone(), included)) {
         return Ok(());
     }
     covered(root, &file, patterns)?;
-    let syntax = syn::parse_file(&std::fs::read_to_string(&file)?)?;
+    let source = std::fs::read_to_string(&file)?;
     let parent = file.parent().ok_or("module parent missing")?;
-    let directory = if matches!(
-        file.file_name().and_then(|s| s.to_str()),
-        Some("lib.rs" | "main.rs" | "mod.rs")
-    ) {
+    let directory = if included
+        || matches!(
+            file.file_name().and_then(|s| s.to_str()),
+            Some("lib.rs" | "main.rs" | "mod.rs")
+        ) {
         parent.to_path_buf()
     } else {
         parent.join(file.file_stem().ok_or("module stem missing")?)
@@ -118,11 +130,16 @@ fn audit_file(
         package,
         file: &file,
         directory,
+        inline_module: false,
         patterns,
         visited,
         error: None,
     };
-    audit.visit_file(&syntax);
+    match syn::parse_file(&source) {
+        Ok(syntax) => audit.visit_file(&syntax),
+        Err(_) if included => audit.visit_expr(&syn::parse_str::<syn::Expr>(&source)?),
+        Err(error) => return Err(error.into()),
+    }
     match audit.error {
         Some(error) => Err(error),
         None => Ok(()),
@@ -134,8 +151,9 @@ struct Audit<'a> {
     package: &'a Path,
     file: &'a Path,
     directory: PathBuf,
+    inline_module: bool,
     patterns: &'a [glob::Pattern],
-    visited: &'a mut BTreeSet<PathBuf>,
+    visited: &'a mut BTreeSet<(PathBuf, bool)>,
     error: Option<crate::command::DynError>,
 }
 
@@ -198,32 +216,43 @@ impl<'ast> Visit<'ast> for Audit<'_> {
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        let explicit = match module_path(module) {
+            Ok(path) => path,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
         if let Some((_, items)) = &module.content {
             let previous = self.directory.clone();
-            self.directory.push(module.ident.to_string());
+            let previous_inline = self.inline_module;
+            if let Some(path) = &explicit {
+                let base = if self.inline_module {
+                    &self.directory
+                } else {
+                    self.file.parent().unwrap_or(self.root)
+                };
+                self.directory = base.join(path);
+            } else {
+                self.directory.push(module.ident.to_string());
+            }
+            self.inline_module = true;
             for item in items {
                 self.visit_item(item);
             }
             self.directory = previous;
+            self.inline_module = previous_inline;
             return;
         }
         let result = (|| -> DynResult<()> {
-            let explicit = module.attrs.iter().find(|a| a.path().is_ident("path"));
             let file =
-                if let Some(attr) = explicit {
-                    let syn::Meta::NameValue(value) = &attr.meta else {
-                        return Err("unsupported module path attribute".into());
+                if let Some(path) = &explicit {
+                    let base = if self.inline_module {
+                        &self.directory
+                    } else {
+                        self.file.parent().ok_or("module parent missing")?
                     };
-                    let syn::Expr::Lit(value) = &value.value else {
-                        return Err("module path must be literal".into());
-                    };
-                    let syn::Lit::Str(value) = &value.lit else {
-                        return Err("module path must be string".into());
-                    };
-                    self.file
-                        .parent()
-                        .ok_or("module parent missing")?
-                        .join(value.value())
+                    base.join(path)
                 } else {
                     let name = module.ident.to_string();
                     let flat = self.directory.join(format!("{name}.rs"));
@@ -239,7 +268,14 @@ impl<'ast> Visit<'ast> for Audit<'_> {
                         .into()),
                     }
                 };
-            audit_file(self.root, self.package, &file, self.patterns, self.visited)
+            audit_rust_file(
+                self.root,
+                self.package,
+                &file,
+                self.patterns,
+                self.visited,
+                explicit.is_some(),
+            )
         })();
         if let Err(error) = result {
             self.error = Some(error);
@@ -247,34 +283,28 @@ impl<'ast> Visit<'ast> for Audit<'_> {
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        if !["include_str", "include_bytes", "include"]
-            .iter()
-            .any(|name| mac.path.is_ident(name))
-        {
+        let Some(rust_source) = include_macro(&mac.path) else {
+            self.visit_nested_tokens(mac.tokens.clone());
             return;
-        }
+        };
         let result = (|| -> DynResult<()> {
             let expr = syn::parse2::<syn::Expr>(mac.tokens.clone())?;
             match include_path(&expr)? {
-                Include::Relative(path) => covered(
-                    self.root,
+                Include::Relative(path) => self.audit_include(
                     &self
                         .file
                         .parent()
                         .ok_or("include parent missing")?
                         .join(path),
-                    self.patterns,
+                    rust_source,
                 ),
-                Include::Manifest(path) => covered(
-                    self.root,
+                Include::Manifest(path) => self.audit_include(
                     &self.package.join(path.trim_start_matches('/')),
-                    self.patterns,
+                    rust_source,
                 ),
                 Include::Generated => {
                     // Reviewed generator boundary: prost reads the complete admitted proto tree.
-                    if mac.path.is_ident("include")
-                        && self.package.ends_with("skippy/crates/skippy-protocol")
-                    {
+                    if rust_source && self.package.ends_with("skippy/crates/skippy-protocol") {
                         covered(self.root, &self.package.join("build.rs"), self.patterns)?;
                         covered(
                             self.root,
@@ -296,6 +326,117 @@ impl<'ast> Visit<'ast> for Audit<'_> {
                 .into(),
             );
         }
+    }
+}
+
+fn module_path(module: &syn::ItemMod) -> DynResult<Option<String>> {
+    for attr in &module.attrs {
+        reject_conditional_path(&attr.meta)?;
+    }
+    let Some(attr) = module
+        .attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("path"))
+    else {
+        return Ok(None);
+    };
+    let syn::Meta::NameValue(value) = &attr.meta else {
+        return Err("unsupported module path attribute".into());
+    };
+    let syn::Expr::Lit(value) = &value.value else {
+        return Err("module path must be literal".into());
+    };
+    let syn::Lit::Str(value) = &value.lit else {
+        return Err("module path must be string".into());
+    };
+    Ok(Some(value.value()))
+}
+
+fn reject_conditional_path(meta: &syn::Meta) -> DynResult<()> {
+    let syn::Meta::List(list) = meta else {
+        return Ok(());
+    };
+    if !list.path.is_ident("cfg_attr") {
+        return Ok(());
+    }
+    let attributes = list.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+    )?;
+    for attribute in attributes.iter().skip(1) {
+        if attribute.path().is_ident("path") {
+            return Err("conditional module path requires explicit resource ownership".into());
+        }
+        reject_conditional_path(attribute)?;
+    }
+    Ok(())
+}
+
+impl Audit<'_> {
+    fn audit_include(&mut self, path: &Path, rust_source: bool) -> DynResult<()> {
+        if rust_source {
+            audit_rust_file(
+                self.root,
+                self.package,
+                path,
+                self.patterns,
+                self.visited,
+                true,
+            )
+        } else {
+            covered(self.root, path, self.patterns)
+        }
+    }
+
+    fn visit_nested_tokens(&mut self, tokens: proc_macro2::TokenStream) {
+        use proc_macro2::TokenTree;
+        let tokens: Vec<_> = tokens.into_iter().collect();
+        let mut index = 0;
+        while index < tokens.len() && self.error.is_none() {
+            if let [
+                TokenTree::Ident(name),
+                TokenTree::Punct(bang),
+                TokenTree::Group(_),
+                ..,
+            ] = &tokens[index..]
+                && bang.as_char() == '!'
+                && matches!(
+                    name.to_string().as_str(),
+                    "include" | "include_str" | "include_bytes"
+                )
+            {
+                let nested: proc_macro2::TokenStream =
+                    tokens[index..index + 3].iter().cloned().collect();
+                match syn::parse2::<syn::Macro>(nested) {
+                    Ok(mac) => self.visit_macro(&mac),
+                    Err(error) => self.error = Some(error.into()),
+                }
+                index += 3;
+            } else {
+                if let TokenTree::Group(group) = &tokens[index] {
+                    self.visit_nested_tokens(group.stream());
+                }
+                index += 1;
+            }
+        }
+    }
+}
+
+fn include_macro(path: &syn::Path) -> Option<bool> {
+    let mut segments = path.segments.iter();
+    let first = segments.next()?;
+    let name = match segments.next() {
+        None => &first.ident,
+        Some(last)
+            if (first.ident == "std" || first.ident == "core") && segments.next().is_none() =>
+        {
+            &last.ident
+        }
+        Some(_) => return None,
+    };
+    match name.to_string().as_str() {
+        "include" => Some(true),
+        "include_str" | "include_bytes" => Some(false),
+        _ => None,
     }
 }
 
@@ -352,6 +493,259 @@ fn include_path(expr: &syn::Expr) -> DynResult<Include> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conditional_module_paths_require_explicit_ownership() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(root.join("src/child.rs"), "const SAFE: u8 = 0;")?;
+        std::fs::write(
+            root.join("src/alternate.rs"),
+            "const DATA: &str = include_str!(\"../resource.txt\");",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        for attribute in [
+            "#[cfg_attr(unix, path=\"alternate.rs\")]",
+            "#[cfg_attr(unix, cfg_attr(target_os=\"macos\", path=\"alternate.rs\"))]",
+        ] {
+            std::fs::write(root.join("src/main.rs"), format!("{attribute} mod child;"))?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("conditional module path"));
+        }
+        std::fs::write(
+            root.join("src/main.rs"),
+            "#[cfg_attr(unix, allow(dead_code))] mod child;",
+        )?;
+        audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+    }
+
+    #[test]
+    fn module_path_attributes_audit_the_compiled_child() -> DynResult<()> {
+        for (source, selected, decoy) in [
+            (
+                "#[path=\"loaded.rs\"] mod loaded;",
+                "src/child.rs",
+                "src/loaded/child.rs",
+            ),
+            (
+                "mod wrapper { #[path=\"child.rs\"] mod child; }",
+                "src/wrapper/child.rs",
+                "src/child.rs",
+            ),
+            (
+                "#[path=\"alternate\"] mod wrapper { mod child; }",
+                "src/alternate/child.rs",
+                "src/wrapper/child.rs",
+            ),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().canonicalize()?;
+            for child in [selected, decoy] {
+                let path = root.join(child);
+                std::fs::create_dir_all(path.parent().ok_or("fixture parent")?)?;
+                std::fs::write(path, "const SAFE: u8 = 0;")?;
+            }
+            std::fs::write(root.join("src/main.rs"), source)?;
+            std::fs::write(root.join("src/loaded.rs"), "mod child;")?;
+            std::fs::write(root.join("resource.txt"), "data")?;
+            std::fs::write(
+                root.join(selected),
+                "const DATA: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/resource.txt\"));",
+            )?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("resource.txt"),
+                "{source}: {error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn shared_source_is_audited_in_both_resolution_contexts() -> DynResult<()> {
+        for (source, unsafe_child) in [
+            ("mod shared; include!(\"shared.rs\");", "src/child.rs"),
+            (
+                "include!(\"shared.rs\"); mod shared;",
+                "src/shared/child.rs",
+            ),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().canonicalize()?;
+            std::fs::create_dir_all(root.join("src/shared"))?;
+            std::fs::write(root.join("src/main.rs"), source)?;
+            std::fs::write(root.join("src/shared.rs"), "mod child;")?;
+            for child in ["src/child.rs", "src/shared/child.rs"] {
+                std::fs::write(root.join(child), "const SAFE: u8 = 0;")?;
+            }
+            std::fs::write(root.join("resource.txt"), "data")?;
+            std::fs::write(
+                root.join(unsafe_child),
+                "const DATA: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/resource.txt\"));",
+            )?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("resource.txt"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn expression_includes_admit_owned_and_reject_unowned_resources() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(
+            root.join("src/main.rs"),
+            "const DATA: &str = include!(\"expression.rs\");",
+        )?;
+        std::fs::write(
+            root.join("src/expression.rs"),
+            "include_str!(\"../resource.txt\")",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[
+                glob::Pattern::new("src/**")?,
+                glob::Pattern::new("resource.txt")?,
+            ],
+            &mut BTreeSet::new(),
+        )?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn qualified_standard_includes_require_resource_ownership() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        for prefix in ["std::", "core::", "::std::", "::core::"] {
+            std::fs::write(
+                root.join("src/main.rs"),
+                format!("const DATA: &str = {prefix}include_str!(\"../resource.txt\");"),
+            )?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("resource.txt"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn included_modules_use_the_included_files_parent() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir_all(root.join("src/included"))?;
+        std::fs::write(root.join("src/main.rs"), "include!(\"included.rs\");")?;
+        std::fs::write(root.join("src/included.rs"), "mod child;")?;
+        std::fs::write(root.join("src/included/child.rs"), "const SAFE: u8 = 0;")?;
+        std::fs::write(
+            root.join("src/child.rs"),
+            "const DATA: &str = include_str!(\"../resource.txt\");",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_rust_includes_cannot_hide_external_resources() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(root.join("src/main.rs"), "include!(\"included.rs\");")?;
+        std::fs::write(
+            root.join("src/included.rs"),
+            "const DATA: &str = include_str!(\"../resource.txt\");",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn macro_arguments_cannot_hide_external_resources() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn main() { println!(\"{}\", include_str!(\"../resource.txt\")); }",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        let error = audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource.txt"));
+        Ok(())
+    }
 
     #[test]
     fn external_include_additions_require_admission_and_admitted_mutations_remain_covered()

@@ -13,7 +13,7 @@
   "files": {
     ".gitignore": "9133db7aee1394939cbc137290a230621018b4e08389333944dca090df949df9",
     "LICENSE": "44459b86c2e96fdbfd8a6b5c33d30d4b04b5293fcb2ec96fe4dcc4e0f90b8962",
-    "README.md": "75c1e809ff8fa8cb99d494e0d81b5e1cf700306252f2c869c01443e37bc545e1",
+    "README.md": "0546eb36cf252bd9703e9abcad4d599b5129018ac57c10a09ac80fb55d4c9241",
     "ci/canary-python/pyproject.toml": "7e8b046d436deebcf245ff17cd7ca35d151657cc5b6f3fc15b0463f2e4461268",
     "ci/canary-python/uv.lock": "eebb16892847f3545c1c4993d5e916cfb3dec97bb123bd67c6b40e6ba14fab5a",
     "ci/required-sdk-python/pyproject.toml": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
@@ -29,15 +29,15 @@
     "scripts/generate-python-bindings.sh": "6a36750ef5d47984e215cf161e5955c93d83c4a9e1f6f73c8d18b47b4c988088",
     "scripts/import-compatibility.py": "595a7cb19aab27cc55606d25bb231d20fb36b683fcfc4b423fb7d42ea23b6783",
     "scripts/import-embedding.py": "174d20b4c015a80fc9bdaabf3c658e68fdb99cf4053142bdf59ba331b8dc7f32",
-    "src/meshllm/__init__.py": "d9523406155f6dea03fc0fd5af34745623f5094bf5df80dac9fa011087691dfe",
+    "src/meshllm/__init__.py": "f8ff11bf157b2d56b569d19e71f707f2b63bddd44ff12ddea7da3299b8f956e6",
     "src/meshllm/_binding.py": "48ffbd34bd72bc3ac6ac7a7afafd092b54c76fd9dbf02081c2f7db3c8e648b33",
     "src/meshllm/_generated/.gitignore": "d1ed744637de88057038edbb22a0411c08f751390472304b747257687fb5dbe5",
     "src/meshllm/_generated/__init__.py": "eba30075c4d139a19472bcbe1195b1adfd94182b3ee5fd5131fc5865d49a918c",
-    "src/meshllm/_generated/mesh_ffi.py": "0263fffaf814ddefb343ccfba09e6de4568e05d410d248dd893ff15c1e5b606b",
-    "src/meshllm/client.py": "2d3ab9843657371855ee1e1b742b6989da97acd519bcfc58ec3d0d183586ad57",
-    "src/meshllm/types.py": "43e80058ce8859341604cd8ea28fe3930895b1b975fac753e5e81e212322a967",
-    "tests/test_binding.py": "81ba8f430d987675931049bda54efe4dce64c107d51db990713d066283d8ed19",
-    "tests/test_client.py": "cd2fa705820ee262bbe1ace6f9f940d8c7cb85ab687ea24f3977e160e186bd5a",
+    "src/meshllm/_generated/mesh_ffi.py": "d8f12bf7873fd147130fb622de8a609b82cb1866e84764d16c2d2c4e66b1d6fb",
+    "src/meshllm/client.py": "812b9b55d7006973f7a9674570b1efe901af595814c3c4874cd6214d39f04704",
+    "src/meshllm/types.py": "73c84ea78fc3a5bf22e4ac0a2501ff869a4ee21dde3089911450514fc4fc4afc",
+    "tests/test_binding.py": "4d7146a0241a38e6ab2b7a47620bb790fc102833cb3339f2a1b6b0d4751b8a2e",
+    "tests/test_client.py": "164eb4088ee4c204a8f4d269ca17245ba818751507fd23400ec52c9bc00546e2",
     "uniffi.toml": "1bae43ad0481c024429b2fe21068231f4268f6c3f62e31134f2dbb1f72dfe68d"
   }
 }

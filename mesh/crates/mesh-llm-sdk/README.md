@@ -122,9 +122,9 @@ be delayed by long inference; callers choose their own freshness threshold.
 These are local host observations, never remote peers' advertised capacity.
 
 The Node.js, Swift, and Kotlin SDKs expose the same observation through
-`node.runtimeCapacity(model)`. Node.js fields are `bigint`; Swift uses `UInt64`
-and Kotlin uses `ULong`. Python support is deferred; this API is not yet
-available in the separate Python SDK.
+`node.runtimeCapacity(model)`, and Python through `node.runtime_capacity(model)`.
+Node.js fields are `bigint`; Swift uses `UInt64`, Kotlin uses `ULong` and Python
+uses `int`.
 
 ## Native model discovery and inference
 

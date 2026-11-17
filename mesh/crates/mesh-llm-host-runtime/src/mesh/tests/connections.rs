@@ -520,11 +520,14 @@ async fn make_configured_test_node(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
 async fn join_rejects_token_naming_own_identity() -> Result<()> {
     // #1699: two serve processes on one machine silently load the same node
     // key, so the joiner's token names its own endpoint id. iroh refuses
     // self-connections, so before the guard this failed opaquely (or looked
     // like a successful one-node mesh). It must fail loudly instead.
+    let root = tempfile::tempdir()?;
+    let _guard = RuntimeRootGuard::set(root.path());
     let node = make_test_node(super::NodeRole::Worker).await?;
     node.start_accepting();
 

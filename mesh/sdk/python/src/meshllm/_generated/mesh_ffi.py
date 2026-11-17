@@ -557,6 +557,8 @@ def _uniffi_check_contract_api_version(lib):
 def _uniffi_check_api_checksums(lib):
     if lib.uniffi_meshllm_ffi_checksum_func_create_node() != 7741:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_func_create_node_config_json() != 28072:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 50997:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 63557:
@@ -569,17 +571,45 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 6828:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_close_audio() != 32045:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_commit() != 13409:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_next_event_json() != 55429:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio() != 46161:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio_f32() != 32901:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_stop_json() != 12637:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_add_membership_json() != 17642:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 153:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_document_ocr() != 37662:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 32986:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token() != 55229:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_memberships_json() != 7007:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_model_json() != 14746:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_models_json() != 12969:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 65095:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 24624:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_remove_membership() != 60373:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_runtime_capacity() != 26263:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 16152:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_live_transcription_json() != 38423:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 3924:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -617,6 +647,9 @@ _UniffiLib.ffi_meshllm_ffi_uniffi_contract_version.restype = ctypes.c_uint32
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_create_node.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_create_node.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_node_config_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_node_config_json.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_current_mesh_version.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_current_mesh_version.restype = ctypes.c_uint16
@@ -635,24 +668,66 @@ _UniffiLib.uniffi_meshllm_ffi_checksum_func_prune_native_runtimes.restype = ctyp
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_remove_native_runtime.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_remove_native_runtime.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_close_audio.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_close_audio.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_commit.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_commit.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_next_event_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_next_event_json.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio_f32.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio_f32.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_stop_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_stop_json.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_add_membership_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_add_membership_json.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_document_ocr.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_document_ocr.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_memberships_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_memberships_json.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_model_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_model_json.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_models_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_models_json.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_remove_membership.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_remove_membership.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_runtime_capacity.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_runtime_capacity.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_live_transcription_json.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_live_transcription_json.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status.restype = ctypes.c_uint16
@@ -670,6 +745,11 @@ _UniffiLib.uniffi_meshllm_ffi_fn_func_create_node.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_func_create_node.restype = ctypes.c_uint64
+_UniffiLib.uniffi_meshllm_ffi_fn_func_create_node_config_json.argtypes = (
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_func_create_node_config_json.restype = ctypes.c_uint64
 _UniffiLib.uniffi_meshllm_ffi_fn_func_current_mesh_version.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
@@ -703,12 +783,57 @@ _UniffiLib.uniffi_meshllm_ffi_fn_func_remove_native_runtime.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_func_remove_native_runtime.restype = ctypes.c_int8
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_close_audio.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_close_audio.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_commit.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_commit.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_next_event_json.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_next_event_json.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio_f32.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio_f32.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_stop_json.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_stop_json.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_add_membership_json.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_add_membership_json.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel.argtypes = (
     ctypes.c_uint64,
     _UniffiRustBuffer,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_document_ocr.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_document_ocr.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_inference_list_models.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -720,6 +845,23 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_memberships_json.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_memberships_json.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_model_json.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_model_json.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_models_json.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_models_json.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_request.argtypes = (
     ctypes.c_uint64,
     _UniffiRustBuffer,
@@ -735,11 +877,29 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream.argtypes = 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_remove_membership.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_remove_membership.restype = ctypes.c_int8
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_runtime_capacity.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_runtime_capacity.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start_live_transcription_json.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start_live_transcription_json.restype = ctypes.c_uint64
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_status.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -750,6 +910,16 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_stop.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_stop.restype = None
+_UniffiLib.uniffi_meshllm_ffi_fn_clone_livetranscriptionnative.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_clone_livetranscriptionnative.restype = ctypes.c_uint64
+_UniffiLib.uniffi_meshllm_ffi_fn_free_livetranscriptionnative.argtypes = (
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_free_livetranscriptionnative.restype = None
 _UniffiLib.uniffi_meshllm_ffi_fn_clone_meshnodehandle.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1466,6 +1636,54 @@ class _UniffiFfiConverterTypeOpenAiResponseNative(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalString.write(value.content_type, buf)
         _UniffiFfiConverterString.write(value.body, buf)
 
+@dataclass
+class RuntimeCapacityNative:
+    def __init__(self, *, execution_lanes:int, context_tokens_per_lane:int, context_pool_tokens:int, captured_at_unix_ms:int):
+        self.execution_lanes = execution_lanes
+        self.context_tokens_per_lane = context_tokens_per_lane
+        self.context_pool_tokens = context_pool_tokens
+        self.captured_at_unix_ms = captured_at_unix_ms
+
+
+
+
+    def __str__(self):
+        return "RuntimeCapacityNative(execution_lanes={}, context_tokens_per_lane={}, context_pool_tokens={}, captured_at_unix_ms={})".format(self.execution_lanes, self.context_tokens_per_lane, self.context_pool_tokens, self.captured_at_unix_ms)
+    def __eq__(self, other):
+        if self.execution_lanes != other.execution_lanes:
+            return False
+        if self.context_tokens_per_lane != other.context_tokens_per_lane:
+            return False
+        if self.context_pool_tokens != other.context_pool_tokens:
+            return False
+        if self.captured_at_unix_ms != other.captured_at_unix_ms:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeRuntimeCapacityNative(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return RuntimeCapacityNative(
+            execution_lanes=_UniffiFfiConverterUInt64.read(buf),
+            context_tokens_per_lane=_UniffiFfiConverterUInt64.read(buf),
+            context_pool_tokens=_UniffiFfiConverterUInt64.read(buf),
+            captured_at_unix_ms=_UniffiFfiConverterUInt64.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterUInt64.check_lower(value.execution_lanes)
+        _UniffiFfiConverterUInt64.check_lower(value.context_tokens_per_lane)
+        _UniffiFfiConverterUInt64.check_lower(value.context_pool_tokens)
+        _UniffiFfiConverterUInt64.check_lower(value.captured_at_unix_ms)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterUInt64.write(value.execution_lanes, buf)
+        _UniffiFfiConverterUInt64.write(value.context_tokens_per_lane, buf)
+        _UniffiFfiConverterUInt64.write(value.context_pool_tokens, buf)
+        _UniffiFfiConverterUInt64.write(value.captured_at_unix_ms, buf)
+
 
 
 # FfiError
@@ -2029,6 +2247,242 @@ class _UniffiFfiConverterTypeOpenAiStreamEventNative(_UniffiConverterRustBuffer)
 
 
 
+class _UniffiFfiConverterInt16(_UniffiConverterPrimitiveInt):
+    CLASS_NAME = "i16"
+    VALUE_MIN = -2**15
+    VALUE_MAX = 2**15
+
+    @staticmethod
+    def read(buf):
+        return buf.read_i16()
+
+    @staticmethod
+    def write(value, buf):
+        buf.write_i16(value)
+
+class _UniffiFfiConverterSequenceInt16(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiFfiConverterInt16.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiFfiConverterInt16.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiFfiConverterInt16.read(buf) for i in range(count)
+        ]
+
+class _UniffiFfiConverterFloat32(_UniffiConverterPrimitiveFloat):
+    @staticmethod
+    def read(buf):
+        return buf.read_float()
+
+    @staticmethod
+    def write(value, buf):
+        buf.write_float(value)
+
+class _UniffiFfiConverterSequenceFloat32(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiFfiConverterFloat32.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiFfiConverterFloat32.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiFfiConverterFloat32.read(buf) for i in range(count)
+        ]
+
+
+class LiveTranscriptionNativeProtocol(typing.Protocol):
+
+    def close_audio(self, ) -> None:
+        raise NotImplementedError
+    def commit(self, ) -> None:
+        raise NotImplementedError
+    def next_event_json(self, ) -> typing.Optional[str]:
+        raise NotImplementedError
+    def send_audio(self, samples: typing.List[int]) -> None:
+        raise NotImplementedError
+    def send_audio_f32(self, samples: typing.List[float]) -> None:
+        raise NotImplementedError
+    def stop_json(self, ) -> str:
+        raise NotImplementedError
+
+class LiveTranscriptionNative(LiveTranscriptionNativeProtocol):
+
+    _handle: ctypes.c_uint64
+
+    def __init__(self, *args, **kwargs):
+        raise ValueError("This class has no default constructor")
+
+    def __del__(self):
+        # In case of partial initialization of instances.
+        handle = getattr(self, "_handle", None)
+        if handle is not None:
+            _uniffi_rust_call(_UniffiLib.uniffi_meshllm_ffi_fn_free_livetranscriptionnative, handle)
+
+    def _uniffi_clone_handle(self):
+        return _uniffi_rust_call(_UniffiLib.uniffi_meshllm_ffi_fn_clone_livetranscriptionnative, self._handle)
+
+    # Used by alternative constructors or any methods which return this type.
+    @classmethod
+    def _uniffi_make_instance(cls, handle):
+        # Lightly yucky way to bypass the usual __init__ logic
+        # and just create a new instance with the required handle.
+        inst = cls.__new__(cls)
+        inst._handle = handle
+        return inst
+    def close_audio(self, ) -> None:
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+        )
+        _uniffi_lift_return = lambda val: None
+        _uniffi_error_converter = None
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_close_audio,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def commit(self, ) -> None:
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+        )
+        _uniffi_lift_return = lambda val: None
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_commit,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def next_event_json(self, ) -> typing.Optional[str]:
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterOptionalString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_next_event_json,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def send_audio(self, samples: typing.List[int]) -> None:
+
+        _UniffiFfiConverterSequenceInt16.check_lower(samples)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterSequenceInt16.lower(samples),
+        )
+        _uniffi_lift_return = lambda val: None
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def send_audio_f32(self, samples: typing.List[float]) -> None:
+
+        _UniffiFfiConverterSequenceFloat32.check_lower(samples)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterSequenceFloat32.lower(samples),
+        )
+        _uniffi_lift_return = lambda val: None
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio_f32,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def stop_json(self, ) -> str:
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_livetranscriptionnative_stop_json,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+
+
+
+
+
+class _UniffiFfiConverterTypeLiveTranscriptionNative:
+    @staticmethod
+    def lift(value: int) -> LiveTranscriptionNative:
+        return LiveTranscriptionNative._uniffi_make_instance(value)
+
+    @staticmethod
+    def check_lower(value: LiveTranscriptionNative):
+        if not isinstance(value, LiveTranscriptionNative):
+            raise TypeError("Expected LiveTranscriptionNative instance, {} found".format(type(value).__name__))
+
+    @staticmethod
+    def lower(value: LiveTranscriptionNative) -> ctypes.c_uint64:
+        return value._uniffi_clone_handle()
+
+    @classmethod
+    def read(cls, buf: _UniffiRustBuffer) -> LiveTranscriptionNative:
+        ptr = buf.read_u64()
+        if ptr == 0:
+            raise InternalError("Raw handle value was null")
+        return cls.lift(ptr)
+
+    @classmethod
+    def write(cls, value: LiveTranscriptionNative, buf: _UniffiRustBuffer):
+        buf.write_u64(cls.lower(value))
+
+class _UniffiFfiConverterBytes(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        size = buf.read_i32()
+        if size < 0:
+            raise InternalError("Unexpected negative byte string length")
+        return buf.read(size)
+
+    @staticmethod
+    def check_lower(value):
+        try:
+            memoryview(value)
+        except TypeError:
+            raise TypeError("a bytes-like object is required, not {!r}".format(type(value).__name__))
+
+    @staticmethod
+    def write(value, buf):
+        buf.write_i32(len(value))
+        buf.write(value)
+
 class _UniffiFfiConverterSequenceTypeModelNative(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -2103,20 +2557,76 @@ class _UniffiTraitImplOpenAiStreamListenerImpl:
 # The _UniffiConverter which transforms the Callbacks in to Handles to pass to Rust.
 _UniffiFfiConverterTypeOpenAiStreamListener = _UniffiCallbackInterfaceFfiConverter()
 
+class _UniffiFfiConverterOptionalTypeRuntimeCapacityNative(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiFfiConverterTypeRuntimeCapacityNative.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiFfiConverterTypeRuntimeCapacityNative.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiFfiConverterTypeRuntimeCapacityNative.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
+
 
 class MeshNodeHandleProtocol(typing.Protocol):
 
+    def add_membership_json(self, config_json: str) -> str:
+        raise NotImplementedError
     def cancel(self, request_id: str) -> None:
+        raise NotImplementedError
+    def document_ocr(self, file: bytes,options_json: str) -> OpenAiResponseNative:
+        """
+        Upload unchanged document bytes with the same options as the Rust API.
+"""
         raise NotImplementedError
     def inference_list_models(self, ) -> typing.List[ModelNative]:
         raise NotImplementedError
     def join_token(self, token: str) -> None:
         raise NotImplementedError
+    def memberships_json(self, ) -> str:
+        raise NotImplementedError
+    def mesh_model_json(self, id: str) -> str:
+        """
+        Look up an exact public serving ID without applying LLM filtering.
+"""
+        raise NotImplementedError
+    def mesh_models_json(self, query_json: str) -> str:
+        """
+        Query all advertised workloads directly through the embedded node.
+"""
+        raise NotImplementedError
     def openai_request(self, path: str,body_json: str) -> OpenAiResponseNative:
         raise NotImplementedError
     def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
         raise NotImplementedError
+    def remove_membership(self, name: str) -> bool:
+        raise NotImplementedError
+    def runtime_capacity(self, model: str) -> typing.Optional[RuntimeCapacityNative]:
+        """
+        Current local capacity for an exact serving ID; unavailable is not zero.
+"""
+        raise NotImplementedError
     def start(self, ) -> None:
+        raise NotImplementedError
+    def start_live_transcription_json(self, options_json: str) -> LiveTranscriptionNative:
+        """
+        Start a session with the Rust SDK's defaults and role checks.
+"""
         raise NotImplementedError
     def status(self, ) -> NodeStatusNative:
         raise NotImplementedError
@@ -2147,6 +2657,21 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
         inst = cls.__new__(cls)
         inst._handle = handle
         return inst
+    def add_membership_json(self, config_json: str) -> str:
+
+        _UniffiFfiConverterString.check_lower(config_json)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(config_json),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_add_membership_json,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
     def cancel(self, request_id: str) -> None:
 
         _UniffiFfiConverterString.check_lower(request_id)
@@ -2159,6 +2684,27 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def document_ocr(self, file: bytes,options_json: str) -> OpenAiResponseNative:
+        """
+        Upload unchanged document bytes with the same options as the Rust API.
+"""
+
+        _UniffiFfiConverterBytes.check_lower(file)
+
+        _UniffiFfiConverterString.check_lower(options_json)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterBytes.lower(file),
+            _UniffiFfiConverterString.lower(options_json),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterTypeOpenAiResponseNative.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_document_ocr,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -2186,6 +2732,54 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def memberships_json(self, ) -> str:
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_memberships_json,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def mesh_model_json(self, id: str) -> str:
+        """
+        Look up an exact public serving ID without applying LLM filtering.
+"""
+
+        _UniffiFfiConverterString.check_lower(id)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(id),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_model_json,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def mesh_models_json(self, query_json: str) -> str:
+        """
+        Query all advertised workloads directly through the embedded node.
+"""
+
+        _UniffiFfiConverterString.check_lower(query_json)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(query_json),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_models_json,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -2228,6 +2822,39 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
+    def remove_membership(self, name: str) -> bool:
+
+        _UniffiFfiConverterString.check_lower(name)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(name),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterBoolean.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_remove_membership,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def runtime_capacity(self, model: str) -> typing.Optional[RuntimeCapacityNative]:
+        """
+        Current local capacity for an exact serving ID; unavailable is not zero.
+"""
+
+        _UniffiFfiConverterString.check_lower(model)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(model),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterOptionalTypeRuntimeCapacityNative.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_runtime_capacity,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
     def start(self, ) -> None:
         _uniffi_lowered_args = (
             self._uniffi_clone_handle(),
@@ -2237,6 +2864,24 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def start_live_transcription_json(self, options_json: str) -> LiveTranscriptionNative:
+        """
+        Start a session with the Rust SDK's defaults and role checks.
+"""
+
+        _UniffiFfiConverterString.check_lower(options_json)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(options_json),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterTypeLiveTranscriptionNative.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start_live_transcription_json,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -2424,6 +3069,24 @@ def create_node(mode: str,join_tokens: typing.List[str],models: typing.List[str]
         *_uniffi_lowered_args,
     )
     return _uniffi_lift_return(_uniffi_ffi_result)
+def create_node_config_json(config_json: str) -> MeshNodeHandle:
+    """
+    Construct a node from the complete native configuration. Starting the handle
+    performs the same runtime validation as the Rust builder.
+"""
+
+    _UniffiFfiConverterString.check_lower(config_json)
+    _uniffi_lowered_args = (
+        _UniffiFfiConverterString.lower(config_json),
+    )
+    _uniffi_lift_return = _UniffiFfiConverterTypeMeshNodeHandle.lift
+    _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+    _uniffi_ffi_result = _uniffi_rust_call_with_error(
+        _uniffi_error_converter,
+        _UniffiLib.uniffi_meshllm_ffi_fn_func_create_node_config_json,
+        *_uniffi_lowered_args,
+    )
+    return _uniffi_lift_return(_uniffi_ffi_result)
 def current_mesh_version() -> str:
     _uniffi_lowered_args = (
     )
@@ -2532,13 +3195,17 @@ __all__ = [
     "NativeRuntimePruneResultNative",
     "NodeStatusNative",
     "OpenAiResponseNative",
+    "RuntimeCapacityNative",
     "create_node",
+    "create_node_config_json",
     "current_mesh_version",
     "current_skippy_abi_version",
     "install_native_runtime",
     "installed_native_runtimes",
     "prune_native_runtimes",
     "remove_native_runtime",
+    "LiveTranscriptionNative",
+    "LiveTranscriptionNativeProtocol",
     "MeshNodeHandle",
     "MeshNodeHandleProtocol",
     "OpenAiStreamListener",
