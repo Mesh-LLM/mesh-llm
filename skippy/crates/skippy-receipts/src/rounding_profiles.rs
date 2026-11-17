@@ -7,10 +7,12 @@ use anyhow::{Context, Result};
 
 use crate::activation_rounding::Profile;
 
-/// The backends with measured rounding profiles. Metal has none: through
-/// `skippy serve`, its prefill outputs differ from every profile by up to
-/// 8/10,000, which would fail honest nodes (RECEIPTS_MEASUREMENTS.md,
-/// "Detection").
+/// The backends with measured rounding profiles.
+///
+/// Metal Q8_0 profiles are measured on Apple M4 Max and M5 Max through
+/// `skippy serve`: raw, nearest-f16 weights/activations, and nearest-f16 weights
+/// with toward-zero-f16 activations. Each column is checked against these
+/// profiles, not a claimed kernel label (RECEIPTS_MEASUREMENTS.md).
 ///
 /// Vulkan has none either. Its integer-dot kernels round K-quant weights
 /// in a way no profile models, so an honest node with Q4_K_M weights on
@@ -22,6 +24,7 @@ use crate::activation_rounding::Profile;
 pub enum BackendFamily {
     Cpu,
     Cuda,
+    Metal,
 }
 
 impl BackendFamily {
@@ -31,6 +34,8 @@ impl BackendFamily {
             Some(Self::Cpu)
         } else if backend.starts_with("CUDA") {
             Some(Self::Cuda)
+        } else if backend.starts_with("MTL") {
+            Some(Self::Metal)
         } else {
             None
         }
@@ -69,11 +74,13 @@ pub fn profiles_for(family: BackendFamily, weight_type: u32) -> Option<&'static 
         GGML_Q4_K, GGML_Q5_0, GGML_Q5_K, GGML_Q6_K, GGML_Q8_0,
     };
     use Profile::{
-        Bf16, CpuQ8, CpuQ8K, F16, Q8DivHalf, Q8Mul64F32, Q8MulF32, Q8MulHalf, Q8MulHalfSums,
-        Q8MulHalfSumsDp4a, Raw,
+        Bf16, CpuQ8, CpuQ8K, F16, F16Weights, F16WeightsRtz, Q8DivHalf, Q8Mul64F32, Q8MulF32,
+        Q8MulHalf, Q8MulHalfSums, Q8MulHalfSumsDp4a, Raw,
     };
     let profiles: &'static [Profile] = match (family, weight_type) {
-        (_, GGML_F32) | (BackendFamily::Cpu, GGML_F16) => &[Raw],
+        (BackendFamily::Cpu | BackendFamily::Cuda, GGML_F32) | (BackendFamily::Cpu, GGML_F16) => {
+            &[Raw]
+        }
         (BackendFamily::Cpu, GGML_BF16) => &[Bf16],
         (BackendFamily::Cpu, GGML_Q8_0 | GGML_Q4_0 | GGML_Q5_0 | GGML_IQ4_NL) => &[CpuQ8],
         (
@@ -89,6 +96,10 @@ pub fn profiles_for(family: BackendFamily, weight_type: u32) -> Option<&'static 
             &[Q8DivHalf, Q8MulF32, F16]
         }
         (BackendFamily::Cuda, GGML_Q2_K) => &[Q8DivHalf, Q8Mul64F32, F16],
+        // f32 activations in decode (`mul_mv`); f16 activations and weights
+        // in prefill (`mul_mm`), the activation rounded to nearest without
+        // the tensor API and truncated with it; bf16 weights are not measured
+        (BackendFamily::Metal, GGML_Q8_0) => &[Raw, F16Weights, F16WeightsRtz],
         _ => return None,
     };
     Some(profiles)
@@ -120,9 +131,10 @@ mod tests {
     fn each_backend_names_its_own_profiles() {
         assert_eq!(BackendFamily::of("CPU"), Some(BackendFamily::Cpu));
         assert_eq!(BackendFamily::of("CUDA0"), Some(BackendFamily::Cuda));
+        assert_eq!(BackendFamily::of("MTL0"), Some(BackendFamily::Metal));
         // a backend without measured profiles has no family: Vulkan's kernels
-        // round in ways no profile models, and Metal's prefill fits none
-        for unprofiled in ["Vulkan0", "Vulkan1", "MTL0", "Metal", "ROCm0", ""] {
+        // round in ways no profile models; a generic Metal label names no device
+        for unprofiled in ["Vulkan0", "Vulkan1", "Metal", "ROCm0", ""] {
             assert_eq!(BackendFamily::of(unprofiled), None, "{unprofiled}");
             assert!(BackendFamily::checked(unprofiled).is_err());
         }
@@ -156,6 +168,12 @@ mod tests {
                 .unwrap()
                 .contains(&Profile::Q8Mul64F32)
         );
+        assert_eq!(
+            profiles_for(BackendFamily::Metal, GGML_Q8_0),
+            Some(&[Profile::Raw, Profile::F16Weights, Profile::F16WeightsRtz][..])
+        );
+        assert_eq!(profiles_for(BackendFamily::Metal, GGML_Q4_K), None);
+        assert_eq!(profiles_for(BackendFamily::Metal, GGML_BF16), None);
         // types without a reference dequantization or a known profile have none
         assert_eq!(profiles_for(BackendFamily::Cpu, 19), None);
         assert_eq!(profiles_for(BackendFamily::Cuda, GGML_Q4_1), None);

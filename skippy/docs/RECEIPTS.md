@@ -129,17 +129,21 @@ The full list, with the threat model, is in
   and, on the last stage, the output head. CUDA sums F16 products in
   half precision, which no profile models: an honest CUDA node with F16
   weights failed every audit. BF16 was never measured on CUDA.
-- The backend is the CPU or CUDA. A stage on another backend (Vulkan,
-  Metal or ROCm) issues no receipts: its recorder does not start, the
-  stage serves normally, and `skippy serve` prints one warning,
-  `Receipts stay off for this model stage`, with the reason. The auditor
-  has no rounding profiles for those backends, so a receipt that names
-  one gets no audit. The CPU runtime for macOS uses the Accelerate
-  BLAS, which is such a backend, so no stage on macOS issues receipts.
-  A Mesh node does not advertise receipts for a runtime on such a
-  backend. Vulkan lost its profiles on 2026-11-10: an
-  honest Vulkan node with Q4_K_M weights on an integrated GPU passed 2 of
-  16 audits.
+- The backend is CPU, CUDA, or qualified Metal on the exact devices
+  `Apple M4 Max` and `Apple M5 Max`. Metal requires every matrix in the actual loaded GGUF
+  artifacts (including embeddings and the output head) to be Q8_0, full
+  offload to one unambiguously selected GPU, no host experts, and enabled
+  op offload. Implicit multi-shard GGUF loading is refused; explicitly
+  supplied parts are all checked. This checks artifact metadata and
+  placement configuration, not resident-tensor attestation. Other Apple
+  GPUs and Metal matrix types remain unqualified.
+- Unqualified stages, including Vulkan and ROCm, serve normally without
+  receipts. `skippy serve` prints `Receipts stay off for this model stage`
+  with the reason; Mesh derives its receipts flag from the attached recorder,
+  not the requested setting. The auditor refuses missing backend/type
+  profiles. The default macOS CPU runtime uses Accelerate BLAS, which has
+  no profile. Vulkan lost its profiles on 2026-11-10: an honest Vulkan
+  node with Q4_K_M weights on an integrated GPU passed 2 of 16 audits.
 - Every matrix product of the stage runs on one backend. A stage that
   offloads only some of its layers issues no receipts, with the same
   warning. llama.cpp counts the output layer as one more layer and
@@ -1498,7 +1502,10 @@ places:
 | `op ... is not in the receipt op table` | The graph uses a ggml op that the classifier does not know | Serve this model without receipts. Report the op |
 | `the V cache is stored transposed; receipts need flash attention` | Flash attention is off | Turn flash attention on |
 | `no audit covers a quantized KV cache` | A KV cache type of the stage is q8_0 or q4_0. Such a stage also logs `receipts stay off for this stage` when it starts, and then no response carries a receipt | Set both KV cache types of the stage to f16 |
-| `an audit covers CPU and CUDA alone` | The stage runs on Vulkan, Metal, ROCm or another backend without rounding profiles, or on two backends: `partial offload` or `op offload of large batches`. It logs `receipts stay off for this stage` when it starts, and no response carries a receipt | Serve on the CPU or CUDA. Offload every layer of the stage (`--n-gpu-layers -1`), or none with `--op-offload=false` |
+| `an audit covers CPU, CUDA and Metal alone` | The stage runs on Vulkan, ROCm or another backend without rounding profiles, or uses mixed CPU/GPU placement | Serve on a qualified backend with every layer offloaded, or CPU only with op offload disabled |
+| `Metal GPUs measured` | The selected Metal device is neither exactly `Apple M4 Max` nor `Apple M5 Max`, or selection is ambiguous | Serve without receipts or use a qualified device |
+| `Metal placement is unqualified` | Partial offload, host experts, split GPU placement, or disabled op offload | Use full offload to one GPU with op offload enabled |
+| `Metal tensor coverage is unqualified` | A loaded matrix is not Q8_0, metadata cannot be read, or GGUF shards are implicit | Use qualified Q8_0 artifacts and explicitly enumerate loaded parts, or serve without receipts |
 | `which nothing commits` | A layer reads a value from another layer that is not the residual stream | Serve this model without receipts |
 | `more than receipts leave unchecked` | Token-mixing ops read more than 1% of the weight bytes of the layer directly | Serve this model without receipts |
 | `token mixing reaches the layer output without a weight matmul` | The classifier cannot bound a token-mixing region | Serve this model without receipts |

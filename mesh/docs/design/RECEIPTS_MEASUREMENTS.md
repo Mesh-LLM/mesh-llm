@@ -822,6 +822,50 @@ family. Replay on Metal needed one correction: Metal has no pinned host
 buffers, and its asynchronous read accepts only memory that it mapped. So
 the recorder reads values into pageable memory with blocking copies.
 
+**Apple M5 Max, Q8_0 through `skippy serve` (2026-11-11).** This is a
+separate qualification from the historical M6 result above, not an explanation
+of the difference between machines. Qwen3-4B Q8_0 two-stage serving passed
+fresh short, long and cached-prefix-reuse audits and offline rechecks with the
+default environment and with `GGML_METAL_TENSOR_DISABLE=1`. The variable is
+presence-based: setting it to `0` also disables tensor support. Default logs
+reported tensor support available, batch limit 2048 and ubatch limit 512;
+that does not establish every request's kernel dispatch.
+
+The Q8_0 verifier tries raw products, nearest-f16 weights and activations,
+and nearest-f16 weights with toward-zero-f16 activations per checked column.
+A standalone K=2560, M=128 probe fit raw products for N<=16 and the
+rounded-weight/toward-zero-activation profile for N>=17 on both native pins
+`620d2225c` and `372dc5ca157276beb6c67b2e92477e8d662e964a`. These probes do
+not qualify every served batch/head shape or establish a native-pin regression.
+Head keys project the rounded weights, rather than rounding their projections.
+Matrix tolerance (1e-3), head tolerance (1e-5), and bounded repair rules are
+unchanged.
+
+A fresh ignored native test runs real Q8_0 and Q6_K execution against a Q8_0
+claim: Q8 passes, while Q6 is numerically rejected by the normal audit and
+offline recheck with fresh version-7 signed evidence. It constructs test-only
+recorders below production admission; it is not a dishonest split-chain CLI
+control. Production Q6 serving returned ordinary inference successfully but
+started neither stage's receipt recorder. A separate native host test confirms
+that Q8 attaches the recorder/router and sets the receipts trust flag, whereas
+Q6 and partial offload leave all three off.
+
+Serving admission is intentionally narrow: exact `Apple M5 Max`, all matrix
+metadata Q8_0 (including the embedding and output head), full single-device
+GPU placement, and no host experts or disabled op offload. Implicit GGUF shard
+discovery is refused; explicit ordered parts are checked individually. This is
+artifact/configuration admission, not resident-tensor attestation. Metal F32,
+BF16, Q4 and Q6 matrices and other Apple devices remain unqualified.
+
+The served runtime identifies llama.cpp
+`372dc5ca157276beb6c67b2e92477e8d662e964a`, patch digest
+`a5afd80e9e65041199dbae2c8d1abcb0a7bbd5c4e6476b394274b8b81f1350a0`,
+and Skippy ABI 0.1.81. Independent binary-fraction fixtures cover matrix and
+both head verification paths, corruption, legacy head-key rebuilding and
+rounding-boundary repair. These results support this restricted experimental
+configuration; they make no new M6, exhaustive dispatch, or split-chain
+cheating claim.
+
 **ARM CPU (DGX Spark, Neon with i8mm and SVE), lab harness.** The CPU
 profile matches as on x86: `e` ≤ 4e-7 for q4_K, q4_0 (repacked) and q8_0,
 and ≤ 9e-7 for q4_1 with the rule above.
@@ -1223,3 +1267,57 @@ than this arithmetic. The current audit time is in
 | Mesh | Two nodes on one machine, Qwen3-4B, debug build | Honest turns | Pass in about 8 s each |
 | Mesh | Same | Peer serves Q6_K, receipts name the Q8_0 file | Fail on every weight role, the input of layer 0 and the output head. The peer was blocked before the next request |
 | Mesh | Two-node split, empty cache | `skippy recheck-receipt --evidence FILE` | 12.7 s |
+
+## Metal 2026-11-17: M4 Max qualification
+
+These measurements are separate from the historical M5 Max results. Hardware:
+Apple M4 Max, 40 GPU cores, 64 GB unified memory. Build: Ben's receipts head
+`3172b287d1d710aaaf1d2da6eb09337a7c67c702` plus the uncommitted Metal port,
+M4 admission and tensor-geometry startup-gate repair. Release Skippy CLI,
+local Metal native runtime ABI 0.1.82, llama.cpp pin
+`8954f194837d2ec4d5f67f20c81b84abe63883ba`, patched native tree
+`1521eb530523370718d21166a7e6ec40d6a382fd`.
+
+Qwen3-4B Q8_0 ran fully on one explicitly selected MTL0 device, with f16
+KV, flash attention, one lane, context 4096 and batch/microbatch 512.
+Short greedy, sampled (temperature 0.7, seed 42), and long-prefill live
+CPU audits passed with no unchecked operations or reported failures. The
+long run covered positions 0 through 2265. All three saved evidence sets
+passed offline rechecks. A native Mesh host admission test also confirmed
+that full-GPU Q8 exposes the recorder, receipts router and trust flag,
+while Q6 and zero-layer GPU offload do not. An isolated below-admission
+numerical control passed for
+honest Q8 and rejected Q6 execution falsely claiming Q8, both live and
+in saved-evidence rechecks. Production admission still refuses Q6; the
+control does not enable it. These are sampled audits, not exhaustive
+proofs of every operation or token. Cached continuation and broader
+model/hardware qualification are not established by these runs.
+
+### Preliminary recording/serving overhead
+
+Four fresh-process phases used the same greedy garden prompt (26 prompt
+tokens) and 256 actual completion tokens per request. Each phase excluded
+one warmup and measured three requests. No CPU receipt opening/audit or
+compilation ran during measurement.
+
+| Phase | Receipts | Median completion tokens / total second | Median TTFT (ms) |
+|---|---|---|---|
+| off1 | Off | 63.00 | 60.37 |
+| on1 | On | 54.67 | 74.23 |
+| on2 | On | 60.91 | 45.80 |
+| off2 | Off | 64.19 | 51.00 |
+
+Across the six measured requests per condition, medians were 63.79 off
+and 58.07 on: approximately 9% lower throughput, or 10% more time per
+completion. Pooled median TTFT was 52.81 ms off and 62.05 ms on. Substantial
+phase drift makes this a preliminary estimate, not a precise stable cost.
+The throughput uses server-reported completion token counts divided by
+whole-request time, including prefill; it is not pure decode throughput.
+Separately recorded SSE chunk rates are not independently counted tokens.
+CPU receipt opening and verification costs are excluded. This run does
+not demonstrate compliance with the design's 3% decode-overhead budget.
+
+Raw phase JSON, server logs, live evidence, numerical controls and
+`benchmark-summary.json` are retained in the author's external lab archive
+`metal-m4-20261117`; they are not committed model artifacts or a repository
+benchmark fixture.

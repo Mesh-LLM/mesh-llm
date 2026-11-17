@@ -21,12 +21,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use skippy_protocol::StageConfig;
 use skippy_receipts::rounding_profiles::{BackendFamily, unprofiled};
+use skippy_receipts::weights::{LocalFile, WeightFile};
 
 /// A tensor of the stage's files, as far as its type matters here.
 struct Weight {
     name: String,
     layer: Option<u32>,
     ggml_type: u32,
+    is_matrix: bool,
 }
 
 /// Why a stage of `config` on `backend` issues no receipts, when an audit
@@ -64,20 +66,21 @@ fn stage_tensors(config: &StageConfig) -> Result<Vec<Weight>> {
     };
     let mut tensors = Vec::new();
     for file in files {
-        let info = skippy_runtime::ModelInfo::open(&file)
+        let weights = WeightFile::open(Box::new(LocalFile::open(&file)?))
             .with_context(|| format!("read the tensors of {}", file.display()))?;
-        tensors.extend(info.tensors()?.into_iter().map(|t| Weight {
-            name: t.name,
-            layer: t.layer_index,
+        tensors.extend(weights.tensors.values().map(|t| Weight {
+            name: t.name.clone(),
+            layer: t.layer(),
             ggml_type: t.ggml_type,
+            is_matrix: t.is_matrix(),
         }));
     }
     Ok(tensors)
 }
 
 /// The weights of `tensors` a stage of `layers` multiplies, as a client
-/// checks them: every weight of its layers (a vector among them, such as
-/// a norm, is f32 in a GGUF, which has a profile on every backend), and
+/// checks them: every matrix weight of its layers (not scalar/vector
+/// normalization weights, which are not matrix products), and
 /// the output head when the stage holds it (`output.weight`, else the
 /// token embeddings of a tied head).
 fn multiplied(
@@ -91,9 +94,7 @@ fn multiplied(
         .filter(|_| holds_head);
     tensors
         .iter()
-        .filter(move |t| {
-            t.name.ends_with(".weight") && t.layer.is_some_and(|l| layers.contains(&l))
-        })
+        .filter(move |t| t.is_matrix && t.layer.is_some_and(|l| layers.contains(&l)))
         .chain(head)
         .map(|t| (t.name.as_str(), t.ggml_type))
 }
@@ -111,7 +112,21 @@ mod tests {
             name: name.into(),
             layer,
             ggml_type,
+            is_matrix: true,
         }
+    }
+
+    #[test]
+    fn metal_ignores_vector_norms_but_rejects_f32_matrices() {
+        let mut norm = tensor("blk.0.attn_k_norm.weight", Some(0), F32);
+        norm.is_matrix = false;
+        let mut tensors = vec![norm, tensor("blk.0.attn_q.weight", Some(0), Q8_0)];
+        assert_eq!(reason(&tensors, BackendFamily::Metal, false), None);
+        tensors.push(tensor("blk.0.attn_k.weight", Some(0), F32));
+        let why = reason(&tensors, BackendFamily::Metal, false).unwrap();
+        assert!(why.contains("blk.0.attn_k.weight"), "{why}");
+        tensors.push(tensor("output.weight", None, F32));
+        assert!(reason(&tensors, BackendFamily::Metal, true).is_some());
     }
 
     fn reason(tensors: &[Weight], family: BackendFamily, holds_head: bool) -> Option<String> {

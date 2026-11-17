@@ -60,6 +60,10 @@ mod downstream;
 mod http_api;
 mod kept_turns;
 mod kv_cache;
+#[cfg(test)]
+mod metal_negative_tests;
+mod metal_placement;
+mod metal_weights;
 mod native;
 mod opening_queue;
 mod refusal;
@@ -252,10 +256,12 @@ fn next_stage(
 ///
 /// A stage no audit covers gets none of that: one with a quantized KV
 /// cache ([`kv_cache`]), on a backend without rounding profiles, such as
-/// Vulkan or Metal ([`audited_backend`]), or with weights of a type that
+/// Vulkan ([`audited_backend`]), or with weights of a type that
 /// has no rounding profile on its backend, such as f16 on CUDA
-/// ([`audited_weights`]). It issues no receipts and serves as if they were
-/// off. The reason is logged here, once.
+/// ([`audited_weights`]). Metal additionally requires a measured device
+/// ([`audited_backend`]), full single-device placement ([`metal_placement`]),
+/// and Q8_0 matrices in the loaded artifacts ([`metal_weights`]). A refused
+/// stage serves as if receipts were off. The reason is logged here, once.
 pub fn start(
     options: ReceiptsOptions,
     config: &StageConfig,
@@ -264,13 +270,36 @@ pub fn start(
     check_listen(&options)?;
     // a registry that cannot be read leaves the placement unknown
     let block_count = lock_runtime(&runtime).model.block_count();
-    let backend = skippy_runtime::backend_devices().map_or_else(
+    let devices = skippy_runtime::backend_devices();
+    let backend = devices.as_ref().map_or_else(
         |_| "unknown".to_string(),
-        |devices| audited_backend::stage_backend(config, &devices, block_count),
+        |devices| audited_backend::stage_backend(config, devices, block_count),
+    );
+    let description = devices.as_ref().ok().and_then(|devices| {
+        devices
+            .iter()
+            .find(|device| device.name == backend)
+            .and_then(|device| device.description.as_deref())
+    });
+    let metal = matches!(
+        skippy_receipts::rounding_profiles::BackendFamily::of(&backend),
+        Some(skippy_receipts::rounding_profiles::BackendFamily::Metal)
     );
     let unaudited = kv_cache::unaudited(config)
-        .or_else(|| audited_backend::unaudited(&backend))
-        .or_else(|| audited_weights::unaudited(config, &backend));
+        .or_else(|| audited_backend::unaudited(&backend, description))
+        .or_else(|| audited_weights::unaudited(config, &backend))
+        .or_else(|| {
+            metal
+                .then(|| {
+                    metal_placement::unaudited(
+                        config,
+                        devices.as_deref().unwrap_or_default(),
+                        &backend,
+                    )
+                    .or_else(|| metal_weights::unaudited(config))
+                })
+                .flatten()
+        });
     if let Some(reason) = unaudited {
         tracing::warn!(
             stage = config.stage_index,

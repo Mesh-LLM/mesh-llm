@@ -1074,10 +1074,14 @@ challenge. The correction needs authentication between stages.
 
 The weight types with rounding profiles are f32, q8_0, q4_0, q5_0,
 iq4_nl, iq4_xs and the K-quants q2_K to q6_K on the CPU and CUDA, and f16
-and bf16 on the CPU. The backend families with profiles are the CPU and
-CUDA. Vulkan, Metal and ROCm have no profiles. A stage on a backend
-without profiles issues no receipts, and a receipt that names one is not
-audited.
+and bf16 on the CPU. Metal has profiles only for Q8_0 matrices. Metal
+serving admission is restricted to the exact `Apple M4 Max` and `Apple M5 Max` devices, full
+single-GPU offload, no host experts, and Q8_0 matrices in all explicitly
+loaded artifacts, including embeddings and the output head. Implicit
+multi-shard GGUF loading is not admitted. These are artifact/config checks,
+not resident-placement attestation. Vulkan and ROCm have no profiles. A
+stage without qualified coverage issues no receipts; a receipt with a
+missing backend/type profile is not audited.
 
 A stage names the backend its own matrix products run on, and issues no
 receipts when they can run on two. That is the case for a partial
@@ -1701,13 +1705,14 @@ This is the single list for all receipts documents.
    built. In Mesh, the receipts VRF key is a new key per request.
 6. **Splits with remote stages.** A split that a node coordinates with a
    stage on another node does not satisfy the `receipts` tier.
-7. **Backends and models.** Only CPU and CUDA stages are audited. Metal
-   is not audited. On 2026-11-11, an honest Metal node with Q4_K_M
-   weights failed 12 of 12 audits on a build that let it record, and
-   Q8_0 weights passed with a margin of 1.19 times. See
+7. **Backends and models.** CPU, CUDA and qualified Metal Q8_0 stages
+   are audited. Metal is restricted to the exact Apple M4 Max and Apple M5 Max devices and
+   the artifact/placement requirements above. Other devices and matrix
+   types remain unqualified. Historical Q4_K_M failures are not superseded
+   by the Q8_0 measurements. See
    [the measurement](RECEIPTS_MEASUREMENTS.md#metal-2026-11-11). The CPU
-   runtime for macOS uses the Accelerate BLAS, which has no profile, so
-   no stage on macOS issues receipts. ROCm has no profile. Vulkan is not audited either. On 2026-11-10, an honest
+   runtime for macOS uses Accelerate BLAS, which has no profile, so its
+   CPU stages issue no receipts. ROCm has no profile. Vulkan is not audited either. On 2026-11-10, an honest
    Vulkan node with Q4_K_M weights on an integrated GPU passed 2 of 16
    audits, because the integer-dot kernels round K-quant weights in a way
    that no profile models. Q8_0 weights passed there with 1% of margin.

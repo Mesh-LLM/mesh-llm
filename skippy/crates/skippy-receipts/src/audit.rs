@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 
-use crate::activation_rounding::Profile;
+use crate::activation_rounding::{Profile, round_to_f16};
 use crate::draw::DrawStream;
 use crate::error_bound::{all_finite, exceeds, worst_of};
 use crate::glue::PlannedMatmul;
@@ -394,6 +394,7 @@ fn matmul_errors(
     let shape = matmul_slices(tensor, m, x.len(), y.len())?;
     let picked = cache.picked(&m.weight, shape.m, router, seed);
     let sums = profiles.iter().any(|p| p.block_sums().is_some());
+    let rounds_weights = profiles.iter().any(|p| p.rounds_weights());
     let mut checks = Vec::with_capacity(shape.slices.len());
     for g in cache.checked_slices(m, position, shape.slices.len()) {
         let (base, input) = shape.slices[g];
@@ -413,6 +414,13 @@ fn matmul_errors(
                 true => picked
                     .iter()
                     .map(|&r| cache.blocks[&key(r)].as_slice())
+                    .collect(),
+                false => Vec::new(),
+            },
+            f16_rows: match rounds_weights {
+                true => picked
+                    .iter()
+                    .map(|&r| round_to_f16(&cache.rows[&key(r)]))
                     .collect(),
                 false => Vec::new(),
             },
