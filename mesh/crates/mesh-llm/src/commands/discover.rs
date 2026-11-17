@@ -51,7 +51,27 @@ async fn run_nostr_discover(
 
     let mut err = mesh_llm_events::console_err();
     writeln!(err, "🔍 Searching Nostr relays for mesh-llm meshes...")?;
-    let meshes = nostr::discover(&relays, &filter, None).await?;
+    let (meshes, health) = nostr::discover_with_health(&relays, &filter, None).await?;
+    if health.relays_answered < health.relays_queried {
+        // "No meshes found" reads very differently when the round never
+        // heard from most relays; say which state it was.
+        writeln!(
+            err,
+            "ℹ️  {} of {} Nostr relay(s) answered",
+            health.relays_answered, health.relays_queried
+        )?;
+    }
+
+    if !health.any_relay_answered() {
+        // A round where no relay spoke is not an observation about the
+        // mesh plane — it is an observation about reachability. Report
+        // it as a failure so scripts can tell a genuine "no meshes"
+        // (some relay answered) from an unreachable discovery plane.
+        anyhow::bail!(
+            "no Nostr relay answered (0 of {}); check network or relay URLs",
+            health.relays_queried
+        );
+    }
 
     let mut err = mesh_llm_events::console_err();
     if meshes.is_empty() {

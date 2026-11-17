@@ -71,6 +71,103 @@ impl MeshFilter {
     }
 }
 
+/// How many relays a discovery round actually heard back from.
+///
+/// `fetch_events` swallows per-relay errors, so "zero meshes" alone
+/// cannot distinguish "the mesh plane is empty" from "no relay
+/// answered" — callers that act on absence (the publish watchdog) or
+/// report to users (the discover CLI) need this alongside the results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RelayHealth {
+    /// Relays the discovery client tried to query.
+    pub relays_queried: usize,
+    /// Relays that completed the round trip — an EOSE, possibly empty.
+    /// Silence-until-deadline and never-issued requests do not count.
+    pub relays_answered: usize,
+}
+
+impl RelayHealth {
+    /// False only when no relay answered at all — the "cannot tell"
+    /// state for absence-based decisions.
+    pub fn any_relay_answered(&self) -> bool {
+        self.relays_answered > 0
+    }
+}
+
+/// One relay's raw fetch outcome: whether its connection was live when
+/// the attempt started, and the deadline-wrapped per-relay fetch result.
+type RelayFetchOutcome = (
+    bool,
+    Result<
+        Result<std::collections::BTreeSet<Event>, nostr_sdk::prelude::Error>,
+        tokio::time::error::Elapsed,
+    >,
+);
+
+/// One relay's fetch outcome, normalized for counting and merging.
+#[derive(Debug)]
+pub(crate) enum RelayFetchResult {
+    /// The relay completed the round trip: events, or an empty EOSE from
+    /// a connection that was live when the attempt started.
+    Answered(std::collections::BTreeSet<Event>),
+    /// The relay never spoke: silence until the deadline, or a fetch
+    /// error that means the request was never issued to it.
+    Silent,
+}
+
+/// Classify one relay's fetch outcome.
+///
+/// `relay_connected` is the relay's live connection status, consulted for
+/// empty successes because nostr-sdk resolves relays it has given up on
+/// to a fast `Ok(empty)`: only a connected relay's empty result means
+/// "healthy relay, nothing stored" (EOSE).
+///
+/// An `Err` counts as silent, not spoken. In nostr-sdk 0.45.x per-relay
+/// failures never surface as `Err` — the fetch collector logs them and
+/// keeps collecting — so an `Err` here means the request never reached
+/// the relay (target resolution, buffer limits). Counting it as answered
+/// would inflate `relays_answered` in the unsafe direction if a future
+/// SDK ever did propagate relay failures as `Err`.
+pub(crate) fn classify_relay_fetch<E>(
+    events: Result<std::collections::BTreeSet<Event>, E>,
+    relay_connected: bool,
+) -> RelayFetchResult {
+    match events {
+        Ok(set) if !set.is_empty() => RelayFetchResult::Answered(set),
+        Ok(_) if relay_connected => RelayFetchResult::Answered(Default::default()),
+        Ok(_) | Err(_) => RelayFetchResult::Silent,
+    }
+}
+
+/// Count answered relays and merge their events.
+///
+/// Only a completed round trip counts as answered: deadline silence and
+/// never-issued requests do not. Events merge into one set, deduplicated
+/// by event id.
+pub(crate) fn merge_relay_fetch_results(
+    relays_queried: usize,
+    results: Vec<RelayFetchResult>,
+) -> (std::collections::BTreeSet<Event>, RelayHealth) {
+    let mut events = std::collections::BTreeSet::new();
+    let mut relays_answered = 0usize;
+    for result in results {
+        match result {
+            RelayFetchResult::Answered(relay_events) => {
+                relays_answered += 1;
+                events.extend(relay_events);
+            }
+            RelayFetchResult::Silent => {}
+        }
+    }
+    (
+        events,
+        RelayHealth {
+            relays_queried,
+            relays_answered,
+        },
+    )
+}
+
 /// A reusable read-only Nostr client for discovery.
 /// Create once, pass to repeated `discover()` calls to avoid opening
 /// new websocket connections and generating throwaway keys every time.
@@ -96,6 +193,7 @@ impl DiscoveryClient {
             );
         }
         client.connect().await;
+        wait_for_relay_connections(&client, CONNECT_WAIT_CAP).await;
         Ok(Self { client })
     }
 }
@@ -104,12 +202,68 @@ impl DiscoveryClient {
 ///
 /// If `cached_client` is provided, reuses its connections.  Otherwise
 /// creates (and drops) a one-shot client — fine for the initial
-/// `--auto` join but wasteful in tight loops.
+/// `--auto` join but wasteful in tight loops. Discards relay health;
+/// callers that need to distinguish "no meshes" from "no relay
+/// answered" use [`discover_with_health`].
 pub async fn discover(
     relays: &[String],
     filter: &MeshFilter,
     cached_client: Option<&DiscoveryClient>,
 ) -> Result<Vec<DiscoveredMesh>> {
+    let (meshes, _health) = discover_with_health(relays, filter, cached_client).await?;
+    Ok(meshes)
+}
+
+/// Turn per-relay fetch outcomes into counted classifications.
+///
+/// Empty successes are checked against the relay's live connection
+/// status (nostr-sdk resolves relays it has given up on to a fast
+/// Ok(empty)), deadline silence stays silent, and a fetch error means
+/// the request never issued (nostr-sdk 0.45.x swallows per-relay
+/// failures inside the collector), so the relay did not speak.
+fn classify_relay_round(
+    relay_urls: &[nostr_sdk::prelude::RelayUrl],
+    results: Vec<RelayFetchOutcome>,
+) -> Vec<RelayFetchResult> {
+    let mut outcomes: Vec<RelayFetchResult> = Vec::with_capacity(results.len());
+    for (url, (connected_at_start, result)) in relay_urls.iter().cloned().zip(results) {
+        match result {
+            Ok(Ok(relay_events)) => {
+                // The SDK also resolves a relay it has given up
+                // connecting to (or one mid-reconnect) to a fast
+                // Ok(empty) — a spoke-relay is only one whose connection
+                // was live when the attempt started.
+                outcomes.push(classify_relay_fetch::<nostr_sdk::prelude::Error>(
+                    Ok(relay_events),
+                    connected_at_start,
+                ));
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Nostr relay {url} fetch failed: {e}");
+                outcomes.push(classify_relay_fetch::<()>(Err(()), false));
+            }
+            Err(_) => {
+                tracing::debug!("Nostr relay {url} stayed silent until the deadline");
+                outcomes.push(RelayFetchResult::Silent);
+            }
+        }
+    }
+    outcomes
+}
+
+/// Discover meshes and report how many relays answered.
+///
+/// The fetch fans out per relay (one request each, 5 s timeout) so a
+/// relay that errors or stays silent is visible instead of folded into
+/// an all-or-nothing result; events are merged and deduplicated across
+/// relays before the usual per-publisher dedupe. An all-relays failure
+/// still returns `Ok` with empty results — plus `relays_answered == 0`
+/// — rather than a hard error, matching `discover`'s contract.
+pub async fn discover_with_health(
+    relays: &[String],
+    filter: &MeshFilter,
+    cached_client: Option<&DiscoveryClient>,
+) -> Result<(Vec<DiscoveredMesh>, RelayHealth)> {
     // Build a temporary client only when no cached one is supplied.
     let _tmp;
     let client: &Client = if let Some(cc) = cached_client {
@@ -119,22 +273,46 @@ pub async fn discover(
         &_tmp
     };
 
-    let nostr_filter = Filter::new()
-        .kind(Kind::Custom(MESH_SERVICE_KIND))
-        .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
-        .limit(100);
+    // With a cached client the pool is the one it was built with; health
+    // describes that pool, which is what the watchdog's long-lived
+    // client re-checks against.
+    let relay_urls: Vec<nostr_sdk::prelude::RelayUrl> =
+        client.relays().await.keys().cloned().collect();
 
-    let events = match client
-        .fetch_events(nostr_filter)
-        .timeout(Duration::from_secs(5))
-        .await
-    {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!("Nostr fetch failed: {e}");
-            return Ok(Vec::new()); // No results rather than hard error
+    let fetch_one = |url: nostr_sdk::prelude::RelayUrl| {
+        let nostr_filter = Filter::new()
+            .kind(Kind::Custom(MESH_SERVICE_KIND))
+            .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
+            .limit(100);
+        // The timeout is ours, not the SDK's: fetch_events resolves a
+        // silent relay to Ok(empty) at its own timeout, which would make
+        // an outage indistinguishable from an empty relay. Wrapping the
+        // un-timed future means only a relay that actually completed
+        // (EOSE or error) resolves before the deadline; silence surfaces
+        // as Err(Elapsed).
+        // Connection status is sampled BEFORE the fetch, describing the
+        // state the attempt started from; sampling after would let a
+        // gave-up relay that reconnects mid-round masquerade as having
+        // answered with its earlier fast Ok(empty).
+        async move {
+            let connected_at_start = client
+                .relay(&url)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|relay| relay.status().is_connected());
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.fetch_events(ReqTarget::single(url, vec![nostr_filter])),
+            )
+            .await;
+            (connected_at_start, outcome)
         }
     };
+    let results = futures_util::future::join_all(relay_urls.iter().cloned().map(fetch_one)).await;
+
+    let outcomes = classify_relay_round(&relay_urls, results);
+    let (events, health) = merge_relay_fetch_results(relay_urls.len(), outcomes);
 
     let now = Timestamp::now().as_secs();
 
@@ -160,7 +338,53 @@ pub async fn discover(
             .then(b.listing.total_vram_bytes.cmp(&a.listing.total_vram_bytes))
     });
 
-    Ok(meshes)
+    Ok((meshes, health))
+}
+
+/// How long a fresh discovery client waits for its relay connections
+/// before the first round: long enough for a websocket handshake against
+/// a healthy relay (observed well under a second), short enough that a
+/// dead relay set does not stall the command.
+const CONNECT_WAIT_CAP: Duration = Duration::from_secs(2);
+
+/// Wait, capped, until every relay's first connection attempt has
+/// settled.
+///
+/// nostr-sdk 0.45.x `connect()` only spawns connection tasks; it does
+/// not wait for the handshakes. Sampling `relay.status()` immediately
+/// afterwards therefore reports every relay of a freshly built client —
+/// including healthy ones that answer moments later — as not connected,
+/// which would classify a genuine empty EOSE as silence. Waiting here
+/// makes the one-shot path's connection sample meaningful.
+///
+/// "Settled" means Connected or a status a first attempt ends in
+/// (disconnected through banned, sleeping, shutdown): the wait exits as
+/// soon as no relay is still initializing or connecting, so a pool with
+/// one dead relay costs the handshake time of the healthy ones plus the
+/// dead one's failed attempt, not the full cap. A relay that would
+/// auto-reconnect later still samples as not connected, which can only
+/// undercount `relays_answered` — never inflate it.
+async fn wait_for_relay_connections(client: &Client, cap: Duration) {
+    use nostr_sdk::relay::RelayStatus;
+
+    let deadline = tokio::time::Instant::now() + cap;
+    loop {
+        let first_attempts_settled = client.relays().await.values().all(|relay| {
+            matches!(
+                relay.status(),
+                RelayStatus::Connected
+                    | RelayStatus::Disconnected
+                    | RelayStatus::Terminated
+                    | RelayStatus::Banned
+                    | RelayStatus::Sleeping
+                    | RelayStatus::Shutdown
+            )
+        });
+        if first_attempts_settled || tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn build_discovery_client(relays: &[String]) -> Result<Client> {
@@ -180,6 +404,7 @@ async fn build_discovery_client(relays: &[String]) -> Result<Client> {
         );
     }
     client.connect().await;
+    wait_for_relay_connections(&client, CONNECT_WAIT_CAP).await;
     Ok(client)
 }
 
@@ -234,6 +459,110 @@ fn parse_discovered_mesh(event: &Event, now: u64) -> Option<DiscoveredMesh> {
         published_at: event.created_at.as_secs(),
         expires_at,
     })
+}
+
+#[cfg(test)]
+mod relay_health_tests {
+    use super::*;
+
+    fn answered(events: &[&str]) -> RelayFetchResult {
+        // Events are opaque to the accumulator (merged by set identity),
+        // so any Event works; reuse one per unique id.
+        let mut set = std::collections::BTreeSet::new();
+        for id in events {
+            let event = EventBuilder::new(Kind::Custom(1), *id)
+                .finalize(&nostr_sdk::prelude::Keys::generate())
+                .expect("sign");
+            set.insert(event);
+        }
+        RelayFetchResult::Answered(set)
+    }
+
+    #[test]
+    fn silent_relays_do_not_count_as_answered() {
+        let (events, health) = merge_relay_fetch_results(
+            3,
+            vec![
+                answered(&[]),
+                RelayFetchResult::Silent,
+                RelayFetchResult::Silent,
+            ],
+        );
+        assert_eq!(
+            health,
+            RelayHealth {
+                relays_queried: 3,
+                relays_answered: 1
+            }
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn an_all_silent_round_reads_as_zero_answered() {
+        let (_, health) =
+            merge_relay_fetch_results(5, (0..5).map(|_| RelayFetchResult::Silent).collect());
+        assert!(!health.any_relay_answered());
+    }
+
+    #[test]
+    fn duplicate_events_across_relays_merge_to_one() {
+        // The same event fetched from two relays must not duplicate.
+        let event = EventBuilder::new(Kind::Custom(1), "same")
+            .finalize(&nostr_sdk::prelude::Keys::generate())
+            .expect("sign");
+        let mut first = std::collections::BTreeSet::new();
+        first.insert(event.clone());
+        let mut second = std::collections::BTreeSet::new();
+        second.insert(event);
+        let (events, health) = merge_relay_fetch_results(
+            2,
+            vec![
+                RelayFetchResult::Answered(first),
+                RelayFetchResult::Answered(second),
+            ],
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(health.relays_answered, 2);
+    }
+
+    #[test]
+    fn an_empty_result_from_a_disconnected_relay_is_silence() {
+        // The SDK resolves relays it gave up connecting to a fast
+        // Ok(empty); without the connection check a sustained outage
+        // would read as every relay answering.
+        let classified = classify_relay_fetch::<()>(Ok(Default::default()), false);
+        assert!(matches!(classified, RelayFetchResult::Silent));
+    }
+
+    #[test]
+    fn an_empty_result_from_a_connected_relay_is_an_answer() {
+        // EOSE with nothing stored is a healthy, speaking relay.
+        let classified = classify_relay_fetch::<()>(Ok(Default::default()), true);
+        assert!(matches!(classified, RelayFetchResult::Answered(_)));
+    }
+
+    #[test]
+    fn an_errored_fetch_never_reached_the_relay_and_is_silence() {
+        // In nostr-sdk 0.45.x per-relay failures are swallowed by the
+        // fetch collector; an Err means the request was never issued
+        // (target resolution, buffer limits). The relay did not speak.
+        let classified = classify_relay_fetch::<()>(Err(()), true);
+        assert!(matches!(classified, RelayFetchResult::Silent));
+        let classified = classify_relay_fetch::<()>(Err(()), false);
+        assert!(matches!(classified, RelayFetchResult::Silent));
+    }
+
+    #[test]
+    fn a_non_empty_result_is_an_answer_regardless_of_status() {
+        let event = EventBuilder::new(Kind::Custom(1), "x")
+            .finalize(&nostr_sdk::prelude::Keys::generate())
+            .expect("sign");
+        let mut set = std::collections::BTreeSet::new();
+        set.insert(event);
+        let classified = classify_relay_fetch::<()>(Ok(set), false);
+        assert!(matches!(classified, RelayFetchResult::Answered(_)));
+    }
 }
 
 #[cfg(test)]
