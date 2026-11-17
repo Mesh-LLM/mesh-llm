@@ -1,0 +1,145 @@
+From 3fc49eaf2e052ab2a2b120620960b99eced5a281 Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Tue, 17 Nov 2026 21:05:00 +1100
+Subject: [PATCH] diag(llama): log sampler map size on reserve and set_sampler
+ activity
+
+---
+ src/llama-context.cpp | 30 ++++++++++++++++++++----------
+ src/llama-context.h   |  2 ++
+ 2 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index a2477d901..3b779a352 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -25,6 +25,7 @@
+ #include <cmath>
+ #include <cstdlib>
+ #include <cstring>
++#include <cstdio>
+ #include <limits>
+ #include <mutex>
+ #include <stdexcept>
+@@ -858,7 +859,12 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+         return;
+     }
+ 
+-    skippy_trace::scope trace("llama.sched_reserve");
++    skippy_trace::scope trace("llama.sched_reserve", "samplers", static_cast<int64_t>(sampling.samplers.size()));
++    {
++        char detail[96];
++        snprintf(detail, sizeof(detail), "%s:n=%zu", sched_need_reserve_reason, sampling.samplers.size());
++        trace.set_detail(detail);
++    }
+ 
+     sched_need_reserve = false;
+     ++sched_reserve_count;
+@@ -1097,7 +1103,7 @@ void llama_context::set_fused_gdn_for_test(bool fused_ar, bool fused_chunk) {
+     cparams.fused_gdn_ch = fused_chunk;
+     cparams.auto_fgdn = false;
+     ++computation_generation;
+-    sched_need_reserve = true;
++    sched_need_reserve = true; sched_need_reserve_reason = "set_fused_gdn_for_test";
+ }
+ #endif
+ 
+@@ -1530,7 +1536,7 @@ void llama_context::set_embeddings(bool value) {
+     // the toggle changes the graph shape (pooled: logits only; pooling NONE: the reserve graph outputs all tokens,
+     // which crashed ggml_gallocr on the first /completion), so re-reserve on every toggle
+     if (cparams.embeddings != value) {
+-        sched_need_reserve = true;
++        sched_need_reserve = true; sched_need_reserve_reason = "set_embeddings";
+     }
+ 
+     if (cparams.embeddings == value) return;
+@@ -1544,7 +1550,7 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+ 
+     if (cparams.embeddings_nextn != value || cparams.embeddings_nextn_masked != masked) {
+         // these flags change the graph shape
+-        sched_need_reserve = true;
++        sched_need_reserve = true; sched_need_reserve_reason = "set_embeddings_nextn";
+     }
+ 
+     if (cparams.embeddings_nextn == value && cparams.embeddings_nextn_masked == masked) return;
+@@ -1564,7 +1570,7 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+     cparams.embeddings_layer_inp[lid] = enable;
+ 
+     // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
+-    sched_need_reserve = true;
++    sched_need_reserve = true; sched_need_reserve_reason = "set_embeddings_layer_inp";
+ 
+     if (cparams.embeddings_layer_inp_dev) {
+         layer_inp_dev_alloc();
+@@ -1575,7 +1581,7 @@ void llama_context::set_embeddings_layer_inp_dev(bool value) {
+     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+ 
+     if (cparams.embeddings_layer_inp_dev != value) {
+-        sched_need_reserve = true;
++        sched_need_reserve = true; sched_need_reserve_reason = "set_embeddings_layer_inp_dev";
+     }
+ 
+     cparams.embeddings_layer_inp_dev = value;
+@@ -1729,6 +1735,10 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+         sampler->iface->backend_init &&
+         sampler->iface->backend_apply &&
+         llama_sampler_chain_n(sampler) > 0;
++    {
++        skippy_trace::scope set_sampler_trace("llama.set_sampler", "seq", static_cast<int64_t>(seq_id));
++        set_sampler_trace.set_detail(sampler == nullptr ? "detach" : (can_offload ? "attach" : "no-offload"));
++    }
+ 
+     if (sampler && can_offload) {
+         auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
+@@ -1741,7 +1751,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+         // reservation already built with samplers attached covers every
+         // later attach/detach cycle; per-request sampler churn must not
+         // re-reserve worst-case graphs each time.
+-        sched_need_reserve = !sched_reserved_with_samplers;
++        sched_need_reserve = !sched_reserved_with_samplers; sched_need_reserve_reason = "sampler-attach";
+ 
+         return true;
+     }
+@@ -1780,7 +1790,7 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
+     }
+ 
+     ++computation_generation;
+-    sched_need_reserve = true;
++    sched_need_reserve = true; sched_need_reserve_reason = "set_adapters_lora";
+ }
+ 
+ bool llama_context::adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales) {
+@@ -1820,7 +1830,7 @@ bool llama_context::set_adapter_cvec(
+     bool res = cvec->apply(model, data, len, n_embd, il_start, il_end);
+ 
+     if (res) ++computation_generation;
+-    sched_need_reserve = true;
++    sched_need_reserve = true; sched_need_reserve_reason = "set_adapter_cvec";
+ 
+     return res;
+ }
+@@ -4557,7 +4567,7 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
+     }
+ 
+     // the training graph is different, need to reserve again
+-    sched_need_reserve = true;
++    sched_need_reserve = true; sched_need_reserve_reason = "opt_init";
+     sched_reserve();
+ 
+     ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), GGML_OPT_LOSS_TYPE_CROSS_ENTROPY);
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 08cfbdae9..8fc361bdc 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -485,6 +485,8 @@ private:
+     ggml_backend_sched_ptr sched;
+ 
+     bool sched_need_reserve = true;
++    // Diagnostic: which setter last armed a re-reserve; logged by sched_reserve.
++    const char * sched_need_reserve_reason = "construction";
+     // Whether the current scheduler reservation was built while at least one
+     // backend sampler was attached. Attaching a sampler can require more from
+     // the reservation; detaching one never does. Per-request sampler cycles
+-- 
+2.56.0
+
