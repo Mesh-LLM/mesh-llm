@@ -260,7 +260,8 @@ PYEOF
   sleep 5
   PORT=$((PORT+1))
   SKIPPY_TELEMETRY_STDERR=1 \
-  "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-prof.log" 2>&1 &
+  SKIPPY_TELEMETRY_OTLP_FILE="$W/skippy-prof-traces.jsonl" \
+  "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$PORT" --startup-timeout-secs 900 --telemetry-level debug --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers 99 --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR" > "$W/serve-skippy-prof.log" 2>&1 &
   SP=$!
   for i in $(seq 1 180); do sleep 5; curl -sf --max-time 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 && break; done
   echo "-- skippy profile:"
@@ -353,7 +354,7 @@ SWEEPPY
     sleep 5
   done
   fi
-  ship "$W"/serve-*.log
+  ship "$W"/serve-*.log "$W"/skippy-prof-traces.jsonl
   echo "shipped_artifacts=$SHIP_COUNT"
   echo SMOKE_DONE
   exit 0
