@@ -71,6 +71,10 @@ mod sccache_stats;
 mod sccache_summary;
 mod sdk_census;
 mod seed_census;
+mod windows_cache_consumers;
+mod windows_cache_identity;
+mod windows_cache_maintenance;
+mod windows_cache_retention;
 mod workflow_bindings;
 mod workflow_census;
 mod workflow_text;
@@ -95,6 +99,9 @@ pub(crate) enum CiOperationsCommand {
     RuntimeSeed,
     ConfigureCanaryCache,
     ResetLinkerTraces,
+    WindowsCacheIdentity,
+    WindowsCacheRetention,
+    WindowsCacheMaintenance,
     CacheInputs,
 }
 
@@ -115,6 +122,9 @@ impl CiOperationsCommand {
             "runtime-seed" => Some(Self::RuntimeSeed),
             "configure-canary-cache" => Some(Self::ConfigureCanaryCache),
             "reset-linker-traces" => Some(Self::ResetLinkerTraces),
+            "windows-cache-identity" => Some(Self::WindowsCacheIdentity),
+            "windows-cache-retention" => Some(Self::WindowsCacheRetention),
+            "windows-cache-maintenance" => Some(Self::WindowsCacheMaintenance),
             "cache-inputs" => Some(Self::CacheInputs),
             _ => None,
         }
@@ -165,6 +175,11 @@ pub(crate) fn run(
             }
         }
         CiOperationsCommand::BuildCache => build_cache::run(args),
+        CiOperationsCommand::WindowsCacheIdentity => windows_cache_identity::run(args),
+        CiOperationsCommand::WindowsCacheRetention => windows_cache_retention::run(args),
+        CiOperationsCommand::WindowsCacheMaintenance => {
+            windows_cache_maintenance::run(args, &root()?)
+        }
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::SccacheSummary => sccache_summary::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),

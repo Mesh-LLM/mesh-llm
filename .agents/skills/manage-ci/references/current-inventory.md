@@ -1061,6 +1061,20 @@ production source trees include embedded resources; uncompiled integration
 tests and READMEs no longer invalidate hosted executables. The packaged runtime
 inventory includes `skippy-package-builder` and its local dependency closure.
 
+Windows ABI key construction and retention share typed Rust identities.
+The existing warmer's maintenance job derives active families from CI runtime
+rows, release rows and warmer rows, including both CUDA release toolkits and
+the distinct ROCm architecture sets. It enumerates the main-ref ABI namespace
+with complete pagination, retains one useful entry per active family before
+history, and applies a 4 GiB aggregate bound. The existing retention input is
+the total entry limit per family, default two. An impossible minimum budget or
+malformed/incomplete inventory refuses deletion. Other refs and namespaces
+remain untouched. The job retains policy, inventory, plan and execution
+receipts for 14 days. Observed image cohorts for currently consumed toolkit
+and architecture combinations remain active during hosted image rollouts;
+one warmer's image cannot establish that other cohorts are obsolete.
+No live purge accompanies this source cutover.
+
 These source contracts require candidate and post-merge execution evidence;
 they do not establish a measured speedup or production retention qualification.
 

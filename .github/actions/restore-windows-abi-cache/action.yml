@@ -42,6 +42,9 @@ outputs:
   cache-path:
     description: Validated absolute build path shared by restore and save.
     value: ${{ steps.identity.outputs.build-dir }}
+  input-hash:
+    description: Compiled recipe digest used by the shared retention planner.
+    value: ${{ steps.identity.outputs.input-hash }}
 
 runs:
   using: composite
@@ -61,46 +64,12 @@ runs:
       run: |
         $ErrorActionPreference = "Stop"
 
-        function Normalize-KeySegment {
-          param(
-            [string]$Value,
-            [string]$Name,
-            [bool]$AllowEmpty = $false
-          )
-
-          $segment = "$Value".Trim()
-          if ($segment.Contains("`r") -or $segment.Contains("`n")) {
-            throw "$Name must be a single-line cache-key segment"
-          }
-          $segment = ($segment -replace '[,;:\s/\\]+', '_').Trim("_")
-          if (-not $segment) {
-            if ($AllowEmpty) {
-              return ""
-            }
-            throw "$Name must not be empty"
-          }
-          if ($segment -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$') {
-            throw "$Name contains unsupported cache-key characters: $segment"
-          }
-          return $segment
+        if (-not $env:MESH_LLM_AUTOMATION_BIN) {
+          throw "prepared automation is required for Windows ABI cache identity"
         }
-
-        $backend = "$env:INPUT_BACKEND".Trim().ToLowerInvariant()
-        if ($backend -notin @("cpu", "cuda", "rocm", "vulkan")) {
-          throw "unsupported Windows ABI cache backend: $backend"
-        }
-        $toolchainEpoch = Normalize-KeySegment `
-          -Value "$env:INPUT_TOOLCHAIN_EPOCH" `
-          -Name "toolchain_epoch"
-        $buildStampEpoch = Normalize-KeySegment `
-          -Value "$env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH" `
-          -Name "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH"
-        if ($toolchainEpoch -ne $buildStampEpoch) {
-          throw (
-            "toolchain_epoch must match MESH_LLM_LLAMA_TOOLCHAIN_EPOCH: " +
-            "$toolchainEpoch != $buildStampEpoch"
-          )
-        }
+        $identityJson = & $env:MESH_LLM_AUTOMATION_BIN ci-ops windows-cache-identity
+        if ($LASTEXITCODE -ne 0) { throw "Windows ABI cache identity failed" }
+        $identity = $identityJson | ConvertFrom-Json
 
         $buildDir = "$env:INPUT_BUILD_DIR".Trim()
         if (-not $buildDir) {
@@ -161,48 +130,11 @@ runs:
           )
         }
 
-        $architectureSet = Normalize-KeySegment `
-          -Value "$env:INPUT_ARCHITECTURE_SET" `
-          -Name "architecture_set" `
-          -AllowEmpty $true
-        if ($backend -in @("cuda", "rocm") -and -not $architectureSet) {
-          throw "architecture_set is required for the $backend backend"
-        }
-
-        $toolchain = switch ($backend) {
-          "cpu" {
-            "cpu"
-          }
-          "cuda" {
-            $version = Normalize-KeySegment `
-              -Value "$env:INPUT_CUDA_TOOLCHAIN_VERSION" `
-              -Name "cuda_toolchain_version"
-            "cuda-$version-Jimver-v0.2.36"
-          }
-          "vulkan" {
-            $version = Normalize-KeySegment `
-              -Value "$env:INPUT_VULKAN_TOOLCHAIN_VERSION" `
-              -Name "vulkan_toolchain_version"
-            "vulkan-$version-jakoch-v1.5.2"
-          }
-          "rocm" {
-            $version = Normalize-KeySegment `
-              -Value "$env:INPUT_ROCM_TOOLCHAIN_VERSION" `
-              -Name "rocm_toolchain_version"
-            "rocm-$version"
-          }
-        }
-
-        $inputHash = "$env:CACHE_INPUT_HASH".Trim().ToLowerInvariant()
-        if ($inputHash -notmatch '^[0-9a-f]{64}$') {
-          throw "Windows ABI cache input hash is missing or invalid"
-        }
-
         New-Item -ItemType Directory -Force -Path $resolvedBuildDir | Out-Null
-        $cacheKey = "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash"
         @(
           "build-dir=$resolvedBuildDir"
-          "cache-key=$cacheKey"
+          "cache-key=$($identity.key)"
+          "input-hash=$env:CACHE_INPUT_HASH"
         ) | Add-Content -Path $env:GITHUB_OUTPUT
 
     - name: Restore exact Windows ABI cache

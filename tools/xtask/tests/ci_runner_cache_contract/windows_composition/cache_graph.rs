@@ -46,16 +46,12 @@ fn windows_abi_cache_key_binds_every_compatibility_dimension_and_exact_restore()
     }
     let run = text(identity, "run");
     for required in [
-        "$backend -notin @(\"cpu\", \"cuda\", \"rocm\", \"vulkan\")",
-        "$backend -in @(\"cuda\", \"rocm\") -and -not $architectureSet",
+        "$env:MESH_LLM_AUTOMATION_BIN ci-ops windows-cache-identity",
+        "if ($LASTEXITCODE -ne 0)",
+        "prepared automation is required for Windows ABI cache identity",
         "build_dir must resolve inside GITHUB_WORKSPACE",
         "build_dir must remain outside the replaceable llama.cpp ",
-        "toolchain_epoch must match MESH_LLM_LLAMA_TOOLCHAIN_EPOCH",
-        "cuda-$version-Jimver-v0.2.36",
-        "vulkan-$version-jakoch-v1.5.2",
-        "rocm-$version",
-        "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash",
-        "Windows ABI cache input hash is missing or invalid",
+        "cache-key=$($identity.key)",
     ] {
         assert!(run.contains(required), "missing {required}");
     }

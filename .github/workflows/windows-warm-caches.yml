@@ -41,7 +41,7 @@ on:
   workflow_dispatch:
     inputs:
       retention:
-        description: 'Number of warmed Windows ABI cache versions to keep'
+        description: 'Maximum entries per active Windows ABI compatibility family'
         required: false
         default: ''
       workload:
@@ -68,6 +68,7 @@ env:
   CARGO_PROFILE_BENCH_DEBUG: "0"
   CACHE_NAMESPACE: mesh-llm
   LLAMA_WINDOWS_CACHE_RETENTION: ${{ github.event.inputs.retention || vars.LLAMA_WINDOWS_CACHE_RETENTION || '2' }}
+  WINDOWS_CACHE_MAX_BYTES: '4294967296'
   WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
   MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
   WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
@@ -76,6 +77,9 @@ env:
 jobs:
   warm_windows_cpu:
     name: Warm Windows CPU ABI cache
+    outputs:
+      toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
+      input_hash: ${{ steps.llama_cache.outputs.input-hash }}
     if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || inputs.workload == 'all' || inputs.workload == 'cpu') }}
     runs-on: windows-2022
     env:
@@ -323,57 +327,29 @@ jobs:
     needs:
       - warm_windows_cpu
       - warm_windows_gpu
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.warm_windows_cpu.result == 'success' && (needs.warm_windows_gpu.result == 'success' || needs.warm_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
-      - name: Prune old Windows ABI caches
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
-        env:
-          CACHE_NAMESPACE: ${{ env.CACHE_NAMESPACE }}
-          RETENTION: ${{ env.LLAMA_WINDOWS_CACHE_RETENTION }}
-          TARGET_REF: ${{ github.ref }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          script: |
-            const retention = parseInt(process.env.RETENTION, 10);
-            const ref = process.env.TARGET_REF;
-            const prefixes = [
-              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cpu-`,
-              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-cuda-`,
-              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-rocm-`,
-              `${process.env.CACHE_NAMESPACE}-windows-2022-skippy-abi-vulkan-`,
-            ];
-
-            if (!Number.isFinite(retention) || retention < 1) {
-              core.setFailed(`LLAMA_WINDOWS_CACHE_RETENTION must be positive, got: "${process.env.RETENTION}"`);
-              return;
-            }
-
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const allCaches = [];
-            for (let page = 1; page <= 10; page++) {
-              const { data } = await github.request('GET /repos/{owner}/{repo}/actions/caches', {
-                owner,
-                repo,
-                ref,
-                per_page: 100,
-                page,
-                sort: 'created_at',
-                direction: 'desc',
-              });
-              const pageCaches = data.actions_caches || [];
-              allCaches.push(...pageCaches);
-              if (pageCaches.length < 100) break;
-            }
-
-            for (const prefix of prefixes) {
-              const matching = allCaches.filter((c) => c.key.startsWith(prefix));
-              for (const cache of matching.slice(retention)) {
-                await github.request('DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}', {
-                  owner,
-                  repo,
-                  cache_id: cache.id,
-                });
-              }
-              core.notice(`Pruned ${Math.max(matching.length - retention, 0)} cache(s) for ${prefix}`);
-            }
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+      - name: Retain active Windows ABI compatibility families
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_CACHE_TOOLCHAIN_EPOCH: ${{ needs.warm_windows_cpu.outputs.toolchain_epoch }}
+          WINDOWS_CACHE_INPUT_HASH: ${{ needs.warm_windows_cpu.outputs.input_hash }}
+          CACHE_CUDA_VERSION: ${{ vars.CUDA_VERSION }}
+          CACHE_VULKAN_VERSION: ${{ vars.VULKAN_SDK_VERSION }}
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops windows-cache-maintenance --output windows-cache-retention --execute'
+      - name: Upload Windows retention evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: windows-cache-retention-${{ github.run_attempt }}
+          path: windows-cache-retention
+          retention-days: 14
+          if-no-files-found: error

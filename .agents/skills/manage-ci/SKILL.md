@@ -684,6 +684,16 @@ checked-in expiry are the maintainer-controlled approval boundary.
   recipes. Exclude integration tests or documentation only when the compiled
   graph does not consume them. Hosted executable keys also bind the actual
   runner image identity, separately from the Rust toolchain.
+- Windows ABI retention is planned by typed Rust automation against a complete
+  inventory of the trusted main ref. Preserve active toolkit, architecture,
+  backend and image compatibility families before retaining older generations,
+  with explicit byte and history limits. Hosted image rollouts are not atomic:
+  preserve observed image cohorts for currently consumed toolkit/architecture
+  combinations rather than declaring every image except one warmer obsolete.
+  Reject malformed or incomplete data
+  and an insufficient budget before deletion. Unknown keys and other refs are
+  outside its authority. Retain the plan as evidence; a source change does not
+  authorize an operator to purge live caches.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.
