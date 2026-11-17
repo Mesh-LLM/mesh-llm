@@ -135,19 +135,14 @@ fn windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs()
     required_tokens(
         text(identity, "run").unwrap(),
         &[
-            "$backend -notin @(\"cpu\", \"cuda\", \"rocm\", \"vulkan\")",
-            "$toolchainEpoch -ne $buildStampEpoch",
-            "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH",
+            "$env:MESH_LLM_AUTOMATION_BIN ci-ops windows-cache-identity",
+            "if ($LASTEXITCODE -ne 0)",
+            "prepared automation is required for Windows ABI cache identity",
             "build_dir must resolve inside GITHUB_WORKSPACE",
             "build_dir must remain outside the replaceable llama.cpp",
             "$resolvedBuildDir -eq $llamaWorktree",
             "$resolvedBuildDir.StartsWith(",
-            "$backend -in @(\"cuda\", \"rocm\") -and -not $architectureSet",
-            "cuda-$version-Jimver-v0.2.36",
-            "vulkan-$version-jakoch-v1.5.2",
-            "rocm-$version",
-            "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash",
-            "^[0-9a-f]{64}$",
+            "cache-key=$($identity.key)",
         ],
     );
     let restore = step_id(action_steps(&action), "restore");

@@ -1517,6 +1517,20 @@ version 2 keys include packaging policy and the packaged Rust tool's local
 dependency closure. Key lookup remains compilation-free; a miss follows the
 existing build path and a hit retains its existing verification.
 
+Windows ABI retention runs in the existing warmer maintenance job. Rust derives
+the active compatibility roster from CI, release and warmer consumers and
+uses the same identity constructor as restoration. Complete main-ref namespace
+enumeration replaces the capped global scan. A plan keeps one useful entry
+per active toolkit/architecture/backend/image family before bounded history,
+with a 4 GiB aggregate limit and two entries per family by default. Observed
+image cohorts remain active for current toolkit/architecture combinations,
+because hosted image rollout is not atomic across runners. Invalid
+input or an insufficient minimum budget fails before deletion. The job uploads
+the inventory, policy, plan and deletion receipt for 14 days. Other namespaces
+and refs are outside the plan. This change adds no cache authority and performs
+no operator purge. Candidate execution and post-merge qualification remain
+separate from local contract checks.
+
 The Windows host slice uploads Cargo HTML timings from its existing standalone
 Skippy and Mesh compilations as a separate one-day architecture/attempt
 artifact. Each phase also records Cargo fingerprint diagnostics and cumulative

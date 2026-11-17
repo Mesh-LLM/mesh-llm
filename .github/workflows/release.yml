@@ -1725,6 +1725,10 @@ jobs:
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
+      - name: Prepare Windows ABI cache automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          allow_native_github_cache: "true"
       - name: Restore exact Windows CPU ABI cache
         id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
@@ -1829,6 +1833,10 @@ jobs:
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
+      - name: Prepare Windows ABI cache automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          allow_native_github_cache: "true"
       - name: Restore exact Windows GPU ABI cache
         id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
