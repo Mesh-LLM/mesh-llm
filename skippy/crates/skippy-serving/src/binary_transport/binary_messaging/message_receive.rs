@@ -537,10 +537,10 @@ mod tests {
         let registry = Arc::new(StaleDiscardRegistry::default());
         let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
 
-        // A state import frame header declaring 16 MiB of raw bytes — past
-        // the 8 MiB frame budget, inside the 512 MiB protocol cap — with no
-        // payload bytes behind it.
-        let declared: i32 = 16 * 1024 * 1024;
+        // A state import frame header declaring twice the frame budget of raw
+        // bytes, inside the 512 MiB protocol cap, with no payload bytes
+        // behind it.
+        let declared = i32::try_from(2 * skippy_protocol::MAX_STAGE_FRAME_BYTES).unwrap();
         let mut bytes = Vec::new();
         let push = |bytes: &mut Vec<u8>, value: i32| {
             bytes.extend_from_slice(&value.to_le_bytes());

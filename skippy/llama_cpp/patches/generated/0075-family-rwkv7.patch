@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/rwkv7.cpp b/src/models/rwkv7.cpp
-index 6577a25f9216d95b1d1aac43ac0e6b211824f807..edbe8f145187aeb602b9a9c022361a0eab4c064b 100644
+index 77c97f953a866c498c795aeea9962b7f4493bc92..c60943f9a5450a93ae9eff9467b5c93a63c4e69e 100644
 --- a/src/models/rwkv7.cpp
 +++ b/src/models/rwkv7.cpp
-@@ -141,6 +141,8 @@ llama_model_rwkv7::graph::graph(const llama_model & model, const llm_graph_param
+@@ -141,6 +141,8 @@ llama_model_rwkv7::graph::graph(const llm_graph_params & params) :
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 6577a25f9216d95b1d1aac43ac0e6b211824f807..edbe8f145187aeb602b9a9c022361a0e
          const llama_layer * layer = &model.layers[il];
          inpL                      = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
  
-@@ -195,6 +197,7 @@ llama_model_rwkv7::graph::graph(const llama_model & model, const llm_graph_param
+@@ -195,6 +197,7 @@ llama_model_rwkv7::graph::graph(const llm_graph_params & params) :
  
          // input for next layer
          inpL = cur;

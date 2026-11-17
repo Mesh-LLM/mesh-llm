@@ -15,6 +15,7 @@ impl RuntimeState {
         } else {
             capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions)
         };
+        self.complete_parked_session_ends();
         while self.idle_sessions.len() < target_idle_sessions {
             if self.sessions.len() + self.idle_sessions.len() >= self.lane_count as usize {
                 break;
@@ -76,6 +77,7 @@ impl RuntimeState {
         // Binary startup may already have parked every native lane in the idle
         // pool. Borrow a clean session instead of requesting an extra lane.
         // Never overwrite an idle session's retained prefix just for warmup.
+        self.complete_parked_session_ends();
         let idle_index = self
             .idle_sessions
             .iter()
@@ -137,6 +139,7 @@ impl RuntimeState {
     /// long after the owning sessions were gone, producing
     /// `failed to find a memory slot` errors on subsequent admissions.
     pub fn drop_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
+        self.abandon_session_end_kv_exports(session_id);
         self.forget_reset_session(session_id);
         // A draft owed after an early verdict dies with its session, including
         // when the connection failed before the draft was sent.
@@ -336,6 +339,7 @@ impl RuntimeState {
         page_id: &str,
         token_count: u64,
     ) -> Result<bool> {
+        self.complete_parked_session_ends();
         if self.sessions.contains_key(session_id) {
             bail!("session {session_id} already exists");
         }
@@ -349,6 +353,7 @@ impl RuntimeState {
         };
         let mut idle = self.idle_sessions.swap_remove(index);
         idle.resident_prefix = None;
+        self.abandon_session_end_kv_exports(session_id);
         self.sessions.insert(session_id.to_string(), idle);
         self.session_token_counts
             .insert(session_id.to_string(), token_count);
@@ -399,6 +404,20 @@ impl RuntimeState {
             .kv_page_size(layer_start, layer_end, token_start, token_count)
     }
 
+    /// The layout [`Self::export_kv_page`] would describe, without copying.
+    pub fn kv_page_layout(
+        &mut self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<RuntimeKvPageDesc> {
+        self.validate_export_range(session_id, token_start, token_count)?;
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        self.session(session_id)?
+            .kv_page_layout(layer_start, layer_end, token_start, token_count)
+    }
+
     pub fn probe_kv_page(
         &mut self,
         session_id: &str,
@@ -419,6 +438,7 @@ impl RuntimeState {
         desc: &RuntimeKvPageDesc,
         bytes: &[u8],
     ) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let session = self.session(session_id)?;
         session.import_kv_page(desc, bytes)?;
         let token_end = desc
@@ -438,6 +458,7 @@ impl RuntimeState {
         desc: &RuntimeKvPageDesc,
         archive: &[u8],
     ) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let session = self.session(session_id)?;
         session.import_cachegen_kv_page(desc, archive)?;
         let token_end = desc
@@ -467,6 +488,7 @@ impl RuntimeState {
         cache_seq_id: i32,
         token_ids: &[i32],
     ) -> Result<()> {
+        self.abandon_session_end_kv_exports(session_id);
         let session = self.session(session_id)?;
         session.restore_prefix(cache_seq_id, token_ids)?;
         self.session_token_counts
@@ -480,6 +502,7 @@ impl RuntimeState {
         cache_seq_id: i32,
         token_ids: &[i32],
     ) -> Result<()> {
+        self.complete_parked_session_ends();
         if self.sessions.contains_key(session_id) {
             bail!("session {session_id} already exists");
         }
@@ -496,6 +519,7 @@ impl RuntimeState {
             session,
             resident_prefix: None,
         };
+        self.abandon_session_end_kv_exports(session_id);
         self.sessions.insert(session_id.to_string(), lane_session);
         self.session_token_counts
             .insert(session_id.to_string(), token_ids.len() as u64);
@@ -604,7 +628,7 @@ pub(super) fn capped_target_idle_sessions(
 /// If `create()` fails after popping from the free list, the index is
 /// pushed back so a retry can reuse it. The high-water counter is only
 /// bumped on success, matching the prior behavior.
-fn create_indexed_lane_resource<T>(
+pub(super) fn create_indexed_lane_resource<T>(
     next_lane_index: &mut usize,
     free_lane_indices: &mut Vec<usize>,
     lane_count: u32,

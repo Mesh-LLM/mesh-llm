@@ -328,6 +328,30 @@ fn draft_device_on_this_node(device: Option<&str>) -> Option<String> {
 /// drafts arrive where native MTP drafts do, so stage 0 drives them through
 /// the native MTP verify windows. Each window verifies the whole block.
 /// `None` when the plan has no DFlash draft.
+/// The most bytes of DFlash feature rows the stages after stage 0 append to
+/// each prompt token they forward: a row for every target layer past stage
+/// 0's own, `width` values wide, in the widest encoding a stage may send
+/// (`SKIPPY_DFLASH_FEATURE_ENCODING` can override the settled one on any
+/// stage). Layers on the final stage are counted too, though it forwards
+/// nothing, so the bound is high.
+pub(crate) fn downstream_feature_bytes_per_token(
+    dflash: &DFlashProposalConfig,
+    stage0_layer_end: u32,
+    width: usize,
+) -> usize {
+    let row_bytes = skippy_runtime::DFlashFeatureEncoding::READABLE
+        .iter()
+        .map(|encoding| encoding.row_bytes(width))
+        .max()
+        .unwrap_or(0);
+    let layers = dflash
+        .target_layers
+        .iter()
+        .filter(|&&layer| layer >= stage0_layer_end)
+        .count();
+    layers.saturating_mul(row_bytes)
+}
+
 pub(crate) fn split_stage0_plan(plan: &SpeculativeDecodeConfig) -> Option<SpeculativeDecodeConfig> {
     let dflash = plan.dflash.as_ref()?;
     let block = dflash
@@ -401,6 +425,24 @@ mod tests {
         assert_eq!(uncapped.native_mtp.max_draft_tokens, 15);
         let wide = split_stage0_plan(&dflash_plan(Some(31))).unwrap();
         assert_eq!(wide.native_mtp.max_draft_tokens, 15);
+    }
+
+    #[test]
+    fn stage0_counts_feature_rows_of_the_layers_past_its_own_at_the_widest_encoding() {
+        let dflash = DFlashProposalConfig {
+            draft_model_path: PathBuf::from("draft.gguf"),
+            max_draft_tokens: None,
+            target_layers: vec![1, 10, 20, 30],
+            context_window: None,
+            feature_encoding: Some("q4".to_string()),
+        };
+        // Settled on Q4, but any stage may be told to send BF16.
+        let row = DFlashFeatureEncoding::Bf16.row_bytes(2048);
+        assert_eq!(
+            downstream_feature_bytes_per_token(&dflash, 10, 2048),
+            3 * row
+        );
+        assert_eq!(downstream_feature_bytes_per_token(&dflash, 31, 2048), 0);
     }
 
     #[test]

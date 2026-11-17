@@ -7,7 +7,8 @@ use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
-    ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
+    ResponseAdapter, normalize_openai_compat_request, release_request_objects_with,
+    resolve_request_object_references,
 };
 use super::routing_rank::descriptor_for_model;
 
@@ -16,8 +17,10 @@ use audio_multipart::multipart_model_field;
 mod body_rewrite;
 mod chunked;
 mod effective_entity;
+mod plugin_transform;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
+pub(crate) use plugin_transform::RequestTransforms;
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
@@ -111,6 +114,8 @@ struct ParsedHeaders {
     /// are kept for the relay. Every other request drops them.
     is_realtime_upgrade: bool,
     correlation_id: Option<String>,
+    /// The client used the `/private/v1` base URL; `path` has it removed.
+    private_base: bool,
 }
 
 /// The bounded metadata available after HTTP headers parse, even if consuming
@@ -189,6 +194,13 @@ pub struct BufferedHttpRequest {
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
+    /// Set once automatic routing (`mesh`/`auto` or no model) resolved this
+    /// request. The resolved model is written back into the body, so the model
+    /// name alone can no longer tell an automatic request from a named one;
+    /// host selection reads this flag instead (lab, 2026-11-08: inferring it
+    /// from the rewritten name sent every automatic request down the
+    /// named-model local-first path).
+    pub automatic_route: bool,
 }
 
 impl BufferedHttpRequest {
@@ -367,6 +379,8 @@ struct RequestRewriteOutcome {
     request_path: String,
     response_adapter: ResponseAdapter,
     rewritten_body: Option<Vec<u8>>,
+    /// A plugin request transform replaced the body.
+    transformed: bool,
 }
 
 // ── Request parsing ──
@@ -385,12 +399,21 @@ where
 
 /// Variant for host ingress boundaries that need to bind locally generated
 /// error responses to a safely established request lifecycle.
+///
+/// `transforms` says whether plugin request transforms run here: only where
+/// the client sent the request, never on a request another node forwarded.
 pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
+    transforms: RequestTransforms,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
-    let result =
-        read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await;
+    let result = read_http_request_with_limits_with_context(
+        stream,
+        HTTP_READ_LIMITS,
+        plugin_manager,
+        transforms,
+    )
+    .await;
     match &result {
         Ok(request) => stream.set_client_path(&request.client_path),
         Err(error) => {
@@ -410,15 +433,21 @@ pub(super) async fn read_http_request_with_limits<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    read_http_request_with_limits_with_context(stream, limits, plugin_manager)
-        .await
-        .map_err(OpenAiRequestReadError::into_error)
+    read_http_request_with_limits_with_context(
+        stream,
+        limits,
+        plugin_manager,
+        RequestTransforms::Skip,
+    )
+    .await
+    .map_err(OpenAiRequestReadError::into_error)
 }
 
 async fn read_http_request_with_limits_with_context<S>(
     stream: &mut S,
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
+    transforms: RequestTransforms,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -449,12 +478,20 @@ where
     } else {
         serde_json::from_slice::<RequestMetadata>(&body).ok()
     };
+    let transformer = plugin_transform::request_transformer(plugin_manager, transforms).await;
     let requires_json_transform =
-        request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some());
+        request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some())
+            || (transformer.is_some() && plugin_transform::is_transformable_path(&parsed.path));
     let rewrite = rewrite_request_body_for_forwarding(
         &parsed.path,
         &body,
         plugin_manager,
+        Transformer {
+            plugins: transformer,
+            private_hint: parsed.private_base
+                || super::routing_scope::head_requests_private_scope(&raw),
+            node_limit: super::routing_scope::head_node_limit(&raw),
+        },
         requires_json_transform,
     )
     .await
@@ -503,9 +540,15 @@ where
         Some(&rewrite.request_path),
         rewrite.rewritten_body.as_deref(),
         parsed.request_id,
+        parsed.private_base,
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
-    let body_len_bytes = body.len();
+    // Context budgets follow what reaches the model: a transform may replace
+    // a large attachment with a little text, or the reverse.
+    let body_len_bytes = match rewrite.rewritten_body.as_deref() {
+        Some(forwarded) if rewrite.transformed => forwarded.len(),
+        _ => body.len(),
+    };
     let body_bytes = if body.is_empty() { None } else { Some(body) };
 
     Ok(BufferedHttpRequest {
@@ -525,6 +568,7 @@ where
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
+        automatic_route: false,
     })
 }
 
@@ -637,10 +681,20 @@ fn system_one_forward_path(path: &str) -> String {
     }
 }
 
+/// The plugins that transform a request, whether its head already asks for
+/// private scope (the model suffix is read from the body), and the nodes it
+/// is limited to when it is a plugin's nested call.
+struct Transformer<'a> {
+    plugins: Option<&'a plugin::PluginManager>,
+    private_hint: bool,
+    node_limit: Option<crate::mesh::PrivateScope>,
+}
+
 async fn rewrite_request_body_for_forwarding(
     path: &str,
     body: &[u8],
     plugin_manager: Option<&plugin::PluginManager>,
+    transformer: Transformer<'_>,
     requires_json_transform: bool,
 ) -> Result<RequestRewriteOutcome> {
     let mut outcome = RequestRewriteOutcome {
@@ -649,6 +703,7 @@ async fn rewrite_request_body_for_forwarding(
         request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
+        transformed: false,
     };
     if !requires_json_transform {
         return Ok(outcome);
@@ -677,13 +732,43 @@ async fn rewrite_request_body_for_forwarding(
             changed = true;
         }
     }
-    if changed {
-        outcome.rewritten_body = Some(
-            serde_json::to_vec(body_json)
-                .context("serialize normalized OpenAI-compatible request body")?,
-        );
+    let transformed = async {
+        let transformed = plugin_transform::apply_request_transforms(
+            transformer.plugins,
+            (transformer.private_hint, transformer.node_limit),
+            &outcome.request_path,
+            path,
+            body_json,
+        )
+        .await?;
+        plugin_transform::reject_parts_needing_transform(body_json)?;
+        if !(changed || transformed) {
+            return Ok((transformed, None));
+        }
+        let rewritten = serde_json::to_vec(body_json)
+            .context("serialize normalized OpenAI-compatible request body")?;
+        // A peer reading the forwarded request enforces the same limit.
+        if transformed && rewritten.len() > MAX_BODY_BYTES {
+            bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+        }
+        Ok((transformed, Some(rewritten)))
     }
-    Ok(outcome)
+    .await;
+    match transformed {
+        Ok((transformed, rewritten_body)) => {
+            outcome.transformed = transformed;
+            outcome.rewritten_body = rewritten_body;
+            Ok(outcome)
+        }
+        Err(error) => {
+            // The request never starts, so nothing else releases these.
+            if let Some(plugin_manager) = plugin_manager {
+                release_request_objects_with(plugin_manager, &outcome.request_object_request_ids)
+                    .await;
+            }
+            Err(error)
+        }
+    }
 }
 
 fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
@@ -733,6 +818,7 @@ fn finalize_forwarded_request(
     rewritten_path: Option<&str>,
     rewritten_body: Option<&[u8]>,
     request_id: RequestId,
+    private_base: bool,
 ) -> Result<Vec<u8>> {
     let original_body = raw.split_off(header_end);
     // Re-parse with httparse so we iterate over validated header structs.
@@ -779,6 +865,10 @@ fn finalize_forwarded_request(
         if strip_expect && name.eq_ignore_ascii_case("expect") {
             continue;
         }
+        // The `/private/v1` base URL is the scope: it replaces any header.
+        if private_base && name.eq_ignore_ascii_case(super::routing_scope::MESH_SCOPE_HEADER) {
+            continue;
+        }
         if rewritten_body.is_some()
             && (name.eq_ignore_ascii_case("content-length")
                 || name.eq_ignore_ascii_case("transfer-encoding"))
@@ -792,6 +882,9 @@ fn finalize_forwarded_request(
         rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
     rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
+    if private_base {
+        rebuilt.push_str(&super::routing_scope::private_scope_header_line());
+    }
     rebuilt.push_str(&format!(
         "{}: {}\r\n",
         skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str(),
@@ -830,7 +923,8 @@ where
         match req.parse(buf) {
             Ok(httparse::Status::Complete(header_end)) => {
                 let method = req.method.unwrap_or("GET").to_string();
-                let path = req.path.unwrap_or("/").to_string();
+                let (path, private_base) =
+                    super::routing_scope::split_private_base(req.path.unwrap_or("/"));
 
                 let mut content_length = None;
                 let mut is_chunked = false;
@@ -905,6 +999,7 @@ where
                     expects_continue,
                     is_realtime_upgrade,
                     correlation_id,
+                    private_base,
                 });
             }
             Ok(httparse::Status::Partial) => {
@@ -1079,19 +1174,39 @@ pub(crate) fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<Strin
     })
 }
 
+/// [`header_values_from_raw`] for a header that must not be missed: a head
+/// that cannot be parsed (too many headers, say) is `Err(())` too, rather
+/// than reading as one without the header.
+pub(crate) fn header_values_from_parsed_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    let values = header_values_in(raw, name, true)?;
+    Ok(values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .collect())
+}
+
 /// Every value of header `name`, as UTF-8, exactly as httparse returned it.
 fn untrimmed_header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    header_values_in(raw, name, false)
+}
+
+fn header_values_in(raw: &[u8], name: &str, strict: bool) -> Result<Vec<String>, ()> {
     let header_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .unwrap_or(raw.len());
-    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let head = &raw[..header_end.saturating_add(4).min(raw.len())];
+    // A rebuilt head can hold more than MAX_HEADERS: ingress bounded the
+    // client's headers, and forwarding adds its own. Room for every line, up
+    // to a bound no rebuilt head reaches.
+    let lines = head.split(|byte| *byte == b'\n').count();
+    let mut headers_buf = vec![httparse::EMPTY_HEADER; lines.min(2 * MAX_HEADERS)];
     let mut req = httparse::Request::new(&mut headers_buf);
-    if req
-        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
-        .is_err()
-    {
-        return Ok(Vec::new());
+    match req.parse(head) {
+        Ok(httparse::Status::Complete(_)) => {}
+        _ if strict => return Err(()),
+        Err(_) => return Ok(Vec::new()),
+        Ok(httparse::Status::Partial) => {}
     }
     req.headers
         .iter()
@@ -1178,15 +1293,6 @@ pub fn is_legacy_lifecycle_path(path: &str) -> bool {
 
 fn is_tokenize_request(method: &str, path: &str) -> bool {
     method == "POST" && path == "/v1/tokenize"
-}
-
-pub fn pipeline_request_supported(path: &str, body: &serde_json::Value) -> bool {
-    let path = path.split('?').next().unwrap_or(path);
-    path == "/v1/chat/completions"
-        && body
-            .get("messages")
-            .map(|messages| messages.is_array())
-            .unwrap_or(false)
 }
 
 pub fn rewrite_public_model_alias(

@@ -9,19 +9,19 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/cohere2.cpp b/src/models/cohere2.cpp
-index 969b4ef05a8ed033d16016fd1ac6b14a5af31d87..1cbde791128b03f619e257bad818f3cb4d9a86e8 100644
+index 251b2da62d05f1edfcc40ca089ebea922a3fae15..d5267bc05cb735bb8da39548054c46a4c1b1d23b 100644
 --- a/src/models/cohere2.cpp
 +++ b/src/models/cohere2.cpp
-@@ -67,6 +67,8 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
+@@ -78,6 +78,8 @@ llama_model_cohere2::graph::graph(const llm_graph_params & params) : llm_graph_c
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(inpL, il);
 +
-         const bool is_swa = hparams.is_swa(il);
          // UNUSED:
-         // const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-@@ -136,6 +138,7 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
+ 
+         // norm
+@@ -130,6 +132,7 @@ llama_model_cohere2::graph::graph(const llm_graph_params & params) : llm_graph_c
  
          // input for next layer
          inpL = cur;

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use super::split_planning::format_gb;
+
 const RUNTIME_MODEL_FIT_HEADROOM_NUMERATOR: u64 = 11;
 const RUNTIME_MODEL_FIT_HEADROOM_DENOMINATOR: u64 = 10;
 
@@ -195,10 +197,6 @@ impl Drop for RuntimeCapacityReservation {
         self.ledger
             .release_generation(&self.instance_id, self.generation);
     }
-}
-
-fn format_gb(bytes: u64) -> String {
-    format!("{:.1}GB", bytes as f64 / 1e9)
 }
 
 pub(crate) fn model_fits_runtime_capacity(model_bytes: u64, local_vram_bytes: u64) -> bool {

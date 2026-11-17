@@ -6,7 +6,10 @@ pub const UBATCH: u32 = 512;
 // Automatic local serving uses the shared KV planner; this remains the
 // fallback for callers that construct a stage without model metadata.
 pub const PARALLEL: usize = 4;
-pub const PREFILL_CHUNK_SIZE: usize = 64;
+/// Tokens stage 0 of a split prefills, and sends downstream, at a time. Each
+/// stage runs a chunk as one batch, and a 64-token batch left a 30B-class
+/// MoE stage running at half its prefill rate.
+pub const PREFILL_CHUNK_SIZE: usize = 512;
 pub const PREFILL_ADAPTIVE_START: usize = 64;
 pub const PREFILL_ADAPTIVE_STEP: usize = 64;
 pub const PREFILL_ADAPTIVE_MAX: usize = 512;

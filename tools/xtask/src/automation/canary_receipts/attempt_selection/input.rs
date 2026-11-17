@@ -38,7 +38,14 @@ impl Job {
                 "cancelled or skipped canary jobs cannot claim green or repair admission".into(),
             );
         }
-        for value in [&self.outputs.green, &self.outputs.repairable] {
+        if self.outputs.retry_recovered == "true" && self.outputs.green != "true" {
+            return Err("recovered canary retry must have complete green evidence".into());
+        }
+        for value in [
+            &self.outputs.green,
+            &self.outputs.repairable,
+            &self.outputs.retry_recovered,
+        ] {
             if !matches!(value.as_str(), "" | "true" | "false") {
                 return Err("canary job output boolean must be true, false or absent".into());
             }
@@ -51,6 +58,7 @@ impl Job {
 pub(super) struct JobOutputs {
     pub(super) state: String,
     pub(super) green: String,
+    pub(super) retry_recovered: String,
     pub(super) repairable: String,
     pub(super) package: String,
     pub(super) identity: String,
@@ -91,7 +99,7 @@ impl Attempts {
             return Err("selected publication requires separate build identities".into());
         }
         match super::select_attempt(true, repair, verify)? {
-            super::decision::AttemptDecision::Green(candidate) => Ok(candidate),
+            super::decision::AttemptDecision::Green { candidate, .. } => Ok(candidate),
             _ => Err("selected publication requires two complete green passes".into()),
         }
     }

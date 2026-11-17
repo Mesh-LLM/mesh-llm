@@ -1,5 +1,24 @@
 # Node.js SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```js
+const capacity = await node.runtimeCapacity('exact-serving-id')
+if (capacity !== null) {
+  console.log(capacity.executionLanes, capacity.contextTokensPerLane,
+    capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+All fields are `bigint` to preserve unsigned native precision. Each call reads
+the latest published observation without HTTP. Busy lanes count toward capacity;
+this does not reserve resources. `null` means unknown, unsupported, unavailable,
+or incomplete capacity. Stopped nodes reject the promise. The timestamp is the
+oldest observation in Unix milliseconds; callers choose a freshness policy for
+long-running inference. Do not use the total pool as a per-request context limit.
+
 Install the package with `npm install @mesh-llm/sdk`. When developing from this
 checkout, run `npm run build:native` in `mesh/sdk/node` before using the SDK.
 
@@ -150,3 +169,64 @@ the core. In this schema, `mode: 'serve'` means combined serving and inference,
 while `'serve_only'` means serving without SDK inference. The full-config
 default is combined, exactly as in Rust. Existing `Node.create()` keeps its
 client default and camelCase convenience options.
+
+## Live transcription
+
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.
+
+```js
+const session = await node.startLiveTranscription({
+  model: 'speech-model', sampleRate: 16000, turnDetection: null,
+  stepMs: 400, tentative: true
+})
+try {
+  await session.sendAudio(pcm16Samples)
+  await session.commit()
+  console.log(await session.nextEvent())
+  console.log(await session.stop())
+} finally {
+  await session.close()
+}
+```
+
+Supply signed 16-bit mono samples, or use `sendAudioF32` for float samples.
+`stepMs` accepts 200 to 5000 ms; omission keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `item_id`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input. `stop()` finishes the turn and returns
+unread events; `close()` abandons the session.
+## Structured inference failures
+
+`OpenAIRequestError.details` exposes the backend's `message`, `type`, `code`
+and `param` for both failed requests and streams. Check the code rather than
+matching display text:
+
+```javascript
+try {
+  await node.inference.chatCompletions({ model, messages })
+} catch (error) {
+  if (error instanceof OpenAIRequestError && error.details?.code === 'context_length_exceeded') {
+    // Compact the conversation before retrying.
+  } else {
+    throw error
+  }
+}
+```
+
+Import `OpenAIRequestError` from `@mesh-llm/sdk`. `statusCode` and the raw `body`
+remain available. `details` is `null` for transport failures or an unstructured
+body; missing optional fields stay `null`. Unknown codes are preserved.

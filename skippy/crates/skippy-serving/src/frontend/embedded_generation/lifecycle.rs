@@ -17,6 +17,7 @@ use crate::frontend::{
     speculative::{InferenceSpeculativeStats, SpeculativeDecodeConfig},
     util::{openai_backend_error, openai_io_error},
 };
+use crate::runtime_state::RuntimeState;
 
 /// Stops a lane's session: sends Stop and waits for its ACK. With
 /// `draft_owed`, one draft reply from an early verdict may arrive first and is
@@ -545,7 +546,7 @@ impl StageOpenAiBackend {
             // connection handler can reclaim the request's execution session
             // before the replacement admits another request on a one-lane
             // stage.
-            self.drop_embedded_runtime_session(request, session_key);
+            self.drop_embedded_runtime_session(request, session_key, SessionEnd::Failed);
             let lane_id = lane.id;
             drop(lane);
             lane_pool.replace_lane(lane_id);
@@ -557,7 +558,7 @@ impl StageOpenAiBackend {
             // its way. The response does not wait for it: the lane drains the
             // draft and stops the session in the background, and goes back to
             // the pool only if that exchange completes.
-            self.drop_embedded_runtime_session(request, session_key);
+            self.drop_embedded_runtime_session(request, session_key, SessionEnd::Completed);
             match request.lane_pool.clone() {
                 Some(pool) => settle_lane_in_background(
                     pool,
@@ -580,7 +581,7 @@ impl StageOpenAiBackend {
             request.ids.session_id,
             false,
         );
-        self.drop_embedded_runtime_session(request, session_key);
+        self.drop_embedded_runtime_session(request, session_key, SessionEnd::Completed);
 
         let lane_id = lane.id;
         let stop_result = stop_result.map_err(openai_io_error);
@@ -599,18 +600,28 @@ impl StageOpenAiBackend {
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
+        end: SessionEnd,
     ) {
         let scheduler_session_key = session_key.to_string();
         let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
             "embedded-session-drop",
             move |runtime| {
-                runtime
-                    .drop_session_timed(&scheduler_session_key)
-                    .map_err(openai_backend_error)
+                match end {
+                    SessionEnd::Completed => runtime.end_session_timed(&scheduler_session_key),
+                    SessionEnd::Failed => runtime.drop_session_timed(&scheduler_session_key),
+                }
+                .map_err(openai_backend_error)
             },
         ) else {
             return;
         };
+        if end == SessionEnd::Completed {
+            // Prefix-cache exports the session owes run after the response.
+            let _ = self.iteration_scheduler.execute_runtime_detached(
+                "embedded-session-end-exports",
+                RuntimeState::complete_parked_session_ends,
+            );
+        }
         let drop_stats = outcome.value;
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
@@ -640,6 +651,15 @@ impl StageOpenAiBackend {
         self.telemetry
             .emit_debug("stage.openai_session_stop", attrs);
     }
+}
+
+/// How a stage-0 request's session ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionEnd {
+    /// The request finished; the session's prefix-cache exports still run.
+    Completed,
+    /// The request or its downstream failed; the session is suspect.
+    Failed,
 }
 
 pub(super) fn decode_uses_context_sideband(

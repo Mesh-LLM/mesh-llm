@@ -654,6 +654,13 @@ impl StageOpenAiBackend {
         output: &GeneratedText,
         demand: GenerationDemandObservation,
     ) {
+        if let Some(mut stats) = output.generation_stats.clone() {
+            // Admission is timed here, outside the generation itself, so the
+            // wait joins the stats only now.
+            stats.queue_wait_ms = output.queue_wait_ms;
+            stats.total_ms += output.queue_wait_ms;
+            crate::generation_stats::notify(&stats);
+        }
         let work = GenerationAdmissionWork::new(
             usize::try_from(output.prompt_tokens).unwrap_or(usize::MAX),
             output.completion_tokens,

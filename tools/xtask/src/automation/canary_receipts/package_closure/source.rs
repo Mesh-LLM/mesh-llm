@@ -155,7 +155,8 @@ pub(super) fn patch_digest(directory: &Path) -> DynResult<Digest> {
         let name = path
             .strip_prefix(&root)?
             .to_str()
-            .ok_or("non-UTF8 patch path")?;
+            .ok_or("non-UTF8 patch path")?
+            .replace(std::path::MAIN_SEPARATOR, "/");
         hash.update(format!("{name}\n{}\n", Digest::of_file(&path)?.as_str()).as_bytes());
     }
     Ok(Digest::try_from(hex::encode(hash.finalize()))?)

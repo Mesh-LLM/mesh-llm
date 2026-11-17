@@ -52,6 +52,49 @@ pub fn connect_ready_child(
     })
 }
 
+/// Spawn a stage server and wait for its ready handshake, re-spawning it once
+/// when it is killed by a signal before becoming ready.
+///
+/// On unified-memory accelerators (NVIDIA GB10) the CUDA context allocation in
+/// `ggml_cuda_init` draws from the same physical memory as the kernel page cache,
+/// so a stage server can be aborted with "CUDA error: out of memory" while the
+/// lane's memory admission still shows tens of GiB free — the spike passes in
+/// seconds, and the very next server in the same lane starts cleanly. A plain
+/// exit before readiness is deterministic and is not retried; a second signal
+/// crash fails the lane as before.
+pub fn spawn_stage_until_ready(
+    addr: SocketAddr,
+    timeout_secs: u64,
+    build_command: impl FnMut() -> Command,
+) -> Result<(ChildGuard, TcpStream)> {
+    const STARTUP_ABORT_RETRY_DELAY: Duration = Duration::from_secs(2);
+    let mut build_command = build_command;
+    let mut first_error = None;
+    for attempt in 0..2 {
+        let mut child = ChildGuard::spawn(build_command())?;
+        match connect_ready_child(addr, timeout_secs, &mut child) {
+            Ok(stream) => return Ok((child, stream)),
+            Err(error) => {
+                if attempt == 0 && startup_abort_is_retryable(&error) {
+                    first_error = Some(error);
+                    thread::sleep(STARTUP_ABORT_RETRY_DELAY);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    Err(first_error.expect("the retry path always records the first error"))
+}
+
+/// A child that died to a signal before readiness is a candidate for one retry;
+/// an ordinary exit code means the server decided it cannot run and will do the
+/// same next time.
+fn startup_abort_is_retryable(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}");
+    message.contains("exited before readiness") && message.contains("signal:")
+}
+
 fn connect_ready_until(
     addr: SocketAddr,
     timeout_secs: u64,
@@ -176,7 +219,8 @@ mod tests {
         process::{Command, Stdio},
     };
 
-    use super::{ChildGuard, activation_width, connect_ready_child};
+    use super::{ChildGuard, activation_width, connect_ready_child, startup_abort_is_retryable};
+    use anyhow::anyhow;
 
     #[test]
     fn integer_frontier_width_uses_shape_without_reinterpreting_payload() -> anyhow::Result<()> {
@@ -206,6 +250,24 @@ mod tests {
         };
         assert_eq!(activation_width(&frame)?, 8);
         Ok(())
+    }
+
+    #[test]
+    fn a_signal_death_before_readiness_is_retryable_but_a_plain_exit_is_not() {
+        // Real shapes from a GB10 lane whose second stage server lost the CUDA
+        // context allocation race: SIGABRT from ggml_cuda_init, and the kernel's
+        // SIGKILL when unified memory briefly runs out.
+        let aborted = anyhow!(
+            "stage 1 binary server did not become ready: child process exited before readiness with status signal: 6 (SIGABRT) (core dumped)"
+        );
+        let killed =
+            anyhow!("child process exited before readiness with status signal: 9 (SIGKILL)");
+        let exited = anyhow!("child process exited before readiness with status exit code: 1");
+        let timeout = anyhow!("connect failed");
+        assert!(startup_abort_is_retryable(&aborted));
+        assert!(startup_abort_is_retryable(&killed));
+        assert!(!startup_abort_is_retryable(&exited));
+        assert!(!startup_abort_is_retryable(&timeout));
     }
 
     #[test]

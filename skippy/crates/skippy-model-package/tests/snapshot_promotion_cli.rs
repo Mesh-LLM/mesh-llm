@@ -15,6 +15,7 @@ fn cli(endpoint: &str, args: &[&str]) -> Output {
     let home = tempfile::tempdir().unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_promote-layer-package-snapshot"))
         .env_clear()
+        .envs(child_env::windows_system())
         .envs(child_env::ca_certificates())
         .env("HF_ENDPOINT", endpoint)
         .env("HF_HOME", home.path())
@@ -365,6 +366,8 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
 #[path = "snapshot_promotion_cli/publisher_helper.rs"]
 mod publisher_helper;
 
+// Only the Unix-only fixtures run bash scripts or prepend to `PATH`.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[path = "snapshot_promotion_cli/child_env.rs"]
 mod child_env;
 

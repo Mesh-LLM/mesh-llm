@@ -119,6 +119,19 @@ mod dynamic {
                 },
             })
         }
+
+        /// The selection `serve` would load, restricted to bundled and installed
+        /// runtimes, for a read-only command (`gpus`, model sizing) that must
+        /// never download one, whatever `runtime.native_runtime.download` says.
+        pub(crate) fn for_read_only_command(
+            config: mesh_llm_config::NativeRuntimeConfig,
+            llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+        ) -> Result<Self> {
+            Ok(Self {
+                allow_download: false,
+                ..Self::from_config(config, llama_flavor)?
+            })
+        }
     }
 
     pub(crate) fn load_local_native_runtime_for_embedded_serving(
@@ -187,9 +200,16 @@ mod dynamic {
         }))
     }
 
+    /// Counts startup resolution attempts so tests can prove a mode never reaches the native loader.
+    #[cfg(test)]
+    pub(crate) static STARTUP_RESOLUTION_ATTEMPTS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
+        #[cfg(test)]
+        STARTUP_RESOLUTION_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let outcome = try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,
@@ -1956,6 +1976,28 @@ mod dynamic {
                     cuda_toolkit_major: None,
                 }
             );
+        }
+
+        #[test]
+        fn read_only_command_selection_never_downloads_but_keeps_the_serve_selection() {
+            for download in [None, Some(true), Some(false)] {
+                let config = mesh_llm_config::NativeRuntimeConfig {
+                    mesh_version: Some("0.75.0".to_string()),
+                    skippy_abi: Some("0.1.52".to_string()),
+                    selection: Some("cuda13".to_string()),
+                    download,
+                    ..Default::default()
+                };
+                let serve = NativeRuntimeStartupSelection::from_config(config.clone(), None)
+                    .expect("configured selection should resolve");
+                let read_only = NativeRuntimeStartupSelection::for_read_only_command(config, None)
+                    .expect("configured selection should resolve");
+
+                assert!(!read_only.allow_download, "download = {download:?}");
+                assert_eq!(read_only.mesh_version, serve.mesh_version);
+                assert_eq!(read_only.skippy_abi, serve.skippy_abi);
+                assert_eq!(read_only.runtime_selection, serve.runtime_selection);
+            }
         }
 
         #[test]

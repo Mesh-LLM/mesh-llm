@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/chatglm.cpp b/src/models/chatglm.cpp
-index 54e3913c4a2d5cbb92f691cfed6de08a3875725a..47481e314dbb77992a45b10500df5703d06b6331 100644
+index e7442b75f981d5700f6ac704a1d3fcafe15e8ca4..eefb617808b8cb495742e9d8142e149724105547 100644
 --- a/src/models/chatglm.cpp
 +++ b/src/models/chatglm.cpp
-@@ -73,6 +73,8 @@ llama_model_chatglm::graph::graph(const llama_model & model, const llm_graph_par
+@@ -73,6 +73,8 @@ llama_model_chatglm::graph::graph(const llm_graph_params & params) : llm_graph_c
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 54e3913c4a2d5cbb92f691cfed6de08a3875725a..47481e314dbb77992a45b10500df5703
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL,
-@@ -142,6 +144,7 @@ llama_model_chatglm::graph::graph(const llama_model & model, const llm_graph_par
+@@ -133,6 +135,7 @@ llama_model_chatglm::graph::graph(const llm_graph_params & params) : llm_graph_c
  
          // input for next layer
          inpL = cur;

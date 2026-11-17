@@ -183,6 +183,10 @@ Switches:
 - `--gguf <GGUF>`: serve a specific local GGUF file directly (repeatable).
 - `--port <PORT>`: API port (default `9337`).
 - `--client`: API-only mode (no GPU/model serving).
+- `--no-peer-model-downloads`: refuse peer split-stage requests that need model
+  files this node does not already have. Local and configured models still
+  load and serve. Same as `runtime.peer_model_downloads = false`; see
+  [USAGE.md](USAGE.md#peer-model-downloads).
 - `--console <CONSOLE>`: console/API management port (default `3131`).
 - `--headless`: disable the embedded web UI; keep the management API on the `--console` port.
 - `--bind-ip <IP>`: bind mesh QUIC to a specific local IP address. In default
@@ -196,8 +200,6 @@ Switches:
   diagnostics as JSONL. See [SWARM_CAPTURE.md](SWARM_CAPTURE.md) for the full
   debug-capture workflow.
 - `--publish`: publish your mesh for discovery.
-- `--no-default-plugins`: don't install the default plugins on first run (same
-  as `MESH_LLM_NO_DEFAULT_PLUGINS=1`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--require-release-attestation`: when creating a requirement-aware mesh,
   require peers to present a trusted release attestation.
 - `--release-signer-key <KEY>`: allow a release signer key in the creation-time
@@ -478,7 +480,6 @@ Switches:
 - `--version <VERSION>`: install a specific release tag or version, for example `v0.60.0`.
 - `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
 - `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
-- `--no-default-plugins`: turn off the default plugins the running build lists, so the updated node does not install them from its release's bundled copy until `mesh-llm plugins enable NAME` (same as `mesh-llm plugins install-defaults --off`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 
 Without `--auto-update`, mesh-llm checks for a newer release and only shows it: as a notice at startup, and as the latest version in the web console.
@@ -514,6 +515,8 @@ is present, the command requires `--public-key-file` and otherwise reports
 ### `gpus`
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present. `mesh-llm gpus detect` refreshes the raw hardware fingerprint, bandwidth, and compute hints used by local planning.
+
+With a dynamically loaded native runtime (`dynamic-native-runtime` is a default feature of `mesh-llm`, so default Linux and macOS release binaries behave the same as Windows), `gpus` first loads the runtime `serve` would select, from bundled and installed runtimes only (it never downloads one), so devices, stable IDs and memory are the ones the node uses. The `download` command and the `models` subcommands that report or resolve a local fit (`search`, `show`, `download`) do the same before sizing models; the other `models` subcommands skip the load. Loading the runtime costs a few seconds (about five with a Vulkan runtime on a laptop; unmeasured with CUDA). When no runtime can be loaded, `gpus` falls back to what the operating system reports and says so on stderr; that fallback can miss memory the runtime does use, such as the shared memory of an integrated GPU.
 
 After the per-device lines, `gpus` prints what this host would advertise to a mesh and where each byte went: the enumerated device memory, the driver reserve, a platform reserve on unified-memory hosts, the configured safety margin (`defaults.hardware.safety_margin_gb`, or the built-in 2 GB when unset), and the share left for mesh placement. On a host with accelerator memory the local fit plans on that memory only, unless `gpu.host_ram_offload = true` lets it also count system RAM; `gpus` then lists the RAM-backed budget, and otherwise says what the setting would add. Either way that budget feeds the local fit only and is never advertised as accelerator capacity. A CPU-only host keeps its RAM-backed budget regardless. `--json` carries the same figures under `advertised_memory`, with `host_ram_offload` stating the setting. A `serve --max-vram` ceiling is not applied here, so the usable share shown is the uncapped one.
 
@@ -599,6 +602,21 @@ Use this to inspect model status from a running local runtime.
 Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
+
+### `private`
+
+Use this to choose the other nodes your private requests (`@private`, `@incognito`) may go to. It edits `[private] nodes` in the config file, and a running node picks the change up without a restart. See [private routing](specs/private-routing.md).
+
+```bash
+mesh-llm private add studio     # a connected node's label or hostname, or a node id
+mesh-llm private list           # the list, and which listed nodes are connected
+mesh-llm private remove studio  # a name, a node id or a unique prefix of one
+```
+
+Switches:
+
+- `--port <PORT>`: management/API port of the running node, used to look names up and show connection state (default `3131`).
+- `--json` (`list` only): print machine-readable JSON.
 
 ### `runtime guardrails`
 
@@ -732,8 +750,9 @@ All four owner lifecycle commands share these properties:
 ### `discover`
 
 Use this to discover meshes through the selected discovery provider and
-optionally select one automatically. The default provider is Nostr; pass the
-global `--mesh-discovery-mode mdns` before the command for LAN mDNS discovery.
+optionally select one automatically. The default provider is Nostr; pass
+`--mesh-discovery-mode mdns` (before the command, or after `discover`) for LAN
+mDNS discovery.
 
 Switches:
 
@@ -744,6 +763,10 @@ Switches:
 - `--auto`: print best invite token (useful for piping).
 - `--relay <RELAY>`: custom Nostr relay URL(s). Only valid with
   `--mesh-discovery-mode nostr`.
+- `--mesh-discovery-mode <nostr|mdns>` (default: `nostr`): discovery provider
+  for this command; overrides a top-level `--mesh-discovery-mode`. Joining an
+  mDNS-discovered mesh still needs an invite token — pass top-level
+  `--join <token>` before `discover`.
 
 ### `goose`
 
@@ -854,8 +877,7 @@ Subcommands:
 - `plugins disable <NAME>`: keep an installed plugin on disk but prevent host
   startup from launching it.
 - `plugins delete <NAME>`: remove the installed archive contents and local
-  metadata. A deleted default plugin stays removed: the installers and
-  `mesh-llm update` do not install it again until `plugins enable <NAME>`.
+  metadata.
 - `plugins info <NAME>`: show source, version, target, path, and latest known
   status for an installed or configured plugin.
 - `plugins search [QUERY]`: search the configured plugin catalog.

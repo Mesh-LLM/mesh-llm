@@ -126,6 +126,17 @@ pub use rejected::MediaRejected;
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for MediaProjector {}
 
+/// Resolve the projector image token floor against the decode cap.
+///
+/// The decode budget exposes only the effective maximum, so an unset floor
+/// (`-1`) cannot be read back here: native loading would fall back to the
+/// projector's own default floor, which can sit above the capped maximum and
+/// make a small image resolve to more tokens than one decode microbatch. Give
+/// an unset floor the smallest positive value so the cap bounds every floor.
+fn clamp_image_min_tokens(min: i32, decode_batch: i32) -> i32 {
+    min.max(1).min(decode_batch)
+}
+
 impl MediaProjector {
     pub(crate) fn open(
         path: &str,
@@ -162,6 +173,24 @@ impl MediaProjector {
         if let Some(value) = config.batch_max_tokens {
             params.batch_max_tokens =
                 i32::try_from(value).context("batch_max_tokens exceeds i32")?;
+        }
+        // A projector that decodes images with non-causal attention must decode
+        // each image in one batch and one microbatch; the decode helper rejects
+        // a split image. Mirror llama-server's load-time cap and clamp the
+        // vision token budget to the stage context's decode microbatch,
+        // resolved the same way native context creation resolves it. Embedding
+        // workloads grow the native microbatch to n_batch, so this estimate
+        // never exceeds the real one.
+        let decode_batch = i32::try_from(config.projector_decode_batch())
+            .context("decode batch size exceeds i32")?;
+        let budget = unsafe { skippy_ffi::mtmd_helper_get_decode_budget(path.as_ptr(), params) };
+        if budget.use_non_causal && budget.image_max_tokens > decode_batch {
+            crate::logging::write_native_log_note(format!(
+                "capped projector image tokens from {} to {} so one non-causal image fits the {}-token decode microbatch",
+                budget.image_max_tokens, decode_batch, decode_batch
+            ));
+            params.image_max_tokens = decode_batch;
+            params.image_min_tokens = clamp_image_min_tokens(params.image_min_tokens, decode_batch);
         }
         let raw = unsafe { skippy_ffi::mtmd_init_from_file(path.as_ptr(), raw_model, params) };
         if raw.is_null() {
@@ -318,19 +347,18 @@ impl StageModel {
             SpeechOutputFormat::Wav => skippy_ffi::MtmdHelperGenAudioOutputType::Wav,
             SpeechOutputFormat::PcmS16Le => skippy_ffi::MtmdHelperGenAudioOutputType::Pcm,
         };
-        let input = skippy_ffi::MtmdHelperGenAudioInput {
-            seq_id: session.native_sequence_id()?,
-            prompt: prompt.as_ptr(),
-            prompt_len: config.prompt.len(),
-            speaker_ref: ptr::null_mut(),
-            lang: language
-                .as_ref()
-                .map_or(ptr::null(), |value| value.as_ptr()),
-            top_k: config.top_k,
-            top_p: config.top_p,
-            seed: config.seed,
-            out_type: output_type,
-        };
+        let mut input = unsafe { skippy_ffi::mtmd_helper_gen_audio_inp_default() };
+        input.seq_id = session.native_sequence_id()?;
+        input.prompt = prompt.as_ptr();
+        input.prompt_len = config.prompt.len();
+        input.speaker_ref = ptr::null_mut();
+        input.lang = language
+            .as_ref()
+            .map_or(ptr::null(), |value| value.as_ptr());
+        input.top_k = config.top_k;
+        input.top_p = config.top_p;
+        input.seed = config.seed;
+        input.out_type = output_type;
         if unsafe { skippy_ffi::mtmd_helper_gen_audio_set_input(generator.0, &input) } != 0 {
             return Err(anyhow!("speech synthesis rejected the input"));
         }
@@ -1005,7 +1033,26 @@ fn pcm_f32_to_s16le(bytes: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpeechOutputFormat, pcm_f32_to_s16le, validated_speech_metadata};
+    use super::{
+        SpeechOutputFormat, clamp_image_min_tokens, pcm_f32_to_s16le, validated_speech_metadata,
+    };
+
+    #[test]
+    /// An unset image token floor must resolve inside the decode cap: the
+    /// projector's hidden default floor can exceed one decode microbatch.
+    fn image_min_tokens_unset_resolves_inside_the_decode_cap() {
+        // A projector default floor of 64 exceeds the 32-token microbatch.
+        let resolved = clamp_image_min_tokens(-1, 32);
+        assert!(resolved >= 1, "floor stays positive: {resolved}");
+        assert!(resolved <= 32, "floor stays inside the cap: {resolved}");
+    }
+
+    #[test]
+    /// Configured floors are preserved up to the decode cap.
+    fn image_min_tokens_configured_floor_follows_the_decode_cap() {
+        assert_eq!(clamp_image_min_tokens(64, 128), 64);
+        assert_eq!(clamp_image_min_tokens(64, 32), 32);
+    }
 
     #[test]
     /// Reject native speech metadata that cannot describe its payload.

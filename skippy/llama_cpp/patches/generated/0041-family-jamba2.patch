@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/jamba.cpp b/src/models/jamba.cpp
-index ed4c9f13e594c68ed9889ca9d9a5ec7cb4050372..d25185eb50b3c0b09c572329f6bea9add760cda9 100644
+index 842df63b6a80440794e3b823668e4cb1a532d555..5fac6dd53f0b5edc2be65ed2e0864299133ad1f1 100644
 --- a/src/models/jamba.cpp
 +++ b/src/models/jamba.cpp
-@@ -119,6 +119,8 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
+@@ -119,6 +119,8 @@ llama_model_jamba::graph::graph(const llm_graph_params & params) : llm_build_mam
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index ed4c9f13e594c68ed9889ca9d9a5ec7cb4050372..d25185eb50b3c0b09c572329f6bea9ad
          const int64_t n_head_kv = hparams.n_head_kv(il);
  
          cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-@@ -181,6 +183,7 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
+@@ -181,6 +183,7 @@ llama_model_jamba::graph::graph(const llm_graph_params & params) : llm_build_mam
  
          // input for next layer
          inpL = cur;

@@ -144,6 +144,7 @@ impl ReadoutStage<'_> {
                     &session,
                     &message,
                     &tokens,
+                    crate::kv_integration::ExactStateKvExport::Now,
                 ))
             })
             .map_err(|error| anyhow::anyhow!("record decision prefix: {error}"))

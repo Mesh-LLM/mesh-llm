@@ -9,19 +9,19 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/llama4.cpp b/src/models/llama4.cpp
-index 9a365394ce45fdd6744d96718c9cda73f1d0a30a..a6bc08ab4276ec26724b6650f9d72250facbf80a 100644
+index 5fa2a623f7438c548a3c63dd680c95a375f2ba33..22f069769476b7ce9bfb7ba2df26ab086f7f5ef9 100644
 --- a/src/models/llama4.cpp
 +++ b/src/models/llama4.cpp
-@@ -134,6 +134,8 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -138,6 +138,8 @@ llama_model_llama4::graph<iswa>::graph(const llm_graph_params & params) : llm_gr
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(inpL, il);
 +
-         const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
  
-@@ -248,6 +250,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
+         ggml_tensor * inpSA = inpL;
+ 
+@@ -238,6 +240,7 @@ llama_model_llama4::graph<iswa>::graph(const llm_graph_params & params) : llm_gr
  
          // input for next layer
          inpL = cur;

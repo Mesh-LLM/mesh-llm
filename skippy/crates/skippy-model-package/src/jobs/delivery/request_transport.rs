@@ -2,7 +2,6 @@
 use super::{ModelMount, admission};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 pub const MAX_REQUEST_BYTES: usize = 8 * 1048576;
 pub const LOCATOR_ENVIRONMENT: &str = "MESH_HF_JOB_REQUEST";
 #[derive(Clone, Deserialize, Serialize)]
@@ -18,7 +17,6 @@ pub struct MountedRequest {
 impl MountedRequest {
     pub(super) fn admit(&self, bytes: &[u8], mounts: &[ModelMount]) -> Result<()> {
         admission::mounts_admitted(mounts)?;
-        let path = Path::new(&self.path);
         if self.schema_version != 1
             || !admission::absolute(&self.path)
             || !(1..=MAX_REQUEST_BYTES as u64).contains(&self.byte_size)
@@ -27,9 +25,7 @@ impl MountedRequest {
             || !mounts.iter().any(|m| {
                 m.repo == self.repo
                     && m.revision == self.revision
-                    && path
-                        .strip_prefix(&m.mount_path)
-                        .is_ok_and(|p| !p.as_os_str().is_empty())
+                    && admission::inside(&self.path, &m.mount_path)
             })
         {
             bail!("mounted Jobs request pin/immutable mount refused");

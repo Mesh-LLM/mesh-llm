@@ -4,7 +4,8 @@
 //! containers) keep bash and the coreutils the scripts call elsewhere on
 //! `PATH`, and the CA bundle may only be reachable through `SSL_CERT_FILE`, so
 //! the children get the test process's `PATH` and CA variables instead of
-//! fixed system paths. Everything else stays cleared.
+//! fixed system paths. Children that open sockets or temporary files also keep
+//! Windows' `SystemRoot`, `TEMP` and `TMP`. Everything else stays cleared.
 
 use std::{
     ffi::OsString,
@@ -43,6 +44,18 @@ pub fn bash_script(script: impl AsRef<[u8]>) -> Vec<u8> {
     let mut out = format!("#!{}", bash().display()).into_bytes();
     out.extend_from_slice(body);
     out
+}
+
+/// The Windows variables that are set, for children that open sockets or
+/// temporary files: without `SystemRoot`, Winsock cannot initialise and every
+/// connection fails with `WSAEPROVIDERFAILEDINIT` (os error 10106); without
+/// `TEMP` and `TMP`, the temporary directory falls back to the Windows
+/// directory, which a user cannot write. Unset, and so empty, elsewhere.
+pub fn windows_system() -> Vec<(&'static str, OsString)> {
+    ["SystemRoot", "TEMP", "TMP"]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+        .collect()
 }
 
 /// The CA variables that are set, for children that build HTTPS clients.

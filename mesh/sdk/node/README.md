@@ -28,6 +28,22 @@ thinking controls and plugin channel requirements are observations under each `p
 They do not guarantee every replica has those properties. Missing facts remain
 absent. `inference.listModels()` remains the LLM-only compatibility view.
 
+## Local runtime capacity
+
+```js
+const capacity = await node.runtimeCapacity('exact-serving-id')
+if (capacity !== null) {
+  console.log(capacity.executionLanes, capacity.contextTokensPerLane,
+    capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+Fields are `bigint`. This reads the latest native observation, including busy
+lanes, without HTTP or a reservation. Unknown, unsupported, unavailable or
+incomplete capacity returns `null`; stopped nodes reject. The timestamp is the
+oldest observation in Unix milliseconds; callers choose the freshness policy.
+The total pool is not a per-request context limit.
+
 ## Document OCR
 
 Discover an OCR provider, then submit the PDF or image bytes through Mesh:

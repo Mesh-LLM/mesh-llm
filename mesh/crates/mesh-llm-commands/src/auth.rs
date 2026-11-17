@@ -335,13 +335,14 @@ pub(crate) fn run_init(
     };
     let encrypted = !matches!(source, PassphraseSource::None);
 
-    let _ = emit_audit(audit_events::admin_action(
+    emit_audit(audit_events::admin_action(
         Some(owner_id.clone()),
         "auth_init",
         Some("owner_keystore"),
         true,
         None,
-    ));
+    ))
+    .context("Owner keystore was saved, but its audit record could not be written")?;
 
     let mut err = mesh_llm_events::console_err();
     writeln!(err)?;
@@ -584,13 +585,14 @@ pub(crate) fn run_sign_node(
     )?;
     save_node_ownership(&output_path, &ownership)?;
 
-    let _ = emit_audit(audit_events::admin_action(
+    emit_audit(audit_events::admin_action(
         Some(owner.owner_id().to_string()),
         "auth_sign_node",
         Some(&ownership.claim.node_endpoint_id),
         true,
         None,
-    ));
+    ))
+    .context("Node certificate was saved, but its audit record could not be written")?;
 
     let mut err = mesh_llm_events::console_err();
     writeln!(
@@ -761,13 +763,14 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
         )?;
         save_node_ownership(&certificate_path, &ownership)?;
 
-        let _ = emit_audit(audit_events::admin_action(
+        emit_audit(audit_events::admin_action(
             Some(owner.owner_id().to_string()),
             "auth_rotate_node",
             Some(&new_node_id),
             true,
             None,
-        ));
+        ))
+        .context("Rotated node key and certificate were saved, but their audit record could not be written")?;
 
         writeln!(err, "New node certificate: {}", certificate_path.display())?;
         writeln!(err, "New cert ID:      {}", ownership.claim.cert_id)?;
@@ -789,13 +792,14 @@ pub(crate) fn run_revoke_owner(
         true
     })?;
 
-    let _ = emit_audit(audit_events::admin_action(
+    emit_audit(audit_events::admin_action(
         Some("system".to_string()),
         "auth_revoke_owner",
         Some(&owner_id),
         true,
         None,
-    ));
+    ))
+    .context("Owner revocation was saved, but its audit record could not be written")?;
 
     let mut err = mesh_llm_events::console_err();
     writeln!(
@@ -838,25 +842,44 @@ pub(crate) fn run_revoke_node(
         true
     })?;
 
-    let mut err = mesh_llm_events::console_err();
-    if let Some(cert_id) = cert_id.as_ref() {
-        let _ = emit_audit(audit_events::admin_action(
+    let certificate_audit = cert_id
+        .as_ref()
+        .map(|cert_id| {
+            emit_audit(audit_events::admin_action(
             Some("system".to_string()),
             "auth_revoke_node_cert",
             Some(cert_id),
             true,
             None,
-        ));
+        ))
+        .context(
+            "Node revocations were saved, but the certificate audit record could not be written",
+        )
+        })
+        .transpose();
+    let node_audit = normalized_node_id
+        .as_ref()
+        .map(|normalized| {
+            emit_audit(audit_events::admin_action(
+                Some("system".to_string()),
+                "auth_revoke_node_id",
+                Some(normalized),
+                true,
+                None,
+            ))
+            .context(
+                "Node revocations were saved, but the node ID audit record could not be written",
+            )
+        })
+        .transpose();
+    certificate_audit?;
+    node_audit?;
+
+    let mut err = mesh_llm_events::console_err();
+    if let Some(cert_id) = cert_id.as_ref() {
         writeln!(err, "Revoked cert ID {cert_id}")?;
     }
     if let Some(normalized) = normalized_node_id.as_ref() {
-        let _ = emit_audit(audit_events::admin_action(
-            Some("system".to_string()),
-            "auth_revoke_node_id",
-            Some(normalized),
-            true,
-            None,
-        ));
         writeln!(err, "Revoked node ID {normalized}")?;
     }
     writeln!(err, "Updated trust store {}", trust_store_path.display())?;
@@ -898,13 +921,14 @@ pub(crate) fn run_rotate_owner(
         true,
     )?;
 
-    let _ = emit_audit(audit_events::admin_action(
+    emit_audit(audit_events::admin_action(
         Some(new_keypair.owner_id().to_string()),
         "auth_rotate_owner",
         Some("owner_keystore"),
         true,
         None,
-    ));
+    ))
+    .context("Rotated owner keystore was saved, but its audit record could not be written")?;
 
     let mut err = mesh_llm_events::console_err();
     writeln!(

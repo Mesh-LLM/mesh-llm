@@ -9,6 +9,9 @@ use skippy_ffi::{
 
 use crate::checkpoint::CheckpointQuantization;
 
+mod host_expert_layers;
+pub use host_expert_layers::HostExpertLayers;
+
 pub const GGML_TYPE_F32: u32 = 0;
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
@@ -157,27 +160,6 @@ pub struct RuntimeConfig {
     pub recurrent_rollback_tokens: u32,
 }
 
-/// Half-open absolute block range `[start, end)` whose routed-expert tensors
-/// (`ffn_{up,down,gate}_exps`) load into host memory. Placement only changes
-/// where the weights live and which kernels run them; routing and precision
-/// are unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HostExpertLayers {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl HostExpertLayers {
-    /// Build a range, returning `None` when it is empty.
-    pub fn new(start: u32, end: u32) -> Option<Self> {
-        (start < end).then_some(Self { start, end })
-    }
-
-    pub fn layer_count(self) -> u32 {
-        self.end.saturating_sub(self.start)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GlmDsaPolicy {
     #[default]
@@ -228,6 +210,12 @@ impl RuntimeConfig {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.layer_start >= self.layer_end {
             return Err("layer_start must be less than layer_end");
+        }
+        if self
+            .host_expert_layers
+            .is_some_and(|layers| HostExpertLayers::new(layers.start, layers.end).is_none())
+        {
+            return Err("host_expert_layers must contain between 1 and 4096 blocks");
         }
         if self
             .selected_backend_device
@@ -483,6 +471,28 @@ impl RuntimeConfig {
                 .unwrap_or_else(|| "none".to_string()),
         )
     }
+
+    /// Effective decode microbatch for a non-causal projector image chunk,
+    /// mirroring how native context creation resolves the batches: the context
+    /// size bounds n_batch, and n_batch bounds n_ubatch. A projector image
+    /// that does not fit this microbatch is rejected at decode time. A
+    /// ctx_size of 0 means automatic on the native side (it resolves to the
+    /// model's training context, which the runtime does not know here); keep
+    /// the conservative 512-token cap so the automatic configuration still
+    /// bounds the image budget instead of collapsing it to zero.
+    pub(crate) fn projector_decode_batch(&self) -> u32 {
+        self.n_ubatch
+            .unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH)
+            .min(
+                self.n_batch
+                    .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count)),
+            )
+            .min(if self.ctx_size > 0 {
+                self.ctx_size
+            } else {
+                512
+            })
+    }
 }
 
 /// Unified KV is always enabled; the per-lane batch distinction is removed.
@@ -608,6 +618,49 @@ mod tests {
             batch_thread_config.validate(),
             Err("n_threads_batch must be greater than zero when provided")
         );
+    }
+
+    #[test]
+    fn projector_decode_batch_is_bounded_by_ctx_size() {
+        // Native context creation clamps n_batch to n_ctx and n_ubatch to
+        // n_batch; the projector decode cap must fold the context size in too.
+        let small_ctx = RuntimeConfig {
+            ctx_size: 256,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(small_ctx.projector_decode_batch(), 256);
+
+        let batches_smaller_than_ctx = RuntimeConfig {
+            ctx_size: 4096,
+            n_batch: Some(1024),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(batches_smaller_than_ctx.projector_decode_batch(), 512);
+
+        let default_batches_small_ctx = RuntimeConfig {
+            ctx_size: 128,
+            n_batch: None,
+            n_ubatch: None,
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(default_batches_small_ctx.projector_decode_batch(), 128);
+
+        let defaults = RuntimeConfig::default();
+        assert_eq!(
+            defaults.projector_decode_batch(),
+            LLAMA_SERVER_DEFAULT_N_UBATCH.min(SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH)
+        );
+
+        let auto_ctx = RuntimeConfig {
+            ctx_size: 0,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(auto_ctx.projector_decode_batch(), 512);
     }
 
     #[test]
@@ -796,37 +849,6 @@ mod tests {
         assert_eq!(disabled.op_offload, skippy_ffi::TRISTATE_FALSE);
         assert_ne!(enabled.op_offload, disabled.op_offload);
         Ok(())
-    }
-
-    #[test]
-    fn runtime_config_raw_defaults_host_expert_layers_to_empty_range() -> anyhow::Result<()> {
-        let raw = RuntimeConfig::default().as_raw()?.raw;
-        assert_eq!(raw.host_expert_layer_start, 0);
-        assert_eq!(raw.host_expert_layer_end, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_config_raw_carries_host_expert_layer_range() -> anyhow::Result<()> {
-        let raw = RuntimeConfig {
-            host_expert_layers: HostExpertLayers::new(25, 48),
-            ..RuntimeConfig::default()
-        }
-        .as_raw()?
-        .raw;
-        assert_eq!(raw.host_expert_layer_start, 25);
-        assert_eq!(raw.host_expert_layer_end, 48);
-        Ok(())
-    }
-
-    #[test]
-    fn host_expert_layers_rejects_empty_ranges() {
-        assert_eq!(HostExpertLayers::new(4, 4), None);
-        assert_eq!(HostExpertLayers::new(5, 4), None);
-        assert_eq!(
-            HostExpertLayers::new(0, 3).map(|layers| layers.layer_count()),
-            Some(3)
-        );
     }
 
     #[test]

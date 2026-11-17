@@ -15,8 +15,8 @@ use skippy_inference_api::{
     generation::GenerationRequest, generation::GenerationResponse,
 };
 use skippy_runtime::{
-    PcmResampler, SpeechRecognitionModel, SpeechStream, SpeechStreamConfig, SpeechStreamEvent,
-    Transcription, TranscriptionOptions, TurnDetection,
+    PcmResampler, SPEECH_SAMPLE_RATE, SpeechRecognitionModel, SpeechStream, SpeechStreamConfig,
+    SpeechStreamEvent, Transcription, TranscriptionOptions, TurnDetection,
 };
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task;
@@ -213,7 +213,12 @@ impl InferenceBackend for SpeechRecognitionBackend {
         tokio::spawn(async move {
             // No thread until the client sends something: an idle or probing
             // connection costs nothing here.
-            let Some(first) = input.recv().await else {
+            let first = tokio::select! {
+                biased;
+                () = live.cancellation.cancelled() => None,
+                first = input.recv() => first,
+            };
+            let Some(first) = first else {
                 return;
             };
             let Ok(slot) = sessions.try_acquire_owned() else {
@@ -262,6 +267,7 @@ struct LiveSession {
 }
 
 impl LiveSession {
+    /// Runs the live session loop, feeding batched audio in step-sized pushes.
     fn run(
         self,
         config: RealtimeTranscriptionConfig,
@@ -286,9 +292,26 @@ impl LiveSession {
                             Err(_) => break,
                         }
                     }
-                    stream.push(&pcm, &mut |samples, options| {
-                        self.transcribe(samples, options)
-                    })
+                    // Deliver each cadence pass's events before the next
+                    // pass runs: feed the batched audio in step-sized
+                    // pushes rather than one large push, so a backlog
+                    // never holds every delta until the whole batch
+                    // settles. Each push runs at most one pass, in the
+                    // same order a single push would.
+                    // One step of the stream's current cadence, in its 16 kHz
+                    // samples; a mid-session `Configure` changes the step.
+                    let step_samples = ((SPEECH_SAMPLE_RATE / 1000) as u64
+                        * u64::from(stream.config().step_ms).max(1))
+                        as usize;
+                    pcm.chunks(step_samples)
+                        .try_for_each(|chunk| {
+                            let pass_events = stream.push(chunk, &mut |samples, options| {
+                                self.transcribe(samples, options)
+                            })?;
+                            pass_events.into_iter().for_each(|event| self.report(event));
+                            Ok(())
+                        })
+                        .map(|()| Vec::new())
                 }
                 RealtimeInput::Commit => {
                     if !stream.has_pending_audio() {
@@ -312,9 +335,14 @@ impl LiveSession {
             };
             match events {
                 Ok(events) => events.into_iter().for_each(|event| self.report(event)),
-                Err(error) => self.send(RealtimeOutput::Failed {
-                    message: format!("{error:#}"),
-                }),
+                Err(error) => {
+                    self.send(RealtimeOutput::Failed {
+                        message: format!("{error:#}"),
+                    });
+                    // A failed push can have advanced confirmation without
+                    // returning earlier events. Never reuse that stream state.
+                    break;
+                }
             }
             if self.cancellation.is_cancelled() {
                 break;
@@ -331,15 +359,12 @@ impl LiveSession {
                 command = tokio::time::timeout(self.idle_timeout, input.recv()) => match command {
                     Ok(command) => command,
                     Err(_) => {
-                        let _ = self
-                            .output
-                            .send(RealtimeOutput::Failed {
-                                message: format!(
-                                    "live transcription session idle for {} s",
-                                    self.idle_timeout.as_secs()
-                                ),
-                            })
-                            .await;
+                        tokio::select! {
+                            () = self.cancellation.cancelled() => {},
+                            _ = self.output.send(RealtimeOutput::Failed {
+                                message: format!("live transcription session idle for {} s", self.idle_timeout.as_secs()),
+                            }) => {},
+                        }
                         None
                     }
                 },
@@ -395,8 +420,13 @@ impl LiveSession {
     }
 
     fn send(&self, output: RealtimeOutput) {
-        // A closed receiver means the client left; the input side ends the loop.
-        let _ = self.output.blocking_send(output);
+        self.runtime.block_on(async {
+            tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {},
+                _ = self.output.send(output) => {},
+            }
+        });
     }
 }
 
@@ -416,11 +446,20 @@ fn stream_config(config: &RealtimeTranscriptionConfig) -> SpeechStreamConfig {
     }
 }
 
+/// Fails a request that is not speech-only.
 fn speech_only() -> InferenceError {
     InferenceError::unsupported(
         "this speech-recognition model only serves /v1/audio/transcriptions and /v1/audio/translations",
     )
 }
+
+#[cfg(test)]
+mod native_streaming_tests;
+
+#[cfg(test)]
+mod cadence_tests;
+#[cfg(test)]
+mod cancellation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -436,7 +475,7 @@ mod tests {
 
     /// Returns a fixed transcript and records the options it was given.
     #[derive(Default)]
-    struct FakeModel {
+    pub(super) struct FakeModel {
         seen: Mutex<Vec<TranscriptionOptions>>,
     }
 
@@ -550,6 +589,7 @@ mod tests {
         }
     }
 
+    /// Builds a request the live session answers slowly in tests.
     fn slow_request() -> AudioTranscriptionRequest {
         AudioTranscriptionRequest {
             model: "whisper-test".into(),
@@ -657,9 +697,8 @@ mod tests {
             .await
             .unwrap();
         let second = vec![8_000i16; 16_000];
-        // Audio that queues behind a pass is batched into the next one, so
-        // how the words split across deltas depends on timing; their sum
-        // does not.
+        // Queued audio may be batched, but recognition still visits each
+        // audio-clock cadence boundary before completing the turn.
         for _ in 0..2 {
             session
                 .input

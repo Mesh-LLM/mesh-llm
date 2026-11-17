@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/openai-moe.cpp b/src/models/openai-moe.cpp
-index 8e42278039f975b06de0a9cd17cce411b3a63a3f..66435dc87646e2e69a73688467f84980477427d8 100644
+index 920acbb64c00ada60ba1e79f0566fc078e31a34e..04fb74859292157b803d40519e9df141b630b4b0 100644
 --- a/src/models/openai-moe.cpp
 +++ b/src/models/openai-moe.cpp
-@@ -73,6 +73,8 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -73,6 +73,8 @@ llama_model_openai_moe::graph::graph(const llm_graph_params & params) : llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -20,8 +20,8 @@ index 8e42278039f975b06de0a9cd17cce411b3a63a3f..66435dc87646e2e69a73688467f84980
 +
          res->t_layer_inp[il] = inpL;
  
-         const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-@@ -149,6 +151,7 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
+         ggml_tensor * inpSA = inpL;
+@@ -137,6 +139,7 @@ llama_model_openai_moe::graph::graph(const llm_graph_params & params) : llm_grap
  
          // input for next layer
          inpL = cur;

@@ -7,6 +7,10 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON; empty selects standalone preparation.
+        required: true
+        type: string
       original_event_name:
         description: Original event used for model-cache publication policy.
         required: false
@@ -50,6 +54,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-windows-amd64-cpu

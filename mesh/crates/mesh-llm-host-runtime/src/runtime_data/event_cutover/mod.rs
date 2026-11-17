@@ -3,7 +3,7 @@
 //! See `matrix.rs` for the compile-time field → generation → producer-task
 //! authority table, `merge.rs` for the generation-tagged merge gate wired
 //! into `collector::update_snapshots`, and `producer_write_methods.rs` for
-//! the plan's eleven-write-method documentation matrix.
+//! the plan's thirteen-write-method documentation matrix.
 
 mod matrix;
 mod merge;

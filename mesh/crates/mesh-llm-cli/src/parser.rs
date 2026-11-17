@@ -2,6 +2,7 @@ mod commands;
 mod logging_help;
 mod normalization;
 mod runtime_surface_help;
+mod subcommand_options;
 mod suggestion_redaction;
 mod top_level_options;
 mod validation;
@@ -9,7 +10,8 @@ mod validation;
 pub use commands::{
     AnalyticsCommand, AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope,
     DoctorCommand, GpuCommand, KvCacheCommand, MeshDiscoveryMode, MeshGuardrailCliMode,
-    PluginCommand, ServingStrategyCli, SkillAgentArg, SkillCommand, TrustCommand, TrustPolicy,
+    PluginCommand, PrivateCommand, ServingStrategyCli, SkillAgentArg, SkillCommand, TrustCommand,
+    TrustPolicy,
 };
 pub use logging_help::logging_help;
 pub use normalization::{
@@ -17,6 +19,7 @@ pub use normalization::{
     normalize_runtime_surface_args, raw_args_invoke_analytics, value_taking_option_names,
 };
 pub use runtime_surface_help::runtime_surface_help;
+pub use subcommand_options::{DiscoverArgs, ModelPrepareArgs, SetupArgs, UninstallArgs};
 pub use top_level_options::{
     JoiningOptions, KvCacheOptions, LoggingOptions, MeshPolicyOptions, NetworkOptions,
     NodeModeOptions, OwnerOptions, PlacementOptions, ServingOptions, SpeculativeOptions,
@@ -233,23 +236,18 @@ mod tests {
     }
 
     #[test]
-    fn serve_and_client_still_take_the_hidden_no_default_plugins_flag() {
-        for surface in ["serve", "client"] {
+    fn serve_takes_no_peer_model_downloads_flag() {
+        let parse = |args: &[&str]| {
             let normalized = super::normalize_runtime_surface_args(
-                ["mesh-llm", surface, "--headless", "--no-default-plugins"]
-                    .into_iter()
+                args.iter()
                     .map(std::ffi::OsString::from)
                     .collect::<Vec<_>>(),
             );
-            let cli = Cli::try_parse_from(normalized.normalized)
-                .unwrap_or_else(|error| panic!("{surface} --no-default-plugins: {error}"));
-            assert!(cli.node.headless);
-            assert!(cli.no_default_plugins, "{surface}");
-        }
-        let help = <Cli as clap::CommandFactory>::command()
-            .render_long_help()
-            .to_string();
-        assert!(!help.contains("--no-default-plugins"));
+            Cli::try_parse_from(normalized.normalized).expect("serve flags should parse")
+        };
+
+        assert!(!parse(&["mesh-llm", "serve"]).no_peer_model_downloads);
+        assert!(parse(&["mesh-llm", "serve", "--no-peer-model-downloads"]).no_peer_model_downloads);
     }
 
     #[test]

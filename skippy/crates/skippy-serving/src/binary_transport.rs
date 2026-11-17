@@ -21,7 +21,10 @@ pub use self::binary_messaging::{serve_binary_stage, serve_binary_stage_with_shu
 pub use self::direct_return::PredictionReturnHub;
 pub use self::direct_return::PredictionReturnListener;
 pub(crate) use self::direct_return::PredictionReturnReceiver;
-pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_message_timed};
+pub(crate) use self::forwarding::{
+    PREFILL_FRAME_BUDGET, forwarded_prefill_frames, forwarded_stage_message,
+    forwarded_stage_message_timed,
+};
 pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions};
 pub(crate) use self::stage_execution::{
     BinaryStageExecutionOptions, connect_binary_downstream, run_binary_stage_message,

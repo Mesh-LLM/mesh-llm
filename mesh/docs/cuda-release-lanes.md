@@ -83,10 +83,10 @@ then rocm, vulkan, metal, and cpu fallback where those release targets exist.
 
 ```bash
 # primary CUDA on pre-Blackwell NVIDIA hosts
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 
 # explicit Blackwell, or automatic on detected Blackwell NVIDIA hosts
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh \
+curl -fsSL https://meshllm.cloud/install.sh \
   | MESH_LLM_INSTALL_FLAVOR=cuda-blackwell bash
 ```
 

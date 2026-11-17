@@ -11,6 +11,7 @@ pub mod config_schema;
 pub mod crypto;
 pub mod discovery;
 pub mod inference;
+mod inference_analytics;
 mod logging;
 mod mesh;
 pub mod models;
@@ -241,6 +242,45 @@ async fn initialize_host_runtime_with_config_and_flavor(
         let _ = (config, llama_flavor);
     }
 
+    Ok(())
+}
+
+/// Load the native runtime `serve` would select, for a one-shot command that
+/// reports this host's devices or sizes models for it.
+///
+/// With a dynamic runtime the device list and memory come from the loaded
+/// runtime; without one, the hardware survey falls back to what the OS
+/// exposes, which misses memory the runtime does use (on Windows, the shared
+/// memory of an integrated GPU). Loading the same selection as `serve` keeps
+/// `gpus` and the model fit budget in line with what the node advertises.
+///
+/// Only bundled and already installed runtimes are considered: a read-only
+/// command never downloads one, and a discovered bundle is served in place
+/// (`NativeRuntimeBundleInstallPolicy::UseInPlace`), so this also writes
+/// nothing into the runtime cache. Without the `dynamic-native-runtime`
+/// feature there is nothing to load and this does nothing.
+///
+/// `Ok(())` covers both outcomes that are not an error: a runtime was loaded,
+/// or one was already loaded (the loader returns early then).
+pub async fn load_installed_native_runtime_for_cli(
+    config_path: Option<&Path>,
+    llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+) -> Result<()> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    {
+        let config = plugin::load_config(config_path)?;
+        let startup_selection =
+            system::native_runtime::NativeRuntimeStartupSelection::for_read_only_command(
+                config.runtime.native_runtime,
+                llama_flavor,
+            )?;
+        // Already loaded is not an error: the loader returns early then.
+        system::native_runtime::try_load_installed_native_runtime(startup_selection).await?;
+    }
+    #[cfg(not(feature = "dynamic-native-runtime"))]
+    {
+        let _ = (config_path, llama_flavor);
+    }
     Ok(())
 }
 
@@ -607,4 +647,55 @@ async fn live_logging_limit_application_updates_the_installed_service() {
 }
 
 #[cfg(test)]
-include!("exact_test_wrappers.rs");
+#[tokio::test]
+#[serial_test::serial]
+async fn client_mode_does_not_require_a_native_runtime() {
+    let mut config = tempfile::NamedTempFile::new().expect("isolated client config");
+    std::io::Write::write_all(&mut config, b"[logging]\nenabled = false\n").unwrap();
+    let client = RuntimeOptions {
+        client: true,
+        config: Some(config.path().to_path_buf()),
+        ..Default::default()
+    };
+    #[cfg(feature = "dynamic-native-runtime")]
+    let attempts = || {
+        system::native_runtime::STARTUP_RESOLUTION_ATTEMPTS
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    #[cfg(feature = "dynamic-native-runtime")]
+    let attempts_before = attempts();
+    initialize_host_runtime_for_options(&client)
+        .await
+        .expect("client initializes without native libraries");
+
+    let plugin = RuntimeOptions {
+        plugin: Some("blobstore".to_string()),
+        ..Default::default()
+    };
+    initialize_host_runtime_for_options(&plugin)
+        .await
+        .expect("plugin worker initializes without native libraries");
+    #[cfg(feature = "dynamic-native-runtime")]
+    assert_eq!(
+        attempts(),
+        attempts_before,
+        "client and plugin startup must not resolve a native runtime"
+    );
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn plugin_mode_skips_malformed_host_config() {
+    let mut malformed_config = tempfile::NamedTempFile::new().expect("create malformed config");
+    std::io::Write::write_all(&mut malformed_config, b"[logging\n")
+        .expect("write malformed config");
+    let plugin = RuntimeOptions {
+        plugin: Some("blobstore".to_string()),
+        config: Some(malformed_config.path().to_path_buf()),
+        ..Default::default()
+    };
+
+    initialize_host_runtime_for_options(&plugin)
+        .await
+        .expect("plugin mode should not load host config");
+}

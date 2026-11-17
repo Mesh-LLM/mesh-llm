@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/internlm2.cpp b/src/models/internlm2.cpp
-index 8fc99856a28d3655faf53c013a0087d07cbb500e..1a5b8d9658afbbdee9b8cb286e6b1f6c035dcda0 100644
+index 39ce67af6683bd400485975bce6e4df73eeb67f7..886c12971e985723680e1ef324288cd77a545890 100644
 --- a/src/models/internlm2.cpp
 +++ b/src/models/internlm2.cpp
-@@ -57,6 +57,8 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -57,6 +57,8 @@ llama_model_internlm2::graph::graph(const llm_graph_params & params) : llm_graph
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 8fc99856a28d3655faf53c013a0087d07cbb500e..1a5b8d9658afbbdee9b8cb286e6b1f6c
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -119,6 +121,7 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -110,6 +112,7 @@ llama_model_internlm2::graph::graph(const llm_graph_params & params) : llm_graph
  
          // input for next layer
          inpL = cur;

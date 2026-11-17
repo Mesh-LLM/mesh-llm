@@ -49,6 +49,7 @@ pub(crate) async fn collect(node: &mesh::Node) -> Result<Vec<MeshModel>> {
     collect_local(node, &mut catalog).await?;
     collect_peers(node, &mut catalog).await;
     collect_virtual(node, &mut catalog).await?;
+    insert_automatic_directive(&mut catalog, &node.id().to_string());
     Ok(catalog.into_values().map(finish_model).collect())
 }
 
@@ -149,6 +150,10 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
             .peers
             .values()
             .filter(|peer| peer.is_admitted())
+            .filter(|peer| {
+                // A private listing shows only what the scope's nodes serve.
+                mesh::current_private_scope().is_none_or(|scope| scope.admits_peer(peer))
+            })
             .map(|peer| (peer.clone(), state.peer_has_observed_liveness(peer)))
             .unzip()
     };
@@ -173,6 +178,10 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
                     | crate::proto::node::InferenceAdmissionState::AllPaused
             )
         );
+        // `@private`/`@incognito` are reserved request selectors, never a model
+        // a peer can advertise: listing one would let a stranger's model pose
+        // as private.
+        names.retain(|name| !crate::network::openai::routing_scope::has_private_model_suffix(name));
         for name in names {
             let available = live
                 && !paused
@@ -233,6 +242,47 @@ async fn collect_virtual(
         });
     }
     Ok(())
+}
+
+/// List the automatic directive (`mesh`) like any other chat model, as it was
+/// when the built-in committee registered it. Core serves it from one model,
+/// so it is available whenever an LLM is. A plugin that registered `mesh`
+/// keeps its own entry. The deprecated `auto` alias stays unlisted.
+fn insert_automatic_directive(catalog: &mut BTreeMap<String, MeshModel>, node_id: &str) {
+    let id = crate::network::openai::automatic::DIRECTIVE;
+    if catalog.contains_key(id) {
+        return;
+    }
+    let available = catalog.values().any(MeshModel::is_available_llm);
+    let class = Some(ModelWorkloadClass::CausalGeneration);
+    let provider = MeshModelProvider {
+        provider_id: node_id.to_string(),
+        local: true,
+        endpoint_id: None,
+        plugin: None,
+        workload_class: class,
+        available,
+        operations: operations(class),
+        capabilities: None,
+        metadata: None,
+        runtime: None,
+        thinking: None,
+        requires: None,
+    };
+    catalog.insert(
+        id.to_string(),
+        MeshModel {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            kind: MeshModelKind::Virtual,
+            workload_class: class,
+            availability: availability(available),
+            operations: provider.operations.clone(),
+            metadata: None,
+            providers: vec![provider],
+            virtual_model: Some(serde_json::json!({ "automatic": true })),
+        },
+    );
 }
 
 fn normalized_id(name: &str, descriptor: Option<&ServedModelDescriptor>) -> String {

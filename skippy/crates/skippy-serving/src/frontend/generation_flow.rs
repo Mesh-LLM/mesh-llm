@@ -1185,12 +1185,17 @@ impl StageOpenAiBackend {
             "openai-embedded-session-stop",
             move |runtime| {
                 runtime
-                    .drop_session_timed(&scheduler_session_key)
+                    .end_session_timed(&scheduler_session_key)
                     .map_err(|error| {
                         skippy_inference_api::InferenceError::backend(error.to_string())
                     })
             },
         ) {
+            // Prefix-cache exports the session owes run after the response.
+            let _ = self.iteration_scheduler.execute_runtime_detached(
+                "openai-embedded-session-end-exports",
+                crate::runtime_state::RuntimeState::complete_parked_session_ends,
+            );
             let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
             let drop_stats = outcome.value;
             let mut attrs = self.openai_attrs(&request.ids);

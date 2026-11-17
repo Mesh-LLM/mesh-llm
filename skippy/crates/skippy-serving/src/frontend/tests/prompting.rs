@@ -183,6 +183,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -241,6 +242,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -282,6 +284,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -339,6 +342,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -376,6 +380,7 @@ fn split_prefix_cache_hit_is_reported_in_timings() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        generation_stats: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -816,6 +821,7 @@ fn generated_text_with_logprobs() -> GeneratedText {
             },
         ]),
         activation_wire: None,
+        generation_stats: None,
     }
 }
 
@@ -921,4 +927,51 @@ fn completion_response_reports_token_logprobs_in_legacy_shape() {
     plain.token_logprobs = None;
     let response = completion_response_from_generated_text("qwen".to_string(), &plain);
     assert_eq!(response.choices[0].logprobs, None);
+}
+
+#[tokio::test]
+async fn streaming_skip_chat_parsing_preserves_tool_shaped_text() -> Result<()> {
+    let Some(model_path) = env::var_os("SKIPPY_CHAT_PARSER_TEST_MODEL") else {
+        eprintln!(
+            "set SKIPPY_CHAT_PARSER_TEST_MODEL to a native fixture to exercise streaming parsing"
+        );
+        return Ok(());
+    };
+    let backend = local_openai_backend(
+        StageConfig {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            model_id: "parser-fixture".into(),
+            layer_start: 0,
+            layer_end: 2,
+            lane_count: 1,
+            ctx_size: 128,
+            n_gpu_layers: 0,
+            native_mtp_enabled: false,
+            ..prefix_cache_test_config()
+        },
+        "parser-fixture",
+    )?;
+    let request = tool_request();
+    let metadata = json!({"skip_chat_parsing": true, "grammar_triggers": []}).to_string();
+    let text = "TOOL_CALL lookup {\"city\":\"Sydney\"}";
+    let direct = backend
+        .parse_chat_output(text, &request, Some(&metadata), false)?
+        .expect("raw content");
+    assert_eq!(direct.content.as_deref(), Some(text));
+    assert!(direct.tool_calls.is_none());
+    let mut parser = ChatOutputStreamParser::new(backend, request, metadata, true)?;
+    let mut events = parser.push_delta("TOOL_CALL lookup ")?;
+    events.extend(parser.push_delta("{\"city\":\"Sydney\"}")?);
+    let (final_events, reason) = parser.finish(text, FinishReason::Stop)?;
+    events.extend(final_events);
+    let mut content = String::new();
+    for event in events {
+        match event {
+            GenerationStreamEvent::Delta(delta) => content.push_str(&delta),
+            _ => panic!("skip_chat_parsing emitted a structured event"),
+        }
+    }
+    assert_eq!(content, text);
+    assert_eq!(reason, FinishReason::Stop);
+    Ok(())
 }

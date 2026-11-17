@@ -90,7 +90,7 @@ impl Node {
                 super::super::pre_admission::SlotClaim::Granted(permit) => Some(permit),
                 super::super::pre_admission::SlotClaim::Full => {
                     tracing::warn!(
-                        "Refusing stream {:#04x} from {}: too many gossip and route handlers on one connection",
+                        "Refusing stream {:#04x} from {}: too many handlers of this kind on one connection",
                         accepted.stream_type,
                         accepted.remote.fmt_short()
                     );

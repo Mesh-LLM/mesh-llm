@@ -132,24 +132,41 @@ fn block_media_ref_action(block: &serde_json::Value) -> Option<(MediaRefAction, 
     Some((MediaRefAction::InputAudio, token))
 }
 
+/// Inline every request-object reference, returning the request ids that
+/// hold them. On error the ids acquired so far are released.
 pub(super) async fn resolve_request_object_references(
     path: &str,
     body: &mut serde_json::Value,
     plugin_manager: &plugin::PluginManager,
 ) -> Result<Vec<String>> {
+    let mut request_ids = Vec::new();
+    match inline_request_objects(path, body, plugin_manager, &mut request_ids).await {
+        Ok(()) => Ok(request_ids),
+        Err(error) => {
+            release_request_objects_with(plugin_manager, &request_ids).await;
+            Err(error)
+        }
+    }
+}
+
+async fn inline_request_objects(
+    path: &str,
+    body: &mut serde_json::Value,
+    plugin_manager: &plugin::PluginManager,
+    request_ids: &mut Vec<String>,
+) -> Result<()> {
     let path_only = path.split('?').next().unwrap_or(path);
     if path_only != "/v1/chat/completions" {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let request_id = request_id_from_body(body);
     let Some(messages) = body
         .get_mut("messages")
         .and_then(|value| value.as_array_mut())
     else {
-        return Ok(Vec::new());
+        return Ok(());
     };
 
-    let mut request_ids = Vec::new();
     let mut blob_cache: HashMap<String, crate::plugins::blobstore::GetRequestObjectResponse> =
         HashMap::new();
     for message in messages.iter_mut() {
@@ -229,7 +246,7 @@ pub(super) async fn resolve_request_object_references(
         }
     }
 
-    Ok(request_ids)
+    Ok(())
 }
 
 pub async fn release_request_objects(node: &mesh::Node, request_ids: &[String]) {
@@ -239,9 +256,17 @@ pub async fn release_request_objects(node: &mesh::Node, request_ids: &[String]) 
     let Some(plugin_manager) = node.plugin_manager().await else {
         return;
     };
+    release_request_objects_with(&plugin_manager, request_ids).await;
+}
+
+/// Release each request id; a failure is logged and the rest still released.
+pub(super) async fn release_request_objects_with(
+    plugin_manager: &plugin::PluginManager,
+    request_ids: &[String],
+) {
     for request_id in request_ids {
         if let Err(err) = crate::plugins::blobstore::complete_request(
-            &plugin_manager,
+            plugin_manager,
             crate::plugins::blobstore::FinishRequestRequest {
                 request_id: request_id.clone(),
             },

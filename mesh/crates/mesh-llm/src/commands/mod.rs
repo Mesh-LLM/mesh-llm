@@ -11,7 +11,7 @@ mod runtime;
 mod setup;
 
 use anyhow::{Context, Result};
-use mesh_llm_cli::{Cli, Command};
+use mesh_llm_cli::{Cli, Command, DiscoverArgs, ModelPrepareArgs, UninstallArgs};
 
 use self::analytics::dispatch_analytics_command;
 use self::config::dispatch_config_command;
@@ -71,12 +71,47 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
             )
             .await
         }
-        Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
+        Command::ModelPrepare(_) => dispatch_model_prepare(cmd).await,
         Command::Hermes(args) => mesh_llm_commands::agent_cli::config_write::run(args, true).await,
         Command::Openclaw(args) => {
             mesh_llm_commands::agent_cli::config_write::run(args, false).await
         }
         _ => dispatch_general_command(cli, cmd).await,
+    }
+}
+
+/// `gpus`, model and download commands read this host's devices and memory.
+/// With a dynamic native runtime those come from the loaded runtime, so load
+/// the one `serve` would select (bundled or installed, never downloaded)
+/// before surveying. Without it the survey falls back to what the OS reports
+/// and can disagree with what `serve` advertises. A runtime that fails to load
+/// leaves that fallback in place rather than failing a read-only command.
+///
+/// The model subcommands that render the local fit budget (`search`, `show`)
+/// or resolve a repo ref fit-aware (`download`) need the same survey; the
+/// others never read device memory and skip the load.
+async fn load_installed_native_runtime(cli: &Cli) {
+    if let Err(error) = mesh_llm_host_runtime::load_installed_native_runtime_for_cli(
+        cli.config.as_deref(),
+        cli.placement.llama_flavor.map(crate::map_binary_flavor),
+    )
+    .await
+    {
+        use std::io::Write as _;
+        if cli.logging.debug {
+            // The full chain is debug-only: it names settings these commands
+            // forced themselves (downloads off), which reads as advice about
+            // config the user never touched.
+            let _ = writeln!(
+                mesh_llm_events::console_err(),
+                "native runtime load failed: {error:#}"
+            );
+        }
+        // stderr, so `--json` output on stdout stays machine-readable.
+        let _ = writeln!(
+            mesh_llm_events::console_err(),
+            "⚠️ Native runtime not loaded; this host's device memory comes from what the OS reports and may differ from what `serve` advertises. Run `mesh-llm runtime install` to match `serve`."
+        );
     }
 }
 
@@ -93,38 +128,74 @@ fn apply_config_host_ram_offload(config_path: Option<&std::path::Path>) -> Resul
     Ok(())
 }
 
+/// The `models` subcommands that render the local fit budget in their output
+/// (`search`, `show`) or resolve a repo ref fit-aware (`download`), so they
+/// read this host's device memory and need the runtime-backed survey.
+fn models_command_reads_fit_budget(command: &mesh_llm_cli::models::ModelsCommand) -> bool {
+    matches!(
+        command,
+        mesh_llm_cli::models::ModelsCommand::Search { .. }
+            | mesh_llm_cli::models::ModelsCommand::Show { .. }
+            | mesh_llm_cli::models::ModelsCommand::Download { .. }
+    )
+}
+
+/// Whether a `gpus` subcommand reads the hardware survey. `run-benchmark`
+/// resolves and runs its own benchmark tool and never reads the survey, so it
+/// skips the runtime load.
+fn gpu_command_reads_survey(command: Option<&mesh_llm_cli::GpuCommand>) -> bool {
+    !matches!(command, Some(mesh_llm_cli::GpuCommand::RunBenchmark { .. }))
+}
+
+/// Run a `gpus` command, loading the native runtime first when it reads the
+/// hardware survey.
+async fn dispatch_gpus(
+    cli: &Cli,
+    json: bool,
+    command: Option<&mesh_llm_cli::GpuCommand>,
+) -> Result<()> {
+    if gpu_command_reads_survey(command) {
+        load_installed_native_runtime(cli).await;
+    }
+    mesh_llm_commands::gpus::dispatch_gpu_command(json, command, cli.config.as_deref())
+}
+
 /// Dispatch general CLI commands and propagate the selected command's result.
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Serve | Command::Client => Ok(()),
         Command::Models { command } => {
             apply_config_host_ram_offload(cli.config.as_deref())?;
+            if models_command_reads_fit_budget(command) {
+                load_installed_native_runtime(cli).await;
+            }
             dispatch_models_command(command).await?;
             Ok(())
         }
         Command::Download { name, draft } => {
             apply_config_host_ram_offload(cli.config.as_deref())?;
+            load_installed_native_runtime(cli).await;
             dispatch_download_command(name.as_deref(), *draft).await
         }
         Command::Update { .. } => mesh_llm_commands::update::run_update(cli).await,
-        Command::Gpus { json, command } => {
-            mesh_llm_commands::gpus::dispatch_gpu_command(
-                *json,
-                command.as_ref(),
-                cli.config.as_deref(),
-            )?;
-            Ok(())
-        }
+        Command::Gpus { json, command } => dispatch_gpus(cli, *json, command.as_ref()).await,
         Command::Runtime { .. } | Command::KvCache { .. } => {
             unreachable!("runtime and kv-cache commands are dispatched before general commands")
         }
-        Command::Setup { .. } => {
+        Command::Setup(_) => {
             dispatch_setup_command(cmd, cli.config.as_deref(), cli.placement.llama_flavor).await
         }
         Command::Analytics { command } => {
             dispatch_analytics_command(command, cli.config.as_deref())
         }
-        Command::Uninstall {
+        Command::Private { command } => {
+            mesh_llm_commands::private_nodes::dispatch_private_command(
+                command,
+                cli.config.as_deref(),
+            )
+            .await
+        }
+        Command::Uninstall(UninstallArgs {
             dry_run,
             yes,
             keep_cache,
@@ -134,7 +205,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             binary_path,
             json,
             verbose,
-        } => mesh_llm_commands::uninstall::run_uninstall_command(
+        }) => mesh_llm_commands::uninstall::run_uninstall_command(
             mesh_llm_commands::uninstall::UninstallOptions {
                 dry_run: *dry_run,
                 yes: *yes,
@@ -168,14 +239,19 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Status { port } => run_status(*port).await,
         Command::Stop => run_stop(),
         Command::ServiceHost => mesh_llm_commands::setup::run_service_host(),
-        Command::Discover {
+        Command::Discover(DiscoverArgs {
             name,
             model,
             min_vram,
             region,
             auto,
             relay,
-        } => {
+            // resolved through cli.effective_mesh_discovery_mode()
+            mesh_discovery_mode: _,
+        }) => {
+            // The runtime surfaces enforce their own relay constraint at
+            // startup; only discover's own relay rule applies here.
+            mesh_llm_cli::validate_discovery_mode_args(cli)?;
             run_discover(DiscoverOptions {
                 name: name.clone(),
                 model: model.clone(),
@@ -183,7 +259,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
                 region: region.clone(),
                 auto_join: *auto,
                 relays: relay.clone(),
-                discovery_mode: cli.joining.mesh_discovery_mode,
+                discovery_mode: cli.effective_mesh_discovery_mode(),
                 supplied_join_tokens: cli.joining.join.clone(),
             })
             .await
@@ -201,7 +277,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
                 .await
         }
-        Command::ModelPrepare { .. }
+        Command::ModelPrepare(_)
         | Command::Auth { .. }
         | Command::Hermes(_)
         | Command::Openclaw(_) => unreachable!("handled by dispatch_command"),
@@ -232,7 +308,7 @@ async fn dispatch_agent_command(cmd: &Command) -> Result<()> {
 }
 
 async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
-    let Command::ModelPrepare {
+    let Command::ModelPrepare(ModelPrepareArgs {
         source_repo,
         quant,
         target,
@@ -249,7 +325,7 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
         cancel,
         list,
         update_script,
-    } = cmd
+    }) = cmd
     else {
         unreachable!("dispatch_model_prepare called for non-model-prepare command");
     };
@@ -285,29 +361,16 @@ async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) ->
             let mut rows = resolved_plugin_list_rows(cli)?;
             rows.providers =
                 mesh_llm_commands::plugin::fetch_capability_providers(cli.node.console).await;
-            mesh_llm_commands::plugin::run_plugin_command(
-                command,
-                Some(&rows),
-                cli.config.as_deref(),
-            )
-            .await?;
+            mesh_llm_commands::plugin::run_plugin_command(command, Some(&rows)).await?;
         }
         mesh_llm_cli::PluginCommand::Info { .. } => {
-            if !mesh_llm_commands::plugin::run_plugin_command(command, None, cli.config.as_deref())
-                .await?
-            {
+            if !mesh_llm_commands::plugin::run_plugin_command(command, None).await? {
                 let rows = resolved_plugin_list_rows(cli)?;
-                mesh_llm_commands::plugin::run_plugin_command(
-                    command,
-                    Some(&rows),
-                    cli.config.as_deref(),
-                )
-                .await?;
+                mesh_llm_commands::plugin::run_plugin_command(command, Some(&rows)).await?;
             }
         }
         _ => {
-            mesh_llm_commands::plugin::run_plugin_command(command, None, cli.config.as_deref())
-                .await?;
+            mesh_llm_commands::plugin::run_plugin_command(command, None).await?;
         }
     }
     Ok(())
@@ -346,5 +409,42 @@ fn plugin_runtime_options_from_cli(cli: &Cli) -> mesh_llm_host_runtime::RuntimeO
         publish: cli.mesh_policy.publish,
         nostr_discovery: cli.nostr_discovery,
         ..mesh_llm_host_runtime::RuntimeOptions::default()
+    }
+}
+
+#[cfg(test)]
+mod discovery_mode_dispatch_tests {
+    use super::dispatch_general_command;
+    use clap::Parser;
+    use mesh_llm_cli::{Cli, Command};
+
+    #[tokio::test]
+    async fn discover_dispatch_rejects_relays_in_mdns_mode_before_any_discovery() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "discover",
+            "--mesh-discovery-mode",
+            "mdns",
+            "--relay",
+            "wss://relay.example",
+        ]);
+        let command = cli.command.as_ref().expect("discover subcommand");
+        assert!(matches!(command, Command::Discover { .. }));
+
+        // Guards the failure mode, not the happy path: an unwired validator
+        // falls through to a real LAN mDNS browse (~seconds) before failing.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            dispatch_general_command(&cli, command),
+        )
+        .await
+        .expect("dispatch must return quickly; a timeout means the validator was unwired and discovery ran");
+
+        let err = outcome
+            .expect_err("dispatch must enforce the relay/mode constraint before discovering");
+        assert!(
+            err.to_string().contains("discover --relay"),
+            "error should name the discover relay constraint: {err}"
+        );
     }
 }

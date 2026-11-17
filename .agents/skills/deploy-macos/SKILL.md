@@ -10,10 +10,12 @@ metadata:
 Use this when standing up mesh-llm on a macOS machine — either installing a
 release or shipping a locally built dev binary to a remote Mac for testing.
 
-This is the macOS counterpart to `deploy-linux-gpu`. The current binary embeds
-the staged llama.cpp runtime: the bundle is a **single `mesh-llm` binary**.
-There is no `rpc-server`, no `llama-server`, and no `.dylib` set anymore — if
-you see instructions mentioning those, they are outdated.
+This is the macOS counterpart to `deploy-linux-gpu`. The product bundle contains
+the backend-neutral `mesh-llm` host, product metadata, bundled plugins, and an
+adjacent `native-runtimes/` tree with the selected runtime's manifest and dynamic
+libraries. Transfer and retain the complete bundle; copying only the host does
+not install its inference runtime. Standalone Skippy has a separate CLI archive
+and uses the same native runtime format.
 
 Related skills/docs:
 
@@ -34,17 +36,18 @@ pre-download with `hf`/`huggingface-cli`, do NOT scp GGUFs around. (Only
 ## Install path A: official release (most cases)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 The binary lands at `~/.local/bin/mesh-llm` (may not be on a non-interactive
-SSH `PATH` — use the full path or `bash -lc`). Metal is the macOS backend; the
-installer picks it automatically.
+SSH `PATH` — use the full path or `bash -lc`). The installer also installs the
+selected native runtime. Metal is the macOS backend; the installer picks it
+automatically.
 
 To install as a per-user background service (launchd agent) in the same step:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash -s -- --service
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --service
 ```
 
 Service files: `~/Library/LaunchAgents/com.mesh-llm.mesh-llm.plist`, shared env
@@ -55,9 +58,15 @@ in `~/.config/mesh-llm/service.env`, startup models in `~/.mesh-llm/config.toml`
 Build and bundle locally (from the repo):
 
 ```bash
-just release-build   # serious testing must use the release binary
-just bundle          # /tmp/mesh-llm-bundle.tar.gz (single mesh-llm binary)
+just bundle          # builds release products, then packages host + default runtime
+                     # /tmp/mesh-llm-bundle.tar.gz and its checksum sidecar
 ```
+
+`just bundle` depends on `just release-build` and uses the canonical product
+packager. These development checks prepare a candidate. Final release
+qualification under `release-validation` builds each candidate locally on every
+validation host with `just release-bundle`. Record each build's exact source,
+archive SHA-256, host identity, runtime manifests, and binary version.
 
 Ship and unpack:
 

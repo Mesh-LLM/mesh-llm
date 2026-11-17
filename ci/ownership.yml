@@ -53,6 +53,9 @@
         "scripts/plan-*.sh",
         "scripts/collect-ci-metrics.py",
         "scripts/tests/test_plan_ci.py",
+        "scripts/cargo-linker.cmd",
+        "tools/xtask/src/native_policy/windows_linker.rs",
+        "mesh/scripts/build-windows.ps1",
         "tools/xtask/src/qualification/**",
         "tools/xtask/src/product/**",
         "tools/xtask/tests/qualification_contract*",
@@ -255,6 +258,10 @@
       "patterns": [
         "scripts/build-windows.ps1",
         "scripts/install-windows-sdk.ps1",
+        "scripts/cargo-linker.cmd",
+        "tools/xtask/src/native_policy/windows_linker.rs",
+        "tools/xtask/src/native_policy/windows_linker_tests.rs",
+        "tools/xtask/src/ci_validation/windows_linker_native.rs",
         "scripts/windows-native-runtime-deps.py",
         ".github/actions/setup-windows-short-paths/**",
         ".github/workflows/windows-warm-caches.yml"

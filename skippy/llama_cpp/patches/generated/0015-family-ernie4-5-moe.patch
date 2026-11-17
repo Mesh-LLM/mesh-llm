@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/ernie4-5-moe.cpp b/src/models/ernie4-5-moe.cpp
-index 6bf539d2133186aa8be629f45efe69eea45cb89d..863dcc8d7fa981bd14f624bfbe3a14ca21c7b271 100644
+index 7edf9f508bcc6dd05fa5ffb1ba5d3a69ebbefb1e..2003980a83c5c5230b58f92ab2740b9874776b5b 100644
 --- a/src/models/ernie4-5-moe.cpp
 +++ b/src/models/ernie4-5-moe.cpp
-@@ -25,6 +25,8 @@ llama_model_ernie4_5_moe::graph::graph(const llama_model & model, const llm_grap
+@@ -25,6 +25,8 @@ llama_model_ernie4_5_moe::graph::graph(const llm_graph_params & params) :
  
      GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Ernie 4.5 MoE requires n_moe_layer_step > 0");
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 6bf539d2133186aa8be629f45efe69eea45cb89d..863dcc8d7fa981bd14f624bfbe3a14ca
          ggml_tensor * inpSA = inpL;
          // norm
          {
-@@ -115,6 +117,7 @@ llama_model_ernie4_5_moe::graph::graph(const llama_model & model, const llm_grap
+@@ -112,6 +114,7 @@ llama_model_ernie4_5_moe::graph::graph(const llm_graph_params & params) :
  
          // input for next layer
          inpL = cur;

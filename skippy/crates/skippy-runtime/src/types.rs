@@ -441,6 +441,13 @@ pub struct RuntimeKvPageDesc {
 }
 
 impl RuntimeKvPageDesc {
+    /// Whether the page includes a sliding-window cache's rows. That cache
+    /// reuses rows that fall out of the window as the sequence grows, so its
+    /// rows below a position do not stay resident.
+    pub fn has_sliding_window_component(&self) -> bool {
+        self.codec == skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1
+    }
+
     pub fn validate_payload(&self, payload_len: usize) -> Result<()> {
         let payload_len = u64::try_from(payload_len)?;
         if self.payload_bytes != payload_len {

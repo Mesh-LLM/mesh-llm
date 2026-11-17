@@ -44,13 +44,19 @@ Run the setup command after the executable is installed:
 mesh-llm setup
 ```
 
-On Windows PowerShell:
+On Windows, `install.ps1` already runs setup at the end of an interactive
+install, so skip this step if you just saw its summary. To run it again from
+PowerShell:
 
 ```powershell
 mesh-llm.exe setup
 ```
 
-On interactive macOS and Linux terminals, setup can offer to install and enable the background service. The GitHub star prompt only appears when interactive and eligible, and it defaults to Yes.
+On interactive terminals, setup offers to install the background service
+(default Yes) on macOS, Linux and Windows. Accepting it starts a node right
+away, and again at each login, on the console and API ports used below. The
+GitHub star prompt only appears when interactive and eligible, and it defaults
+to Yes.
 
 <a id="3-start-one-private-node"></a>
 
@@ -59,6 +65,22 @@ On interactive macOS and Linux terminals, setup can offer to install and enable 
 The commands below use named Nostr discovery, not a private-mesh setup.
 The discovery name is not an access-control credential. See
 [discovery, join tokens, and admission policy](/docs/pages/private-meshes/#discovery-and-admission).
+
+If setup's summary shows the service running, a node already holds the ports
+below and the `serve` command fails because they are in use. Before running it,
+stop the service: on macOS and Linux with `mesh-llm stop`; on Windows by ending
+its scheduled task, which also ends its node:
+
+```powershell
+schtasks /End /TN mesh-llm
+```
+
+Or skip `serve` and load the model into the running node with
+`mesh-llm load unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL`. That node keeps
+running in the background but has no `my-mesh` discovery name, so stop the
+service and use `serve` below before you add another machine in step 7. If
+setup said the service starts at your next logon, no node is running yet and
+`serve` below works as is.
 
 Use this model first on a 12GB+ machine:
 
@@ -85,6 +107,13 @@ If the model does not load, stop Mesh and use the [model picker](/docs/pages/cho
 mesh-llm stop
 ```
 
+On Windows, if you loaded the model into the background service, end its task
+instead: `mesh-llm stop` ends that node, but the service starts it again.
+
+```powershell
+schtasks /End /TN mesh-llm
+```
+
 ## 4. Chat in the console
 
 Open:
@@ -107,6 +136,13 @@ List the models your local node can route to:
 
 ```sh
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
+```
+
+On Windows PowerShell, where `curl` is an alias of `Invoke-WebRequest` and `jq`
+is not installed:
+
+```powershell
+(Invoke-RestMethod http://localhost:9337/v1/models).data.id
 ```
 
 You should see at least one model id. Use that id for direct API calls or agents.

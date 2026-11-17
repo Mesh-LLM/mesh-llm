@@ -53,6 +53,7 @@ mod tests {
                 attempts,
                 timeout_attempts,
                 refreshed: false,
+                prompt_bytes: None,
             };
             let status = state.exhausted_status();
             assert_eq!(status, expected);

@@ -1,6 +1,6 @@
 use super::runtime::{native_runtime_command_selection, native_runtime_config_selector};
 use anyhow::{Result, bail};
-use mesh_llm_cli::{BinaryFlavor, Command};
+use mesh_llm_cli::{BinaryFlavor, Command, SetupArgs};
 use mesh_llm_commands::setup::{SetupCommandArgs, SetupEnvironment, SetupOptions, SetupPlatform};
 use std::io::IsTerminal;
 use std::path::Path;
@@ -22,14 +22,14 @@ fn setup_command_args<'a>(
     cmd: &Command,
     configured: mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection<'a>,
 ) -> Result<SetupCommandArgs<'a>> {
-    let Command::Setup {
+    let Command::Setup(SetupArgs {
         yes,
         no_interactive,
         service,
         no_service,
         skip_runtime,
         verbose,
-    } = cmd
+    }) = cmd
     else {
         bail!("dispatch_setup_command called for non-setup command");
     };
@@ -71,14 +71,14 @@ mod tests {
     #[test]
     fn setup_dispatch_maps_cli_booleans_directly_into_setup_options() {
         let args = setup_command_args(
-            &Command::Setup {
+            &Command::Setup(SetupArgs {
                 yes: true,
                 no_interactive: false,
                 service: true,
                 no_service: false,
                 skip_runtime: true,
                 verbose: true,
-            },
+            }),
             mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection::default(),
         )
         .expect("setup args should build");

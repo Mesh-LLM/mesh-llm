@@ -24,8 +24,14 @@ const UNVERIFIED: &[&str] = &[
     // Current divergent owners split from the already-unverified skippy-server.
     "skippy-serving",
     "skippy-api",
+    // Tested by its own Windows unit step; catalog routing waits until the
+    // rename map stops listing it as a `skippy-server` successor.
     "skippy-cli",
     "xtask",
+    // Model verification moved from xtask keeps its Unix nonblocking open; Windows runtime proof is pending.
+    "authority-automation",
+    // Runner cleanup moved from xtask keeps its Unix replay and signal fixtures; Windows runtime proof is pending.
+    "runner-cleanup",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
 ];

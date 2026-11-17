@@ -39,6 +39,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "owner_control.advertise_addr",
             ConfigValueSchema::SocketAddr,
         ),
+        private_nodes_setting(),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),
@@ -108,6 +109,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "runtime.reconcile_model_target_demand_upgrades",
             ConfigValueSchema::Boolean,
         ),
+        runtime_setting("runtime.peer_model_downloads", ConfigValueSchema::Boolean),
         native_runtime_setting(
             "runtime.native_runtime.mesh_version",
             ConfigValueSchema::String,

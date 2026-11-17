@@ -618,7 +618,12 @@ impl Node {
         &self,
         peer_id: EndpointId,
     ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        // A private request may only leave this node for a node in its
+        // private scope, whichever routing path chose the peer. Checked again
+        // after the connection wait: a certificate can expire meanwhile.
+        self.ensure_peer_in_current_private_scope(peer_id).await?;
         let conn = self.connection_to_peer(peer_id).await?;
+        self.ensure_peer_in_current_private_scope(peer_id).await?;
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let (mut send, recv) = conn.open_bi().await?;
             send.write_all(&[STREAM_TUNNEL_HTTP]).await?;
@@ -1022,14 +1027,17 @@ impl Node {
         });
     }
 
+    /// Handles a plugin channel stream, holding its connection slot until done.
     pub(crate) fn spawn_plugin_channel_stream(
         &self,
         remote: EndpointId,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node.handle_plugin_channel_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin channel stream error from {}: {error}",
@@ -1039,14 +1047,17 @@ impl Node {
         });
     }
 
+    /// Handles a plugin bulk-transfer stream, holding its connection slot until done.
     pub(crate) fn spawn_plugin_bulk_stream(
         &self,
         remote: EndpointId,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node.handle_plugin_bulk_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin bulk stream error from {}: {error}",
@@ -1056,14 +1067,17 @@ impl Node {
         });
     }
 
+    /// Handles a plugin mesh stream, holding its connection slot until done.
     pub(crate) fn spawn_plugin_mesh_stream(
         &self,
         remote: EndpointId,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node.handle_plugin_mesh_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin mesh stream error from {}: {error}",
@@ -1124,9 +1138,9 @@ impl Node {
             STREAM_PEER_DOWN => self.spawn_peer_down_stream(remote, recv),
             STREAM_PEER_LEAVING => self.spawn_peer_leaving_stream(remote, recv),
             STREAM_DIRECT_PATH_REQUEST => self.spawn_direct_path_request_stream(remote, recv),
-            STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv),
-            STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv),
-            STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv),
+            STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv, slot),
+            STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv, slot),
+            STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv, slot),
             STREAM_SUBPROTOCOL => self.spawn_subprotocol_stream(remote, send, recv),
             other => tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short()),
         }

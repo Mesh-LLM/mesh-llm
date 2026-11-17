@@ -6,7 +6,7 @@ and graph planning require no downloaded weights. These tests do not run numeric
 inference or replace real-model, projector, audio, OCR or encoder-decoder certification.
 
 The native CTest table in `src/skippy/tests/graph_contract_cases.cmake` is carried
-by core patch `0006-test-cover-graph-derived-stage-contracts.patch`.
+by core patch `0006-test-skippy-cover-live-graph-and-state-contracts.patch`.
 `tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs`, run by `just ci-validate`,
 compares every family, architecture, trunk depth, activation width, MTP count and
 test mode against `family-certified.json`. Missing, duplicate or stale rows fail.

@@ -14,6 +14,8 @@ mod identity_registry;
 mod identity_transport;
 pub(crate) mod inference_routing;
 mod model_assets;
+#[cfg(test)]
+pub(crate) mod selected_attempt_test_support;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;
@@ -32,6 +34,8 @@ pub(crate) mod mcp;
 pub mod openai_exchange;
 mod operation_bindings;
 pub(crate) mod operations;
+pub(crate) mod private_invocations;
+mod request_transform;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -94,12 +98,6 @@ pub use self::config::{
 pub(crate) use self::config::{HardwareConfig, ModelConfigDefaults, SkippyConfig};
 #[cfg(test)]
 pub(crate) use self::config::{ModelFitConfig, RequestDefaultsConfig, ThroughputConfig};
-#[cfg(test)]
-pub(crate) use self::config::{
-    assert_mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges,
-    assert_mesh_requirements_config_rejects_non_ed25519_signer_key,
-    assert_mesh_requirements_config_rejects_required_attestation_without_signer_keys,
-};
 pub(crate) use self::config::{
     mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
     mesh_requirements_validation_error, validate_config_diagnostics_with_installed_plugin_schemas,
@@ -152,6 +150,7 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) runtime_data: RuntimeDataCollector,
     pub(in crate::plugin) rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     pub(in crate::plugin) shutting_down: AtomicBool,
+    pub(in crate::plugin) private_invocations: private_invocations::PrivateInvocations,
     #[cfg(test)]
     pub(in crate::plugin) bridged_plugins: BTreeSet<String>,
     #[cfg(test)]
@@ -250,6 +249,7 @@ impl PluginManager {
                 runtime_data,
                 rpc_bridge,
                 shutting_down: AtomicBool::new(false),
+                private_invocations: Default::default(),
                 #[cfg(test)]
                 bridged_plugins: BTreeSet::new(),
                 #[cfg(test)]
@@ -478,6 +478,7 @@ impl PluginManager {
                 runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
                 shutting_down: AtomicBool::new(false),
+                private_invocations: Default::default(),
                 bridged_plugins: plugin_names
                     .iter()
                     .map(|name| (*name).to_string())
@@ -509,6 +510,7 @@ impl PluginManager {
                 runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(None)),
                 shutting_down: AtomicBool::new(false),
+                private_invocations: Default::default(),
                 bridged_plugins: BTreeSet::new(),
                 test_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
@@ -954,25 +956,64 @@ impl PluginManager {
             .await
     }
 
+    /// Mark `plugin_name` as handling a private request until the guard
+    /// drops; `nodes` is that request's scope, when it has one yet. See
+    /// [`private_invocations`].
+    pub(crate) fn begin_private_invocation(
+        &self,
+        plugin_name: &str,
+        nodes: Option<crate::mesh::PrivateScope>,
+    ) -> private_invocations::PrivateInvocationGuard {
+        self.inner.private_invocations.begin(plugin_name, nodes)
+    }
+
+    /// How nested inference from `plugin_name` must be scoped, if private.
+    pub(crate) fn private_nested_scope(
+        &self,
+        plugin_name: &str,
+    ) -> Option<private_invocations::NestedScope> {
+        self.inner.private_invocations.nested_scope(plugin_name)
+    }
+
     pub async fn invoke_virtual_model(
         &self,
         route: &VirtualModelRoute,
         input_json: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<mesh_llm_plugin::VirtualModelResponse> {
+        let response = self
+            .invoke_virtual_model_service(route, input_json, timeout)
+            .await?;
+        Self::virtual_model_response(route, response)
+    }
+
+    /// Send a virtual-model turn and wait for the plugin's reply, whatever
+    /// it says; [`Self::virtual_model_response`] reads it.
+    pub(crate) async fn invoke_virtual_model_service(
+        &self,
+        route: &VirtualModelRoute,
+        input_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<proto::InvokeServiceResponse> {
         let plugin = self
             .inner
             .plugins
             .get(&route.plugin_name)
             .with_context(|| format!("Unknown plugin '{}'", route.plugin_name))?;
-        let response = plugin
+        plugin
             .invoke_service(
                 proto::ServiceKind::VirtualModel,
                 &route.handler,
                 input_json,
                 timeout,
             )
-            .await?;
+            .await
+    }
+
+    pub(crate) fn virtual_model_response(
+        route: &VirtualModelRoute,
+        response: proto::InvokeServiceResponse,
+    ) -> Result<mesh_llm_plugin::VirtualModelResponse> {
         if response.is_error {
             bail!(
                 "Virtual model '{}' failed: {}",
@@ -1252,6 +1293,7 @@ impl PluginManager {
                 proto::ServiceKind::OpenaiExchange => {
                     bail!("OpenAI lifecycle services have no MCP projection")
                 }
+                proto::ServiceKind::RequestTransform => "request_transform/invoke",
                 proto::ServiceKind::Unspecified => {
                     bail!("Service kind is required for test plugin '{plugin_name}'")
                 }

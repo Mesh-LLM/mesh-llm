@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/minicpm3.cpp b/src/models/minicpm3.cpp
-index 7e01153dc66a7d94e08f03abb92b1c9128555e0b..c70c918257dd5611d1692d0e383ee95e5673d4db 100644
+index 0cfe0d5aba977dc030d133d80fe48993093610ba..51ef02c4ec2856699287d8e37b879f6ca0b94f09 100644
 --- a/src/models/minicpm3.cpp
 +++ b/src/models/minicpm3.cpp
-@@ -89,6 +89,8 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -89,6 +89,8 @@ llama_model_minicpm3::graph::graph(const llm_graph_params & params) : llm_graph_
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -20,8 +20,8 @@ index 7e01153dc66a7d94e08f03abb92b1c9128555e0b..c70c918257dd5611d1692d0e383ee95e
 +
          ggml_tensor * inpSA = inpL;
  
-         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-@@ -227,6 +229,7 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+         // norm
+@@ -217,6 +219,7 @@ llama_model_minicpm3::graph::graph(const llm_graph_params & params) : llm_graph_
  
          // input for next layer
          inpL = cur;

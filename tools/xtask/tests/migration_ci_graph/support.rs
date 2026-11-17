@@ -33,6 +33,7 @@ pub(crate) fn text(bytes: &[u8]) -> String {
 pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
     match lane {
         "quality" => &[
+            "consistency",
             "authority_source",
             "authority_linux_x64",
             "quality",
@@ -47,11 +48,21 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
             "static_abi",
             "rust_tests",
             "hosts",
-            "native_runtimes",
-            "runtime_product",
+            "native_runtime_cpu",
+            "product_cpu",
+            "product_smoke_cpu",
+            "native_runtime_cuda",
+            "product_cuda",
+            "product_smoke_cuda",
+            "native_runtime_rocm",
+            "product_rocm",
+            "product_smoke_rocm",
+            "native_runtime_vulkan",
+            "product_vulkan",
+            "product_smoke_vulkan",
             "kotlin_sdk_input",
-            "sdk",
-            "product_smoke",
+            "sdk_rust",
+            "sdk_kotlin",
         ],
         "macos" => &[
             "authority_source",

@@ -226,3 +226,13 @@ async fn run_auto_console_state_keeps_worker_nodes_out_of_client_mode() {
     assert_eq!(status["is_client"], serde_json::Value::Bool(false));
     assert_ne!(status["node_state"], "client");
 }
+
+#[test]
+fn quitting_during_startup_cancels_without_late_ready_render() {
+    assert_quitting_during_startup_cancels_without_late_ready_render();
+}
+
+#[test]
+fn startup_launch_plan_describes_planned_runtime_before_process_start() {
+    assert_startup_launch_plan_describes_planned_runtime_before_process_start();
+}

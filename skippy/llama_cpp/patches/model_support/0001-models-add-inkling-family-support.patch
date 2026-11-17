@@ -1,55 +1,59 @@
-From deffabcb3b09a6fa9eb136aafb7af2399d34ae7f Mon Sep 17 00:00:00 2001
+From b50c61ac8677a96dc1cf76e2cd398c75916d8816 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
-Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH 1/6] models: add inkling family support
+Date: Fri, 6 Nov 2026 10:32:22 -0800
+Subject: [PATCH] models: add inkling family support
 
 ---
- common/chat.cpp                     |   8 +
- common/parsers/inkling.cpp          | 117 +++++
- common/parsers/parsers.h            |   2 +
- common/parsers/sources.cmake        |   1 +
- models/templates/Inkling.jinja      | 514 +++++++++++++++++++++
- src/llama-arch.cpp                  |  15 +
- src/llama-arch.h                    |  24 +
- src/llama-context.cpp               |   6 +
- src/llama-graph.cpp                 |  21 +-
- src/llama-hparams.cpp               |   2 +-
- src/llama-hparams.h                 |  10 +-
- src/llama-kv-cache.h                |   5 +
- src/llama-model-saver.cpp           |   1 +
- src/llama-model.cpp                 |  14 +
- src/llama-model.h                   |   9 +
- src/llama-quant.cpp                 |  10 +
- src/llama-vocab.cpp                 |  10 +
- src/llama-vocab.h                   |   1 +
- src/models/inkling.cpp              | 687 ++++++++++++++++++++++++++++
- src/models/models.h                 |  13 +
- src/models/nemotron-h-moe.cpp       |   2 +-
- src/skippy/speculative_decoding.cpp |  93 +++-
- tests/test-chat.cpp                 | 115 +++++
- tests/test-llama-archs.cpp          |   4 +
- tools/mtmd/CMakeLists.txt           |   1 +
- tools/mtmd/clip-impl.h              |   9 +
- tools/mtmd/clip-model.h             |  12 +
- tools/mtmd/clip.cpp                 |  62 ++-
- tools/mtmd/models/inkling.cpp       | 105 +++++
- tools/mtmd/models/models.h          |  11 +
- tools/mtmd/mtmd-audio.cpp           |  69 +++
- tools/mtmd/mtmd-audio.h             |  10 +
- tools/mtmd/mtmd-image.cpp           |  72 +++
- tools/mtmd/mtmd-image.h             |  20 +
- tools/mtmd/mtmd.cpp                 |  37 +-
- 35 files changed, 2070 insertions(+), 22 deletions(-)
+ common/chat.cpp                      |   8 +
+ common/parsers/inkling.cpp           | 117 +++++
+ common/parsers/parsers.h             |   2 +
+ common/parsers/sources.cmake         |   1 +
+ models/templates/Inkling.jinja       | 514 ++++++++++++++++++++
+ src/llama-arch.cpp                   |  15 +
+ src/llama-arch.h                     |  24 +
+ src/llama-context.cpp                |   6 +
+ src/llama-graph.cpp                  |  25 +-
+ src/llama-hparams.cpp                |   2 +-
+ src/llama-hparams.h                  |  10 +-
+ src/llama-kv-cache.cpp               |  24 +-
+ src/llama-kv-cache.h                 |   4 +-
+ src/llama-model.cpp                  |  14 +
+ src/llama-model.h                    |   9 +
+ src/llama-quant.cpp                  |  10 +
+ src/llama-vocab.cpp                  |  10 +
+ src/llama-vocab.h                    |   1 +
+ src/models/inkling.cpp               | 691 +++++++++++++++++++++++++++
+ src/models/models.h                  |  12 +
+ src/models/nemotron-h-moe.cpp        |   2 +-
+ src/skippy/speculative_decoding.cpp  |  93 +++-
+ tests/test-chat.cpp                  | 115 +++++
+ tests/test-llama-archs.cpp           |   4 +
+ tests/test-mtmd-impl.cpp             |  52 ++
+ tests/test-skippy-kv-page-export.cpp |  58 +++
+ tools/mtmd/CMakeLists.txt            |   1 +
+ tools/mtmd/models/inkling.cpp        | 105 ++++
+ tools/mtmd/models/models.h           |  11 +
+ tools/mtmd/mtmd-audio.cpp            |  72 +++
+ tools/mtmd/mtmd-audio.h              |  12 +
+ tools/mtmd/mtmd-graph.cpp            |   4 +
+ tools/mtmd/mtmd-image.cpp            |  72 +++
+ tools/mtmd/mtmd-image.h              |  20 +
+ tools/mtmd/mtmd-impl.h               |   9 +
+ tools/mtmd/mtmd-model.cpp            |  52 +-
+ tools/mtmd/mtmd-model.h              |  12 +
+ tools/mtmd/mtmd-subcontext.cpp       |   9 +
+ tools/mtmd/mtmd.cpp                  |  37 +-
+ 39 files changed, 2206 insertions(+), 33 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
  create mode 100644 tools/mtmd/models/inkling.cpp
 
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 287d92bc2..f526789a7 100644
+index f2e3ad37b..a54d8a23f 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -1277,6 +1277,14 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
+@@ -1390,6 +1390,14 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
          return common_chat_params_init_cohere2moe;
      }
  
@@ -188,10 +192,10 @@ index 000000000..6bf2ed611
 +    return data;
 +}
 diff --git a/common/parsers/parsers.h b/common/parsers/parsers.h
-index 8f0a97ce3..c9362b6e7 100644
+index b1b6d166a..917a1a669 100644
 --- a/common/parsers/parsers.h
 +++ b/common/parsers/parsers.h
-@@ -67,6 +67,8 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &
+@@ -63,6 +63,8 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &
  
  common_chat_params common_chat_params_init_ling3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
  
@@ -201,10 +205,10 @@ index 8f0a97ce3..c9362b6e7 100644
  common_chat_params common_chat_params_init_lfm2(const common_chat_template & tmpl, const autoparser::generation_params & inputs, bool tool_list_tokens);
  
 diff --git a/common/parsers/sources.cmake b/common/parsers/sources.cmake
-index 152397074..d7dc6edc9 100644
+index 2174f4519..7bbf85a85 100644
 --- a/common/parsers/sources.cmake
 +++ b/common/parsers/sources.cmake
-@@ -13,6 +13,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
+@@ -14,6 +14,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/kimi-k2.cpp
      ${CMAKE_CURRENT_LIST_DIR}/kimi-k3.cpp
      ${CMAKE_CURRENT_LIST_DIR}/ling3.cpp
@@ -733,18 +737,18 @@ index 000000000..95874d23d
 +{%- endif -%}
 +{#- Unsloth translation to jinja from TML's parser #}
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 50cf12122..89e1fc386 100644
+index 05875a8a8..e659ba84a 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -164,6 +164,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
-     { LLM_ARCH_QWEN3TTS,         "qwen3tts"         },
-     { LLM_ARCH_POCKETTTS,        "pockettts"        },
-     { LLM_ARCH_K2_HORIZON,       "k2-horizon"       },
+@@ -179,6 +179,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_BEAM,             "beam"             },
+     { LLM_ARCH_KOLIBRI1,         "kolibri1"         },
+     { LLM_ARCH_RICURSIVE,        "ricursive"        },
 +    { LLM_ARCH_INKLING,          "inkling"          },
      { LLM_ARCH_UNKNOWN,          "(unknown)"        },
  };
  
-@@ -402,6 +403,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -444,6 +445,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_LILICORR_MLP_HIDDEN_SIZE,   "lilicorr.mlp_hidden_size"  },
  
      { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
@@ -763,35 +767,35 @@ index 50cf12122..89e1fc386 100644
      // sentence-transformers dense modules feature dims
      { LLM_KV_DENSE_2_FEAT_IN,        "%s.dense_2_feat_in"  },
      { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out" },
-@@ -1234,6 +1247,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
-         case LLM_ARCH_QWEN4EXP:
+@@ -1396,6 +1409,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
          case LLM_ARCH_DEEPSEEK4:
+         case LLM_ARCH_DEEPSEEK41:
          case LLM_ARCH_MINIMAX_01:
 +        case LLM_ARCH_INKLING:
              return true;
          default:
              return false;
-@@ -1318,6 +1332,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+@@ -1492,6 +1506,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
          case LLM_ARCH_KIMI_K3:
-         case LLM_ARCH_GLM5_NEXT:
+         case LLM_ARCH_KIMI_K31:
          case LLM_ARCH_QWEN3TTS:
 +        case LLM_ARCH_INKLING:
+         case LLM_ARCH_LIMITE:
              return false;
          default:
-             return true;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index d822d6d76..fe46aa888 100644
+index cd34e36a9..4ee49d708 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -169,6 +169,7 @@ enum llm_arch {
-     LLM_ARCH_MINIMAX_01,
-     LLM_ARCH_HRM_TEXT,
-     LLM_ARCH_K2_HORIZON,
+@@ -183,6 +183,7 @@ enum llm_arch {
+     LLM_ARCH_KOLIBRI1,
+     LLM_ARCH_LIMITE,
+     LLM_ARCH_RICURSIVE,
 +    LLM_ARCH_INKLING,
      LLM_ARCH_UNKNOWN,
  };
  
-@@ -448,6 +449,17 @@ enum llm_kv {
+@@ -492,6 +493,17 @@ enum llm_kv {
  
      LLM_KV_SHORTCONV_L_CACHE,
  
@@ -809,7 +813,7 @@ index d822d6d76..fe46aa888 100644
      LLM_KV_XIELU_ALPHA_N,
      LLM_KV_XIELU_ALPHA_P,
      LLM_KV_XIELU_BETA,
-@@ -527,6 +539,10 @@ enum llm_tensor {
+@@ -576,6 +588,10 @@ enum llm_tensor {
      LLM_TENSOR_FFN_DOWN_CHEXPS,
      LLM_TENSOR_FFN_GATE_CHEXPS,
      LLM_TENSOR_FFN_UP_CHEXPS,
@@ -820,7 +824,7 @@ index d822d6d76..fe46aa888 100644
      LLM_TENSOR_FFN_EXP_PROBS_B,
      LLM_TENSOR_FFN_EXP_PROBS_B_VL,
      LLM_TENSOR_FFN_LATENT_DOWN,
-@@ -732,6 +748,14 @@ enum llm_tensor {
+@@ -827,6 +843,14 @@ enum llm_tensor {
      LLM_TENSOR_SHORTCONV_CONV,
      LLM_TENSOR_SHORTCONV_INPROJ,
      LLM_TENSOR_SHORTCONV_OUTPROJ,
@@ -836,10 +840,10 @@ index d822d6d76..fe46aa888 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b966f8ccd..56390f221 100644
+index bc031e147..dff74dde9 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -272,6 +272,12 @@ llama_context::llama_context(
+@@ -281,6 +281,12 @@ llama_context::llama_context(
          }
      }
  
@@ -853,10 +857,10 @@ index b966f8ccd..56390f221 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index ec6e4d075..569b27022 100644
+index dd066de24..1358811e8 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3401,9 +3401,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3617,10 +3617,27 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -864,8 +868,9 @@ index ec6e4d075..569b27022 100644
 +    // backends without a fused-bias flash-attention kernel (e.g. Metal for the
 +    // banded op) can still run FA by folding the additive KQ bias into the mask
 +    const bool fold_kq_b_into_mask = cparams.flash_attn && kq_b != nullptr && kq_mask != nullptr &&
-+            arch == LLM_ARCH_INKLING;
++            model.arch == LLM_ARCH_INKLING;
 +    const bool use_flash_attn = cparams.flash_attn && (kq_b == nullptr || fold_kq_b_into_mask);
+     GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
      if (use_flash_attn) {
 -        GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 +        ggml_tensor * fa_mask = kq_mask;
@@ -885,8 +890,21 @@ index ec6e4d075..569b27022 100644
  
          if (v_trans) {
              v = ggml_transpose(ctx0, v);
+@@ -3636,10 +3653,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+         }
+ 
+         if (kv_rows) {
+-            cur = ggml_flash_attn_ext_rows(ctx0, q, k, v, kq_mask, kv_rows, kq_scale, hparams.f_max_alibi_bias,
++            cur = ggml_flash_attn_ext_rows(ctx0, q, k, v, fa_mask, kv_rows, kq_scale, hparams.f_max_alibi_bias,
+                                            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+         } else {
+-            cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
++            cur = ggml_flash_attn_ext(ctx0, q, k, v, fa_mask, kq_scale, hparams.f_max_alibi_bias,
+                                       hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+         }
+         res->add_fused_node({kv_rows ? LLM_FUSED_OP_FLASH_ATTN_KV_ROWS : LLM_FUSED_OP_FLASH_ATTN, cur, il});
 diff --git a/src/llama-hparams.cpp b/src/llama-hparams.cpp
-index e53a51cd8..057123fd6 100644
+index 1a554d204..08b81a067 100644
 --- a/src/llama-hparams.cpp
 +++ b/src/llama-hparams.cpp
 @@ -217,7 +217,7 @@ uint32_t llama_hparams::n_embd_k_idx(uint32_t il) const {
@@ -899,10 +917,10 @@ index e53a51cd8..057123fd6 100644
      }
  
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index a7c608537..bc30ead2f 100644
+index 53810f36f..e685800f3 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
-@@ -103,9 +103,17 @@ struct llama_hparams {
+@@ -106,9 +106,17 @@ struct llama_hparams {
  
      uint32_t n_shortconv_l_cache  = 0;
  
@@ -921,58 +939,101 @@ index a7c608537..bc30ead2f 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index b8fdbd578..f0f2be6fc 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -3315,7 +3315,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
+     }
+ }
+ 
+-void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
++void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows) const {
+     const int64_t n_tokens = ubatch->n_tokens;
+ 
+     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+@@ -3325,7 +3325,16 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+     const int64_t n_kv = dst->ne[0];
+     GGML_ASSERT(dst->ne[1] == n_tokens);
+ 
+-    // [n_kv, n_tokens] in GLOBAL token order (stream-major, same as the KQ mask)
++    const int32_t * row_ids = nullptr;
++    int64_t n_slices = 1;
++    if (rows != nullptr) {
++        GGML_ASSERT(ggml_backend_buffer_is_host(rows->buffer));
++        GGML_ASSERT(rows->ne[0] == n_kv && rows->ne[1] > 0 && n_tokens % rows->ne[1] == 0);
++        row_ids = static_cast<const int32_t *>(rows->data);
++        n_slices = rows->ne[1];
++    }
++
++    // Each slice must use the same physical-cell order and padding as its attention mask.
+     for (int64_t i = 0; i < n_tokens; ++i) {
+         const llama_seq_id seq_id = ubatch->seq_id[i][0];
+ 
+@@ -3336,8 +3345,10 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+         for (int64_t j = 0; j < n_kv; ++j) {
+             // use the ACTUAL absolute position in the KV cell; physical slot order is not monotonic
+             int32_t rel = (int32_t) extent; // zero-bias column
+-            if (!cells.is_empty(j)) {
+-                const llama_pos d = p1 - cells.pos_get(j);
++            const int64_t slice = row_ids != nullptr ? i / (n_tokens / n_slices) : 0;
++            const int32_t cell = row_ids != nullptr ? row_ids[slice*n_kv + j] : static_cast<int32_t>(j);
++            if (cell >= 0 && !cells.is_empty(cell)) {
++                const llama_pos d = p1 - cells.pos_get(cell);
+                 if (d >= 0 && d < (llama_pos) extent) {
+                     rel = (int32_t) d;
+                 }
+@@ -4592,8 +4603,9 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+     kv->set_input_pos_bucket(dst, ubatch);
+ }
+ 
+-void llama_kv_cache_context::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
+-    kv->set_input_pos_rel_flat(dst, ubatch, extent);
++void llama_kv_cache_context::set_input_pos_rel_flat(
++        ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows) const {
++    kv->set_input_pos_rel_flat(dst, ubatch, extent, rows);
+ }
+ 
+ void llama_kv_cache_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 80edf6865..021fdfe2e 100644
+index 47ed977c4..4bc80bb96 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -287,6 +287,10 @@ public:
-     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+@@ -302,7 +302,7 @@ public:
  
-+    // inkling: fill dst I32 [n_kv, n_tokens] with flat rel-bias gather indices,
-+    // idx(i, j) = i*(extent + 1) + rel; empty/out-of-band cells map to the zero-bias column `extent`
-+    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
-+
-     void set_input_k_rot(ggml_tensor * dst) const;
-     void set_input_v_rot(ggml_tensor * dst) const;
+     // inkling: fill dst I32 [n_kv, n_tokens] with flat rel-bias gather indices,
+     // idx(i, j) = i*(extent + 1) + rel; empty/out-of-band cells map to the zero-bias column `extent`
+-    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
++    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows = nullptr) const;
  
-@@ -504,6 +508,7 @@ public:
+     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
+     bool has_cell_ext() const;
+@@ -529,7 +529,7 @@ public:
      void set_input_k_shift   (ggml_tensor * dst) const;
-     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
-+    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const; // inkling
+-    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const; // inkling
++    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, const ggml_tensor * rows = nullptr) const; // inkling
  
-     void set_input_k_rot(ggml_tensor * dst) const;
-     void set_input_v_rot(ggml_tensor * dst) const;
-diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
-index e011e24ea..7ddb0a54b 100644
---- a/src/llama-model-saver.cpp
-+++ b/src/llama-model-saver.cpp
-@@ -22,6 +22,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
-         case LLM_ARCH_STEP35:
-         case LLM_ARCH_CLEF: // the head tensors are not saved
-         case LLM_ARCH_VLLM_DECISION2:
-+        case LLM_ARCH_INKLING:
-             return false;
-         default:
-             return true;
+     // see llama_kv_cache::get_prev_tokens()
+     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 9901eca36..e39a0dcfb 100644
+index 143c1f895..d614d1a0a 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -355,6 +355,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
-             return new llama_model_spark2_5(params);
-         case LLM_ARCH_K2_HORIZON:
+@@ -385,6 +385,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_k2_horizon(params);
+         case LLM_ARCH_KOLIBRI1:
+             return new llama_model_kolibri1(params);
 +        case LLM_ARCH_INKLING:
 +            return new llama_model_inkling(params);
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -3215,8 +3217,19 @@ llama_memory_i * llama_model::create_memory(
-                     llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
-                     const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
-                     if (arch == LLM_ARCH_FALCON_H1) {
+@@ -3430,8 +3432,19 @@ llama_memory_i * llama_model::create_memory(
+                             return il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
+                         };
+                     } else if (arch == LLM_ARCH_FALCON_H1) {
 +                        // all layers have both an attention KV cache and a recurrent (conv) state
                          filter_attn = [&](uint32_t) { return true; };
                          filter_recr = [&](uint32_t) { return true; };
@@ -989,19 +1050,19 @@ index 9901eca36..e39a0dcfb 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -3600,6 +3613,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
-         case LLM_ARCH_KIMI_LINEAR:
-         case LLM_ARCH_KIMI_K3:
+@@ -3824,6 +3837,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_KIMI_K31:
          case LLM_ARCH_GLM5_NEXT:
+         case LLM_ARCH_STARCODER:
 +        case LLM_ARCH_INKLING:
              return LLAMA_ROPE_TYPE_NONE;
  
          // use what we call a normal RoPE, operating on pairs of consecutive head values
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 42210ef67..34a94365d 100644
+index 06cd32f62..a5d8e9ac3 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -623,6 +623,15 @@ struct llama_layer {
+@@ -681,6 +681,15 @@ struct llama_layer {
  
      struct llama_layer_nextn nextn;
  
@@ -1018,12 +1079,12 @@ index 42210ef67..34a94365d 100644
  };
  
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 1fdb97303..9992659d8 100644
+index 69379305b..2c90b2331 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
-@@ -324,6 +324,16 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
-     quantize &= name.find("ssm_conv1d") == std::string::npos;
-     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
+@@ -357,6 +357,16 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
+     quantize &= name.find("conv_dw") == std::string::npos;
+     quantize &= name.rfind("a.gen.wav.quant.", 0) != 0;
  
 +    // keep Inkling's shortconv kernels and rel-proj table unquantized; arch-gated so the
 +    // name substrings cannot hit another architecture
@@ -1039,11 +1100,11 @@ index 1fdb97303..9992659d8 100644
      quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
      quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index 9b5cc2e1c..a800d3ff3 100644
+index 229a051e0..4f2e601d8 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
-@@ -443,6 +443,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
-                     "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+@@ -459,6 +459,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
+                     "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                  };
                  break;
 +            case LLAMA_VOCAB_PRE_TYPE_INKLING:
@@ -1055,7 +1116,7 @@ index 9b5cc2e1c..a800d3ff3 100644
              case LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI:
                  // Same lookaheads as GPT4O but with \p{M} added so combining marks
                  // (diacritics) attach to their base letters. Avoids excessive
-@@ -2475,6 +2481,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+@@ -2677,6 +2683,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                  tokenizer_pre == "talkie") {
                  pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
                  clean_spaces = false;
@@ -1067,23 +1128,23 @@ index 9b5cc2e1c..a800d3ff3 100644
                  tokenizer_pre == "granite-embed-multi-97m") {
                  pre_type = LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI;
 diff --git a/src/llama-vocab.h b/src/llama-vocab.h
-index 898a23ae6..3ab139857 100644
+index 1ae5b65f6..29190ca38 100644
 --- a/src/llama-vocab.h
 +++ b/src/llama-vocab.h
-@@ -70,6 +70,7 @@ enum llama_vocab_pre_type {
-     LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
-     LLAMA_VOCAB_PRE_TYPE_MMBERT            = 60,
-     LLAMA_VOCAB_PRE_TYPE_K2_HORIZON        = 61,
-+    LLAMA_VOCAB_PRE_TYPE_INKLING           = 62,
+@@ -75,6 +75,7 @@ enum llama_vocab_pre_type {
+     LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD = 64,
+     LLAMA_VOCAB_PRE_TYPE_SOPRANO           = 65,
+     LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3       = 66,
++    LLAMA_VOCAB_PRE_TYPE_INKLING           = 67,
  };
  
- struct LLM_KV;
+ // HF Metaspace pre-tokenizer prepend_scheme
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
 new file mode 100644
-index 000000000..4037a31ec
+index 000000000..c6c9e223a
 --- /dev/null
 +++ b/src/models/inkling.cpp
-@@ -0,0 +1,687 @@
+@@ -0,0 +1,691 @@
 +// Inkling (PRIVATE arch): hybrid iSWA attention + per-layer packed shortconv state; see INKLING_DESIGN.md.
 +
 +#include "models.h"
@@ -1253,11 +1314,11 @@ index 000000000..4037a31ec
 +        }
 +
 +        if (rel_idx) {
-+            mctx->get_attn()->get_base()->set_input_pos_rel_flat(rel_idx, ubatch, hparams.inkling_rel_extent);
++            mctx->get_attn()->get_base()->set_input_pos_rel_flat(rel_idx, ubatch, hparams.inkling_rel_extent, rel_rows);
 +        }
 +
 +        if (rel_idx_swa) {
-+            mctx->get_attn()->get_swa()->set_input_pos_rel_flat(rel_idx_swa, ubatch, hparams.inkling_rel_extent_swa);
++            mctx->get_attn()->get_swa()->set_input_pos_rel_flat(rel_idx_swa, ubatch, hparams.inkling_rel_extent_swa, rel_rows_swa);
 +        }
 +
 +        if (vocab_mask) {
@@ -1290,6 +1351,8 @@ index 000000000..4037a31ec
 +    ggml_tensor * tau         = nullptr; // F32 [1, 1, n_tokens]
 +    ggml_tensor * rel_idx     = nullptr; // I32 [n_kv_base, n_tokens]
 +    ggml_tensor * rel_idx_swa = nullptr; // I32 [n_kv_swa, n_tokens]
++    ggml_tensor * rel_rows    = nullptr; // Physical KV cell lists for the global bias
++    ggml_tensor * rel_rows_swa = nullptr; // Physical KV cell lists for the SWA bias
 +    ggml_tensor * vocab_mask  = nullptr; // F32 [n_vocab]
 +    ggml_tensor * shexp_idx   = nullptr; // I32 [n_shexp, n_tokens], constant 0..n_shexp-1
 +
@@ -1327,7 +1390,6 @@ index 000000000..4037a31ec
 +
 +    const auto * mctx_hyb  = static_cast<const llama_memory_hybrid_iswa_context *>(mctx);
 +    const auto * mctx_recr = mctx_hyb->get_recr();
-+    const auto * mctx_attn = mctx_hyb->get_attn();
 +
 +    const uint32_t kv_head = mctx_recr->get_head();
 +
@@ -1356,6 +1418,9 @@ index 000000000..4037a31ec
 +        }
 +    }
 +
++    // Fill the row lists before the relative-position input reads them.
++    auto * inp_hybrid = build_inp_mem_hybrid_iswa();
++    auto * attn_input = inp_hybrid->get_attn();
 +    auto inp = std::make_unique<llm_graph_input_inkling>(hparams, mctx_hyb);
 +
 +    if (hparams.inkling_log_n_floor > 0 && has_global) {
@@ -1365,14 +1430,16 @@ index 000000000..4037a31ec
 +    }
 +
 +    if (needs_rel_idx_global) {
-+        const int64_t n_kv = mctx_attn->get_base()->get_n_kv();
++        const int64_t n_kv = attn_input->self_attn_mask.raw->ne[0];
++        inp->rel_rows = attn_input->self_attn_mask.rows;
 +        inp->rel_idx = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_tokens);
 +        ggml_set_input(inp->rel_idx);
 +        ggml_set_name(inp->rel_idx, "inkling_rel_idx");
 +    }
 +
 +    if (needs_rel_idx_local) {
-+        const int64_t n_kv_swa = mctx_attn->get_swa()->get_n_kv();
++        const int64_t n_kv_swa = attn_input->self_attn_mask_swa.raw->ne[0];
++        inp->rel_rows_swa = attn_input->self_attn_mask_swa.rows;
 +        inp->rel_idx_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv_swa, n_tokens);
 +        ggml_set_input(inp->rel_idx_swa);
 +        ggml_set_name(inp->rel_idx_swa, "inkling_rel_idx_swa");
@@ -1407,8 +1474,6 @@ index 000000000..4037a31ec
 +    request_input(shexp_idx,   "inkling.shared_expert_indices");
 +
 +    res->add_input(std::move(inp));
-+
-+    auto * inp_hybrid = build_inp_mem_hybrid_iswa();
 +
 +    // shared by the 4 stream sub-views; build_rs must run exactly once per layer (it zero-inits fresh states)
 +    ggml_tensor * conv_rs_cur = nullptr;
@@ -1500,7 +1565,7 @@ index 000000000..4037a31ec
 +        cb(rel, "inkling_rel_logits", il);
 +
 +        auto * inp_attn = inp_hybrid->get_attn();
-+        const int64_t n_stream = (is_swa ? inp_attn->get_kq_mask_swa() : inp_attn->get_kq_mask())->ne[3];
++        const int64_t n_stream = (is_swa ? inp_attn->self_attn_mask_swa.raw : inp_attn->self_attn_mask.raw)->ne[3];
 +        GGML_ASSERT(n_tokens % n_stream == 0);
 +
 +            // soft_max_ext scales kq + kq_b jointly: fold 1/head_dim into q to keep the bias unscaled
@@ -1772,12 +1837,12 @@ index 000000000..4037a31ec
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 88fd07d97..fc5e5b61d 100644
+index 39dbd99bc..272b6dadf 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2264,6 +2264,19 @@ struct llama_model_lfm2moe : public llama_model_base {
+@@ -2398,6 +2398,18 @@ struct llama_model_lfm3 : public llama_model_base {
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
- 
  
 +struct llama_model_inkling : public llama_model_base {
 +    llama_model_inkling(const struct llama_model_params & params) : llama_model_base(params) {}
@@ -1791,15 +1856,14 @@ index 88fd07d97..fc5e5b61d 100644
 +    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 +};
 +
-+
  struct llama_model_smallthinker : public llama_model_base {
      llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/nemotron-h-moe.cpp b/src/models/nemotron-h-moe.cpp
-index a80d7970e..7b454ba00 100644
+index 26b0ba7cf..1d5da2af1 100644
 --- a/src/models/nemotron-h-moe.cpp
 +++ b/src/models/nemotron-h-moe.cpp
-@@ -23,7 +23,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+@@ -23,7 +23,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llm_graph_params & params
  
      // token embedding weights
      // A standalone NextN-only draft omits token_embd/output and shares the
@@ -1809,7 +1873,7 @@ index a80d7970e..7b454ba00 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 3d15111fb..258c86143 100644
+index 7f55c0d88..5ab739c9d 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@
@@ -1863,7 +1927,7 @@ index 3d15111fb..258c86143 100644
      llama_context * ctx;
      uint32_t depth_count;
  };
-@@ -101,8 +124,12 @@ void skippy_mtp_clear_session_state(skippy_session * session) {
+@@ -175,8 +198,12 @@ void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_cou
  static bool skippy_mtp_shares_target_memory(
          const llama_context * mtp_ctx,
          const llama_context * target_ctx) {
@@ -1878,7 +1942,7 @@ index 3d15111fb..258c86143 100644
  }
  
  enum skippy_status skippy_mtp_sync_target_inputs(
-@@ -126,7 +153,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -200,7 +227,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
      skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
      const bool mtp_shares_target_memory = skippy_mtp_shares_target_memory(mtp_ctx, session->ctx);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -1887,7 +1951,7 @@ index 3d15111fb..258c86143 100644
      // MTP consumes complete pre-norm output rows, which can be wider than
      // token embeddings (for example DeepSeek4 hyperconnections).
      const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
-@@ -340,9 +367,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -416,9 +443,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
  }
  
  int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
@@ -1946,7 +2010,7 @@ index 3d15111fb..258c86143 100644
  }
  
  skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx) {
-@@ -393,7 +466,7 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -469,7 +542,7 @@ enum skippy_status skippy_mtp_propose_next(
              max_draft_tokens,
              SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -1956,10 +2020,10 @@ index 3d15111fb..258c86143 100644
          draft_limit = std::min<size_t>(draft_limit, mtp_depth_scope.depth_count);
      }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index bff571609..c6be5a10a 100644
+index 4a15d1e71..175a95150 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -3032,6 +3032,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -3135,6 +3135,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .run();
      }
  
@@ -2057,7 +2121,7 @@ index bff571609..c6be5a10a 100644
      {
          // Google Gemma 2 2B - does not support tool calling
          auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
-@@ -7690,6 +7781,28 @@ static void test_template_generation_prompt() {
+@@ -8124,6 +8215,28 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
  
@@ -2086,7 +2150,7 @@ index bff571609..c6be5a10a 100644
      {
          // Preserve canonical "none" while keeping the boolean aliases disabled.
          auto render_disabled = [](const char * template_path) {
-@@ -7723,6 +7836,8 @@ static void test_template_generation_prompt() {
+@@ -8157,6 +8270,8 @@ static void test_template_generation_prompt() {
          assert_contains(qwen, "<think>\n\n</think>\n\n");
          const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja").str();
          assert_contains(gpt_oss, "Reasoning: none");
@@ -2096,10 +2160,10 @@ index bff571609..c6be5a10a 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ef56c4c61..e791fcaf9 100644
+index 4f5fb29d6..0b3812728 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -936,6 +936,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -1274,6 +1274,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2110,11 +2174,164 @@ index ef56c4c61..e791fcaf9 100644
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
+diff --git a/tests/test-mtmd-impl.cpp b/tests/test-mtmd-impl.cpp
+index 3fd720088..0e019bfc7 100644
+--- a/tests/test-mtmd-impl.cpp
++++ b/tests/test-mtmd-impl.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "ggml-backend.h"
+ #include "ggml-cpp.h"
++#include "gguf.h"
+ #include "mtmd-audio.h"
+ #include "mtmd-subcontext.h"
+ #include "mtmd-helper.h"
+@@ -12,7 +13,9 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdlib>
++#include <filesystem>
+ #include <iostream>
++#include <random>
+ #include <stdexcept>
+ #include <string>
+ #include <tuple>
+@@ -52,6 +55,55 @@ struct test_registry {
+ // mtmd_image
+ //
+ 
++MAKE_TEST(test_inkling_projector_without_patch_embedding) {
++    // Inkling's hierarchical MLP consumes raw RGB patches; requiring a ViT
++    // patch-embedding tensor rejects an otherwise complete projector.
++    const auto path = std::filesystem::temp_directory_path() /
++        ("mtmd-inkling-" + std::to_string(std::random_device{}()) + ".gguf");
++    gguf_context_ptr meta(gguf_init_empty());
++    gguf_set_val_str(meta.get(), "general.architecture", "clip");
++    gguf_set_val_str(meta.get(), "clip.projector_type", "inkling");
++    gguf_set_val_bool(meta.get(), "clip.has_vision_encoder", true);
++    gguf_set_val_u32(meta.get(), "clip.vision.embedding_length", 3);
++    gguf_set_val_u32(meta.get(), "clip.vision.attention.head_count", 1);
++    gguf_set_val_u32(meta.get(), "clip.vision.feed_forward_length", 0);
++    gguf_set_val_u32(meta.get(), "clip.vision.block_count", 4);
++    gguf_set_val_u32(meta.get(), "clip.vision.projection_dim", 4);
++    gguf_set_val_f32(meta.get(), "clip.vision.attention.layer_norm_epsilon", 1e-6f);
++    gguf_set_val_u32(meta.get(), "clip.vision.image_size", 40);
++    gguf_set_val_u32(meta.get(), "clip.vision.patch_size", 40);
++    const float mean[] = { 0.0f, 0.0f, 0.0f };
++    const float std[] = { 1.0f, 1.0f, 1.0f };
++    gguf_set_arr_data(meta.get(), "clip.vision.image_mean", GGUF_TYPE_FLOAT32, mean, 3);
++    gguf_set_arr_data(meta.get(), "clip.vision.image_std", GGUF_TYPE_FLOAT32, std, 3);
++
++    ggml_context_ptr tensors(ggml_init({ 65536, nullptr, false }));
++    auto add = [&](const char * name, int64_t inputs, int64_t outputs) {
++        ggml_tensor * value = outputs == 0
++            ? ggml_new_tensor_1d(tensors.get(), GGML_TYPE_F32, inputs)
++            : ggml_new_tensor_2d(tensors.get(), GGML_TYPE_F32, inputs, outputs);
++        ggml_set_name(value, name);
++        ggml_set_zero(value);
++        gguf_add_tensor(meta.get(), value);
++    };
++    add("v.hmlp.0.linear.weight", 75, 1);
++    add("v.hmlp.0.norm.weight", 1, 0);
++    add("v.hmlp.1.linear.weight", 4, 1);
++    add("v.hmlp.1.norm.weight", 1, 0);
++    add("v.hmlp.2.linear.weight", 16, 1);
++    add("v.hmlp.2.norm.weight", 1, 0);
++    add("v.hmlp.3.linear.weight", 2, 4);
++    add("v.hmlp.final_norm.weight", 4, 0);
++    if (!gguf_write_to_file(meta.get(), path.string().c_str(), false)) {
++        throw std::runtime_error("cannot write Inkling projector fixture");
++    }
++    auto params = mtmd_context_params_default();
++    params.use_gpu = false;
++    const auto usage = mtmd_get_memory_usage(path.string().c_str(), params);
++    std::filesystem::remove(path);
++    t.assert_equal("Inkling projector admits its own stem", false, usage.backend_mem_usage.empty());
++}
++
+ MAKE_TEST(test_image_preprocessor_longest_edge) {
+     mtmd_hparams hparams;
+     hparams.image_longest_edge = 1540;
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 30c88b490..0fb9f036a 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -1,4 +1,8 @@
+ #include "skippy.h"
++#include "ggml-alloc.h"
++#include "ggml-cpu.h"
++#include <algorithm>
++#include <cstring>
+ #include "../src/skippy/state_memory.h"
+ 
+ #include "../src/llama-batch.h"
+@@ -77,7 +81,61 @@ static bool graph_cache_capabilities_cover_complete_state() {
+     return skippy_graph_cache_capabilities(result) == 0;
+ }
+ 
++static bool relative_position_indices_follow_kv_rows() {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    if (!model) return false;
++    llama_hparams hparams{};
++    hparams.n_layer_all = 1;
++    hparams.n_embd_head_k_full = hparams.n_embd_head_v_full = 4;
++    hparams.n_embd_head_k_swa = hparams.n_embd_head_v_swa = 4;
++    hparams.n_embd_head_k_mla_impl = hparams.n_embd_head_v_mla_impl = 4;
++    hparams.n_head_arr[0] = hparams.n_head_kv_arr[0] = 1;
++    llama_kv_cache kv(*model, false, hparams, GGML_TYPE_F32, GGML_TYPE_F32,
++            true, false, true, 8, 2, 0, LLAMA_SWA_TYPE_NONE, nullptr,
++            [](int32_t il) { return il == 0; }, {}, {});
++
++    llama_pos positions[] = {5, 7};
++    llama_seq_id sequences[] = {0, 1};
++    llama_seq_id * token_sequences[] = {&sequences[0], &sequences[1]};
++    int32_t counts[] = {1, 1};
++    llama_ubatch batch{};
++    batch.n_tokens = 2;
++    batch.n_pos = 1;
++    batch.n_seq_tokens = 1;
++    batch.n_seqs = batch.n_seqs_unq = 2;
++    batch.pos = positions;
++    batch.n_seq_id = counts;
++    batch.seq_id = token_sequences;
++    batch.seq_id_unq = sequences;
++    llama_kv_cache::slot_info slot{};
++    slot.s0 = slot.s1 = 0;
++    slot.strm = {0};
++    slot.idxs = {{3, 1}};
++    kv.apply_ubatch(slot, batch);
++
++    ggml_context_ptr context(ggml_init({ggml_tensor_overhead()*2, nullptr, true}));
++    auto * rows = ggml_new_tensor_2d(context.get(), GGML_TYPE_I32, 2, 2);
++    auto * indices = ggml_new_tensor_2d(context.get(), GGML_TYPE_I32, 2, 2);
++    auto * buffer = ggml_backend_alloc_ctx_tensors_from_buft(context.get(), ggml_backend_cpu_buffer_type());
++    if (!buffer) return false;
++    const int32_t selected_rows[] = {3, -1, 1, -1};
++    ggml_backend_tensor_set(rows, selected_rows, 0, sizeof(selected_rows));
++    positions[0] = 6;
++    positions[1] = 8;
++    kv.set_input_pos_rel_flat(indices, &batch, 4, rows);
++    int32_t actual[4]{};
++    ggml_backend_tensor_get(indices, actual, 0, sizeof(actual));
++    const int32_t expected[] = {1, 4, 6, 9};
++    const bool matches = std::equal(std::begin(expected), std::end(expected), std::begin(actual));
++    ggml_backend_buffer_free(buffer);
++    return matches;
++}
++
+ int main() {
++    if (!relative_position_indices_follow_kv_rows()) {
++        fprintf(stderr, "relative positions do not follow fused KV row order and padding\n");
++        return 1;
++    }
+     if (!graph_cache_capabilities_cover_complete_state()) {
+         fprintf(stderr, "graph cache capabilities do not cover complete state\n");
+         return 1;
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index 82f74bdc9..860f6d3ea 100644
+index c19815d67..3fa9f0cbe 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
-@@ -43,6 +43,7 @@ add_library(mtmd
+@@ -51,6 +51,7 @@ add_library(mtmd
              models/granite4-vision.cpp
              models/hunyuanvl.cpp
              models/internvl.cpp
@@ -2122,201 +2339,15 @@ index 82f74bdc9..860f6d3ea 100644
              models/kimivl.cpp
              models/kimik25.cpp
              models/nemotron-v2-vl.cpp
-diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
-index 3d6c6f8c4..f936f3ceb 100644
---- a/tools/mtmd/clip-impl.h
-+++ b/tools/mtmd/clip-impl.h
-@@ -378,6 +378,13 @@
- #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
- #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
- 
-+// Inkling hMLP vision and dMel audio towers.
-+#define TN_INKLING_HMLP_LINEAR     "v.hmlp.%d.linear.weight"
-+#define TN_INKLING_HMLP_NORM       "v.hmlp.%d.norm.weight"
-+#define TN_INKLING_HMLP_FINAL_NORM "v.hmlp.final_norm.weight"
-+#define TN_INKLING_DMEL_EMBD       "a.dmel.embedding.weight"
-+#define TN_INKLING_DMEL_FINAL_NORM "a.dmel.final_norm.weight"
-+
- // mobilenetv5 (gemma3n) definitions
- #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
- #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
-@@ -446,6 +453,7 @@
- struct clip_ctx;
- 
- enum projector_type {
-+    PROJECTOR_TYPE_INKLING,
-     PROJECTOR_TYPE_MLP,
-     PROJECTOR_TYPE_MLP_NORM,
-     PROJECTOR_TYPE_LDP,
-@@ -519,6 +527,7 @@ enum projector_type {
- };
- 
- static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
-+    { PROJECTOR_TYPE_INKLING,           "inkling" },
-     { PROJECTOR_TYPE_MLP,               "mlp" },
-     { PROJECTOR_TYPE_LDP,               "ldp" },
-     { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
-diff --git a/tools/mtmd/clip-model.h b/tools/mtmd/clip-model.h
-index 2c4ea398c..bef80ac73 100644
---- a/tools/mtmd/clip-model.h
-+++ b/tools/mtmd/clip-model.h
-@@ -556,6 +556,12 @@ struct clip_code2wav {
-     ggml_tensor * dac_post_snake_beta  = nullptr;
-     ggml_tensor * dac_post_conv_w      = nullptr;
-     ggml_tensor * dac_post_conv_b      = nullptr;
-+
-+};
-+
-+struct inkling_hmlp_layer {
-+    ggml_tensor * linear_w = nullptr;
-+    ggml_tensor * norm_w   = nullptr;
- };
- 
- struct clip_model {
-@@ -572,6 +578,12 @@ struct clip_model {
-     ggml_tensor * norm_embd_w = nullptr;
-     ggml_tensor * norm_embd_b = nullptr;
- 
-+    // Inkling towers (neither uses standard transformer blocks).
-+    std::vector<inkling_hmlp_layer> inkling_hmlp_layers;
-+    ggml_tensor * inkling_hmlp_final_norm_w = nullptr;
-+    ggml_tensor * inkling_dmel_embd_w        = nullptr;
-+    ggml_tensor * inkling_dmel_final_norm_w  = nullptr;
-+
-     // "indexed" patch embedding norms
-     ggml_tensor * patch_norm_1_w = nullptr;
-     ggml_tensor * patch_norm_1_b = nullptr;
-diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index 4c1185a43..38ace4b1a 100644
---- a/tools/mtmd/clip.cpp
-+++ b/tools/mtmd/clip.cpp
-@@ -956,6 +956,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
-     std::unique_ptr<clip_graph> builder;
- 
-     switch (ctx->proj_type()) {
-+        case PROJECTOR_TYPE_INKLING:
-+            {
-+                builder = std::make_unique<clip_graph_inkling>(ctx, img);
-+            } break;
-         case PROJECTOR_TYPE_GEMMA3:
-         case PROJECTOR_TYPE_IDEFICS3:
-         case PROJECTOR_TYPE_COHERE2V:
-@@ -1456,6 +1460,21 @@ struct clip_model_loader {
- 
-             // model-specific params
-             switch (model.proj_type) {
-+                case PROJECTOR_TYPE_INKLING:
-+                    {
-+                        if (is_vision) {
-+                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
-+                            hparams.image_resize_pad  = PAD_NONE;
-+                            hparams.warmup_image_size = hparams.patch_size;
-+                        } else {
-+                            hparams.audio_chunk_len   = 0;
-+                            hparams.audio_sample_rate = 16000;
-+                            hparams.audio_n_fft       = 1600;
-+                            hparams.audio_window_len  = 1600;
-+                            hparams.audio_hop_len     = 800;
-+                            hparams.warmup_audio_size = 4;
-+                        }
-+                    } break;
-                 case PROJECTOR_TYPE_MLP:
-                 case PROJECTOR_TYPE_MLP_NORM:
-                 case PROJECTOR_TYPE_LDP:
-@@ -2348,7 +2367,8 @@ struct clip_model_loader {
-         const bool has_standard_layers = (
-             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
-             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
--            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN);
-+            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
-+            model.proj_type != PROJECTOR_TYPE_INKLING);
- 
-         // layers
-         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2443,6 +2463,23 @@ struct clip_model_loader {
- 
- 
-         switch (model.proj_type) {
-+            case PROJECTOR_TYPE_INKLING:
-+                {
-+                    if (model.modality == CLIP_MODALITY_VISION) {
-+                        model.inkling_hmlp_layers.resize(hparams.n_layer);
-+                        for (int il = 0; il < hparams.n_layer; ++il) {
-+                            auto & layer = model.inkling_hmlp_layers[il];
-+                            layer.linear_w = get_tensor(string_format(TN_INKLING_HMLP_LINEAR, il));
-+                            layer.norm_w = il + 1 < hparams.n_layer
-+                                ? get_tensor(string_format(TN_INKLING_HMLP_NORM, il))
-+                                : nullptr;
-+                        }
-+                        model.inkling_hmlp_final_norm_w = get_tensor(TN_INKLING_HMLP_FINAL_NORM);
-+                    } else {
-+                        model.inkling_dmel_embd_w       = get_tensor(TN_INKLING_DMEL_EMBD);
-+                        model.inkling_dmel_final_norm_w = get_tensor(TN_INKLING_DMEL_FINAL_NORM);
-+                    }
-+                } break;
-             case PROJECTOR_TYPE_MLP:
-             case PROJECTOR_TYPE_MLP_NORM:
-                 {
-@@ -3818,6 +3855,11 @@ struct clip_model_loader {
-             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
-         }
-         batch.entries.push_back(img);
-+        // One logical Inkling vision patch always contains two adjacent temporal slices (including warmup reserve).
-+        if (ctx_clip.model.modality == CLIP_MODALITY_VISION &&
-+                ctx_clip.model.proj_type == PROJECTOR_TYPE_INKLING) {
-+            batch.entries.push_back(img);
-+        }
-         return batch;
-     }
- 
-@@ -4253,6 +4295,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
-     projector_type proj = ctx->proj_type();
- 
-     switch (proj) {
-+        case PROJECTOR_TYPE_INKLING:
-+            {
-+                if (ctx->model.modality == CLIP_MODALITY_AUDIO) {
-+                    // One dMel row is one soft audio token.
-+                    n_patches = img->nx();
-+                } else {
-+                    // Batch entries are temporal slices; each pair emits one token.
-+                    n_patches = 1;
-+                }
-+            } break;
-         case PROJECTOR_TYPE_MLP:
-         case PROJECTOR_TYPE_MLP_NORM:
-         case PROJECTOR_TYPE_JANUS_PRO:
-@@ -4768,6 +4820,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
- 
-     // set input per projector
-     switch (ctx->model.proj_type) {
-+        case PROJECTOR_TYPE_INKLING:
-+            {
-+                // inp_raw is the only graph input.
-+            } break;
-         case PROJECTOR_TYPE_MUSE_GLIMMER:
-             {
-                 const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -6108,6 +6164,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
- 
- int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
-     switch (ctx->model.proj_type) {
-+        case PROJECTOR_TYPE_INKLING:
-+            return ctx->model.modality == CLIP_MODALITY_AUDIO
-+                ? ctx->model.inkling_dmel_final_norm_w->ne[0]
-+                : ctx->model.inkling_hmlp_final_norm_w->ne[0];
-         case PROJECTOR_TYPE_LDP:
-             return ctx->model.mm_model_block_1_block_2_1_b->ne[0];
-         case PROJECTOR_TYPE_LDPV2:
 diff --git a/tools/mtmd/models/inkling.cpp b/tools/mtmd/models/inkling.cpp
 new file mode 100644
-index 000000000..c04a8c989
+index 000000000..71041023a
 --- /dev/null
 +++ b/tools/mtmd/models/inkling.cpp
 @@ -0,0 +1,105 @@
 +#include "models.h"
 +
-+ggml_tensor * clip_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
++ggml_tensor * mtmd_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
 +    ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
 +    ggml_prec_set_acc(cur, GGML_PREC_F32);
 +    return cur;
@@ -2343,11 +2374,11 @@ index 000000000..c04a8c989
 +    return cur;
 +}
 +
-+ggml_cgraph * clip_graph_inkling::build() {
-+    return model.modality == CLIP_MODALITY_AUDIO ? build_audio() : build_vision();
++ggml_cgraph * mtmd_graph_inkling::build() {
++    return model.modality == MTMD_MODALITY_AUDIO ? build_audio() : build_vision();
 +}
 +
-+ggml_cgraph * clip_graph_inkling::build_vision() {
++ggml_cgraph * mtmd_graph_inkling::build_vision() {
 +    static constexpr int temporal_patch_size = 2;
 +    static constexpr int spatial_folds[] = {5, 2, 4};
 +
@@ -2387,7 +2418,7 @@ index 000000000..c04a8c989
 +    return gf;
 +}
 +
-+ggml_cgraph * clip_graph_inkling::build_audio() {
++ggml_cgraph * mtmd_graph_inkling::build_audio() {
 +    static constexpr int n_mels = 80;
 +    static constexpr int mel_vocab_size = 16;
 +
@@ -2420,15 +2451,15 @@ index 000000000..c04a8c989
 +    return gf;
 +}
 diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-index 2f4676a54..fbedb1b71 100644
+index 4f68462ba..68a4e8f26 100644
 --- a/tools/mtmd/models/models.h
 +++ b/tools/mtmd/models/models.h
-@@ -17,6 +17,17 @@ struct clip_graph_siglip : clip_graph {
+@@ -18,6 +18,17 @@ struct mtmd_graph_siglip : mtmd_graph {
      ggml_cgraph * build() override;
  };
  
-+struct clip_graph_inkling : clip_graph {
-+    clip_graph_inkling(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
++struct mtmd_graph_inkling : mtmd_graph {
++    mtmd_graph_inkling(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
 +    ggml_cgraph * build() override;
 +    ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
 +    bool support_batch() const override { return true; }
@@ -2438,14 +2469,14 @@ index 2f4676a54..fbedb1b71 100644
 +    ggml_cgraph * build_audio();
 +};
 +
- struct clip_graph_gemma4v : clip_graph {
-     clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+ struct mtmd_graph_gemma4v : mtmd_graph {
+     mtmd_graph_gemma4v(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
      ggml_cgraph * build() override;
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 2eebb90bd..d75c03cb5 100644
+index aceaf5391..b909c7431 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -541,6 +541,75 @@ static bool log_mel_spectrogram(
+@@ -497,6 +497,78 @@ static bool log_mel_spectrogram(
      return true;
  }
  
@@ -2457,12 +2488,26 @@ index 2eebb90bd..d75c03cb5 100644
 +    cache.fill_mel_filterbank_matrix(
 +        hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
 +        0.0f, -1.0f, true, 1.0f, false);
++
++    mel_config.n_mel            = hparams.n_mel_bins;
++    mel_config.n_fft_bins       = 1 + hparams.audio_n_fft / 2;
++    mel_config.hann_window_size = hparams.audio_window_len;
++    mel_config.hop_length       = hparams.audio_hop_len;
++    mel_config.sample_rate      = hparams.audio_sample_rate;
++    mel_config.no_padding       = true;
++    mel_config.use_natural_log  = false;
++    mel_config.use_magnitude    = true;
++    mel_config.mel_floor        = 1e-10f;
++    mel_config.power_floor      = 1e-10f; // reference clamps |X|^2 before sqrt
++    mel_config.n_threads        = 4;
++    mel_config.cache            = &cache;
 +}
 +
-+bool mtmd_audio_preprocessor_inkling::preprocess(
++bool mtmd_audio_preprocessor_inkling::process(
 +        const float * samples,
 +        size_t n_samples,
-+        std::vector<mtmd_audio_mel> & output) const {
++        std::vector<mtmd_audio_mel> & output,
++        bool shape_only) const {
 +    if (n_samples == 0) {
 +        return false;
 +    }
@@ -2478,40 +2523,29 @@ index 2eebb90bd..d75c03cb5 100644
 +    std::vector<float> padded(left_pad + n_samples + right_pad, 0.0f);
 +    std::copy(samples, samples + n_samples, padded.begin() + left_pad);
 +
-+    filter_params params;
-+    params.n_mel            = hparams.n_mel_bins;
-+    params.n_fft_bins       = 1 + hparams.audio_n_fft / 2;
-+    params.hann_window_size = hparams.audio_window_len;
-+    params.hop_length       = hparams.audio_hop_len;
-+    params.sample_rate      = hparams.audio_sample_rate;
-+    params.no_padding       = true;
-+    params.use_natural_log  = false;
-+    params.use_magnitude    = true;
-+    params.mel_floor        = 1e-10f;
-+    params.power_floor      = 1e-10f; // reference clamps |X|^2 before sqrt
-+
 +    mtmd_audio_mel dmel;
 +    if (!log_mel_spectrogram(
-+            padded.data(), static_cast<int>(padded.size()), 4,
-+            params, cache, dmel)) {
++            padded.data(), static_cast<int>(padded.size()), mel_config, shape_only, dmel)) {
 +        return false;
 +    }
 +    dmel.n_len_org = static_cast<int64_t>(n_samples);
 +
 +    // nearest of 16 float64 centers over [-7,2]; strict '<' keeps the lower bin on midpoints (torch.argmin)
-+    for (float & value_f32 : dmel.data) {
-+        const double value = std::max(-7.0, std::min(2.0, static_cast<double>(value_f32)));
-+        int best = 0;
-+        double best_dist = INFINITY;
-+        for (int bin = 0; bin < 16; ++bin) {
-+            const double center = -7.0 + 9.0 * static_cast<double>(bin) / 15.0;
-+            const double dist = std::abs(value - center);
-+            if (dist < best_dist) {
-+                best = bin;
-+                best_dist = dist;
++    if (!shape_only) {
++        for (float & value_f32 : dmel.data) {
++            const double value = std::max(-7.0, std::min(2.0, static_cast<double>(value_f32)));
++            int best = 0;
++            double best_dist = INFINITY;
++            for (int bin = 0; bin < 16; ++bin) {
++                const double center = -7.0 + 9.0 * static_cast<double>(bin) / 15.0;
++                const double dist = std::abs(value - center);
++                if (dist < best_dist) {
++                    best = bin;
++                    best_dist = dist;
++                }
 +            }
++            value_f32 = static_cast<float>(best);
 +        }
-+        value_f32 = static_cast<float>(best);
 +    }
 +
 +    output.push_back(std::move(dmel));
@@ -2522,55 +2556,72 @@ index 2eebb90bd..d75c03cb5 100644
  // mtmd_audio_preprocessor_whisper
  //
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index 4ca6cbd55..9e7c8da55 100644
+index 5ffeca401..3ca95129b 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
-@@ -70,6 +70,16 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
-     mtmd_audio_cache cache;
+@@ -128,6 +128,18 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
+     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
  };
  
 +// Inkling dMel: 100 ms Slaney-mel magnitude windows at a 50 ms hop, quantized to 16 bins.
 +struct mtmd_audio_preprocessor_inkling : mtmd_audio_preprocessor {
-+    mtmd_audio_preprocessor_inkling(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
++    mtmd_audio_preprocessor_inkling(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
 +    void initialize() override;
-+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
++
++  protected:
++    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 +
 +private:
 +    mtmd_audio_cache cache;
 +};
 +
  struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
-     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
-     mtmd_audio_preprocessor_conformer(const clip_hparams & hparams) : mtmd_audio_preprocessor(hparams) {}
+     mtmd_audio_preprocessor_conformer(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+     mtmd_audio_preprocessor_conformer(const mtmd_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
+diff --git a/tools/mtmd/mtmd-graph.cpp b/tools/mtmd/mtmd-graph.cpp
+index 738837152..5c7e8389a 100644
+--- a/tools/mtmd/mtmd-graph.cpp
++++ b/tools/mtmd/mtmd-graph.cpp
+@@ -752,6 +752,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
+     std::unique_ptr<mtmd_graph> builder;
+ 
+     switch (ctx->model.proj_type) {
++        case PROJECTOR_TYPE_INKLING:
++            {
++                builder = std::make_unique<mtmd_graph_inkling>(ctx, img);
++            } break;
+         case PROJECTOR_TYPE_GEMMA3:
+         case PROJECTOR_TYPE_IDEFICS3:
+         case PROJECTOR_TYPE_COHERE2V:
 diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
-index a34fd4548..5a9c11025 100644
+index 33ce243d5..af307e541 100644
 --- a/tools/mtmd/mtmd-image.cpp
 +++ b/tools/mtmd/mtmd-image.cpp
-@@ -487,6 +487,78 @@ private:
+@@ -512,6 +512,78 @@ private:
  };
  
  
-+static clip_image_u8 mtmd_inkling_resize(const clip_image_u8 & img, resize_algo algo) {
++static mtmd_image_u8 mtmd_inkling_resize(const mtmd_image_u8 & img, resize_algo algo) {
 +    constexpr int patch_size = 40;
-+    const clip_image_size source_size = img.get_size();
-+    const clip_image_size target_size = {
++    const mtmd_image_size source_size = img.get_size();
++    const mtmd_image_size target_size = {
 +        std::max(patch_size, ((source_size.width + patch_size - 1) / patch_size) * patch_size),
 +        std::max(patch_size, ((source_size.height + patch_size - 1) / patch_size) * patch_size),
 +    };
 +
-+    clip_image_u8 resized;
++    mtmd_image_u8 resized;
 +    img_tool::resize(img, resized, target_size, algo, PAD_CEIL);
 +    return resized;
 +}
 +
 +mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
-+        const clip_image_u8 & img,
++        const mtmd_image_u8 & img,
 +        resize_algo algo) {
 +    constexpr int patch_size = 40;
 +    constexpr int temporal_patch_size = 2;
 +
-+    const clip_image_u8 resized = mtmd_inkling_resize(img, algo);
-+    const clip_image_size resized_size = resized.get_size();
++    const mtmd_image_u8 resized = mtmd_inkling_resize(img, algo);
++    const mtmd_image_size resized_size = resized.get_size();
 +    mtmd_inkling_image_preproc_out output;
 +    output.source_size = img.get_size();
 +    output.resized_size = resized_size;
@@ -2599,12 +2650,12 @@ index a34fd4548..5a9c11025 100644
 +    return output;
 +}
 +
-+mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const clip_image_u8 & img) const {
++mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const mtmd_image_u8 & img) const {
 +    constexpr int patch_size = 40;
 +    constexpr int temporal_patch_size = 2;
 +
-+    const clip_image_u8 resized = mtmd_inkling_resize(img, hparams.image_resize_algo);
-+    const clip_image_size resized_size = resized.get_size();
++    const mtmd_image_u8 resized = mtmd_inkling_resize(img, hparams.image_resize_algo);
++    const mtmd_image_size resized_size = resized.get_size();
 +    const int patch_rows = resized_size.height / patch_size;
 +    const int patch_cols = resized_size.width / patch_size;
 +
@@ -2612,7 +2663,7 @@ index a34fd4548..5a9c11025 100644
 +    output.entries.reserve((size_t) patch_rows * patch_cols * temporal_patch_size);
 +    for (int row = 0; row < patch_rows; ++row) {
 +        for (int col = 0; col < patch_cols; ++col) {
-+            clip_image_u8 patch;
++            mtmd_image_u8 patch;
 +            img_tool::crop(resized, patch, col * patch_size, row * patch_size, patch_size, patch_size);
 +            output.append(hparams, patch, true);
 +            output.append(hparams, patch, true);
@@ -2626,7 +2677,7 @@ index a34fd4548..5a9c11025 100644
  // mtmd_image_preprocessor_llava_uhd
  //
 diff --git a/tools/mtmd/mtmd-image.h b/tools/mtmd/mtmd-image.h
-index b318b2d42..e44ee2744 100644
+index 3e0b127e9..4f8201a9f 100644
 --- a/tools/mtmd/mtmd-image.h
 +++ b/tools/mtmd/mtmd-image.h
 @@ -26,6 +26,20 @@ struct mtmd_image_preproc_out {
@@ -2635,8 +2686,8 @@ index b318b2d42..e44ee2744 100644
  
 +// Inkling hMLP preprocessing; pixel_values_bthwc is row-major BTHWC [n_patches, 2, 40, 40, 3].
 +struct mtmd_inkling_image_preproc_out {
-+    clip_image_size source_size;
-+    clip_image_size resized_size;
++    mtmd_image_size source_size;
++    mtmd_image_size resized_size;
 +    int patch_rows = 0;
 +    int patch_cols = 0;
 +    std::vector<uint8_t> resized_rgb;
@@ -2644,43 +2695,232 @@ index b318b2d42..e44ee2744 100644
 +};
 +
 +mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
-+        const clip_image_u8 & img,
++        const mtmd_image_u8 & img,
 +        resize_algo algo = RESIZE_ALGO_LANCZOS);
 +
  // base class, models must inherit from this class
  struct mtmd_image_preprocessor {
-     const clip_hparams & hparams;
-@@ -126,6 +140,12 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
-     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+     const mtmd_hparams & hparams;
+@@ -132,6 +146,12 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
+     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
  };
  
 +// Inkling: split an image into 40x40 hMLP patches, each duplicated across a fixed temporal dimension of two.
 +struct mtmd_image_preprocessor_inkling : mtmd_image_preprocessor {
-+    mtmd_image_preprocessor_inkling(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
++    mtmd_image_preprocessor_inkling(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
++    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 +};
 +
  // resize image to multiple of patch_size*n_merge, while preserving aspect ratio
  // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
  // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
+diff --git a/tools/mtmd/mtmd-impl.h b/tools/mtmd/mtmd-impl.h
+index 9d447a05e..69f88f81e 100644
+--- a/tools/mtmd/mtmd-impl.h
++++ b/tools/mtmd/mtmd-impl.h
+@@ -422,6 +422,13 @@
+ #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
+ #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
+ 
++// Inkling hMLP vision and dMel audio towers.
++#define TN_INKLING_HMLP_LINEAR     "v.hmlp.%d.linear.weight"
++#define TN_INKLING_HMLP_NORM       "v.hmlp.%d.norm.weight"
++#define TN_INKLING_HMLP_FINAL_NORM "v.hmlp.final_norm.weight"
++#define TN_INKLING_DMEL_EMBD       "a.dmel.embedding.weight"
++#define TN_INKLING_DMEL_FINAL_NORM "a.dmel.final_norm.weight"
++
+ // mobilenetv5 (gemma3n) definitions
+ #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
+ #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
+@@ -493,6 +500,7 @@
+ #define MTMD_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+ 
+ enum projector_type {
++    PROJECTOR_TYPE_INKLING,
+     PROJECTOR_TYPE_MLP,
+     PROJECTOR_TYPE_MLP_NORM,
+     PROJECTOR_TYPE_LDP,
+@@ -581,6 +589,7 @@ enum projector_type {
+ };
+ 
+ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
++    { PROJECTOR_TYPE_INKLING,           "inkling" },
+     { PROJECTOR_TYPE_MLP,               "mlp" },
+     { PROJECTOR_TYPE_LDP,               "ldp" },
+     { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
+diff --git a/tools/mtmd/mtmd-model.cpp b/tools/mtmd/mtmd-model.cpp
+index da74ed383..b8576e6c9 100644
+--- a/tools/mtmd/mtmd-model.cpp
++++ b/tools/mtmd/mtmd-model.cpp
+@@ -293,6 +293,21 @@ struct mtmd_model_loader {
+ 
+             // model-specific params
+             switch (model.proj_type) {
++                case PROJECTOR_TYPE_INKLING:
++                    {
++                        if (is_vision) {
++                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
++                            hparams.image_resize_pad  = PAD_NONE;
++                            hparams.warmup_image_size = hparams.patch_size;
++                        } else {
++                            hparams.audio_chunk_len   = 0;
++                            hparams.audio_sample_rate = 16000;
++                            hparams.audio_n_fft       = 1600;
++                            hparams.audio_window_len  = 1600;
++                            hparams.audio_hop_len     = 800;
++                            hparams.warmup_audio_size = 4;
++                        }
++                    } break;
+                 case PROJECTOR_TYPE_MLP:
+                 case PROJECTOR_TYPE_MLP_NORM:
+                 case PROJECTOR_TYPE_LDP:
+@@ -1453,7 +1468,8 @@ struct mtmd_model_loader {
+             model.modality  == MTMD_MODALITY_VISION &&
+             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+             model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
+-            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2);
++            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2 &&
++            model.proj_type != PROJECTOR_TYPE_INKLING);
+ 
+         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
+         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   has_patch_embd);
+@@ -1474,7 +1490,8 @@ struct mtmd_model_loader {
+             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
+             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
+-            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC);
++            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC &&
++            model.proj_type != PROJECTOR_TYPE_INKLING);
+ 
+         // layers
+         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
+@@ -1664,6 +1681,23 @@ struct mtmd_model_loader {
+         };
+ 
+         switch (model.proj_type) {
++            case PROJECTOR_TYPE_INKLING:
++                {
++                    if (model.modality == MTMD_MODALITY_VISION) {
++                        model.inkling_hmlp_layers.resize(hparams.n_layer);
++                        for (int il = 0; il < hparams.n_layer; ++il) {
++                            auto & layer = model.inkling_hmlp_layers[il];
++                            layer.linear_w = get_tensor(mtmd_format(TN_INKLING_HMLP_LINEAR, il));
++                            layer.norm_w = il + 1 < hparams.n_layer
++                                ? get_tensor(mtmd_format(TN_INKLING_HMLP_NORM, il))
++                                : nullptr;
++                        }
++                        model.inkling_hmlp_final_norm_w = get_tensor(TN_INKLING_HMLP_FINAL_NORM);
++                    } else {
++                        model.inkling_dmel_embd_w       = get_tensor(TN_INKLING_DMEL_EMBD);
++                        model.inkling_dmel_final_norm_w = get_tensor(TN_INKLING_DMEL_FINAL_NORM);
++                    }
++                } break;
+             case PROJECTOR_TYPE_MLP:
+             case PROJECTOR_TYPE_MLP_NORM:
+                 {
+@@ -3857,6 +3891,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
+     projector_type proj = proj_type;
+ 
+     switch (proj) {
++        case PROJECTOR_TYPE_INKLING:
++            {
++                if (modality == MTMD_MODALITY_AUDIO) {
++                    // One dMel row is one soft audio token.
++                    n_patches = img->nx();
++                } else {
++                    // Batch entries are temporal slices; each pair emits one token.
++                    n_patches = 1;
++                }
++            } break;
+         case PROJECTOR_TYPE_MLP:
+         case PROJECTOR_TYPE_MLP_NORM:
+         case PROJECTOR_TYPE_JANUS_PRO:
+@@ -4222,6 +4266,10 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
+ 
+ int mtmd_model::n_mmproj_embd() const {
+     switch (proj_type) {
++        case PROJECTOR_TYPE_INKLING:
++            return modality == MTMD_MODALITY_AUDIO
++                ? inkling_dmel_final_norm_w->ne[0]
++                : inkling_hmlp_final_norm_w->ne[0];
+         case PROJECTOR_TYPE_LDP:
+             return mm_model_block_1_block_2_1_b->ne[0];
+         case PROJECTOR_TYPE_LDPV2:
+diff --git a/tools/mtmd/mtmd-model.h b/tools/mtmd/mtmd-model.h
+index 0d975ba36..9f8cfc8ef 100644
+--- a/tools/mtmd/mtmd-model.h
++++ b/tools/mtmd/mtmd-model.h
+@@ -629,6 +629,12 @@ struct mtmd_code2wav {
+     ggml_tensor * dac_post_snake_beta  = nullptr;
+     ggml_tensor * dac_post_conv_w      = nullptr;
+     ggml_tensor * dac_post_conv_b      = nullptr;
++
++};
++
++struct inkling_hmlp_layer {
++    ggml_tensor * linear_w = nullptr;
++    ggml_tensor * norm_w   = nullptr;
+ };
+ 
+ struct mtmd_chatterbox {
+@@ -906,6 +912,12 @@ struct mtmd_model {
+     ggml_tensor * norm_embd_w = nullptr;
+     ggml_tensor * norm_embd_b = nullptr;
+ 
++    // Inkling towers (neither uses standard transformer blocks).
++    std::vector<inkling_hmlp_layer> inkling_hmlp_layers;
++    ggml_tensor * inkling_hmlp_final_norm_w = nullptr;
++    ggml_tensor * inkling_dmel_embd_w        = nullptr;
++    ggml_tensor * inkling_dmel_final_norm_w  = nullptr;
++
+     // "indexed" patch embedding norms
+     ggml_tensor * patch_norm_1_w = nullptr;
+     ggml_tensor * patch_norm_1_b = nullptr;
+diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
+index 64eb1b690..bb47ca8a5 100644
+--- a/tools/mtmd/mtmd-subcontext.cpp
++++ b/tools/mtmd/mtmd-subcontext.cpp
+@@ -170,6 +170,11 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
+         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
+     }
+     batch.entries.push_back(img);
++    // One logical Inkling vision patch always contains two adjacent temporal slices (including warmup reserve).
++    if (model.modality == MTMD_MODALITY_VISION &&
++            model.proj_type == PROJECTOR_TYPE_INKLING) {
++        batch.entries.push_back(img);
++    }
+     return batch;
+ }
+ 
+@@ -804,6 +809,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
+                 tail.resize(hparams.n_embd, 0.0f);
+                 set_input_f32("inp_stem_tail", tail);
+             } break;
++        case PROJECTOR_TYPE_INKLING:
++            {
++                // inp_raw is the only graph input.
++            } break;
+         case PROJECTOR_TYPE_MUSE_GLIMMER:
+             {
+                 const int grid_w = pos_w;            // image_size_width  / patch_size
 diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-index 2fa02f83e..ef113a3a0 100644
+index 9b45d3de3..a5289cf63 100644
 --- a/tools/mtmd/mtmd.cpp
 +++ b/tools/mtmd/mtmd.cpp
-@@ -673,6 +673,12 @@ struct mtmd_context {
-         projector_type proj = clip_get_projector_type(ctx_v);
+@@ -807,6 +807,12 @@ struct mtmd_context {
+         projector_type proj = ctx_v->model.proj_type;
  
          switch (proj) {
 +            case PROJECTOR_TYPE_INKLING:
 +                {
 +                    // renderer opens each image part with <|content_image|>; block framing comes from the template
 +                    img_beg = "<|content_image|>";
-+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling>(ctx_v);
++                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling>(models.v.get());
 +                } break;
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
              case PROJECTOR_TYPE_LDP:
-@@ -1001,6 +1007,13 @@ struct mtmd_context {
+@@ -1180,6 +1186,13 @@ struct mtmd_context {
  
          // set preprocessor
          switch (proj) {
@@ -2689,18 +2929,18 @@ index 2fa02f83e..ef113a3a0 100644
 +                    // <|content_audio_input|> ... <|audio_end|>, matching the renderer's audio framing
 +                    aud_beg = "<|content_audio_input|>";
 +                    aud_end = "<|audio_end|>";
-+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inkling>(ctx_a);
++                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inkling>(models.a.get());
 +                } break;
              case PROJECTOR_TYPE_QWEN2A:
              case PROJECTOR_TYPE_QWEN25O:
                  {
-@@ -1579,23 +1592,35 @@ struct mtmd_tokenizer {
+@@ -1823,23 +1836,35 @@ struct mtmd_tokenizer {
                  }
  
                  size_t n_tokens = 0;
 -                for (auto & e : preproc_out.entries) {
--                    n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
--                    if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
+-                    n_tokens += ctx->ctx_v->model.n_output_tokens(&e);
+-                    if (ctx->ctx_v->model.n_temporal_merge() == 2) {
 -                        // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
 -                        break;
 +                if (ctx->proj_type_v() == PROJECTOR_TYPE_INKLING) {
@@ -2708,8 +2948,8 @@ index 2fa02f83e..ef113a3a0 100644
 +                    n_tokens = preproc_out.entries.size() / 2;
 +                } else {
 +                    for (auto & e : preproc_out.entries) {
-+                        n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
-+                        if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
++                        n_tokens += ctx->ctx_v->model.n_output_tokens(&e);
++                        if (ctx->ctx_v->model.n_temporal_merge() == 2) {
 +                            // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
 +                            break;
 +                        }
@@ -2719,16 +2959,16 @@ index 2fa02f83e..ef113a3a0 100644
                  mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
  
                  // [QWEN_VIDEO] improve this in the future
--                image_tokens->n_temporal_merge = clip_model_n_temporal_merge(ctx->ctx_v);
+-                image_tokens->n_temporal_merge = ctx->ctx_v->model.n_temporal_merge();
 +                // Inkling's pair is internal to each patch; it must not merge consecutive user bitmaps as video frames.
 +                image_tokens->n_temporal_merge = ctx->proj_type_v() == PROJECTOR_TYPE_INKLING
 +                    ? 2
-+                    : clip_model_n_temporal_merge(ctx->ctx_v);
++                    : ctx->ctx_v->model.n_temporal_merge();
  
                  if (mtmd_decode_use_mrope(ctx)) {
                      // for Qwen2VL, we need this information for M-RoPE decoding positions
-                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, &preproc_out.entries[0]);
-                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, &preproc_out.entries[0]);
+                     image_tokens->nx = ctx->ctx_v->model.n_output_tokens_x(&preproc_out.entries[0]);
+                     image_tokens->ny = ctx->ctx_v->model.n_output_tokens_y(&preproc_out.entries[0]);
 +                } else if (ctx->proj_type_v() == PROJECTOR_TYPE_INKLING) {
 +                    // n_tokens() multiplies 1x1 by the number of temporal groups.
 +                    image_tokens->nx = 1;
@@ -2737,5 +2977,5 @@ index 2fa02f83e..ef113a3a0 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.55.0
+2.56.0
 

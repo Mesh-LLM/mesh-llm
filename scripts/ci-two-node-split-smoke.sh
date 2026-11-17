@@ -721,6 +721,7 @@ assert_expected_stage_payload() {
     # when reading its HEAD as the fallback.
     tested_commit="${MESH_TWO_NODE_SPLIT_SOURCE_SHA:-$(git -c safe.directory="$PWD" rev-parse HEAD)}"
     "${automation[@]}" split-payloads certify \
+        --source-root . \
         --evidence "$SPLIT_EVIDENCE_PATH" \
         --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
         --model-manifest ci/model-artifacts/manifests/scripted-binary-smoke.json \

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/apertus.cpp b/src/models/apertus.cpp
-index 130980e32a70aa5e764bab7c289d493dd1efde29..5d6790a0aa7c4c989510df7721315d11918444e4 100644
+index c0bb23659b898d203baf2d8d1bfec27bf552031c..dd89464b7dc10c1184867f033849bb852a7d20b5 100644
 --- a/src/models/apertus.cpp
 +++ b/src/models/apertus.cpp
-@@ -77,6 +77,8 @@ llama_model_apertus::graph::graph(const llama_model & model, const llm_graph_par
+@@ -77,6 +77,8 @@ llama_model_apertus::graph::graph(const llm_graph_params & params) : llm_graph_c
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 130980e32a70aa5e764bab7c289d493dd1efde29..5d6790a0aa7c4c989510df7721315d11
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -151,6 +153,7 @@ llama_model_apertus::graph::graph(const llama_model & model, const llm_graph_par
+@@ -146,6 +148,7 @@ llama_model_apertus::graph::graph(const llm_graph_params & params) : llm_graph_c
  
          // input for next layer
          inpL = cur;

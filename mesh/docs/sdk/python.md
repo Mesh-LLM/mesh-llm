@@ -1,10 +1,8 @@
 # Python SDK source ownership
 
-The Python package, generated UniFFI bindings, SDK tests and real OpenAI/LiteLLM/LangChain/embedding clients are owned by the separately versioned `Mesh-LLM/mesh-llm-python-sdk` project. Both extracted projects are published; fresh anonymous restore and native source admission passed for the [SDK descriptor](../../../ci/required-sdk-python/sdk-source.json) and [research descriptor](../../../ci/python-research-source.json). This source proof does not qualify hosted workflows, installed SDKs, native bridges, models or a new PyPI release.
+The Python package, generated UniFFI bindings, component tests, locked dependency environments, and OpenAI/LiteLLM/LangChain/embedding clients live in [mesh/sdk/python](../../sdk/python/README.md). Mesh CI admits the component's checked-in source manifest before preparing its locked environments. It no longer restores a second SDK repository. Compatibility and embedding checks keep their existing cadence.
 
-Mesh preparation restores the exact commit in `ci/required-sdk-python/sdk-source.json` and admits its manifest and all tracked file hashes through `automation smoke-observation sdk-source`. Local preparation must set `MESH_PYTHON_SDK_SOURCE` to an absolute checkout of that pinned source. Runtime SDK execution is offline and does not resolve dependencies or compile a native bridge. The compatibility and embedding checks keep their required cadence.
-
-SDK binding generation belongs to the external producer: pass an explicit Mesh source checkout and an existing UniFFI 0.32.0 generator. Packaging consumes an explicitly supplied, already built Mesh FFI library; it does not infer a neighboring Mesh checkout. The native bridge source/API and runtime ABI remain Mesh-owned and must match the generated binding artifact.
+Generate bindings from the Mesh source in this checkout with an existing UniFFI 0.32.0 generator and an already built Mesh FFI library. Packaging consumes the supplied native library; it does not build a bridge implicitly. The wrapper and generated bindings must match the Mesh native API and runtime ABI.
 
 # Python SDK
 
@@ -81,8 +79,8 @@ and optional thinking observations and plugin requirements. See
 [Mesh model discovery](../MODEL_DISCOVERY.md) for complete HTTP and SDK shapes.
 
 Use a Python SDK release and native bridge containing these APIs together.
-The public wrapper and generated bindings live in the companion Python SDK
-repository; updating Mesh alone does not publish a new Python wheel.
+The public wrapper and generated bindings are maintained in this repository;
+publishing a new Python wheel remains a separate release step.
 
 ## Invoke document OCR
 
@@ -170,17 +168,21 @@ the node's loaded models. `node.models` remains scoped to the primary mesh.
 
 ## Live transcription
 
+> Draft, unshippable guidance. The in-tree Python SDK source checkpoint
+> `0357f19` does not provide this speech API. This example requires a future
+> update to the package wrapper and regenerated bindings for the native API.
+
 ```python
 from meshllm import LiveTranscriptionOptions
 
 session = await node.start_live_transcription(LiveTranscriptionOptions(
     model="speech-model", sample_rate=16000, turn_detection=None,
+    step_ms=400, tentative=True,
 ))
-try:
+async with session:
     await session.send_audio(pcm16_samples)
     await session.commit()
     event = await session.next_event()
-finally:
     remaining_events = await session.stop()
 ```
 
@@ -188,4 +190,20 @@ Use signed 16-bit mono PCM for `send_audio`, or floating point samples for
 `send_audio_f32`. Defaults use 16 kHz audio and server-side turn detection;
 `turn_detection=None` ends a turn on explicit `commit`. `events()` provides an
 async event iterator. `stop` returns final remaining events; `close` abandons
-the session. Session transport uses the embedded realtime endpoint.
+the session. Context exit closes it, including on errors. Session transport
+uses the embedded realtime endpoint.
+
+`step_ms` accepts 200 to 5000 ms; `None` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `False`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `item_id`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input.

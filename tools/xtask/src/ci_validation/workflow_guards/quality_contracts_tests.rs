@@ -87,12 +87,11 @@ fn fixture_path_in_shell_comment_cannot_mask_an_incorrect_assignment() {
 }
 
 #[test]
-fn quality_calls_are_required_direct_and_ordered_before_retained_legacy() {
+fn quality_calls_are_required_and_direct() {
     for run in [
-        "echo just ci-automation-contracts\njust ci-legacy-contracts",
-        "just ci-legacy-contracts\njust ci-automation-contracts",
-        "just ci-automation-contracts || true\njust ci-legacy-contracts",
-        "# just ci-automation-contracts\njust ci-legacy-contracts",
+        "echo just ci-automation-contracts",
+        "just ci-automation-contracts || true",
+        "# just ci-automation-contracts",
     ] {
         let yaml = format!(
             "jobs:\n  quality_contracts:\n    steps:\n      - name: Test CI, packaging, and SDK contracts\n        run: |\n{}",
@@ -272,8 +271,16 @@ fn component_contracts_cannot_be_omitted_filtered_or_moved() {
             "    just with-lld cargo test --locked -p ci-controller --lib\n",
         ),
         (
+            "    just with-lld cargo test --locked -p authority-automation\n",
+            "    just with-lld cargo test --locked -p authority-automation --lib\n",
+        ),
+        (
             "    just with-lld cargo test --locked -p process-supervision -- --test-threads=1\n",
             "    just with-lld cargo test --locked -p process-supervision --lib -- --test-threads=1\n",
+        ),
+        (
+            "    just with-lld cargo test --locked -p runner-cleanup -- --test-threads=1\n",
+            "    just with-lld cargo test --locked -p runner-cleanup --lib -- --test-threads=1\n",
         ),
     ] {
         assert!(source.contains(line), "{line}");

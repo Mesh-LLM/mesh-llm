@@ -85,11 +85,11 @@ pub(crate) fn configured_external_plugin_spec(
                 .as_deref()
                 .is_none_or(|command| Path::new(command) == metadata.executable_path())
         });
-    if command.is_none()
-        && installed_metadata
-            .as_ref()
-            .is_some_and(|metadata| metadata.default_managed)
-    {
+    // A bare entry (no `command` of its own) runs the store's copy, which the
+    // operator did not choose by path; it starts optional so a broken plugin
+    // install never stops the node. The store's enabled flag
+    // (`mesh-llm plugins disable`) decides whether it starts at all.
+    if command.is_none() && installed_metadata.is_some() {
         startup.optional = true;
     }
 
@@ -309,8 +309,10 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         url: None,
         env: BTreeMap::new(),
         settings: Default::default(),
+        // An installed plugin a config entry does not name starts optional:
+        // the node must start with or without it.
         startup: PluginStartupOptions {
-            optional: metadata.default_managed,
+            optional: true,
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,

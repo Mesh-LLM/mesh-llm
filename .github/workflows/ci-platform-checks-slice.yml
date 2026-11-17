@@ -143,6 +143,11 @@ jobs:
         uses: ./.github/actions/setup-macos-lld
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: ${{ matrix.check.platform == 'windows' }}
+        # sccache 0.17+ expands Cargo's rustc argfile and exceeds the Windows
+        # command-line limit with Rust 1.100's build-dir layout (os error 206,
+        # mozilla/sccache#2787). 0.16.0 passes the argfile through.
+        with:
+          version: v0.16.0
       - uses: ./.github/actions/configure-sccache-gha
         if: ${{ matrix.check.platform == 'windows' }}
         with:
@@ -460,6 +465,19 @@ jobs:
             cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Run Windows skippy-cli tests
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          # `skippy-cli` has no library target: its tests drive the debug
+          # `skippy` binary, so they also cover its main-thread stack and the
+          # paths it prints. It stays off the `platform-windows-cfg` catalog
+          # while the rename map lists it as a `skippy-server` successor, so
+          # this row runs it on main and manual-full and on pull requests that
+          # select the row for another reason. The dynamic link mode needs no
+          # native ABI build, and the tests use offline fixtures only.
+          cargo test --locked -p skippy-cli --features dynamic-native-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare Windows automation contract tools
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
@@ -491,6 +509,7 @@ jobs:
             "ci_validation::windows_runtime::tests::native::native_windows_build_directory_tracks_prepared_pin_and_explicit_override",
             "ci_validation::windows_runtime::tests::native::native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_wsl",
             "ci_validation::windows_runtime::tests::native::native_windows_relative_llama_override_is_bound_to_repo_not_process_directory",
+            "ci_validation::windows_runtime::tests::native::linker_metadata::native_windows_linker_metadata_preserves_product_links_and_failure",
             "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_interactive_runs_setup_and_warns_for_legacy_flavor",
             "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_noninteractive_prints_setup_and_installs_runtime",
             "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_no_setup_prints_command_without_executing_setup",
@@ -511,7 +530,7 @@ jobs:
             "automation::private_state::windows_privacy::tests::migration_lifecycle_windows_directory_has_only_current_user_inheritable_dacl",
             "product::posix_path::tests::windows_paths_keep_drive_and_share_roots"
           )
-          if ($expected.Count -ne 22 -or @($expected | Select-Object -Unique).Count -ne 22) { throw "native Windows contract roster must contain twenty-two distinct methods" }
+          if ($expected.Count -ne 23 -or @($expected | Select-Object -Unique).Count -ne 23) { throw "native Windows contract roster must contain twenty-three distinct methods" }
           $verified = 0
           foreach ($method in $expected) {
             $listing = @(just with-lld cargo test --locked -p xtask --bin xtask $method -- --exact --list)
@@ -525,7 +544,7 @@ jobs:
             if (@($result | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows method must pass without an ignored test: $method" }
             $verified++
           }
-          if ($verified -ne 22) { throw "all twenty-two native Windows methods must be verified" }
+          if ($verified -ne 23) { throw "all twenty-three native Windows methods must be verified" }
           $wrapper = "ci_validation::windows_runtime::tests::with_lld::windows_with_lld_propagates_native_failure_and_success"
           $wrapperListing = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --list)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

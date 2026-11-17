@@ -35,6 +35,15 @@ pub enum Event {
     ModelDownload,
     /// The shape of this machine, reported once per serving process.
     HardwareProfile,
+    /// One generation served by this node: prefill, decode, context length,
+    /// speculation, and lanes. Rate limited; `weight` says how many requests
+    /// the event stands for.
+    InferenceRequest,
+    /// One routing attempt fronted by this node, local or across the mesh,
+    /// with the link class and round-trip time to a remote target.
+    InferenceRoute,
+    /// A periodic summary of this node's links to its mesh peers.
+    MeshLinks,
 }
 
 impl Event {
@@ -49,6 +58,9 @@ impl Event {
             Self::ModelLoaded => "model_loaded",
             Self::ModelDownload => "model_download",
             Self::HardwareProfile => "hardware_profile",
+            Self::InferenceRequest => "inference_request",
+            Self::InferenceRoute => "inference_route",
+            Self::MeshLinks => "mesh_links",
         }
     }
 }
@@ -196,6 +208,8 @@ impl Label {
 pub enum Value {
     Bool(bool),
     Int(i64),
+    /// A measurement. Non-finite values serialize as `null`.
+    Float(f64),
     Text(Label),
     /// A compile-time constant, safe by construction.
     Static(&'static str),
@@ -210,6 +224,18 @@ impl From<bool> for Value {
 impl From<i64> for Value {
     fn from(value: i64) -> Self {
         Self::Int(value)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<u32> for Value {
+    fn from(value: u32) -> Self {
+        Self::Int(i64::from(value))
     }
 }
 
@@ -254,6 +280,12 @@ impl Properties {
         self
     }
 
+    /// The value attached under `key`, if any.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.0.get(key)
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&'static str, &Value)> {
         self.0.iter().map(|(key, value)| (*key, value))
     }
@@ -277,19 +309,15 @@ pub fn bucket_count(count: u64) -> &'static str {
     }
 }
 
-/// Bucket a byte size into human power-of-two ranges.
+/// A byte size in GiB, rounded to the nearest whole GiB.
+///
+/// Reported as a number rather than a range. Ranges with shared edges read as
+/// double counting (`8-16`, `16-32`), and a memory budget that moves a little
+/// between runs flipped the same install from one range to the next.
 #[must_use]
-pub fn bucket_gigabytes(bytes: u64) -> &'static str {
-    const GB: u64 = 1024 * 1024 * 1024;
-    match bytes / GB {
-        0..=7 => "0-8",
-        8..=15 => "8-16",
-        16..=31 => "16-32",
-        32..=63 => "32-64",
-        64..=127 => "64-128",
-        128..=255 => "128-256",
-        _ => "256+",
-    }
+pub fn gigabytes(bytes: u64) -> u64 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    bytes.saturating_add(GIB / 2) / GIB
 }
 
 /// Bucket a duration in seconds into coarse session lengths.

@@ -25,7 +25,7 @@ struct Roster {
     architectures: Vec<String>,
 }
 #[derive(Serialize)]
-struct Recipe {
+pub(super) struct Recipe {
     llama_upstream_sha: String,
     skippy_abi: String,
     patch_queue_sha256: Digest,
@@ -181,16 +181,19 @@ fn architectures(manifest: &Value) -> DynResult<Vec<String>> {
     }
     Ok(result.into_iter().collect())
 }
-fn render(root: &Path, manifest: &[u8]) -> DynResult<Vec<u8>> {
+pub(super) fn native_recipe(root: &Path) -> DynResult<Recipe> {
     let pin = fs::read_to_string(root.join("skippy/llama_cpp/upstream.txt"))?;
     source::revision(pin.trim())?;
+    Ok(Recipe {
+        llama_upstream_sha: pin.trim().to_owned(),
+        skippy_abi: abi(root)?,
+        patch_queue_sha256: queue(root)?,
+    })
+}
+fn render(root: &Path, manifest: &[u8]) -> DynResult<Vec<u8>> {
     let roster = Roster {
         schema_version: 2,
-        native_recipe: Recipe {
-            llama_upstream_sha: pin.trim().to_owned(),
-            skippy_abi: abi(root)?,
-            patch_queue_sha256: queue(root)?,
-        },
+        native_recipe: native_recipe(root)?,
         architectures: architectures(&serde_json::from_slice(manifest)?)?,
     };
     let mut bytes = serde_json::to_vec_pretty(&roster)?;

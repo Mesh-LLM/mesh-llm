@@ -52,7 +52,8 @@ pub enum ggml_type {
     Nvfp4 = 40,
     Q1_0 = 41,
     Q2_0 = 42,
-    Count = 43,
+    F8E4M3 = 43,
+    Count = 44,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -148,17 +149,18 @@ pub enum ggml_op {
     DSV4HcComb = 88,
     DSV4HcPre = 89,
     DSV4HcPost = 90,
-    Unary = 91,
-    MapCUSTOM1 = 92,
-    MapCUSTOM2 = 93,
-    MapCUSTOM3 = 94,
-    Custom = 95,
-    CrossEntropyLoss = 96,
-    CrossEntropyLossBack = 97,
-    OptStepAdamw = 98,
-    OptStepSgd = 99,
-    Glu = 100,
-    Count = 101,
+    TopKMask = 91,
+    Unary = 92,
+    MapCUSTOM1 = 93,
+    MapCUSTOM2 = 94,
+    MapCUSTOM3 = 95,
+    Custom = 96,
+    CrossEntropyLoss = 97,
+    CrossEntropyLossBack = 98,
+    OptStepAdamw = 99,
+    OptStepSgd = 100,
+    Glu = 101,
+    Count = 102,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -295,6 +297,7 @@ pub enum llama_ftype {
     MostlyNvfp4 = 39,
     MostlyQ1_0 = 40,
     MostlyQ2_0 = 41,
+    MostlyF8E4M3 = 42,
     Guessed = 1024,
 }
 impl llama_rope_scaling_type {
@@ -479,6 +482,7 @@ pub struct llama_context_params {
     pub type_k: ggml_type,
     pub type_v: ggml_type,
     pub moe_cache_size: usize,
+    pub moe_cache_cpu_share: f32,
     pub abort_callback: ggml_abort_callback,
     pub abort_callback_data: *mut ::std::os::raw::c_void,
     pub embeddings: bool,

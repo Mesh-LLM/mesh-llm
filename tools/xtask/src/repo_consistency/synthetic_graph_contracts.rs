@@ -3,7 +3,8 @@
 use serde::Deserialize;
 use std::{collections::BTreeMap, fs, path::Path};
 
-const PATCH: &str = "skippy/llama_cpp/patches/0006-test-cover-graph-derived-stage-contracts.patch";
+const PATCH: &str =
+    "skippy/llama_cpp/patches/0006-test-skippy-cover-live-graph-and-state-contracts.patch";
 const REGISTRY: &str = "ci/llama-canary/family-certified.json";
 
 #[derive(Clone, Deserialize)]
@@ -176,8 +177,9 @@ fn synthetic_graph_dimension_and_mtp_drift_fail_coverage() {
 }
 #[test]
 fn synthetic_graph_cases_remain_registered_with_required_ctest_fixtures() {
-    let build_patch =
-        source("skippy/llama_cpp/patches/0005-build-wire-staged-runtime-and-backend-support.patch");
+    let build_patch = source(
+        "skippy/llama_cpp/patches/0005-build-skippy-wire-native-runtime-and-backend-support.patch",
+    );
     assert!(build_patch.contains("+    include(skippy/tests/graph_contract_cases.cmake)"));
     let patch = source(PATCH);
     for term in [

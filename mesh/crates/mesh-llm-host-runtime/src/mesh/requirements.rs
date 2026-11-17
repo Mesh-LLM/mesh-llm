@@ -43,7 +43,8 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn assert_mesh_requirements_policy_canonical_hash_is_stable() {
+    #[test]
+    fn mesh_requirements_policy_canonical_hash_is_stable() {
         let (policy, mut local_input) = MeshGenesisPolicy::for_local_node(
             "owner-123",
             1_717_171_717_000,
@@ -69,7 +70,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_policy_change_changes_mesh_id() {
+    #[test]
+    fn mesh_requirements_policy_change_changes_mesh_id() {
         let baseline =
             MeshGenesisPolicy::new("owner-123", 1_717_171_717_000, restricted_requirements())
                 .expect("policy should validate");
@@ -96,7 +98,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_bootstrap_token_validates_origin_signature() {
+    #[test]
+    fn mesh_requirements_bootstrap_token_validates_origin_signature() {
         let owner = mesh_llm_identity::OwnerKeypair::generate();
         let signed_policy = SignedMeshGenesisPolicy::sign(
             MeshGenesisPolicy::new(
@@ -130,7 +133,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_bootstrap_rejects_expired_token() {
+    #[test]
+    fn mesh_requirements_bootstrap_rejects_expired_token() {
         let owner = mesh_llm_identity::OwnerKeypair::generate();
         let signed_policy = SignedMeshGenesisPolicy::sign(
             MeshGenesisPolicy::new(
@@ -162,7 +166,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_bootstrap_rejects_policy_hash_mismatch() {
+    #[test]
+    fn mesh_requirements_bootstrap_rejects_policy_hash_mismatch() {
         let owner = mesh_llm_identity::OwnerKeypair::generate();
         let signed_policy = SignedMeshGenesisPolicy::sign(
             MeshGenesisPolicy::new(
@@ -195,7 +200,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_policy_hash_derives_mesh_id() {
+    #[test]
+    fn mesh_requirements_policy_hash_derives_mesh_id() {
         let policy =
             MeshGenesisPolicy::new("owner-123", 1_717_171_717_000, restricted_requirements())
                 .expect("policy should validate");
@@ -207,7 +213,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_version_bounds_unset_min_only_max_only_and_exact() {
+    #[test]
+    fn mesh_requirements_version_bounds_unset_min_only_max_only_and_exact() {
         let unrestricted = MeshRequirements::unrestricted();
         let stable_input = MeshRequirementEvaluationInput {
             advertised_node_version: Some("0.65.1".into()),
@@ -288,7 +295,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_protocol_bounds_reject_unknown_only_when_constrained() {
+    #[test]
+    fn mesh_requirements_protocol_bounds_reject_unknown_only_when_constrained() {
         let unconstrained = MeshRequirements::unrestricted();
         let unrestricted_policy =
             MeshGenesisPolicy::new("owner-123", 1_717_171_717_000, unconstrained)
@@ -360,7 +368,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_rejects_unsigned_when_attestation_required() {
+    #[test]
+    fn mesh_requirements_rejects_unsigned_when_attestation_required() {
         let constrained = MeshRequirements {
             release_attestation: ReleaseAttestationRequirement {
                 required: true,
@@ -402,7 +411,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_accept_trusted_signer_with_compatible_peer_version() {
+    #[test]
+    fn release_attestation_policy_accepts_trusted_signer_with_compatible_different_peer_version() {
         let constrained = MeshRequirements {
             require_signed_gossip: false,
             node_version: NodeVersionBounds {
@@ -433,7 +443,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_mesh_requirements_rejection_reasons_are_stable() {
+    #[test]
+    fn mesh_requirements_rejection_reasons_are_stable() {
         let stable = [
             (
                 MeshRequirementRejectReason::CertifiedBinaryRequired,

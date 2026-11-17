@@ -5,20 +5,20 @@
 //! formats are retained. `parity-download` owns manual discovery and verified
 //! candidate materialization without inline Python.
 
-mod argv;
 mod certification;
+mod dflash_draft;
 mod family_roster;
-mod fields;
 mod generate;
-pub(crate) mod json_bytes;
-mod manifest;
 pub(crate) mod parity_download;
 mod projection;
 mod projector_download;
 mod registry;
-mod resolve;
-mod restore_inputs;
-pub(crate) mod serving_entry;
+
+// Transitional: `resolve` and `restore-inputs` and the modules they share live in
+// authority-automation; the remaining `models` commands import them from here.
+pub(crate) use authority_automation::model_registry::{
+    argv, fields, json_bytes, manifest, resolve, restore_inputs, serving_entry,
+};
 
 use crate::command::DynResult;
 use std::path::Path;
@@ -31,6 +31,7 @@ pub(crate) enum ModelsCommand {
     RestoreInputs,
     ParityDownload,
     ProjectorDownload,
+    DflashDraftConvert,
 }
 
 impl ModelsCommand {
@@ -41,6 +42,7 @@ impl ModelsCommand {
             "restore-inputs" => Some(Self::RestoreInputs),
             "projector-download" => Some(Self::ProjectorDownload),
             "parity-download" => Some(Self::ParityDownload),
+            "dflash-draft-convert" => Some(Self::DflashDraftConvert),
             _ => None,
         }
     }
@@ -56,12 +58,17 @@ pub(crate) fn run(
     if matches!(command, ModelsCommand::ProjectorDownload) {
         return projector_download::run(args);
     }
+    if matches!(command, ModelsCommand::DflashDraftConvert) {
+        return dflash_draft::run(args);
+    }
     let report = match command {
         ModelsCommand::Generate => generate::run(Path::new(&root()?), args),
         ModelsCommand::Resolve => resolve::run(args),
         ModelsCommand::RestoreInputs => restore_inputs::run(args),
         ModelsCommand::ParityDownload => parity_download::run(args),
-        ModelsCommand::ProjectorDownload => unreachable!("projector dispatch returned"),
+        ModelsCommand::ProjectorDownload | ModelsCommand::DflashDraftConvert => {
+            unreachable!("direct dispatch returned")
+        }
     };
     report.emit()
 }

@@ -1,5 +1,4 @@
 mod affected_crates;
-mod bundled_plugins;
 pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
@@ -14,7 +13,7 @@ mod upstream_release;
 
 use crate::cli::RepositoryCheck;
 use crate::command::DynResult;
-use ci_controller::repository::{CheckRoots, conventional_commit, upstream_pin};
+use ci_controller::repository::{CheckRoots, upstream_pin};
 
 /// Runs a ported check with the shared `CheckRoots` discovery semantics.
 pub(crate) fn run_check(
@@ -30,14 +29,11 @@ pub(crate) fn run_check(
         RepositoryCheck::PublishOrder => publish_order::run(args),
         RepositoryCheck::AffectedCrates => affected_crates::run(&cwd, args),
         RepositoryCheck::CargoPackages => cargo_packages::run(&cwd, args),
-        RepositoryCheck::ConventionalCommits => conventional_commit::run(&cwd, args),
         RepositoryCheck::EnvMutationCensus => env_census::run(args, default_root),
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),
         RepositoryCheck::LlamaUpstreamRelease => upstream_release::run(args),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
-        RepositoryCheck::BundledPlugins => bundled_plugins::list(args, default_root),
-        RepositoryCheck::BundledPluginsCheck => bundled_plugins::bundle_check(args),
     }
 }
 

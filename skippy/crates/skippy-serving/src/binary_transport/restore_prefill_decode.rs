@@ -247,6 +247,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 &record_session_id,
                 &record_message,
                 record_message.tokens.as_slice(),
+                crate::kv_integration::ExactStateKvExport::Now,
             ))
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;

@@ -248,3 +248,13 @@ pub(in crate::automation) fn with_local_parity<T>(
 ) -> DynResult<T> {
     local_inspection::with_parity(authority, body)
 }
+
+/// Bind the roster's v2 queue identity to the digest carried in runtime build manifests.
+pub(crate) fn native_runtime_recipe(
+    root: &std::path::Path,
+) -> DynResult<(serde_json::Value, String)> {
+    let root = root.canonicalize()?;
+    let recipe = serde_json::to_value(split_roster::native_recipe(&root)?)?;
+    let patch_digest = source::patch_digest(&root.join("skippy/llama_cpp/patches"))?;
+    Ok((recipe, patch_digest.as_str().to_owned()))
+}

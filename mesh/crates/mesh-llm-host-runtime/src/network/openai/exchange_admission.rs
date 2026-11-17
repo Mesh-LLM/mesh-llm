@@ -15,6 +15,17 @@ pub(super) enum SelectedRouteTarget<'a> {
     Mesh(&'a InferenceTarget),
 }
 
+/// What the `backend_selected` admission hook decided for one candidate.
+pub(super) enum SelectedRouteAdmission {
+    Proceed,
+    /// A plugin denied this candidate and the caller has another to try. Nothing
+    /// was written to the client and the denial's headers were not attached.
+    NextCandidate,
+    /// The client was already sent the rejection.
+    Rejected(transport::RouteDispatchOutcome),
+}
+
+/// Admission for a route with no further candidate: any deny is final.
 pub(super) async fn admit_selected_route(
     node: &mesh::Node,
     stream: &mut ClientStream,
@@ -24,9 +35,35 @@ pub(super) async fn admit_selected_route(
     target: SelectedRouteTarget<'_>,
     attempt: usize,
 ) -> Option<transport::RouteDispatchOutcome> {
-    let manager = node.plugin_manager().await?;
+    match admit_selected_candidate(
+        node, stream, request, model, provider, target, attempt, false,
+    )
+    .await
+    {
+        SelectedRouteAdmission::Rejected(outcome) => Some(outcome),
+        SelectedRouteAdmission::Proceed | SelectedRouteAdmission::NextCandidate => None,
+    }
+}
+
+/// Admission for one candidate of several. A plain plugin deny (not combined
+/// with a required-hook failure) yields [`SelectedRouteAdmission::NextCandidate`]
+/// when `more_candidates` is set; the final candidate's deny is sent as usual.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn admit_selected_candidate(
+    node: &mesh::Node,
+    stream: &mut ClientStream,
+    request: &transport::BufferedHttpRequest,
+    model: Option<&str>,
+    provider: &str,
+    target: SelectedRouteTarget<'_>,
+    attempt: usize,
+    more_candidates: bool,
+) -> SelectedRouteAdmission {
+    let Some(manager) = node.plugin_manager().await else {
+        return SelectedRouteAdmission::Proceed;
+    };
     if !manager.has_exchange_hooks().await {
-        return None;
+        return SelectedRouteAdmission::Proceed;
     }
     let model_identity = match (&target, model) {
         (SelectedRouteTarget::Mesh(target), Some(model)) => {
@@ -42,14 +79,15 @@ pub(super) async fn admit_selected_route(
         model_identity.as_ref(),
         attempt,
     ) {
-        Ok(event) => event?,
+        Ok(Some(event)) => event,
+        Ok(None) => return SelectedRouteAdmission::Proceed,
         Err(error) => {
             tracing::warn!(%error, "cannot observe effective OpenAI request entity");
             stream.record_exchange_outcome("internal_hook_failure");
-            return Some(send_selected_route_denial(stream, 503).await);
+            return SelectedRouteAdmission::Rejected(send_selected_route_denial(stream, 503).await);
         }
     };
-    apply_selected_route_policy(&manager, request, stream, event).await
+    apply_selected_route_policy(&manager, request, stream, event, more_candidates).await
 }
 
 /// The identity of `model` on the selected target, as this node knows it: its
@@ -93,16 +131,28 @@ async fn apply_selected_route_policy(
     request: &transport::BufferedHttpRequest,
     stream: &mut ClientStream,
     event: serde_json::Value,
-) -> Option<transport::RouteDispatchOutcome> {
+    more_candidates: bool,
+) -> SelectedRouteAdmission {
     let result = match &request.exchange_observation_id {
-        Some(id) => manager.selected_exchange_phase(id, event).await,
+        Some(id) => {
+            manager
+                .selected_exchange_phase_for_candidate(id, event, more_candidates)
+                .await
+        }
         None => manager.exchange_phase(event).await,
     };
+    if more_candidates && result.is_candidate_deny() {
+        return SelectedRouteAdmission::NextCandidate;
+    }
     if let Err(error) = stream.add_response_metadata(result.headers.clone()) {
         tracing::warn!(%error, "plugin response metadata arrived after headers committed");
     }
-    let status = result.error_status()?;
-    Some(send_selected_route_denial(stream, status).await)
+    match result.error_status() {
+        Some(status) => {
+            SelectedRouteAdmission::Rejected(send_selected_route_denial(stream, status).await)
+        }
+        None => SelectedRouteAdmission::Proceed,
+    }
 }
 
 fn selected_route_event(

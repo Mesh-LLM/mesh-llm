@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/jais2.cpp b/src/models/jais2.cpp
-index 4b24e697f5c622b9a32810960d81e6031c7abd18..37725dfa7560a8f2487e467f9d9090ab7fb07aaa 100644
+index 8376423ea5fd671adf7c559b6994a0d812f93303..f80a10a8dd94620415374e46b7e77558b0b3c6e2 100644
 --- a/src/models/jais2.cpp
 +++ b/src/models/jais2.cpp
-@@ -71,6 +71,8 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -71,6 +71,8 @@ llama_model_jais2::graph::graph(const llm_graph_params & params) : llm_graph_con
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 4b24e697f5c622b9a32810960d81e6031c7abd18..37725dfa7560a8f2487e467f9d9090ab
          // Pre-attention LayerNorm
          cur = build_norm(inpL,
                  model.layers[il].attn_norm,
-@@ -134,6 +136,7 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -125,6 +127,7 @@ llama_model_jais2::graph::graph(const llm_graph_params & params) : llm_graph_con
          inpL = ggml_add(ctx0, cur, ffn_inp);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_out", il);

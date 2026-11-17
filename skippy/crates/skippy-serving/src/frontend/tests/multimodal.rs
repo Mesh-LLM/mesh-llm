@@ -220,6 +220,10 @@ fn multimodal_stage_config(
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: None,
+        // The 128px smoke image collapses to 16 vision tokens on Qwen-VL,
+        // which can stop before generating an answer. Exercise image generation
+        // with enough visual detail while keeping this bounded smoke small.
+        image_min_tokens: Some(256),
         native_mtp_enabled: true,
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         bind_addr: bind_addr.to_string(),
@@ -264,6 +268,9 @@ fn multimodal_chat_request_with_max_tokens(
     serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "mm-smoke",
             "messages": [{
+                "role": "system",
+                "content": "Describe the image directly in one short sentence."
+            }, {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Describe this image briefly."},
@@ -763,6 +770,52 @@ fn message_content_to_generation_text_rejects_remote_media_urls() {
         error.body().error.code.as_deref(),
         Some("unsupported_model_feature")
     );
+}
+
+#[test]
+fn message_content_to_generation_text_rejects_documents_needing_a_transform() {
+    // An Anthropic document or flat Responses file that no transform
+    // converted must fail, as it did before transforms, rather than be
+    // dropped while the accompanying text is answered.
+    let content: MessageContent = serde_json::from_value(json!([
+        {"type": "text", "text": "summarize"},
+        {"type": "input_file", "input_file": {
+            "file_data": "data:application/pdf;base64,JVBERi0=",
+            "mime_type": "application/pdf"
+        }, "mesh_requires_transform": true}
+    ]))
+    .unwrap();
+    let mut media = Vec::new();
+
+    let error =
+        message_content_to_generation_text(&content, "<__media__>", &mut media).unwrap_err();
+
+    assert_eq!(error.status().as_u16(), 400);
+    assert_eq!(
+        error.body().error.code.as_deref(),
+        Some("unsupported_model_feature")
+    );
+    assert!(media.is_empty());
+}
+
+#[test]
+fn message_content_to_generation_text_still_ignores_plain_file_parts() {
+    // Chat `file` and nested Responses `input_file` parts were ignored before
+    // request transforms, and still are.
+    for part in [
+        json!({"type": "input_file", "input_file": {"url": "data:text/plain;base64,aGVsbG8="}}),
+        json!({"type": "file", "file": {"file_id": "file-1"}}),
+    ] {
+        let content: MessageContent =
+            serde_json::from_value(json!([{"type": "text", "text": "summarize"}, part])).unwrap();
+        let mut media = Vec::new();
+
+        let text = message_content_to_generation_text(&content, "<__media__>", &mut media)
+            .expect("plain file part is ignored");
+
+        assert_eq!(text, "summarize", "{part}");
+        assert!(media.is_empty());
+    }
 }
 
 #[test]

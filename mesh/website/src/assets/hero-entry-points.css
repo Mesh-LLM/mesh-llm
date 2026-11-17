@@ -1,7 +1,7 @@
-/* The CLI and embeddable SDK share the hero's first-screen entry point. */
+/* Run, embed and extend share the hero's first-screen entry point. */
 .hero-entry-points {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr));
   gap: 24px;
   flex: 1;
   min-width: 0;

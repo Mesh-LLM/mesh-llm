@@ -2,16 +2,18 @@
 
 use crate::bindings;
 
-pub type MtmdContext = bindings::mtmd::mtmd_context;
 pub type MtmdBitmap = bindings::mtmd::mtmd_bitmap;
+pub type MtmdContext = bindings::mtmd::mtmd_context;
 pub type MtmdInputChunks = bindings::mtmd::mtmd_input_chunks;
 pub type MtmdHelperVideo = bindings::mtmd::mtmd_helper_video;
 pub type MtmdHelperGenAudio = bindings::mtmd::mtmd_helper_gen_audio;
 pub type MtmdGenAudioType = bindings::mtmd::mtmd_gen_audio_type;
 pub type MtmdGenAudioInfo = bindings::mtmd::mtmd_gen_audio_info;
 pub type MtmdHelperGenAudioOutputType = bindings::mtmd::mtmd_helper_gen_audio_outtype;
+pub type MtmdHelperGenAudioOutputMode = bindings::mtmd::mtmd_helper_gen_audio_out_mode;
 pub type MtmdHelperGenAudioInput = bindings::mtmd::mtmd_helper_gen_audio_inp;
 pub type MtmdHelperBitmapWrapper = bindings::mtmd::mtmd_helper_bitmap_wrapper;
+pub type MtmdHelperDecodeBudget = bindings::mtmd::mtmd_helper_decode_budget;
 pub type MtmdHelperVideoInitParams = bindings::mtmd::mtmd_helper_video_init_params;
 pub type MtmdHelperInitOpt = bindings::mtmd::mtmd_helper_init_opt;
 pub type MtmdInputChunkType = bindings::mtmd::mtmd_input_chunk_type;

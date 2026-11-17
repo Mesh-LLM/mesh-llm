@@ -45,6 +45,7 @@ use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sampl
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
 mod exact_state_recording;
+use crate::kv_integration::ExactStateKvExport;
 // Test-only: lets iteration_scheduler tests exercise the real outstanding-
 // capture accounting through the real channel/command types.
 #[cfg(test)]
@@ -946,6 +947,7 @@ impl StageOpenAiBackend {
                     request.prompt_token_ids[..boundary].to_vec(),
                     "shared_prefill_checkpoint",
                     true,
+                    ExactStateKvExport::Now,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -990,6 +992,7 @@ impl StageOpenAiBackend {
                     self.kv.as_ref().is_some_and(|kv| {
                         kv.full_exact_state_writes_through_l3(request.prompt_token_ids.len())
                     }),
+                    ExactStateKvExport::Now,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -1300,6 +1303,7 @@ impl StageOpenAiBackend {
                     checkpoint_tokens,
                     "chat_prefix_checkpoint",
                     true,
+                    ExactStateKvExport::Now,
                 );
                 prefill_cache_chunks(
                     runtime,

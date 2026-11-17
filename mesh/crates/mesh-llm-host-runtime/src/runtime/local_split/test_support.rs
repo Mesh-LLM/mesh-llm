@@ -183,7 +183,9 @@ pub(super) fn split_test_peer(
         local_gguf_content_id_supported: stage_protocol_generation_supported,
         decode_batch_policy_supported: stage_protocol_generation_supported,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
 
@@ -372,6 +374,7 @@ pub(super) fn runtime_status_for_stage(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
     }
 }
 
@@ -707,6 +710,7 @@ fn write_fake_native_mtp_gguf_model(path: &Path) {
 
 #[tokio::test]
 async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
+    let _default_drafts = mesh_llm_skippy_adapter::config::with_default_dflash_drafts();
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9339 })
         .await
         .unwrap();
@@ -842,6 +846,7 @@ fn split_dflash_spec<'a>(
 
 #[tokio::test]
 async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
+    let _default_drafts = mesh_llm_skippy_adapter::config::with_default_dflash_drafts();
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9342 })
         .await
         .unwrap();
@@ -944,6 +949,7 @@ fn write_fake_dflash_draft(path: &Path, target_layers: &[u32]) {
 
 #[tokio::test]
 async fn split_load_of_a_cataloged_target_serves_its_default_dflash_draft() {
+    let _default_drafts = mesh_llm_skippy_adapter::config::with_default_dflash_drafts();
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9341 })
         .await
         .unwrap();
@@ -1306,6 +1312,7 @@ pub(super) fn test_stage_status_from_load(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
         dflash_feature_encodings: Vec::new(),
@@ -1364,6 +1371,7 @@ pub(super) fn test_stage_status_from_stop(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
         dflash_feature_encodings: Vec::new(),

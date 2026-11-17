@@ -365,23 +365,32 @@ mod tests {
     }
 
     #[test]
+    fn trust_store_lock_ignores_inherited_child_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "auth::trust::tests::trust_store_lock_is_shared_between_processes",
+            ])
+            .env(
+                "MESH_LLM_TEST_TRUST_STORE_LOCK_PATH",
+                directory.path().join("unrelated-missing-file"),
+            )
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
     fn trust_store_lock_is_shared_between_processes() {
         const CHILD_LOCK_PATH: &str = "MESH_LLM_TEST_TRUST_STORE_LOCK_PATH";
-        if let Some(path) = std::env::var_os(CHILD_LOCK_PATH) {
-            let lock = OpenOptions::new().write(true).open(path).unwrap();
-            assert!(matches!(
-                lock.try_lock(),
-                Err(std::fs::TryLockError::WouldBlock)
-            ));
-            return;
-        }
-
         let path = temporary_trust_store_path("process-lock");
         let lock = lock_trust_store(&path).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "auth::trust::tests::trust_store_lock_is_shared_between_processes",
+                "auth::trust::tests::trust_store_lock_child",
+                "--ignored",
             ])
             .env(
                 CHILD_LOCK_PATH,
@@ -392,6 +401,17 @@ mod tests {
         assert!(output.status.success(), "{output:?}");
         drop(lock);
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    #[ignore = "invoked with controlled inputs by trust_store_lock_is_shared_between_processes"]
+    fn trust_store_lock_child() {
+        let path = std::env::var_os("MESH_LLM_TEST_TRUST_STORE_LOCK_PATH").unwrap();
+        let lock = OpenOptions::new().write(true).open(path).unwrap();
+        assert!(matches!(
+            lock.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
     }
 
     #[test]

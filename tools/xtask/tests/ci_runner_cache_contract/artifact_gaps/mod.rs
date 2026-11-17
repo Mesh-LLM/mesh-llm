@@ -111,7 +111,7 @@ fn artifact_every_lane_parallelism_input_consumes_its_declared_budget() {
     let mut observed = std::collections::BTreeSet::new();
     for lane in ["quality", "linux", "macos", "windows"] {
         let document = document(&format!("ci-{lane}-lane.yml"));
-        for (_, job) in document.get("jobs").unwrap().entries() {
+        for (name, job) in document.get("jobs").unwrap().entries() {
             let Some(inputs) = job.get("with") else {
                 continue;
             };
@@ -120,6 +120,12 @@ fn artifact_every_lane_parallelism_input_consumes_its_declared_budget() {
                     key.as_str(),
                     "max_parallel" | "clippy_max_parallel" | "total_max_workers"
                 ) {
+                    continue;
+                }
+                if lane == "linux"
+                    && (name.starts_with("native_runtime_") || name.starts_with("product_"))
+                {
+                    assert_eq!(value.text(), Some("1"));
                     continue;
                 }
                 let budget = if key == "total_max_workers" {

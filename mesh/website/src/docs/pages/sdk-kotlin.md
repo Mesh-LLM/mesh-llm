@@ -4,6 +4,8 @@ title: Java, Kotlin, and Android SDK
 
 # Java, Kotlin, and Android SDK
 
+## Install
+
 Install `ai.meshllm:meshllm-android:{{ site.sdkVersion }}` from the GitHub
 Packages registry at `https://maven.pkg.github.com/Mesh-LLM/mesh-llm`.
 Configure the registry credentials through your Gradle properties or environment.
@@ -34,6 +36,24 @@ try {
 
 Use `joinTokens = listOf(token)` for a private mesh and `ownerKeyPath` for an
 existing Mesh LLM owner keystore. Client mode loads no serving runtime.
+
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID, within a coroutine:
+
+```kotlin
+node.runtimeCapacity("exact-serving-id")?.let { capacity ->
+    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
+    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
+}
+```
+
+`LaneCapacity` fields are `ULong`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. Unknown, unsupported, unavailable or incomplete capacity returns `null`;
+stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long inference. The total pool is not a
+per-request context limit.
 
 ## Discover advertised models
 
@@ -140,12 +160,23 @@ primary mesh; it never combines independent memberships implicitly.
 
 ## Live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 Use signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection to commit
 turns explicitly:
 
 ```kotlin
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+
 val session = node.startLiveTranscription(LiveTranscriptionOptions(
-    model = "speech-model", sampleRate = 16000u, turnDetection = null))
+    model = "speech-model", sampleRate = 16000u, turnDetection = null,
+    stepMs = 400u, tentative = true))
 try {
     session.sendAudio(pcm16Samples)
     session.commit()
@@ -153,13 +184,30 @@ try {
     val remainingEvents = session.stop()
     println(remainingEvents)
 } finally {
-    session.close()
+    withContext(NonCancellable) { session.close() }
 }
 ```
 
 `sendAudioF32` accepts floating point samples. Defaults use 16 kHz and server-side
 turn detection. `stop()` returns remaining final events; `close()` abandons the
 session. Stop the node when the application exits.
+Cancelling `events()` also closes the session without waiting for a pending
+native read; native cleanup finishes in the background.
+
+`stepMs` accepts 200 to 5000 ms; `null` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `itemId`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input.
 
 ## Full embedded-node configuration
 
@@ -181,3 +229,24 @@ omitted fields use native defaults, and unknown keys are rejected by the core.
 Full-config `mode` is `client`, `serve_only`, or `serve` (combined); the
 full-config default is combined, matching Rust. The existing `Node(...)`
 constructor keeps its client default and Kotlin convenience arguments.
+
+## Structured inference failures
+
+`OpenAIRequestException.details` and `OpenAIStreamException.details` expose
+typed `InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```kotlin
+try {
+    node.inference.chatCompletions(request)
+} catch (error: OpenAIRequestException) {
+    if (error.details?.code == "context_length_exceeded") {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `null` for transport failures or an unstructured body;
+missing optional fields stay `null`. Unknown codes are preserved.

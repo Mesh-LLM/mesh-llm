@@ -9,9 +9,10 @@ pub const MESH_SERVICE_KIND: u16 = 31990;
 pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
-    "wss://relay.nostr.band",
-    "wss://nostr.land",
-    "wss://nostr.wine",
+    "wss://relay.ditto.pub",
+    "wss://relay.primal.net",
+    "wss://relay.nostr.net",
+    "wss://nostr.oxtr.dev",
 ];
 
 /// What we publish about a mesh.
@@ -50,6 +51,11 @@ pub struct MeshListing {
     /// Stable mesh identity — all nodes in the same mesh share this ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_id: Option<String>,
+    /// Whether this publishing node serves a model itself, so a thin client
+    /// tunnelling to the invite endpoint gets an answer. `None` from nodes
+    /// that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_serves: Option<bool>,
 }
 
 /// Discovered mesh from Nostr.

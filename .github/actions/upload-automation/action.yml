@@ -64,6 +64,7 @@ runs:
       if: runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && (inputs.source-profile == 'protected-clean' || inputs.source-profile == 'product-clean'))
       uses: ./.github/actions/prepare-automation
       with:
+        tool: ${{ inputs.source-profile == 'protected-clean' && 'authority-automation' || 'xtask' }}
         runner-profile: ${{ inputs.runner-profile }}
         reuse-hosted-binary: ${{ inputs.source-profile != 'protected-clean' && 'true' || 'false' }}
     - name: Build and stage automation
@@ -75,6 +76,7 @@ runs:
         AUTOMATION_BINARY_PATH: ${{ steps.prepare.outputs.binary_path }}
         AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
         AUTOMATION_SOURCE_PROFILE: ${{ inputs.source-profile }}
+        AUTOMATION_TOOL: ${{ inputs.source-profile == 'protected-clean' && 'authority-automation' || 'xtask' }}
       run: |
         set -euo pipefail
         case "${AUTOMATION_CI_LANE:-}" in
@@ -97,7 +99,12 @@ runs:
         binary_path="${AUTOMATION_BINARY_PATH%$'\r'}"
         if [[ -z "$binary_path" && "$RUNNER_OS" != Windows ]]; then
           test "$AUTOMATION_PROFILE" = image || exit 1
-          report="$(just automation-bootstrap)"
+          case "$AUTOMATION_TOOL" in
+            xtask) recipe=automation-bootstrap ;;
+            authority-automation) recipe=authority-automation-bootstrap ;;
+            *) exit 1 ;;
+          esac
+          report="$(just "$recipe")"
           binary_path="$(printf '%s\n' "$report" | sed -n 's/^binary_path=//p')"
         fi
         if command -v cygpath >/dev/null 2>&1; then

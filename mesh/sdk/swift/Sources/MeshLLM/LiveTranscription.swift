@@ -18,12 +18,18 @@ public struct LiveTranscriptionOptions: Encodable, Sendable {
     public var sampleRate: UInt32
     /// nil uses explicit commit calls instead of server-side turn detection.
     public var turnDetection: LiveTurnDetection?
+    /// Audio between transcription passes, 200 to 5000 ms; nil keeps the node's 1000 ms default.
+    public var stepMs: UInt32?
+    /// Report replaceable, unconfirmed text before confirmed deltas. Defaults to false.
+    public var tentative: Bool
     public init(model: String? = nil, language: String? = nil, prompt: String? = nil,
-                sampleRate: UInt32 = 16000, turnDetection: LiveTurnDetection? = LiveTurnDetection()) {
+                sampleRate: UInt32 = 16000, turnDetection: LiveTurnDetection? = LiveTurnDetection(),
+                stepMs: UInt32? = nil, tentative: Bool = false) {
         self.model = model; self.language = language; self.prompt = prompt
         self.sampleRate = sampleRate; self.turnDetection = turnDetection
+        self.stepMs = stepMs; self.tentative = tentative
     }
-    private enum CodingKeys: String, CodingKey { case model, language, prompt, sampleRate, turnDetection }
+    private enum CodingKeys: String, CodingKey { case model, language, prompt, sampleRate, turnDetection, stepMs, tentative }
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encodeIfPresent(model, forKey: .model)
@@ -31,6 +37,8 @@ public struct LiveTranscriptionOptions: Encodable, Sendable {
         try values.encodeIfPresent(prompt, forKey: .prompt)
         try values.encode(sampleRate, forKey: .sampleRate)
         try values.encode(turnDetection, forKey: .turnDetection)
+        try values.encodeIfPresent(stepMs, forKey: .stepMs)
+        try values.encode(tentative, forKey: .tentative)
     }
     internal func json() throws -> String {
         let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
@@ -38,7 +46,9 @@ public struct LiveTranscriptionOptions: Encodable, Sendable {
     }
 }
 
-/// Event types are speech_started, speech_stopped, delta, committed, completed and error.
+/// Event types are speech_started, speech_stopped, delta, tentative, committed, completed and error.
+/// A tentative event replaces the turn's previous unconfirmed text; empty text clears it.
+/// Completed supersedes tentative text. Delta text is confirmed and should be appended.
 public struct LiveTranscriptionEvent: Decodable, Sendable {
     public let type: String
     public let itemId: String?

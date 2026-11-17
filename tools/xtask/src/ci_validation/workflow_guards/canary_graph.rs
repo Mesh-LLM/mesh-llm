@@ -288,7 +288,9 @@ fn independent_pass(
     };
     h::condition(
         verify,
-        &format!("${{{{ !cancelled() && {changed}needs.{repair_name}.outputs.green == 'true' }}}}"),
+        &format!(
+            "${{{{ !cancelled() && {changed}needs.{repair_name}.outputs.green == 'true' && needs.{repair_name}.outputs.retry_recovered != 'true' }}}}"
+        ),
     )?;
     pass(verify, &format!("verify-{number}"))?;
     let inputs = h::member(verify, "with")?;
@@ -450,6 +452,24 @@ mod tests {
     #[test]
     fn current_admission_graph_is_bound() {
         validate(document()).unwrap();
+    }
+
+    #[test]
+    fn all_verification_passes_must_skip_recovered_retries() -> DynResult<()> {
+        for number in 1..=3 {
+            let mut node = document();
+            let verify = format!("verify_{number}");
+            let condition = h::member(h::job(&node, &verify).unwrap(), "if")?
+                .text()
+                .unwrap()
+                .replace(
+                    &format!(" && needs.repair_{number}.outputs.retry_recovered != 'true'"),
+                    "",
+                );
+            h::replace(&mut node, &["jobs", &verify, "if"], Node::Scalar(condition));
+            assert!(validate(node).is_err(), "{verify}");
+        }
+        Ok(())
     }
 
     #[test]

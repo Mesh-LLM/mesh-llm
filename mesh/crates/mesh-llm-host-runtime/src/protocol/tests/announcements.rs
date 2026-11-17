@@ -61,7 +61,9 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: true,
+        private_routing_supported: true,
         persistent_lane_marker_supported: true,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -105,7 +107,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
     );
     assert!(skippy.features.iter().any(|feature| feature
-        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V15));
+        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V16));
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -119,6 +121,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     assert!(roundtripped.stage_status_list_supported);
     assert!(roundtripped.stage_protocol_generation_supported);
     assert!(roundtripped.plugin_origin_signature_supported);
+    assert!(roundtripped.private_routing_supported);
     assert!(roundtripped.persistent_lane_marker_supported);
     let mut legacy = proto_pa.clone();
     for subprotocol in &mut legacy.subprotocols {
@@ -146,7 +149,8 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     assert_eq!(roundtripped.claim.node_label.as_deref(), Some("studio"));
 }
 
-pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
+#[test]
+fn mixed_version_peer_ignores_missing_release_attestation() {
     let proto = crate::proto::node::PeerAnnouncement {
         endpoint_id: vec![1; 32],
         role: crate::proto::node::NodeRole::Worker as i32,
@@ -189,6 +193,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
             window_ms: 900_000,
             kind: crate::network::metrics::ThroughputMeasurementKind::EndToEndAttempt,
         }),
+        prefill: None,
     }];
     let salt = [0xC3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES];
     let prefix_hash = 0xfeed_beef;
@@ -235,7 +240,9 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -243,6 +250,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 avg_tokens_per_second_milli: 250_000,
                 throughput_samples: 99,
                 measurement: None,
+                prefill: None,
             },
         ],
         cache_affinity: Some(
@@ -464,7 +472,9 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -514,13 +524,13 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
     for missing in [
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V15,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V16,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
     ] {
         let features = [
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V15,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V16,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
         ]
@@ -547,6 +557,35 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
     }
 }
 
+/// A peer that advertises the previous generation's full bundle is not
+/// admitted to split planning.
+#[test]
+fn proto_announcement_with_the_previous_generation_bundle_is_not_stage_compatible() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD2; 32]).public());
+    let proto_pa = crate::proto::node::PeerAnnouncement {
+        endpoint_id: peer_id.as_bytes().to_vec(),
+        role: crate::proto::node::NodeRole::Worker as i32,
+        subprotocols: vec![crate::proto::node::MeshSubprotocol {
+            name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+            major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+            features: [
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+                "stage-generation-15",
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        }],
+        ..Default::default()
+    };
+
+    let (_, ann) = proto_ann_to_local(&proto_pa).expect("proto announcement should decode");
+
+    assert!(!ann.stage_protocol_generation_supported);
+}
+
 /// Partial duplicate descriptors cannot combine into a valid capability bundle.
 #[test]
 fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
@@ -560,7 +599,7 @@ fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
                 major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
                 features: vec![
                     skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V15
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V16
                         .to_string(),
                 ],
             },
@@ -727,7 +766,9 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1136,7 +1177,9 @@ fn claimed_log_head_test_announcement(
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1251,7 +1294,9 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,

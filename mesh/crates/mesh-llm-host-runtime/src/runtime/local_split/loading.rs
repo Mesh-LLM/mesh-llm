@@ -482,6 +482,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     spec.node
         .record_stage_status(Some(spec.node.id()), stage0_status)
         .await;
+    super::super::local::report_split_model_loaded_analytics(&model_ref, &spec.package.package_ref);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -581,10 +582,12 @@ pub(super) async fn stage0_runtime_options(
     {
         let stage0_load = stage0_load.clone();
         Some(
-            tokio::task::spawn_blocking(move || skippy::resolve_stage_load_package(&stage0_load))
-                .await
-                .context("join resolve package-v2 stage 0 task")??
-                .context("package-v2 stage 0 did not resolve to a local package")?,
+            tokio::task::spawn_blocking(move || {
+                skippy::resolve_stage_load_package(&stage0_load, skippy::StageSourceFetch::Allowed)
+            })
+            .await
+            .context("join resolve package-v2 stage 0 task")??
+            .context("package-v2 stage 0 did not resolve to a local package")?,
         )
     } else {
         None

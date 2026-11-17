@@ -77,40 +77,6 @@ fn narrow_binary_rejects_commands_outside_its_scope() -> TestResult {
 }
 
 #[test]
-fn conventional_commits_accepts_a_conventional_subject() -> TestResult {
-    // Given: a conventional subject passed inline.
-    let args = [
-        "repository",
-        "conventional-commits",
-        "--message",
-        "fix(ci): keep one planner",
-    ];
-    // When: the commit convention check runs through the executable.
-    let output = run(&args, b"")?;
-    // Then: it passes silently.
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(output.stdout.is_empty());
-    Ok(())
-}
-
-#[test]
-fn conventional_commits_refuses_a_nonconventional_subject() -> TestResult {
-    // Given: a subject with no type prefix.
-    let args = [
-        "repository",
-        "conventional-commits",
-        "--message",
-        "keep one planner",
-    ];
-    // When: the commit convention check runs.
-    let output = run(&args, b"")?;
-    // Then: it fails with the shared release-notes guidance.
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(String::from_utf8(output.stderr)?.contains("Conventional Commits:"));
-    Ok(())
-}
-
-#[test]
 fn upstream_pin_requires_both_revisions() -> TestResult {
     // Given: the pin guard without its base and head revisions.
     let args = ["repository", "llama-upstream-pin"];
