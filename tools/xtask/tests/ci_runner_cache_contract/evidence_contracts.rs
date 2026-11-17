@@ -457,6 +457,21 @@ fn current_seed_recipe_compiles_host_and_isolated_automation_clippy_dependencies
             "cargo clippy --locked -p xtask --all-targets -- -D warnings",
         ]
     );
+    let host = fs::read_to_string(root().join("mesh/scripts/build-host.sh")).unwrap();
+    let features = host
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("host_features=\"")
+                .and_then(|value| value.strip_suffix('"'))
+        })
+        .expect("host declares its compiled features");
+    assert!(
+        commands.iter().any(|command| {
+            command.ends_with(&format!("--features {features}"))
+                && command.contains("--no-default-features")
+        }),
+        "seed must compile the actual host feature selection"
+    );
     let warmer = workflows().remove("cache-warm-sccache.yml").unwrap();
     assert!(
         warmer

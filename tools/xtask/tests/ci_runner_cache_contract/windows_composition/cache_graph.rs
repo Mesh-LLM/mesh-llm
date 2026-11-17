@@ -62,18 +62,15 @@ fn windows_abi_cache_key_binds_every_compatibility_dimension_and_exact_restore()
     let hash = text(environment, "CACHE_INPUT_HASH");
     for source in [
         ".github/actions/restore-windows-abi-cache/action.yml",
-        ".github/actions/save-and-verify-actions-cache/action.yml",
-        ".github/actions/resolve-native-toolchain-epoch/action.yml",
-        ".github/actions/prepare-native-runtime-input/action.yml",
-        ".github/actions/setup-windows-rocm-sdk/action.yml",
-        "scripts/build-llama.sh",
-        "skippy/scripts/build-llama.sh",
-        "scripts/prepare-llama.sh",
-        "skippy/scripts/prepare-llama.sh",
-        "scripts/package-native-runtime.sh",
-        "skippy/scripts/package-native-runtime.sh",
-        "skippy/llama_cpp/upstream.txt",
-        "skippy/llama_cpp/patches/**",
+        ".github/actions/save-and-verify-actions-cache/**",
+        ".github/actions/resolve-native-toolchain-epoch/**",
+        ".github/actions/prepare-native-runtime-input/**",
+        ".github/actions/setup-windows-rocm-sdk/**",
+        "scripts/**",
+        "skippy/scripts/**",
+        "skippy/llama_cpp/**",
+        "tools/xtask/src/native_policy/**",
+        "tools/xtask/src/prepared_input/**",
         ".github/cache-version.txt",
     ] {
         assert!(hash.contains(&format!("'{source}'")), "unbound {source}");

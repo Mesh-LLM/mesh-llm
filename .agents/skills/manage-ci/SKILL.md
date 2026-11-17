@@ -676,6 +676,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
   restore prefixes across trust or ABI boundaries.
+- Hosted automation and Linux CPU packaged-runtime keys use the typed
+  `ci-ops cache-inputs` inventory. Its checked-in projections require freshness
+  validation; resolving a cache key must not compile an automation helper.
+  Include the complete local production dependency closure, build scripts,
+  included resources, native patches, packaging implementation and linker
+  recipes. Exclude integration tests or documentation only when the compiled
+  graph does not consume them. Hosted executable keys also bind the actual
+  runner image identity, separately from the Rust toolchain.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.
@@ -688,9 +696,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/authority-automation/**`,
-  `tools/ci-controller/**`, `tools/process-supervision/**`, and
-  `tools/runner-cleanup/**` because xtask compiles those libraries. A
+  executable, whose inventory also includes the manifests and production
+  sources of authority-automation, ci-controller, process-supervision and
+  runner-cleanup because xtask compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence

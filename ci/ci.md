@@ -1509,6 +1509,14 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+Exact hosted executable and Linux CPU packaged-runtime key expressions are
+projections of the typed `ci-ops cache-inputs` inventory. The normal contract
+gate checks freshness. Hosted version 2 keys bind the actual hosted image as
+well as the Rust toolchain, and include the common linker driver. Runtime
+version 2 keys include packaging policy and the packaged Rust tool's local
+dependency closure. Key lookup remains compilation-free; a miss follows the
+existing build path and a hit retains its existing verification.
+
 The Windows host slice uploads Cargo HTML timings from its existing standalone
 Skippy and Mesh compilations as a separate one-day architecture/attempt
 artifact. Each phase also records Cargo fingerprint diagnostics and cumulative
@@ -2462,34 +2470,20 @@ on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 --stdin` and `plan-ci` calls `ci plan` through that variable, and each prepares
 the controller only when it is unset, so a planner job builds it once. Lane
 summaries run `ci validate-lane`; the Quality summary also runs `repository
-llama-upstream-pin` on PRs. Its exact-key cache entry
-(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
-`Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
-drivers) is separate from the xtask entry. A miss runs `cargo build --locked
---release -p ci-controller --bin ci-controller` without Just or sccache and
-saves the result.
+llama-upstream-pin` on PRs. Its exact-key cache entry uses the version 2 hosted-controller inventory and
+binds OS, architecture, Rust toolchain and hosted system image. A miss builds
+locked release ci-controller without Just or sccache and saves the result.
 
-Other jobs that must not wait on a producer keep `prepare-automation`: the
-release UI stamp and the
-Windows unit platform-check jobs, independent release SDK and smoke callers, canary, nightly, Docker and warm-cache
-workflows. The `hosted-bare` profile now restores a release executable from an
-exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
-`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
-`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/runner-cleanup/**`,
-`tools/trajectory-reader/**`,
-`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/authority-automation/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, and `tools/runner-cleanup/**` because xtask
-compiles those libraries. Only the
-default `tool: xtask` restores or saves that entry. The image
-profile never restores or saves an executable. The protected authority producers
-pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
-run from the frozen protected source. A first run after any hashed input changes
-is a cold miss. Pull requests execute main's reusable workflows, so none of this
-applies to a PR until it is merged. No hosted execution is recorded here.
+Other jobs without a producer use prepare-automation. Its hosted-bare profile
+restores the exact version 2 xtask inventory, compiles on a miss and saves on a
+miss. The inventory covers every local production dependency, build script,
+reviewed included resource and linker recipe; normal contract validation checks
+both the dependency closure and checked-in key projections. Only tool: xtask
+uses this cache. Image profiles never restore executables, and protected
+producers keep reuse-hosted-binary: false to compile their frozen source in-run.
+A changed compiled input or hosted image starts a new exact cohort. There are
+no restore prefixes. PRs may execute protected-main workflow definitions;
+candidate and production qualification must identify the definition that ran.
 
 ## Python SDK component and admission
 
