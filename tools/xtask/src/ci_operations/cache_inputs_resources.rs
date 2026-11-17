@@ -330,6 +330,9 @@ impl<'ast> Visit<'ast> for Audit<'_> {
 }
 
 fn module_path(module: &syn::ItemMod) -> DynResult<Option<String>> {
+    for attr in &module.attrs {
+        reject_conditional_path(&attr.meta)?;
+    }
     let Some(attr) = module
         .attrs
         .iter()
@@ -347,6 +350,25 @@ fn module_path(module: &syn::ItemMod) -> DynResult<Option<String>> {
         return Err("module path must be string".into());
     };
     Ok(Some(value.value()))
+}
+
+fn reject_conditional_path(meta: &syn::Meta) -> DynResult<()> {
+    let syn::Meta::List(list) = meta else {
+        return Ok(());
+    };
+    if !list.path.is_ident("cfg_attr") {
+        return Ok(());
+    }
+    let attributes = list.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+    )?;
+    for attribute in attributes.iter().skip(1) {
+        if attribute.path().is_ident("path") {
+            return Err("conditional module path requires explicit resource ownership".into());
+        }
+        reject_conditional_path(attribute)?;
+    }
+    Ok(())
 }
 
 impl Audit<'_> {
@@ -471,6 +493,45 @@ fn include_path(expr: &syn::Expr) -> DynResult<Include> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conditional_module_paths_require_explicit_ownership() -> DynResult<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        std::fs::create_dir(root.join("src"))?;
+        std::fs::write(root.join("src/child.rs"), "const SAFE: u8 = 0;")?;
+        std::fs::write(
+            root.join("src/alternate.rs"),
+            "const DATA: &str = include_str!(\"../resource.txt\");",
+        )?;
+        std::fs::write(root.join("resource.txt"), "data")?;
+        for attribute in [
+            "#[cfg_attr(unix, path=\"alternate.rs\")]",
+            "#[cfg_attr(unix, cfg_attr(target_os=\"macos\", path=\"alternate.rs\"))]",
+        ] {
+            std::fs::write(root.join("src/main.rs"), format!("{attribute} mod child;"))?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("conditional module path"));
+        }
+        std::fs::write(
+            root.join("src/main.rs"),
+            "#[cfg_attr(unix, allow(dead_code))] mod child;",
+        )?;
+        audit_file(
+            &root,
+            &root,
+            &root.join("src/main.rs"),
+            &[glob::Pattern::new("src/**")?],
+            &mut BTreeSet::new(),
+        )
+    }
 
     #[test]
     fn module_path_attributes_audit_the_compiled_child() -> DynResult<()> {
