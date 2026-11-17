@@ -130,6 +130,7 @@ fn audit_rust_file(
         package,
         file: &file,
         directory,
+        inline_module: false,
         patterns,
         visited,
         error: None,
@@ -150,6 +151,7 @@ struct Audit<'a> {
     package: &'a Path,
     file: &'a Path,
     directory: PathBuf,
+    inline_module: bool,
     patterns: &'a [glob::Pattern],
     visited: &'a mut BTreeSet<(PathBuf, bool)>,
     error: Option<crate::command::DynError>,
@@ -214,32 +216,43 @@ impl<'ast> Visit<'ast> for Audit<'_> {
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        let explicit = match module_path(module) {
+            Ok(path) => path,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
         if let Some((_, items)) = &module.content {
             let previous = self.directory.clone();
-            self.directory.push(module.ident.to_string());
+            let previous_inline = self.inline_module;
+            if let Some(path) = &explicit {
+                let base = if self.inline_module {
+                    &self.directory
+                } else {
+                    self.file.parent().unwrap_or(self.root)
+                };
+                self.directory = base.join(path);
+            } else {
+                self.directory.push(module.ident.to_string());
+            }
+            self.inline_module = true;
             for item in items {
                 self.visit_item(item);
             }
             self.directory = previous;
+            self.inline_module = previous_inline;
             return;
         }
         let result = (|| -> DynResult<()> {
-            let explicit = module.attrs.iter().find(|a| a.path().is_ident("path"));
             let file =
-                if let Some(attr) = explicit {
-                    let syn::Meta::NameValue(value) = &attr.meta else {
-                        return Err("unsupported module path attribute".into());
+                if let Some(path) = &explicit {
+                    let base = if self.inline_module {
+                        &self.directory
+                    } else {
+                        self.file.parent().ok_or("module parent missing")?
                     };
-                    let syn::Expr::Lit(value) = &value.value else {
-                        return Err("module path must be literal".into());
-                    };
-                    let syn::Lit::Str(value) = &value.lit else {
-                        return Err("module path must be string".into());
-                    };
-                    self.file
-                        .parent()
-                        .ok_or("module parent missing")?
-                        .join(value.value())
+                    base.join(path)
                 } else {
                     let name = module.ident.to_string();
                     let flat = self.directory.join(format!("{name}.rs"));
@@ -255,7 +268,14 @@ impl<'ast> Visit<'ast> for Audit<'_> {
                         .into()),
                     }
                 };
-            audit_file(self.root, self.package, &file, self.patterns, self.visited)
+            audit_rust_file(
+                self.root,
+                self.package,
+                &file,
+                self.patterns,
+                self.visited,
+                explicit.is_some(),
+            )
         })();
         if let Err(error) = result {
             self.error = Some(error);
@@ -307,6 +327,26 @@ impl<'ast> Visit<'ast> for Audit<'_> {
             );
         }
     }
+}
+
+fn module_path(module: &syn::ItemMod) -> DynResult<Option<String>> {
+    let Some(attr) = module
+        .attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("path"))
+    else {
+        return Ok(None);
+    };
+    let syn::Meta::NameValue(value) = &attr.meta else {
+        return Err("unsupported module path attribute".into());
+    };
+    let syn::Expr::Lit(value) = &value.value else {
+        return Err("module path must be literal".into());
+    };
+    let syn::Lit::Str(value) = &value.lit else {
+        return Err("module path must be string".into());
+    };
+    Ok(Some(value.value()))
 }
 
 impl Audit<'_> {
@@ -431,6 +471,55 @@ fn include_path(expr: &syn::Expr) -> DynResult<Include> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_path_attributes_audit_the_compiled_child() -> DynResult<()> {
+        for (source, selected, decoy) in [
+            (
+                "#[path=\"loaded.rs\"] mod loaded;",
+                "src/child.rs",
+                "src/loaded/child.rs",
+            ),
+            (
+                "mod wrapper { #[path=\"child.rs\"] mod child; }",
+                "src/wrapper/child.rs",
+                "src/child.rs",
+            ),
+            (
+                "#[path=\"alternate\"] mod wrapper { mod child; }",
+                "src/alternate/child.rs",
+                "src/wrapper/child.rs",
+            ),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().canonicalize()?;
+            for child in [selected, decoy] {
+                let path = root.join(child);
+                std::fs::create_dir_all(path.parent().ok_or("fixture parent")?)?;
+                std::fs::write(path, "const SAFE: u8 = 0;")?;
+            }
+            std::fs::write(root.join("src/main.rs"), source)?;
+            std::fs::write(root.join("src/loaded.rs"), "mod child;")?;
+            std::fs::write(root.join("resource.txt"), "data")?;
+            std::fs::write(
+                root.join(selected),
+                "const DATA: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/resource.txt\"));",
+            )?;
+            let error = audit_file(
+                &root,
+                &root,
+                &root.join("src/main.rs"),
+                &[glob::Pattern::new("src/**")?],
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("resource.txt"),
+                "{source}: {error}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn shared_source_is_audited_in_both_resolution_contexts() -> DynResult<()> {
