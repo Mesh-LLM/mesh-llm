@@ -67,19 +67,7 @@ impl RuntimeState {
     }
 
     pub(crate) fn warmup_generation_graph(&mut self) -> Result<bool> {
-        // Prewarming invokes decode_step. Encode-only models cannot decode,
-        // and encoder-decoder models must encode a source first.
-        if self.model.workload_info()?.kind != ModelWorkload::CausalGeneration {
-            return Ok(false);
-        }
-        if self.model.input_activation_boundary().is_some()
-            || self.model.output_activation_boundary().is_some()
-        {
-            return Ok(false);
-        }
-        // DiffusionGemma runs non-causally with no KV memory, so a decode
-        // step has no graph to warm and the reset would fail.
-        if self.serves_system_one() {
+        if !self.can_warm_generation_graph() {
             return Ok(false);
         }
         let token_id = self
@@ -105,6 +93,131 @@ impl RuntimeState {
             .and_then(|_| lane.session.reset());
         self.finish_generation_warmup(lane, result, idle_index.is_some())?;
         Ok(true)
+    }
+
+    /// Whether [`Self::warmup_generation_graph`] can run for this runtime.
+    fn can_warm_generation_graph(&self) -> bool {
+        // Prewarming invokes decode_step. Encode-only models cannot decode,
+        // and encoder-decoder models must encode a source first.
+        if !matches!(
+            self.model.workload_info().map(|info| info.kind),
+            Ok(ModelWorkload::CausalGeneration)
+        ) {
+            return false;
+        }
+        if self.model.input_activation_boundary().is_some()
+            || self.model.output_activation_boundary().is_some()
+        {
+            return false;
+        }
+        // DiffusionGemma runs non-causally with no KV memory, so a decode
+        // step has no graph to warm and the reset would fail.
+        !self.serves_system_one()
+    }
+
+    /// Reserve the compute graphs serving will actually use before the first
+    /// request pays for them. [`Self::warmup_generation_graph`] exercises a
+    /// one-token single-sequence decode; the first real prefill and the first
+    /// concurrent decode wave each need a larger graph, and the native
+    /// runtime's lazy graph reservation charges that growth to the request
+    /// that triggers it (a 314 ms `sched_reserve` on a GB10 spark for the
+    /// first full ubatch). Warm both serving shapes at startup instead: one
+    /// single-session prefill of `prefill_tokens`, then one one-token decode
+    /// wave across every lane. Best-effort: a model that cannot run the
+    /// larger shapes still serves, keeping the lazy reservation.
+    pub(crate) fn warmup_serving_shapes(&mut self, prefill_tokens: usize) -> Result<()> {
+        if !self.can_warm_generation_graph() || prefill_tokens == 0 {
+            return Ok(());
+        }
+        let token_id = self
+            .model
+            .tokenize("", true)?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+        self.warmup_prefill_shape(token_id, prefill_tokens);
+        self.warmup_concurrent_decode_shape(token_id);
+        Ok(())
+    }
+
+    fn warmup_prefill_shape(&mut self, token_id: i32, prefill_tokens: usize) {
+        let idle_index = self
+            .idle_sessions
+            .iter()
+            .position(|idle| idle.resident_prefix.is_none());
+        let mut lane = match idle_index {
+            Some(index) => self.idle_sessions.swap_remove(index),
+            None => match self.create_lane_session() {
+                Ok(lane) => lane,
+                Err(error) => {
+                    tracing::warn!(?error, "serving prefill warmup could not borrow a lane");
+                    return;
+                }
+            },
+        };
+        let tokens = vec![token_id; prefill_tokens];
+        let warmed = {
+            let request = IterationBatchRequest {
+                session: &mut lane.session,
+                token_ids: &tokens,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: false,
+                phase: IterationBatchPhase::Prefill,
+            };
+            StageSession::iteration_batch_sampled(&mut [request]).map(|_| ())
+        };
+        let result = warmed.and_then(|_| lane.session.reset());
+        if let Err(error) = self.finish_generation_warmup(lane, result, idle_index.is_some()) {
+            tracing::warn!(
+                ?error,
+                "serving prefill warmup failed; keeping lazy reservation"
+            );
+        }
+    }
+
+    fn warmup_concurrent_decode_shape(&mut self, token_id: i32) {
+        let mut lanes = Vec::new();
+        while lanes.len() < self.lane_count as usize {
+            match self.idle_sessions.pop() {
+                Some(lane) => lanes.push(lane),
+                None => match self.create_lane_session() {
+                    Ok(lane) => lanes.push(lane),
+                    Err(_) => break,
+                },
+            }
+        }
+        if lanes.is_empty() {
+            return;
+        }
+        let mut requests = Vec::with_capacity(lanes.len());
+        for lane in lanes.iter_mut() {
+            requests.push(IterationBatchRequest {
+                session: &mut lane.session,
+                token_ids: std::slice::from_ref(&token_id),
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: false,
+                phase: IterationBatchPhase::Decode,
+            });
+        }
+        let warmed = StageSession::iteration_batch_sampled(&mut requests).map(|_| ());
+        if let Err(error) = &warmed {
+            tracing::warn!(
+                ?error,
+                "serving decode-wave warmup failed; keeping lazy reservation"
+            );
+        }
+        for mut lane in lanes {
+            // Resetting clears any partially-written warmup state; a failed
+            // warmup discards the lane rather than returning it to the pool.
+            let result = lane.session.reset();
+            if let Err(error) = self.finish_generation_warmup(lane, result, false) {
+                tracing::warn!(?error, "serving decode-wave warmup cleanup failed");
+            }
+        }
     }
 
     fn finish_generation_warmup(

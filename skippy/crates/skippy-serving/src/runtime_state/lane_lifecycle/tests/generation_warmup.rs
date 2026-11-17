@@ -49,6 +49,32 @@ fn full_idle_pool_warms_repeatedly_and_all_lanes_still_decode() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_WARMUP_STAGE_CONFIG and a local causal GGUF"]
+fn serving_shape_warmup_keeps_every_lane_usable() -> Result<()> {
+    for lanes in [1, 4] {
+        let runtime = fixture(lanes)?;
+        let mut runtime = runtime.lock().unwrap();
+        runtime.prewarm_idle_sessions(lanes as usize)?;
+        runtime.warmup_serving_shapes(64)?;
+        // The shape warmup borrows and releases lanes; the pool must be
+        // whole again and every lane must still decode.
+        assert_eq!(runtime.idle_sessions.len(), lanes as usize);
+        assert!(
+            runtime
+                .idle_sessions
+                .iter()
+                .all(|lane| lane.session.token_count() == 0)
+        );
+        let token = runtime.model.tokenize("Hello", true)?[0];
+        let prediction = runtime
+            .session("shape-warmup-request")?
+            .decode_step(token)?;
+        assert!(prediction >= 0);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_WARMUP_STAGE_CONFIG and a local causal GGUF"]
 fn temporary_warmup_releases_capacity_with_idle_pool_disabled() -> Result<()> {
     let runtime = fixture(1)?;
     let mut runtime = runtime.lock().unwrap();
