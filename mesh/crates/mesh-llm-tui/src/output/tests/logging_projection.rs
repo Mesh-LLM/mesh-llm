@@ -443,9 +443,18 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
                 "pretty leaked {forbidden:?}"
             );
         }
+        // Compare against the decoded message, not the serialized JSON:
+        // a Windows `USERPROFILE` (C:\Users\Alice) is backslash-escaped
+        // in the JSON text, so a raw `contains` would fail even when the
+        // projection preserved the path.
+        let json_record: Value =
+            serde_json::from_str(json_line.trim_end()).expect("native JSON line to parse");
+        let json_message = json_record["message"]
+            .as_str()
+            .expect("native JSON record to carry a message");
         assert!(
-            json_line.contains(home.as_str()),
-            "native JSON projection should keep the operator's path visible: {json_line:?}"
+            json_message.contains(home.as_str()),
+            "native JSON projection should keep the operator's path visible: {json_message:?}"
         );
         assert!(
             pretty_line.contains(home.as_str()),
