@@ -15,6 +15,7 @@ mod routing;
 mod send;
 mod served_model_headers;
 mod shared_responses_stream;
+mod sse_frames;
 mod stream_translation;
 
 pub(super) use cache_cost::CacheCostObservation;

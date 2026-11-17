@@ -8,7 +8,7 @@ use tokio::{io::AsyncRead, sync::mpsc};
 use super::{
     body_reader::BodyReader,
     probe::{probe_http_response, response_is_event_stream, try_parse_response_headers},
-    shared_responses_stream::{MAX_SSE_FRAME_BYTES, frame_end, normalize_crlf, sse_frame_data},
+    sse_frames::SseFrames,
 };
 
 const MAX_ERROR_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -76,18 +76,13 @@ async fn capture_sse_body<R: AsyncRead + Unpin>(
     sender: &mpsc::Sender<Value>,
     state: &mut CaptureState,
 ) -> Result<()> {
-    let mut carry = Vec::new();
+    let mut carry = SseFrames::default();
     while let Some(bytes) = body.next().await? {
-        carry.extend_from_slice(&bytes);
-        normalize_crlf(&mut carry);
-        while let Some(end) = frame_end(&carry, 0) {
-            if end > MAX_SSE_FRAME_BYTES {
-                bail!("captured Responses SSE frame exceeded the frame limit");
-            }
-            let frame = std::str::from_utf8(&carry[..end])
-                .context("captured Responses SSE frame was not UTF-8")?;
-            let data = sse_frame_data(frame);
-            carry.drain(..end + 2);
+        carry.push(&bytes);
+        while let Some(data) = carry
+            .next_data()
+            .map_err(|error| anyhow::anyhow!(error.message()))?
+        {
             if data.is_empty() || data == "[DONE]" {
                 continue;
             }
@@ -98,9 +93,6 @@ async fn capture_sse_body<R: AsyncRead + Unpin>(
                 .send(value)
                 .await
                 .map_err(|_| anyhow::anyhow!("Responses WebSocket writer stopped"))?;
-        }
-        if carry.len() > MAX_SSE_FRAME_BYTES {
-            bail!("captured Responses SSE frame exceeded the frame limit");
         }
     }
     if !carry.is_empty() {

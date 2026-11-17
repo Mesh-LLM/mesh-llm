@@ -23,19 +23,27 @@ fn early_command_errors_are_visible_on_stderr() {
 
 #[test]
 fn gpus_json_without_native_runtime_keeps_json_stdout_and_warns_on_stderr() {
-    // An empty HOME (plus XDG roots) has no installed native runtime and no
-    // bundle: `gpus` must keep working from the OS survey, `--json` stdout
-    // must stay machine-readable, and the fallback notice belongs on stderr.
+    // Isolate executable-adjacent bundles as well as user state: `--json`
+    // must stay machine-readable, and the OS-survey notice belongs on stderr.
     let temp = TempDir::new().expect("tempdir should be created");
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("isolated home should be created");
-    let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+    let executable = temp
+        .path()
+        .join(format!("mesh-llm{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(env!("CARGO_BIN_EXE_mesh-llm"), &executable)
+        .expect("isolated executable should be copied");
+    let output = Command::new(&executable)
         .args(["gpus", "--json"])
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", home.join("xdg-config"))
         .env("XDG_CACHE_HOME", home.join("xdg-cache"))
         .env("XDG_DATA_HOME", home.join("xdg-data"))
-        .env_remove("MESH_LLM_NO_RUNTIME_DOWNLOAD")
+        .env("MESH_LLM_NO_RUNTIME_DOWNLOAD", "1")
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
+            home.join("runtime-cache"),
+        )
         .env_remove("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR")
         .output()
         .expect("mesh-llm command should run");

@@ -786,3 +786,86 @@ fn max_tool_calls_failure_quarantines_repeated_calls_and_commits_nothing() {
     assert!(store.get(&CallerScope::LocalHost, &id).is_err());
     assert!(session.get(&id).is_none());
 }
+
+#[test]
+fn empty_continuation_ids_do_not_establish_or_replace_call_identity() {
+    let first = json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"f","arguments":"{"}}]}}]});
+    let fragment = |id| json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":id,"function":{"arguments":"}"}}]}}]});
+    let events = run(&[first.clone(), fragment(json!("")), finish("tool_calls")]);
+    assert_well_formed(&events);
+    assert_eq!(
+        events.last().unwrap().data["response"]["output"][0]["call_id"],
+        "c"
+    );
+    assert_eq!(
+        events.last().unwrap().data["response"]["output"][0]["arguments"],
+        "{}"
+    );
+    for id in [json!("replacement"), json!(42), Value::Null] {
+        let events = run(&[first.clone(), fragment(id), finish("tool_calls")]);
+        assert_eq!(events.last().unwrap().event, "response.failed");
+    }
+    for call in [
+        json!({"index":0,"id":"","function":{"name":"f","arguments":"{}"}}),
+        json!({"index":0,"function":{"name":"f","arguments":"{}"}}),
+    ] {
+        let events = run(&[
+            json!({"choices":[{"delta":{"tool_calls":[call]}}]}),
+            finish("tool_calls"),
+        ]);
+        assert_eq!(events.last().unwrap().event, "response.failed");
+    }
+}
+
+#[test]
+fn only_explicit_completed_empty_arguments_are_normalized() {
+    for (function, reason, expected) in [
+        (json!({"name":"f","arguments":""}), "tool_calls", Some("{}")),
+        (json!({"name":"f","arguments":""}), "length", Some("")),
+        (json!({"name":"f","arguments":"{"}), "tool_calls", Some("{")),
+        (json!({"name":"f"}), "tool_calls", None),
+    ] {
+        let store = Arc::new(ResponseStore::default());
+        let mut stream = stream_with(ResponseContinuation::new(
+            Some(store.clone()),
+            Some(CallerScope::LocalHost),
+        ));
+        let id = stream.turn().id().to_string();
+        let mut events = stream.start();
+        events.extend(stream.push_chunk(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":function}]}}]})));
+        events.extend(stream.push_chunk(&finish(reason)));
+        events.extend(stream.finish());
+        assert_well_formed(&events);
+        let Some(expected) = expected else {
+            assert_eq!(events.last().unwrap().event, "response.failed");
+            assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+            continue;
+        };
+        let deltas: String = events
+            .iter()
+            .filter(|e| e.event == "response.function_call_arguments.delta")
+            .map(|e| e.data["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(deltas, expected);
+        assert_eq!(
+            events
+                .iter()
+                .find(|e| e.event == "response.function_call_arguments.done")
+                .unwrap()
+                .data["arguments"],
+            expected
+        );
+        assert_eq!(
+            events.last().unwrap().data["response"]["output"][0]["arguments"],
+            expected
+        );
+        if reason == "length" {
+            assert!(store.get(&CallerScope::LocalHost, &id).is_err());
+        } else {
+            assert_eq!(
+                store.get(&CallerScope::LocalHost, &id).unwrap().output[0]["arguments"],
+                expected
+            );
+        }
+    }
+}

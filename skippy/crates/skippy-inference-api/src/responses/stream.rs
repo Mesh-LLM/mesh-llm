@@ -391,14 +391,19 @@ impl ResponsesStream {
         }
         let pending = self.calls.entry(index).or_default();
         if let Some(id) = call.get("id") {
-            let id = id
-                .as_str()
-                .filter(|id| !id.is_empty())
-                .ok_or_else(malformed_stream_call)?;
-            if pending.call_id.is_some() {
-                return Err(malformed_stream_call());
+            let id = id.as_str().ok_or_else(malformed_stream_call)?;
+            // Some workers repeat an empty ID on later argument fragments.
+            // It cannot establish or replace a call's identity.
+            if id.is_empty() {
+                if pending.call_id.is_none() {
+                    return Err(malformed_stream_call());
+                }
+            } else {
+                if pending.call_id.is_some() {
+                    return Err(malformed_stream_call());
+                }
+                pending.call_id = Some(id.to_string());
             }
-            pending.call_id.get_or_insert_with(|| id.to_string());
         }
         let Some(function) = call.get("function") else {
             return Ok(());
@@ -705,6 +710,13 @@ impl ResponsesStream {
         index: usize,
         status: ResponseStatus,
     ) -> Result<(), ReplayError> {
+        // Validation already required an explicitly supplied arguments field.
+        // Repair only a completed empty call, never a partial JSON fragment.
+        if status == ResponseStatus::Completed
+            && matches!(&self.output[index], OutputSlot::Call(slot) if slot.arguments.is_empty())
+        {
+            self.push_arguments(events, index, "{}")?;
+        }
         let OutputSlot::Call(slot) = &self.output[index] else {
             return Ok(());
         };
@@ -790,39 +802,12 @@ fn quarantine_limit() -> ToolOutputViolation {
     )
 }
 
-/// Replay a complete response as the events that would have streamed it,
-/// for answers that are only available whole (such as a virtual model's).
-pub fn stream_events_for_response(response: &Value) -> Vec<ResponsesStreamEvent> {
-    replay::stream_events_for_response(response)
-}
-
-/// Replay a complete Responses resource after an already committed progress
-/// prelude, using the prelude's next final sequence number for padding.
-pub fn stream_events_for_response_after_progress(
-    response: &Value,
-    next_sequence: u64,
-) -> Vec<ResponsesStreamEvent> {
-    replay::stream_events_for_response_after_progress(response, next_sequence)
-}
-
-/// Translate and replay a complete Chat Completions body for `turn`. The turn
-/// commits only after the full replay has passed incremental admission.
-pub fn stream_events_for_chat_completion(
-    turn: &ResponsesTurn,
-    chat: &Value,
-) -> Vec<ResponsesStreamEvent> {
-    replay::stream_events_for_chat_completion(turn, chat)
-}
-
-/// Replay a buffered completion after a virtual-model progress prelude has
-/// already emitted `response.created` and consumed earlier sequence numbers.
-pub fn stream_events_for_chat_completion_after_progress(
-    turn: &ResponsesTurn,
-    chat: &Value,
-    next_sequence: u64,
-) -> Vec<ResponsesStreamEvent> {
-    replay::stream_events_for_chat_completion_after_progress(turn, chat, next_sequence)
-}
+pub use replay::{
+    responses_stream_events_for_chat_completion,
+    responses_stream_events_for_chat_completion_after_progress,
+    responses_stream_events_for_response, responses_stream_events_for_response_after_progress,
+    stream_events_for_response,
+};
 
 fn patch_response_store(events: &mut [ResponsesStreamEvent], stored: bool) {
     for event in events {

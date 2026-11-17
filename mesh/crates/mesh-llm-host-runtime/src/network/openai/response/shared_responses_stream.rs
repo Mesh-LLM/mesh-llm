@@ -24,11 +24,10 @@ use super::probe::{
     append_mesh_served_by_header, try_parse_response_headers,
 };
 use super::relay::relay_error_response;
+use super::sse_frames::SseFrames;
 use super::stream_translation::{StreamedChatAssembly, write_captured_sse_event};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
-
-pub(super) const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 struct Progress {
@@ -81,7 +80,7 @@ pub(super) async fn relay<R: AsyncRead + Unpin>(
         parsed.chunked,
         parsed.content_length,
     );
-    let mut carry = Vec::new();
+    let mut carry = SseFrames::default();
     let mut progress = Progress::default();
     loop {
         process_available_frames(
@@ -113,20 +112,20 @@ pub(super) async fn relay<R: AsyncRead + Unpin>(
                 break;
             }
         };
-        carry.extend_from_slice(&bytes);
-        normalize_crlf(&mut carry);
-        if carry.len() > MAX_SSE_FRAME_BYTES && frame_end(&carry, 0).is_none() {
-            write_events(
-                tcp_stream,
-                &mut capture,
-                machine.fail(
-                    "upstream_stream_frame_too_large",
-                    "upstream stream event exceeded the frame limit",
-                ),
-            )
-            .await?;
-            progress.failure = Some(CommittedStreamFailureCause::BackendError);
-        }
+        carry.push(&bytes);
+    }
+
+    if progress.failure.is_none() && !progress.done_seen && !carry.is_empty() {
+        write_events(
+            tcp_stream,
+            &mut capture,
+            machine.fail(
+                "upstream_stream_incomplete",
+                "upstream stream ended inside an event frame",
+            ),
+        )
+        .await?;
+        progress.failure = Some(CommittedStreamFailureCause::Truncated);
     }
 
     let terminal = if let Some(cause) = progress.failure {
@@ -190,43 +189,23 @@ async fn process_available_frames(
     machine: &mut ResponsesStream,
     progress: &mut Progress,
     route_observer: &OpenAiRouteObserver<'_>,
-    carry: &mut Vec<u8>,
+    carry: &mut SseFrames,
 ) -> Result<()> {
-    let mut processed = 0;
-    while let Some(end) = frame_end(carry, processed) {
-        if end.saturating_sub(processed) > MAX_SSE_FRAME_BYTES {
-            write_events(
-                tcp_stream,
-                capture,
-                machine.fail(
-                    "upstream_stream_frame_too_large",
-                    "upstream stream event exceeded the frame limit",
-                ),
-            )
-            .await?;
-            progress.failure = Some(CommittedStreamFailureCause::BackendError);
-            processed = end + 2;
-            break;
-        }
-        let frame = match std::str::from_utf8(&carry[processed..end]) {
-            Ok(frame) => frame,
-            Err(_) => {
+    loop {
+        let data = match carry.next_data() {
+            Ok(Some(data)) => data,
+            Ok(None) => break,
+            Err(error) => {
                 write_events(
                     tcp_stream,
                     capture,
-                    machine.fail(
-                        "upstream_stream_invalid",
-                        "upstream emitted a non-UTF-8 stream event",
-                    ),
+                    machine.fail(error.code(), error.message()),
                 )
                 .await?;
                 progress.failure = Some(CommittedStreamFailureCause::BackendError);
-                processed = end + 2;
                 break;
             }
         };
-        processed = end + 2;
-        let data = sse_frame_data(frame);
         if data.is_empty() {
             continue;
         }
@@ -243,45 +222,7 @@ async fn process_available_frames(
             break;
         }
     }
-    if processed > 0 {
-        carry.drain(..processed);
-    }
     Ok(())
-}
-
-pub(super) fn frame_end(carry: &[u8], start: usize) -> Option<usize> {
-    carry[start..]
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|relative| start + relative)
-}
-
-pub(super) fn normalize_crlf(bytes: &mut Vec<u8>) {
-    if !bytes.contains(&b'\r') {
-        return;
-    }
-    let mut read = 0;
-    let mut write = 0;
-    while read < bytes.len() {
-        if bytes[read] == b'\r' && bytes.get(read + 1) == Some(&b'\n') {
-            bytes[write] = b'\n';
-            read += 2;
-        } else {
-            bytes[write] = bytes[read];
-            read += 1;
-        }
-        write += 1;
-    }
-    bytes.truncate(write);
-}
-
-pub(super) fn sse_frame_data(frame: &str) -> String {
-    frame
-        .lines()
-        .filter_map(|line| line.strip_prefix("data:"))
-        .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 async fn process_frame(
@@ -683,6 +624,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_frame_after_finish_reason_fails_without_storing_continuation() {
+        let store = Arc::new(ResponseStore::default());
+        let turn = turn(&store);
+        let id = turn.id().to_string();
+        let upstream = concat!(
+            "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":",
+        );
+        let (wire, result) = run(upstream, turn).await;
+        assert!(matches!(
+            result,
+            RouteAttemptResult::CommittedStreamFailure {
+                cause: CommittedStreamFailureCause::Truncated,
+                ..
+            }
+        ));
+        assert!(wire.contains("response.failed"), "{wire}");
+        assert!(!wire.contains("response.completed"), "{wire}");
+        let mut continuation =
+            serde_json::json!({"model":"m", "previous_response_id":id, "input":"continue"});
+        let error = ResponsesTurn::prepare(
+            &mut continuation,
+            ResponseContinuation::new(Some(store), Some(CallerScope::LocalHost)),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.body().error.code.as_deref(),
+            Some("previous_response_not_found")
+        );
+    }
+
+    #[tokio::test]
     async fn eof_after_finish_reason_succeeds_without_done_sentinel() {
         let store = Arc::new(ResponseStore::default());
         let turn = turn(&store);
@@ -749,7 +722,8 @@ mod tests {
         let mut client = ClientStream::null().with_wire_bytes_observer(capture);
         let mut response_capture = None;
         let mut progress = Progress::default();
-        let mut carry = format!("data: {}\n\n", "x".repeat(MAX_SSE_FRAME_BYTES + 1)).into_bytes();
+        let mut carry = SseFrames::default();
+        carry.push(format!("data: {}\n\n", "x".repeat(1024 * 1024 + 1)).as_bytes());
         let observer = OpenAiRouteObserver::default();
         process_available_frames(
             &mut client,

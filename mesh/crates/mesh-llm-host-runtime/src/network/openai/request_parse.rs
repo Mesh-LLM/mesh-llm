@@ -829,7 +829,9 @@ async fn rewrite_request_body_for_forwarding(
         return Ok(outcome);
     };
 
-    if let Some(continuation) = response_continuation {
+    {
+        let continuation = response_continuation
+            .unwrap_or_else(skippy_inference_api::responses::ResponseContinuation::disabled);
         outcome.responses_turn = match path.split('?').next() {
             Some("/v1/responses") => Some(Arc::new(
                 skippy_inference_api::responses::ResponsesTurn::prepare(body_json, continuation)?,

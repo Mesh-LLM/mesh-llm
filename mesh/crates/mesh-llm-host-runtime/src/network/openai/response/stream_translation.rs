@@ -14,6 +14,7 @@ use crate::network::openai::response::common::sse_data_frame_is_openai_error;
 use crate::network::openai::response_adapter;
 use crate::plugin::openai_exchange::ExchangeOutputDigests;
 use anyhow::{Context, Result, anyhow};
+#[cfg(test)]
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 use skippy_inference_api::chat::identifiers::ChatStreamNormalizationState;
@@ -22,14 +23,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 mod normalized_chat_stream;
 #[path = "normalized_stream_completion.rs"]
 mod normalized_stream_completion;
+#[cfg(test)]
 #[path = "responses_function_calls.rs"]
 mod responses_function_calls;
-
-use responses_function_calls::{
-    TranslatedFunctionCall, announce_and_stream_function_call, at_output_index,
-    emit_translated_function_call_deltas, finish_translated_function_calls,
-    note_translated_finish_reason, translated_terminal_event,
-};
 
 /// One tool call's deltas folded across `chat.completion.chunk` frames,
 /// keyed by the `index` OpenAI streaming clients use to tell concurrent tool
@@ -190,78 +186,6 @@ pub(super) async fn write_captured_sse_event(
     response_adapter::write_chunked_sse_event(tcp_stream, event, data).await
 }
 
-struct ResponsesStreamRelayState {
-    created_at: i64,
-    response_id: String,
-    item_id: String,
-    model: String,
-    output_text: String,
-    usage: Option<serde_json::Value>,
-    observed_usage: Option<TokenUsage>,
-    observed_cache_cost: Option<CacheCostObservation>,
-    sequence_number: i32,
-    created_emitted: bool,
-    output_item_emitted: bool,
-    /// Output position of the assistant message, claimed by its first
-    /// reasoning or text delta.
-    message_output_index: Option<i32>,
-    /// Output positions are handed out in the order items first appear.
-    next_output_index: i32,
-    /// Function calls folded from `delta.tool_calls`, keyed by the chunk
-    /// `index` that tells concurrent calls apart.
-    function_calls: std::collections::BTreeMap<u64, TranslatedFunctionCall>,
-    /// The upstream stopped at its token limit (`finish_reason: "length"`).
-    cut_by_length: bool,
-}
-
-impl ResponsesStreamRelayState {
-    fn new() -> Self {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs() as i64)
-            .unwrap_or(0);
-        Self {
-            created_at,
-            response_id: format!("resp_{created_at}"),
-            item_id: format!("msg_{created_at}"),
-            model: String::new(),
-            output_text: String::new(),
-            usage: None,
-            observed_usage: None,
-            observed_cache_cost: None,
-            sequence_number: 0,
-            created_emitted: false,
-            output_item_emitted: false,
-            message_output_index: None,
-            next_output_index: 0,
-            function_calls: std::collections::BTreeMap::new(),
-            cut_by_length: false,
-        }
-    }
-
-    fn next_sequence_number(&mut self) -> i32 {
-        self.sequence_number = self.sequence_number.saturating_add(1);
-        self.sequence_number
-    }
-
-    fn claim_output_index(&mut self) -> i32 {
-        let index = self.next_output_index;
-        self.next_output_index = self.next_output_index.saturating_add(1);
-        index
-    }
-
-    /// Reasoning streams under the message's item id, so the message takes
-    /// its position at the first reasoning or text delta, whichever is first.
-    fn claim_message_output_index(&mut self) -> i32 {
-        if let Some(index) = self.message_output_index {
-            return index;
-        }
-        let index = self.claim_output_index();
-        self.message_output_index = Some(index);
-        index
-    }
-}
-
 pub(super) use normalized_chat_stream::relay_normalized_chat_completion_stream;
 
 fn normalized_stream_is_truncated(done_seen: bool, upstream_error_seen: bool) -> bool {
@@ -284,524 +208,18 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     request_id: RequestId,
     responses_turn: Option<std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
 ) -> Result<RouteAttemptResult> {
-    if let Some(turn) = responses_turn {
-        // Keep the shared relay's state out of the already large routed
-        // ingress future, including for non-Responses requests.
-        return Box::pin(super::shared_responses_stream::relay(
-            tcp_stream,
-            reader,
-            probe,
-            retry_policy,
-            served_by,
-            route_observer,
-            request_id,
-            turn,
-        ))
-        .await;
-    }
-    fn should_parse_stream_chunk(data: &str, model_missing: bool, usage_missing: bool) -> bool {
-        model_missing
-            || usage_missing
-            || data.contains("\"delta\"")
-            || data.contains("\"content\"")
-            || data.contains("\"logprobs\"")
-            || data.contains("\"usage\"")
-    }
-
-    #[derive(Debug, Default)]
-    struct TranslatedStreamProgress {
-        done_seen: bool,
-        first_chunk_seen: bool,
-        upstream_error_seen: bool,
-    }
-
-    async fn relay_translated_frame(
-        tcp_stream: &mut ClientStream,
-        response_capture: &mut Option<OpenAiStreamArtifactCapture>,
-        state: &mut ResponsesStreamRelayState,
-        progress: &mut TranslatedStreamProgress,
-        assembly: &mut StreamedChatAssembly,
-        route_observer: &OpenAiRouteObserver<'_>,
-        data: &str,
-    ) -> Result<()> {
-        if data == "[DONE]" {
-            progress.done_seen = true;
-            return Ok(());
-        }
-        if sse_data_frame_is_openai_error(data) {
-            // The upstream backend framed a mid-stream failure. Relay the
-            // frame as-is so the client still sees the error body, but do
-            // not treat it as stream progress or terminal success.
-            write_captured_sse_event(tcp_stream, response_capture, Some("error"), data).await?;
-            progress.upstream_error_seen = true;
-            return Ok(());
-        }
-        // The upstream frames are chat-completions chunks: fold every one, as
-        // the chat-completions stream relay does, before the parse filter
-        // below skips any, so the digest covers the whole served message.
-        assembly.ingest_chunk(data);
-        if !should_parse_stream_chunk(data, state.model.is_empty(), state.usage.is_none()) {
-            return Ok(());
-        }
-        state.observed_cache_cost = state
-            .observed_cache_cost
-            .or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
-        process_translated_responses_frame(tcp_stream, response_capture, state, data).await?;
-        if progress.first_chunk_seen {
-            route_observer.stream_chunk();
-        } else {
-            route_observer.stream_first_token();
-            progress.first_chunk_seen = true;
-        }
-        Ok(())
-    }
-
-    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
-        return Ok(result);
-    }
-
-    if !(200..300).contains(&probe.status_code) {
-        route_observer.stream_error("upstream_status");
-        return relay_error_response(
-            tcp_stream,
-            reader,
-            probe,
-            served_by,
-            route_observer,
-            request_id,
-        )
-        .await;
-    }
-
-    let parsed = try_parse_response_headers(&probe.buffered)?
-        .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
-    let mut state = ResponsesStreamRelayState::new();
-    let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
-    );
-    append_capsule_nonce_headers(
-        &mut header,
-        parsed.client_nonce.as_deref(),
-        parsed.nonce_origin.as_deref(),
-    );
-    parsed.served_model.append_to(&mut header);
-    append_mesh_served_by_header(&mut header, served_by);
-    append_mesh_request_id_header(&mut header, request_id);
-    header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
-    let mut response_capture = route_observer.begin_stream_response_capture();
-    route_observer.stream_started(None);
-
-    let mut progress = TranslatedStreamProgress::default();
-    let mut assembly = StreamedChatAssembly::default();
-    loop {
-        let mut processed = 0usize;
-        while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
-            let frame_end = processed + frame_end_rel;
-            let frame = &carry[processed..frame_end];
-            processed = frame_end + 2;
-            let data_lines = frame
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>();
-            if data_lines.is_empty() {
-                continue;
-            }
-            let data = data_lines.join("\n");
-            relay_translated_frame(
-                tcp_stream,
-                &mut response_capture,
-                &mut state,
-                &mut progress,
-                &mut assembly,
-                &route_observer,
-                &data,
-            )
-            .await?;
-            if progress.done_seen {
-                break;
-            }
-        }
-        if processed > 0 {
-            carry = carry[processed..].to_string();
-        }
-
-        if progress.done_seen {
-            break;
-        }
-
-        let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
-        if n == 0 {
-            break;
-        }
-        let new_data = String::from_utf8_lossy(&chunk[..n]);
-        carry.push_str(&new_data);
-        // Normalize CRLF so frame parsing works for both LF and CRLF upstreams
-        if carry.contains('\r') {
-            carry = carry.replace("\r\n", "\n");
-        }
-    }
-
-    if progress.upstream_error_seen {
-        tcp_stream.record_exchange_outcome("backend_error");
-        write_captured_sse_event(tcp_stream, &mut response_capture, Some("done"), "[DONE]").await?;
-        let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
-        let _ = tcp_stream.shutdown().await;
-        route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::CommittedStreamFailure {
-            status_code: 200,
-            cause: CommittedStreamFailureCause::BackendError,
-        });
-    }
-    if !progress.done_seen {
-        tcp_stream.finish_wire_bytes(
-            skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
-        );
-        route_observer.stream_error("upstream_stream_incomplete");
-        return Err(anyhow!("upstream Responses stream ended before [DONE]"));
-    }
-    finish_translated_responses_stream(tcp_stream, &mut response_capture, &mut state).await?;
-    write_captured_sse_event(tcp_stream, &mut response_capture, Some("done"), "[DONE]").await?;
-    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
-    let _ = tcp_stream.shutdown().await;
-    route_observer.complete_stream_response_capture(response_capture);
-    route_observer.stream_completed(state.observed_usage);
-    Ok(RouteAttemptResult::Delivered {
-        status_code: 200,
-        usage: state.observed_usage,
-        cache_cost: state.observed_cache_cost,
-        // The assembly folded every upstream chat chunk before translation.
-        // Publish its digest only after a complete [DONE] frame.
-        output_digests: assembly.output_digests(),
-    })
-}
-
-async fn process_translated_responses_frame(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-    data: &str,
-) -> Result<()> {
-    let chunk = skippy_inference_api::parse_chat_stream_chunk(data)
-        .context("parse typed upstream chat stream chunk")?;
-    update_translated_responses_model(state, &chunk);
-    emit_translated_response_created(tcp_stream, capture, state).await?;
-    emit_translated_reasoning_delta(tcp_stream, capture, state, &chunk).await?;
-    emit_translated_output_delta(tcp_stream, capture, state, &chunk).await?;
-    emit_translated_function_call_deltas(tcp_stream, capture, state, &chunk).await?;
-    update_translated_responses_usage(state, &chunk);
-    note_translated_finish_reason(state, &chunk);
-    Ok(())
-}
-
-fn update_translated_responses_model(
-    state: &mut ResponsesStreamRelayState,
-    chunk: &skippy_inference_api::responses::ChatCompletionStreamChunk,
-) {
-    if let Some(chunk_model) = chunk.model.as_deref().filter(|_| state.model.is_empty()) {
-        state.model = chunk_model.to_string();
-    }
-}
-
-async fn emit_translated_response_created(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-) -> Result<()> {
-    if state.created_emitted || state.model.is_empty() {
-        return Ok(());
-    }
-    let sequence_number = state.next_sequence_number();
-    let created = serde_json::to_string(
-        &response_adapter::responses_stream_created_event_with_sequence(
-            &state.model,
-            state.created_at,
-            sequence_number,
-        ),
-    )
-    .context("serialize response.created stream event")?;
-    write_captured_sse_event(tcp_stream, capture, Some("response.created"), &created).await?;
-    state.created_emitted = true;
-    Ok(())
-}
-
-async fn emit_translated_reasoning_delta(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-    chunk: &skippy_inference_api::responses::ChatCompletionStreamChunk,
-) -> Result<()> {
-    let Some(delta) = chunk
-        .choices
-        .first()
-        .and_then(|choice| choice.delta.as_ref())
-        .and_then(|delta| delta.reasoning_content.as_deref())
-    else {
-        return Ok(());
-    };
-    // Reasoning streams under the message's item, so the message is announced
-    // first, keeping item-added events in output order.
-    emit_translated_output_item_prelude(tcp_stream, capture, state).await?;
-    let output_index = state.message_output_index.unwrap_or_default();
-    let sequence_number = state.next_sequence_number();
-    let event = serde_json::to_string(&at_output_index(
-        response_adapter::responses_stream_reasoning_delta_event_with_sequence(
-            &state.item_id,
-            delta,
-            sequence_number,
-        ),
-        output_index,
+    let turn = responses_turn.context("Responses stream requires a prepared request")?;
+    Box::pin(super::shared_responses_stream::relay(
+        tcp_stream,
+        reader,
+        probe,
+        retry_policy,
+        served_by,
+        route_observer,
+        request_id,
+        turn,
     ))
-    .context("serialize response.reasoning_text.delta event")?;
-    write_captured_sse_event(
-        tcp_stream,
-        capture,
-        Some("response.reasoning_text.delta"),
-        &event,
-    )
-    .await?;
-    Ok(())
-}
-
-async fn emit_translated_output_delta(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-    chunk: &skippy_inference_api::responses::ChatCompletionStreamChunk,
-) -> Result<()> {
-    let Some(delta) = chunk
-        .choices
-        .first()
-        .and_then(|choice| choice.delta.as_ref())
-        .and_then(|delta| delta.content.as_deref())
-    else {
-        return Ok(());
-    };
-    emit_translated_output_item_prelude(tcp_stream, capture, state).await?;
-    let logprobs = chunk
-        .choices
-        .first()
-        .and_then(|choice| choice.logprobs.clone());
-    state.output_text.push_str(delta);
-    let sequence_number = state.next_sequence_number();
-    let event = serde_json::to_string(&at_output_index(
-        response_adapter::responses_stream_delta_event_with_logprobs_and_sequence(
-            &state.item_id,
-            delta,
-            logprobs,
-            sequence_number,
-        ),
-        state.message_output_index.unwrap_or_default(),
-    ))
-    .context("serialize response.output_text.delta event")?;
-    write_captured_sse_event(
-        tcp_stream,
-        capture,
-        Some("response.output_text.delta"),
-        &event,
-    )
-    .await?;
-    Ok(())
-}
-
-async fn emit_translated_output_item_prelude(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-) -> Result<()> {
-    if state.output_item_emitted {
-        return Ok(());
-    }
-    let output_index = state.claim_message_output_index();
-    let item_added_sequence_number = state.next_sequence_number();
-    let item_added = serde_json::to_string(&at_output_index(
-        response_adapter::responses_stream_output_item_added_event(
-            &state.item_id,
-            item_added_sequence_number,
-        ),
-        output_index,
-    ))
-    .context("serialize response.output_item.added event")?;
-    write_captured_sse_event(
-        tcp_stream,
-        capture,
-        Some("response.output_item.added"),
-        &item_added,
-    )
-    .await?;
-    let part_added_sequence_number = state.next_sequence_number();
-    let part_added = serde_json::to_string(&at_output_index(
-        response_adapter::responses_stream_content_part_added_event(
-            &state.item_id,
-            part_added_sequence_number,
-        ),
-        output_index,
-    ))
-    .context("serialize response.content_part.added event")?;
-    write_captured_sse_event(
-        tcp_stream,
-        capture,
-        Some("response.content_part.added"),
-        &part_added,
-    )
-    .await?;
-    state.output_item_emitted = true;
-    Ok(())
-}
-
-fn update_translated_responses_usage(
-    state: &mut ResponsesStreamRelayState,
-    chunk: &skippy_inference_api::responses::ChatCompletionStreamChunk,
-) {
-    if let Some(usage) = chunk.usage.as_ref() {
-        state.usage = Some(response_adapter::stream_usage_to_responses_usage(usage));
-        if let Some(authoritative) = TokenUsage::from_counts(
-            usage.prompt_tokens,
-            usage.completion_tokens,
-            usage.total_tokens,
-        ) {
-            state.observed_usage = Some(
-                authoritative.with_cached_prompt_tokens(
-                    usage
-                        .prompt_tokens_details
-                        .as_ref()
-                        .and_then(|details| details.cached_tokens),
-                ),
-            );
-        }
-    }
-}
-
-async fn finish_translated_responses_stream(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-) -> Result<()> {
-    emit_translated_fallback_created(tcp_stream, capture, state).await?;
-    // A call whose name never arrived is still announced, under the
-    // non-streamed translation's fallback name.
-    let unannounced = state
-        .function_calls
-        .iter()
-        .filter(|(_, call)| call.output_index.is_none())
-        .map(|(index, _)| *index)
-        .collect::<Vec<_>>();
-    for index in unannounced {
-        if let Some(call) = state.function_calls.get_mut(&index)
-            && call.name.is_empty()
-        {
-            call.name = "tool".to_string();
-        }
-        announce_and_stream_function_call(tcp_stream, capture, state, index).await?;
-    }
-    // A reply without function calls keeps its message item even when it is
-    // empty; next to function calls the message appears only if text or
-    // reasoning streamed under it.
-    if state.function_calls.is_empty() || state.message_output_index.is_some() {
-        finish_translated_message(tcp_stream, capture, state).await?;
-    }
-    // Clients run a function call as soon as its item is done, so calls cut
-    // by the token limit are never closed: the response ends incomplete.
-    let calls_cut = state.cut_by_length && !state.function_calls.is_empty();
-    let finished = finish_translated_function_calls(tcp_stream, capture, state, calls_cut).await?;
-    let (kind, terminal) = translated_terminal_event(state, finished, calls_cut);
-    let terminal = serde_json::to_string(&terminal).context("serialize the terminal event")?;
-    write_captured_sse_event(tcp_stream, capture, Some(kind), &terminal).await?;
-    Ok(())
-}
-
-/// Closes the assistant message item: its text, content part and item.
-async fn finish_translated_message(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-) -> Result<()> {
-    emit_translated_output_item_prelude(tcp_stream, capture, state).await?;
-    let output_index = state.message_output_index.unwrap_or_default();
-    let text_done_sequence_number = state.next_sequence_number();
-    emit_translated_stream_done_event(
-        tcp_stream,
-        capture,
-        Some("response.output_text.done"),
-        serde_json::to_string(&at_output_index(
-            response_adapter::responses_stream_text_done_event_with_sequence(
-                &state.item_id,
-                &state.output_text,
-                text_done_sequence_number,
-            ),
-            output_index,
-        ))
-        .context("serialize response.output_text.done event")?,
-    )
-    .await?;
-    let content_part_done_sequence_number = state.next_sequence_number();
-    emit_translated_stream_done_event(
-        tcp_stream,
-        capture,
-        Some("response.content_part.done"),
-        serde_json::to_string(&at_output_index(
-            response_adapter::responses_stream_content_part_done_event(
-                &state.item_id,
-                &state.output_text,
-                content_part_done_sequence_number,
-            ),
-            output_index,
-        ))
-        .context("serialize response.content_part.done event")?,
-    )
-    .await?;
-    let output_item_done_sequence_number = state.next_sequence_number();
-    emit_translated_stream_done_event(
-        tcp_stream,
-        capture,
-        Some("response.output_item.done"),
-        serde_json::to_string(&at_output_index(
-            response_adapter::responses_stream_output_item_done_event(
-                &state.item_id,
-                &state.output_text,
-                output_item_done_sequence_number,
-            ),
-            output_index,
-        ))
-        .context("serialize response.output_item.done event")?,
-    )
-    .await?;
-    Ok(())
-}
-
-async fn emit_translated_fallback_created(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    state: &mut ResponsesStreamRelayState,
-) -> Result<()> {
-    if state.created_emitted {
-        return Ok(());
-    }
-    let sequence_number = state.next_sequence_number();
-    let created = serde_json::to_string(
-        &response_adapter::responses_stream_created_event_with_sequence(
-            &state.model,
-            state.created_at,
-            sequence_number,
-        ),
-    )
-    .context("serialize response.created stream event")?;
-    write_captured_sse_event(tcp_stream, capture, Some("response.created"), &created).await?;
-    state.created_emitted = true;
-    Ok(())
-}
-
-async fn emit_translated_stream_done_event(
-    tcp_stream: &mut ClientStream,
-    capture: &mut Option<OpenAiStreamArtifactCapture>,
-    event_name: Option<&str>,
-    payload: String,
-) -> Result<()> {
-    write_captured_sse_event(tcp_stream, capture, event_name, &payload).await?;
-    Ok(())
+    .await
 }
 
 #[cfg(test)]
@@ -849,6 +267,22 @@ mod tests {
         }
     }
 
+    fn test_turn() -> std::sync::Arc<skippy_inference_api::responses::ResponsesTurn> {
+        test_turn_with(skippy_inference_api::responses::ResponseContinuation::disabled())
+    }
+
+    fn test_turn_with(
+        continuation: skippy_inference_api::responses::ResponseContinuation,
+    ) -> std::sync::Arc<skippy_inference_api::responses::ResponsesTurn> {
+        use skippy_inference_api::responses::ResponsesTurn;
+        let mut request = serde_json::json!({
+            "model":"qwen", "input":"test", "stream_options":{"include_obfuscation":false},
+            "tools":[{"type":"function","name":"read"},{"type":"function","name":"write"},
+                     {"type":"function","name":"list"},{"type":"function","name":"now"}]
+        });
+        std::sync::Arc::new(ResponsesTurn::prepare(&mut request, continuation).unwrap())
+    }
+
     #[tokio::test]
     async fn relay_translated_responses_stream_emits_one_delta_per_upstream_chunk() {
         use tokio::io::AsyncWriteExt;
@@ -876,7 +310,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
-                None,
+                Some(test_turn()),
             )
             .await
             .expect("relay")
@@ -1169,12 +603,29 @@ mod tests {
     pub(super) async fn relay_translated_over(
         upstream: &'static [u8],
     ) -> (Result<RouteAttemptResult>, String) {
+        relay_translated_with_header(
+            upstream,
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+        )
+        .await
+    }
+
+    async fn relay_translated_with_header(
+        upstream: &[u8],
+        header: &'static [u8],
+    ) -> (Result<RouteAttemptResult>, String) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        use skippy_inference_api::responses::{CallerScope, ResponseContinuation, ResponseStore};
+        let store = std::sync::Arc::new(ResponseStore::default());
+        let turn = test_turn_with(ResponseContinuation::new(
+            Some(store.clone()),
+            Some(CallerScope::LocalHost),
+        ));
+        let response_id = turn.id().to_string();
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -1192,7 +643,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
-                None,
+                Some(turn),
             )
             .await
         });
@@ -1201,10 +652,50 @@ mod tests {
         let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
-        (
-            server_task.await.expect("server task"),
-            String::from_utf8_lossy(&output).to_string(),
-        )
+        let result = server_task.await.expect("server task");
+        let wire = String::from_utf8_lossy(&output).to_string();
+        if wire.contains("event: response.failed") || wire.contains("event: response.incomplete") {
+            assert!(
+                store.get(&CallerScope::LocalHost, &response_id).is_err(),
+                "failed and incomplete turns must not be retained"
+            );
+        }
+        (result, wire)
+    }
+
+    #[tokio::test]
+    async fn damaged_http_framing_cannot_complete_a_translated_response() {
+        let payload =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n";
+        let truncated_chunk = format!("{:x}\r\n{payload}\r\n", payload.len());
+        for (body, header) in [
+            (
+                payload.as_bytes(),
+                &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"[..],
+            ),
+            (
+                truncated_chunk.as_bytes(),
+                &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"[..],
+            ),
+            (
+                payload.as_bytes(),
+                &b"HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n"[..],
+            ),
+        ] {
+            let (result, wire) = relay_translated_with_header(body, header).await;
+            assert!(
+                matches!(
+                    result,
+                    Ok(RouteAttemptResult::CommittedStreamFailure {
+                        cause: CommittedStreamFailureCause::Truncated,
+                        ..
+                    })
+                ),
+                "{result:?}"
+            );
+            assert!(wire.contains("response.failed"));
+            assert!(!wire.contains("response.completed"));
+        }
     }
 
     /// Streamed /v1/responses requests use this translated path. A completed
@@ -1286,7 +777,7 @@ data: [DONE]\n\n",
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
-                None,
+                Some(test_turn()),
             )
             .await
         });
@@ -1303,9 +794,15 @@ data: [DONE]\n\n",
         let route_result = server_task.await.expect("server task");
         let body = String::from_utf8_lossy(&output);
 
-        assert!(route_result.is_err());
+        assert!(matches!(
+            route_result,
+            Ok(RouteAttemptResult::CommittedStreamFailure {
+                cause: CommittedStreamFailureCause::Truncated,
+                ..
+            })
+        ));
+        assert!(body.contains("response.failed"));
         assert!(!body.contains("response.completed"));
-        assert!(!body.contains("data: [DONE]"));
     }
 
     #[tokio::test]
@@ -1450,7 +947,7 @@ data: [DONE]\n\n",
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
-                None,
+                Some(test_turn()),
             )
             .await
             .expect("relay")
@@ -1724,7 +1221,7 @@ data: [DONE]\n\n";
                 None,
                 OpenAiRouteObserver::default(),
                 request_id,
-                None,
+                Some(test_turn()),
             )
             .await
             .expect("relay")

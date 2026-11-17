@@ -471,3 +471,42 @@ async fn current_peer_recovers_concrete_model_when_an_unknown_responses_extensio
         serde_json::json!([])
     );
 }
+
+#[tokio::test]
+async fn stateless_responses_preserve_request_tool_policy() {
+    let body = serde_json::json!({"model":"m","input":"read","stream":true,
+        "tools":[{"type":"function","name":"read"}]});
+    let outcome = rewrite_request_body_for_forwarding(
+        "/v1/responses",
+        &serde_json::to_vec(&body).unwrap(),
+        None,
+        Transformer {
+            plugins: None,
+            private_hint: false,
+            node_limit: None,
+        },
+        true,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcome.response_adapter,
+        ResponseAdapter::OpenAiResponsesStream
+    );
+    let turn = outcome.responses_turn.expect("stateless prepared turn");
+    let completion = |name| {
+        serde_json::json!({"choices":[{"message":{"role":"assistant",
+        "tool_calls":[{"id":"c","type":"function","function":{"name":name,"arguments":"{}"}}]},
+        "finish_reason":"tool_calls"}]})
+    };
+    let allowed = turn
+        .try_finish_chat_completion(&completion("read"))
+        .unwrap();
+    assert_eq!(allowed["store"], false);
+    assert_eq!(
+        turn.try_finish_chat_completion(&completion("write"))
+            .unwrap()["status"],
+        "failed"
+    );
+}

@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 #[cfg(test)]
 use super::obfuscation::RandomSource;
-use super::{ResponsesStreamEvent, obfuscation::ObfuscationPolicy};
+use super::{ResponsesStreamEvent, obfuscation::ObfuscationPolicy, patch_response_store};
 use crate::responses::{
     resource::{ResponseEnvelope, ResponseError, ResponseSnapshot, ResponseStatus},
     tools::MAX_TOOL_CALLS,
@@ -178,7 +178,7 @@ impl ReplayAdmission {
     }
 }
 
-pub(super) fn stream_events_for_response(response: &Value) -> Vec<ResponsesStreamEvent> {
+pub fn stream_events_for_response(response: &Value) -> Vec<ResponsesStreamEvent> {
     stream_events_for_response_with_policy(
         response,
         ReplayLimits::default(),
@@ -478,14 +478,6 @@ fn failed_replay_events(
     events.into_events()
 }
 
-fn patch_response_store(events: &mut [ResponsesStreamEvent], stored: bool) {
-    for event in events {
-        if let Some(response) = event.data.get_mut("response") {
-            response["store"] = Value::Bool(stored);
-        }
-    }
-}
-
 fn replay_item(events: &mut EventBuffer, index: usize, item: &Value) -> Result<(), ReplayError> {
     let id = item.get("id").cloned().unwrap_or(Value::Null);
     let kind = item.get("type").and_then(Value::as_str);
@@ -597,6 +589,50 @@ fn replay_function_call(
         "response.function_call_arguments.done",
         json!({"item_id": item_id, "output_index": output_index, "arguments": arguments}),
     )
+}
+
+/// Expand a complete `/v1/responses` body into the events that stream it.
+pub fn responses_stream_events_for_response(response: &Value) -> Vec<Value> {
+    event_data(stream_events_for_response(response))
+}
+
+/// Expand a complete Responses body after an already committed virtual-model
+/// progress prelude.
+pub fn responses_stream_events_for_response_after_progress(
+    response: &Value,
+    next_sequence: u64,
+) -> Vec<Value> {
+    event_data(stream_events_for_response_after_progress(
+        response,
+        next_sequence,
+    ))
+}
+
+/// Translate a whole Chat Completions body and expand it into Responses
+/// events, committing `turn` only after the complete replay is admitted.
+pub fn responses_stream_events_for_chat_completion(
+    turn: &ResponsesTurn,
+    chat: &Value,
+) -> Vec<Value> {
+    event_data(stream_events_for_chat_completion(turn, chat))
+}
+
+/// Translate and replay a buffered Chat Completions body after an already
+/// committed virtual-model Responses progress prelude.
+pub fn responses_stream_events_for_chat_completion_after_progress(
+    turn: &ResponsesTurn,
+    chat: &Value,
+    next_sequence: u64,
+) -> Vec<Value> {
+    event_data(stream_events_for_chat_completion_after_progress(
+        turn,
+        chat,
+        next_sequence,
+    ))
+}
+
+fn event_data(events: Vec<ResponsesStreamEvent>) -> Vec<Value> {
+    events.into_iter().map(|event| event.data).collect()
 }
 
 #[cfg(test)]

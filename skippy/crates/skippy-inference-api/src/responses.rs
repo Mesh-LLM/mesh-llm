@@ -1,4 +1,3 @@
-mod buffered_stream;
 mod compaction;
 mod content_items;
 mod continuation;
@@ -23,12 +22,6 @@ mod tools;
 mod truncation_tests;
 mod turn;
 
-pub use buffered_stream::{
-    events_for_chat_completion as responses_stream_events_for_chat_completion,
-    events_for_chat_completion_after_progress as responses_stream_events_for_chat_completion_after_progress,
-    events_for_response as responses_stream_events_for_response,
-    events_for_response_after_progress as responses_stream_events_for_response_after_progress,
-};
 pub use continuation::ResponseContinuation;
 pub use execution::{ResponsesSessionExecutor, ResponsesTurnEventStream};
 pub use resource::{ResponseStatus, ResponsesUsage};
@@ -40,7 +33,12 @@ pub use store::{
     CallerScope, FORWARDING_HEADERS, RESPONSE_STORAGE_ENV, ResponseStore, ResponseStoreLimits,
     caller_scope_for_http_peer, configured_response_storage,
 };
-pub use stream::{ResponsesStream, ResponsesStreamEvent, stream_events_for_response};
+pub use stream::{
+    ResponsesStream, ResponsesStreamEvent, responses_stream_events_for_chat_completion,
+    responses_stream_events_for_chat_completion_after_progress,
+    responses_stream_events_for_response, responses_stream_events_for_response_after_progress,
+    stream_events_for_response,
+};
 pub use turn::ResponsesTurn;
 
 use crate::{
