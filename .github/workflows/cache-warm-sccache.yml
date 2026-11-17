@@ -5,13 +5,19 @@ on:
     workflows: ["Main · Quality"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      qualification:
+        description: Compare current and standalone Skippy seed recipes without publishing caches
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
   packages: read
 
 concurrency:
-  group: trusted-sccache-seed
+  group: trusted-sccache-seed-${{ inputs.qualification && github.run_id || 'publisher' }}
   cancel-in-progress: false
 
 env:
@@ -21,9 +27,76 @@ env:
   CARGO_PROFILE_BENCH_DEBUG: "0"
 
 jobs:
+  qualification_automation:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualification }}
+    uses: ./.github/workflows/product-automation-artifact.yml
+    with:
+      platform: linux-x64
+      lane: linux
+      product_source_sha: ${{ github.sha }}
+
+  qualification:
+    name: Compiler seed pair ${{ matrix.pair }}
+    needs: qualification_automation
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualification }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        pair: [1, 2, 3]
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
+    env:
+      CARGO_INCREMENTAL: '0'
+      MESH_LLM_SKIP_UI: '1'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_MULTILEVEL_CHAIN: disk
+      SCCACHE_CACHE_SIZE: 2G
+      COMPILER_SEED_IMAGE: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify measurement image
+        run: verify-runner-image public cpu
+      - name: Resolve product source layout
+        id: layout
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
+      - name: Prepare seed UI input
+        env:
+          UI_DIR: ${{ steps.layout.outputs.ui_dir }}
+        run: mkdir -p "$UI_DIR/dist" && printf '<html></html>' > "$UI_DIR/dist/index.html"
+      - name: Restore product automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.qualification_automation.outputs.source_sha }}
+          product_source_sha: ${{ github.sha }}
+          source_profile: product-clean
+          require_product: 'true'
+          artifact_id: ${{ needs.qualification_automation.outputs.artifact_id }}
+          binary_sha256: ${{ needs.qualification_automation.outputs.binary_sha256 }}
+          producer_os: ${{ needs.qualification_automation.outputs.producer_os }}
+          producer_arch: ${{ needs.qualification_automation.outputs.producer_arch }}
+      - name: Measure isolated seed recipes and consumers
+        env:
+          PAIR: ${{ matrix.pair }}
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops compiler-seed run --pair "$PAIR" --output "$RUNNER_TEMP/compiler-seed-evidence"'
+      - name: Retain paired measurement evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: compiler-seed-pair-${{ matrix.pair }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/compiler-seed-evidence
+          if-no-files-found: error
+          retention-days: 14
+
   warm:
     name: Publish bounded Linux compiler seed
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    if: ${{ !inputs.qualification && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     container:

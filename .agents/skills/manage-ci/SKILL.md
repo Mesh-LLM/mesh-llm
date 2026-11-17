@@ -521,6 +521,13 @@ retired parser behavior, and source review still owns semantic emulation.
 - Every seeded compiler job records whether the exact seed was warm or cold.
   Enforce a measured minimum hit rate only for an exact warm restore; an
   intentional cache miss is classified cold and must not fail the build.
+- The seed warmer's manual `qualification` mode disables its publisher and
+  runs three sequential paired experiments on the pinned GitHub-hosted image.
+  Each pair compares the current recipe with appended standalone Skippy using
+  isolated 2 GiB disk caches and fresh consumer targets. The typed
+  `ci-ops compiler-seed` owner retains source, resource, timing, counter and
+  object-eviction evidence. It never publishes caches or enables runtime seed
+  restoration; experiment results do not automatically change the seed recipe.
 
 ### Bounded Depot PR cache-risk exception
 

@@ -45,3 +45,10 @@ artifacts and before either build. It invokes the restored executable's
 `ci-ops reset-linker-traces` command, which removes only linker trace files
 under the checkout's `target` tree. Compiler outputs remain available for
 reuse; timing uploads require the reset to succeed.
+
+The manual compiler-seed qualification workflow invokes the restored executable
+as `ci-ops compiler-seed run --pair N --output DIR`, with `N` from 1 through 3.
+It compares the current seed recipe with appended standalone Skippy in isolated
+2 GiB disk caches, retains phase logs and object inventories, and never publishes
+a seed. It requires the workflow's pinned Linux image and source/run identity;
+see the [CI cache contract](../../../ci/ci.md) for measurement limits.

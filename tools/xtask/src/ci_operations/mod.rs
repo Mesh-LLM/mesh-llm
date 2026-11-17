@@ -39,6 +39,9 @@ mod ci_metrics_stats;
 pub(crate) mod ci_metrics_time;
 mod ci_metrics_transport;
 pub(crate) mod ci_metrics_value;
+mod compiler_seed;
+mod compiler_seed_evidence;
+mod compiler_seed_process;
 mod evidence_binding;
 mod evidence_catalog;
 mod evidence_input;
@@ -97,6 +100,7 @@ pub(crate) enum CiOperationsCommand {
     RegistryPulls,
     ChatDisplay,
     RuntimeSeed,
+    CompilerSeed,
     ConfigureCanaryCache,
     ResetLinkerTraces,
     WindowsCacheIdentity,
@@ -120,6 +124,7 @@ impl CiOperationsCommand {
             "registry-pulls" => Some(Self::RegistryPulls),
             "chat-display" => Some(Self::ChatDisplay),
             "runtime-seed" => Some(Self::RuntimeSeed),
+            "compiler-seed" => Some(Self::CompilerSeed),
             "configure-canary-cache" => Some(Self::ConfigureCanaryCache),
             "reset-linker-traces" => Some(Self::ResetLinkerTraces),
             "windows-cache-identity" => Some(Self::WindowsCacheIdentity),
@@ -141,6 +146,9 @@ pub(crate) fn run(
     if matches!(command, CiOperationsCommand::CacheInputs) {
         return cache_inputs::run(&root()?, args);
     }
+    if matches!(command, CiOperationsCommand::CompilerSeed) {
+        return compiler_seed::run(&root()?, args);
+    }
     if matches!(command, CiOperationsCommand::ResetLinkerTraces) {
         return linker_traces::run(args, root);
     }
@@ -155,6 +163,7 @@ pub(crate) fn run(
     }
     let report = match command {
         CiOperationsCommand::CacheInputs => unreachable!(),
+        CiOperationsCommand::CompilerSeed => unreachable!(),
         CiOperationsCommand::ResetLinkerTraces => unreachable!(),
         CiOperationsCommand::ConfigureCanaryCache => unreachable!(),
         CiOperationsCommand::RunnerCleanup => unreachable!(),

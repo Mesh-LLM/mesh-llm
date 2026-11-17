@@ -1800,6 +1800,22 @@ workflow-level debug-information overrides apply to every seed profile and its
 consumers. Root and workspace package Cargo manifests and the
 warmer workflow, along with `Justfile` and `just/**`, are part of the exact
 seed key.
+Manual dispatch with `qualification=true` disables publication and measures
+three sequential pairs on the same pinned image. Each pair runs both the
+current seed recipe and that recipe with standalone Skippy appended, using
+separate 2 GiB disk caches and fresh consumer targets. One product automation
+producer supplies the typed measurement owner; paired artifacts retain source,
+resource, timing, compiler-counter and object-eviction evidence. No shared cache
+is restored or published, and runtime seed restoration remains disabled.
+The command fetches locked dependencies before timing either arm, alternates
+arm order across pairs, and measures standalone followed by Mesh consumers.
+Each consumer starts with fresh Cargo outputs while retaining its arm's cache;
+the Mesh result therefore includes the preceding standalone consumer's cache
+writes. Object inventories show eviction, and resource receipts identify
+container-wide limits and observations rather than per-process peak usage.
+These local-disk measurements exclude archive transfer and publication costs;
+they cannot alone establish hosted net savings. Any failed phase makes the
+pair inconclusive, with logs retained alongside successful phases.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The native `migration_ci_operations` contracts

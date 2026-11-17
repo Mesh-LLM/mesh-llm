@@ -23,6 +23,70 @@ fn workflows() -> BTreeMap<String, Node> {
         })
         .collect()
 }
+
+#[test]
+fn compiler_seed_qualification_is_manual_bounded_and_nonpublishing() {
+    let documents = workflows();
+    let workflow = &documents["cache-warm-sccache.yml"];
+    let jobs = workflow.get("jobs").unwrap();
+    let qualification = jobs.get("qualification").unwrap();
+    assert_eq!(
+        qualification.get("if").unwrap().text(),
+        Some("${{ github.event_name == 'workflow_dispatch' && inputs.qualification }}")
+    );
+    assert!(
+        jobs.get("warm")
+            .unwrap()
+            .get("if")
+            .unwrap()
+            .text()
+            .unwrap()
+            .contains("!inputs.qualification")
+    );
+    assert_eq!(
+        qualification.get("runs-on").unwrap().text(),
+        Some("ubuntu-24.04")
+    );
+    let strategy = qualification.get("strategy").unwrap();
+    assert_eq!(strategy.get("max-parallel").unwrap().text(), Some("1"));
+    let Node::Seq(pairs) = strategy.get("matrix").unwrap().get("pair").unwrap() else {
+        panic!("pair matrix must be a sequence");
+    };
+    assert_eq!(
+        pairs.iter().map(Node::text).collect::<Vec<_>>(),
+        [Some("1"), Some("2"), Some("3")]
+    );
+    let environment = qualification.get("env").unwrap();
+    assert_eq!(
+        environment.get("SCCACHE_CACHE_SIZE").unwrap().text(),
+        Some("2G")
+    );
+    assert_eq!(
+        environment.get("SCCACHE_GHA_ENABLED").unwrap().text(),
+        Some("false")
+    );
+    assert_eq!(
+        environment.get("SCCACHE_MULTILEVEL_CHAIN").unwrap().text(),
+        Some("disk")
+    );
+    let Node::Seq(steps) = qualification.get("steps").unwrap() else {
+        panic!("qualification steps must be a sequence");
+    };
+    for step in steps {
+        if let Some(action) = step.get("uses").and_then(Node::text) {
+            assert!(
+                !action.contains("actions/cache"),
+                "experiment must not access shared caches"
+            );
+        }
+    }
+    assert!(steps.iter().any(|step| {
+        step.get("run")
+            .and_then(Node::text)
+            .is_some_and(|run| run.contains("ci-ops compiler-seed run"))
+    }));
+}
+
 fn changed(name: &str, old: &str, new: &str) -> BTreeMap<String, Node> {
     let mut documents = workflows();
     let source = fs::read_to_string(root().join(".github/workflows").join(name)).unwrap();
