@@ -37,6 +37,10 @@ temperature 0 and seed 42. Its JSON retains generated content separately from
 the cache-token accounting. The manual four-model owner is documented in
 [KV validation](../../evals/kv-validation/README.md).
 
+The checks start `skippy` stage servers. Without `--stage-server-bin` they use
+the `skippy` next to `skippy-correctness`, else `target/debug/skippy` when it
+exists, else the one on `PATH`.
+
 ```bash
 skippy-correctness single-step \
   --model model.gguf \

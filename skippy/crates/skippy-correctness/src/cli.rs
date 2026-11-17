@@ -166,7 +166,9 @@ impl CacheTypeArg {
 
 #[derive(Args, Clone)]
 pub struct ServerArgs {
-    #[arg(long, default_value = "target/debug/skippy")]
+    /// The `skippy` binary that serves the stages. Default: the one next to this
+    /// tool, else `target/debug/skippy` when it exists, else the one on `PATH`.
+    #[arg(long, default_value_os_t = crate::sibling_binary::sibling_binary("skippy", "target/debug/skippy"))]
     pub stage_server_bin: PathBuf,
     #[arg(long)]
     pub child_logs: bool,
