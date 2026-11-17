@@ -1703,6 +1703,7 @@ pub(super) async fn query_stage_inventory(
         manifest_sha256: load.manifest_sha256.clone(),
         expected_source_model_sha256: load.source_model_sha256.clone(),
         local_source_required: load.local_source_required,
+        from_peer: false,
     };
     let response = if stage_node_id == node.id() {
         node.send_local_stage_control(skippy::StageControlRequest::Inventory(request))

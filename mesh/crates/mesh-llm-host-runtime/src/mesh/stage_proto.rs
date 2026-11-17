@@ -465,6 +465,7 @@ pub(super) fn stage_control_request_from_proto(
                     local_source_required: source_resolution_policy_from_proto(
                         inventory.source_resolution_policy,
                     )?,
+                    from_peer: true,
                 },
             ))
         }

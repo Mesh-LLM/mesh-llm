@@ -119,7 +119,7 @@ pub(crate) use resolver::{
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;
 pub(crate) use skippy_serving::InferenceGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
-pub(crate) use source_fetch::{StageSourceFetch, peer_may_name_package};
+pub(crate) use source_fetch::{StageSourceFetch, names_a_local_path, peer_may_name_package};
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;

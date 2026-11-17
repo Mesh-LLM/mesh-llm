@@ -210,6 +210,7 @@ fn stage_control_inventory_request_round_trips_proto() {
             manifest_sha256: "b".repeat(64),
             expected_source_model_sha256: Some(digest.clone()),
             local_source_required: true,
+            from_peer: false,
         },
     );
 
@@ -231,6 +232,8 @@ fn stage_control_inventory_request_round_trips_proto() {
         Some(digest.as_str())
     );
     assert!(inventory.local_source_required);
+    // Every request that crossed the wire came from a peer.
+    assert!(inventory.from_peer);
 }
 
 #[test]

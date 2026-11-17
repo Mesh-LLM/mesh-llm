@@ -798,6 +798,7 @@ pub(super) async fn split_peer_package_signal(
         manifest_sha256: package.manifest_sha256.clone(),
         expected_source_model_sha256: Some(package.source_model_sha256.clone()),
         local_source_required,
+        from_peer: false,
     };
     let result = node
         .send_stage_control(peer_id, skippy::StageControlRequest::Inventory(request))

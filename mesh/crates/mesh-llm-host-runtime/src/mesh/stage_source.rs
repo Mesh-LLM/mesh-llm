@@ -2,9 +2,11 @@
 //! carries no local path that exists here, and refusing the names a peer may
 //! not use.
 
-use std::path::{Component, Path};
+use std::path::Path;
 
-use crate::inference::skippy::{StageLoadRequest, StageSourceFetch, peer_may_name_package};
+use crate::inference::skippy::{
+    StageLoadRequest, StageSourceFetch, names_a_local_path, peer_may_name_package,
+};
 
 /// Who asked this node to load a stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,19 +72,6 @@ fn source_name_candidates(
     .filter(|candidate| origin == StageLoadOrigin::Local || !names_a_local_path(candidate))
     .map(str::to_string)
     .collect()
-}
-
-/// A peer names a model, never a file on this node. The resolver opens any
-/// name that is an existing path as given, and joins other names onto the
-/// model store, so a peer's name must be neither a path that exists here nor
-/// one that can leave the store.
-fn names_a_local_path(candidate: &str) -> bool {
-    let path = Path::new(candidate);
-    path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        || path.exists()
 }
 
 #[cfg(test)]

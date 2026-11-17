@@ -614,6 +614,7 @@ fn inventory_source_candidates_prefer_explicit_gguf_ref() {
         manifest_sha256: "sha256".to_string(),
         expected_source_model_sha256: None,
         local_source_required: false,
+        from_peer: false,
     };
 
     let candidates = inventory_source_candidates(&request);
@@ -621,6 +622,90 @@ fn inventory_source_candidates_prefer_explicit_gguf_ref() {
     assert_eq!(
         candidates[0],
         std::path::PathBuf::from("/tmp/source-model.gguf")
+    );
+}
+
+#[test]
+fn a_peer_inventory_cannot_name_a_local_file_or_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let gguf = dir.path().join("private.gguf");
+    write_metadata_only_gguf(&gguf, 4);
+    let gguf = gguf.to_string_lossy().into_owned();
+    let package = dir.path().join("package");
+    crate::inference::skippy::write_test_package_v2_fixture(
+        &package,
+        "model-a",
+        &[("primary", "artifacts/primary.gguf", "input.weight")],
+    )
+    .unwrap();
+    let package = package.to_string_lossy().into_owned();
+    let request = |model_id: &str, package_ref: &str, from_peer| StageInventoryRequest {
+        model_id: model_id.to_string(),
+        runtime_profile: Some(String::new()),
+        package_ref: package_ref.to_string(),
+        manifest_sha256: "manifest".to_string(),
+        expected_source_model_sha256: None,
+        local_source_required: false,
+        from_peer,
+    };
+
+    for (model_id, package_ref) in [
+        ("model-a", format!("gguf://{gguf}")),
+        // The model store appends `.gguf` to a model id it cannot find.
+        (gguf.trim_end_matches(".gguf"), String::new()),
+        ("model-a", package.clone()),
+    ] {
+        assert!(
+            resolve_inventory_source(
+                &request(model_id, &package_ref, false),
+                StageSourceFetch::Allowed
+            )
+            .is_some(),
+            "this node resolves its own names ({model_id}, {package_ref})"
+        );
+        assert!(
+            resolve_inventory_source(
+                &request(model_id, &package_ref, true),
+                StageSourceFetch::Allowed
+            )
+            .is_none(),
+            "a peer cannot name a local path ({model_id}, {package_ref})"
+        );
+    }
+}
+
+#[test]
+fn a_peer_inventory_names_a_package_directory_by_its_manifest() {
+    use sha2::{Digest, Sha256};
+
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("package");
+    crate::inference::skippy::write_test_package_v2_fixture(
+        &package,
+        "model-a",
+        &[("primary", "artifacts/primary.gguf", "input.weight")],
+    )
+    .unwrap();
+    let manifest_sha256 = hex::encode(Sha256::digest(
+        fs::read(package.join("model-package.json")).unwrap(),
+    ));
+    let request = |manifest_sha256: &str| StageInventoryRequest {
+        model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
+        package_ref: package.to_string_lossy().into_owned(),
+        manifest_sha256: manifest_sha256.to_string(),
+        expected_source_model_sha256: None,
+        local_source_required: false,
+        from_peer: true,
+    };
+
+    assert!(
+        resolve_inventory_source(&request(&manifest_sha256), StageSourceFetch::Allowed).is_some(),
+        "a peer names a package directory by the hash of its manifest"
+    );
+    assert!(
+        resolve_inventory_source(&request(&"0".repeat(64)), StageSourceFetch::Allowed).is_none(),
+        "another manifest hash names nothing"
     );
 }
 
@@ -649,6 +734,7 @@ fn inventory_source_resolves_metadata_only_first_shard() {
             manifest_sha256: "manifest".to_string(),
             expected_source_model_sha256: None,
             local_source_required: false,
+            from_peer: false,
         },
         StageSourceFetch::Allowed,
     )
@@ -678,6 +764,7 @@ async fn content_addressed_inventory_proves_local_bytes_without_leaking_path() {
         manifest_sha256: package.manifest_sha256.clone(),
         expected_source_model_sha256: Some(package.source_model_sha256.clone()),
         local_source_required: true,
+        from_peer: false,
     };
 
     let inventory = StageControlState::default()
@@ -827,6 +914,7 @@ async fn peer_inventory_without_downloads_reports_nothing_for_an_uncached_packag
         manifest_sha256: "0".repeat(64),
         expected_source_model_sha256: None,
         local_source_required: false,
+        from_peer: false,
     };
 
     assert!(resolve_inventory_source(&request, StageSourceFetch::LocalOnly).is_none());

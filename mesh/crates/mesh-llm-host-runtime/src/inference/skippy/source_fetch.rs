@@ -8,7 +8,7 @@
 //! `--no-peer-model-downloads`) a peer's request may only use files already on
 //! local disk. The node's own loads and split coordination always fetch.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use mesh_llm_skippy_adapter::package::acquisition::StagePackageRef;
 
@@ -73,6 +73,19 @@ impl StageSourceFetch {
         }
         Err(Self::refusal(&format!("model {}", load.model_id)))
     }
+}
+
+/// A peer names a model, never a file on this node. The resolvers open any
+/// name that is an existing path as given, and join other names onto the
+/// model store, so a peer's name must be neither a path that exists here nor
+/// one that can leave the store.
+pub(crate) fn names_a_local_path(candidate: &str) -> bool {
+    let path = Path::new(candidate);
+    path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.exists()
 }
 
 /// A peer names a layer package by its `hf://` ref, or by a package directory
