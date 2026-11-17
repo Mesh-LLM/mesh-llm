@@ -33,6 +33,7 @@ use super::operational_logging::{
     LocalServingOperationalEvent, record_local_serving_operational_event,
 };
 
+mod lane_fallback;
 mod model_loaded_analytics;
 mod native_runtime_events;
 
@@ -1103,7 +1104,7 @@ async fn start_local_skippy_model(
     spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
-    plan: RuntimeResourcePlan,
+    mut plan: RuntimeResourcePlan,
     measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
     default_dflash_planned: bool,
@@ -1161,9 +1162,10 @@ async fn start_local_skippy_model(
         model: model_name.clone(),
         source: None,
     });
-    let skippy_model = load_direct_skippy_model_with_dflash_fallback(
+    let skippy_model = lane_fallback::load_direct_skippy_model_with_lane_fallback(
         &spec,
         &mut resolved,
+        &mut plan,
         &model_name,
         progress_ingress,
     )
