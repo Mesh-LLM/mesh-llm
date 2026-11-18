@@ -24,6 +24,17 @@ impl NodeExchangePolicy {
             .await
             .map(|manager| super::openai_exchange::OpenAiExchangeHookBridge::new(Arc::new(manager)))
     }
+    /// The id a typed dispatch's `openai.exchange.v1` events carry: the one its
+    /// plugin lifecycle callbacks carry (the session's), so a plugin joins the
+    /// two. A backend-minted id names the dispatch only outside a session.
+    async fn channel_exchange_id(&self, backend_exchange_id: &str) -> String {
+        match self.node.plugin_manager().await {
+            Some(manager) => manager
+                .session_exchange_id(backend_exchange_id)
+                .unwrap_or_else(|| backend_exchange_id.to_owned()),
+            None => backend_exchange_id.to_owned(),
+        }
+    }
     async fn admit_typed_request(
         &self,
         encode_request: impl FnOnce() -> Result<Vec<u8>, serde_json::Error> + Send,
@@ -130,7 +141,11 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         route: &ChatExchangeRoute,
     ) {
         if let Some(bridge) = self.legacy_bridge().await {
-            bridge.on_effective_chat_completion(request, route).await;
+            let route = ChatExchangeRoute::for_request(
+                request,
+                self.channel_exchange_id(&route.exchange_id).await,
+            );
+            bridge.on_effective_chat_completion(request, &route).await;
         }
     }
     async fn on_chat_completion_terminal(
@@ -157,8 +172,9 @@ impl InferenceHookPolicy for NodeExchangePolicy {
             manager.record_typed_execution_outcome(id, execution_outcome);
         }
         if let Some(bridge) = self.legacy_bridge().await {
+            let exchange_id = self.channel_exchange_id(id).await;
             bridge
-                .on_chat_completion_terminal(request, id, outcome)
+                .on_chat_completion_terminal(request, &exchange_id, outcome)
                 .await;
         }
     }

@@ -1851,3 +1851,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ingress_tests/telemetry_rejection.rs"]
 mod telemetry_rejection;
+
+#[cfg(test)]
+#[path = "ingress_tests/exchange_id_join.rs"]
+mod exchange_id_join;
