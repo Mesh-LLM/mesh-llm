@@ -31,7 +31,12 @@ fn resolve_sibling(
     // `fallback` is written without the platform's executable suffix.
     let mut built = fallback.as_os_str().to_owned();
     built.push(suffix);
-    let on_path = path.into_iter().flat_map(std::env::split_paths);
+    // An empty entry would give a bare file name, which `Command` looks up on
+    // `PATH` again rather than in the working directory.
+    let on_path = path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|directory| !directory.as_os_str().is_empty());
     beside
         .into_iter()
         .chain(std::iter::once(PathBuf::from(built)))
@@ -45,14 +50,23 @@ mod tests {
     use super::resolve_sibling;
     use std::path::{Path, PathBuf};
 
-    fn scratch(name: &str) -> PathBuf {
+    /// Removes its directory when dropped, also when an assertion fails.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
         let root = std::env::temp_dir().join(format!(
             "skippy-correctness-sibling-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        root
+        Scratch(root)
     }
 
     fn program(directory: &Path, file_name: &str) -> PathBuf {
@@ -64,7 +78,8 @@ mod tests {
 
     #[test]
     fn the_tool_beside_the_executable_wins_then_the_build_path_then_path() {
-        let root = scratch("order");
+        let dir = scratch("order");
+        let root = &dir.0;
         let executable = root.join("bin/self");
         let fallback = root.join("target/tool");
         let search = std::env::join_paths([root.join("empty"), root.join("path")]).unwrap();
@@ -82,12 +97,12 @@ mod tests {
             built,
             "no executable path and no PATH"
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn the_executable_suffix_applies_in_all_three_places() {
-        let root = scratch("suffix");
+        let dir = scratch("suffix");
+        let root = &dir.0;
         let executable = root.join("bin/self.exe");
         let fallback = root.join("target/tool");
         let search = std::env::join_paths([root.join("path")]).unwrap();
@@ -105,12 +120,12 @@ mod tests {
         assert_eq!(resolve(), built);
         let beside = program(&root.join("bin"), "tool.exe");
         assert_eq!(resolve(), beside);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn a_directory_with_the_tool_name_is_not_a_tool() {
-        let root = scratch("directory");
+        let dir = scratch("directory");
+        let root = &dir.0;
         let fallback = root.join("target/tool");
         std::fs::create_dir_all(root.join("bin/tool")).unwrap();
         std::fs::create_dir_all(root.join("target/tool")).unwrap();
@@ -127,6 +142,18 @@ mod tests {
             ),
             on_path
         );
-        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_path_entry_is_not_the_working_directory() {
+        let dir = scratch("empty-entry");
+        let fallback = dir.0.join("target/tool");
+        // Tests run in the package directory, which has a `Cargo.toml`.
+        assert!(Path::new("Cargo.toml").is_file());
+        let search = std::env::join_paths([PathBuf::new(), dir.0.join("path")]).unwrap();
+        assert_eq!(
+            resolve_sibling(None, Some(&search), "Cargo", ".toml", &fallback),
+            fallback
+        );
     }
 }
