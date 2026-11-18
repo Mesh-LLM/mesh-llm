@@ -842,11 +842,13 @@ impl Node {
                         peer_id.fmt_short()
                     );
                 }
-                self.state
-                    .lock()
-                    .await
-                    .connections
-                    .insert(peer_id, conn.clone());
+                {
+                    let mut state = self.state.lock().await;
+                    state.connections.insert(peer_id, conn.clone());
+                    state
+                        .redial_backoff
+                        .connected(peer_id, std::time::Instant::now());
+                }
                 let node_for_dispatch = self.clone();
                 let conn_for_dispatch = conn.clone();
                 tokio::spawn(async move {

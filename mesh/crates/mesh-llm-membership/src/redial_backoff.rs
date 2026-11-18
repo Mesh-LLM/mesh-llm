@@ -15,14 +15,20 @@
 //! in place, inbound replacements included, to the close that asks for a
 //! redial.
 //!
+//! The first close, or the first after a connection that was not the redial
+//! of a recent close, is redialed at once: only closes in a row back off.
+//!
 //! Each close hands out a [`RedialTicket`]; only the latest ticket for a peer
 //! may still dial once its wait is over ([`RedialBackoff::may_redial`]), so a
 //! replacement that closes while an older wait is pending does not leave two
-//! recoveries dialing the same peer.
+//! recoveries dialing the same peer. Which recovery owns a peer's redial is
+//! kept apart from the bounded history, so evicting a peer's history while
+//! its recovery waits does not cancel that recovery, and generations come
+//! from one counter, so a recreated entry never revives an old ticket.
 //!
 //! Scope: this paces the closed-connection recovery loop only. Request-driven
 //! dials (`connection_to_peer`), discovery joins and heartbeat reconnects do
-//! not consult it.
+//! not consult it, but they record the connections they put in place.
 
 use iroh::EndpointId;
 use std::collections::HashMap;
@@ -38,12 +44,24 @@ pub const MAX_DELAY: Duration = Duration::from_secs(60);
 const JITTER: f64 = 0.2;
 /// Peers tracked at once; the least recently touched entry goes first beyond it.
 const MAX_PEERS: usize = 1024;
+/// A connection put in place this soon after a close is taken as that close's
+/// redial: the longest wait plus the dial and gossip timeouts, with room to
+/// spare. One that came later starts a new run of closes.
+const REDIAL_WITHIN: Duration = Duration::from_secs(120);
 
 /// Recent connections and redials per peer. Lives in
 /// [`crate::state::MembershipState`].
 #[derive(Debug, Default)]
 pub struct RedialBackoff {
+    /// Bounded history, evicted least recently touched first.
     peers: HashMap<EndpointId, RedialRecord>,
+    /// The generation of the recovery that owns each peer's next redial,
+    /// while one is in progress. Never evicted: an entry lives from a close
+    /// until its recovery calls [`RedialBackoff::finish_redial`] or a newer
+    /// close replaces it.
+    owners: HashMap<EndpointId, u64>,
+    /// Source of every ticket's generation, shared by all peers.
+    next_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,8 +73,6 @@ struct RedialRecord {
     /// Quick closes in a row, each less than [`STABLE_AFTER`] after the
     /// connection or redial before it.
     quick_redials: u32,
-    /// Bumped by every close; the recovery holding it may dial.
-    generation: u64,
     /// For eviction: the latest call that touched this entry.
     touched_at: Instant,
 }
@@ -91,19 +107,25 @@ impl RedialBackoff {
         record.quick_redials = quick_redials_after(record, now);
         record.closed_at = Some(now);
         record.touched_at = now;
-        record.generation = record.generation.wrapping_add(1);
-        RedialTicket {
-            delay: with_jitter(base_delay(record.quick_redials), jitter_unit),
-            generation: record.generation,
-        }
+        let delay = with_jitter(base_delay(record.quick_redials), jitter_unit);
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        self.owners.insert(peer, generation);
+        RedialTicket { delay, generation }
     }
 
     /// Whether the recovery holding `ticket` may still dial `peer`: no close
     /// for that peer has handed out a newer ticket since.
     pub fn may_redial(&self, peer: EndpointId, ticket: RedialTicket) -> bool {
-        self.peers
-            .get(&peer)
-            .is_some_and(|record| record.generation == ticket.generation)
+        self.owners.get(&peer) == Some(&ticket.generation)
+    }
+
+    /// The recovery holding `ticket` is done with `peer`, whether it dialed
+    /// or stood down. A newer recovery's ownership is left in place.
+    pub fn finish_redial(&mut self, peer: EndpointId, ticket: RedialTicket) {
+        if self.may_redial(peer, ticket) {
+            self.owners.remove(&peer);
+        }
     }
 
     fn entry(&mut self, peer: EndpointId, now: Instant) -> &mut RedialRecord {
@@ -121,24 +143,29 @@ impl RedialBackoff {
             connected_at: None,
             closed_at: None,
             quick_redials: 0,
-            generation: 0,
             touched_at: now,
         })
     }
 }
 
 /// Quick closes in a row once this close at `now` counts: one more than before
-/// when the connection that just closed was short-lived, none otherwise. The
-/// connection's start is the later of its recorded connect and the previous
-/// close, so a close with no connect seen since the previous one is measured
-/// from that previous close.
+/// when the connection that just closed was short-lived and was the redial of
+/// the previous close, none otherwise. The connection's start is the later of
+/// its recorded connect and the previous close, so a close with no connect
+/// seen since the previous one is measured from that previous close. With no
+/// previous close, or one long before the connection started, this is a first
+/// drop and is redialed at once.
 fn quick_redials_after(record: &RedialRecord, now: Instant) -> u32 {
-    let since = match (record.connected_at, record.closed_at) {
-        (Some(connected), Some(closed)) => connected.max(closed),
-        (Some(at), None) | (None, Some(at)) => at,
-        (None, None) => return 0,
+    let Some(closed) = record.closed_at else {
+        return 0;
     };
-    if now.saturating_duration_since(since) < STABLE_AFTER {
+    let started = record
+        .connected_at
+        .map_or(closed, |connected| connected.max(closed));
+    if started.saturating_duration_since(closed) > REDIAL_WITHIN {
+        return 0;
+    }
+    if now.saturating_duration_since(started) < STABLE_AFTER {
         record.quick_redials.saturating_add(1)
     } else {
         0
@@ -180,6 +207,9 @@ mod tests {
         let mut backoff = RedialBackoff::default();
         let peer = peer();
         let start = Instant::now();
+        // A connection put in place normally that closes within the first
+        // minute is still a first drop.
+        backoff.connected(peer, start - secs(10));
         assert_eq!(
             backoff.delay_before_redial(peer, start, 0.5).delay,
             Duration::ZERO
@@ -281,11 +311,68 @@ mod tests {
     }
 
     #[test]
-    fn a_ticket_for_an_unknown_or_evicted_peer_may_not_dial() {
+    fn a_connection_long_after_the_last_close_starts_a_new_run() {
+        let mut backoff = RedialBackoff::default();
+        let peer = peer();
+        let t0 = Instant::now();
+        for n in (1..=4).rev() {
+            backoff.delay_before_redial(peer, t0 - Duration::from_millis(50 * n), 0.5);
+        }
+        assert!(backoff.delay_before_redial(peer, t0, 0.5).delay > secs(5));
+        // An hour later the peer connects again and drops after ten seconds.
+        let later = t0 + secs(3600);
+        backoff.connected(peer, later);
+        assert_eq!(
+            backoff
+                .delay_before_redial(peer, later + secs(10), 0.5)
+                .delay,
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn a_ticket_for_another_peer_may_not_dial() {
         let mut backoff = RedialBackoff::default();
         let known = peer();
         let ticket = backoff.delay_before_redial(known, Instant::now(), 0.5);
         assert!(!backoff.may_redial(peer(), ticket));
+    }
+
+    #[test]
+    fn evicting_a_waiting_peers_history_keeps_its_recovery() {
+        let mut backoff = RedialBackoff::default();
+        let waiting = peer();
+        let now = Instant::now();
+        let ticket = backoff.delay_before_redial(waiting, now, 0.5);
+        // Enough other peers come and go to push its history out.
+        for _ in 0..MAX_PEERS {
+            backoff.connected(peer(), now + secs(1));
+        }
+        assert!(!backoff.peers.contains_key(&waiting));
+        assert!(backoff.may_redial(waiting, ticket));
+        backoff.finish_redial(waiting, ticket);
+        assert!(!backoff.may_redial(waiting, ticket));
+        assert!(backoff.owners.is_empty());
+    }
+
+    #[test]
+    fn a_recreated_entry_never_revives_an_older_ticket() {
+        let mut backoff = RedialBackoff::default();
+        let target = peer();
+        let now = Instant::now();
+        let older = backoff.delay_before_redial(target, now, 0.5);
+        for _ in 0..MAX_PEERS {
+            backoff.connected(peer(), now + secs(1));
+        }
+        // The history is gone; a new close recreates it.
+        assert!(!backoff.peers.contains_key(&target));
+        let newer = backoff.delay_before_redial(target, now + secs(2), 0.5);
+        assert_ne!(older, newer);
+        assert!(!backoff.may_redial(target, older));
+        assert!(backoff.may_redial(target, newer));
+        // The older recovery finishing does not take the newer one's place.
+        backoff.finish_redial(target, older);
+        assert!(backoff.may_redial(target, newer));
     }
 
     #[test]
