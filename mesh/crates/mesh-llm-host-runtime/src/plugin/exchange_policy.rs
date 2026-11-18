@@ -172,8 +172,9 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
-        // First, so a slow or failing hook below cannot skip the cleanup.
-        let exchange_id = self.channel_exchange_id(id, true);
+        // Looked up first and dropped last: a terminal cancelled part-way is
+        // run again by its guard, and that run must find the same id.
+        let exchange_id = self.channel_exchange_id(id, false);
         if let Some(manager) = self.node.plugin_manager().await {
             if let ChatCompletionOutcome::Success { response } = outcome {
                 manager.record_typed_usage(id, json!(response.usage));
@@ -196,6 +197,7 @@ impl InferenceHookPolicy for NodeExchangePolicy {
                 .on_chat_completion_terminal(request, &exchange_id, outcome)
                 .await;
         }
+        self.channel_exchange_id(id, true);
     }
     async fn on_completion_terminal(&self, exchange_id: &str, outcome: &str) {
         self.channel_exchange_id(exchange_id, true);
