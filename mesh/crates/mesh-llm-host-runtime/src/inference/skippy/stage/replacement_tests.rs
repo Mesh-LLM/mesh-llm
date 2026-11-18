@@ -111,6 +111,7 @@ async fn load_from_another_coordinator_leaves_the_bound_stage_running() {
 }
 
 #[tokio::test]
+#[serial_test::serial(runtime_event_engine_state)]
 async fn invalid_replacement_load_leaves_the_running_stage_serving() {
     // Calls the launch step directly so the replacement ordering is tested
     // without a native runtime, which `load` requires before it gets here.
@@ -122,6 +123,7 @@ async fn invalid_replacement_load_leaves_the_running_stage_serving() {
 }
 
 #[tokio::test]
+#[serial_test::serial(runtime_event_engine_state)]
 async fn replacement_with_unsupported_runtime_options_leaves_the_stage_serving() {
     // A runtime slice of a GGUF materializes nothing, so preparing it leaves
     // the process environment alone.
@@ -134,7 +136,8 @@ async fn replacement_with_unsupported_runtime_options_leaves_the_stage_serving()
 
 /// Launch a replacement for a running placeholder stage, edited by `edit` so
 /// launching it fails, and return the failure after checking that the
-/// running stage was not shut down.
+/// running stage was not shut down. Its stage-load operation reserves a slot
+/// in the process-wide runtime event engine, so callers serialize on it.
 async fn launch_rejected_replacement(edit: impl FnOnce(&mut StageLoadRequest)) -> String {
     let mut state = StageControlState::default();
     let mut running = load_request();
