@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use crate::inference::skippy::{
-    StageLoadRequest, StageSourceFetch, names_a_local_path, peer_may_name_package,
+    StageLoadRequest, StageSourceFetch, is_layer_package_ref, names_a_local_path,
+    peer_may_name_package,
 };
 
 /// Who asked this node to load a stage.
@@ -42,12 +43,7 @@ pub(crate) async fn resolve_stage_source_by_name(
     origin: StageLoadOrigin,
     source_fetch: StageSourceFetch,
 ) {
-    if load.load_mode != skippy_protocol::LoadMode::RuntimeSlice
-        || load
-            .model_path
-            .as_deref()
-            .is_some_and(|path| Path::new(path).exists())
-    {
+    if !resolves_source_by_name(load) {
         return;
     }
     for candidate in source_name_candidates(&load.model_id, &load.package_ref, origin) {
@@ -56,6 +52,19 @@ pub(crate) async fn resolve_stage_source_by_name(
             return;
         }
     }
+}
+
+/// Whether a load takes its model file from its names. A layer package's
+/// stage runs from the package's own files, which the stage loop resolves
+/// (from cache, or fetched when allowed), so it never needs the model's full
+/// GGUF, and looking one up by name could download it.
+fn resolves_source_by_name(load: &StageLoadRequest) -> bool {
+    load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
+        && !is_layer_package_ref(&load.package_ref)
+        && !load
+            .model_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path).exists())
 }
 
 fn source_name_candidates(
@@ -118,6 +127,34 @@ mod tests {
                 2,
                 "local loads keep every name"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cached_layer_package_loads_without_the_model_gguf() {
+        let package = tempfile::tempdir().unwrap();
+        crate::inference::skippy::write_test_package_v2_fixture(
+            package.path(),
+            "Qwen3-8B-Q4_K_M",
+            &[("layer-0", "layers/layer-0.gguf", "blk.0.attn.weight")],
+        )
+        .unwrap();
+        let mut load = crate::inference::skippy::test_stage_load_request();
+        load.model_id = "Qwen3-8B-Q4_K_M".to_string();
+        load.package_ref = package.path().to_string_lossy().into_owned();
+        load.model_path = None;
+
+        assert!(!resolves_source_by_name(&load));
+        resolve_stage_source_by_name(&mut load, StageLoadOrigin::Peer, StageSourceFetch::Allowed)
+            .await;
+        assert_eq!(load.model_path, None);
+        StageSourceFetch::LocalOnly
+            .ensure_local_source(&load)
+            .expect("a cached layer package needs no standalone GGUF");
+
+        for package_ref in ["gguf://Qwen3-8B-Q4_K_M.gguf", "pkg-a"] {
+            load.package_ref = package_ref.to_string();
+            assert!(resolves_source_by_name(&load), "{package_ref}");
         }
     }
 
