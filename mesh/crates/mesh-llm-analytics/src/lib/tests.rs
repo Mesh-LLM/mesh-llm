@@ -58,6 +58,16 @@ async fn capture_one_request() -> (SocketAddr, oneshot::Receiver<String>) {
     (addr, rx)
 }
 
+/// A client for the plain-HTTP fixtures above. It trusts no roots, so the
+/// tests don't need the system's CA bundle, which build sandboxes lack.
+fn fixture_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .tls_certs_only([])
+        .timeout(client::REQUEST_TIMEOUT)
+        .build()
+        .expect("build the fixture client")
+}
+
 #[tokio::test]
 async fn queued_events_are_delivered_as_a_batch_on_shutdown() {
     let (addr, body) = capture_one_request().await;
@@ -66,6 +76,7 @@ async fn queued_events_are_delivered_as_a_batch_on_shutdown() {
 
     let worker = tokio::spawn(flush_loop(
         receiver,
+        fixture_client(),
         "phc_test_key".to_owned(),
         "install-under-test".to_owned(),
         endpoint,
@@ -105,6 +116,7 @@ async fn delivered_events_carry_the_privacy_properties_and_no_free_text() {
 
     let worker = tokio::spawn(flush_loop(
         receiver,
+        fixture_client(),
         "phc_test_key".to_owned(),
         "install-under-test".to_owned(),
         endpoint,
@@ -145,6 +157,7 @@ async fn an_unreachable_endpoint_is_not_an_error() {
     let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
     let worker = tokio::spawn(flush_loop(
         receiver,
+        fixture_client(),
         "phc_test_key".to_owned(),
         "install-under-test".to_owned(),
         "http://127.0.0.1:1/batch/".to_owned(),
