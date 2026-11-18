@@ -138,7 +138,12 @@ fn verify_dir(path: &Path, options: &Options, tools: &dyn Toolchain) -> Result<S
             "linux" => super::runtime_package_linux::verify(&package, tools)?,
             "macos" => super::runtime_package_macos::verify(&package, tools)?,
             "windows" => {
-                super::windows_pe_machine::verify(path, &package.arch, &package.target)?;
+                super::windows_pe_machine::verify(
+                    path,
+                    &package.arch,
+                    &package.target,
+                    package.entries(),
+                )?;
                 let arguments = vec![
                     "verify".to_owned(),
                     "--lib-dir".to_owned(),

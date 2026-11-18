@@ -115,8 +115,9 @@ function Resolve-CargoTargetDir {
 }
 
 # A path the packaging bash (Git Bash, MSYS2 or Cygwin, never WSL) reads from
-# the repository root: relative inside the repository, and `/d/...` outside
-# it, since GNU tar reads a `D:` prefix as a remote host.
+# the repository root: relative inside the repository, and its own drive form
+# outside it (`/d/...`, or `/cygdrive/d/...` in Cygwin), since GNU tar reads a
+# `D:` prefix as a remote host.
 function ConvertTo-MsysPath {
     param([string]$Path)
 
@@ -128,7 +129,9 @@ function ConvertTo-MsysPath {
     if ($full -notmatch '^[A-Za-z]:\\') {
         throw "Cargo's target directory must be on a drive-letter path: $Path"
     }
-    return "/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
+    $kernel = (& $packagingBash -c "uname -s" | Select-Object -First 1)
+    $drivePrefix = if ($kernel -match '^CYGWIN') { "/cygdrive/" } else { "/" }
+    return $drivePrefix + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
 }
 
 # WSL bash reports a Linux kernel; Git Bash and Cygwin report their own.
@@ -1460,15 +1463,19 @@ Invoke-InRepo {
     foreach ($variable in Get-ChildItem env:) {
         $buildEnvironment[$variable.Name] = $variable.Value
     }
+    # Remove-Item, not SetEnvironmentVariable with $null: PowerShell passes
+    # $null to it as an empty string, which .NET 9 (PowerShell 7.5) keeps.
     foreach ($name in $buildEnvironment.Keys) {
         if (-not $callerEnvironment.ContainsKey($name)) {
-            [System.Environment]::SetEnvironmentVariable($name, $null, "Process")
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
         }
     }
+    # A changed variable the caller had empty is set back to empty, which
+    # PowerShell 7.5 keeps; Windows PowerShell can only remove it.
     foreach ($entry in $callerEnvironment.GetEnumerator()) {
         $unchanged = $buildEnvironment.ContainsKey($entry.Key) -and $buildEnvironment[$entry.Key] -ceq $entry.Value
-        if (-not $unchanged -and $entry.Value) {
-            [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        if (-not $unchanged) {
+            [System.Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, "Process")
         }
     }
 }
