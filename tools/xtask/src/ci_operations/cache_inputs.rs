@@ -11,7 +11,7 @@ mod resources;
 #[path = "cache_inputs_tests.rs"]
 mod tests;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inventory {
     HostedXtask,
     HostedController,
@@ -24,6 +24,23 @@ pub(crate) const ALL: [Inventory; 4] = [
     Inventory::HostedController,
     Inventory::LinuxRuntime,
     Inventory::WindowsAbi,
+];
+
+/// Uncompiled edits each identity must survive; the Linux cache measurement applies
+/// the first entry of its cohort as the unrelated-edit condition.
+pub(crate) const PRESERVED_EDITS: &[(Inventory, &str)] = &[
+    (Inventory::HostedXtask, "tools/xtask/tests/integration.rs"),
+    (Inventory::HostedXtask, "tools/trajectory-reader/README.md"),
+    (Inventory::HostedController, "tools/xtask/src/main.rs"),
+    (
+        Inventory::LinuxRuntime,
+        "skippy/crates/skippy-cli/src/main.rs",
+    ),
+    (Inventory::LinuxRuntime, "skippy/docs/ARCHITECTURE.md"),
+    (
+        Inventory::WindowsAbi,
+        "skippy/crates/skippy-package-builder/src/main.rs",
+    ),
 ];
 
 const COMMON: &[&str] = &[
@@ -83,6 +100,11 @@ impl Inventory {
             }
             Self::WindowsAbi => "",
         }
+    }
+
+    /// Literal key family before the first expression.
+    pub(crate) fn family(self) -> &'static str {
+        self.prefix().split("-${{").next().unwrap_or_default()
     }
 
     pub(crate) fn inputs(self) -> BTreeSet<String> {
@@ -207,9 +229,7 @@ pub(crate) fn check(root: &Path) -> DynResult<()> {
         let keys: Vec<_> = source
             .lines()
             .filter_map(|line| line.trim().strip_prefix(field))
-            .filter(|key| {
-                key.starts_with(inventory.prefix().split("-${{").next().unwrap_or_default())
-            })
+            .filter(|key| key.starts_with(inventory.family()))
             .collect();
         if keys != [inventory.expression()] {
             return Err(format!(

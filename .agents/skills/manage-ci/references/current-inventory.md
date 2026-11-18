@@ -146,6 +146,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `dflash-pairings-publish.yml` (`Publish DFlash pairing index`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**`, dispatch on `main` | Publishes the checked-in DFlash pairing index to Hugging Face `meshllm/dflash-pairings` with `HF_TOKEN`: uploads `index/<sha256>.json` only when absent (never overwritten or deleted; an existing copy must hash to its name), refreshes the human-facing root `index.json` and `README.md`, then re-downloads and hashes the published file. Releases pin the index by `DFLASH_PAIRING_INDEX_SHA256`. GitHub-hosted with the pinned `public cpu` image for the `hf` CLI; one non-cancelling concurrency group per commit, so no pending publication is replaced; only the run whose pairings still match `main` refreshes the root copies |
 | `dflash-drafts-publish.yml` (`Publish DFlash draft conversions`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/**`, dispatch on `main` | Converts each DFlash draft in the checked-in manifest that is not yet on Hugging Face and uploads it to its `meshllm/` repo with `HF_TOKEN`. Sources are fetched by revision; `cargo xtool models dflash-draft-convert` (Rust, no Python) hashes every source file against the manifest, converts, and keeps the output only when it matches the entry's SHA-256 and size. Nothing is overwritten: an existing file must already hash to the manifest, and the target is re-checked with the token before upload. GitHub-hosted with the pinned `public cpu` image (Rust, git, jq, `hf` CLI) and `prepare-automation`; the token reaches only the upload step; one global non-cancelling concurrency group serializes runs (a replaced pending run loses nothing: each run publishes every unpublished draft in its manifest) |
+| `linux-cache-measurement.yml` (`Diagnostic · Linux cache measurement`) | dispatch only | Nonpublishing cold, exact-warm and unrelated-edit sample of the Linux CPU runtime package, hosted xtask or hosted controller cache; read-only token, no secrets, hosted `ubuntu-24.04`, evidence artifact only |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
@@ -1066,6 +1067,22 @@ The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
 paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
 exclusions), so a key input cannot change on `main` without waking its only
 producer.
+
+`linux-cache-measurement.yml` measures those three Linux identities without
+publishing. Inputs are closed choices (`cohort` cpu-runtime/hosted-xtask/
+hosted-controller, `condition` cold/exact-warm/unrelated-edit, `sample` 1-5).
+Each cohort job binds its restore key to the inventory expression; the CPU job
+selects the unchanged `linux-cpu` row of `ci/slices.yml`. `ci-ops
+linux-cache-measurement` records the key before and after the admitted edit,
+phase times, the restore result and the measured output tree, then writes
+`admission.json`, `blocked.json` or `refusal.json` and, after the unchanged
+production preparation, `receipt.json`. A warm arm without an exact hit is
+BLOCKED; a moved key, a reused root or a rebuilt warm output is refused. An
+admitted sample writes `receipt.json` even when preparation fails; a failed
+preparation, missing or out-of-order phases or an unreadable output make it
+`admitted=false`.
+Evidence retains for 14 days. The workflow is outside every inventory, so
+editing it does not move a measured key.
 
 Windows ABI key construction and retention share typed Rust identities.
 The existing warmer's maintenance job derives active families from CI runtime
