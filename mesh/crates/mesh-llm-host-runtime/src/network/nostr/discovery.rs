@@ -220,6 +220,54 @@ pub async fn discover(
     Ok(meshes)
 }
 
+/// Fold one client notification into the round map.
+///
+/// Events are collected from the raw `RelayMessage::Event` stream, not
+/// the `ClientNotification::Event` variant: that variant is
+/// deduplicated against the client's event database, so a listing
+/// re-delivered on a later round of the same cached client (the
+/// watchdog's) would be suppressed while its EOSE still counts —
+/// manufacturing a "relay answered with nothing" round and, downstream,
+/// a takeover for a listing that is present. The raw message is
+/// delivered for every receipt and carries the fully validated event
+/// (limits, filter match, expiry, signature).
+fn apply_discovery_notification(
+    rounds: &mut std::collections::HashMap<nostr_sdk::prelude::RelayUrl, RelayRound>,
+    subscription_id: &SubscriptionId,
+    notification: ClientNotification,
+) {
+    let ClientNotification::Message { relay_url, message } = notification else {
+        return;
+    };
+    match *message {
+        RelayMessage::Event {
+            subscription_id: id,
+            event,
+        } if *id == *subscription_id => {
+            if let Some(round) = rounds.get_mut(&relay_url) {
+                round.events.insert(event.into_owned());
+            }
+        }
+        RelayMessage::EndOfStoredEvents(id) if *id == *subscription_id => {
+            if let Some(round) = rounds.get_mut(&relay_url) {
+                round.eose = true;
+            }
+        }
+        // A relay that closes the subscription (rejected, auth-required,
+        // rate-limited) will never send EOSE for it: mark it terminal so
+        // the round does not wait out the deadline on its behalf.
+        RelayMessage::Closed {
+            subscription_id: id,
+            ..
+        } if *id == *subscription_id => {
+            if let Some(round) = rounds.get_mut(&relay_url) {
+                round.closed = true;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Discover meshes and report how many relays answered.
 ///
 /// The fetch fans out per relay (one request each, 5 s timeout) so a
@@ -298,45 +346,7 @@ pub async fn discover_with_health(
             // are already accumulated and are kept.
             Ok(None) | Err(_) => break,
         };
-        match notification {
-            ClientNotification::Event {
-                relay_url,
-                subscription_id: id,
-                event,
-            } if id == subscription_id => {
-                // This variant is client-deduplicated ("first time the
-                // event is seen"), so an event two relays both deliver
-                // attributes only to whichever arrived first. The merged
-                // result is unaffected (it deduplicates anyway), and the
-                // counting effect is confined to a relay whose only
-                // deliveries were duplicates — it can under-count toward
-                // Silent, never inflate toward Answered.
-                if let Some(round) = rounds.get_mut(&relay_url) {
-                    round.events.insert(*event);
-                }
-            }
-            ClientNotification::Message { relay_url, message } => match *message {
-                RelayMessage::EndOfStoredEvents(id) if *id == subscription_id => {
-                    if let Some(round) = rounds.get_mut(&relay_url) {
-                        round.eose = true;
-                    }
-                }
-                // A relay that closes the subscription (rejected,
-                // auth-required, rate-limited) will never send EOSE for
-                // it: mark it terminal so the round does not wait out
-                // the deadline on its behalf.
-                RelayMessage::Closed {
-                    subscription_id: id,
-                    ..
-                } if *id == subscription_id => {
-                    if let Some(round) = rounds.get_mut(&relay_url) {
-                        round.closed = true;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
+        apply_discovery_notification(&mut rounds, &subscription_id, notification);
     }
     // Always drop the subscription, including on the cached client the
     // watchdog reuses — a leaked REQ would keep streaming events into
@@ -560,6 +570,57 @@ mod relay_health_tests {
         );
         assert_eq!(events.len(), 1);
         assert_eq!(health.relays_answered, 2);
+    }
+
+    /// Regression (review round 2): on a later round of the same cached
+    /// client, a re-delivered listing arrives ONLY as a raw
+    /// `RelayMessage::Event` — the `ClientNotification::Event` variant
+    /// is deduplicated against the client's event database and never
+    /// fires again. A round shaped exactly like that (raw event + EOSE,
+    /// no deduped variant) must still find the listing; this test fails
+    /// if collection ever reverts to the deduped arm.
+    #[test]
+    fn a_repeat_delivery_arrives_only_on_the_raw_message_stream() {
+        use std::borrow::Cow;
+        use std::collections::HashMap;
+
+        let id = SubscriptionId::generate();
+        let relay_url: nostr_sdk::prelude::RelayUrl = "wss://relay.example".parse().unwrap();
+        let event = EventBuilder::new(Kind::Custom(1), "x")
+            .finalize(&Keys::generate())
+            .expect("sign");
+
+        let mut rounds = HashMap::new();
+        rounds.insert(relay_url.clone(), RelayRound::default());
+
+        apply_discovery_notification(
+            &mut rounds,
+            &id,
+            ClientNotification::Message {
+                relay_url: relay_url.clone(),
+                message: Box::new(RelayMessage::Event {
+                    subscription_id: Cow::Owned(id.clone()),
+                    event: Cow::Owned(event),
+                }),
+            },
+        );
+        apply_discovery_notification(
+            &mut rounds,
+            &id,
+            ClientNotification::Message {
+                relay_url: relay_url.clone(),
+                message: Box::new(RelayMessage::EndOfStoredEvents(Cow::Owned(id.clone()))),
+            },
+        );
+
+        let round = rounds.remove(&relay_url).expect("round to exist");
+        let classified = classify_relay_round_outcome(round);
+        match classified {
+            RelayFetchResult::Answered(events) => {
+                assert_eq!(events.len(), 1, "the raw re-delivery must be collected")
+            }
+            other => panic!("expected Answered, got {other:?}"),
+        }
     }
 
     #[test]
