@@ -17,6 +17,8 @@ use super::RuntimeOptions;
 use super::serving_surface::bind_runtime_tcp_listener;
 
 const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// A mesh-llm status is a few kilobytes; whatever answers with more is not one.
+const STATUS_BODY_LIMIT: usize = 256 * 1024;
 
 /// Check each serving port once. A port in use ends startup with
 /// [`port_in_use_message`]; any other bind error is left to the real bind
@@ -134,7 +136,8 @@ async fn find_mesh_node_holding(
     console: u16,
     runs_mesh_llm: fn(u32) -> bool,
 ) -> Option<PortHolder> {
-    let client = reqwest::Client::builder()
+    // No proxy and no redirect: only the listener on this port may answer.
+    let client = mesh_llm_system::local_http::local_http_client_builder()
         .timeout(STATUS_REQUEST_TIMEOUT)
         .build()
         .ok()?;
@@ -152,7 +155,7 @@ async fn find_mesh_node_holding(
         let Ok(response) = client.get(url).send().await else {
             continue;
         };
-        let Ok(status) = response.json::<serde_json::Value>().await else {
+        let Some(status) = read_status(response).await else {
             continue;
         };
         if let Some(holder) =
@@ -164,6 +167,22 @@ async fn find_mesh_node_holding(
     None
 }
 
+/// The JSON body of a successful status answer, read up to
+/// [`STATUS_BODY_LIMIT`]; `None` for anything else.
+async fn read_status(mut response: reqwest::Response) -> Option<serde_json::Value> {
+    if !response.status().is_success() {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > STATUS_BODY_LIMIT {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).ok()
+}
+
 /// The holder a node's `/api/status`, served on `management_port`, names for
 /// `port`; `None` unless it is a mesh-llm status that accounts for the port.
 fn holder_from_status(
@@ -173,6 +192,10 @@ fn holder_from_status(
     management_port: u16,
     runs_mesh_llm: fn(u32) -> bool,
 ) -> Option<PortHolder> {
+    // Fields every mesh-llm status carries: another service answering on the
+    // port with an `api_port` of its own is not taken for a node.
+    status["node_id"].as_str()?;
+    let is_client = status["is_client"].as_bool()?;
     let api_port = status["api_port"].as_u64()?;
     if !is_console_port && api_port != u64::from(port) {
         return None;
@@ -188,7 +211,7 @@ fn holder_from_status(
         pid,
         runs_mesh_llm: pid.is_some_and(runs_mesh_llm),
         management_port,
-        is_client: status["is_client"].as_bool() == Some(true),
+        is_client,
     })
 }
 
@@ -227,14 +250,15 @@ fn port_in_use_message(port: u16, label: &str, flag: &str, holder: Option<&PortH
 }
 
 // On Windows the service's supervisor restarts a node ended on its own, so
-// the service itself has to be ended. Dashes, not slashes: schtasks and
+// the service itself has to be ended. A console process has no window to
+// close, so taskkill only ends it with -F. Dashes, not slashes: schtasks and
 // taskkill take both, and the console's path redaction would turn `/End`
 // and `/TN` into `[REDACTED_PATH]`.
 #[cfg(windows)]
 fn stop_hint(pid: Option<u32>) -> String {
     const SERVICE: &str = "`schtasks -End -TN mesh-llm` if it is the background service";
     match pid {
-        Some(pid) => format!(" ({SERVICE}, otherwise `taskkill -PID {pid}`)"),
+        Some(pid) => format!(" ({SERVICE}, otherwise `taskkill -F -PID {pid}`)"),
         None => format!(" ({SERVICE})"),
     }
 }
@@ -285,6 +309,7 @@ mod tests {
 
     fn node_status(api_port: u16, pid: u32, is_client: bool) -> serde_json::Value {
         serde_json::json!({
+            "node_id": "0123abcd",
             "api_port": api_port,
             "is_client": is_client,
             "local_instances": [
@@ -377,6 +402,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_oversized_answer_is_not_read_as_a_status() {
+        let mut status = node_status(9447, 4242, false);
+        status["padding"] = serde_json::Value::String("x".repeat(STATUS_BODY_LIMIT));
+        let console = status_server(status).await;
+        assert_eq!(
+            find_mesh_node_holding(console, true, console, |_| true).await,
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn a_console_reporting_another_api_port_does_not_claim_this_one() {
         let (_api, api_port) = held_port().await;
         let console = status_server(node_status(api_port.wrapping_add(1), 4242, false)).await;
@@ -412,15 +448,22 @@ mod tests {
                 ..named
             })
         );
-        // A JSON answer that is not a mesh-llm status.
-        assert_eq!(
-            holder_from_status(&serde_json::json!({"ok": true}), 3145, true, 3145, mesh_llm),
-            None
-        );
+        // JSON answers that are not a mesh-llm status, one naming an API port.
+        for other in [
+            serde_json::json!({"ok": true}),
+            serde_json::json!({"api_port": 9337}),
+            serde_json::json!({"api_port": 9337, "is_client": false}),
+        ] {
+            assert_eq!(
+                holder_from_status(&other, 9337, false, 3145, mesh_llm),
+                None,
+                "{other}"
+            );
+        }
         // A node whose instance scan has not run yet is still a node.
         assert_eq!(
             holder_from_status(
-                &serde_json::json!({"api_port": 9337}),
+                &serde_json::json!({"node_id": "0123abcd", "api_port": 9337, "is_client": false}),
                 9337,
                 false,
                 3131,
@@ -461,7 +504,7 @@ mod tests {
         let message = port_in_use_message(9337, "OpenAI-compatible API", "--port", Some(&node));
         #[cfg(windows)]
         {
-            assert!(message.contains("taskkill -PID 7"));
+            assert!(message.contains("taskkill -F -PID 7"));
             assert!(message.contains("schtasks -End -TN mesh-llm"));
         }
         #[cfg(not(windows))]
