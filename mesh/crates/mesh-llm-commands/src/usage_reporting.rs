@@ -77,10 +77,11 @@ pub fn init_for_unparsed(raw_args: &[OsString], config_path: Option<&Path>) {
 
 /// Why a `serve` session or a one-shot command failed, from a fixed list.
 ///
-/// Classified from the typed causes in the error chain, never from its text,
-/// so no path, model name, or message rides along. The outermost recognised
-/// cause wins: a model download that failed on a permission error is
-/// `model_download`. A failure with no recognised cause is `other`.
+/// Classified from typed errors, never from text, so no path, model name, or
+/// message rides along. The typed contexts the runtime installer and the model
+/// downloaders attach come first: a model download that failed on a permission
+/// error is `model_download`. Then the io kinds and the config parser anywhere
+/// in the chain. A failure with no recognised cause is `other`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailureKind {
     /// The port `serve` binds is already held, typically by another node.
@@ -107,6 +108,17 @@ impl FailureKind {
     }
 
     pub fn classify(error: &anyhow::Error) -> Self {
+        if carries::<skippy_ffi::NativeRuntimeLoadError>(error)
+            || carries::<skippy_runtime_install::NativeRuntimeResolutionError>(error)
+            || carries::<skippy_runtime_install::NativeRuntimeFetchError>(error)
+        {
+            return Self::RuntimeUnavailable;
+        }
+        // Only a failure where model files are downloaded: a Hub error from a
+        // metadata lookup (`models show`) is not a download failure.
+        if carries::<skippy_model_hf::ModelDownloadError>(error) {
+            return Self::ModelDownload;
+        }
         for cause in error.chain() {
             if let Some(io) = cause.downcast_ref::<std::io::Error>() {
                 match io.kind() {
@@ -115,20 +127,21 @@ impl FailureKind {
                     _ => {}
                 }
             }
-            if cause.is::<skippy_ffi::NativeRuntimeLoadError>()
-                || cause.is::<skippy_runtime_install::NativeRuntimeResolutionError>()
-            {
-                return Self::RuntimeUnavailable;
-            }
-            if cause.is::<hf_hub::HFError>() {
-                return Self::ModelDownload;
-            }
             if cause.is::<toml::de::Error>() {
                 return Self::ConfigInvalid;
             }
         }
         Self::Other
     }
+}
+
+/// Whether `error` carries a `T`, as its root, as a source in its chain, or as
+/// context attached with `anyhow::Context`, which only `downcast_ref` finds.
+fn carries<T>(error: &anyhow::Error) -> bool
+where
+    T: std::error::Error + Send + Sync + 'static,
+{
+    error.downcast_ref::<T>().is_some() || error.chain().any(|cause| cause.is::<T>())
 }
 
 /// Record the outcome of a one-shot command.
@@ -502,7 +515,10 @@ mod tests {
             "runtime_unavailable"
         );
         assert_eq!(
-            classify(anyhow::Error::from(hf_hub::HFError::CacheNotEnabled).context("download")),
+            classify(
+                anyhow::Error::from(hf_hub::HFError::CacheNotEnabled)
+                    .context(skippy_model_hf::ModelDownloadError)
+            ),
             "model_download"
         );
         let toml = toml::from_str::<toml::Value>("not = = toml").unwrap_err();
@@ -528,8 +544,49 @@ mod tests {
         // HFError::Io wraps the io error transparently, so the chain shows the
         // Hugging Face error, not a permission error.
         let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        let error = anyhow::Error::from(hf_hub::HFError::from(denied)).context("download model");
+        let error = anyhow::Error::from(hf_hub::HFError::from(denied))
+            .context(skippy_model_hf::ModelDownloadError);
         assert_eq!(classify(error), "model_download");
+    }
+
+    #[test]
+    fn failure_kind_reads_the_resolution_error_the_installer_attaches_as_context() {
+        // install_native_runtime returns the resolver's error with the
+        // explanation as its outermost context, which the source chain does
+        // not show as a NativeRuntimeResolutionError.
+        let explanation = skippy_runtime_install::NativeRuntimeResolutionError {
+            summary: "no native runtime candidate qualifies".into(),
+            selection: skippy_runtime_install::RuntimeSelection::Recommended,
+            catalogs: Default::default(),
+            candidates: Vec::new(),
+            set_aside: 0,
+            enumeration_failed: false,
+        };
+        let error = anyhow::anyhow!("no compatible native runtime").context(explanation);
+        assert_eq!(classify(error.context("setup")), "runtime_unavailable");
+    }
+
+    #[test]
+    fn failure_kind_reads_a_runtime_archive_that_could_not_be_fetched() {
+        // download_runtime_archive attaches NativeRuntimeFetchError to the
+        // HTTP failure, a 404 for a selected runtime's archive included.
+        let error = anyhow::anyhow!("HTTP status client error (404 Not Found)").context(
+            skippy_runtime_install::NativeRuntimeFetchError(
+                "native runtime request failed for https://example.invalid/runtime.tar.gz".into(),
+            ),
+        );
+        assert_eq!(
+            classify(error.context("install runtime")),
+            "runtime_unavailable"
+        );
+    }
+
+    #[test]
+    fn failure_kind_leaves_a_hub_metadata_lookup_out_of_model_downloads() {
+        // `models show` gets a Hub error for repository metadata without
+        // reaching a file download.
+        let lookup = anyhow::Error::from(hf_hub::HFError::CacheNotEnabled).context("show model");
+        assert_eq!(classify(lookup), "other");
     }
 
     #[test]

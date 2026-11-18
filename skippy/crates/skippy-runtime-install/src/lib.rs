@@ -35,8 +35,8 @@ pub use legacy_import::{
 pub use import::{NativeRuntimeImportOutcome, NativeRuntimeImportStatus, import_runtime_copy};
 
 pub use install::{
-    NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime,
-    install_native_runtime_explicit,
+    NativeRuntimeFetchError, NativeRuntimeResolutionError, RejectedCandidate,
+    install_native_runtime, install_native_runtime_explicit,
 };
 pub use manifest::{
     NativeRuntimeCatalogSources, load_release_manifest,

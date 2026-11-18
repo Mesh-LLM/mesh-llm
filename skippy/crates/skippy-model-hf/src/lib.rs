@@ -16,6 +16,19 @@ pub use cache_paths::{
     prepare_download_directories, prepare_download_directories_with_data_roots,
 };
 pub use checkpoint::DownloadedCheckpointFile;
+
+/// Context attached where model files are downloaded, so a failure there can
+/// be told apart from a metadata lookup that failed on the same Hub error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModelDownloadError;
+
+impl std::fmt::Display for ModelDownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("could not download the model")
+    }
+}
+
+impl std::error::Error for ModelDownloadError {}
 pub use tls::{HfTlsProvider, configure_hf_tls_provider};
 
 use std::{

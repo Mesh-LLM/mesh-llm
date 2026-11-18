@@ -175,7 +175,9 @@ pub async fn download_model_ref_with_progress_details_direct(
         .as_ref()
         .map(|detail| detail.download_url.as_str())
         .unwrap_or(input);
-    let download = download_exact_ref_with_progress_direct(download_ref, progress, direct).await?;
+    let download = download_exact_ref_with_progress_direct(download_ref, progress, direct)
+        .await
+        .context(skippy_model_hf::ModelDownloadError)?;
     Ok(ModelDownload {
         path: download.path,
         paths: download.paths,
@@ -188,6 +190,7 @@ pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Re
     download_exact_ref_with_progress_direct(input, progress, false)
         .await
         .map(|download| download.path)
+        .context(skippy_model_hf::ModelDownloadError)
 }
 
 pub(crate) async fn download_direct_ref_with_progress(
@@ -197,6 +200,7 @@ pub(crate) async fn download_direct_ref_with_progress(
     download_exact_ref_with_progress_direct(input, progress, true)
         .await
         .map(|download| download.path)
+        .context(skippy_model_hf::ModelDownloadError)
 }
 
 async fn download_exact_ref_with_progress_direct(
