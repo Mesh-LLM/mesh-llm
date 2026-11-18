@@ -21,10 +21,6 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
-# The whisper.cpp tree speech recognition builds from: WHISPER_WORKDIR when set,
-# as skippy/scripts/build-llama.sh reads it, so an offline build can supply a
-# pre-staged checkout; otherwise .deps/whisper.cpp.
-$whisperDir = if ($env:WHISPER_WORKDIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:WHISPER_WORKDIR)) } else { Join-Path $repoRoot ".deps\whisper.cpp" }
 $meshUiDir = Join-Path $repoRoot "mesh\crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null
@@ -67,7 +63,9 @@ function Resolve-StageBuildDir {
 function ConvertTo-BashRepoPath {
     param(
         [string]$Path,
-        [switch]$Wsl
+        [switch]$Wsl,
+        # The variable the path came from, named when it cannot be converted.
+        [string]$Setting = "MESH_LLM_LLAMA_DIR"
     )
 
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -76,7 +74,7 @@ function ConvertTo-BashRepoPath {
         return $full.Substring($root.Length).Replace("\", "/")
     }
     if ($full -notmatch '^[A-Za-z]:\\') {
-        throw "MESH_LLM_LLAMA_DIR must be inside the repository or on a drive-letter path: $Path"
+        throw "$Setting must be inside the repository or on a drive-letter path: $Path"
     }
     if ($Wsl) {
         return "/mnt/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
@@ -158,7 +156,7 @@ function Prepare-Whisper {
             [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\",
             [System.StringComparison]::OrdinalIgnoreCase)
         $wsl = if ($insideRepo) { $false } else { Test-BashIsWsl }
-        $env:WHISPER_WORKDIR = ConvertTo-BashRepoPath $whisperDir -Wsl:$wsl
+        $env:WHISPER_WORKDIR = ConvertTo-BashRepoPath $whisperDir -Wsl:$wsl -Setting "WHISPER_WORKDIR"
     }
     try {
         Invoke-NativeCommand "bash" @("skippy/scripts/prepare-whisper.sh")
@@ -1110,6 +1108,17 @@ switch ($backendName) {
 $speechRecognition = if ($env:SKIPPY_SPEECH_RECOGNITION) { $env:SKIPPY_SPEECH_RECOGNITION.ToUpperInvariant() } else { "ON" }
 if ($speechRecognition -notin @("ON", "OFF")) {
     throw "Unsupported SKIPPY_SPEECH_RECOGNITION '$($env:SKIPPY_SPEECH_RECOGNITION)'. Expected ON or OFF."
+}
+# The whisper.cpp tree speech recognition builds from: WHISPER_WORKDIR when set,
+# as skippy/scripts/build-llama.sh reads it, so an offline build can supply a
+# pre-staged checkout; otherwise .deps/whisper.cpp. Resolved only for a build
+# that compiles it, so an override elsewhere is never read.
+$whisperDir = if ($speechRecognition -ne "ON") {
+    $null
+} elseif ($env:WHISPER_WORKDIR) {
+    [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:WHISPER_WORKDIR))
+} else {
+    Join-Path $repoRoot ".deps\whisper.cpp"
 }
 
 $packagingBash = Resolve-PackagingBash
