@@ -26,6 +26,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
             "windows-warm-caches.yml",
             &["warm_windows_cpu", "warm_windows_gpu"][..],
         ),
+        ("windows-abi-measurement.yml", &["measure"][..]),
     ] {
         let source = fs::read_to_string(root.join(".github/workflows").join(workflow))?;
         let document = workflow_yaml::parse(&source)?;

@@ -694,6 +694,23 @@ checked-in expiry are the maintainer-controlled approval boundary.
   and an insufficient budget before deletion. Unknown keys and other refs are
   outside its authority. Retain the plan as evidence; a source change does not
   authorize an operator to purge live caches.
+- Windows ABI cold versus exact-warm measurement uses only the manual
+  `windows-abi-measurement.yml` diagnostic. It has no push, PR, schedule,
+  `workflow_run` or `workflow_call` trigger, a read-only token, no secrets, no
+  OIDC and fixed hosted `windows-2022` placement, and it never passes or
+  fabricates `original_event_name`. Typed `ci-ops windows-abi-measurement`
+  plans closed rows from the Windows `ci/slices.yml` runtime rows, at most five
+  samples per condition. Both arms compute the same exact key through the
+  canonical restore action. Cold skips retrieval and requires an empty build
+  directory. Exact-warm requires an exact hit whose key equals the computed
+  identity, plus an unchanged build stamp after canonical preparation, so a
+  rebuild is refused rather than relabelled. Every compiler, SDK, automation and
+  ABI cache authority is literal `false` except that exact-warm read-only
+  restore, and no job reaches a cache save, save-and-verify, retention or
+  publisher. The workflow is a registered retention consumer that adds no
+  family. It is deliberately outside `CACHE_INPUT_HASH`, so editing it cannot
+  move the key it measures. Restores may update cache access metadata. Receipts
+  are evidence artifacts only.
 - A workflow that is the only `main` producer of a key must wake on every input
   of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
   `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract

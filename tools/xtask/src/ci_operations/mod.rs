@@ -71,6 +71,7 @@ mod sccache_stats;
 mod sccache_summary;
 mod sdk_census;
 mod seed_census;
+mod windows_abi_measurement;
 mod windows_cache_consumers;
 mod windows_cache_identity;
 mod windows_cache_maintenance;
@@ -102,6 +103,7 @@ pub(crate) enum CiOperationsCommand {
     WindowsCacheIdentity,
     WindowsCacheRetention,
     WindowsCacheMaintenance,
+    WindowsAbiMeasurement,
     CacheInputs,
 }
 
@@ -125,6 +127,7 @@ impl CiOperationsCommand {
             "windows-cache-identity" => Some(Self::WindowsCacheIdentity),
             "windows-cache-retention" => Some(Self::WindowsCacheRetention),
             "windows-cache-maintenance" => Some(Self::WindowsCacheMaintenance),
+            "windows-abi-measurement" => Some(Self::WindowsAbiMeasurement),
             "cache-inputs" => Some(Self::CacheInputs),
             _ => None,
         }
@@ -180,6 +183,7 @@ pub(crate) fn run(
         CiOperationsCommand::WindowsCacheMaintenance => {
             windows_cache_maintenance::run(args, &root()?)
         }
+        CiOperationsCommand::WindowsAbiMeasurement => windows_abi_measurement::run(args, &root()?),
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::SccacheSummary => sccache_summary::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),
