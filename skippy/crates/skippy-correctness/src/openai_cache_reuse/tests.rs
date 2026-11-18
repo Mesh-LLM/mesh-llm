@@ -10,9 +10,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Result;
+use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use super::{OpenAiCacheReuseArgs, run};
+use super::{OpenAiCacheReuseArgs, run_with};
 
 static NEXT_PROMPT: AtomicU64 = AtomicU64::new(0);
 
@@ -135,6 +137,12 @@ fn request_body(stream: &mut TcpStream) -> Value {
         assert!(bytes.len() <= 32 * 1024);
     }
     serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap()
+}
+
+/// Runs the check against the plain-HTTP peer with a client that trusts no
+/// roots, so the tests don't need the system's CA bundle.
+fn run(args: OpenAiCacheReuseArgs) -> Result<()> {
+    run_with(args, Client::builder().tls_certs_only([]))
 }
 
 fn args(peer: &Peer, prompt: &Prompt) -> OpenAiCacheReuseArgs {
