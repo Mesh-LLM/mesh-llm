@@ -17,9 +17,15 @@ use tokio::{
 
 mod inventory;
 mod launch;
+#[cfg(test)]
+mod replacement_tests;
 mod runtime_events;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use replacement_tests::spawn_stage_control_loop_with_placeholder_stage;
+#[cfg(test)]
+pub(crate) use tests::load_request as test_stage_load_request;
 mod types;
 
 use super::StageSourceFetch;
@@ -96,7 +102,7 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                             }
                         }
                         StageControlCommand::ValidateLoad { load, resp } => {
-                            let _ = resp.send(state.validate_load_claim(&load));
+                            let _ = resp.send(state.load_preflight_rejection(&load));
                         }
                     }
                 }
@@ -335,9 +341,7 @@ impl StageControlState {
             }
         }
         let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
-        if let Some(existing) = self.stages.get(&key)
-            && let Some(error) = stage_replacement_rejection(&existing.load, &load)
-        {
+        if let Some(error) = self.replacement_rejection(&load) {
             return Ok(rejected_load_response(&load, error.to_string()));
         }
         if let Err(error) =
@@ -539,6 +543,21 @@ impl StageControlState {
             .filter(|stage| filter.matches(&stage.load))
             .map(status_from_running)
             .collect()
+    }
+
+    /// Why `load` would be refused before it fetches anything, checked before
+    /// a node resolves its source or records its topology: it would replace a
+    /// stage it may not, or its coordinator claim is not current.
+    fn load_preflight_rejection(&self, load: &StageLoadRequest) -> Option<String> {
+        self.replacement_rejection(load)
+            .map(str::to_string)
+            .or_else(|| self.validate_load_claim(load))
+    }
+
+    fn replacement_rejection(&self, load: &StageLoadRequest) -> Option<&'static str> {
+        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
+        let existing = self.stages.get(&key)?;
+        stage_replacement_rejection(&existing.load, load)
     }
 
     fn validate_load_claim(&self, load: &StageLoadRequest) -> Option<String> {

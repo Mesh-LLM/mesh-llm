@@ -43,3 +43,4 @@ mod split_coverage {
 
 mod model_requirements;
 mod private_scope;
+mod stage_load_record;

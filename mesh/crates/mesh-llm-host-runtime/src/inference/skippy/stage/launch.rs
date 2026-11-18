@@ -29,7 +29,9 @@ pub(super) async fn prepare_stage_launch(
 ) -> Result<PreparedStageLaunch> {
     let bind_addr = loopback_stage_bind_addr(&load.bind_addr)?;
     let mut effective_load = load;
-    crate::inference::skippy::configure_materialized_stage_cache();
+    if materializes(&effective_load) {
+        crate::inference::skippy::configure_materialized_stage_cache();
+    }
     if let Some(plan) = effective_load.dflash.as_mut() {
         crate::inference::skippy::materialize_split_dflash_draft(plan, source_fetch).await;
     }
@@ -51,12 +53,24 @@ pub(super) async fn prepare_stage_launch(
     let bind_addr = materialize_stage_bind_addr(bind_addr)?;
     effective_load.bind_addr = bind_addr.to_string();
     let config = stage_config(&effective_load, resolved_package.as_ref())?;
+    // The runtime parses these options only once it starts, after the stage
+    // this load replaces has stopped.
+    skippy_serving::runtime_state::validate_stage_runtime_config(&config)?;
     Ok(PreparedStageLaunch {
         load: effective_load,
         bind_addr,
         package: resolved_package,
         config,
     })
+}
+
+/// Whether preparing `load` can materialize stage files, which go under the
+/// process-wide stage cache directory: a layer package, a non-slice load mode,
+/// or a split DFlash draft. A runtime slice of a GGUF materializes nothing.
+fn materializes(load: &StageLoadRequest) -> bool {
+    load.dflash.is_some()
+        || load.load_mode != skippy_protocol::LoadMode::RuntimeSlice
+        || crate::inference::skippy::is_layer_package_ref(&load.package_ref)
 }
 
 /// The stage server socket carries no authentication; other nodes reach it
@@ -132,5 +146,21 @@ mod tests {
                 .to_string();
             assert!(error.contains("not a loopback address"), "{error}");
         }
+    }
+
+    #[test]
+    fn only_a_load_that_materializes_files_configures_the_stage_cache() {
+        let mut load = super::super::test_stage_load_request();
+        load.package_ref = "gguf://model.gguf".to_string();
+        assert!(!materializes(&load));
+
+        load.dflash = Some(Default::default());
+        assert!(materializes(&load));
+        load.dflash = None;
+        load.load_mode = skippy_protocol::LoadMode::LayerPackage;
+        assert!(materializes(&load));
+        load.load_mode = skippy_protocol::LoadMode::RuntimeSlice;
+        load.package_ref = "hf://meshllm/demo@main".to_string();
+        assert!(materializes(&load));
     }
 }

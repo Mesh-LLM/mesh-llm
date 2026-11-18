@@ -245,12 +245,21 @@ impl Node {
             crate::inference::skippy::StageControlRequest::Status(filter) => Some(filter.clone()),
             _ => None,
         };
+        // A load's outcome is recorded where it executes, so a refused
+        // replacement does not overwrite the running stage's status.
+        let load_records_its_outcome = matches!(
+            request,
+            crate::inference::skippy::StageControlRequest::Load(_)
+                | crate::inference::skippy::StageControlRequest::LoadLocal(_)
+        );
         let mut response = self
             .authorize_resolve_and_execute_stage_control(remote, request_kind, request)
             .await?;
         self.append_locally_executing_statuses(status_filter, &mut response)
             .await;
-        self.record_stage_control_response(&response).await;
+        if !load_records_its_outcome {
+            self.record_stage_control_response(&response).await;
+        }
         let proto_response = stage_control_response_to_proto(response);
         write_len_prefixed(&mut send, &proto_response.encode_to_vec()).await?;
         let _ = send.finish();
@@ -279,13 +288,15 @@ impl Node {
             .await
         {
             Ok(()) => {
-                if let crate::inference::skippy::StageControlRequest::Load(load)
-                | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
-                {
-                    self.record_stage_load_topology(load).await;
-                }
-                match Self::execute_stage_control_request_with_sender(
-                    control_tx,
+                let provisional = match &request {
+                    crate::inference::skippy::StageControlRequest::Load(load)
+                    | crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
+                        Some(self.record_provisional_stage_load(load).await)
+                    }
+                    _ => None,
+                };
+                let response = match Self::execute_stage_control_request_with_sender(
+                    control_tx.clone(),
                     remote,
                     request.clone(),
                     source_fetch,
@@ -296,14 +307,26 @@ impl Node {
                     Err(error) => {
                         Self::stage_control_load_failure_response(remote, request.clone(), error)?
                     }
-                }
+                };
+                self.settle_executed_stage_load(
+                    control_tx.as_ref(),
+                    &request,
+                    provisional,
+                    &response,
+                )
+                .await;
+                response
             }
             Err(error) => {
                 tracing::warn!(
                     "handle_stage_control: authorization or source resolution failed for {request_kind} from {}: {error}",
                     remote.fmt_short()
                 );
-                Self::stage_control_load_failure_response(remote, request.clone(), error)?
+                let response =
+                    Self::stage_control_load_failure_response(remote, request.clone(), error)?;
+                self.settle_executed_stage_load(control_tx.as_ref(), &request, None, &response)
+                    .await;
+                response
             }
         };
         drop(control_tx_guard);
@@ -477,7 +500,7 @@ impl Node {
             .context("timeout waiting for stage load authorization")?
             .context("stage control loop closed before load authorization")?;
         if let Some(error) = rejection {
-            anyhow::bail!("stage load claim rejected before source resolution: {error}");
+            anyhow::bail!("stage load rejected before source resolution: {error}");
         }
         Ok(())
     }

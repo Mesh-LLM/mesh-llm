@@ -3,7 +3,7 @@ use crate::mesh::node::LocalRequestMetricsSampler;
 use crate::mesh::stage_proto::{
     stage_control_request_to_proto, stage_control_response_from_proto,
     stage_runtime_status_from_snapshot, stage_runtime_status_key,
-    stage_snapshot_from_runtime_status, stage_topology_from_load, stage_topology_key,
+    stage_snapshot_from_runtime_status, stage_topology_key,
 };
 use crate::protocol::{ControlProtocol, read_len_prefixed, write_len_prefixed};
 use anyhow::{Context, Result};
@@ -712,33 +712,6 @@ impl Node {
         self.stage_topologies.lock().await.record_topology(topology);
     }
 
-    pub(crate) async fn record_stage_load_topology(
-        &self,
-        load: &crate::inference::skippy::StageLoadRequest,
-    ) {
-        let topology = stage_topology_from_load(self.endpoint.id(), load);
-        let mut state = self.stage_topologies.lock().await;
-        state.record_topology(topology.clone());
-        for stage in topology.stages {
-            let mut snapshot = crate::mesh::stage_status_from_load(
-                load,
-                crate::inference::skippy::StageRuntimeState::Starting,
-            );
-            snapshot.stage_id = stage.stage_id;
-            snapshot.stage_index = stage.stage_index;
-            snapshot.layer_start = stage.layer_start;
-            snapshot.layer_end = stage.layer_end;
-            snapshot.bind_addr = stage.endpoint.bind_addr;
-            snapshot.admission =
-                (snapshot.stage_id == load.stage_id).then(|| load.admission.clone());
-            snapshot.error = None;
-            state.record_status(stage_runtime_status_from_snapshot(
-                Some(stage.node_id),
-                snapshot,
-            ));
-        }
-    }
-
     pub async fn activate_stage_topology(&self, topology: StageTopologyInstance) {
         self.stage_topologies
             .lock()
@@ -956,11 +929,14 @@ impl Node {
             crate::inference::skippy::StageSourceFetch::Allowed,
         )
         .await?;
-        if let crate::inference::skippy::StageControlRequest::Load(load)
-        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
-        {
-            self.record_stage_load_topology(load).await;
-        }
+        let provisional = match &request {
+            crate::inference::skippy::StageControlRequest::Load(load)
+            | crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
+                Some(self.record_provisional_stage_load(load).await)
+            }
+            _ => None,
+        };
+        let load_request = provisional.is_some().then(|| request.clone());
         // Loading can take minutes on large stages; use the same
         // per-request budget remote control uses instead of the short default.
         let timeout = Self::stage_control_request_timeout(&request);
@@ -984,6 +960,10 @@ impl Node {
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
         let response = wait_local_stage_control_response(resp_rx, timeout).await?;
+        if let Some(load_request) = &load_request {
+            self.settle_executed_stage_load(Some(&tx), load_request, provisional, &response)
+                .await;
+        }
         drop(control_tx_guard);
         // The stage-to-stage transport bridge is aborted only after the
         // stage-control loop removed a running stage (#2217).
@@ -995,7 +975,10 @@ impl Node {
                 .await;
         }
         match &response {
-            crate::inference::skippy::StageControlResponse::Ready(ready) => {
+            // A settled load already recorded its outcome.
+            crate::inference::skippy::StageControlResponse::Ready(ready)
+                if load_request.is_none() =>
+            {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())
                     .await;
             }
