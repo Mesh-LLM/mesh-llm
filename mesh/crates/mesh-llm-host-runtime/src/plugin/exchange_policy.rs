@@ -13,10 +13,18 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub(crate) struct NodeExchangePolicy {
     node: crate::mesh::Node,
+    /// Typed dispatches inside a session: backend-minted id to the session's
+    /// id, resolved at admission and dropped by the dispatch's terminal. The
+    /// session can already be gone when a cancelled stream's terminal runs, so
+    /// the terminal must not look the session up.
+    session_ids: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 impl NodeExchangePolicy {
     pub(crate) fn new(node: crate::mesh::Node) -> Arc<Self> {
-        Arc::new(Self { node })
+        Arc::new(Self {
+            node,
+            session_ids: Arc::default(),
+        })
     }
     async fn legacy_bridge(&self) -> Option<super::openai_exchange::OpenAiExchangeHookBridge> {
         self.node
@@ -27,13 +35,15 @@ impl NodeExchangePolicy {
     /// The id a typed dispatch's `openai.exchange.v1` events carry: the one its
     /// plugin lifecycle callbacks carry (the session's), so a plugin joins the
     /// two. A backend-minted id names the dispatch only outside a session.
-    async fn channel_exchange_id(&self, backend_exchange_id: &str) -> String {
-        match self.node.plugin_manager().await {
-            Some(manager) => manager
-                .session_exchange_id(backend_exchange_id)
-                .unwrap_or_else(|| backend_exchange_id.to_owned()),
-            None => backend_exchange_id.to_owned(),
-        }
+    /// `last` is the dispatch's terminal: the mapping ends with it.
+    fn channel_exchange_id(&self, backend_exchange_id: &str, last: bool) -> String {
+        let mut ids = self.session_ids.lock().unwrap();
+        let session_id = if last {
+            ids.remove(backend_exchange_id)
+        } else {
+            ids.get(backend_exchange_id).cloned()
+        };
+        session_id.unwrap_or_else(|| backend_exchange_id.to_owned())
     }
     async fn admit_typed_request(
         &self,
@@ -79,7 +89,14 @@ impl NodeExchangePolicy {
                 // the session fills in once the typed one is dropped.
                 Some(id) => {
                     event.as_object_mut().unwrap().remove("exchange_id");
-                    manager.selected_exchange_phase(&id, event).await
+                    let result = manager.selected_exchange_phase(&id, event).await;
+                    if let Some(session_id) = manager.session_exchange_id(exchange_id) {
+                        self.session_ids
+                            .lock()
+                            .unwrap()
+                            .insert(exchange_id.to_owned(), session_id);
+                    }
+                    result
                 }
                 None => manager.exchange_phase(event).await,
             };
@@ -141,10 +158,10 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         route: &ChatExchangeRoute,
     ) {
         if let Some(bridge) = self.legacy_bridge().await {
-            let route = ChatExchangeRoute::for_request(
-                request,
-                self.channel_exchange_id(&route.exchange_id).await,
-            );
+            let route = ChatExchangeRoute {
+                exchange_id: self.channel_exchange_id(&route.exchange_id, false),
+                ..route.clone()
+            };
             bridge.on_effective_chat_completion(request, &route).await;
         }
     }
@@ -171,8 +188,8 @@ impl InferenceHookPolicy for NodeExchangePolicy {
             };
             manager.record_typed_execution_outcome(id, execution_outcome);
         }
+        let exchange_id = self.channel_exchange_id(id, true);
         if let Some(bridge) = self.legacy_bridge().await {
-            let exchange_id = self.channel_exchange_id(id).await;
             bridge
                 .on_chat_completion_terminal(request, &exchange_id, outcome)
                 .await;

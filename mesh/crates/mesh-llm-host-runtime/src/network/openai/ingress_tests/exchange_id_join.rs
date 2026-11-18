@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::plugin::selected_attempt_test_support::{AttemptProbe, attempt_policy_probe};
+use futures_util::StreamExt as _;
 use serde_json::Value;
 use std::sync::{
     Arc,
@@ -210,18 +211,19 @@ async fn peer_failover_joins_lifecycle_callbacks_and_channel_events_on_one_id() 
     assert_ne!(other[0]["exchange_id"], id.as_str());
 }
 
-/// A typed chat completion served by this node: the lifecycle callbacks
-/// (`request_received`, `backend_selected`, `exchange_finished`) and the
-/// channel's effective and terminal events are one exchange under one id.
-#[tokio::test]
-async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
+/// A typed backend behind the node's production hooks and the real HTTP
+/// router. With `hang`, a streamed completion sends one delta and then never
+/// finishes, so a test can drop the client mid-stream.
+async fn typed_server(probe: &AttemptProbe, hang: bool) -> (String, tokio::task::JoinHandle<()>) {
     use skippy_inference_api::{
         HookedInferenceBackend, InferenceBackend, InferenceRequestContext, InferenceResult,
         ModelObject, Usage, generation::GenerationEvent, generation::GenerationEventStream,
         generation::GenerationRequest, generation::GenerationResponse,
     };
 
-    struct TypedBackend;
+    struct TypedBackend {
+        hang: bool,
+    }
     #[async_trait::async_trait]
     impl InferenceBackend for TypedBackend {
         async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
@@ -242,20 +244,28 @@ async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
             request: GenerationRequest,
             _context: InferenceRequestContext,
         ) -> InferenceResult<GenerationEventStream> {
+            let delta = Ok(GenerationEvent::delta(request.model.clone(), "typed"));
+            if self.hang {
+                return Ok(Box::pin(
+                    futures_util::stream::iter(vec![delta]).chain(futures_util::stream::pending()),
+                ));
+            }
             Ok(Box::pin(futures_util::stream::iter(vec![
-                Ok(GenerationEvent::delta(request.model.clone(), "typed")),
+                delta,
                 Ok(GenerationEvent::done(request.model)),
             ])))
         }
     }
 
-    let (probe, _) = attempt_policy_probe(None, false).await;
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
         .await
         .unwrap();
     node.set_plugin_manager(probe.manager.clone()).await;
     let hooks = crate::plugin::exchange_policy::compose_node_hooks(node);
-    let backend = Arc::new(HookedInferenceBackend::new(Arc::new(TypedBackend), hooks));
+    let backend = Arc::new(HookedInferenceBackend::new(
+        Arc::new(TypedBackend { hang }),
+        hooks,
+    ));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -263,6 +273,49 @@ async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
             .await
             .unwrap();
     });
+    (base, server)
+}
+
+/// Every lifecycle callback and both channel events of one typed exchange
+/// carry one id.
+fn assert_one_typed_exchange(lifecycle: &[Value], channel: &[Value], context: &str) -> String {
+    let id = phase(lifecycle, "request_received")[0]["exchange_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(!id.is_empty());
+    for event in lifecycle {
+        assert_eq!(
+            event["exchange_id"],
+            id.as_str(),
+            "{context} lifecycle: {event}"
+        );
+    }
+    assert_eq!(phase(lifecycle, "backend_selected").len(), 1);
+    assert_eq!(
+        channel.len(),
+        2,
+        "{context}: effective and terminal: {channel:?}"
+    );
+    for event in channel {
+        assert_eq!(
+            event["exchange_id"],
+            id.as_str(),
+            "{context} channel: {event}"
+        );
+    }
+    id
+}
+
+/// A typed chat completion served by this node, streamed or not: the
+/// lifecycle callbacks (`request_received`, `backend_selected`,
+/// `exchange_finished`) and the channel's effective and terminal events are
+/// one exchange under one id, and the next request is another exchange.
+#[tokio::test]
+async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
+    let (probe, _) = attempt_policy_probe(None, false).await;
+    let (base, server) = typed_server(&probe, false).await;
+    let mut ids = Vec::new();
     for stream in [true, false] {
         probe.lifecycle.lock().unwrap().clear();
         probe.channel.lock().unwrap().clear();
@@ -287,27 +340,46 @@ async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
             events.iter().any(|e| e["phase"] == "terminal")
         })
         .await;
-        let id = phase(&lifecycle, "request_received")[0]["exchange_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        assert!(!id.is_empty());
-        for event in &lifecycle {
-            assert_eq!(
-                event["exchange_id"],
-                id.as_str(),
-                "stream={stream} lifecycle: {event}"
-            );
-        }
-        assert_eq!(phase(&lifecycle, "backend_selected").len(), 1);
-        assert_eq!(channel.len(), 2, "effective and terminal: {channel:?}");
-        for event in &channel {
-            assert_eq!(
-                event["exchange_id"],
-                id.as_str(),
-                "stream={stream} channel: {event}"
-            );
-        }
+        ids.push(assert_one_typed_exchange(
+            &lifecycle,
+            &channel,
+            &format!("stream={stream}"),
+        ));
     }
+    assert_ne!(ids[0], ids[1]);
+    server.abort();
+}
+
+/// A client that drops a streamed typed chat mid-response still gets a
+/// terminal channel event under the exchange's id: the cancellation terminal
+/// runs after the session is gone, so the id cannot be looked up then.
+#[tokio::test]
+async fn cancelled_typed_chat_keeps_the_one_id_on_its_terminal_channel_event() {
+    let (probe, _) = attempt_policy_probe(None, false).await;
+    let (base, server) = typed_server(&probe, true).await;
+    let mut response = reqwest::Client::new()
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": MODEL,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    // The first chunk arrived, so the exchange is in flight; drop the client.
+    assert!(response.chunk().await.unwrap().is_some());
+    drop(response);
+
+    let lifecycle = wait_for("the terminal callback", &probe.lifecycle, |events| {
+        events.iter().any(|e| e["phase"] == "exchange_finished")
+    })
+    .await;
+    let channel = wait_for("the terminal channel event", &probe.channel, |events| {
+        events.iter().any(|e| e["phase"] == "terminal")
+    })
+    .await;
+    assert_one_typed_exchange(&lifecycle, &channel, "cancelled");
     server.abort();
 }
