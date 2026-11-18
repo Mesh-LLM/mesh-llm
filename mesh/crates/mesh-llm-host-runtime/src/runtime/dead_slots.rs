@@ -64,7 +64,7 @@ pub(crate) fn prune_dead_runtime_slots(
         if age < retention {
             continue;
         }
-        match remove_unclaimed_slot(root, &dir, dir_pid) {
+        match remove_unclaimed_slot(root, &dir, dir_pid, last_write) {
             Ok(true) => removed += 1,
             Ok(false) => {}
             Err(error) => tracing::debug!(
@@ -110,8 +110,16 @@ fn is_instance_slot(dir: &Path) -> bool {
 /// starting under the same pid meanwhile finds no slot and creates a fresh
 /// one instead of losing its files. On Windows a directory with an open file
 /// cannot be renamed, so the claim is released first and a rename that fails
-/// means an instance has opened the lock since: the slot is kept.
-fn remove_unclaimed_slot(root: &Path, dir: &Path, pid: u32) -> io::Result<bool> {
+/// means an instance has opened the lock since: the slot is kept. An instance
+/// could also open the lock, write its files and exit before the rename, so a
+/// slot with a file written after `last_write`, the write the age check saw,
+/// is put back rather than removed.
+fn remove_unclaimed_slot(
+    root: &Path,
+    dir: &Path,
+    pid: u32,
+    last_write: SystemTime,
+) -> io::Result<bool> {
     let Some(claim) = claim_slot(&dir.join("lock"))? else {
         return Ok(false);
     };
@@ -125,6 +133,11 @@ fn remove_unclaimed_slot(root: &Path, dir: &Path, pid: u32) -> io::Result<bool> 
     #[cfg(not(windows))]
     drop(claim);
     if renamed.is_err() {
+        return Ok(false);
+    }
+    if newest_entry_write(&removing).is_some_and(|newest| newest > last_write) {
+        // Back where its instance expects it, unless one has recreated it.
+        let _ = fs::rename(&removing, dir);
         return Ok(false);
     }
     fs::remove_dir_all(&removing)?;
@@ -205,8 +218,18 @@ fn owner_may_be_running(dir: &Path, dir_pid: u32) -> bool {
 /// The latest modification time of the slot directory and the files in it and
 /// in its `logs/` directory, the places a running instance writes.
 fn newest_write(dir: &Path) -> Option<SystemTime> {
+    let own = fs::metadata(dir).and_then(|meta| meta.modified()).ok();
+    match (own, newest_entry_write(dir)) {
+        (Some(own), Some(entries)) => Some(own.max(entries)),
+        (own, entries) => own.or(entries),
+    }
+}
+
+/// The newest modification time of the files in `dir` and `dir/logs`, leaving
+/// out `dir` itself, whose time a rename may change.
+fn newest_entry_write(dir: &Path) -> Option<SystemTime> {
     let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
-    let mut newest = modified(dir);
+    let mut newest: Option<SystemTime> = None;
     for scanned in [dir.to_path_buf(), dir.join("logs")] {
         let Ok(entries) = fs::read_dir(&scanned) else {
             continue;
@@ -411,6 +434,24 @@ mod tests {
             0
         );
         assert!(dir.join("logs").join("skippy-native.log").exists());
+    }
+
+    #[test]
+    fn a_slot_written_after_the_age_check_is_put_back() {
+        // On Windows an instance can open the lock, write its owner record
+        // and exit between the release of the claim and the rename.
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        let checked = newest_write(&dir).unwrap() - Duration::from_secs(60);
+
+        assert!(!remove_unclaimed_slot(root.path(), &dir, DEAD_PID, checked).unwrap());
+        assert!(dir.join("logs").join("skippy-native.log").exists());
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+
+        let unchanged = newest_write(&dir).unwrap();
+        assert!(remove_unclaimed_slot(root.path(), &dir, DEAD_PID, unchanged).unwrap());
+        assert!(!dir.exists());
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
     /// Holds a slot lock the way a running instance does.
