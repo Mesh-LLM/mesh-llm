@@ -791,7 +791,7 @@ async fn a_redial_stands_down_for_a_pending_handshake_or_a_departed_peer() -> Re
 
     // The peer said it was leaving while its recovery waited.
     let requester = requester_knowing(&remote).await?;
-    let closed = connect_mesh(&requester.endpoint, addr).await?;
+    let closed = connect_mesh(&requester.endpoint, addr.clone()).await?;
     requester
         .state
         .lock()
@@ -810,6 +810,36 @@ async fn a_redial_stands_down_for_a_pending_handshake_or_a_departed_peer() -> Re
             .await
             .is_none(),
         "a departed peer must not be redialed"
+    );
+
+    // The departure is recorded before the peer record goes, under separate
+    // locks: a recovery claiming in between still finds the record.
+    let requester = requester_knowing(&remote).await?;
+    let closed = connect_mesh(&requester.endpoint, addr).await?;
+    requester
+        .state
+        .lock()
+        .await
+        .connections
+        .insert(remote.id(), closed.clone());
+    let ticket = redial_ticket(
+        requester
+            .remove_closed_connection(remote.id(), closed.stable_id())
+            .await,
+    );
+    requester
+        .state
+        .lock()
+        .await
+        .departed_peers
+        .insert(remote.id(), std::time::Instant::now());
+    assert!(requester.state.lock().await.peers.contains_key(&remote.id()));
+    assert!(
+        requester
+            .claim_redial_after_wait(remote.id(), ticket)
+            .await
+            .is_none(),
+        "a peer whose departure is recorded must not be redialed"
     );
     Ok(())
 }

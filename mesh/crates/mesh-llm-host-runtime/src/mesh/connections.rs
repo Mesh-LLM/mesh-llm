@@ -819,7 +819,8 @@ impl Node {
     /// gossip during the wait may have changed. `None` when the redial is not
     /// this recovery's: a later close of a replacement connection started a
     /// newer recovery, which owns the redial; the peer reconnected or left
-    /// the mesh meanwhile; or an on-demand handshake is already dialing it.
+    /// the mesh meanwhile, including a departure recorded before its peer
+    /// record is removed; or an on-demand handshake is already dialing it.
     pub(crate) async fn claim_redial_after_wait(
         &self,
         remote: EndpointId,
@@ -835,7 +836,8 @@ impl Node {
         }
         let mut state = self.state.lock().await;
         let ours = state.redial_backoff.may_redial(remote, ticket)
-            && !state.connections.contains_key(&remote);
+            && !state.connections.contains_key(&remote)
+            && !state.departed_peers.contains_key(&remote);
         state.redial_backoff.finish_redial(remote, ticket);
         let addr = state.peers.get(&remote).map(|peer| peer.addr.clone());
         let (true, Some(addr)) = (ours, addr) else {
