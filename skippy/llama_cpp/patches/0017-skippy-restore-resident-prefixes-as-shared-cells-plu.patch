@@ -1766,16 +1766,19 @@ index 000000000..d08029062
 +    return 0;
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
-index f092b75b0..2f1899797 100644
+index 0c81c9d47..4c7c891e1 100644
 --- a/src/skippy/tests/sampling_history.cpp
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -5,23 +5,112 @@
+@@ -5,26 +5,115 @@
  #include "../runtime_support.h"
  #include "../verify_window.h"
  #include "llama-model.h"
 +#include "llama-graph.h"
 +#include "ggml-backend.h"
  #include "../../../common/sampling.h"
+ 
+ #include "log_gate.h"
+ static const skippy::log_gate::installer skippy_log_gate_installer{};
  
  #include <cstdio>
 +#include <algorithm>
@@ -1882,7 +1885,7 @@ index f092b75b0..2f1899797 100644
  void ok(skippy_status status, skippy_error * error) {
      if (status != SKIPPY_STATUS_OK) {
          std::fprintf(stderr, "native failure: %s\n", error ? error->message : "no detail");
-@@ -30,6 +119,31 @@ void ok(skippy_status status, skippy_error * error) {
+@@ -33,6 +122,31 @@ void ok(skippy_status status, skippy_error * error) {
      skippy_error_free(error);
  }
  
@@ -1914,7 +1917,7 @@ index f092b75b0..2f1899797 100644
  void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
      size_t bytes = 0;
      skippy_error * error = nullptr;
-@@ -567,6 +681,174 @@ void state_round_trip(skippy_model * model) {
+@@ -570,6 +684,174 @@ void state_round_trip(skippy_model * model) {
      CHECK(max_delta == 0.0f);
  }
  
@@ -2089,7 +2092,7 @@ index f092b75b0..2f1899797 100644
  void adapter_contracts(skippy_model * model) {
      auto * session = create(model);
      prefill(session, {1, 2});
-@@ -623,24 +905,118 @@ void adapter_contracts(skippy_model * model) {
+@@ -626,24 +908,118 @@ void adapter_contracts(skippy_model * model) {
      release(session);
  }
  
@@ -2212,7 +2215,7 @@ index f092b75b0..2f1899797 100644
          // A dense stage's page already carries its whole checkpoint, so the
          // partial side payload is intentionally empty there.
          CHECK(require_recurrent);
-@@ -670,5 +1046,8 @@ int main(int argc, char ** argv) {
+@@ -673,5 +1049,8 @@ int main(int argc, char ** argv) {
      error = nullptr;
      const auto freed = skippy_model_free(model, &error);
      ok(freed, error);

@@ -259,9 +259,11 @@ OpenCode/Pi/Goose agent smokes. It writes `manifest.json`, `commands.jsonl`,
 directory. Use `--print-plan` before long runs to inspect the exact check list
 without touching the endpoint or creating artifacts.
 
-Scheduled GitHub runs are opt-in via `MESH_NIGHTLY_STABILITY_ENABLED=1` plus a
-configured endpoint. The scheduled/manual wrapper delegates execution to the
-reusable `nightly-stability-run.yml` workflow, which owns the harness run,
+Scheduled GitHub runs are paused pending setup qualification; the workflow is
+manual-only via `workflow_dispatch`. When the schedule returns, runs are
+opt-in via `MESH_NIGHTLY_STABILITY_ENABLED=1` plus a configured endpoint. The
+dispatch wrapper delegates execution to the reusable
+`nightly-stability-run.yml` workflow, which owns the harness run,
 artifact upload, and timing summary. The reusable workflow uses GitHub-hosted
 Ubuntu and does not accept a caller-selected runner label. Treat this as a
 trend/evidence harness, not a required PR gate.

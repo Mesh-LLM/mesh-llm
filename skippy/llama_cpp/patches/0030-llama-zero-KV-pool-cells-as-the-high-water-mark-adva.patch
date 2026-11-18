@@ -62,7 +62,7 @@ index 7cf2c6580..6988537ed 100644
      return ggml_backend_buft_is_host(ggml_backend_buffer_get_type(buffer));
  }
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 1ab98ee59..a36b29e5a 100644
+index 1245efd8d..eb4a69a0f 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -62,6 +62,14 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
@@ -80,10 +80,10 @@ index 1ab98ee59..a36b29e5a 100644
  //
  // llama_kv_cache
  //
-@@ -266,6 +274,12 @@ llama_kv_cache::llama_kv_cache(
-         map_layer_ids[il] = layers.size();
+@@ -271,6 +279,12 @@ llama_kv_cache::llama_kv_cache(
+         const llama_layer & mlayer = il < model.layers.size() ? model.layers[il] : empty_layer;
  
-         layers.push_back({ il, k, v, k_idx, k_stream, v_stream, k_idx_stream });
+         layers.push_back({ il, k, v, k_idx, mlayer.k_cache_s, mlayer.v_cache_s, k_stream, v_stream, k_idx_stream });
 +
 +        for (ggml_tensor * t : { k, v, k_idx }) {
 +            if (t) {
@@ -93,7 +93,7 @@ index 1ab98ee59..a36b29e5a 100644
      }
  
      if (reuse) {
-@@ -292,13 +306,37 @@ llama_kv_cache::llama_kv_cache(
+@@ -297,13 +311,37 @@ llama_kv_cache::llama_kv_cache(
          }
      }
  
@@ -133,7 +133,7 @@ index 1ab98ee59..a36b29e5a 100644
      {
          const size_t memory_size_k     = size_k_bytes();
          const size_t memory_size_v     = size_v_bytes();
-@@ -465,9 +503,37 @@ void llama_kv_cache::clear(bool data) {
+@@ -470,9 +508,37 @@ void llama_kv_cache::clear(bool data) {
          for (auto & [_, buf] : ctxs_bufs) {
              ggml_backend_buffer_clear(buf.get(), 0);
          }
@@ -171,7 +171,7 @@ index 1ab98ee59..a36b29e5a 100644
  bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
      skippy_trace::scope trace("llama.kv_seq_rm", "seq", seq_id);
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
-@@ -1376,6 +1442,14 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+@@ -1381,6 +1447,14 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
  
      assert(ubatch.n_tokens == sinfo.n_stream()*sinfo.size());
  

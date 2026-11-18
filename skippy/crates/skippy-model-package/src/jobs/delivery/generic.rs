@@ -182,8 +182,8 @@ fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Val
         259200,
     )?;
     admission::artifact(&v["runner"], mounts, false)?;
-    let runner = Path::new(admission::text(&v["runner"], "path")?);
-    if runner.starts_with("/work") || runner.starts_with("/models") {
+    let runner = admission::text(&v["runner"], "path")?;
+    if admission::within(runner, "/work") || admission::within(runner, "/models") {
         bail!("generic runner must be image supplied");
     }
     let c = &op["conversion"];
@@ -199,18 +199,16 @@ fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Val
         || (c["upload_only"] != true && files.is_empty())
         || files.len() > 1024
         || (c["upload_only"] != true
-            && !mounts.iter().any(|m| {
-                Path::new(source).starts_with(&m.mount_path) && c["source_repo"] == m.repo
-            }))
+            && !mounts
+                .iter()
+                .any(|m| admission::within(source, &m.mount_path) && c["source_repo"] == m.repo))
         || !(1..=1024).contains(&c["expected_splits"].as_u64().unwrap_or(0))
     {
         bail!("generic immutable conversion source/budget admission");
     }
     for (i, file) in files.iter().enumerate() {
         admission::artifact(file, mounts, true)?;
-        let path = Path::new(admission::text(file, "path")?);
-        if path == Path::new(source)
-            || !path.starts_with(source)
+        if !admission::inside(admission::text(file, "path")?, source)
             || files[..i].iter().any(|p| p["path"] == file["path"])
         {
             bail!("generic source roster ancestry/duplicate");
@@ -260,7 +258,7 @@ fn upload_workspace(v: &Value, mounts: &[ModelMount], plan: &CpuJobPlan) -> Resu
     }
     let source = admission::text(a, "source_directory")?;
     if !mounts.iter().any(|m| {
-        Path::new(source).starts_with(&m.mount_path)
+        admission::within(source, &m.mount_path)
             && a["repo"] == m.repo
             && a["revision"] == m.revision
     }) {

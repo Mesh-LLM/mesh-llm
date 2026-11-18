@@ -226,7 +226,10 @@ impl HttpExchangePolicy for NodeExchangePolicy {
         event["node_endpoint_id"] = json!(self.node.id().to_string());
         event["emission_boundary"] = json!("http_body_poll");
         event["dispatch_path"] = json!("typed_frontend");
-        let (session, result) = ExchangeSession::begin(&manager, event).await;
+        // A private request's hooks run in its scope here too.
+        let scope = crate::network::openai::routing_scope::local_server_scope(headers);
+        let (session, result) =
+            crate::mesh::with_private_scope(scope, ExchangeSession::begin(&manager, event)).await;
         let denial = result.error_status().map(|status| match status {
             402 | 403 => policy_denial(status, "OpenAI plugin policy denied the exchange"),
             _ => hook_unavailable("required OpenAI plugin admission unavailable"),

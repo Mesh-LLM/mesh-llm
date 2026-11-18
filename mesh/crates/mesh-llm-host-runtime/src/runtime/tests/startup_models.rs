@@ -251,6 +251,36 @@ ngram_max_proposal_tokens = 6
 }
 
 #[test]
+fn cli_spec_default_override_wins_over_the_config_file() {
+    let mut config: plugin::MeshConfig = toml::from_str(
+        r#"
+[defaults.speculative]
+spec_default = true
+
+[[models]]
+model = "test/model"
+
+[models.speculative]
+spec_default = true
+"#,
+    )
+    .expect("config parses");
+    let mut overrides = plugin::SpeculativeConfig::default();
+    overrides.spec_default = Some(crate::sdk::config::BoolOrAuto::Bool(false));
+
+    apply_runtime_cli_speculative_overrides(&mut config, Some(&overrides));
+
+    let off = Some(crate::sdk::config::BoolOrAuto::Bool(false));
+    let defaults = config
+        .defaults
+        .as_ref()
+        .and_then(|d| d.speculative.as_ref());
+    assert_eq!(defaults.and_then(|s| s.spec_default.clone()), off);
+    let model = config.models[0].speculative.as_ref();
+    assert_eq!(model.and_then(|s| s.spec_default.clone()), off);
+}
+
+#[test]
 fn cli_checkpoint_overrides_are_canonical_and_take_precedence() {
     let temp = tempfile::tempdir().expect("tempdir");
     let imatrix = temp.path().join("test.imatrix");
@@ -786,6 +816,60 @@ async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
     )
     .expect("standby inventory can verify its registered cached source");
     assert_eq!(verified.package_ref, package.package_ref);
+
+    let _ = std::fs::remove_dir_all(&cache_root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn cached_hf_gguf_keeps_the_requested_identity_as_its_declared_ref() {
+    let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+    let cache_root = std::env::temp_dir().join(format!(
+        "mesh-llm-preindex-hf-identity-cache-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&cache_root).unwrap();
+    let _hub_cache = EnvVarGuard::set_path("HF_HUB_CACHE", &cache_root);
+    let _hf_home = EnvVarGuard::remove("HF_HOME");
+    let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
+
+    let repo_id = "someone/Declared-Identity-GGUF";
+    let revision = "c".repeat(40);
+    let blob_sha256 = "d".repeat(64);
+    let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
+    std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+    std::fs::write(repo_dir.join("refs").join("main"), &revision).unwrap();
+    let snapshot_path = huggingface_snapshot_path(repo_id, RepoTypeModel, &revision)
+        .join("Declared-Identity-Q4_K_M.gguf");
+    std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+    let blob_dir = repo_dir.join("blobs");
+    std::fs::create_dir_all(&blob_dir).unwrap();
+    write_identity_test_gguf(&blob_dir.join(&blob_sha256), 4096);
+    std::os::unix::fs::symlink(format!("../../blobs/{blob_sha256}"), &snapshot_path).unwrap();
+
+    let plans = resolve_startup_models(
+        &[direct_gguf_startup_spec(
+            Path::new("someone/Declared-Identity-GGUF:Q4_K_M"),
+            None,
+        )],
+        true,
+    )
+    .await
+    .expect("cached Hugging Face GGUF resolves");
+
+    // A ref that resolved through the Hub cache is known by that ref on every
+    // surface; content addressing names bare local files only. Byte proof for
+    // split participants is unaffected.
+    assert_eq!(
+        plans[0].declared_ref,
+        "someone/Declared-Identity-GGUF:Q4_K_M"
+    );
+    assert!(plans[0].local_source_required);
+    assert!(plans[0].preindexed_split_package.is_some());
 
     let _ = std::fs::remove_dir_all(&cache_root);
 }

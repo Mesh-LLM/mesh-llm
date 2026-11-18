@@ -46,6 +46,7 @@ use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sampl
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
 mod exact_state_recording;
+use crate::kv_integration::ExactStateKvExport;
 // Test-only: lets iteration_scheduler tests exercise the real outstanding-
 // capture accounting through the real channel/command types.
 #[cfg(test)]

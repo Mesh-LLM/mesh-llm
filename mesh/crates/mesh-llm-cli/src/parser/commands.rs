@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use super::subcommand_options::{DiscoverArgs, ModelPrepareArgs, SetupArgs, UninstallArgs};
 use super::top_level_options::{
     JoiningOptions, KvCacheOptions, LoggingOptions, MeshPolicyOptions, NetworkOptions,
     NodeModeOptions, OwnerOptions, PlacementOptions, ServingOptions, SpeculativeOptions,
@@ -538,18 +539,18 @@ pub struct Cli {
     #[command(flatten)]
     pub kv_cache: KvCacheOptions,
 
+    /// Refuse peer split-stage requests that need model files not already on
+    /// this node. Local and configured models still load and serve. Same as
+    /// `runtime.peer_model_downloads = false`.
+    #[arg(long)]
+    pub no_peer_model_downloads: bool,
+
     #[command(flatten)]
     pub owner: OwnerOptions,
 
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub nostr_discovery: bool,
-
-    /// Don't install the default plugins when this node starts.
-    /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1. Hidden; kept so existing
-    /// `serve` and `client` invocations still parse.
-    #[arg(long, hide = true)]
-    pub no_default_plugins: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -582,11 +583,6 @@ pub enum Command {
         /// Re-detect the best host backend flavor before selecting the release bundle.
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
-        /// Turn off the default plugins this build lists: the updated node
-        /// does not install them from its release until `mesh-llm plugins
-        /// enable NAME`. Same as `mesh-llm plugins install-defaults --off`.
-        #[arg(long)]
-        no_default_plugins: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
@@ -618,6 +614,11 @@ pub enum Command {
         #[command(subcommand)]
         command: AnalyticsCommand,
     },
+    /// Choose the other nodes this node's private requests may go to.
+    Private {
+        #[command(subcommand)]
+        command: PrivateCommand,
+    },
     /// Diagnose local mesh, runtime, and split-readiness problems.
     Doctor {
         /// Print machine-readable JSON for the default doctor report.
@@ -627,56 +628,9 @@ pub enum Command {
         command: Option<DoctorCommand>,
     },
     /// Bootstrap a new installation.
-    Setup {
-        /// Automatically answer yes to prompts.
-        #[arg(long)]
-        yes: bool,
-        /// Run without prompting for interactive input.
-        #[arg(long = "no-interactive")]
-        no_interactive: bool,
-        /// Install and enable the mesh-llm service.
-        #[arg(long, conflicts_with = "no_service")]
-        service: bool,
-        /// Skip installing and enabling the mesh-llm service.
-        #[arg(long = "no-service", conflicts_with = "service")]
-        no_service: bool,
-        /// Skip downloading or configuring the native runtime.
-        #[arg(long = "skip-runtime")]
-        skip_runtime: bool,
-        /// Print detailed setup paths, commands, and follow-up guidance.
-        #[arg(long)]
-        verbose: bool,
-    },
+    Setup(SetupArgs),
     /// Remove mesh-llm binaries, service files, and optional caches.
-    Uninstall {
-        /// Print what would be removed without changing the machine.
-        #[arg(long)]
-        dry_run: bool,
-        /// Do not prompt before removing files and services.
-        #[arg(long)]
-        yes: bool,
-        /// Preserve native runtime caches.
-        #[arg(long)]
-        keep_cache: bool,
-        /// Preserve setup-owned service helper files.
-        #[arg(long)]
-        keep_service_files: bool,
-        /// Also remove ~/.mesh-llm configuration and identity data.
-        #[arg(long, conflicts_with = "keep_config")]
-        purge_config: bool,
-        /// Explicitly preserve ~/.mesh-llm configuration and identity data.
-        #[arg(long, conflicts_with = "purge_config")]
-        keep_config: bool,
-        /// Override the installed binary path to remove.
-        #[arg(long)]
-        binary_path: Option<std::path::PathBuf>,
-        /// Print machine-readable JSON.
-        #[arg(long)]
-        json: bool,
-        /// Print detailed cleanup steps and removed paths.
-        #[arg(long)]
-        verbose: bool,
-    },
+    Uninstall(UninstallArgs),
     /// Load a local model into a running mesh-llm instance.
     Load {
         /// Model name/path/url to load
@@ -707,26 +661,7 @@ pub enum Command {
         port: u16,
     },
     /// Discover meshes and optionally auto-join one.
-    Discover {
-        /// Filter by mesh name (case-insensitive exact match)
-        #[arg(long)]
-        name: Option<String>,
-        /// Filter by model name (substring match)
-        #[arg(long)]
-        model: Option<String>,
-        /// Filter by minimum VRAM (GB)
-        #[arg(long)]
-        min_vram: Option<f64>,
-        /// Filter by region
-        #[arg(long)]
-        region: Option<String>,
-        /// Print the invite token of the best match (for piping to --join)
-        #[arg(long)]
-        auto: bool,
-        /// Nostr relay URLs (default: see DEFAULT_RELAYS)
-        #[arg(long)]
-        relay: Vec<String>,
-    },
+    Discover(DiscoverArgs),
     /// Rotate all identity keys (node + Nostr).
     #[command(hide = true)]
     RotateKey,
@@ -828,70 +763,7 @@ pub enum Command {
         hide = true,
         aliases = ["model-package", "skippy-model-package"]
     )]
-    ModelPrepare {
-        /// Source HuggingFace model ref (e.g. unsloth/Qwen3-235B-A22B-GGUF:UD-Q4_K_XL).
-        source_repo: Option<String>,
-
-        /// Quantization variant (deprecated; prefer source refs like repo:Q4_K_M).
-        #[arg(long)]
-        quant: Option<String>,
-
-        /// Target repo for the layer package (auto-derived if omitted).
-        #[arg(long)]
-        target: Option<String>,
-
-        /// Override model ID in the manifest.
-        #[arg(long)]
-        model_id: Option<String>,
-
-        /// HF Job hardware flavor. Use auto for the default CPU splitter baseline.
-        #[arg(long, default_value = "auto")]
-        flavor: String,
-
-        /// Requested job timeout; raised automatically by model-size minimums.
-        #[arg(long, default_value = "1h")]
-        timeout: String,
-
-        /// Branch or tag of mesh-llm to build in the job [default: main].
-        #[arg(long, default_value = "main")]
-        mesh_llm_ref: String,
-
-        /// Explicitly keep this as a dry run. This is the default unless --confirm is set.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Actually submit the HF Job. Without this, the command only prints plan, spec, and max cost.
-        #[arg(long)]
-        confirm: bool,
-
-        /// Stream job logs after submission until completion.
-        #[arg(long)]
-        follow: bool,
-
-        /// Emit JSON output.
-        #[arg(long)]
-        json: bool,
-
-        /// Check status of a previously submitted job.
-        #[arg(long)]
-        status: Option<String>,
-
-        /// Fetch logs for a previously submitted job.
-        #[arg(long)]
-        logs: Option<String>,
-
-        /// Cancel a running job.
-        #[arg(long)]
-        cancel: Option<String>,
-
-        /// List recent skippy-model-package jobs.
-        #[arg(long)]
-        list: bool,
-
-        /// Upload the latest job script to the meshllm bucket (requires org access).
-        #[arg(long)]
-        update_script: bool,
-    },
+    ModelPrepare(ModelPrepareArgs),
     /// Manage owner identity and keystore.
     Auth {
         #[command(subcommand)]
@@ -919,6 +791,39 @@ pub enum AnalyticsCommand {
     Enable,
     /// Turn usage reporting off by writing `[analytics] enabled = false`.
     Disable,
+}
+
+/// `mesh-llm private`: edit `[private] nodes` in the config file. A running
+/// node reads the list again when the file changes.
+#[derive(Subcommand, Debug)]
+pub enum PrivateCommand {
+    /// Let private requests go to a node, by node id or by the label or
+    /// hostname of a node this one is connected to.
+    Add {
+        /// A node id (64 hex characters), or a connected node's label or hostname.
+        node: String,
+        /// Console/API port of the running mesh-llm instance, for label lookup.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
+    /// Stop private requests going to a node.
+    Remove {
+        /// A node id from `mesh-llm private list`, a unique prefix of one, or a
+        /// connected node's label or hostname.
+        node: String,
+        /// Console/API port of the running mesh-llm instance, for label lookup.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
+    /// Show the nodes private requests may go to, and which are connected.
+    List {
+        /// Console/API port of the running mesh-llm instance.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -988,12 +893,6 @@ pub enum ConfigCommand {
 pub enum PluginCommand {
     /// Install the default plugins from this release's bundled copy (no download).
     /// A node also does this when it starts.
-    InstallDefaults {
-        /// Turn every default plugin off instead: none is installed, and an
-        /// installed one is disabled, until `mesh-llm plugins enable NAME`.
-        #[arg(long)]
-        off: bool,
-    },
     /// Install native plugins in order, or install one local release archive.
     Install {
         /// Plugin catalog names, GitHub owner/repo references, or GitHub URLs.
@@ -1127,7 +1026,7 @@ mod tests {
         for spelling in ["model-prepare", "model-package", "skippy-model-package"] {
             let cli = Cli::try_parse_from(["mesh-llm", spelling, "owner/model"])
                 .expect("model preparation spelling should parse");
-            assert!(matches!(cli.command, Some(Command::ModelPrepare { .. })));
+            assert!(matches!(cli.command, Some(Command::ModelPrepare(_))));
         }
     }
 

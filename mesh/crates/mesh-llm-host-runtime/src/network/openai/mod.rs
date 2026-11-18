@@ -1,12 +1,14 @@
 pub(crate) mod accept;
 pub(crate) mod auto_route;
 pub(crate) mod automatic;
+mod automatic_retry;
 pub(crate) mod client_stream;
 mod exchange_admission;
 mod forwarded_request;
 pub(crate) mod ingress;
 pub(crate) mod model_discovery;
 pub(crate) mod model_names;
+mod nested_inference;
 mod parse_failure;
 mod request_normalize;
 pub(crate) mod request_parse;
@@ -18,9 +20,12 @@ pub(crate) use response::send_503;
 pub(crate) mod response_adapter;
 mod response_quality;
 mod routing_rank;
+pub(crate) mod routing_scope;
 pub(crate) mod runtime_events;
-mod tool_call_ids;
 pub(crate) mod transport;
 pub(crate) mod virtual_model;
 
 pub(crate) mod workload_routing;
+
+#[cfg(test)]
+mod channel_admission_tests;

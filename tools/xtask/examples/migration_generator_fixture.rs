@@ -4,6 +4,9 @@ use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(path) = std::env::var_os("MESH_WINDOWS_LINK_FIXTURE_LOG") {
+        return linker(&arguments, Path::new(&path));
+    }
     if let Some(path) = std::env::var_os("MESH_WINDOWS_INSTALL_FIXTURE_CALLS") {
         return installer_host(&arguments, Path::new(&path));
     }
@@ -42,6 +45,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("unexpected generator fixture argv".into()),
     }
     Ok(())
+}
+
+fn linker(arguments: &[String], log: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let executable = std::env::current_exe()?;
+    if executable.file_stem().is_some_and(|name| name == "rustc") {
+        if arguments != ["--print", "sysroot"] {
+            return Err("unexpected fixture rustc invocation".into());
+        }
+        writeln!(
+            io::stdout(),
+            "{}",
+            std::env::var("MESH_WINDOWS_LINK_FIXTURE_SYSROOT")?
+        )?;
+        return Ok(());
+    }
+    fs::write(
+        log,
+        serde_json::to_vec(&serde_json::json!({
+            "arguments": arguments,
+            "source_date_epoch": std::env::var("SOURCE_DATE_EPOCH").ok(),
+        }))?,
+    )?;
+    io::stdout().write_all(b"native-link stdout\n")?;
+    io::stderr().write_all(b"native-link stderr\n")?;
+    let code = std::env::var("MESH_WINDOWS_LINK_FIXTURE_EXIT")
+        .unwrap_or_else(|_| "0".into())
+        .parse()?;
+    std::process::exit(code);
 }
 
 fn rewrite(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {

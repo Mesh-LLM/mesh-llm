@@ -22,6 +22,9 @@ fn inputs(fixture: &Fixture, version: &str, major: &str) {
         b"owned inert CUDA redistribution license\n",
     )
     .unwrap();
+    for name in ["libllama.so.0", "libllama.so.0.29.0"] {
+        std::os::unix::fs::symlink("libllama.so", fixture.path().join("build").join(name)).unwrap();
+    }
     let compiler = if version.is_empty() {
         "if [[ ${1:-} == --version ]]; then exit 89; fi\nexit 90".to_owned()
     } else {
@@ -32,7 +35,7 @@ fn inputs(fixture: &Fixture, version: &str, major: &str) {
     fixture.tool("nvcc", &compiler);
     fixture.tool("model-tool", "exit 0");
     fixture.tool("cargo", "[[ ${1:-} == xtool ]] || exit 96\nprintf '%s\\n' \"$*\" >> \"$TEST_ROOT/native-calls\"\nshift\nexec \"$AUTOMATION\" \"$@\"");
-    fixture.tool("readelf", "[[ $LC_ALL == C ]] || exit 95\ncase ${1:-} in\n -h) printf '  Class: ELF64\\n  Machine: Advanced Micro Devices X86-64\\n' ;;\n -d) case ${2##*/} in\n       libllama.so) printf ' (NEEDED) Shared library: [libcudart.so.%s]\\n' \"$TEST_CUDA_MAJOR\" ;;\n       libcudart.so.*) printf ' (SONAME) Library soname: [%s]\\n' \"${2##*/}\" ;;\n       *) exit 94 ;;\n     esac ;;\n -V) printf 'Version needs section GLIBC_2.17\\n' ;;\n *) exit 93 ;;\nesac");
+    fixture.tool("readelf", "[[ $LC_ALL == C ]] || exit 95\ncase ${1:-} in\n -h) printf '  Class: ELF64\\n  Machine: Advanced Micro Devices X86-64\\n' ;;\n -d) case ${2##*/} in\n       libllama.so*) printf ' (NEEDED) Shared library: [libcudart.so.%s]\\n' \"$TEST_CUDA_MAJOR\" ;;\n       libcudart.so.*) printf ' (SONAME) Library soname: [%s]\\n' \"${2##*/}\" ;;\n       *) exit 94 ;;\n     esac ;;\n -V) printf 'Version needs section GLIBC_2.17\\n' ;;\n *) exit 93 ;;\nesac");
 }
 
 fn package(
@@ -133,7 +136,12 @@ fn emitted(fixture: &Fixture, major: u64) {
     );
     assert_eq!(
         manifest["runtime"]["libraries"],
-        serde_json::json!([library, "lib/libllama.so"])
+        serde_json::json!([
+            library,
+            "lib/libllama.so.0",
+            "lib/libllama.so.0.29.0",
+            "lib/libllama.so"
+        ])
     );
     let license = "licenses/NVIDIA-CUDA-LICENSE.txt";
     assert_eq!(
@@ -177,7 +185,28 @@ fn emitted(fixture: &Fixture, major: u64) {
             .count(),
         1
     );
-    assert!(output.join(format!("{artifact}.tar.gz")).is_file());
+    let archive_path = output.join(format!("{artifact}.tar.gz"));
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(
+        fs::File::open(&archive_path).unwrap(),
+    ));
+    let mut aliases = 0;
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        if entry.header().entry_type().is_hard_link() {
+            aliases += 1;
+            assert_eq!(entry.header().size().unwrap(), 0);
+        }
+    }
+    assert_eq!(
+        aliases, 2,
+        "packaged loader aliases must not repeat payloads"
+    );
+    let (ok, _, error) = fixture.run(
+        "\"$AUTOMATION\" native verify-runtime-package --portable \"$TEST_ARCHIVE\"",
+        &[("TEST_ARCHIVE", archive_path.to_string_lossy().into_owned())],
+    );
+    assert!(ok, "{error}");
+
     assert!(output.join(format!("{artifact}.tar.gz.sha256")).is_file());
 }
 

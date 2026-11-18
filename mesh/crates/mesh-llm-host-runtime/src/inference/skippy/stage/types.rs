@@ -11,6 +11,8 @@ pub(crate) enum StageControlCommand {
         /// control channel. Stage transitions bind terms and shutdown to it
         /// (#2217).
         requester: iroh::EndpointId,
+        /// `LocalOnly` for a peer's request when peer model downloads are off.
+        source_fetch: crate::inference::skippy::StageSourceFetch,
         resp: oneshot::Sender<Result<StageControlResponse>>,
     },
     ValidateLoad {
@@ -287,6 +289,8 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) compute_operations: u64,
     /// Serial decode steps run on this stage; see `skippy_serving::compute_meter`.
     pub(crate) compute_decode_tokens: u64,
+    /// Token positions run in speculative verify windows on this stage.
+    pub(crate) compute_verify_tokens: u64,
     /// On a split final stage that attached its DFlash draft, the target
     /// layers the draft reads. `None` when the stage drafts nothing, so the
     /// coordinator serves stage 0 without DFlash.

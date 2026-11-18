@@ -100,6 +100,11 @@ async fn send_json_with_status_and_headers_inner(
     Ok(())
 }
 
+/// Write a locally generated OpenAI JSON error with any status.
+pub(crate) async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
+    send_openai_error(stream, code, msg, None).await
+}
+
 pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
 }

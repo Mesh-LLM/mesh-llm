@@ -305,6 +305,7 @@ where
             model_id: candidate.model_id.clone(),
             target_node_id: candidate.target_node_id.clone(),
             request: invocation.request.clone(),
+            single_model_only: false,
             timeout_ms: Some(remaining.as_millis().min(u64::MAX as u128) as u64),
         };
         let result = tokio::time::timeout(remaining, infer(request)).await;
@@ -481,6 +482,7 @@ impl moa::ModelBackend for HostBackend {
                 model_id: model.to_string(),
                 target_node_id: self.target_node_id.clone(),
                 request,
+                single_model_only: false,
                 timeout_ms: Some(timeout.as_millis().min(u64::MAX as u128) as u64),
             })
             .await

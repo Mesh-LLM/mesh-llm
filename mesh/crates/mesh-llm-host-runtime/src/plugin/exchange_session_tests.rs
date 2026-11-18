@@ -347,3 +347,137 @@ async fn request_allow_then_selected_rejection_retains_admission_but_reports_typ
         manager.shutdown().await;
     }
 }
+
+/// A candidate the plugin refused must not leave the exchange marked denied
+/// when a later candidate was admitted (skip-to-next-peer on a NO).
+#[tokio::test]
+async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
+    let (manager, seen, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(1, false).await;
+    let (session, admission) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "skip-then-admit".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(admission.error_status().is_none());
+    let mut statuses = Vec::new();
+    for attempt in 1..=2 {
+        let mut selected = request_event(
+            "skip-then-admit".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        let result = manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, attempt == 1)
+            .await;
+        statuses.push(result.error_status());
+    }
+    assert_eq!(statuses, vec![Some(403), None]);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    let state = state.lock().unwrap();
+    assert!(!state.denied, "the admitted attempt decides the exchange");
+    assert!(
+        state.headers.is_empty(),
+        "a skipped deny's headers stay out"
+    );
+    assert_eq!(state.attempt_history.len(), 2);
+    assert_eq!(state.attempt_history[0]["admission_denied"], true);
+    assert!(state.attempt_history[1].get("admission_denied").is_none());
+}
+
+#[test]
+fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
+    let deny = |required_failure, deny_status| PhaseResult {
+        denied: true,
+        required_failure,
+        deny_status,
+        ..Default::default()
+    };
+    assert!(deny(false, None).is_candidate_deny());
+    assert!(deny(false, Some(402)).is_candidate_deny());
+    assert!(!deny(true, None).is_candidate_deny());
+    assert!(
+        !PhaseResult {
+            required_failure: true,
+            ..Default::default()
+        }
+        .is_candidate_deny()
+    );
+    assert!(!PhaseResult::default().is_candidate_deny());
+}
+
+/// A private exchange keeps its observing plugin's own inference private
+/// between callbacks, while it holds response bytes, and through
+/// `exchange_finished`; then releases it. Cancellation does the same.
+#[tokio::test]
+async fn a_private_exchange_keeps_its_observers_private_until_its_terminal_callback() {
+    use crate::plugin::private_invocations::NestedScope;
+    let (manager, mut receiver) = observer_manager(false).await;
+    let scope = crate::mesh::PrivateScope::new("me");
+    let private = Some(NestedScope::Nodes(scope.clone()));
+    let event = |id: &str| {
+        request_event(
+            id.into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        )
+    };
+    let (mut session, _) = crate::mesh::with_private_scope(
+        Some(scope.clone()),
+        ExchangeSession::begin(&manager, event("finished")),
+    )
+    .await;
+    // The request callback has replied; the response is still to come.
+    assert_eq!(manager.private_nested_scope("delayed-observer"), private);
+    let observer = session.observer();
+    assert!(observer.try_chunk(0, b"response"));
+    observer.finish(commit_wire_bytes(b"response"));
+    session.finish("completed").await;
+    assert_eq!(receiver.recv().await.unwrap(), b"response");
+    assert_eq!(manager.private_nested_scope("delayed-observer"), None);
+
+    let (session, _) = crate::mesh::with_private_scope(
+        Some(scope),
+        ExchangeSession::begin(&manager, event("cancelled")),
+    )
+    .await;
+    drop(session);
+    assert_eq!(manager.private_nested_scope("delayed-observer"), private);
+    let released = async {
+        while manager.private_nested_scope("delayed-observer").is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), released)
+        .await
+        .expect("a cancelled exchange releases its observers after its terminal callback");
+    manager.shutdown().await;
+}

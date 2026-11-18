@@ -41,8 +41,8 @@ For the trusted-local ledger, retention, and capture guidance, see
 mesh-llm --version
 ```
 
-Release builds report the released package version, such as `mesh-llm 0.78.0`.
-Local source builds may include build metadata, such as `mesh-llm 0.78.0+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
+Release builds report the released package version, such as `mesh-llm 0.80.0`.
+Local source builds may include build metadata, such as `mesh-llm 0.80.0+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
 
 ## Start here (common tasks)
 
@@ -803,9 +803,26 @@ Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
 
+### `private`
+
+Use this to choose the other nodes your private requests (`@private`, `@incognito`) may go to. It edits `[private] nodes` in the config file, and a running node picks the change up without a restart. See [Private routing](/docs/pages/private-routing/).
+
+```bash
+mesh-llm private add studio     # a connected node's label or hostname, or a node id
+mesh-llm private list           # the list, and which listed nodes are connected
+mesh-llm private remove studio  # a name, a node id or a unique prefix of one
+```
+
+Switches:
+
+- `--port <PORT>`: management/API port of the running node, used to look names up and show connection state (default `3131`).
+- `--json` (`list` only): print machine-readable JSON.
+
 ### `discover`
 
-Use this to discover meshes via Nostr and optionally select one automatically.
+Use this to discover meshes through the selected discovery provider and
+optionally select one automatically. Pass `--mesh-discovery-mode mdns` (before
+the command, or after `discover`) for LAN mDNS discovery.
 
 Switches:
 
@@ -814,7 +831,12 @@ Switches:
 - `--min-vram <MIN_VRAM>`: filter by minimum VRAM (GB).
 - `--region <REGION>`: filter by region.
 - `--auto`: print best invite token (useful for piping).
-- `--relay <RELAY>`: custom relay URL(s).
+- `--relay <RELAY>`: custom relay URL(s). Only valid with
+  `--mesh-discovery-mode nostr`.
+- `--mesh-discovery-mode <nostr|mdns>` (default: `nostr`): discovery provider
+  for this command; overrides a top-level `--mesh-discovery-mode`. Joining an
+  mDNS-discovered mesh still needs an invite token — pass top-level
+  `--join <token>` before `discover`.
 
 ### `benchmark`
 

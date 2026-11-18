@@ -190,7 +190,7 @@ fn parse_catalog_ref(input: &str) -> Result<PluginInstallRef, PluginInstallRefPa
     if !is_valid_name(name) {
         return Err(PluginInstallRefParseError::new(
             input,
-            "catalog name must contain only ASCII letters, digits, '.', '_', or '-'",
+            "catalog name must contain only ASCII letters, digits, '.', '_', or '-', and must not end with '.'",
         ));
     }
     Ok(PluginInstallRef::Catalog {
@@ -276,11 +276,17 @@ fn is_valid_github_owner(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
+/// A plugin name is used as a directory name under the plugin store and the
+/// install root, so it must name a directory of its own. It cannot end in
+/// `.`: that rules out `.` and `..`, which name the root itself or its
+/// parent, and on Windows, which strips trailing periods from the last path
+/// component, `...` would also open the parent and `a.` would open `a`.
 pub(crate) fn is_valid_name(value: &str) -> bool {
     !value.is_empty()
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        && !value.ends_with('.')
 }
 
 #[cfg(test)]
@@ -353,6 +359,25 @@ mod tests {
         let source =
             GitHubPluginSource::from_url("https://github.com/mesh-llm/cool-plugin.git").unwrap();
         assert_eq!(source.repo_slug(), "mesh-llm/cool-plugin");
+    }
+
+    #[test]
+    fn dot_names_are_not_plugin_names() {
+        for name in [".", "..", "...", "a."] {
+            assert!(!is_valid_name(name), "{name}");
+            assert!(parse_install_ref(name).is_err(), "{name}");
+            assert!(
+                parse_install_ref(&format!("{name}@1.0.0")).is_err(),
+                "{name}"
+            );
+            assert!(
+                parse_install_ref(&format!("mesh-llm/{name}")).is_err(),
+                "{name}"
+            );
+        }
+        for name in [".hidden", "a.b", "v1.0", "a..b"] {
+            assert!(is_valid_name(name), "{name}");
+        }
     }
 
     #[test]

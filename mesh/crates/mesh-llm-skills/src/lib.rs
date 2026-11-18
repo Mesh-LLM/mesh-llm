@@ -82,6 +82,16 @@ pub struct SkillInstallReport {
     pub available_skills: usize,
     pub targets: Vec<SkillTarget>,
     pub actions: Vec<SkillInstallAction>,
+    /// Skills a provider offers that were left out, with the reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<SkippedSkill>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SkippedSkill {
+    pub provider_name: String,
+    pub skill_name: String,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -130,6 +140,7 @@ pub fn install_skills(
         available_skills: skills.len(),
         targets,
         actions,
+        skipped: Vec::new(),
     })
 }
 

@@ -1,5 +1,7 @@
 mod windows_task;
 
+pub use windows_task::{BackgroundServiceStop, end_background_service};
+
 use crate::terminal::{self, ConfirmDefault, style_muted, style_ok, style_warn};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;

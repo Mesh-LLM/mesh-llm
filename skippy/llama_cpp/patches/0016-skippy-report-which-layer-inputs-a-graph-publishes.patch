@@ -1,7 +1,8 @@
-From 1a469ba388e6631d22e7eae3fdec94cfa3f7a3fa Mon Sep 17 00:00:00 2001
+From f1ac190fd220e6d7cea890df77e5119320269372 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:18:19 +1100
-Subject: [PATCH] skippy: report published layer inputs including head input
+Subject: [PATCH 16/32] skippy: report published layer inputs including head
+ input
 
 ---
  src/llama-context.cpp | 46 ++++++++++++++++++++++++++++++++++++++++++-
@@ -10,7 +11,7 @@ Subject: [PATCH] skippy: report published layer inputs including head input
  3 files changed, 57 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 3257d7f2c..cb68e7e53 100644
+index eb0e23fff..bc031e147 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -25,6 +25,7 @@
@@ -21,7 +22,7 @@ index 3257d7f2c..cb68e7e53 100644
  #include <stdexcept>
  #include <string>
  #include <unordered_map>
-@@ -1516,9 +1517,10 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+@@ -1514,9 +1515,10 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
  }
  
  void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
@@ -33,7 +34,7 @@ index 3257d7f2c..cb68e7e53 100644
  
      if (cparams.embeddings_layer_inp[lid] == enable) return;
      ++computation_generation;
-@@ -2151,6 +2153,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2285,6 +2287,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
  int llama_context::decode(
          const llama_batch_ext & batch_inp,
          const skippy_graph_build_inputs & graph_build_inputs) {
@@ -41,7 +42,7 @@ index 3257d7f2c..cb68e7e53 100644
      if (!memory) {
          LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
          return encode(batch_inp, graph_build_inputs);
-@@ -3054,6 +3057,43 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
+@@ -3219,6 +3222,43 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
      return true;
  }
  
@@ -69,7 +70,7 @@ index 3257d7f2c..cb68e7e53 100644
 +        llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
 +        llama_ubatch ubatch = balloc.ubatch_reserve(1, n_seqs);
 +        ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
-+        llm_graph_result res(graph_max_nodes(n_seqs));
++        llm_graph_result res(graph_max_nodes());
 +        res.reset();
 +        const auto graph = model.build_arch_graph(
 +                graph_params(&res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type)));
@@ -85,7 +86,7 @@ index 3257d7f2c..cb68e7e53 100644
  ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_tokens,
                                             uint32_t                          n_seqs,
                                             uint32_t                          n_outputs,
-@@ -4940,6 +4980,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
+@@ -5165,6 +5205,10 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
      ctx->set_embeddings_layer_inp(lid, value);
  }
  
@@ -97,7 +98,7 @@ index 3257d7f2c..cb68e7e53 100644
      ctx->set_nextn_layer_offset(offset);
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 791072aeb..f8884668f 100644
+index 0232c2cf7..d699a1088 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -14,6 +14,7 @@
@@ -108,7 +109,7 @@ index 791072aeb..f8884668f 100644
  #include <string>
  #include <vector>
  
-@@ -154,6 +155,10 @@ struct llama_context {
+@@ -152,6 +153,10 @@ struct llama_context {
      void set_embeddings (bool value);
      void set_embeddings_nextn(bool value, bool masked);
      void set_embeddings_layer_inp(uint32_t lid, bool enable);
@@ -119,7 +120,7 @@ index 791072aeb..f8884668f 100644
      void set_embeddings_layer_inp_dev(bool value);
  
      // whether decode accepts entries whose embd is a row of ctx_other's layer input device buffer
-@@ -374,6 +379,8 @@ private:
+@@ -398,6 +403,8 @@ private:
      const llama_model & model;
  
      llama_cparams cparams;
@@ -129,7 +130,7 @@ index 791072aeb..f8884668f 100644
      const skippy_graph_build_inputs graph_build_inputs;
      uint64_t computation_generation = 0;
 diff --git a/src/llama-ext.h b/src/llama-ext.h
-index 9449e1da7..2ebc4a2a6 100644
+index 5fc6dbe5b..630a97f14 100644
 --- a/src/llama-ext.h
 +++ b/src/llama-ext.h
 @@ -166,6 +166,11 @@ LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int
@@ -144,6 +145,3 @@ index 9449e1da7..2ebc4a2a6 100644
  // mirrors:
  // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
  LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
--- 
-2.56.0
-

@@ -1,6 +1,7 @@
 mod action_pins;
 mod authority_delivery_body;
 mod authority_sources;
+mod automation_tool;
 mod build_acceleration;
 mod cache_authority;
 mod cache_boundaries;
@@ -25,6 +26,8 @@ mod laya;
 mod nightly_stability;
 mod permissions;
 mod pr_canary;
+mod product_chains;
+mod quality_consistency;
 mod quality_contracts;
 mod registry_canary;
 mod rolling_preview;
@@ -36,6 +39,7 @@ mod runner_finalization;
 mod runtime_events;
 mod selected_ref;
 mod shell;
+mod smoke_automation;
 mod windows_build_paths;
 mod windows_skippy_probes;
 
@@ -46,6 +50,7 @@ use std::path::Path;
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
     build_acceleration::check(root)?;
+    automation_tool::check(root)?;
     windows_build_paths::check(root)?;
     windows_skippy_probes::check(root)?;
     compute_changes_budget::check(root)?;
@@ -77,7 +82,10 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         workflows.insert(name, document);
     }
     cancellation::check(&workflows)?;
+    product_chains::check(&workflows)?;
+    smoke_automation::check(root, &workflows)?;
     quality_contracts::check(root, &workflows)?;
+    quality_consistency::check(&workflows)?;
     selected_ref::check(&workflows)?;
     claude_clients::check(&workflows)?;
     pr_canary::check(&workflows)?;
@@ -112,7 +120,10 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     authority_sources::documentation(&std::fs::read_to_string(
         root.join("ci/DEPOT_MIGRATION.md"),
     )?)?;
-    cpu_runtime_cache::check(&workflows)?;
+    cpu_runtime_cache::check_with_key(
+        &workflows,
+        &crate::ci_operations::cache_inputs::Inventory::LinuxRuntime.expression(),
+    )?;
     cache_consumers::check(&workflows)?;
     cache_callers::check(&workflows)?;
     cache_boundaries::check(&workflows)?;

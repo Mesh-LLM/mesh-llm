@@ -69,8 +69,15 @@ Live sessions start with `start_live_transcription` in Rust/Python or
 and turn detection with threshold `0.5`, 300 ms prefix padding and 500 ms
 silence. An explicit null turn detector (Python `None`) enables push-to-talk.
 Sessions retain speech-start/stop, delta, committed, completed and error events.
-They use the embedded realtime WebSocket, while native model queries use the
-in-process discovery service.
+Rust, Node.js, Swift and Kotlin embedded live sessions use in-process typed
+channels to a locally loaded speech model; they do not open HTTP or WebSocket
+connections. Remote-only speech models are rejected explicitly. Rust callers
+can opt into network relaying with
+`LiveTranscription::start`. Model queries use the in-process discovery service.
+Native sessions validate audio rate, cadence and VAD settings before startup
+returns; invalid options fail before audio is accepted.
+The separately versioned Python SDK retains its current transport; its native
+transcription migration is deferred.
 
 ## Discover all models; choose the right operation
 

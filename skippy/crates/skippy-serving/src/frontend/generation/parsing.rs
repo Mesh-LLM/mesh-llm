@@ -142,6 +142,8 @@ pub(in crate::frontend) struct PreparedGenerationPrompt {
     /// Also only a candidate: generation keeps the token prefix it shares with
     /// `text`, which every request with these system messages shares too.
     pub(in crate::frontend) recurrent_system_prefix_text: Option<String>,
+    /// The request's coarse shape, for the generation-stats observer.
+    pub(in crate::frontend) shape: crate::generation_stats::RequestShape,
 }
 
 impl PreparedGenerationPrompt {
@@ -152,6 +154,7 @@ impl PreparedGenerationPrompt {
             chat_parse_metadata: None,
             recurrent_cache_prefix_text: None,
             recurrent_system_prefix_text: None,
+            shape: crate::generation_stats::RequestShape::default(),
         }
     }
 

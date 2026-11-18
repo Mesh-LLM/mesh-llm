@@ -17,8 +17,12 @@ test('live options preserve defaults and explicit push-to-talk while audio and e
   }
   await startLiveTranscription(handle)
   assert.deepEqual(calls.shift(), {})
-  const live = await startLiveTranscription(handle, { sampleRate: 48000, turnDetection: null })
-  assert.deepEqual(calls.shift(), { sample_rate: 48000, turn_detection: null })
+  const live = await startLiveTranscription(handle, {
+    model: 'speech#fast', language: 'de', prompt: 'jargon', sampleRate: 48000, turnDetection: null
+  })
+  assert.deepEqual(calls.shift(), {
+    model: 'speech#fast', language: 'de', prompt: 'jargon', sample_rate: 48000, turn_detection: null
+  })
   await live.sendAudio(new Int16Array([1, -2]))
   await live.sendAudioF32(new Float32Array([0.5]))
   await live.commit()
@@ -37,4 +41,20 @@ test('breaking event iteration closes the session and native errors propagate', 
   for await (const event of live) { assert.equal(event.type, 'delta'); break }
   assert.equal(closed, true)
   await assert.rejects(live.sendAudio([]), /closed/)
+})
+
+test('incremental options use native keys and tentative replacements survive reads and stop', async () => {
+  const events = ['hel', 'hello', ''].map(text => ({ type: 'tentative', item_id: 'turn', text }))
+  const completed = { type: 'completed', item_id: 'turn', transcript: 'Hello!' }
+  const live = await startLiveTranscription({ async startLiveTranscriptionJson(source) {
+    assert.deepEqual(JSON.parse(source), { step_ms: 400, tentative: true })
+    return {
+      async nextEventJson() { return JSON.stringify(events.shift()) },
+      async stopJson() { return JSON.stringify([completed]) }
+    }
+  } }, { stepMs: 400, tentative: true })
+  for (const text of ['hel', 'hello', '']) {
+    assert.deepEqual(await live.nextEvent(), { type: 'tentative', item_id: 'turn', text })
+  }
+  assert.deepEqual(await live.stop(), [completed])
 })

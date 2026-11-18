@@ -271,6 +271,7 @@ mod filter_tests {
                 name: name.map(|s| s.to_string()),
                 region: region.map(|s| s.to_string()),
                 mesh_id: None,
+                publisher_serves: None,
             },
             publisher_npub: "npub-test".into(),
             published_at: 1000,
@@ -499,6 +500,7 @@ mod integration_tests {
             name: Some(mesh_name.clone()),
             region: Some("test-region".into()),
             mesh_id: Some(mesh_id.clone()),
+            publisher_serves: None,
         };
         pub_a.publish(&listing_a, 120).await.expect("publish A");
 

@@ -48,7 +48,24 @@ pub struct MessageContentPart {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// Marks a file part built from an attachment form that only a request
+/// transform plugin can use: an Anthropic `document` or a flat Responses
+/// `input_file`, both rejected before transforms existed. Mesh ingress removes
+/// it before running transforms and rejects the request if such a part
+/// survives them; a backend rejects a part that still carries it rather than
+/// dropping it, so these requests fail as they used to instead of being
+/// answered without the attachment.
+pub const REQUIRES_TRANSFORM_KEY: &str = "mesh_requires_transform";
+
 impl MessageContentPart {
+    /// Whether this part carries [`REQUIRES_TRANSFORM_KEY`].
+    pub fn requires_transform(&self) -> bool {
+        self.extra
+            .get(REQUIRES_TRANSFORM_KEY)
+            .and_then(Value::as_bool)
+            == Some(true)
+    }
+
     /// Return the URL supplied by any accepted OpenAI multimodal container
     /// shape. The stage runtime may still decide whether that URL is local,
     /// data-backed, or requires an upstream fetch.

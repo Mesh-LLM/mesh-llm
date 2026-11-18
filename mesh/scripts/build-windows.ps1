@@ -21,26 +21,6 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
-# Git never activates a committed hook on clone, so enable the repository hooks
-# on the first local development build. Skipped in CI, and never overrides a
-# hooks path the developer chose themselves.
-function Enable-RepoGitHooks {
-    if ($env:CI) { return }
-    try {
-        $current = & git -C $repoRoot config --get core.hooksPath 2>$null
-        if ($LASTEXITCODE -eq 0 -and $current) { return }
-        & git -C $repoRoot config core.hooksPath scripts/hooks 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "enabled repository git hooks (core.hooksPath=scripts/hooks); commit messages are now checked locally"
-        }
-    } catch {
-        # A missing or unusual git installation must never fail a build.
-    }
-    $global:LASTEXITCODE = 0
-}
-
-Enable-RepoGitHooks
-
 $meshUiDir = Join-Path $repoRoot "mesh\crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null
@@ -104,6 +84,27 @@ function ConvertTo-BashRepoPath {
 function Test-BashIsWsl {
     $kernel = (& bash -c "uname -s" 2>$null | Out-String).Trim()
     return $kernel -eq "Linux"
+}
+
+# package-native-runtime.sh runs Windows cargo and collects Windows DLLs, so it
+# needs a Windows bash (Git Bash, MSYS2 or Cygwin): WSL bash would reach Linux
+# tools. From PowerShell, System32's WSL launcher can come first on PATH, even
+# where WSL is not installed, so take Git for Windows' bash next to git then.
+# Resolved before the ABI build, not after it.
+function Resolve-PackagingBash {
+    $kernel = try { (& bash -c "uname -s" 2>$null | Out-String).Trim() } catch { "" }
+    if ($kernel -match '^(MINGW|MSYS|CYGWIN)') {
+        return "bash"
+    }
+    $git = Resolve-CommandPath "git"
+    if ($git) {
+        # git.exe sits in <Git>\cmd or <Git>\bin, and Git Bash in <Git>\bin.
+        $gitBash = Join-Path (Split-Path -Parent (Split-Path -Parent $git)) "bin\bash.exe"
+        if (Test-Path $gitBash) {
+            return $gitBash
+        }
+    }
+    throw "Packaging the native runtime needs Git Bash, MSYS2 or Cygwin bash, but bash on PATH is not one (uname -s: '$kernel') and no Git Bash was found next to git. Put Git for Windows' bin directory first on PATH."
 }
 
 function Prepare-Llama {
@@ -237,6 +238,9 @@ function Configure-LldLinker {
         Show-LldInstallInstructions
     }
 
+    if ($env:MESH_CI_STABLE_PROC_MACRO_METADATA -eq "1") {
+        $linker = Join-Path $scriptDir "cargo-linker.cmd"
+    }
     $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $linker
     $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = $linker
     Write-Host "Using Rust linker: $linker"
@@ -1031,7 +1035,7 @@ if ($HostOnly) {
             }
         }
         Set-BuildVersionStamp
-        $hostArgs = @("build")
+        $hostArgs = @("build", "--timings")
         $hostOutputProfile = "debug"
         if ($buildProfile -eq "release") {
             $hostArgs += "--release"
@@ -1069,6 +1073,8 @@ switch ($backendName) {
         throw "Unsupported backend '$backendName'. Use one of: cuda, rocm, hip, vulkan, cpu."
     }
 }
+
+$packagingBash = Resolve-PackagingBash
 
 Invoke-InRepo {
     Prepare-Llama
@@ -1191,12 +1197,12 @@ Invoke-InRepo {
         $env:LLAMA_STAGE_AMDGPU_TARGETS = $RocmArch
     }
     $profileDir = if ($buildProfile -eq "release") { "release" } else { "debug" }
-    # Invoke-InRepo makes this shell-relative path portable across Git Bash and
-    # WSL. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
+    # Invoke-InRepo makes these shell-relative paths resolve from the repository
+    # root. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
     # remote host and fail after the expensive ABI build has already completed.
     $runtimeOut = "target/$profileDir/native-runtimes"
-    Invoke-NativeCommand "bash" @(
-        (Join-Path $scriptDir "package-native-runtime.sh"),
+    Invoke-NativeCommand $packagingBash @(
+        "scripts/package-native-runtime.sh",
         "--backend", $backendName,
         "--target", "x86_64-pc-windows-msvc",
         "--out", $runtimeOut

@@ -2,6 +2,7 @@ use super::archive::Entry;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 
@@ -17,7 +18,7 @@ fn octal(field: &mut [u8], value: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn header(entry: &Entry) -> Result<[u8; 512], String> {
+fn header(entry: &Entry, link: Option<&str>) -> Result<[u8; 512], String> {
     let mut bytes = [0_u8; 512];
     let name = entry.name.as_bytes();
     if name.len() <= 100 {
@@ -42,11 +43,24 @@ fn header(entry: &Entry) -> Result<[u8; 512], String> {
     octal(&mut bytes[116..124], 0)?;
     octal(
         &mut bytes[124..136],
-        if entry.directory { 0 } else { entry.size },
+        if entry.directory || link.is_some() {
+            0
+        } else {
+            entry.size
+        },
     )?;
     octal(&mut bytes[136..148], 0)?;
     bytes[148..156].fill(b' ');
-    bytes[156] = if entry.directory { b'5' } else { b'0' };
+    bytes[156] = if entry.directory {
+        b'5'
+    } else if link.is_some() {
+        b'1'
+    } else {
+        b'0'
+    };
+    if let Some(link) = link {
+        bytes[157..157 + link.len()].copy_from_slice(link.as_bytes());
+    }
     bytes[257..263].copy_from_slice(b"ustar\0");
     bytes[263..265].copy_from_slice(b"00");
     let checksum: u64 = bytes.iter().map(|byte| u64::from(*byte)).sum();
@@ -56,9 +70,12 @@ fn header(entry: &Entry) -> Result<[u8; 512], String> {
 
 pub(super) fn write(file: File, entries: &[Entry]) -> Result<(), String> {
     let mut encoder = GzEncoder::new(file, Compression::default());
+    let mut libraries = BTreeMap::new();
     for entry in entries {
+        let key = library_key(entry);
+        let link = key.as_ref().and_then(|key| libraries.get(key).copied());
         encoder
-            .write_all(&header(entry)?)
+            .write_all(&header(entry, link)?)
             .map_err(|error| error.to_string())?;
         if !entry.directory {
             let mut input = File::open(&entry.path).map_err(|error| error.to_string())?;
@@ -71,14 +88,25 @@ pub(super) fn write(file: File, entries: &[Entry]) -> Result<(), String> {
                 if count == 0 {
                     break;
                 }
-                encoder
-                    .write_all(&buffer[..count])
-                    .map_err(|error| error.to_string())?;
+                if link.is_none() {
+                    encoder
+                        .write_all(&buffer[..count])
+                        .map_err(|error| error.to_string())?;
+                }
                 digest.update(&buffer[..count]);
                 copied += u64::try_from(count).map_err(|error| error.to_string())?;
             }
             if copied != entry.size || Some(hex::encode(digest.finalize())) != entry.sha256 {
                 return Err(format!("archive input changed: {}", entry.path.display()));
+            }
+            if link.is_some() {
+                continue;
+            }
+            // Ustar link targets have no prefix field. Keep long names as payloads.
+            if entry.name.len() <= 100
+                && let Some(key) = key
+            {
+                libraries.insert(key, entry.name.as_str());
             }
             let pad = (512 - entry.size % 512) % 512;
             encoder
@@ -96,3 +124,15 @@ pub(super) fn write(file: File, entries: &[Entry]) -> Result<(), String> {
     encoder.finish().map_err(|error| error.to_string())?;
     Ok(())
 }
+
+// Only Linux shared libraries within the same directory may share a payload.
+fn library_key(entry: &Entry) -> Option<(&str, u64, u32, &str)> {
+    let (directory, name) = entry.name.rsplit_once('/')?;
+    (!entry.directory
+        && directory.ends_with("/lib")
+        && (name.ends_with(".so") || name.contains(".so.")))
+    .then_some((directory, entry.size, entry.mode, entry.sha256.as_deref()?))
+}
+
+#[cfg(test)]
+mod tests;

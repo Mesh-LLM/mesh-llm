@@ -799,6 +799,25 @@ unsafe extern "C" {
         opt: mtmd_helper_init_opt,
     ) -> mtmd_helper_bitmap_wrapper;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct mtmd_helper_resampler {
+    _unused: [u8; 0],
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_resampler_init(rate_in: i32, rate_out: i32) -> *mut mtmd_helper_resampler;
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_resampler_free(ctx: *mut mtmd_helper_resampler);
+}
+unsafe extern "C" {
+    pub fn mtmd_helper_resampler_process(
+        ctx: *mut mtmd_helper_resampler,
+        in_: *const f32,
+        n_in: usize,
+        out: *mut *const f32,
+    ) -> i64;
+}
 unsafe extern "C" {
     pub fn mtmd_helper_get_n_tokens(chunks: *const mtmd_input_chunks) -> usize;
 }
@@ -853,6 +872,19 @@ unsafe extern "C" {
         callback: mtmd_helper_chunk_decode_callback,
         user_data: *mut ::std::os::raw::c_void,
     ) -> i32;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct mtmd_helper_decode_budget {
+    pub image_max_tokens: i32,
+    pub use_non_causal: bool,
+}
+unsafe extern "C" {
+    #[doc = " @brief Probe a projector's vision token budget and non-causal decode requirement."]
+    pub fn mtmd_helper_get_decode_budget(
+        mmproj_fname: *const ::std::os::raw::c_char,
+        ctx_params: mtmd_context_params,
+    ) -> mtmd_helper_decode_budget;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -979,6 +1011,7 @@ pub struct mtmd_helper_gen_audio_inp {
     pub lang: *const ::std::os::raw::c_char,
     pub top_k: i32,
     pub top_p: f32,
+    pub temp: f32,
     pub seed: u32,
     pub out_type: mtmd_helper_gen_audio_outtype,
 }

@@ -46,7 +46,7 @@ impl ExternalPlugin {
     pub(super) async fn lifecycle_runtime_handles(
         &self,
         operation: LifecycleOperation<'_>,
-    ) -> Result<(mpsc::Sender<proto::Envelope>, PendingResponses)> {
+    ) -> Result<(u64, mpsc::Sender<proto::Envelope>, PendingResponses)> {
         let runtime = self.runtime.lock().await;
         let runtime = runtime
             .as_ref()
@@ -79,7 +79,11 @@ impl ExternalPlugin {
         }
         // These channels belong only to this verified generation. A reconnect
         // cannot redirect the operation through a replacement's channels.
-        Ok((runtime.outbound_tx.clone(), runtime.pending.clone()))
+        Ok((
+            runtime.generation,
+            runtime.outbound_tx.clone(),
+            runtime.pending.clone(),
+        ))
     }
 }
 

@@ -209,6 +209,9 @@ impl LanMeshAdvertisement {
             name: self.mesh_name.clone(),
             region: self.region.clone(),
             mesh_id: self.mesh_id.clone(),
+            // LAN listings carry no publisher capability; only the thin
+            // public-mesh client reads it (#2765).
+            publisher_serves: None,
         }
     }
 }
@@ -746,6 +749,8 @@ pub(crate) async fn build_local_mesh_listing(
         name,
         region,
         mesh_id: node.mesh_id().await,
+        // Not part of the mDNS record (see sanitized_listing).
+        publisher_serves: None,
     }
 }
 
@@ -1134,6 +1139,7 @@ mod tests {
             name: Some("lab-cluster".to_string()),
             region: Some("LAN".to_string()),
             mesh_id: Some("mesh-lab-01".to_string()),
+            publisher_serves: None,
         }
     }
 

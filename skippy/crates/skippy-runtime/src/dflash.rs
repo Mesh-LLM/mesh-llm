@@ -328,6 +328,9 @@ impl DFlashDraft {
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
+        // The draft's model builder publishes whether its block attends
+        // causally (a decoder contract that needs it sets the key even when
+        // the file does not).
         let causal =
             unsafe { skippy_ffi::llama_model_meta_val_str(self.model, "dflash.attention.causal") }
                 .is_some_and(|value| value == "true");

@@ -1,5 +1,23 @@
 # Kotlin/Android SDK
 
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID, within a coroutine:
+
+```kotlin
+node.runtimeCapacity("exact-serving-id")?.let { capacity ->
+    println("${capacity.executionLanes} lanes, ${capacity.contextTokensPerLane} tokens per lane")
+    println("${capacity.contextPoolTokens} pooled tokens, observed at ${capacity.capturedAtUnixMs}")
+}
+```
+
+`LaneCapacity` fields use `ULong`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. `null` means unknown, unsupported, unavailable, or incomplete capacity.
+Stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long-running inference. Do not use the total
+pool as a per-request context limit.
+
 Install `ai.meshllm:meshllm-android:<version>` from GitHub Packages. Configure
 the repository and credentials in Gradle:
 
@@ -144,3 +162,68 @@ omitted fields use native defaults, and unknown keys are rejected by the core.
 Full-config `mode` is `client`, `serve_only`, or `serve` (combined); the
 full-config default is combined, matching Rust. The existing `Node(...)`
 constructor keeps its client default and Kotlin convenience arguments.
+
+## Live transcription
+
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.
+
+```kotlin
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+
+val session = node.startLiveTranscription(LiveTranscriptionOptions(
+    model = "speech-model", sampleRate = 16000u, turnDetection = null,
+    stepMs = 400u, tentative = true))
+try {
+    session.sendAudio(pcm16Samples)
+    session.commit()
+    println(session.nextEvent())
+    val remainingEvents = session.stop()
+    println(remainingEvents)
+} finally {
+    withContext(NonCancellable) { session.close() }
+}
+```
+
+Supply signed 16-bit mono samples, or use `sendAudioF32` for float samples.
+`stepMs` accepts 200 to 5000 ms; `null` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `itemId`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input. `stop()` finishes the turn and returns
+unread events; `close()` abandons the session.
+Cancelling `events()` also closes the session without waiting for a pending
+native read; native cleanup finishes in the background.
+## Structured inference failures
+
+`OpenAIRequestException.details` and `OpenAIStreamException.details` expose
+typed `InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```kotlin
+try {
+    node.inference.chatCompletions(request)
+} catch (error: OpenAIRequestException) {
+    if (error.details?.code == "context_length_exceeded") {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `null` for transport failures or an unstructured body;
+missing optional fields stay `null`. Unknown codes are preserved.

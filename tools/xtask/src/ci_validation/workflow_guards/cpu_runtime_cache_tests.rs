@@ -64,8 +64,8 @@ fn cpu_cache_restore_requires_cpu_authority_hosted_placement_and_exact_key() {
             "actions/cache/restore@main",
         ),
         (
-            "key: skippy-runtime-linux-",
-            "restore-keys: skippy-runtime-linux-\n          key: skippy-runtime-linux-",
+            "key: skippy-runtime-linux-v2-",
+            "restore-keys: skippy-runtime-linux-v2-\n          key: skippy-runtime-linux-v2-",
         ),
     ] {
         assert!(check(&mutated(before, after)).is_err(), "accepted: {after}");
@@ -73,12 +73,16 @@ fn cpu_cache_restore_requires_cpu_authority_hosted_placement_and_exact_key() {
     for component in [
         "${{ matrix.runtime.target }}-",
         "${{ matrix.runtime.toolchain_epoch }}-",
-        "'skippy/**', ",
+        "'skippy/llama_cpp/**', ",
         "'Cargo.lock', ",
         "'.github/cache-version.txt'",
     ] {
-        let key = KEY.replace(component, "");
-        assert!(check(&mutated(KEY, &key)).is_err(), "omitted: {component}");
+        let expected = key();
+        let changed = expected.replace(component, "");
+        assert!(
+            check(&mutated(&expected, &changed)).is_err(),
+            "omitted: {component}"
+        );
     }
 }
 #[test]

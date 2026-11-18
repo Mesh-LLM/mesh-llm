@@ -66,6 +66,21 @@ impl CacheAffinityAdvertisement {
             && self.entries == other.entries
     }
 
+    /// The peer's prefill cost for `model` whatever the prefix, from the rate
+    /// carried by its fresh entries of that model, so a peer can be costed
+    /// cold for a prefix it does not hold. The slowest advertised rate is
+    /// taken; an unmeasured (`0`) rate or a stale advertisement gives `None`.
+    pub fn model_prefill_micros_per_token(&self, model: &str, now_unix_ms: u64) -> Option<u64> {
+        if !self.is_fresh_at(now_unix_ms) {
+            return None;
+        }
+        self.entries
+            .iter()
+            .filter(|entry| entry.model == model && entry.prefill_micros_per_token > 0)
+            .map(|entry| entry.prefill_micros_per_token)
+            .max()
+    }
+
     pub fn probe(
         &self,
         model: &str,
@@ -110,6 +125,8 @@ pub struct CacheInventory {
     max_entries: usize,
     ttl: Duration,
     model_prefill_micros_per_token: HashMap<String, u64>,
+    /// When each model's rate last took a sample.
+    model_prefill_observed_at: HashMap<String, Instant>,
 }
 
 impl CacheInventory {
@@ -137,6 +154,15 @@ impl CacheInventory {
     /// Calibrate this node/model from provider-reported prefill timing. The
     /// bounded integer EWMA damps one-off scheduling and timer noise without
     /// putting floating-point values on the gossip wire.
+    /// This node's calibrated prefill cost for `model`, with or without a
+    /// cache hit, or `None` before the first measurement.
+    pub fn model_prefill_micros_per_token(&self, model: &str) -> Option<u64> {
+        self.model_prefill_micros_per_token
+            .get(model)
+            .copied()
+            .filter(|rate| *rate > 0)
+    }
+
     pub fn observe_prefill_cost(&mut self, model: &str, prefill_micros_per_token: u64) {
         if prefill_micros_per_token == 0 {
             return;
@@ -159,6 +185,15 @@ impl CacheInventory {
                     / 4;
             })
             .or_insert(prefill_micros_per_token);
+        self.model_prefill_observed_at
+            .insert(model.to_string(), Instant::now());
+    }
+
+    /// This node's calibrated rate for `model` and when it last took a
+    /// sample, for gossip; `None` before the first measurement.
+    pub fn model_prefill_measurement(&self, model: &str) -> Option<(u64, Instant)> {
+        let rate = self.model_prefill_micros_per_token(model)?;
+        Some((rate, *self.model_prefill_observed_at.get(model)?))
     }
 
     pub fn record_l1_hit(
@@ -340,6 +375,7 @@ impl Default for CacheInventory {
             max_entries: CACHE_AFFINITY_MAX_ENTRIES,
             ttl: CACHE_AFFINITY_TTL,
             model_prefill_micros_per_token: HashMap::new(),
+            model_prefill_observed_at: HashMap::new(),
         }
     }
 }
@@ -511,6 +547,51 @@ mod tests {
         assert_ne!(
             first,
             rotating_salt(&node_id, CACHE_AFFINITY_SALT_ROTATION_MS)
+        );
+    }
+
+    #[test]
+    fn the_model_prefill_rate_is_known_with_or_without_a_hit() {
+        let mut inventory = CacheInventory::default();
+        assert_eq!(inventory.model_prefill_micros_per_token("model"), None);
+        inventory.observe_prefill_cost("model", 800);
+        assert_eq!(inventory.model_prefill_micros_per_token("model"), Some(800));
+        let (rate, observed_at) = inventory
+            .model_prefill_measurement("model")
+            .expect("a measured rate is dated for gossip");
+        assert_eq!(rate, 800);
+        assert!(observed_at.elapsed() < Duration::from_secs(60));
+        assert_eq!(inventory.model_prefill_measurement("other"), None);
+        assert_eq!(inventory.model_prefill_micros_per_token("other"), None);
+    }
+
+    #[test]
+    fn a_peer_is_costed_cold_from_any_fresh_entry_of_the_model() {
+        let mut inventory = CacheInventory::default();
+        inventory.observe_prefill_cost("model", 400);
+        inventory.record_l1_hit("model", 1, 512, 32, 0);
+        inventory.observe_prefill_cost("model", 1_200);
+        inventory.record_l1_hit("model", 2, 512, 32, 0);
+        let advertisement = inventory.advertisement([3; CACHE_AFFINITY_SALT_BYTES], 1_000);
+        let rates: Vec<_> = advertisement
+            .entries
+            .iter()
+            .map(|entry| entry.prefill_micros_per_token)
+            .collect();
+        let slowest = *rates.iter().max().expect("two entries");
+
+        assert_eq!(
+            advertisement.model_prefill_micros_per_token("model", 1_000),
+            Some(slowest)
+        );
+        assert_eq!(
+            advertisement.model_prefill_micros_per_token("other", 1_000),
+            None
+        );
+        let stale_at = 1_000 + u64::from(advertisement.ttl_ms) + 1;
+        assert_eq!(
+            advertisement.model_prefill_micros_per_token("model", stale_at),
+            None
         );
     }
 }

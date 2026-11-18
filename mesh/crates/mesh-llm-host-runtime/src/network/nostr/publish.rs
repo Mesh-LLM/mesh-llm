@@ -542,6 +542,11 @@ async fn build_publish_listing(
         .sum::<u64>()
         + node.vram_bytes();
     let node_count = non_client_peer_count(peers) + 1;
+    // A thin client tunnels HTTP to the invite endpoint, which answers only
+    // when this node itself serves a model; a client or an idle worker
+    // replies 503 (#2765).
+    let publisher_serves = matches!(node.role().await, crate::mesh::NodeRole::Host { .. })
+        && !node.hosted_models().await.is_empty();
     MeshListing {
         invite_token,
         serving,
@@ -554,6 +559,7 @@ async fn build_publish_listing(
         name,
         region,
         mesh_id: node.mesh_id().await,
+        publisher_serves: Some(publisher_serves),
     }
 }
 
@@ -692,5 +698,33 @@ mod tests {
         assert_eq!(config.region.as_deref(), Some("iad"));
         assert_eq!(config.relays, vec!["wss://relay.example".to_string()]);
         assert_eq!(config.max_clients, None);
+    }
+
+    #[tokio::test]
+    async fn a_listing_says_whether_its_publisher_serves_a_model_itself() {
+        async fn publisher_serves(role: crate::mesh::NodeRole, hosted: &[&str]) -> Option<bool> {
+            let node = crate::mesh::Node::new_for_tests(role).await.unwrap();
+            node.set_hosted_models(hosted.iter().map(|model| model.to_string()).collect())
+                .await;
+            build_publish_listing(&node, &[], "invite".into(), 0, None, None, None)
+                .await
+                .publisher_serves
+        }
+        let host = crate::mesh::NodeRole::Host { http_port: 9337 };
+        assert_eq!(
+            publisher_serves(host.clone(), &["Qwen3-0.6B"]).await,
+            Some(true)
+        );
+        // A host that has nothing loaded, a worker and a client all answer a
+        // tunnelled request with 503, so they say so.
+        assert_eq!(publisher_serves(host, &[]).await, Some(false));
+        assert_eq!(
+            publisher_serves(crate::mesh::NodeRole::Worker, &[]).await,
+            Some(false)
+        );
+        assert_eq!(
+            publisher_serves(crate::mesh::NodeRole::Client, &[]).await,
+            Some(false)
+        );
     }
 }

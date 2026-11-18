@@ -208,4 +208,18 @@ mod tests {
         let stale = vec!["a-v0.1.0-x86_64-unknown-linux-gnu.tar.gz".to_string()];
         assert!(infer_plugin_asset(&version, &target, &stale).is_none());
     }
+
+    #[test]
+    fn inference_refuses_dot_plugin_names() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v1.0.0").unwrap();
+        for name in [".", ".."] {
+            let assets = vec![format!("{name}-v1.0.0-x86_64-unknown-linux-gnu.tar.gz")];
+            assert!(
+                infer_plugin_asset(&version, &target, &assets).is_none(),
+                "{name}"
+            );
+            assert!(select_plugin_asset(name, Some(&version), &target, &assets).is_err());
+        }
+    }
 }

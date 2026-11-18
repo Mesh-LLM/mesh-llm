@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod identifiers;
+
 use crate::{
     common::{
         FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, StopSequence,
@@ -83,8 +85,8 @@ impl ChatCompletionRequest {
 }
 
 pub use crate::generation::content::{
-    GenerationMessage as ChatMessage, MessageContent, MessageContentPart, ensure_tool_call_ids,
-    message_content_to_text, messages_to_plain_prompt,
+    GenerationMessage as ChatMessage, MessageContent, MessageContentPart, REQUIRES_TRANSFORM_KEY,
+    ensure_tool_call_ids, message_content_to_text, messages_to_plain_prompt,
 };
 
 /// `#[non_exhaustive]`: a downstream crate that builds this via struct

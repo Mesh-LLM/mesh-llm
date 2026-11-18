@@ -1,0 +1,2 @@
+[crates.meshllm_ffi.bindings.python]
+cdylib_name = "uniffi"

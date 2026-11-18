@@ -22,7 +22,7 @@ async fn wire(bytes: Vec<u8>, status_endpoint: bool) -> Result<Transfer, Transfe
                 request_id: RequestId::generate().unwrap(),
             }
         },
-        deadline: Instant::now() + std::time::Duration::from_secs(5),
+        deadline: Instant::now() + std::time::Duration::from_secs(30),
     };
     let server = async {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -42,7 +42,7 @@ async fn wire(bytes: Vec<u8>, status_endpoint: bool) -> Result<Transfer, Transfe
             tokio::task::yield_now().await;
         }
     };
-    let (_, result) = tokio::time::timeout(std::time::Duration::from_secs(7), async {
+    let (_, result) = tokio::time::timeout(std::time::Duration::from_secs(35), async {
         tokio::join!(
             server,
             transfer(

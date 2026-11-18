@@ -40,6 +40,8 @@ mod report;
 pub mod retained;
 mod spec;
 mod supervisor;
+#[cfg(all(test, unix))]
+mod test_sleep;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]

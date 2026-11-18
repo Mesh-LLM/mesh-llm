@@ -6,7 +6,17 @@ use std::path::PathBuf;
 use mesh_llm_cli::{check_cli_inventory, write_cli_inventory};
 
 fn main() {
-    if let Err(error) = run(env::args_os().skip(1).collect()) {
+    // Clap reflection needs more stack than the Windows main thread provides.
+    let result = std::thread::Builder::new()
+        .name("cli-inventory".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| run(env::args_os().skip(1).collect()))
+        .and_then(|thread| {
+            thread
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        });
+    if let Err(error) = result {
         let message = format!("mesh-llm-cli-inventory: {error}\n");
         let _ = io::stderr().write_all(message.as_bytes());
         std::process::exit(1);

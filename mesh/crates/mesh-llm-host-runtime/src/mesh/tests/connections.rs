@@ -344,6 +344,17 @@ async fn make_test_node_with_requirements(
     role: super::NodeRole,
     local_mesh_requirements: crate::MeshRequirements,
 ) -> Result<Node> {
+    make_configured_test_node(role, local_mesh_requirements, |_| {}).await
+}
+
+/// Like [`make_test_node_with_requirements`], with `configure` applied before
+/// the accept loop takes its copy of the node, so plain fields such as
+/// `public_mesh` and `is_membership` also hold for the connections it accepts.
+async fn make_configured_test_node(
+    role: super::NodeRole,
+    local_mesh_requirements: crate::MeshRequirements,
+    configure: impl FnOnce(&mut Node),
+) -> Result<Node> {
     use iroh::endpoint::QuicTransportConfig;
 
     let transport_config = QuicTransportConfig::builder()
@@ -376,9 +387,10 @@ async fn make_test_node_with_requirements(
 
     let config_state = crate::runtime::config_state::ConfigState::default();
     let live_request_defaults = config_state.live_request_defaults();
-    let node = Node {
+    let mut node = Node {
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
+        gossip_reply_limiter: Arc::default(),
         native_inference: Default::default(),
         adopted_membership_file: None,
         identity_state_dir: None,
@@ -411,6 +423,7 @@ async fn make_test_node_with_requirements(
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         requirement_mesh_state: Arc::new(Mutex::new(None)),
         mesh_id: Arc::new(Mutex::new(None)),
+        mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
         mesh_policy_hash: Arc::new(Mutex::new(None)),
         signed_genesis_policy: Arc::new(Mutex::new(None)),
         bootstrap_token: Arc::new(Mutex::new(None)),
@@ -456,6 +469,7 @@ async fn make_test_node_with_requirements(
         control_listener: Arc::new(Mutex::new(None)),
         trust_store: Arc::new(Mutex::new(TrustStore::default())),
         trust_policy: TrustPolicy::Off,
+        private_nodes: Default::default(),
         enumerate_host: false,
         gpu_name: None,
         hostname: None,
@@ -483,6 +497,7 @@ async fn make_test_node_with_requirements(
         public_mesh: false,
         drain_timeout_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS,
         drain_timeout_max_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+        peer_stage_source_fetch: Default::default(),
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
@@ -494,6 +509,7 @@ async fn make_test_node_with_requirements(
         local_endpoints: super::node::LocalEndpoints::default(),
         is_membership: false,
     };
+    configure(&mut node);
 
     let accept_node = node.clone();
     tokio::spawn(async move {
@@ -504,11 +520,14 @@ async fn make_test_node_with_requirements(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
 async fn join_rejects_token_naming_own_identity() -> Result<()> {
     // #1699: two serve processes on one machine silently load the same node
     // key, so the joiner's token names its own endpoint id. iroh refuses
     // self-connections, so before the guard this failed opaquely (or looked
     // like a successful one-node mesh). It must fail loudly instead.
+    let root = tempfile::tempdir()?;
+    let _guard = RuntimeRootGuard::set(root.path());
     let node = make_test_node(super::NodeRole::Worker).await?;
     node.start_accepting();
 

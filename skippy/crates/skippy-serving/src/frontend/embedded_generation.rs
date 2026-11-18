@@ -472,6 +472,9 @@ impl StageOpenAiBackend {
                         &session_key,
                         request.ids,
                         prefill_tokens,
+                        // Recorded at the end of prefill, before the first
+                        // token; deferring it shortens TTFT.
+                        crate::kv_integration::ExactStateKvExport::AtSessionEnd,
                     )?;
                 }
             }

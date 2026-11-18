@@ -143,6 +143,7 @@ pub(super) async fn route_missing_local_model(
                 request,
                 proxy::RouteModelRequestContext {
                     local_execution_only: false,
+                    automatic_retry: ctx.automatic_retry,
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
@@ -244,9 +245,17 @@ async fn route_without_a_mesh_host(
         );
     }
 
-    // Try plugin dispatch (admission-checked inside).
-    if ctx.plugin_manager.is_some() {
+    // Try plugin dispatch (admission-checked inside). An automatic request
+    // goes there only when a plugin serves the chosen model; otherwise it hands
+    // the stream back so another compatible model can be chosen.
+    if ctx.plugin_manager.is_some()
+        && (ctx.automatic_retry.is_none() || plugin_serves_model(ctx, model_name).await)
+    {
         return try_route_plugin_model(ctx, tcp_stream, request, model_name, route_observer).await;
+    }
+    if let Some(handoff) = ctx.automatic_retry {
+        handoff.retain(tcp_stream);
+        return proxy::RouteDispatchOutcome::Failed("automatic_model_exhausted");
     }
 
     // Model not found anywhere — return 404. This replaces the old fallback behavior that would

@@ -1,7 +1,7 @@
 /// Smart model router — classifies requests and picks the best model.
 pub use mesh_llm_types::router::{
-    Category, Classification, Complexity, MediaRequirements, classify, media_requirements,
-    strip_split_suffix, strip_split_suffix_owned,
+    Classification, MediaRequirements, classify, media_requirements, strip_split_suffix,
+    strip_split_suffix_owned,
 };
 
 // ── Model profiles ──────────────────────────────────────────────────
@@ -12,7 +12,6 @@ pub type Tier = u8;
 
 pub struct ModelProfile {
     pub name: &'static str,
-    pub strengths: &'static [Category],
     pub tier: Tier,
     /// Whether this model can handle tool-calling requests (function calling).
     /// Models without this set to true are filtered out when tools are present.
@@ -20,223 +19,174 @@ pub struct ModelProfile {
 }
 
 /// Static profiles for catalog models.
-/// Order of strengths matters — first entry is primary strength.
+/// Profiles declare only quality tier and tool support.
 pub static MODEL_PROFILES: &[ModelProfile] = &[
     // ── Tier 4: Frontier ────────────────────────────────────────
     ModelProfile {
         name: "Qwen3-235B-A22B-Q4_K_M",
-        strengths: &[
-            Category::Code,
-            Category::Reasoning,
-            Category::Chat,
-            Category::Creative,
-        ],
         tier: 4,
         tools: true,
     },
     ModelProfile {
         name: "Llama-3.1-405B-Instruct-Q2_K",
-        strengths: &[Category::Chat, Category::Reasoning, Category::Code],
         tier: 4,
         tools: true,
     },
     ModelProfile {
         name: "MiniMax-M2.5-Q4_K_M",
-        strengths: &[
-            Category::Code,
-            Category::Reasoning,
-            Category::Chat,
-            Category::Creative,
-            Category::ToolCall,
-        ],
         tier: 4,
         tools: true,
     },
     // ── Tier 3: Strong ──────────────────────────────────────────
     ModelProfile {
         name: "Qwen2.5-72B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat, Category::Reasoning, Category::Code],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Llama-3.3-70B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat, Category::ToolCall, Category::Code],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "DeepSeek-R1-Distill-70B-Q4_K_M",
-        strengths: &[Category::Reasoning],
         tier: 3,
         tools: false, // reasoning-only, no tool support
     },
     ModelProfile {
         name: "Mixtral-8x22B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat, Category::Code, Category::Reasoning],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Qwen3-32B-Q4_K_M",
-        strengths: &[Category::Reasoning, Category::Code, Category::Chat],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Qwen2.5-Coder-32B-Instruct-Q4_K_M",
-        strengths: &[Category::Code],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "DeepSeek-R1-Distill-Qwen-32B-Q4_K_M",
-        strengths: &[Category::Reasoning],
         tier: 3,
         tools: false,
     },
     ModelProfile {
         name: "Qwen3-30B-A3B-Q4_K_M",
-        strengths: &[Category::Chat, Category::Reasoning, Category::Code],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M",
-        strengths: &[Category::Code, Category::ToolCall],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Qwen2.5-32B-Instruct-Q4_K_M",
-        strengths: &[
-            Category::Chat,
-            Category::Reasoning,
-            Category::Code,
-            Category::ToolCall,
-        ],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Gemma-3-27B-it-Q4_K_M",
-        strengths: &[Category::Reasoning, Category::Chat],
         tier: 3,
         tools: false, // unreliable tool calling
     },
     ModelProfile {
         name: "Qwen3.5-27B-Q4_K_M",
-        strengths: &[Category::Code, Category::Reasoning, Category::Chat],
         tier: 3,
         tools: true,
     },
     ModelProfile {
         name: "Qwen3-Coder-Next-Q4_K_M",
-        strengths: &[Category::Code, Category::ToolCall, Category::Reasoning],
         tier: 4,
         tools: true,
     },
     // ── Tier 2: Good ────────────────────────────────────────────
     ModelProfile {
         name: "Qwen3.5-9B-Q4_K_M",
-        strengths: &[Category::Chat, Category::Code],
         tier: 2,
         tools: false,
     },
     ModelProfile {
         name: "Mistral-Small-3.1-24B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat, Category::ToolCall],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "Devstral-Small-2505-Q4_K_M",
-        strengths: &[Category::Code, Category::ToolCall],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "GLM-4.7-Flash-Q4_K_M",
-        strengths: &[Category::Chat, Category::ToolCall],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "GLM-4-32B-0414-Q4_K_M",
-        strengths: &[Category::Chat, Category::ToolCall, Category::Code],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "Llama-4-Scout-Q4_K_M",
-        strengths: &[Category::Chat, Category::ToolCall],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "Qwen3-14B-Q4_K_M",
-        strengths: &[Category::Chat, Category::Reasoning],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "Qwen2.5-14B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "Qwen2.5-Coder-14B-Instruct-Q4_K_M",
-        strengths: &[Category::Code],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M",
-        strengths: &[Category::Reasoning],
         tier: 2,
         tools: false,
     },
     ModelProfile {
         name: "Gemma-3-12B-it-Q4_K_M",
-        strengths: &[Category::Chat, Category::Reasoning],
         tier: 2,
         tools: false,
     },
     ModelProfile {
         name: "Qwen3-8B-Q4_K_M",
-        strengths: &[Category::Chat, Category::Code],
         tier: 2,
         tools: true,
     },
     ModelProfile {
         name: "Hermes-2-Pro-Mistral-7B-Q4_K_M",
-        strengths: &[Category::Chat],
         tier: 2,
         tools: false,
     },
     ModelProfile {
         name: "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
-        strengths: &[Category::Code],
         tier: 2,
         tools: true,
     },
     // ── Tier 1: Small / Draft ───────────────────────────────────
     ModelProfile {
         name: "Qwen3-4B-Q4_K_M",
-        strengths: &[Category::Chat],
         tier: 1,
         tools: true,
     },
     ModelProfile {
         name: "Qwen2.5-3B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat],
         tier: 1,
         tools: true,
     },
     ModelProfile {
         name: "Llama-3.2-3B-Instruct-Q4_K_M",
-        strengths: &[Category::Chat, Category::ToolCall],
         tier: 1,
         tools: true,
     },
@@ -257,7 +207,7 @@ pub fn profile_for(model_name: &str) -> Option<&'static ModelProfile> {
 
 // ── Model selection ─────────────────────────────────────────────────
 
-/// Pick the best model using full classification (category + complexity + tools).
+/// Pick a model using declared tool support, size tier and measured speed.
 pub fn pick_model_classified<'a>(
     classification: &Classification,
     available_models: &[(&'a str, f64)],
@@ -283,8 +233,6 @@ pub fn pick_model_classified<'a>(
         &filtered
     };
 
-    let category = classification.category;
-
     // Score each available model
     let mut scored: Vec<(&str, i32)> = candidates
         .iter()
@@ -292,44 +240,7 @@ pub fn pick_model_classified<'a>(
             let profile = profile_for(name);
             let tier = profile.map(|p| p.tier).unwrap_or(1) as i32;
 
-            // Task match is the primary signal.
-            let has_match = profile
-                .map(|p| p.strengths.contains(&category))
-                .unwrap_or(false);
-
-            let match_bonus = if has_match { 1000 } else { 0 };
-
-            // Within matched models: primary > secondary > listed
-            let position_bonus = profile
-                .map(|p| {
-                    p.strengths
-                        .iter()
-                        .position(|s| *s == category)
-                        .map(|i| match i {
-                            0 => 20,
-                            1 => 10,
-                            _ => 5,
-                        })
-                        .unwrap_or(0)
-                })
-                .unwrap_or(0);
-
-            // Agentic vs chat scoring:
-            // When tools are needed, strongly prefer the most capable model.
-            // For chat, prefer the fastest model that matches.
-            let tier_bonus = if classification.needs_tools {
-                // Agentic: always prefer strongest. Tier dominates.
-                // tier 1→20, tier 2→40, tier 3→60, tier 4→80
-                tier * 20
-            } else {
-                // Chat/no-tools: always prefer bigger models, but less aggressively
-                // than agentic. Small models are fallbacks, not first choice.
-                match classification.complexity {
-                    Complexity::Quick => tier * 5,     // tier 2→10, tier 3→15, tier 4→20
-                    Complexity::Moderate => tier * 10, // tier 2→20, tier 3→30, tier 4→40
-                    Complexity::Deep => tier * 15,     // tier 2→30, tier 3→45, tier 4→60
-                }
-            };
+            let tier_bonus = tier * if classification.needs_tools { 20 } else { 10 };
 
             // Speed bonus: higher for chat (speed matters), lower for agentic (quality matters)
             let speed_bonus = if classification.needs_tools {
@@ -340,7 +251,7 @@ pub fn pick_model_classified<'a>(
                 (tok_s / 5.0).min(20.0) as i32
             };
 
-            let score = match_bonus + tier_bonus + position_bonus + speed_bonus;
+            let score = tier_bonus + speed_bonus;
             (*name, score)
         })
         .collect();
@@ -371,24 +282,6 @@ pub fn pick_model_classified<'a>(
     scored.first().map(|(name, _)| *name)
 }
 
-/// Legacy wrapper for tests that have category + tools but no complexity.
-#[cfg(test)]
-pub fn pick_model_with_tools<'a>(
-    category: Category,
-    available_models: &[(&'a str, f64)],
-    tools_required: bool,
-) -> Option<&'a str> {
-    pick_model_classified(
-        &Classification {
-            category,
-            complexity: Complexity::Moderate,
-            needs_tools: tools_required,
-            has_media_inputs: false,
-        },
-        available_models,
-    )
-}
-
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -403,37 +296,7 @@ mod tests {
             "messages": [{"role": "user", "content": "Run the tests and check the output"}],
             "tools": [{"type": "function", "function": {"name": "bash"}}]
         });
-        assert_eq!(classify(&body).category, Category::ToolCall);
-    }
-
-    #[test]
-    fn test_classify_code() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Write a Python function to implement binary search and debug any issues"}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Code);
-    }
-
-    #[test]
-    fn test_classify_reasoning() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Prove that the square root of 2 is irrational. Explain step by step."}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Reasoning);
-    }
-
-    #[test]
-    fn test_classify_creative() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Write a story about a robot who learns to paint"}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Creative);
+        assert!(classify(&body).needs_tools);
     }
 
     #[test]
@@ -444,21 +307,8 @@ mod tests {
             ]
         });
         let cl = classify(&body);
-        assert_eq!(cl.category, Category::Chat);
-        assert_eq!(cl.complexity, Complexity::Quick); // short simple question
         assert!(!cl.needs_tools);
         assert!(!cl.has_media_inputs);
-    }
-
-    #[test]
-    fn test_classify_deep_analysis() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Design a system architecture for a distributed database with strong consistency guarantees. Provide a detailed analysis of the trade-offs between CAP theorem constraints and explain how to handle network partitions in depth."}
-            ]
-        });
-        let cl = classify(&body);
-        assert_eq!(cl.complexity, Complexity::Deep);
     }
 
     #[test]
@@ -469,7 +319,6 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "bash"}}]
         });
         let cl = classify(&body);
-        assert_eq!(cl.category, Category::Code);
         assert!(cl.needs_tools);
     }
 
@@ -513,7 +362,6 @@ mod tests {
         });
         let cl = classify(&body);
         assert!(cl.needs_tools);
-        assert!(matches!(cl.category, Category::Code | Category::ToolCall));
     }
 
     #[test]
@@ -554,17 +402,6 @@ mod tests {
         let available = vec![("Qwen3-8B-Q4_K_M", 40.0), ("MiniMax-M2.5-Q4_K_M", 20.0)];
         let picked = pick_model_classified(&cl, &available);
         assert_eq!(picked, Some("MiniMax-M2.5-Q4_K_M"));
-    }
-
-    #[test]
-    fn test_classify_system_prompt_code() {
-        let body = json!({
-            "messages": [
-                {"role": "system", "content": "You are a senior developer and coding assistant."},
-                {"role": "user", "content": "Help me with this."}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Code);
     }
 
     #[test]
@@ -613,8 +450,6 @@ mod tests {
         let available = vec![("Qwen3-8B-Q4_K_M", 50.0), ("Qwen3-235B-A22B-Q4_K_M", 20.0)];
         let result = pick_model_classified(
             &Classification {
-                category: Category::Chat,
-                complexity: Complexity::Moderate,
                 needs_tools: false,
                 has_media_inputs: false,
             },
@@ -630,8 +465,6 @@ mod tests {
         let available = vec![("Qwen3-8B-Q4_K_M", 50.0), ("Qwen3-235B-A22B-Q4_K_M", 20.0)];
         let result = pick_model_classified(
             &Classification {
-                category: Category::Chat,
-                complexity: Complexity::Deep,
                 needs_tools: false,
                 has_media_inputs: false,
             },
@@ -650,8 +483,6 @@ mod tests {
         ];
         let result = pick_model_classified(
             &Classification {
-                category: Category::Chat,
-                complexity: Complexity::Quick,
                 needs_tools: false,
                 has_media_inputs: false,
             },
@@ -669,8 +500,6 @@ mod tests {
         ];
         let result = pick_model_classified(
             &Classification {
-                category: Category::Reasoning,
-                complexity: Complexity::Moderate,
                 needs_tools: false,
                 has_media_inputs: false,
             },
@@ -691,8 +520,6 @@ mod tests {
         ];
         let result = pick_model_classified(
             &Classification {
-                category: Category::Code,
-                complexity: Complexity::Moderate,
                 needs_tools: false,
                 has_media_inputs: false,
             },
@@ -710,8 +537,6 @@ mod tests {
         assert_eq!(
             pick_model_classified(
                 &Classification {
-                    category: Category::Chat,
-                    complexity: Complexity::Moderate,
                     needs_tools: false,
                     has_media_inputs: false,
                 },
@@ -726,8 +551,6 @@ mod tests {
         let available = vec![("SomeUnknownModel", 30.0)];
         let result = pick_model_classified(
             &Classification {
-                category: Category::Chat,
-                complexity: Complexity::Moderate,
                 needs_tools: false,
                 has_media_inputs: false,
             },
@@ -744,19 +567,12 @@ mod tests {
     }
 
     #[test]
-    fn test_all_profiles_have_strengths() {
-        for p in MODEL_PROFILES {
-            assert!(!p.strengths.is_empty(), "{} has no strengths", p.name);
-        }
-    }
-
-    #[test]
     fn test_classify_empty_tools_is_not_tool_call() {
         let body = json!({
             "messages": [{"role": "user", "content": "hello"}],
             "tools": []
         });
-        assert_eq!(classify(&body).category, Category::Chat);
+        assert!(!classify(&body).needs_tools);
     }
 
     #[test]
@@ -792,13 +608,25 @@ fn test_tools_filter_prefers_capable() {
         ("Qwen2.5-32B-Instruct-Q4_K_M", 50.0),         // tools: true, Chat+Reasoning+Code
     ];
     // Without tools, Reasoning request: scores within 15 points, either valid
-    let result = pick_model_with_tools(Category::Reasoning, &available, false);
+    let result = pick_model_classified(
+        &Classification {
+            needs_tools: false,
+            has_media_inputs: false,
+        },
+        &available,
+    );
     assert!(
         result == Some("DeepSeek-R1-Distill-Qwen-32B-Q4_K_M")
             || result == Some("Qwen2.5-32B-Instruct-Q4_K_M")
     );
     // With tools, Reasoning request: Qwen wins (DeepSeek filtered out — can't do tools)
-    let result = pick_model_with_tools(Category::Reasoning, &available, true);
+    let result = pick_model_classified(
+        &Classification {
+            needs_tools: true,
+            has_media_inputs: false,
+        },
+        &available,
+    );
     assert_eq!(result, Some("Qwen2.5-32B-Instruct-Q4_K_M"));
 }
 
@@ -808,7 +636,13 @@ fn test_tools_filter_fallback_when_none_capable() {
         ("DeepSeek-R1-Distill-Qwen-32B-Q4_K_M", 10.0), // tools: false
     ];
     // With tools required but nothing capable: falls back to available
-    let result = pick_model_with_tools(Category::Reasoning, &available, true);
+    let result = pick_model_classified(
+        &Classification {
+            needs_tools: true,
+            has_media_inputs: false,
+        },
+        &available,
+    );
     assert_eq!(result, Some("DeepSeek-R1-Distill-Qwen-32B-Q4_K_M"));
 }
 
@@ -821,8 +655,6 @@ fn test_agentic_prefers_strongest_model() {
         ("Qwen2.5-32B-Instruct-Q4_K_M", 18.0),    // tier 3, tools: true
     ];
     let cl = Classification {
-        category: Category::Code,
-        complexity: Complexity::Moderate,
         needs_tools: true,
         has_media_inputs: false,
     };
@@ -839,8 +671,6 @@ fn test_chat_prefers_fastest_model() {
         ("Qwen2.5-32B-Instruct-Q4_K_M", 18.0),    // tier 3, slow
     ];
     let cl = Classification {
-        category: Category::Chat,
-        complexity: Complexity::Quick,
         needs_tools: false,
         has_media_inputs: false,
     };
@@ -859,8 +689,6 @@ fn test_agentic_deep_strongly_prefers_biggest() {
         ("MiniMax-M2.5-Q4_K_M", 21.0),              // tier 4
     ];
     let cl = Classification {
-        category: Category::Code,
-        complexity: Complexity::Deep,
         needs_tools: true,
         has_media_inputs: false,
     };

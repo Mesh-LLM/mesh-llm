@@ -136,7 +136,10 @@ mod tests {
             RouteAttemptResult::RetryableResponseQuality(
                 ResponseQualityFailure::EmptyAssistantOutput,
             ),
-            RouteAttemptResult::CommittedStreamFailure { status_code: 200 },
+            RouteAttemptResult::CommittedStreamFailure {
+                status_code: 200,
+                cause: super::super::common::CommittedStreamFailureCause::Truncated,
+            },
         ] {
             let mut upstream = CancelRecorder::default();
 
