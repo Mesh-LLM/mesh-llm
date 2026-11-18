@@ -7,13 +7,19 @@
 //! Q4_K_M on a Radeon 780M (Vulkan, 16 GB laptop) plans four 4096-token lanes,
 //! and Vulkan refuses the 1 GiB KV block with `ErrorOutOfDeviceMemory`. The
 //! model then never loads, while a single lane of the same depth does.
+//!
+//! The footprint that load measures is reused for the next load of the model,
+//! scaled to its lane count, so the plan also gives up auto-planned lanes when
+//! that measurement leaves them no room for the minimum context.
 
 use anyhow::Result;
 use mesh_llm_events::{OutputEvent, emit_event};
 
 use super::{LocalOpenAiModelStartSpec, load_direct_skippy_model_with_dflash_fallback};
 use crate::inference::skippy;
-use crate::runtime::context_planning::RuntimeResourcePlan;
+use crate::runtime::context_planning::{
+    RuntimeResourcePlan, RuntimeResourcePlanInput, plan_runtime_resources,
+};
 
 /// What the native runtime reports when `llama_init_from_model` returns no
 /// context, which is how a KV or compute buffer allocation failure surfaces.
@@ -79,6 +85,37 @@ fn fallback_warning(model_name: &str, plan: &RuntimeResourcePlan) -> String {
     )
 }
 
+/// The widest plan under `plan.slots` auto-planned lanes whose measured
+/// footprint fits, when `plan`'s leaves no room for the minimum context.
+/// After a one-lane retry, the measurement is one lane's compute charge, which
+/// the next plan multiplies by the lanes it picks again: that can overrun a
+/// device the single lane fits. `plan` is kept otherwise, and always for a
+/// lane count the operator set.
+pub(super) fn fewer_lanes_for_measured_fit(
+    input: RuntimeResourcePlanInput<'_>,
+    plan: RuntimeResourcePlan,
+) -> RuntimeResourcePlan {
+    let measured_no_fit = plan
+        .breakdown
+        .is_some_and(|breakdown| breakdown.measured_fit == Some(false));
+    if !measured_no_fit || input.parallel_override.is_some() {
+        return plan;
+    }
+    (1..plan.slots)
+        .rev()
+        .find_map(|lanes| {
+            let mut fewer = plan_runtime_resources(RuntimeResourcePlanInput {
+                parallel_override: Some(lanes),
+                ..input
+            });
+            let breakdown = fewer.breakdown.as_mut()?;
+            // The planner chose this lane count, not the operator.
+            breakdown.slots_auto = true;
+            (breakdown.measured_fit != Some(false)).then_some(fewer)
+        })
+        .unwrap_or(plan)
+}
+
 fn use_one_lane(plan: &mut RuntimeResourcePlan) {
     let lanes = plan.slots as u64;
     plan.slots = 1;
@@ -124,6 +161,59 @@ mod tests {
             message: message.to_string(),
         })
         .context("load Skippy runtime for model qwen3-8b")
+    }
+
+    /// The device of the module example, as the measurement a one-lane retry
+    /// left: 300 MiB of compute and a 4096-token KV, with 1,200 MiB beside
+    /// the weights. Four lanes charge 1,200 MiB of compute against the
+    /// 1,056 MiB the utilization target leaves; two lanes still fit.
+    #[test]
+    fn a_measurement_from_one_lane_plans_the_auto_lanes_it_fits() {
+        use crate::runtime::context_planning::{
+            MeasuredBufferFootprint, RuntimeResourcePlanSource, RuntimeResourcePlanningProfile,
+        };
+        const MIB: u64 = 1024 * 1024;
+        let meta = crate::models::gguf::GgufCompactMeta {
+            context_length: 40_960,
+            ..Default::default()
+        };
+        let input = |parallel_override| RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override,
+            model_bytes: 5_027_783_488,
+            projector_bytes: 0,
+            vram_bytes: 5_027_783_488 + 1_200 * MIB,
+            metadata: Some(&meta),
+            kv_cache_quant: crate::models::gguf::GgufKvCacheQuant::F16,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            measured_buffers: Some(MeasuredBufferFootprint {
+                compute_bytes: 300 * MIB,
+                kv_bytes: 576 * MIB,
+                context_length: 4096,
+                lane_count: 1,
+            }),
+        };
+
+        let four = plan_runtime_resources(input(None));
+        assert_eq!(four.slots, 4);
+        assert_eq!(four.breakdown.unwrap().measured_fit, Some(false));
+
+        let fewer = fewer_lanes_for_measured_fit(input(None), four);
+        let breakdown = fewer.breakdown.unwrap();
+        assert_eq!(fewer.slots, 2);
+        assert_eq!(breakdown.measured_fit, Some(true));
+        assert!(breakdown.slots_auto);
+        assert_eq!(
+            breakdown.planning_source,
+            RuntimeResourcePlanSource::MeasuredFootprint
+        );
+
+        // Four lanes the operator asked for are kept, and so is their refusal.
+        let asked = plan_runtime_resources(input(Some(4)));
+        assert_eq!(fewer_lanes_for_measured_fit(input(Some(4)), asked), asked);
+        // A plan whose measurement fits is left alone.
+        assert_eq!(fewer_lanes_for_measured_fit(input(None), fewer), fewer);
     }
 
     #[test]

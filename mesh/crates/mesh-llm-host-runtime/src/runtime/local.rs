@@ -1061,6 +1061,12 @@ pub(super) async fn start_local_openai_model(
         .flatten();
     let (plan, default_dflash_planned) =
         plan_with_default_dflash_draft(plan_input, default_dflash_draft);
+    // A plan holding a draft keeps it: only a plan without one is redone.
+    let plan = if default_dflash_planned {
+        plan
+    } else {
+        lane_fallback::fewer_lanes_for_measured_fit(plan_input, plan)
+    };
     if default_dflash_draft.is_some() && !default_dflash_planned {
         tracing::warn!(
             model = model_name,
