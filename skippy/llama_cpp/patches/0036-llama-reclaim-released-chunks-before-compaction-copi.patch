@@ -1,0 +1,214 @@
+From bc0e2f85b4fc6db42178aff53ace97937a1da05b Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Wed, 18 Nov 2026 20:03:10 +1100
+Subject: [PATCH 36/39] llama: reclaim released chunks before compaction copies
+ rows into them
+
+A chunk whose cells are all free hands its pages back to the kernel and is
+marked released; the next ubatch that writes into it zeroes the whole chunk
+first. Compaction moved live rows into such a chunk without clearing the
+mark, so the next write there, a decoded token appended after a compacted
+prefix, zeroed the prefix it had just moved.
+
+Compaction now reclaims each destination chunk before copying rows into it,
+as apply_ubatch does before a ubatch writes. Every other writer already goes
+through apply_ubatch.
+
+test-skippy-kv-release-compact frees a chunk below a live sequence,
+compacts the sequence into it and appends a token there, then checks the
+moved rows.
+---
+ src/llama-kv-cache.cpp                   |  16 +++
+ src/llama-kv-cache.h                     |   1 +
+ tests/CMakeLists.txt                     |   1 +
+ tests/test-skippy-kv-release-compact.cpp | 120 +++++++++++++++++++++++
+ 4 files changed, 138 insertions(+)
+ create mode 100644 tests/test-skippy-kv-release-compact.cpp
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 8dd006f9e..b8c00f857 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -678,6 +678,20 @@ void llama_kv_cache::reclaim_chunks(uint32_t stream, const std::vector<uint32_t>
+     trace.set_value("bytes", (int64_t) bytes);
+ }
+ 
++void llama_kv_cache::reclaim_compaction_targets(const std::vector<compaction_move> & moves) {
++    std::vector<uint32_t> streams(n_stream);
++    std::iota(streams.begin(), streams.end(), 0);
++    std::for_each(streams.begin(), streams.end(), [&](uint32_t s) {
++        std::vector<uint32_t> targets;
++        std::for_each(moves.begin(), moves.end(), [&](const compaction_move & move) {
++            if (move.strm == s) {
++                targets.push_back(move.dst);
++            }
++        });
++        reclaim_chunks(s, targets);
++    });
++}
++
+ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+     skippy_trace::scope trace("llama.kv_seq_rm", "seq", seq_id);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+@@ -1098,6 +1112,8 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool
+             const auto moves = compact_cells();
+             did_compact = !moves.empty();
+             if (did_compact) {
++                // a row moved into a released chunk must not be zeroed by the next write there
++                reclaim_compaction_targets(moves);
+                 copy_compacted_cells(moves);
+                 LLAMA_LOG_DEBUG("%s: compacted %zu KV cells\n", __func__, moves.size());
+             }
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index d17215dda..ad9257353 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -313,6 +313,7 @@ public:
+     void release_free_chunks();
+     void release_free_chunks(uint32_t stream);
+     void reclaim_chunks(uint32_t stream, const std::vector<uint32_t> & idxs);
++    void reclaim_compaction_targets(const std::vector<compaction_move> & moves);
+     // the byte range of chunks [chunk0, chunk1) of `stream` in each cache tensor
+     void for_each_chunk_range(uint32_t stream, uint32_t chunk0, uint32_t chunk1,
+             const std::function<void(ggml_tensor *, size_t, size_t)> & fn) const;
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index c1449c563..077620687 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -195,6 +195,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
+     llama_build_and_test(test-skippy-kv-rows-aligned.cpp)
+     llama_build_and_test(test-skippy-kv-place-together.cpp)
++    llama_build_and_test(test-skippy-kv-release-compact.cpp)
+     llama_build_and_test(test-skippy-task-pool.cpp)
+     target_include_directories(test-skippy-task-pool PRIVATE ${PROJECT_SOURCE_DIR}/src)
+     llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
+diff --git a/tests/test-skippy-kv-release-compact.cpp b/tests/test-skippy-kv-release-compact.cpp
+new file mode 100644
+index 000000000..9ea25b89f
+--- /dev/null
++++ b/tests/test-skippy-kv-release-compact.cpp
+@@ -0,0 +1,120 @@
++// A chunk whose pages went back to the kernel is zeroed when a ubatch next writes into it.
++// Compaction can move a live sequence into such a chunk; its rows must survive that write.
++#include "../src/llama-batch.h"
++#include "../src/llama-kv-cache.h"
++#include "../src/llama-model.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <memory>
++#include <numeric>
++#include <vector>
++
++static int failures = 0;
++#define CHECK(cond) do { if (!(cond)) { ++failures; std::printf("FAIL line %d: %s\n", __LINE__, #cond); } } while (0)
++
++namespace {
++
++constexpr uint32_t chunk = llama_kv_cache::kv_chunk_cells;
++
++struct tokens_at {
++    std::vector<llama_pos>      pos;
++    std::vector<llama_seq_id>   seq;
++    std::vector<llama_seq_id *> seq_ptr;
++    std::vector<int32_t>        n_seq;
++    llama_seq_id                unq;
++    llama_ubatch                ubatch{};
++    llama_kv_cache::slot_info   slot{};
++
++    tokens_at(llama_seq_id id, llama_pos p0, uint32_t cell0, uint32_t n)
++        : pos(n), seq(n, id), seq_ptr(n), n_seq(n, 1), unq(id) {
++        std::iota(pos.begin(), pos.end(), p0);
++        std::transform(seq.begin(), seq.end(), seq_ptr.begin(), [](llama_seq_id & s) { return &s; });
++        ubatch.n_tokens     = n;
++        ubatch.n_pos        = 1;
++        ubatch.n_seq_tokens = n;
++        ubatch.n_seqs       = ubatch.n_seqs_unq = 1;
++        ubatch.pos          = pos.data();
++        ubatch.n_seq_id     = n_seq.data();
++        ubatch.seq_id       = seq_ptr.data();
++        ubatch.seq_id_unq   = &unq;
++        slot.s0   = slot.s1 = 0;
++        slot.strm = { 0 };
++        slot.idxs = { std::vector<uint32_t>(n) };
++        std::iota(slot.idxs[0].begin(), slot.idxs[0].end(), cell0);
++    }
++
++    tokens_at(const tokens_at &)             = delete;
++    tokens_at & operator=(const tokens_at &) = delete;
++};
++
++void fill(llama_kv_cache & kv, uint32_t cell0, uint32_t n, float value) {
++    std::for_each(kv.cell_tensors.begin(), kv.cell_tensors.end(), [&](ggml_tensor * t) {
++        const size_t per_row = t->nb[1]/sizeof(float);
++        std::vector<float> rows(per_row*n);
++        std::vector<size_t> at(rows.size());
++        std::iota(at.begin(), at.end(), size_t(0));
++        std::transform(at.begin(), at.end(), rows.begin(), [&](size_t i) { return value + (float) (cell0 + i/per_row); });
++        ggml_backend_tensor_set(t, rows.data(), (size_t) cell0*t->nb[1], rows.size()*sizeof(float));
++    });
++}
++
++bool holds(const llama_kv_cache & kv, uint32_t cell0, uint32_t n, float value, uint32_t from) {
++    return std::all_of(kv.cell_tensors.begin(), kv.cell_tensors.end(), [&](ggml_tensor * t) {
++        const size_t per_row = t->nb[1]/sizeof(float);
++        std::vector<float> rows(per_row*n);
++        ggml_backend_tensor_get(t, rows.data(), (size_t) cell0*t->nb[1], rows.size()*sizeof(float));
++        std::vector<size_t> at(rows.size());
++        std::iota(at.begin(), at.end(), size_t(0));
++        return std::all_of(at.begin(), at.end(), [&](size_t i) { return rows[i] == value + (float) (from + i/per_row); });
++    });
++}
++
++}
++
++int main() {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    if (!model) {
++        std::printf("failed to create test model\n");
++        return 1;
++    }
++    llama_hparams hparams{};
++    hparams.n_layer_all = 1;
++    hparams.n_embd_head_k_full = hparams.n_embd_head_v_full = 4;
++    hparams.n_embd_head_k_swa = hparams.n_embd_head_v_swa = 4;
++    hparams.n_embd_head_k_mla_impl = hparams.n_embd_head_v_mla_impl = 4;
++    hparams.n_head_arr[0] = hparams.n_head_kv_arr[0] = 1;
++    llama_kv_cache kv(*model, false, hparams, GGML_TYPE_F32, GGML_TYPE_F32,
++            false, false, true, 4*chunk, 2, 0, LLAMA_SWA_TYPE_NONE, nullptr,
++            [](int32_t il) { return il == 0; }, {}, {});
++    if (!kv.release_pages) {
++        std::printf("SKIP: this platform keeps freed KV pages\n");
++        return 0;
++    }
++
++    const uint32_t prefix = 20;
++    const float    mark   = 100.0f;
++    tokens_at other(1, 0, 0, chunk);
++    kv.apply_ubatch(other.slot, other.ubatch);
++    tokens_at kept(0, 0, chunk, prefix);
++    kv.apply_ubatch(kept.slot, kept.ubatch);
++    fill(kv, chunk, prefix, mark);
++
++    kv.seq_rm(1, -1, -1);
++    CHECK(kv.chunk_released[0]);
++
++    kv.init_update(nullptr, true);
++    CHECK(kv.seq_pos_min(0) == 0 && kv.seq_pos_max(0) == (llama_pos) prefix - 1);
++    CHECK(holds(kv, 0, prefix, mark, chunk));
++
++    tokens_at next(0, prefix, prefix, 1);
++    kv.apply_ubatch(next.slot, next.ubatch);
++    CHECK(holds(kv, 0, prefix, mark, chunk));
++
++    if (failures) {
++        std::printf("%d check(s) failed\n", failures);
++        return 1;
++    }
++    std::printf("OK\n");
++    return 0;
++}
+-- 
+2.43.0
+
