@@ -44,49 +44,67 @@ pub(crate) fn prune_dead_runtime_slots(
     let Ok(entries) = fs::read_dir(root) else {
         return 0;
     };
-    let mut removed = 0;
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        let Some(dir_pid) = dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        if dir_pid == my_pid || !is_instance_slot(&dir) || owner_may_be_running(&dir, dir_pid) {
-            continue;
-        }
-        let Some(last_write) = newest_write(&dir) else {
-            continue;
-        };
-        let age = now.duration_since(last_write).unwrap_or_default();
-        if age < retention {
-            continue;
-        }
-        match remove_unclaimed_slot(root, &dir, dir_pid, last_write) {
-            Ok(true) => removed += 1,
-            Ok(false) => {}
-            Err(error) => tracing::debug!(
-                path = %dir.display(),
-                %error,
-                "could not remove a stopped instance's runtime directory"
-            ),
-        }
-    }
+    let removed = entries
+        .flatten()
+        .filter(|entry| prune_slot(root, &entry.path(), my_pid, now, retention))
+        .count();
     if removed > 0 {
         tracing::debug!(removed, root = %root.display(), "removed stopped instances' runtime directories");
     }
     removed
 }
 
+/// Prunes one entry of the runtime root, and says whether it removed a slot.
+fn prune_slot(root: &Path, dir: &Path, my_pid: u32, now: SystemTime, retention: Duration) -> bool {
+    if is_renamed_for_removal(dir) {
+        // A cleanup renamed it, then could not remove all of it.
+        if let Err(error) = fs::remove_dir_all(dir) {
+            tracing::debug!(
+                path = %dir.display(),
+                %error,
+                "could not finish removing a stopped instance's runtime directory"
+            );
+        }
+        return false;
+    }
+    let Some(dir_pid) = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    if dir_pid == my_pid || !is_instance_slot(dir) || owner_may_be_running(dir, dir_pid) {
+        return false;
+    }
+    let Some(last_write) = newest_write(dir) else {
+        return false;
+    };
+    if now.duration_since(last_write).unwrap_or_default() < retention {
+        return false;
+    }
+    match remove_unclaimed_slot(root, dir, dir_pid, last_write) {
+        Ok(removed) => removed,
+        Err(error) => {
+            tracing::debug!(
+                path = %dir.display(),
+                %error,
+                "could not remove a stopped instance's runtime directory"
+            );
+            false
+        }
+    }
+}
+
 /// Whether `dir` is a slot an instance created: it holds the `lock` file
 /// every instance opens, and nothing but what an instance writes there
-/// (`owner.json`, the temporary file it is written through, and `logs/`).
-/// Any other numeric directory under a custom root, such as an archive named
-/// after a year, is not ours to remove.
+/// (`owner.json`, the temporary file it is written through, and `logs/`),
+/// each of the kind the instance makes, symlinks never counting. Any other
+/// numeric directory under a custom root, such as an archive named after a
+/// year, is not ours to remove.
 fn is_instance_slot(dir: &Path) -> bool {
-    if !dir.join("lock").is_file() {
+    let kind = |path: &Path| fs::symlink_metadata(path).map(|meta| meta.file_type());
+    if !kind(&dir.join("lock")).is_ok_and(|kind| kind.is_file()) {
         return false;
     }
     let Ok(mut entries) = fs::read_dir(dir) else {
@@ -94,13 +112,27 @@ fn is_instance_slot(dir: &Path) -> bool {
     };
     entries.all(|entry| {
         entry.is_ok_and(|entry| {
-            matches!(
-                entry.file_name().to_str(),
-                Some("lock" | "owner.json" | "owner.json.tmp" | "logs")
-            )
+            let Ok(kind) = kind(&entry.path()) else {
+                return false;
+            };
+            match entry.file_name().to_str() {
+                Some("lock" | "owner.json" | "owner.json.tmp") => kind.is_file(),
+                Some("logs") => kind.is_dir(),
+                _ => false,
+            }
         })
     })
 }
+
+/// A slot a cleanup renamed out of the way before removing it.
+fn is_renamed_for_removal(dir: &Path) -> bool {
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(REMOVING_PREFIX))
+        && fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir())
+}
+
+const REMOVING_PREFIX: &str = ".removing-";
 
 /// Removes `dir` unless an instance holds it, and says whether it did.
 ///
@@ -126,13 +158,16 @@ fn remove_unclaimed_slot(
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
-    let removing = root.join(format!(".removing-{pid}-{nanos}"));
+    let removing = root.join(format!("{REMOVING_PREFIX}{pid}-{nanos}"));
     #[cfg(windows)]
     drop(claim);
     let renamed = fs::rename(dir, &removing);
     #[cfg(not(windows))]
     drop(claim);
-    if renamed.is_err() {
+    if let Err(error) = renamed {
+        // Expected while an instance holds the slot on Windows; anything else
+        // (a root that refuses renames, say) is worth a line.
+        tracing::debug!(path = %dir.display(), %error, "kept a stopped instance's runtime directory: rename failed");
         return Ok(false);
     }
     if newest_entry_write(&removing).is_some_and(|newest| newest > last_write) {
@@ -148,12 +183,22 @@ fn remove_unclaimed_slot(
 /// instance holds it or it has gone.
 #[cfg(unix)]
 fn claim_slot(lock: &Path) -> io::Result<Option<fs::File>> {
-    use std::os::unix::io::AsRawFd;
     let file = match fs::OpenOptions::new().read(true).write(true).open(lock) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
+    claim_opened_lock(file, lock)
+}
+
+/// Takes the flock on `file`, opened from `lock`, and keeps it only while
+/// `lock` still names that file. Another cleanup may have claimed the file
+/// first, renamed its slot away and released it, and an instance created a
+/// new slot at the same path since: the lock held is then not the slot's.
+#[cfg(unix)]
+fn claim_opened_lock(file: fs::File, lock: &Path) -> io::Result<Option<fs::File>> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::io::AsRawFd;
     // SAFETY: flock is safe to call with a valid fd.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         let error = io::Error::last_os_error();
@@ -162,7 +207,10 @@ fn claim_slot(lock: &Path) -> io::Result<Option<fs::File>> {
         }
         return Err(error);
     }
-    Ok(Some(file))
+    let held = file.metadata()?;
+    let still_here = fs::metadata(lock)
+        .is_ok_and(|current| current.dev() == held.dev() && current.ino() == held.ino());
+    Ok(still_here.then_some(file))
 }
 
 #[cfg(windows)]
@@ -452,6 +500,65 @@ mod tests {
         assert!(remove_unclaimed_slot(root.path(), &dir, DEAD_PID, unchanged).unwrap());
         assert!(!dir.exists());
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn keeps_a_numeric_directory_whose_entries_are_not_of_the_kind_an_instance_writes() {
+        let root = tempdir().unwrap();
+        let dir = root.path().join(DEAD_PID.to_string());
+        fs::create_dir_all(dir.join("owner.json.tmp")).unwrap();
+        fs::write(dir.join("lock"), "").unwrap();
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("owner.json.tmp").is_dir());
+
+        // `logs` as a file is not an instance's either.
+        fs::remove_dir(dir.join("owner.json.tmp")).unwrap();
+        fs::write(dir.join("logs"), "").unwrap();
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("logs").is_file());
+    }
+
+    #[test]
+    fn finishes_removing_a_slot_an_earlier_cleanup_renamed() {
+        let root = tempdir().unwrap();
+        let renamed = root.path().join(format!("{REMOVING_PREFIX}{DEAD_PID}-1"));
+        fs::create_dir_all(renamed.join("logs")).unwrap();
+        fs::write(renamed.join("logs").join("skippy-native.log"), "left").unwrap();
+        // Something else whose name only starts the same way is a file.
+        let file = root.path().join(format!("{REMOVING_PREFIX}notes"));
+        fs::write(&file, "kept").unwrap();
+
+        prune_dead_runtime_slots(root.path(), 1, SystemTime::now(), DEAD_SLOT_RETENTION);
+        assert!(!renamed.exists());
+        assert!(file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_replaced_after_it_was_opened_is_not_claimed() {
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        let lock = dir.join("lock");
+        let open = || {
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lock)
+                .unwrap()
+        };
+        let opened = open();
+        // Meanwhile the slot went and a new instance's lock took its path.
+        fs::remove_file(&lock).unwrap();
+        fs::write(&lock, "").unwrap();
+        assert!(claim_opened_lock(opened, &lock).unwrap().is_none());
+        assert!(claim_opened_lock(open(), &lock).unwrap().is_some());
     }
 
     /// Holds a slot lock the way a running instance does.

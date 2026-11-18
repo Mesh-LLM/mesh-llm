@@ -266,10 +266,11 @@ fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) ->
         writeln_some(err, tally.record(target.pid, &target.label, outcome))?;
     }
     let (lines, stopped) = tally.finish();
-    for line in lines {
-        writeln!(err, "{line}")?;
-    }
+    let written = lines.iter().try_for_each(|line| writeln!(err, "{line}"));
+    // A process that would not stop is the failure to report, even when the
+    // summary could not be written.
     stopped?;
+    written?;
     // A plain client never registers a runtime instance, so this command
     // cannot see it; say so in the closing output, since a bare
     // "Nothing running." would be false while a client still serves
@@ -290,7 +291,9 @@ fn writeln_some(err: &mut impl Write, line: Option<String>) -> std::io::Result<(
 struct StopTally {
     stopped: u32,
     failed: u32,
-    /// Records left by nodes that had already stopped, said once at the end:
+    /// Records of nodes that were not running when checked, said once at the
+    /// end (stale before the command, or a service child the service's stop
+    /// ended first):
     /// a machine that ran many nodes keeps one per run, and a line for each
     /// buried the one that mattered.
     already_stopped: u32,
@@ -368,9 +371,9 @@ impl StopTally {
         let mut lines = Vec::new();
         match self.already_stopped {
             0 => {}
-            1 => lines.push("  1 record left by a node that had already stopped".to_string()),
+            1 => lines.push("  1 record of a node that was not running when checked".to_string()),
             count => lines.push(format!(
-                "  {count} records left by nodes that had already stopped"
+                "  {count} records of nodes that were not running when checked"
             )),
         }
         if self.failed > 0 {
@@ -436,7 +439,7 @@ mod stop_tests {
         // that nothing runs.
         assert_eq!(
             lines,
-            ["  1 record left by a node that had already stopped"]
+            ["  1 record of a node that was not running when checked"]
         );
     }
 
@@ -475,7 +478,7 @@ mod stop_tests {
         assert_eq!(
             finished(tally),
             [
-                "  3 records left by nodes that had already stopped",
+                "  3 records of nodes that were not running when checked",
                 "Nothing running."
             ]
         );
@@ -485,7 +488,7 @@ mod stop_tests {
         tally.record(8, "mesh-llm", TerminationOutcome::Graceful);
         assert_eq!(
             finished(tally),
-            ["  1 record left by a node that had already stopped"]
+            ["  1 record of a node that was not running when checked"]
         );
     }
 
