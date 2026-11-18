@@ -51,6 +51,8 @@ where
 }
 
 pub async fn run_setup_command(args: SetupCommandArgs<'_>) -> Result<()> {
+    // A node started after this point is the one this run's service started.
+    let setup_started = std::time::SystemTime::now();
     let mut prompter = CliSetupPrompter;
     let mut actions = CliSetupActions::new(args.environment, args.configured, args.options.verbose);
     let plan = run_setup(args.options, args.environment, &mut prompter, &mut actions).await?;
@@ -60,7 +62,7 @@ pub async fn run_setup_command(args: SetupCommandArgs<'_>) -> Result<()> {
         args.options,
         &actions.service_outcome,
     ) {
-        super::console_open::open_console_when_ready().await;
+        super::console_open::open_console_when_ready(setup_started).await;
     }
     Ok(())
 }
