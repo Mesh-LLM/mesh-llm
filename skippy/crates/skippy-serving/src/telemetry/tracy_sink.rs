@@ -128,10 +128,13 @@ impl Lanes {
     }
 }
 
-/// What the sink keeps while a span is live.
+/// What the sink keeps while a span is live, including the identity its
+/// lane is mapped by, which ending and discarding both release.
 struct Open {
     zone: sys::___tracy_c_zone_context,
     lane: Lane,
+    span_id: [u8; 8],
+    name: &'static str,
 }
 
 pub(super) struct TracySink {
@@ -210,7 +213,7 @@ impl TracySink {
             }
             Self::zone_end(open.zone);
         });
-        self.lanes().release(span.context.span_id, &span.name);
+        self.lanes().release(open.span_id, open.name);
     }
 
     fn plot(&self, name: &str, value: f64) {
@@ -250,7 +253,14 @@ impl TraceSink for TracySink {
         let lane = self.lanes().assign(span);
         let mut zone = None;
         lane.resume(|| zone = Some(Self::zone_begin(span.name)));
-        zone.map_or(OpenSpan::NONE, |zone| OpenSpan::keep(Open { zone, lane }))
+        zone.map_or(OpenSpan::NONE, |zone| {
+            OpenSpan::keep(Open {
+                zone,
+                lane,
+                span_id: span.context.span_id,
+                name: span.name,
+            })
+        })
     }
 
     fn end_span(&self, open: OpenSpan, span: &SpanRecord) {
@@ -263,6 +273,7 @@ impl TraceSink for TracySink {
     fn discard_span(&self, open: OpenSpan) {
         if let Some(open) = open.take::<Open>() {
             open.lane.resume(|| Self::zone_end(open.zone));
+            self.lanes().release(open.span_id, open.name);
         }
     }
 
@@ -401,6 +412,16 @@ mod tests {
             "a freed request lane is taken again"
         );
         assert_eq!(lanes.requests_made, 1);
+    }
+
+    #[test]
+    fn a_discarded_span_releases_its_lane() {
+        let sink = TracySink::start();
+        let open = sink.create_span_with(&start(REQUEST_ROOT, 9, None));
+        sink.discard_span(open);
+        let lanes = sink.lanes();
+        assert!(lanes.by_span.is_empty());
+        assert_eq!(lanes.free_requests.len(), 1);
     }
 
     #[test]
