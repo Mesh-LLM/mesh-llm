@@ -81,16 +81,29 @@ impl MeshFilter {
 pub struct RelayHealth {
     /// Relays the discovery client tried to query.
     pub relays_queried: usize,
-    /// Relays that completed the round trip — an EOSE, possibly empty.
-    /// Silence-until-deadline and never-issued requests do not count.
+    /// Relays that spoke: completed the query (EOSE) or delivered
+    /// events before the round ended. Silence-until-deadline and
+    /// never-issued requests do not count.
     pub relays_answered: usize,
+    /// Relays that completed their query with EOSE. Higher bar than
+    /// `relays_answered`: a relay that delivered partial events and
+    /// disconnected did not finish, so absence inference must not rest
+    /// on it — the listing it never sent may still have been coming.
+    pub queries_completed: usize,
 }
 
 impl RelayHealth {
     /// False only when no relay answered at all — the "cannot tell"
-    /// state for absence-based decisions.
+    /// state for the CLI's outage reporting.
     pub fn any_relay_answered(&self) -> bool {
         self.relays_answered > 0
+    }
+
+    /// True when at least one relay finished its query. Only a
+    /// completed query that did not contain the listing is evidence of
+    /// absence; the absence-based takeover decision requires this.
+    pub fn any_query_completed(&self) -> bool {
+        self.queries_completed > 0
     }
 }
 
@@ -118,9 +131,13 @@ impl RelayRound {
 /// One relay's fetch outcome, normalized for counting and merging.
 #[derive(Debug)]
 pub(crate) enum RelayFetchResult {
-    /// The relay completed the round trip (EOSE) or delivered events
-    /// before the round ended — either way it spoke.
-    Answered(std::collections::BTreeSet<Event>),
+    /// The relay spoke: completed the query (EOSE) or delivered events
+    /// before the round ended. `completed_query` distinguishes the two —
+    /// only a completed query supports absence inference.
+    Answered {
+        events: std::collections::BTreeSet<Event>,
+        completed_query: bool,
+    },
     /// The relay neither completed nor delivered anything: never
     /// connected, disconnected before EOSE, closed without EOSE, or
     /// silent until the deadline.
@@ -139,7 +156,10 @@ pub(crate) enum RelayFetchResult {
 /// completed empty one.
 pub(crate) fn classify_relay_round_outcome(round: RelayRound) -> RelayFetchResult {
     if round.eose || !round.events.is_empty() {
-        RelayFetchResult::Answered(round.events)
+        RelayFetchResult::Answered {
+            events: round.events,
+            completed_query: round.eose,
+        }
     } else {
         RelayFetchResult::Silent
     }
@@ -156,10 +176,15 @@ pub(crate) fn merge_relay_fetch_results(
 ) -> (std::collections::BTreeSet<Event>, RelayHealth) {
     let mut events = std::collections::BTreeSet::new();
     let mut relays_answered = 0usize;
+    let mut queries_completed = 0usize;
     for result in results {
         match result {
-            RelayFetchResult::Answered(relay_events) => {
+            RelayFetchResult::Answered {
+                events: relay_events,
+                completed_query,
+            } => {
                 relays_answered += 1;
+                queries_completed += usize::from(completed_query);
                 events.extend(relay_events);
             }
             RelayFetchResult::Silent => {}
@@ -170,6 +195,7 @@ pub(crate) fn merge_relay_fetch_results(
         RelayHealth {
             relays_queried,
             relays_answered,
+            queries_completed,
         },
     )
 }
@@ -244,8 +270,22 @@ fn apply_discovery_notification(
             subscription_id: id,
             event,
         } if *id == *subscription_id => {
-            if let Some(round) = rounds.get_mut(&relay_url) {
-                round.events.insert(event.into_owned());
+            let event = event.into_owned();
+            // The SDK's relay verification cache keys on the CLAIMED
+            // event id (shared.rs `verify_and_cache` returns Ok on a
+            // cache hit without checking the signature), so a relay can
+            // replay a cached id over altered content and pass. Verify
+            // here: hash and signature must match the content actually
+            // received.
+            match event.verify() {
+                Ok(()) => {
+                    if let Some(round) = rounds.get_mut(&relay_url) {
+                        round.events.insert(event);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Nostr relay {relay_url} sent an invalid event: {e}");
+                }
             }
         }
         RelayMessage::EndOfStoredEvents(id) if *id == *subscription_id => {
@@ -521,7 +561,10 @@ mod relay_health_tests {
                 .expect("sign");
             set.insert(event);
         }
-        RelayFetchResult::Answered(set)
+        RelayFetchResult::Answered {
+            events: set,
+            completed_query: true,
+        }
     }
 
     #[test]
@@ -538,7 +581,8 @@ mod relay_health_tests {
             health,
             RelayHealth {
                 relays_queried: 3,
-                relays_answered: 1
+                relays_answered: 1,
+                queries_completed: 1
             }
         );
         assert!(events.is_empty());
@@ -549,6 +593,7 @@ mod relay_health_tests {
         let (_, health) =
             merge_relay_fetch_results(5, (0..5).map(|_| RelayFetchResult::Silent).collect());
         assert!(!health.any_relay_answered());
+        assert!(!health.any_query_completed());
     }
 
     #[test]
@@ -564,12 +609,19 @@ mod relay_health_tests {
         let (events, health) = merge_relay_fetch_results(
             2,
             vec![
-                RelayFetchResult::Answered(first),
-                RelayFetchResult::Answered(second),
+                RelayFetchResult::Answered {
+                    events: first,
+                    completed_query: true,
+                },
+                RelayFetchResult::Answered {
+                    events: second,
+                    completed_query: true,
+                },
             ],
         );
         assert_eq!(events.len(), 1);
         assert_eq!(health.relays_answered, 2);
+        assert_eq!(health.queries_completed, 2);
     }
 
     /// Regression (review round 2): on a later round of the same cached
@@ -616,11 +668,60 @@ mod relay_health_tests {
         let round = rounds.remove(&relay_url).expect("round to exist");
         let classified = classify_relay_round_outcome(round);
         match classified {
-            RelayFetchResult::Answered(events) => {
+            RelayFetchResult::Answered { events, .. } => {
                 assert_eq!(events.len(), 1, "the raw re-delivery must be collected")
             }
             other => panic!("expected Answered, got {other:?}"),
         }
+    }
+
+    /// Regression (review round 3): the SDK's relay verification cache
+    /// keys on the CLAIMED event id, so a relay can replay a cached id
+    /// over altered content and pass `verify_and_cache`. The collector
+    /// verifies every raw event itself: hash and signature must match
+    /// the content actually received.
+    #[test]
+    fn an_event_reusing_a_cached_id_with_altered_content_is_rejected() {
+        use std::borrow::Cow;
+        use std::collections::HashMap;
+
+        let id = SubscriptionId::generate();
+        let relay_url: nostr_sdk::prelude::RelayUrl = "wss://relay.example".parse().unwrap();
+
+        let valid = EventBuilder::new(Kind::Custom(1), "legitimate")
+            .finalize(&Keys::generate())
+            .expect("sign");
+
+        // Same claimed id, altered content: an id-for-content mismatch
+        // `verify()` must catch regardless of any cache.
+        let other = EventBuilder::new(Kind::Custom(1), "forged")
+            .finalize(&Keys::generate())
+            .expect("sign");
+        let mut value = serde_json::to_value(&other).expect("serialize");
+        value["id"] = serde_json::to_value(valid.id).expect("id json");
+        let forged: Event = serde_json::from_value(value).expect("deserialize");
+
+        let mut rounds = HashMap::new();
+        rounds.insert(relay_url.clone(), RelayRound::default());
+
+        for event in [valid, forged] {
+            apply_discovery_notification(
+                &mut rounds,
+                &id,
+                ClientNotification::Message {
+                    relay_url: relay_url.clone(),
+                    message: Box::new(RelayMessage::Event {
+                        subscription_id: Cow::Owned(id.clone()),
+                        event: Cow::Owned(event),
+                    }),
+                },
+            );
+        }
+
+        let round = rounds.remove(&relay_url).expect("round to exist");
+        // Only the legitimate event survives; the forged replay is
+        // dropped by verification.
+        assert_eq!(round.events.len(), 1);
     }
 
     #[test]
@@ -652,7 +753,9 @@ mod relay_health_tests {
             ..RelayRound::default()
         };
         let classified = classify_relay_round_outcome(completed_empty);
-        assert!(matches!(classified, RelayFetchResult::Answered(set) if set.is_empty()));
+        assert!(
+            matches!(classified, RelayFetchResult::Answered { events, completed_query: true } if events.is_empty())
+        );
     }
 
     #[test]
@@ -672,8 +775,11 @@ mod relay_health_tests {
         };
         let classified = classify_relay_round_outcome(unfinished);
         match classified {
-            RelayFetchResult::Answered(events) => assert_eq!(events.len(), 1),
-            other => panic!("expected Answered, got {other:?}"),
+            RelayFetchResult::Answered {
+                events,
+                completed_query: false,
+            } => assert_eq!(events.len(), 1),
+            other => panic!("expected Answered without completion, got {other:?}"),
         }
     }
 }

@@ -399,9 +399,12 @@ async fn watchdog_initial_delay() {
 pub(crate) enum ListingPresence {
     /// A current listing for our mesh was seen.
     Present,
-    /// At least one relay answered and none had our listing.
+    /// At least one relay completed its query (EOSE) and none had our
+    /// listing. Partial speech — events delivered without the query
+    /// finishing — is not absence evidence: the listing may still have
+    /// been coming when the round ended.
     Missing,
-    /// No relay answered; absence is not evidence.
+    /// No relay completed its query; absence is not evidence.
     Unknown,
 }
 
@@ -413,7 +416,7 @@ fn listing_presence(
 ) -> ListingPresence {
     if mesh_listing_present(meshes, mesh_id, served) {
         ListingPresence::Present
-    } else if health.any_relay_answered() {
+    } else if health.any_query_completed() {
         ListingPresence::Missing
     } else {
         ListingPresence::Unknown
@@ -755,18 +758,33 @@ mod listing_presence_tests {
         }
     }
 
-    fn health(answered: usize) -> RelayHealth {
+    fn health(answered: usize, completed: usize) -> RelayHealth {
         RelayHealth {
             relays_queried: 5,
             relays_answered: answered,
+            queries_completed: completed,
         }
+    }
+
+    /// The incomplete-query hole: a relay delivered an event for
+    /// another mesh and disconnected before EOSE, and nothing else
+    /// completed. Absence inference must not rest on partial speech.
+    #[test]
+    fn an_unrelated_event_without_a_completed_query_is_unknown_not_missing() {
+        let meshes = vec![mesh_with_id(Some("other"), &[])];
+        // Spoke (delivered an event) but never finished the query.
+        let partial = listing_presence(&meshes, health(1, 0), Some("abc"), &[]);
+        assert_eq!(partial, ListingPresence::Unknown);
+        // The same round with a completed query elsewhere is a verdict.
+        let completed = listing_presence(&meshes, health(2, 1), Some("abc"), &[]);
+        assert_eq!(completed, ListingPresence::Missing);
     }
 
     #[test]
     fn matching_mesh_id_means_present() {
         let meshes = vec![mesh_with_id(Some("abc"), &[])];
         assert_eq!(
-            listing_presence(&meshes, health(5), Some("abc"), &[]),
+            listing_presence(&meshes, health(5, 5), Some("abc"), &[]),
             ListingPresence::Present
         );
     }
@@ -775,12 +793,12 @@ mod listing_presence_tests {
     fn absence_with_answers_means_missing() {
         let meshes = vec![mesh_with_id(Some("other"), &[])];
         assert_eq!(
-            listing_presence(&meshes, health(5), Some("abc"), &[]),
+            listing_presence(&meshes, health(5, 5), Some("abc"), &[]),
             ListingPresence::Missing
         );
         // Empty results with a live relay are still a verdict.
         assert_eq!(
-            listing_presence(&[], health(1), Some("abc"), &[]),
+            listing_presence(&[], health(1, 1), Some("abc"), &[]),
             ListingPresence::Missing
         );
     }
@@ -789,7 +807,7 @@ mod listing_presence_tests {
     fn absence_with_no_answers_is_unknown_not_missing() {
         let meshes = vec![mesh_with_id(Some("other"), &[])];
         assert_eq!(
-            listing_presence(&meshes, health(0), Some("abc"), &[]),
+            listing_presence(&meshes, health(0, 0), Some("abc"), &[]),
             ListingPresence::Unknown
         );
     }
@@ -802,7 +820,7 @@ mod listing_presence_tests {
         // alone — this is the property that keeps the watchdog from
         // taking over during relay outages.
         let meshes = vec![mesh_with_id(Some("other"), &[])];
-        let outage = listing_presence(&meshes, health(0), Some("abc"), &[]);
+        let outage = listing_presence(&meshes, health(0, 0), Some("abc"), &[]);
         assert_ne!(outage, ListingPresence::Missing);
         assert_eq!(outage, ListingPresence::Unknown);
 
@@ -819,7 +837,7 @@ mod listing_presence_tests {
         let meshes = vec![mesh_with_id(None, &["Qwen3-8B-Q4_K_M"])];
         let served = vec!["Qwen3-8B-Q4_K_M".to_string()];
         assert_eq!(
-            listing_presence(&meshes, health(3), None, &served),
+            listing_presence(&meshes, health(3, 3), None, &served),
             ListingPresence::Present
         );
     }
