@@ -146,6 +146,16 @@ runs:
       if: runner.os != 'Linux' && inputs.runner-profile != 'preinstalled-macos'
       uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
 
+    - name: Resolve hosted system image
+      id: hosted_image
+      if: inputs.runner-profile == 'hosted-bare'
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${ImageOS:-}" in ''|*[!A-Za-z0-9._-]*) exit 1 ;; esac
+        case "${ImageVersion:-}" in ''|*[!A-Za-z0-9._-]*) exit 1 ;; esac
+        printf 'identity=%s-%s\n' "$ImageOS" "$ImageVersion" >> "$GITHUB_OUTPUT"
+
     # Exact key (no restore-keys) over every file compiled into the binary. The
     # image profile never restores an executable: it may run on Depot, whose
     # cache namespace is repository-wide rather than ref-scoped.
@@ -155,7 +165,7 @@ runs:
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: target/release/xtask
-        key: xtask-hosted-bare-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust_toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', '.github/actions/prepare-automation/action.yml', '.github/cache-version.txt', 'tools/xtask/**', 'tools/authority-automation/**', 'tools/ci-controller/**', 'tools/process-supervision/**', 'tools/runner-cleanup/**', 'tools/trajectory-reader/**', 'mesh/crates/mesh-llm-release-footer/**', 'ci/python-research-source.json', 'scripts/ci-compat-smoke.sh', 'scripts/linux-glibc-floor.txt', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh') }}
+        key: xtask-hosted-bare-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust_toolchain.outputs.cachekey }}-${{ steps.hosted_image.outputs.identity }}-${{ hashFiles('.cargo/**', '.github/actions/prepare-automation/action.yml', '.github/cache-version.txt', 'Cargo.lock', 'Cargo.toml', 'ci/python-research-source.json', 'mesh/crates/mesh-llm-release-footer/Cargo.toml', 'mesh/crates/mesh-llm-release-footer/src/**', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/ci-compat-smoke.sh', 'scripts/lib/lld.sh', 'scripts/linux-glibc-floor.txt', 'tools/authority-automation/Cargo.toml', 'tools/authority-automation/src/**', 'tools/ci-controller/Cargo.toml', 'tools/ci-controller/src/**', 'tools/process-supervision/Cargo.toml', 'tools/process-supervision/src/**', 'tools/runner-cleanup/Cargo.toml', 'tools/runner-cleanup/src/**', 'tools/trajectory-reader/Cargo.toml', 'tools/trajectory-reader/src/**', 'tools/xtask/Cargo.toml', 'tools/xtask/build.rs', 'tools/xtask/src/**') }}
 
     - name: Build automation tool
       id: bootstrap_unix

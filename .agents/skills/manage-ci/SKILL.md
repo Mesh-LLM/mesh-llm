@@ -37,8 +37,7 @@ modes. Preserve exact bytes where a caller consumes or hashes them.
 
 `tools/ci-controller` owns CI planning (`ci plan`), lane result admission
 (`ci validate-lane`), the planner-side repository checks
-(`repository affected-crates`, `repository conventional-commits`, and
-`repository llama-upstream-pin`), and the shared `automation bootstrap` check.
+(`repository affected-crates` and `repository llama-upstream-pin`), and the shared `automation bootstrap` check.
 Its normal dependencies are limited to serde, serde_json, sha2, and hex. Full
 xtask keeps every command and delegates these to the library, so outputs, exit
 codes, and refusals match. `ci family-plan`, `ci validate-graph`, and all
@@ -126,7 +125,7 @@ they never rebuild it and never fall back to `prepare-automation`. Its artifact
 name carries a `product-` prefix, so it cannot collide with or stand in for the
 protected `authority_*` artifacts, and it retains for one day. Jobs that must
 not wait on a producer and only plan or validate (the entry planners through
-`compute-changes` and `plan-ci`, commit convention, and lane summaries) use
+`compute-changes` and `plan-ci`, and lane summaries) use
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
@@ -677,6 +676,28 @@ checked-in expiry are the maintainer-controlled approval boundary.
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
   restore prefixes across trust or ABI boundaries.
+- Hosted automation and Linux CPU packaged-runtime keys use the typed
+  `ci-ops cache-inputs` inventory. Its checked-in projections require freshness
+  validation; resolving a cache key must not compile an automation helper.
+  Include the complete local production dependency closure, build scripts,
+  included resources, native patches, packaging implementation and linker
+  recipes. Exclude integration tests or documentation only when the compiled
+  graph does not consume them. Hosted executable keys also bind the actual
+  runner image identity, separately from the Rust toolchain.
+- Windows ABI retention is planned by typed Rust automation against a complete
+  inventory of the trusted main ref. Preserve active toolkit, architecture,
+  backend and image compatibility families before retaining older generations,
+  with explicit byte and history limits. Hosted image rollouts are not atomic:
+  preserve observed image cohorts for currently consumed toolkit/architecture
+  combinations rather than declaring every image except one warmer obsolete.
+  Reject malformed or incomplete data
+  and an insufficient budget before deletion. Unknown keys and other refs are
+  outside its authority. Retain the plan as evidence; a source change does not
+  authorize an operator to purge live caches.
+- A workflow that is the only `main` producer of a key must wake on every input
+  of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
+  `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract
+  gate refuses an uncovered input and any `!` exclusion in those paths.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.
@@ -689,9 +710,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/authority-automation/**`,
-  `tools/ci-controller/**`, `tools/process-supervision/**`, and
-  `tools/runner-cleanup/**` because xtask compiles those libraries. A
+  executable, whose inventory also includes the manifests and production
+  sources of authority-automation, ci-controller, process-supervision and
+  runner-cleanup because xtask compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
@@ -745,6 +766,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   not dispatch another publication.
 
 ## Workflow definition and dependencies
+
+- Commit and PR prose is not a CI gate. Do not install commit-message hooks,
+  enforce title grammar, or blacklist attribution identities. Release-note
+  classification may recognize conventional prefixes without requiring them;
+  unclassified titles remain in Other changes.
 
 - Declare least-privilege `permissions` explicitly. Default to
   `contents: read`; grant write or OIDC permissions only to the owning job.
@@ -860,6 +886,10 @@ unconfirmed.
 Bounded, explicitly unverified source checkpoints are retained after every coding
 turn and after supervised termination. Upload recovery before verbose evidence;
 never include the restored Python environment in the diagnostic upload.
+The native build supervisor freezes its running automation executable in a
+private directory outside both checkouts before launching the wrapper. Keep that
+copy alive through supervision and recovery: candidate Cargo builds may replace
+their own `target/debug/xtask`, but must not replace the admitted controller.
 If the recorded native base is unavailable, capture its complete tracked tree
 against an empty tree so committed repairs remain in the unverified checkpoint.
 

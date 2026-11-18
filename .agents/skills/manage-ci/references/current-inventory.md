@@ -581,42 +581,16 @@ Merge settings as of 2026-09-10: `allow_merge_commit=false`,
 `squash_merge_commit_title=PR_TITLE`, and
 `squash_merge_commit_message=PR_BODY`. The title and body settings were
 changed from `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES` on that date.
-`COMMIT_MESSAGES` composed the squash body from the branch commit messages,
-which carried agent and bot `Co-authored-by:` trailers onto `main` even when
-the pull request title was clean. Composing from the title and body instead
-means the squash commit contains only text CI has validated. GitHub may still
-add its own `Co-authored-by:` trailer for a pull request whose commits have
-several distinct authors; no message-level control prevents that.
+GitHub may add its own `Co-authored-by:` trailer for a pull request whose
+commits have several distinct authors. Attribution identities are no longer
+blacklisted in hooks or CI; these source changes do not modify merge settings
+or repository rulesets.
 
-Attribution-trailer enforcement is CI plus merge-message composition, not a
-ruleset. A negated `commit_message_pattern` ruleset was created, measured and
-deleted on 2026-09-10. Rulesets accept commit-metadata rules on any plan and
-report them `active`, but GitHub gates metadata restrictions to Enterprise
-organizations and this organization is on Team, so the rule was never
-evaluated. Four pushes carrying the denied literal were accepted: branch
-creation and branch update, with both the `regex` and `contains` operators,
-from a ruleset reporting `current_user_can_bypass: "never"`. Do not re-add a
-commit-metadata rule here expecting it to enforce anything.
-
-What enforces the convention instead:
-
-- `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
-  the first local development build on every platform. It invokes the Rust
-  `repository conventional-commits` command through `cargo xtool`.
-- The `commit_convention` job in `ci-quality-slice.yml`, which validates the
-  pull request title against Conventional Commits and scans every branch
-  commit message plus the pull request body for denied attribution trailers.
-  It runs `repository conventional-commits` through the `ci-controller`
-  executable from `prepare-ci-controller`. It declares no `needs`, so it fails
-  within a minute rather than after a lane has compiled anything, and runs
-  only for `pull_request` events.
-  Pull-request-authored text reaches the script through environment variables
-  and is never interpolated into the shell.
-- Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
-  `squash_merge_commit_message=PR_BODY` since 2026-09-10, replacing
-  `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`. The squash commit is built from
-  the title and body that CI validated, so a branch commit that skipped the
-  hook cannot carry a trailer onto `main`.
+Commit-message hooks, title validation and attribution scans are removed.
+Builds do not install hooks, and the Quality slice has no commit-convention
+job. Release-note classification remains advisory: recognized prefixes select
+a section; unclassified titles remain in Other changes. Merge-message
+composition and repository rulesets are unchanged.
 
 The four `main` ruleset bypass actors remain deliberately: maintainers need a
 fast merge path. Required checks therefore do not bind them, and the CI check
@@ -1078,6 +1052,36 @@ changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
 ## Artifact and cache owners
+
+`ci-ops cache-inputs` owns the checked-in hosted executable and Linux CPU
+runtime key projections. Version 2 keys include the shared linker driver and
+the runtime packaging implementation. Hosted executable keys bind `ImageOS`
+and `ImageVersion` separately from Rust's toolchain cache key. Conservative
+production source trees include embedded resources; uncompiled integration
+tests and READMEs no longer invalidate hosted executables. The packaged runtime
+inventory includes `skippy-package-builder` and its local dependency closure.
+The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
+`windows_warmer_paths` workflow guard requires `windows-warm-caches.yml` push
+paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
+exclusions), so a key input cannot change on `main` without waking its only
+producer.
+
+Windows ABI key construction and retention share typed Rust identities.
+The existing warmer's maintenance job derives active families from CI runtime
+rows, release rows and warmer rows, including both CUDA release toolkits and
+the distinct ROCm architecture sets. It enumerates the main-ref ABI namespace
+with complete pagination, retains one useful entry per active family before
+history, and applies a 4 GiB aggregate bound. The existing retention input is
+the total entry limit per family, default two. An impossible minimum budget or
+malformed/incomplete inventory refuses deletion. Other refs and namespaces
+remain untouched. The job retains policy, inventory, plan and execution
+receipts for 14 days. Observed image cohorts for currently consumed toolkit
+and architecture combinations remain active during hosted image rollouts;
+one warmer's image cannot establish that other cohorts are obsolete.
+No live purge accompanies this source cutover.
+
+These source contracts require candidate and post-merge execution evidence;
+they do not establish a measured speedup or production retention qualification.
 
 `native runtime-manifest-write` owns Windows ROCm target admission after the
 shell copies SDK kernels. For configured targets with a declared `rocblas.dll`,
@@ -1615,6 +1619,14 @@ product-version input defaults to the host version, never the runtime release.
 The product manifest records required and supplied ABI plus runtime release.
 No workflow dispatch, runner, or publication permissions change.
 
+Linux native packaging coalesces identical regular `.so` aliases after relocation
+through `native deduplicate-linux-libraries`; system tar stores their hard links.
+The product tar writer independently coalesces equal library bytes and modes
+within each `lib` directory, preserving names and manifest hashes even after
+composition copies. Ustar link targets longer than 100 bytes keep regular payloads.
+Windows ZIP, macOS libraries, workflow topology and publication identities do not
+change; cache importers may expand aliases back into separate files.
+
 Product schema coverage compares the composer's emitted root, host and runtime
 field sets with `schemas/product-v2.schema.json`, including required/supplied ABI
 and runtime release. Default bundled startup additionally verifies the complete
@@ -1773,6 +1785,10 @@ rerun, without starting an agent for the transient failure.
 
 Every coding turn saves an explicitly unverified source checkpoint; the native
 outer supervisor also attempts recovery after termination and cancellation.
+That supervisor gives the wrapper a private copy of its running automation
+executable outside both checkouts and retains it through final recovery. A
+candidate rebuild of `target/debug/xtask` cannot replace that controller; the
+wrapper's existing digest guards remain mandatory.
 When the native base commit is unavailable, recovery captures the complete
 tracked tree against an empty tree. Candidate processes cannot inherit GitHub
 workflow-control paths, and local repair uses a private home without Git credentials.
@@ -2062,8 +2078,8 @@ run without its producer and an unplanned producer must be skipped.
 Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates
@@ -2075,34 +2091,20 @@ by its `authority_source` job, so a default-branch update cannot change validati
 while producers run. If no authority producer is selected, the summary retains
 the protected default-branch checkout. Linux validation also admits the preceding
 grouped layout for in-flight workflows, identified by dependency names. Mixed
-layouts fail and every planned job must still succeed. Its exact-key cache entry
-(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
-`Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
-drivers) is separate from the xtask entry. A miss runs `cargo build --locked
---release -p ci-controller --bin ci-controller` without Just or sccache and
-saves the result.
+layouts fail and every planned job must still succeed. Its exact-key cache entry uses the version 2 hosted-controller inventory and
+binds OS, architecture, Rust toolchain and hosted system image. A miss builds
+locked release ci-controller without Just or sccache and saves the result.
 
-Other jobs that must not wait on a producer keep `prepare-automation`: the
-release UI stamp and the
-Windows unit platform-check jobs, independent release SDK and smoke callers, canary, nightly, Docker and warm-cache
-workflows. The `hosted-bare` profile now restores a release executable from an
-exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
-`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
-`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/runner-cleanup/**`,
-`tools/trajectory-reader/**`,
-`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/authority-automation/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, and `tools/runner-cleanup/**` because xtask
-compiles those libraries. Only the
-default `tool: xtask` restores or saves that entry. The image
-profile never restores or saves an executable. The protected authority producers
-pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
-run from the frozen protected source. A first run after any hashed input changes
-is a cold miss. Pull requests execute main's reusable workflows, so none of this
-applies to a PR until it is merged. No hosted execution is recorded here.
+Other jobs without a producer use prepare-automation. Its hosted-bare profile
+restores the exact version 2 xtask inventory, compiles on a miss and saves on a
+miss. The inventory covers every local production dependency, build script,
+reviewed included resource and linker recipe; normal contract validation checks
+both the dependency closure and checked-in key projections. Only tool: xtask
+uses this cache. Image profiles never restore executables, and protected
+producers keep reuse-hosted-binary: false to compile their frozen source in-run.
+A changed compiled input or hosted image starts a new exact cohort. There are
+no restore prefixes. PRs may execute protected-main workflow definitions;
+candidate and production qualification must identify the definition that ran.
 
 ## Python SDK component and admission
 

@@ -161,7 +161,7 @@ Distribution packagers run the test suite while building MeshLLM and Skippy, in 
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
 
-Run `just hooks-install` once per clone before your first commit; git cannot activate a committed hook on clone, so nothing else enables it, and `just build` only enables it after a local build. Commit subjects must follow Conventional Commits v1.0.0, and `just check-commits` validates a range. The type decides which release-notes section the change lands in, and the PR title becomes the squash-merge subject, so give the PR a conventional title too. See `.agents/skills/release-notes/SKILL.md`.
+Use a clear, user-focused commit subject and PR title. Conventional Commit prefixes are optional hints for release-note classification, not a hook or CI requirement. The PR title becomes the squash-merge subject; unclassified titles appear under Other changes. See `.agents/skills/release-notes/SKILL.md`.
 
 ### Minimum validation by change type
 
@@ -178,7 +178,6 @@ Do not rerun otherwise unchanged validation solely because a commit is about to 
 
 ### Rust changes
 
-- After Rust changes, run `just no-console-print`. It forbids direct printing and terminal handles in product code, with no allowlist; use the owning product's output facilities.
 - The preferred Rust edition for this workspace is Rust 2024. Determine the edition from the owning crate's `Cargo.toml`; if it uses `edition.workspace = true`, read `workspace.package.edition` from the root `Cargo.toml`. Most crates inherit `edition = "2024"` from the root; any crate that opts out declares its own edition in its `Cargo.toml`.
 - Format Rust files in a way that preserves the owning crate's edition metadata. Prefer `cargo fmt -p <crate> -- path/to/file.rs` for a narrow edit, or `cargo fmt --all` when changes span packages. Do not use `cargo fmt --all -- path/to/file.rs`: workspace-level file arguments can be parsed without the owning crate's Rust 2024 edition metadata and fail on let-chains.
 - If you must invoke `rustfmt` directly on a standalone file, pass the edition resolved from that manifest lookup, for example `--edition 2024` for the current workspace default; otherwise use `cargo fmt` through the owning package.

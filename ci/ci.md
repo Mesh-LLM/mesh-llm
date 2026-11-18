@@ -112,8 +112,7 @@ compiling. The default image profile keeps its verification and cache setup.
 Metadata-only Cargo discovery remains permitted. Composition-only release
 jobs still consume immutable automation and never compile.
 
-Quality commit convention and environment-mutation checks use Rust repository
-owners. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
+Quality environment-mutation checks use the Rust repository owner. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
 summaries use `ci-ops registry-pulls`, with jq producing the observation JSON.
 Runtime-seed preflight, restore verification, measurement and summary use
 `ci-ops runtime-seed`. Its automation build precedes measurement and uses
@@ -973,9 +972,10 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 ## Planner and profiles
 
-The local `scripts/hooks/commit-msg` hook now invokes the Rust
-`repository conventional-commits` command through the repository Cargo alias.
-The workflow commit check, planner and five lane summaries use Rust owners
+Commit subjects, PR titles and attribution identities are not CI gates.
+Builds do not install commit-message hooks. Release notes still classify
+recognized conventional prefixes and retain other titles in Other changes.
+The planner and five lane summaries use Rust owners
 through `prepare-ci-controller`. Lane summaries use the protected revision frozen
 by `authority_source`, keeping validation stable across default-branch updates
 while producers run. When that producer is skipped, summaries retain the
@@ -1510,6 +1510,34 @@ keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
+
+Exact hosted executable and Linux CPU packaged-runtime key expressions are
+projections of the typed `ci-ops cache-inputs` inventory. The normal contract
+gate checks freshness. Hosted version 2 keys bind the actual hosted image as
+well as the Rust toolchain, and include the common linker driver. Runtime
+version 2 keys include packaging policy and the packaged Rust tool's local
+dependency closure. Key lookup remains compilation-free; a miss follows the
+existing build path and a hit retains its existing verification.
+The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`, and
+`windows-warm-caches.yml` is the only job that saves it on `main`, so the
+contract gate also checks that the warmer's `push` paths cover every input of
+that key, by equality or a literal `<dir>/**`, and refuses `!` exclusions there:
+an input it does not watch would move the key on `main` with no warmed entry,
+and the next Windows runtime run of each PR would build cold.
+
+Windows ABI retention runs in the existing warmer maintenance job. Rust derives
+the active compatibility roster from CI, release and warmer consumers and
+uses the same identity constructor as restoration. Complete main-ref namespace
+enumeration replaces the capped global scan. A plan keeps one useful entry
+per active toolkit/architecture/backend/image family before bounded history,
+with a 4 GiB aggregate limit and two entries per family by default. Observed
+image cohorts remain active for current toolkit/architecture combinations,
+because hosted image rollout is not atomic across runners. Invalid
+input or an insufficient minimum budget fails before deletion. The job uploads
+the inventory, policy, plan and deletion receipt for 14 days. Other namespaces
+and refs are outside the plan. This change adds no cache authority and performs
+no operator purge. Candidate execution and post-merge qualification remain
+separate from local contract checks.
 
 The Windows host slice uploads Cargo HTML timings from its existing standalone
 Skippy and Mesh compilations as a separate one-day architecture/attempt
@@ -2170,6 +2198,10 @@ rerun, without starting an agent for the transient failure.
 
 Every coding turn saves an explicitly unverified source checkpoint; the native
 outer supervisor also attempts recovery after termination and cancellation.
+That supervisor gives the wrapper a private copy of its running automation
+executable outside both checkouts and retains it through final recovery. A
+candidate rebuild of `target/debug/xtask` cannot replace that controller; the
+wrapper's existing digest guards remain mandatory.
 When the native base commit is unavailable, recovery captures the complete
 tracked tree against an empty tree. Candidate processes cannot inherit GitHub
 workflow-control paths, and local repair uses a private home without Git credentials.
@@ -2452,42 +2484,28 @@ run without its producer and an unplanned producer must be skipped.
 Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
 
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates
 --stdin` and `plan-ci` calls `ci plan` through that variable, and each prepares
 the controller only when it is unset, so a planner job builds it once. Lane
 summaries run `ci validate-lane`; the Quality summary also runs `repository
-llama-upstream-pin` on PRs. Its exact-key cache entry
-(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
-`Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
-drivers) is separate from the xtask entry. A miss runs `cargo build --locked
---release -p ci-controller --bin ci-controller` without Just or sccache and
-saves the result.
+llama-upstream-pin` on PRs. Its exact-key cache entry uses the version 2 hosted-controller inventory and
+binds OS, architecture, Rust toolchain and hosted system image. A miss builds
+locked release ci-controller without Just or sccache and saves the result.
 
-Other jobs that must not wait on a producer keep `prepare-automation`: the
-release UI stamp and the
-Windows unit platform-check jobs, independent release SDK and smoke callers, canary, nightly, Docker and warm-cache
-workflows. The `hosted-bare` profile now restores a release executable from an
-exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
-`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/authority-automation/**`,
-`tools/ci-controller/**`, `tools/process-supervision/**`, `tools/runner-cleanup/**`,
-`tools/trajectory-reader/**`,
-`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/authority-automation/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, and `tools/runner-cleanup/**` because xtask
-compiles those libraries. Only the
-default `tool: xtask` restores or saves that entry. The image
-profile never restores or saves an executable. The protected authority producers
-pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
-run from the frozen protected source. A first run after any hashed input changes
-is a cold miss. Pull requests execute main's reusable workflows, so none of this
-applies to a PR until it is merged. No hosted execution is recorded here.
+Other jobs without a producer use prepare-automation. Its hosted-bare profile
+restores the exact version 2 xtask inventory, compiles on a miss and saves on a
+miss. The inventory covers every local production dependency, build script,
+reviewed included resource and linker recipe; normal contract validation checks
+both the dependency closure and checked-in key projections. Only tool: xtask
+uses this cache. Image profiles never restore executables, and protected
+producers keep reuse-hosted-binary: false to compile their frozen source in-run.
+A changed compiled input or hosted image starts a new exact cohort. There are
+no restore prefixes. PRs may execute protected-main workflow definitions;
+candidate and production qualification must identify the definition that ran.
 
 ## Python SDK component and admission
 

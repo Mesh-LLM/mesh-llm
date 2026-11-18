@@ -167,6 +167,14 @@ verified against the entry's pinned version and per-platform SHA-256; a
 direct GitHub reference is verified against the digest GitHub reports, and a
 local `--archive` install carries no catalog pin.
 
+Linux runtime and product tar archives store identical shared-library aliases
+as hard links: every loader filename, mode and manifest checksum is retained,
+without repeating its payload. Runtime staging deduplicates only after ELF
+relocation; product archiving compares bytes even if composition copied aliases
+into separate files. Extractors must support tar hard links. Later cache imports
+may copy aliases again, so this reduces downloads but does not guarantee smaller
+installed caches. Windows ZIP and macOS library packaging are unchanged.
+
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
 means an unstamped build, and `invalid` means the bytes changed after packaging.

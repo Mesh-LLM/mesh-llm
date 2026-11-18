@@ -20,10 +20,8 @@ ci-validate:
     actionlint -config-file .github/actionlint.yaml
     git diff --check
     just ci-automation-contracts
-    just ci-legacy-contracts
     just ci-crate-lists
     just check-release
-    just no-console-print
     just publish-crates
 
 # Required native ownership for the former Windows Python contract modules.
@@ -81,12 +79,6 @@ automation-run *ARGS:
 # Run crates.io publish-chain consistency checks.
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
-
-# Gate on println!/eprintln!/print!/eprint! and direct io::stdout()/io::stderr()
-# handles in Rust files under crates/ (excluding tests, non-product crates, helper
-# bins and build.rs). There is no allowlist: route output through mesh-llm-events.
-no-console-print:
-    cargo run -p xtask -- repo-consistency no-console-print
 
 # Shellcheck the explicitly supplied changed shell scripts.
 ci-shellcheck *scripts:

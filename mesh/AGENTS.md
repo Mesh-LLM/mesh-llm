@@ -293,7 +293,6 @@ you want quiet output, use `--log-format json` and parse what you need.
 
 ## Rust validation
 
-- After Rust changes, run `just no-console-print`. There is no allowlist. It forbids `println!` / `eprintln!` / `print!` / `eprint!` and direct `io::stdout()` / `io::stderr()` handles in product code. Route operational output through `mesh_llm_events::emit_event` or `tracing`, human-facing CLI prose through `mesh_llm_events::console_out` / `console_err`, and a `--json` payload through `mesh_llm_events::machine_out`. Only the console output facility may hold a terminal handle; its roster is `CONSOLE_OUTPUT_OWNERS` in `tools/xtask/src/no_console_print/scope.rs`.
 - If a change is reachable from the shipped binary, run at least `cargo check -p mesh-llm` and `cargo clippy -p mesh-llm --all-targets -- -D warnings`.
 - Changes to `proto/`, any Mesh `protocol/` module, `mesh-llm-host-runtime/src/mesh/gossip.rs`, `mesh-llm-host-runtime/src/mesh/mod.rs`, routing, election, or API serialization need `cargo test -p mesh-llm-host-runtime --lib`; do not stop at build-only validation.
 

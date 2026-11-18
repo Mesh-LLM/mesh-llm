@@ -14,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / "src"))
 
 from meshllm import (
+    LaneCapacity,
     Node,
     OpenAIRequestError,
     OpenAIStreamChunk,
@@ -194,6 +195,61 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(models[0].context_length, 131_072)
 
         self.assertFalse(handle.started)
+
+    async def test_runtime_capacity_forwards_exact_ids_unsigned_values_absence_and_errors(self) -> None:
+        serving_id = "org/model@revision#profile"
+        initial = SimpleNamespace(
+            execution_lanes=2,
+            context_tokens_per_lane=(1 << 63) - 1,
+            context_pool_tokens=(1 << 64) - 2,
+            captured_at_unix_ms=(1 << 64) - 1,
+        )
+        smaller = SimpleNamespace(
+            execution_lanes=1,
+            context_tokens_per_lane=4096,
+            context_pool_tokens=4096,
+            captured_at_unix_ms=123,
+        )
+        failure = RuntimeError("node is not running")
+        current: object = initial
+        requested: list[str] = []
+
+        class CapacityHandle(FakeHandle):
+            def runtime_capacity(self, model: str) -> object:
+                requested.append(model)
+                if current is failure:
+                    raise failure
+                return current
+
+        node = Node(CapacityHandle())
+        self.assertEqual(
+            await node.runtime_capacity(serving_id),
+            LaneCapacity(
+                execution_lanes=2,
+                context_tokens_per_lane=(1 << 63) - 1,
+                context_pool_tokens=(1 << 64) - 2,
+                captured_at_unix_ms=(1 << 64) - 1,
+            ),
+        )
+        current = smaller
+        capacity = await node.runtime_capacity(serving_id)
+        self.assertIsInstance(capacity, LaneCapacity)
+        self.assertEqual(
+            (
+                capacity.execution_lanes,
+                capacity.context_tokens_per_lane,
+                capacity.context_pool_tokens,
+                capacity.captured_at_unix_ms,
+            ),
+            (1, 4096, 4096, 123),
+        )
+        current = None
+        self.assertIsNone(await node.runtime_capacity(serving_id))
+        current = failure
+        with self.assertRaises(RuntimeError) as caught:
+            await node.runtime_capacity(serving_id)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(requested, [serving_id] * 4)
 
     async def test_startup_failure_does_not_stop_a_node_that_never_started(self) -> None:
         class FailedStartHandle(FakeHandle):

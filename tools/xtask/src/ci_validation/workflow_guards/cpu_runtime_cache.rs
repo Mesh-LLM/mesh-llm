@@ -11,7 +11,16 @@ const RESTORE: &str = "Restore exact Linux CPU runtime";
 const SAVE: &str = "Save exact Linux CPU runtime from trusted main";
 const RESTORE_GATE: &str = "${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu == 'true' && !startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-') }}";
 const SAVE_GATE: &str = "${{ matrix.runtime.backend == 'cpu' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.runner_policy.outputs.allow_native_github_cache_cpu == 'true' && !startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-') && steps.runtime_cache.outputs.cache-hit != 'true' }}";
-const KEY: &str = "skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}";
+#[cfg(test)]
+fn key() -> String {
+    // Inventory freshness is checked separately; these fixtures mutate its projection.
+    include_str!("../../../../../.github/workflows/ci-linux-runtime-slice.yml")
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("key: "))
+        .find(|key| key.starts_with("skippy-runtime-linux-v2-"))
+        .unwrap_or_default()
+        .to_owned()
+}
 
 fn member<'a>(node: &'a Node, key: &str) -> Result<&'a Node, String> {
     node.get(key)
@@ -50,7 +59,10 @@ fn operation(node: &Node, action: &str, condition: &str, key: &str) -> Result<()
     }
     Ok(())
 }
-pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
+pub(super) fn check_with_key(
+    workflows: &BTreeMap<String, Node>,
+    expected_key: &str,
+) -> Result<(), String> {
     let workflow = workflows
         .get("ci-linux-runtime-slice.yml")
         .ok_or("CPU cache workflow missing")?;
@@ -77,7 +89,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
     };
     let (restore_index, restore) = step(steps, RESTORE)?;
     bind(restore, "id", "runtime_cache")?;
-    operation(restore, "restore", RESTORE_GATE, KEY)?;
+    operation(restore, "restore", RESTORE_GATE, expected_key)?;
     let (verify, _) = step(steps, "Verify restored Linux CPU runtime")?;
     let (prepare, _) = step(steps, "Prepare immutable Linux native runtime")?;
     let (upload, _) = step(steps, "Upload immutable Linux runtime input")?;
@@ -92,6 +104,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
         return Err("CPU runtime cache must restore, verify, prepare, upload, then save".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
+    check_with_key(workflows, &key())
 }
 
 #[cfg(test)]

@@ -46,34 +46,27 @@ fn windows_abi_cache_key_binds_every_compatibility_dimension_and_exact_restore()
     }
     let run = text(identity, "run");
     for required in [
-        "$backend -notin @(\"cpu\", \"cuda\", \"rocm\", \"vulkan\")",
-        "$backend -in @(\"cuda\", \"rocm\") -and -not $architectureSet",
+        "$env:MESH_LLM_AUTOMATION_BIN ci-ops windows-cache-identity",
+        "if ($LASTEXITCODE -ne 0)",
+        "prepared automation is required for Windows ABI cache identity",
         "build_dir must resolve inside GITHUB_WORKSPACE",
         "build_dir must remain outside the replaceable llama.cpp ",
-        "toolchain_epoch must match MESH_LLM_LLAMA_TOOLCHAIN_EPOCH",
-        "cuda-$version-Jimver-v0.2.36",
-        "vulkan-$version-jakoch-v1.5.2",
-        "rocm-$version",
-        "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash",
-        "Windows ABI cache input hash is missing or invalid",
+        "cache-key=$($identity.key)",
     ] {
         assert!(run.contains(required), "missing {required}");
     }
     let hash = text(environment, "CACHE_INPUT_HASH");
     for source in [
         ".github/actions/restore-windows-abi-cache/action.yml",
-        ".github/actions/save-and-verify-actions-cache/action.yml",
-        ".github/actions/resolve-native-toolchain-epoch/action.yml",
-        ".github/actions/prepare-native-runtime-input/action.yml",
-        ".github/actions/setup-windows-rocm-sdk/action.yml",
-        "scripts/build-llama.sh",
-        "skippy/scripts/build-llama.sh",
-        "scripts/prepare-llama.sh",
-        "skippy/scripts/prepare-llama.sh",
-        "scripts/package-native-runtime.sh",
-        "skippy/scripts/package-native-runtime.sh",
-        "skippy/llama_cpp/upstream.txt",
-        "skippy/llama_cpp/patches/**",
+        ".github/actions/save-and-verify-actions-cache/**",
+        ".github/actions/resolve-native-toolchain-epoch/**",
+        ".github/actions/prepare-native-runtime-input/**",
+        ".github/actions/setup-windows-rocm-sdk/**",
+        "scripts/**",
+        "skippy/scripts/**",
+        "skippy/llama_cpp/**",
+        "tools/xtask/src/native_policy/**",
+        "tools/xtask/src/prepared_input/**",
         ".github/cache-version.txt",
     ] {
         assert!(hash.contains(&format!("'{source}'")), "unbound {source}");
