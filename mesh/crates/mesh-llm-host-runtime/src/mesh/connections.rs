@@ -1312,20 +1312,30 @@ impl Node {
     ) -> Result<()> {
         match self.reserve_pending_connection(peer_id).await {
             PendingConnectionReservation::Owner(owner) => {
-                let result = self
-                    .complete_cached_connection_gossip(peer_id, conn, discover_peers)
-                    .await;
-                let outcome = match &result {
-                    Ok(()) => PendingConnectionOutcome::Admitted,
-                    Err(error) => PendingConnectionOutcome::Failed(error.to_string()),
-                };
-                self.finish_pending_connection(owner, outcome).await;
-                result
+                self.complete_owned_cached_connection_gossip(conn, owner, discover_peers)
+                    .await
             }
             PendingConnectionReservation::Waiter(waiter) => {
                 self.await_pending_connection(waiter).await
             }
         }
+    }
+
+    async fn complete_owned_cached_connection_gossip(
+        &self,
+        conn: Connection,
+        owner: PendingConnectionAttemptOwner,
+        discover_peers: bool,
+    ) -> Result<()> {
+        let result = self
+            .complete_cached_connection_gossip(owner.peer_id, conn, discover_peers)
+            .await;
+        let outcome = match &result {
+            Ok(()) => PendingConnectionOutcome::Admitted,
+            Err(error) => PendingConnectionOutcome::Failed(error.to_string()),
+        };
+        self.finish_pending_connection(owner, outcome).await;
+        result
     }
 
     async fn use_cached_connection_if_ready(&self, peer_id: EndpointId) -> Result<bool> {
@@ -1434,25 +1444,6 @@ impl Node {
         Ok((conn, owner))
     }
 
-    async fn complete_outbound_pending_gossip(
-        &self,
-        peer_id: EndpointId,
-        conn: &Connection,
-        owner: PendingConnectionAttemptOwner,
-    ) -> Result<PendingConnectionAttemptOwner> {
-        if let Err(error) = self.initiate_gossip(conn.clone(), peer_id).await {
-            conn.close(0u32.into(), b"connect-peer-gossip-failed");
-            self.finish_pending_connection(
-                owner,
-                PendingConnectionOutcome::Failed(error.to_string()),
-            )
-            .await;
-            return Err(error);
-        }
-
-        Ok(owner)
-    }
-
     async fn publish_admitted_outbound_connection(
         &self,
         peer_id: EndpointId,
@@ -1484,7 +1475,10 @@ impl Node {
     }
 
     pub(crate) async fn connect_to_peer(&self, addr: EndpointAddr) -> Result<()> {
-        let peer_id = addr.id;
+        self.connect_to_peer_inner(addr.id, addr).await
+    }
+
+    async fn connect_to_peer_inner(&self, peer_id: EndpointId, addr: EndpointAddr) -> Result<()> {
         if self.outbound_connection_preflight_complete(peer_id).await? {
             return Ok(());
         }
@@ -1493,9 +1487,15 @@ impl Node {
             return Ok(());
         };
         let (conn, owner) = self.open_outbound_pending_connection(addr, owner).await?;
-        let owner = self
-            .complete_outbound_pending_gossip(peer_id, &conn, owner)
-            .await?;
+        if let Err(error) = self.exchange_and_apply_gossip(conn.clone(), peer_id).await {
+            conn.close(0u32.into(), b"connect-peer-gossip-failed");
+            self.finish_pending_connection(
+                owner,
+                PendingConnectionOutcome::Failed(error.to_string()),
+            )
+            .await;
+            return Err(error);
+        }
         self.publish_admitted_outbound_connection(peer_id, conn, owner)
             .await;
 

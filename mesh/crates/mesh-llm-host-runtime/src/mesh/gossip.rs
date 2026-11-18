@@ -33,7 +33,7 @@ pub(super) mod reply_limit;
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
 ///
 /// Peers below this floor are rejected at ingest in both `add_peer`
-/// (direct gossip exchange) and `update_transitive_peer` (gossip relayed
+/// (direct gossip exchange) and `apply_transitive_peer` (gossip relayed
 /// by a bridge peer). They do not appear in `/api/status`, do not appear
 /// in the UI, and are not included in outbound gossip. A peer that updates
 /// and re-announces with a version at or above the floor is accepted on
@@ -263,8 +263,7 @@ impl Node {
             );
             return Ok(());
         }
-        self.update_transitive_peer(peer_id, addr, ann, remote)
-            .await;
+        self.apply_transitive_peer(peer_id, addr, ann, remote).await;
         Ok(())
     }
 
@@ -276,13 +275,24 @@ impl Node {
         negotiated_protocol_generation: Option<u32>,
         direct_peer_requirements_validated: bool,
     ) -> Result<()> {
-        let context = AnnouncedPeerContext {
-            remote,
-            rtt_ms,
-            negotiated_protocol_generation,
-            direct_peer_requirements_validated,
-        };
-        if !direct_peer_requirements_validated {
+        self.apply_announced_peers_with_context(
+            their_announcements,
+            AnnouncedPeerContext {
+                remote,
+                rtt_ms,
+                negotiated_protocol_generation,
+                direct_peer_requirements_validated,
+            },
+        )
+        .await
+    }
+
+    async fn apply_announced_peers_with_context(
+        &self,
+        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
+        context: AnnouncedPeerContext,
+    ) -> Result<()> {
+        if !context.direct_peer_requirements_validated {
             self.validate_direct_announcement_before_payload_apply(their_announcements, context)
                 .await?;
         } else {
@@ -497,6 +507,14 @@ impl Node {
 
     /// Open a gossip stream on an existing connection to exchange peer info.
     pub(super) async fn initiate_gossip(&self, conn: Connection, remote: EndpointId) -> Result<()> {
+        self.exchange_and_apply_gossip(conn, remote).await
+    }
+
+    pub(super) async fn exchange_and_apply_gossip(
+        &self,
+        conn: Connection,
+        remote: EndpointId,
+    ) -> Result<()> {
         // Timeout only the gossip round-trip. A misbehaving peer may accept the
         // QUIC connection and even the bi-stream but never send a gossip response,
         // blocking the join path indefinitely and preventing fallback to other
@@ -818,12 +836,14 @@ impl Node {
         their_announcements: &[(EndpointAddr, PeerAnnouncement)],
         discover_peers: bool,
     ) -> Result<()> {
-        self.apply_announced_peers(
-            remote,
+        self.apply_announced_peers_with_context(
             their_announcements,
-            Some(rtt_ms),
-            Some(NODE_PROTOCOL_GENERATION),
-            false,
+            AnnouncedPeerContext {
+                remote,
+                rtt_ms: Some(rtt_ms),
+                negotiated_protocol_generation: Some(NODE_PROTOCOL_GENERATION),
+                direct_peer_requirements_validated: false,
+            },
         )
         .await?;
 
@@ -1076,6 +1096,17 @@ impl Node {
         true
     }
 
+    #[cfg(test)]
+    pub(super) async fn update_transitive_peer(
+        &self,
+        id: EndpointId,
+        addr: &EndpointAddr,
+        ann: &PeerAnnouncement,
+        bridge_id: EndpointId,
+    ) {
+        self.apply_transitive_peer(id, addr, ann, bridge_id).await;
+    }
+
     /// Update a peer learned transitively through gossip (not directly connected).
     /// Updates assigned/hosted state so models_being_served() includes their models.
     /// Refreshes `last_mentioned` (not `last_seen`) so the peer survives pruning
@@ -1083,7 +1114,7 @@ impl Node {
     /// PeerDown silencing uses only `last_seen` (direct proof-of-life).
     /// Does NOT trigger peer_change events for new transitive peers
     /// (avoids re-election storms at scale).
-    pub(super) async fn update_transitive_peer(
+    async fn apply_transitive_peer(
         &self,
         id: EndpointId,
         addr: &EndpointAddr,
@@ -1096,12 +1127,7 @@ impl Node {
         // Refuse transitive ingest from peers below the supported version
         // floor. Keeps the local table free of pre-floor gossip filler;
         // /api/status, the UI, and routing all stop seeing them.
-        if !version_allowed_for_rebroadcast(ann.version.as_deref()) {
-            if !has_fresh_direct_admission {
-                self.reject_transitive_peer(id).await;
-            }
-            return;
-        }
+        let version_filtered = !version_allowed_for_rebroadcast(ann.version.as_deref());
         // Refuse transitive ingest of idle clients — clients that aren't
         // asking for any model, aren't serving anything, and aren't hosting
         // anything. They contribute nothing the mesh can use:
@@ -1113,7 +1139,8 @@ impl Node {
         // and the peer is admitted normally. Direct connections (`add_peer`)
         // are never affected — a client that actually contacts us still
         // gets in.
-        if peer_is_idle_transitive_client(ann) {
+        let filtered = version_filtered || peer_is_idle_transitive_client(ann);
+        if filtered {
             if !has_fresh_direct_admission {
                 self.reject_transitive_peer(id).await;
             }
