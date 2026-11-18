@@ -2044,7 +2044,10 @@ not a handle.
 The gate checks Cargo metadata on every invocation and rejects an exempt crate
 that becomes a transitive normal dependency of `mesh-llm`, including optional
 and platform-specific dependencies. Tests cover that guard and the scope rules.
-The Quality workflow still invokes the same `just no-console-print` gate.
+The Quality workflow no longer runs this gate. Its candidate source consistency
+job runs the crate-list, publish crate-chain, release-target and process
+environment mutation checks, and `repo-consistency no-console-print` now only
+reports that the gate is retired.
 
 The CPU native runtime-event gate selects `family-qwen3-dense` from the
 `skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The

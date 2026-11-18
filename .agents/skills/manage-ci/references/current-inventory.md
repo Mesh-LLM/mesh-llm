@@ -65,14 +65,14 @@ themselves establish workload or GPU qualification.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
-L2 post-checkout planning, the five lane summaries, and Quality commit
-convention use the narrow `ci-controller` executable through
+L2 post-checkout planning, the five lane summaries, and the Quality llama.cpp
+upstream pin guard use the narrow `ci-controller` executable through
 `prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release
 Cargo bypasses compiler wrappers and Just and reuses an exact-key cached
 release executable when present. Other automation keeps the closed
 `prepare-automation` hosted-bare profile under the same rules, while
-image callers retain verification and sccache unchanged. Quality convention
-and environment ownership checks, runner-contract cleanup, registry summary,
+image callers retain verification and sccache unchanged. Quality environment
+ownership checks, runner-contract cleanup, registry summary,
 and runtime-seed lifecycle have Rust callers. Runtime-seed preparation uses
 step-local runner-temp Cargo home/target paths before the measured section.
 The protected `ed07043b` audit, `38d63b2f` resolver and no-checkout sentinel
