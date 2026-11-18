@@ -94,48 +94,54 @@ impl RelayHealth {
     }
 }
 
-/// One relay's raw fetch outcome: whether its connection was live when
-/// the attempt started, and the deadline-wrapped per-relay fetch result.
-type RelayFetchOutcome = (
-    bool,
-    Result<
-        Result<std::collections::BTreeSet<Event>, nostr_sdk::prelude::Error>,
-        tokio::time::error::Elapsed,
-    >,
-);
+/// One relay's round outcome, accumulated from the notification stream.
+#[derive(Debug, Default)]
+pub(crate) struct RelayRound {
+    /// The relay sent EOSE for this round's subscription: the query
+    /// completed, so an empty event set still counts as answered.
+    eose: bool,
+    /// The relay terminated the subscription without EOSE (Closed), so
+    /// no completion should be expected even if the round waits.
+    closed: bool,
+    /// Events delivered before the round ended — kept even when the
+    /// relay never finished, because a delivered listing is evidence
+    /// regardless of completion.
+    events: std::collections::BTreeSet<Event>,
+}
+
+impl RelayRound {
+    fn terminal(&self) -> bool {
+        self.eose || self.closed
+    }
+}
 
 /// One relay's fetch outcome, normalized for counting and merging.
 #[derive(Debug)]
 pub(crate) enum RelayFetchResult {
-    /// The relay completed the round trip: events, or an empty EOSE from
-    /// a connection that was live when the attempt started.
+    /// The relay completed the round trip (EOSE) or delivered events
+    /// before the round ended — either way it spoke.
     Answered(std::collections::BTreeSet<Event>),
-    /// The relay never spoke: silence until the deadline, or a fetch
-    /// error that means the request was never issued to it.
+    /// The relay neither completed nor delivered anything: never
+    /// connected, disconnected before EOSE, closed without EOSE, or
+    /// silent until the deadline.
     Silent,
 }
 
-/// Classify one relay's fetch outcome.
+/// Classify one relay's round from completion evidence.
 ///
-/// `relay_connected` is the relay's live connection status, consulted for
-/// empty successes because nostr-sdk resolves relays it has given up on
-/// to a fast `Ok(empty)`: only a connected relay's empty result means
-/// "healthy relay, nothing stored" (EOSE).
-///
-/// An `Err` counts as silent, not spoken. In nostr-sdk 0.45.x per-relay
-/// failures never surface as `Err` — the fetch collector logs them and
-/// keeps collecting — so an `Err` here means the request never reached
-/// the relay (target resolution, buffer limits). Counting it as answered
-/// would inflate `relays_answered` in the unsafe direction if a future
-/// SDK ever did propagate relay failures as `Err`.
-pub(crate) fn classify_relay_fetch<E>(
-    events: Result<std::collections::BTreeSet<Event>, E>,
-    relay_connected: bool,
-) -> RelayFetchResult {
-    match events {
-        Ok(set) if !set.is_empty() => RelayFetchResult::Answered(set),
-        Ok(_) if relay_connected => RelayFetchResult::Answered(Default::default()),
-        Ok(_) | Err(_) => RelayFetchResult::Silent,
+/// A relay counts as answered when its query completed (EOSE observed on
+/// the notification stream) or when it demonstrably spoke (delivered
+/// events, even if it never finished). Only a relay that neither
+/// completed nor delivered anything is silent: never connected,
+/// disconnected before EOSE, or hung to the deadline. Unlike a
+/// pre-fetch connection snapshot, EOSE cannot be observed for a relay
+/// that dropped mid-fetch, so a truncated round can no longer pose as a
+/// completed empty one.
+pub(crate) fn classify_relay_round_outcome(round: RelayRound) -> RelayFetchResult {
+    if round.eose || !round.events.is_empty() {
+        RelayFetchResult::Answered(round.events)
+    } else {
+        RelayFetchResult::Silent
     }
 }
 
@@ -214,43 +220,6 @@ pub async fn discover(
     Ok(meshes)
 }
 
-/// Turn per-relay fetch outcomes into counted classifications.
-///
-/// Empty successes are checked against the relay's live connection
-/// status (nostr-sdk resolves relays it has given up on to a fast
-/// Ok(empty)), deadline silence stays silent, and a fetch error means
-/// the request never issued (nostr-sdk 0.45.x swallows per-relay
-/// failures inside the collector), so the relay did not speak.
-fn classify_relay_round(
-    relay_urls: &[nostr_sdk::prelude::RelayUrl],
-    results: Vec<RelayFetchOutcome>,
-) -> Vec<RelayFetchResult> {
-    let mut outcomes: Vec<RelayFetchResult> = Vec::with_capacity(results.len());
-    for (url, (connected_at_start, result)) in relay_urls.iter().cloned().zip(results) {
-        match result {
-            Ok(Ok(relay_events)) => {
-                // The SDK also resolves a relay it has given up
-                // connecting to (or one mid-reconnect) to a fast
-                // Ok(empty) — a spoke-relay is only one whose connection
-                // was live when the attempt started.
-                outcomes.push(classify_relay_fetch::<nostr_sdk::prelude::Error>(
-                    Ok(relay_events),
-                    connected_at_start,
-                ));
-            }
-            Ok(Err(e)) => {
-                tracing::warn!("Nostr relay {url} fetch failed: {e}");
-                outcomes.push(classify_relay_fetch::<()>(Err(()), false));
-            }
-            Err(_) => {
-                tracing::debug!("Nostr relay {url} stayed silent until the deadline");
-                outcomes.push(RelayFetchResult::Silent);
-            }
-        }
-    }
-    outcomes
-}
-
 /// Discover meshes and report how many relays answered.
 ///
 /// The fetch fans out per relay (one request each, 5 s timeout) so a
@@ -279,39 +248,106 @@ pub async fn discover_with_health(
     let relay_urls: Vec<nostr_sdk::prelude::RelayUrl> =
         client.relays().await.keys().cloned().collect();
 
-    let fetch_one = |url: nostr_sdk::prelude::RelayUrl| {
-        let nostr_filter = Filter::new()
-            .kind(Kind::Custom(MESH_SERVICE_KIND))
-            .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
-            .limit(100);
-        // The timeout is ours, not the SDK's: fetch_events resolves a
-        // silent relay to Ok(empty) at its own timeout, which would make
-        // an outage indistinguishable from an empty relay. Wrapping the
-        // un-timed future means only a relay that actually completed
-        // (EOSE or error) resolves before the deadline; silence surfaces
-        // as Err(Elapsed).
-        // Connection status is sampled BEFORE the fetch, describing the
-        // state the attempt started from; sampling after would let a
-        // gave-up relay that reconnects mid-round masquerade as having
-        // answered with its earlier fast Ok(empty).
-        async move {
-            let connected_at_start = client
-                .relay(&url)
-                .await
-                .ok()
-                .flatten()
-                .is_some_and(|relay| relay.status().is_connected());
-            let outcome = tokio::time::timeout(
-                Duration::from_secs(5),
-                client.fetch_events(ReqTarget::single(url, vec![nostr_filter])),
-            )
-            .await;
-            (connected_at_start, outcome)
-        }
-    };
-    let results = futures_util::future::join_all(relay_urls.iter().cloned().map(fetch_one)).await;
+    // Drive one subscription across every relay and route the
+    // notification stream per relay. This replaces per-relay
+    // `fetch_events` futures, which have two blind spots this round
+    // cannot afford: their collected events are dropped if the future
+    // is cancelled at the deadline (a delivered listing would vanish),
+    // and their `Ok(empty)` cannot distinguish a completed empty query
+    // (EOSE) from a stream that ended because the relay disconnected
+    // mid-fetch. The notification stream exposes both signals
+    // per relay: `EndOfStoredEvents` is completion evidence a
+    // connection snapshot can never fake, and events accumulate
+    // outside any cancellable future.
+    let subscription_id = SubscriptionId::generate();
+    // Subscribe to the notification channel BEFORE sending the REQ:
+    // anything received before the channel exists is not delivered to
+    // it (nostr-sdk documents this ordering requirement).
+    let mut notifications = client.notifications();
+    let nostr_filter = Filter::new()
+        .kind(Kind::Custom(MESH_SERVICE_KIND))
+        .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
+        .limit(100);
+    let targets: Vec<(nostr_sdk::prelude::RelayUrl, Vec<Filter>)> = relay_urls
+        .iter()
+        .cloned()
+        .map(|url| (url, vec![nostr_filter.clone()]))
+        .collect();
+    let _output = client
+        .subscribe(ReqTarget::manual(targets))
+        .with_id(subscription_id.clone())
+        .await?;
 
-    let outcomes = classify_relay_round(&relay_urls, results);
+    let mut rounds: std::collections::HashMap<nostr_sdk::prelude::RelayUrl, RelayRound> =
+        relay_urls
+            .iter()
+            .cloned()
+            .map(|url| (url, RelayRound::default()))
+            .collect();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let pending: usize = rounds.values().filter(|r| !r.terminal()).count();
+        if pending == 0 {
+            break;
+        }
+        let next = tokio::time::timeout_at(deadline, notifications.next()).await;
+        let notification = match next {
+            Ok(Some(notification)) => notification,
+            // Deadline: relays that neither completed nor delivered
+            // anything classify as silent; their partial events (if any)
+            // are already accumulated and are kept.
+            Ok(None) | Err(_) => break,
+        };
+        match notification {
+            ClientNotification::Event {
+                relay_url,
+                subscription_id: id,
+                event,
+            } if id == subscription_id => {
+                // This variant is client-deduplicated ("first time the
+                // event is seen"), so an event two relays both deliver
+                // attributes only to whichever arrived first. The merged
+                // result is unaffected (it deduplicates anyway), and the
+                // counting effect is confined to a relay whose only
+                // deliveries were duplicates — it can under-count toward
+                // Silent, never inflate toward Answered.
+                if let Some(round) = rounds.get_mut(&relay_url) {
+                    round.events.insert(*event);
+                }
+            }
+            ClientNotification::Message { relay_url, message } => match *message {
+                RelayMessage::EndOfStoredEvents(id) if *id == subscription_id => {
+                    if let Some(round) = rounds.get_mut(&relay_url) {
+                        round.eose = true;
+                    }
+                }
+                // A relay that closes the subscription (rejected,
+                // auth-required, rate-limited) will never send EOSE for
+                // it: mark it terminal so the round does not wait out
+                // the deadline on its behalf.
+                RelayMessage::Closed {
+                    subscription_id: id,
+                    ..
+                } if *id == subscription_id => {
+                    if let Some(round) = rounds.get_mut(&relay_url) {
+                        round.closed = true;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    // Always drop the subscription, including on the cached client the
+    // watchdog reuses — a leaked REQ would keep streaming events into
+    // later rounds' notification channels.
+    let _ = client.unsubscribe(&subscription_id).await;
+
+    let outcomes = relay_urls
+        .iter()
+        .filter_map(|url| rounds.remove(url))
+        .map(classify_relay_round_outcome)
+        .collect();
     let (events, health) = merge_relay_fetch_results(relay_urls.len(), outcomes);
 
     let now = Timestamp::now().as_secs();
@@ -527,41 +563,57 @@ mod relay_health_tests {
     }
 
     #[test]
-    fn an_empty_result_from_a_disconnected_relay_is_silence() {
-        // The SDK resolves relays it gave up connecting to a fast
-        // Ok(empty); without the connection check a sustained outage
-        // would read as every relay answering.
-        let classified = classify_relay_fetch::<()>(Ok(Default::default()), false);
+    fn a_round_without_eose_or_events_is_silence() {
+        // A relay that never connected, disconnected before EOSE, or
+        // hung to the deadline leaves neither completion evidence nor
+        // speech — the exact round a truncated `Ok(empty)` from the
+        // old fetch path used to fake.
+        let classified = classify_relay_round_outcome(RelayRound::default());
+        assert!(matches!(classified, RelayFetchResult::Silent));
+
+        // A subscription the relay Closed without EOSE is the same
+        // non-answer.
+        let closed = RelayRound {
+            closed: true,
+            ..RelayRound::default()
+        };
+        let classified = classify_relay_round_outcome(closed);
         assert!(matches!(classified, RelayFetchResult::Silent));
     }
 
     #[test]
-    fn an_empty_result_from_a_connected_relay_is_an_answer() {
-        // EOSE with nothing stored is a healthy, speaking relay.
-        let classified = classify_relay_fetch::<()>(Ok(Default::default()), true);
-        assert!(matches!(classified, RelayFetchResult::Answered(_)));
+    fn a_completed_empty_round_is_an_answer() {
+        // EOSE with nothing stored is a healthy relay that finished the
+        // query — completion evidence a connection snapshot cannot
+        // fake.
+        let completed_empty = RelayRound {
+            eose: true,
+            ..RelayRound::default()
+        };
+        let classified = classify_relay_round_outcome(completed_empty);
+        assert!(matches!(classified, RelayFetchResult::Answered(set) if set.is_empty()));
     }
 
     #[test]
-    fn an_errored_fetch_never_reached_the_relay_and_is_silence() {
-        // In nostr-sdk 0.45.x per-relay failures are swallowed by the
-        // fetch collector; an Err means the request was never issued
-        // (target resolution, buffer limits). The relay did not speak.
-        let classified = classify_relay_fetch::<()>(Err(()), true);
-        assert!(matches!(classified, RelayFetchResult::Silent));
-        let classified = classify_relay_fetch::<()>(Err(()), false);
-        assert!(matches!(classified, RelayFetchResult::Silent));
-    }
-
-    #[test]
-    fn a_non_empty_result_is_an_answer_regardless_of_status() {
+    fn a_relay_that_delivered_events_without_finishing_is_an_answer_and_keeps_events() {
+        // The round deadline hit before EOSE, but the relay already
+        // spoke: its events must survive the bound and it counts as
+        // answered — a delivered listing is evidence regardless of
+        // completion.
         let event = EventBuilder::new(Kind::Custom(1), "x")
             .finalize(&nostr_sdk::prelude::Keys::generate())
             .expect("sign");
         let mut set = std::collections::BTreeSet::new();
         set.insert(event);
-        let classified = classify_relay_fetch::<()>(Ok(set), false);
-        assert!(matches!(classified, RelayFetchResult::Answered(_)));
+        let unfinished = RelayRound {
+            events: set,
+            ..RelayRound::default()
+        };
+        let classified = classify_relay_round_outcome(unfinished);
+        match classified {
+            RelayFetchResult::Answered(events) => assert_eq!(events.len(), 1),
+            other => panic!("expected Answered, got {other:?}"),
+        }
     }
 }
 
