@@ -408,6 +408,7 @@ async fn run_loaded_local_model(
     super::node_lifecycle_events::emit_node_draining();
     emit_shutdown(Some(reason)).await;
     model.shutdown().await;
+    skippy_serving::telemetry::finish_process_telemetry();
     super::node_lifecycle_events::emit_node_stopped();
     // Task 3: finalize AFTER node_stopped, same ordering rationale as
     // `control_loop.rs::shutdown_run_auto_runtime` -- the driver's own

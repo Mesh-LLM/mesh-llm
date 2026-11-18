@@ -3,7 +3,7 @@ use std::sync::mpsc as std_mpsc;
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -106,6 +106,18 @@ pub struct TelemetryStats {
 /// What every sink keeps for one live span, in sink order.
 pub(crate) struct OpenSpans(Vec<OpenSpan>);
 
+/// The first handle with a sink, which ends the process span when the host
+/// exits. Like the resource sampler's, it outlives the stage it came from.
+static PROCESS_TELEMETRY: OnceLock<Telemetry> = OnceLock::new();
+
+/// End the process span and stop the resource sampler. The host calls this
+/// once, as it exits; unloading a model leaves both running for the others.
+pub fn finish_process_telemetry() {
+    if let Some(telemetry) = PROCESS_TELEMETRY.get() {
+        telemetry.finish_process();
+    }
+}
+
 impl Telemetry {
     pub fn new(
         endpoint: Option<String>,
@@ -164,6 +176,9 @@ impl Telemetry {
         .flatten()
         .collect();
         let telemetry = Self::with_sinks(sinks, stats, config, level);
+        if level != TelemetryLevel::Off && telemetry.has_sink() {
+            let _ = PROCESS_TELEMETRY.set(telemetry.clone());
+        }
         log_events::start(&telemetry, metrics_endpoint.as_deref());
         if telemetry.is_debug_enabled() && telemetry.has_sink() {
             native_calls::install(&telemetry);
@@ -368,8 +383,14 @@ impl Telemetry {
         }
     }
 
-    /// End the process span and flush queued spans. Shutdown calls this; only
-    /// the first call in the process does anything.
+    /// Flush this handle's queued spans. Unloading a model calls this; the
+    /// process span and the resource sampler keep running for the host.
+    pub(crate) fn flush_queued(&self) {
+        self.flush(FLUSH_TIMEOUT);
+    }
+
+    /// End the process span and flush queued spans. Only the first call in
+    /// the process does anything; hosts call [`finish_process_telemetry`].
     pub fn finish_process(&self) {
         let process = trace_context::process();
         if self.level == TelemetryLevel::Off || !process.begin_finish() {
