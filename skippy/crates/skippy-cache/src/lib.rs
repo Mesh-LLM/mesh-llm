@@ -45,7 +45,8 @@ pub use payload::{
     ExactStatePayloadKind,
 };
 pub use radix::{
-    RadixEviction, RadixEvictionCandidate, RadixMatch, UnifiedRadixCache, UnifiedRadixCacheStats,
+    RadixEviction, RadixEvictionCandidate, RadixMatch, RecurrentEvictionOrder, UnifiedRadixCache,
+    UnifiedRadixCacheStats,
 };
 pub use resident::{
     ResidentActivationCache, ResidentActivationLookup, ResidentActivationRecordOutcome,

@@ -6,8 +6,9 @@ use std::{
 use anyhow::Result;
 use skippy_cache::{
     CacheBlobStore, GeometryBlock, GeometryKind, L3CacheManager, L3Tier, PayloadGeometry,
-    ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits,
-    UnifiedRadixCache, exact_state_identity_for_stage, numerical_model_identity_for_stage,
+    RecurrentEvictionOrder, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
+    StoreLimits, UnifiedRadixCache, exact_state_identity_for_stage,
+    numerical_model_identity_for_stage,
 };
 use skippy_protocol::{StageConfig, StageKvCacheCodec, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
@@ -28,21 +29,13 @@ mod runtime_identity;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
-use exact_state_limits::exact_state_byte_limits;
+#[cfg(test)]
+use exact_state_limits::EXACT_STATE_MIN_RETAINED_ENTRIES;
+use exact_state_limits::{exact_state_byte_limits, exact_state_working_set};
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
 const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
-
-// Exact-state snapshots are indivisible and carry architecture-specific state
-// (recurrent and convolution buffers) that `estimate_stage_cache_max_bytes`
-// cannot see, because that estimate is derived from attention KV metadata
-// alone. A single snapshot therefore routinely exceeds the soft cap. Keep this
-// many snapshots (subject to the configured entry limit) before the soft cap
-// evicts anything: falling to one entry
-// turns the catalog into a single-entry cache, where two concurrent sessions
-// on the same stage evict each other on every request.
-const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
 
 // Operator override for the limit above, in bytes, for workers whose memory
 // headroom does not match the attention-derived estimate. The last indivisible
@@ -218,6 +211,7 @@ impl KvStageIntegration {
             cache_config.max_bytes,
             cache_config.exact_max_bytes,
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
+            exact_state_working_set(config.lane_count, exact_max_entries),
         );
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
@@ -783,7 +777,9 @@ fn store_exact_radix_record_with_codec(
                     released.push(replaced.payload);
                 }
                 while radix.stats().recurrent_entries > max_entries {
-                    let Some(evicted) = radix.evict_lru_recurrent() else {
+                    let Some(evicted) =
+                        radix.evict_recurrent(RecurrentEvictionOrder::SupersededFirst)
+                    else {
                         break;
                     };
                     released.push(evicted.value.payload);
@@ -808,20 +804,20 @@ fn store_exact_radix_record_with_codec(
             payload.release_from(&mut blobs)?;
         }
     }
-    // Exact snapshots are indivisible, and the soft cap is estimated from
-    // attention KV metadata that cannot include architecture-specific
-    // recurrent state, so one snapshot can legitimately exceed it. Hold a small
-    // working set past the soft cap (never more than the configured entry
-    // limit) so concurrent sessions on a stage stop evicting each other, then
-    // apply the hard limit so that allowance stays bounded apart from one
-    // indivisible snapshot. Neither pass evicts the last entry: a snapshot that
-    // self-evicts disables exact prefix caching for the stage entirely, which
-    // is the regression this retention policy exists to prevent.
+    // Exact snapshots are indivisible, so one long conversation's snapshot can
+    // exceed the soft cap. Every pass evicts an earlier turn that a later
+    // stored turn of the same conversation extends before it touches another
+    // conversation, then the least recently used. The soft cap keeps one
+    // snapshot per lane however large, so concurrent sessions on a stage stop
+    // evicting each other's latest turn; the hard cap bounds that working set
+    // apart from one indivisible snapshot. Neither pass evicts the last entry:
+    // a snapshot that self-evicts disables exact prefix caching for the stage
+    // entirely.
     evict_exact_entries_over(
         radix,
         blobs,
         limits.soft_bytes,
-        EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
+        limits.working_set_entries.min(max_entries),
     )?;
     evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
     #[cfg(test)]
@@ -899,9 +895,9 @@ fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
     )
 }
 
-/// Evicts least-recently-used exact entries while the catalog holds more than
-/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
-/// means the catalog has no byte ceiling and nothing is evicted.
+/// Evicts exact entries, superseded turns first, while the catalog holds more
+/// than `limit_bytes`, never dropping below `min_retained_entries`. A zero
+/// limit means the catalog has no byte ceiling and nothing is evicted.
 fn evict_exact_entries_over(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
@@ -930,7 +926,7 @@ fn evict_exact_entries_over(
         let evicted = radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_lru_recurrent();
+            .evict_recurrent(RecurrentEvictionOrder::SupersededFirst);
         let Some(evicted) = evicted else {
             break;
         };
@@ -1030,6 +1026,7 @@ mod tests {
         ExactStateByteLimits {
             soft_bytes,
             hard_bytes,
+            working_set_entries: EXACT_STATE_MIN_RETAINED_ENTRIES,
         }
     }
 
@@ -1061,6 +1058,11 @@ mod tests {
 
     /// Every record carries a REAL credit from the caller's own budget so
     /// release paths stay assertable without cross-test interference.
+    /// Eight bytes no other call returns, so no two snapshots share a block.
+    fn distinct_bytes(index: u8) -> Vec<u8> {
+        (0..8).map(|offset| index * 8 + offset).collect()
+    }
+
     fn pending(
         page_id: &str,
         tokens: &[i32],
@@ -1513,6 +1515,84 @@ mod tests {
         assert!(radix.lookup_recurrent("model", &[1, 2]).is_some());
         assert!(radix.lookup_recurrent("model", &[1, 3]).is_some());
         assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
+    }
+
+    #[test]
+    fn concurrent_conversations_keep_their_latest_turn_over_the_soft_cap() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let budget = StorageBudget::new();
+
+        // Each conversation stores its first turn, then a second turn that
+        // extends it, one conversation after another: least recently used
+        // alone would evict the first conversations' latest turns. Every
+        // snapshot's bytes are distinct so the blob store cannot share them.
+        let mut stored = 0u8;
+        for conversation in 0..4 {
+            for (page_id, tokens) in [
+                (format!("c{conversation}-t1"), vec![conversation + 1, 10]),
+                (
+                    format!("c{conversation}-t2"),
+                    vec![conversation + 1, 10, 20],
+                ),
+            ] {
+                store_exact_radix_record(
+                    &radix,
+                    &blobs,
+                    64,
+                    limits(16, 1_024),
+                    None,
+                    None,
+                    pending(&page_id, &tokens, &distinct_bytes(stored), &budget),
+                )
+                .unwrap();
+                stored += 1;
+            }
+        }
+
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 4);
+        for conversation in 1..=4 {
+            let latest = radix.lookup_recurrent("model", &[conversation, 10, 20]);
+            assert_eq!(
+                latest.map(|found| found.matched_tokens),
+                Some(3),
+                "conversation {conversation} must keep its latest turn"
+            );
+        }
+    }
+
+    #[test]
+    fn the_soft_cap_keeps_one_snapshot_per_lane() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let budget = StorageBudget::new();
+        let six_lanes = ExactStateByteLimits {
+            working_set_entries: 6,
+            ..limits(8, 1_024)
+        };
+
+        for conversation in 1..=6 {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                64,
+                six_lanes,
+                None,
+                None,
+                pending(
+                    &format!("c{conversation}"),
+                    &[conversation, 10],
+                    &distinct_bytes(conversation as u8),
+                    &budget,
+                ),
+            )
+            .unwrap();
+        }
+
+        let radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 6);
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 48);
     }
 
     #[test]
