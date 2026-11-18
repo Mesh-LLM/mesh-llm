@@ -1543,9 +1543,9 @@ only a `workflow_dispatch` trigger, compiles automation once through
 `product-automation-artifact.yml`, and runs one hosted `windows-2022` job with a
 read-only token. Both conditions compute the same exact key through
 `restore-windows-abi-cache`. Only exact-warm retrieves it, and only that
-read-only restore has cache authority. A warm miss, a different restored key or
-a rebuild during canonical runtime preparation refuses the sample; nothing
-relabels it cold. The job uploads phase timestamps and the admission or refusal
+read-only restore has cache authority. A warm miss, a different restored key, a
+rebuild during canonical runtime preparation, a failed preparation or
+out-of-order phase timestamps refuse the sample; nothing relabels it cold. The job uploads phase timestamps and the admission or refusal
 receipt for 14 days. It does not change the runtime slice, the warmer, release
 or retention. A restore may still update an entry's access time.
 

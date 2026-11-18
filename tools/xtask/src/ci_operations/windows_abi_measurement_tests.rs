@@ -131,22 +131,56 @@ fn admission_refuses_retrieval_in_cold_and_any_inexact_warm_state() {
     }
 }
 
+fn ordered() -> Vec<Option<Instant>> {
+    (0..PHASES.len())
+        .map(|offset| {
+            timestamp(&format!("2026-11-18T10:00:{:02}Z", offset * 5))
+                .ok()
+                .flatten()
+        })
+        .collect()
+}
+
+fn complete(condition: Condition, before: &Tree, after: &Tree) -> Result<(), String> {
+    complete_sample(condition, "success", &ordered(), before, after)
+}
+
 #[test]
 fn exact_warm_refuses_a_rebuild_and_both_arms_require_a_stamp() {
     let before = tree(3, Some("s"));
-    complete_sample(Condition::ExactWarm, &before, &tree(3, Some("s"))).unwrap();
-    complete_sample(Condition::Cold, &tree(0, None), &tree(9, Some("t"))).unwrap();
+    complete(Condition::ExactWarm, &before, &tree(3, Some("s"))).unwrap();
+    complete(Condition::Cold, &tree(0, None), &tree(9, Some("t"))).unwrap();
     let rebuilt = Tree {
         digest: "changed".into(),
         ..tree(3, Some("s"))
     };
     assert!(
-        complete_sample(Condition::ExactWarm, &before, &rebuilt)
+        complete(Condition::ExactWarm, &before, &rebuilt)
             .unwrap_err()
             .contains("rebuild")
     );
-    assert!(complete_sample(Condition::ExactWarm, &before, &tree(3, Some("t"))).is_err());
-    assert!(complete_sample(Condition::Cold, &tree(0, None), &tree(4, None)).is_err());
+    assert!(complete(Condition::ExactWarm, &before, &tree(3, Some("t"))).is_err());
+    assert!(complete(Condition::Cold, &tree(0, None), &tree(4, None)).is_err());
+}
+
+#[test]
+fn completion_refuses_failed_preparation_and_missing_or_reordered_phases() {
+    let (empty, stamped) = (tree(0, None), tree(3, Some("s")));
+    let mut missing = ordered();
+    missing[3] = None;
+    let mut reordered = ordered();
+    reordered.swap(0, 1);
+    for (outcome, times, reason) in [
+        ("failure", ordered(), "did not succeed"),
+        ("skipped", ordered(), "did not succeed"),
+        ("", ordered(), "did not succeed"),
+        ("success", missing, "prepare_end is missing"),
+        ("success", reordered, "out of order"),
+    ] {
+        let error =
+            complete_sample(Condition::Cold, outcome, &times, &empty, &stamped).unwrap_err();
+        assert!(error.contains(reason), "{outcome}: {error}");
+    }
 }
 
 #[test]
@@ -185,6 +219,7 @@ fn sample_env(
             "CACHE_HIT" => hit,
             "CACHE_PRIMARY_KEY" => return key.clone(),
             "BUILD_DIR" => return build_dir.clone(),
+            "PREPARE_OUTCOME" => "success",
             _ => "",
         }
         .to_owned()
@@ -229,6 +264,34 @@ fn exact_warm_receipt_binds_identity_phases_and_unchanged_tree() {
     let refused: Value =
         serde_json::from_slice(&fs::read(receipts.path().join("receipt.json")).unwrap()).unwrap();
     assert_eq!(refused["admitted"], false);
+}
+
+#[test]
+fn failed_preparation_writes_a_refused_receipt_with_its_phases() {
+    let build = tempfile::tempdir().unwrap();
+    let receipts = tempfile::tempdir().unwrap();
+    let env = sample_env("cold", build.path(), "", String::new());
+    mark_all(receipts.path());
+    admit(receipts.path(), &env).unwrap();
+    fs::write(build.path().join(STAMP), "partial\n").unwrap();
+    let failed = |name: &str| {
+        if name == "PREPARE_OUTCOME" {
+            "failure".to_owned()
+        } else {
+            env(name)
+        }
+    };
+    assert!(
+        finish(receipts.path(), failed)
+            .unwrap_err()
+            .contains("did not succeed")
+    );
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(receipts.path().join("receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["admitted"], false);
+    assert_eq!(receipt["prepare_outcome"], "failure");
+    assert!(receipt["phases"]["prepare_end"].is_string());
+    assert_eq!(receipt["seconds"]["primary"], 15.0);
 }
 
 #[test]

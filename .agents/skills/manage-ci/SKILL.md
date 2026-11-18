@@ -704,7 +704,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   canonical restore action. Cold skips retrieval and requires an empty build
   directory. Exact-warm requires an exact hit whose key equals the computed
   identity, plus an unchanged build stamp after canonical preparation, so a
-  rebuild is refused rather than relabelled. Every compiler, SDK, automation and
+  rebuild is refused rather than relabelled. An admitted sample always writes a
+  receipt: a failed preparation or missing or out-of-order phase timestamps make
+  it `admitted=false`. Every compiler, SDK, automation and
   ABI cache authority is literal `false` except that exact-warm read-only
   restore, and no job reaches a cache save, save-and-verify, retention or
   publisher. The workflow is a registered retention consumer that adds no

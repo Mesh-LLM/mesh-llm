@@ -1089,7 +1089,9 @@ choices (`backend` cpu/cuda/rocm/vulkan, `condition` cold/exact-warm, `sample`
 row, records lookup and preparation phase times, and admits a sample: cold
 requires no retrieval and an empty build directory, and exact-warm requires an
 exact hit on the computed key and an unchanged ABI tree (paths, sizes, mtimes
-and stamp digest) after canonical `prepare-native-runtime-input`. Any refusal
+and stamp digest) after canonical `prepare-native-runtime-input`. An admitted
+sample writes its receipt even when preparation fails; a failed preparation or
+missing or out-of-order phase timestamps make it `admitted=false`. Any refusal
 fails the job and uploads `refusal.json` or a `receipt.json` with
 `admitted=false`. The ABI restore is enabled only for exact-warm. Every
 compiler, SDK, toolkit, automation and Depot cache authority is literal

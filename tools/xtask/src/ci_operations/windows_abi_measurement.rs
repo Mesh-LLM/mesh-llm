@@ -217,7 +217,24 @@ fn admit_sample(
     }
 }
 
-fn complete_sample(condition: Condition, before: &Tree, after: &Tree) -> Result<(), String> {
+fn complete_sample(
+    condition: Condition,
+    prepare_outcome: &str,
+    times: &[Option<Instant>],
+    before: &Tree,
+    after: &Tree,
+) -> Result<(), String> {
+    if prepare_outcome != "success" {
+        return Err(format!(
+            "runtime preparation did not succeed (outcome {prepare_outcome:?})"
+        ));
+    }
+    if let Some((phase, _)) = PHASES.iter().zip(times).find(|(_, time)| time.is_none()) {
+        return Err(format!("phase {phase} is missing or invalid"));
+    }
+    if times.windows(2).any(|pair| pair[1] < pair[0]) {
+        return Err("phase timestamps are out of order".into());
+    }
     if after.stamp_sha256.is_none() {
         return Err("prepared ABI tree has no build stamp".into());
     }
@@ -292,16 +309,14 @@ fn admit(directory: &Path, env: impl Fn(&str) -> String) -> Result<String, Strin
     ))
 }
 
-fn phase_times(directory: &Path) -> Result<Vec<Instant>, String> {
+/// Recorded instants in `PHASES` order; a missing or unparsable mark is `None`.
+fn phase_times(directory: &Path) -> Vec<Option<Instant>> {
     PHASES
         .iter()
         .map(|phase| {
-            let text = fs::read_to_string(directory.join(format!("phase-{phase}.txt")))
-                .map_err(|error| format!("phase {phase} missing: {error}"))?;
-            timestamp(text.trim())
+            fs::read_to_string(directory.join(format!("phase-{phase}.txt")))
                 .ok()
-                .flatten()
-                .ok_or_else(|| format!("phase {phase} has an invalid timestamp"))
+                .and_then(|text| timestamp(text.trim()).ok().flatten())
         })
         .collect()
 }
@@ -315,9 +330,10 @@ fn finish(directory: &Path, env: impl Fn(&str) -> String) -> Result<String, Stri
     let before: Tree =
         serde_json::from_value(admission["tree"].take()).map_err(|error| error.to_string())?;
     let after = snapshot(Path::new(&env("BUILD_DIR")))?;
-    let times = phase_times(directory)?;
-    let seconds = |start: usize, end: usize| elapsed(Some(times[start]), Some(times[end]));
-    let outcome = complete_sample(condition, &before, &after);
+    let times = phase_times(directory);
+    let seconds = |start: usize, end: usize| elapsed(times[start], times[end]);
+    let prepare_outcome = env("PREPARE_OUTCOME");
+    let outcome = complete_sample(condition, &prepare_outcome, &times, &before, &after);
     let receipt = json!({
         "schema_version": 1,
         "admitted": outcome.is_ok(),
@@ -325,7 +341,8 @@ fn finish(directory: &Path, env: impl Fn(&str) -> String) -> Result<String, Stri
         "admission": admission,
         "tree_before": before,
         "tree_after": after,
-        "phases": PHASES.iter().zip(&times).map(|(phase, time)| (phase.to_string(), Value::from(isoformat(*time)))).collect::<serde_json::Map<_, _>>(),
+        "prepare_outcome": prepare_outcome,
+        "phases": PHASES.iter().zip(&times).map(|(phase, time)| (phase.to_string(), time.map_or(Value::Null, |time| Value::from(isoformat(time))))).collect::<serde_json::Map<_, _>>(),
         "seconds": {"lookup": seconds(0, 1), "prepare": seconds(2, 3), "primary": seconds(0, 3)},
         "run": {
             "repository": env("GITHUB_REPOSITORY"),

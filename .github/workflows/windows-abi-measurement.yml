@@ -138,6 +138,7 @@ jobs:
           & $env:MESH_LLM_AUTOMATION_BIN ci-ops windows-abi-measurement mark --receipt-dir $env:RECEIPT_DIR --phase lookup_end
           if ($LASTEXITCODE -ne 0) { throw 'measurement phase mark failed' }
       - name: Admit measurement sample
+        id: admit
         shell: pwsh
         env:
           INPUT_BACKEND: ${{ steps.row.outputs.backend }}
@@ -186,6 +187,7 @@ jobs:
           & $env:MESH_LLM_AUTOMATION_BIN ci-ops windows-abi-measurement mark --receipt-dir $env:RECEIPT_DIR --phase prepare_start
           if ($LASTEXITCODE -ne 0) { throw 'measurement phase mark failed' }
       - name: Prepare immutable Windows native runtime
+        id: prepare
         uses: ./.github/actions/prepare-native-runtime-input
         env:
           LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ steps.row.outputs.cuda_architectures }}
@@ -197,14 +199,17 @@ jobs:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "false"
       - name: Mark runtime preparation end
+        if: ${{ !cancelled() && steps.admit.outcome == 'success' }}
         shell: pwsh
         run: |
           & $env:MESH_LLM_AUTOMATION_BIN ci-ops windows-abi-measurement mark --receipt-dir $env:RECEIPT_DIR --phase prepare_end
           if ($LASTEXITCODE -ne 0) { throw 'measurement phase mark failed' }
       - name: Write measurement receipt
+        if: ${{ !cancelled() && steps.admit.outcome == 'success' }}
         shell: pwsh
         env:
           BUILD_DIR: ${{ steps.llama_cache.outputs.cache-path }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
         run: |
           & $env:MESH_LLM_AUTOMATION_BIN ci-ops windows-abi-measurement finish --receipt-dir $env:RECEIPT_DIR
           if ($LASTEXITCODE -ne 0) { throw 'Windows ABI measurement sample was refused' }

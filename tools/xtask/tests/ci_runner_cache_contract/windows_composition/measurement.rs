@@ -288,6 +288,17 @@ fn windows_abi_measurement_orders_lookup_admission_preparation_and_receipt() {
     ] {
         assert_eq!(text(env, key), value, "{key}");
     }
+    let admitted = "${{ !cancelled() && steps.admit.outcome == 'success' }}";
+    assert_eq!(text(admit, "id"), "admit");
+    assert_eq!(text(&steps(job)[order[5]], "id"), "prepare");
+    for index in [order[6], order[7]] {
+        assert_eq!(text(&steps(job)[index], "if"), admitted, "step {index}");
+    }
+    let receipt = steps(job)[order[7]].get("env").unwrap();
+    assert_eq!(
+        text(receipt, "PREPARE_OUTCOME"),
+        "${{ steps.prepare.outcome }}"
+    );
     let upload = steps(job).last().unwrap();
     assert!(text(upload, "uses").starts_with("actions/upload-artifact@"));
     assert_eq!(input(upload, "retention-days"), "14");
