@@ -787,6 +787,11 @@ pub(super) fn fatal_events_do_not_consume_startup_history_slots() {
 
 #[test]
 fn startup_history_sanitizes_complete_event_summaries() {
+    // In production an installed console capture keeps the dashboard on
+    // the attached (verbatim) side of the probe; the harness installs no
+    // capture, so force the attached arm for the visibility assertion.
+    let _attached =
+        crate::output::logging_projection::privacy::test_support::AttachmentOverride::set(true);
     let mut formatter = InteractiveDashboardFormatter::default();
     formatter
         .handle_output_event(&OutputEvent::Warning {

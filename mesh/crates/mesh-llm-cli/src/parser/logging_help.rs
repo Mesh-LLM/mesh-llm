@@ -12,7 +12,7 @@ pub fn logging_help() -> &'static str {
         "  Path precedence         logging.application_state_root, then ",
         "MESH_LLM_DATA_DIR/logging, then the local default above.\n",
         "  Retention setting       logging.retention_ttl_secs (default: 129600 seconds).\n",
-        "  Terminal lifecycle      Pretty/TUI and --log-format json project the same lifecycle facts; fatal output redacts credentials and URL-embedded secrets while retaining context.\n",
+        "  Terminal lifecycle      Pretty/TUI and --log-format json project the same lifecycle facts; fatal output redacts credentials and URL-embedded secrets while retaining context. Paths render verbatim on an attached terminal and redact when stderr is redirected (service journals).\n",
         "  Durable ledger          The Logs console and /api/logs/* read the local SQLite ledger.\n",
         "  Audit file sink         --audit-log-path, --audit-log-format, and --audit-log-level control a separate rotating audit file sink.\n",
         "  TUI event navigation    / filter, f follow, PgUp/PgDn page, Home/End jump.\n",

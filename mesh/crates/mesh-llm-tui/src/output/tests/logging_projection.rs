@@ -363,16 +363,13 @@ fn canonical_terminal_events_render_once_and_use_existing_event_controls() {
 
 #[test]
 fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_ids() {
-    // HOME is usually unset on Windows, where the home is USERPROFILE. Same
-    // choice as the redaction: the first non-empty absolute value.
-    let home = ["HOME", "USERPROFILE"]
-        .into_iter()
-        .find_map(|variable| {
-            std::env::var(variable)
-                .ok()
-                .filter(|home| !home.is_empty() && std::path::Path::new(home).is_absolute())
-        })
-        .expect("HOME or USERPROFILE should be an absolute path");
+    // Visibility assertions run against an attached terminal.
+    let _attached =
+        crate::output::logging_projection::privacy::test_support::AttachmentOverride::set(true);
+    // Fixed synthetic path and payload words chosen so no assertion can
+    // collide with the build account's environment (a home containing
+    // "private" once false-failed the negative assertions below).
+    let home = "/var/jenkins-workspace-7013";
     let request_id = RequestId::new();
     let request_id_text = request_id.as_uuid().to_string();
     let canonical = canonical_output(
@@ -380,20 +377,20 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
         9,
         LifecycleEvent::Failed {
             error: format!(
-                "prompt=private Bearer secret-token {home} completion=private response=private"
+                "prompt=confidential-payload Bearer secret-token {home} completion=confidential-payload response=confidential-payload"
             ),
             status_code: None,
         },
     );
     let native = OutputEvent::LlamaNativeLog {
-        message: format!("prompt=private {home} {}", "x".repeat(2_000)),
+        message: format!("prompt=confidential-payload {home} {}", "x".repeat(2_000)),
         category: "model",
         params: vec![
             (
                 "request_id".to_string(),
                 Value::String(request_id_text.clone()),
             ),
-            ("private_path".to_string(), Value::String(home.clone())),
+            ("private_path".to_string(), Value::String(home.to_string())),
             ("progress".to_string(), serde_json::json!(50)),
         ],
     };
@@ -411,7 +408,7 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
     // construction, not by redaction. The native-log projections below
     // do render message text, through this crate's terminal sanitizer,
     // where the operator's path is deliberately visible (see privacy.rs).
-    for forbidden in ["private", "secret-token"] {
+    for forbidden in ["confidential-payload", "secret-token"] {
         assert!(
             !canonical_json.contains(forbidden),
             "canonical JSON leaked {forbidden:?}"
@@ -422,7 +419,7 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
         );
     }
     assert!(
-        !canonical_pretty.contains(home.as_str()),
+        !canonical_pretty.contains(home),
         "canonical pretty line never renders the raw error text"
     );
     assert!(canonical_json.contains(&request_id_text));
@@ -432,7 +429,7 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
         let json_line = json.format(event).expect("native JSON projection");
         let pretty_line = pretty.format(event).expect("native pretty projection");
         for forbidden in [
-            "private",
+            "confidential-payload",
             "secret-token",
             request_id_text.as_str(),
             "tokens",
@@ -453,15 +450,32 @@ fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_
             .as_str()
             .expect("native JSON record to carry a message");
         assert!(
-            json_message.contains(home.as_str()),
+            json_message.contains(home),
             "native JSON projection should keep the operator's path visible: {json_message:?}"
         );
         assert!(
-            pretty_line.contains(home.as_str()),
+            pretty_line.contains(home),
             "native pretty projection should keep the operator's path visible: {pretty_line:?}"
         );
         assert!(pretty_line.chars().count() <= 1_100);
     }
+
+    // The same native message through an unattended stream (service
+    // journal, CI capture): the path redacts, the payload still
+    // redacts, the category text survives.
+    let _unattended =
+        crate::output::logging_projection::privacy::test_support::AttachmentOverride::set(false);
+    let unattended_pretty = pretty
+        .format(&native)
+        .expect("native pretty projection, unattended");
+    assert!(
+        !unattended_pretty.contains(home),
+        "unattended pretty must redact the path: {unattended_pretty:?}"
+    );
+    assert!(
+        unattended_pretty.contains("prompt="),
+        "unattended pretty keeps the diagnostic category"
+    );
 }
 
 #[test]

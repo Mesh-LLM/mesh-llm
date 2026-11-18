@@ -209,11 +209,14 @@ TUI presentation stays on stderr. The projection retains only bounded local
 HTTP `status`, `duration`, and numeric `tokens` when present. It excludes
 prompts, completions, artifact bodies, credentials, URLs, and free-form
 payload/error detail. Fatal startup projection redacts credentials and
-URL-embedded secrets selectively, retaining the surrounding diagnostic
-category and the operator's local paths, which render verbatim on the
-operator's own terminal; durable artifacts keep the stricter path
-redaction of the host runtime's logging policy
-(`mesh-llm-host-runtime`). These local correlation IDs do not cross mesh/network or
+URL-embedded secrets selectively in every mode. The operator's local
+paths render verbatim while stderr is attached to a terminal (an
+installed dashboard console capture counts as attached — its Events
+panel is the operator's screen), and are redacted (`[REDACTED_PATH]`)
+when stderr is redirected — the mode a service journal, container
+log, or CI capture reads. Durable artifacts
+keep the stricter, unconditional path redaction of the host runtime's
+logging policy (`mesh-llm-host-runtime`). These local correlation IDs do not cross mesh/network or
 OTLP telemetry boundaries, and the CLI stream remains a process-observation
 projection rather than a replacement for the trusted-local ledger.
 
