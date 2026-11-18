@@ -30,7 +30,7 @@
   identities, publish into existing MLflow experiment 6, and rewrite the AgentX
   PRs around the final implementation and source-pinned results.
 
-The bounded [validation foundation](skippy/evals/kv-validation/README.md) now
+The bounded [validation foundation](README.md) now
 provides explicit reusable commands. Complete the remaining cases below after
 the current cache and performance work.
 
