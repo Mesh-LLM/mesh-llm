@@ -23,6 +23,21 @@ const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// later, which reports it as before. Port 0 asks the OS for a free port and
 /// is skipped.
 pub(super) async fn ensure_serving_ports_free(options: &RuntimeOptions) -> Result<()> {
+    check_serving_ports(options, runs_mesh_llm).await
+}
+
+/// Whether `pid` is a mesh-llm process of its own, checked as `mesh-llm stop`
+/// checks a process before it ends one. A node embedded in an application
+/// through the SDK reports the application's pid, which is not ours to end.
+fn runs_mesh_llm(pid: u32) -> bool {
+    use super::instance::validate::{PidIdentity, pid_identity};
+    pid_identity(pid, "mesh-llm", None) == PidIdentity::Recorded
+}
+
+async fn check_serving_ports(
+    options: &RuntimeOptions,
+    runs_mesh_llm: fn(u32) -> bool,
+) -> Result<()> {
     // Each probe releases its port, so two listeners on one port would pass
     // here and only collide once the node has started.
     if options.port != 0 && options.port == options.console {
@@ -40,7 +55,9 @@ pub(super) async fn ensure_serving_ports_free(options: &RuntimeOptions) -> Resul
             continue;
         }
         if port_is_taken(port, options.listen_all, label).await {
-            let holder = find_mesh_node_holding(port, flag == "--console", options.console).await;
+            let holder =
+                find_mesh_node_holding(port, flag == "--console", options.console, runs_mesh_llm)
+                    .await;
             anyhow::bail!(
                 "{}",
                 port_in_use_message(port, label, flag, holder.as_ref())
@@ -98,6 +115,8 @@ fn is_addr_in_use(error: &anyhow::Error) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PortHolder {
     pid: Option<u32>,
+    /// Whether `pid` is a mesh-llm process, which the advice may tell to end.
+    runs_mesh_llm: bool,
     /// The console port its status answered on, which `mesh-llm load
     /// --port` takes.
     management_port: u16,
@@ -113,6 +132,7 @@ async fn find_mesh_node_holding(
     port: u16,
     is_console_port: bool,
     console: u16,
+    runs_mesh_llm: fn(u32) -> bool,
 ) -> Option<PortHolder> {
     let client = reqwest::Client::builder()
         .timeout(STATUS_REQUEST_TIMEOUT)
@@ -135,7 +155,9 @@ async fn find_mesh_node_holding(
         let Ok(status) = response.json::<serde_json::Value>().await else {
             continue;
         };
-        if let Some(holder) = holder_from_status(&status, port, is_console_port, candidate) {
+        if let Some(holder) =
+            holder_from_status(&status, port, is_console_port, candidate, runs_mesh_llm)
+        {
             return Some(holder);
         }
     }
@@ -149,6 +171,7 @@ fn holder_from_status(
     port: u16,
     is_console_port: bool,
     management_port: u16,
+    runs_mesh_llm: fn(u32) -> bool,
 ) -> Option<PortHolder> {
     let api_port = status["api_port"].as_u64()?;
     if !is_console_port && api_port != u64::from(port) {
@@ -163,6 +186,7 @@ fn holder_from_status(
     });
     Some(PortHolder {
         pid,
+        runs_mesh_llm: pid.is_some_and(runs_mesh_llm),
         management_port,
         is_client: status["is_client"].as_bool() == Some(true),
     })
@@ -176,6 +200,13 @@ fn port_in_use_message(port: u16, label: &str, flag: &str, holder: Option<&PortH
         );
     };
     let kind = if holder.is_client { "client" } else { "node" };
+    if let Some(pid) = holder.pid.filter(|_| !holder.runs_mesh_llm) {
+        return format!(
+            "port {port} for the {label} is held by a mesh-llm {kind} inside another program \
+             (pid {pid}) on this machine, such as an application built on the SDK. Stop it from \
+             that program, or choose another port with {flag}."
+        );
+    }
     let named = match holder.pid {
         Some(pid) => format!("the mesh-llm {kind} with pid {pid}"),
         None => format!("a mesh-llm {kind}"),
@@ -291,7 +322,7 @@ mod tests {
             console,
             ..RuntimeOptions::default()
         };
-        let message = ensure_serving_ports_free(&options)
+        let message = check_serving_ports(&options, |_| true)
             .await
             .expect_err("a held console port must stop startup")
             .to_string();
@@ -311,7 +342,7 @@ mod tests {
             console,
             ..RuntimeOptions::default()
         };
-        let message = ensure_serving_ports_free(&options)
+        let message = check_serving_ports(&options, |_| true)
             .await
             .expect_err("a held API port must stop startup")
             .to_string();
@@ -320,10 +351,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_node_inside_another_program_is_never_offered_a_kill() {
+        // An application embedding a node reports its own pid as the node's.
+        let console = status_server(node_status(9447, 4242, false)).await;
+        let options = RuntimeOptions {
+            port: 0,
+            console,
+            ..RuntimeOptions::default()
+        };
+        let message = check_serving_ports(&options, |_| false)
+            .await
+            .expect_err("a held console port must stop startup")
+            .to_string();
+        assert!(message.contains("inside another program (pid 4242)"));
+        assert!(message.contains("--console"));
+        assert!(!message.contains("kill"));
+        assert!(!message.contains("schtasks"));
+        assert!(!message.contains("mesh-llm load"));
+    }
+
+    #[test]
+    fn only_a_mesh_llm_process_is_taken_for_the_node_itself() {
+        // The test binary is not mesh-llm, as an SDK application is not.
+        assert!(!runs_mesh_llm(std::process::id()));
+    }
+
+    #[tokio::test]
     async fn a_console_reporting_another_api_port_does_not_claim_this_one() {
         let (_api, api_port) = held_port().await;
         let console = status_server(node_status(api_port.wrapping_add(1), 4242, false)).await;
-        assert_eq!(find_mesh_node_holding(api_port, false, console).await, None);
+        assert_eq!(
+            find_mesh_node_holding(api_port, false, console, |_| true).await,
+            None
+        );
     }
 
     #[test]
@@ -331,25 +391,44 @@ mod tests {
         let node = node_status(9337, 7, false);
         let named = PortHolder {
             pid: Some(7),
+            runs_mesh_llm: true,
             management_port: 3145,
             is_client: false,
         };
+        let mesh_llm: fn(u32) -> bool = |_| true;
         assert_eq!(
-            holder_from_status(&node, 9337, false, 3145),
+            holder_from_status(&node, 9337, false, 3145, mesh_llm),
             Some(named.clone())
         );
-        assert_eq!(holder_from_status(&node, 9447, false, 3145), None);
-        assert_eq!(holder_from_status(&node, 3145, true, 3145), Some(named));
+        assert_eq!(holder_from_status(&node, 9447, false, 3145, mesh_llm), None);
+        assert_eq!(
+            holder_from_status(&node, 3145, true, 3145, mesh_llm),
+            Some(named.clone())
+        );
+        assert_eq!(
+            holder_from_status(&node, 3145, true, 3145, |_| false),
+            Some(PortHolder {
+                runs_mesh_llm: false,
+                ..named
+            })
+        );
         // A JSON answer that is not a mesh-llm status.
         assert_eq!(
-            holder_from_status(&serde_json::json!({"ok": true}), 3145, true, 3145),
+            holder_from_status(&serde_json::json!({"ok": true}), 3145, true, 3145, mesh_llm),
             None
         );
         // A node whose instance scan has not run yet is still a node.
         assert_eq!(
-            holder_from_status(&serde_json::json!({"api_port": 9337}), 9337, false, 3131),
+            holder_from_status(
+                &serde_json::json!({"api_port": 9337}),
+                9337,
+                false,
+                3131,
+                mesh_llm
+            ),
             Some(PortHolder {
                 pid: None,
+                runs_mesh_llm: false,
                 management_port: 3131,
                 is_client: false,
             })
@@ -360,6 +439,7 @@ mod tests {
     fn a_client_holding_the_port_is_never_offered_a_load() {
         let client = PortHolder {
             pid: Some(7),
+            runs_mesh_llm: true,
             management_port: 3131,
             is_client: true,
         };
@@ -374,6 +454,7 @@ mod tests {
     fn the_stop_advice_names_the_holders_pid() {
         let node = PortHolder {
             pid: Some(7),
+            runs_mesh_llm: true,
             management_port: 3131,
             is_client: false,
         };
