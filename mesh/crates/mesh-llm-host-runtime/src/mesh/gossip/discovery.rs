@@ -14,7 +14,7 @@ impl Node {
         log_discovery_failure_as_warning: bool,
     ) {
         let peer_id = addr.id;
-        if self.should_skip_discovered_peer(my_role, peer_id, ann)
+        if self.should_skip_discovered_peer(my_role, peer_id, &ann.role)
             || self
                 .discovered_peer_already_known(peer_id, known_peer_check_uses_connections)
                 .await
@@ -94,10 +94,10 @@ impl Node {
         &self,
         my_role: &NodeRole,
         peer_id: EndpointId,
-        ann: &PeerAnnouncement,
+        peer_role: &NodeRole,
     ) -> bool {
         peer_id == self.endpoint.id()
-            || (matches!(my_role, NodeRole::Client) && matches!(ann.role, NodeRole::Client))
+            || (matches!(my_role, NodeRole::Client) && matches!(peer_role, NodeRole::Client))
     }
 
     pub(crate) async fn discovered_peer_already_known(
