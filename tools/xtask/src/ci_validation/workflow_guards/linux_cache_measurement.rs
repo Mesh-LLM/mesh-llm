@@ -57,6 +57,7 @@ type Actions<'a> = dyn Fn(&str) -> DynResult<Node> + 'a;
 
 pub(super) fn check_document(document: &Node, actions: &Actions) -> DynResult<()> {
     triggers(document)?;
+    per_sample_concurrency(document)?;
     permissions(document.get("permissions"), WORKFLOW)?;
     let jobs = document.get("jobs").ok_or("measurement jobs missing")?;
     for (name, job) in jobs.entries() {
@@ -94,6 +95,27 @@ fn triggers(document: &Node) -> Result<(), String> {
     if events != ["workflow_dispatch"] {
         return Err(format!(
             "{WORKFLOW}: only workflow_dispatch may run the measurement, found {events:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// GitHub keeps one pending run per group, so samples dispatched together need distinct groups.
+fn per_sample_concurrency(document: &Node) -> Result<(), String> {
+    let concurrency = document
+        .get("concurrency")
+        .ok_or("measurement concurrency missing")?;
+    let group = field(concurrency, "group").unwrap_or("");
+    for input in ["cohort", "condition", "sample"] {
+        if !group.contains(&format!("${{{{ inputs.{input} }}}}")) {
+            return Err(format!(
+                "{WORKFLOW}: concurrency group must include inputs.{input}"
+            ));
+        }
+    }
+    if field(concurrency, "cancel-in-progress") != Some("false") {
+        return Err(format!(
+            "{WORKFLOW}: measurements must not cancel in progress"
         ));
     }
     Ok(())

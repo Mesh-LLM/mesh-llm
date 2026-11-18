@@ -475,6 +475,10 @@ fn finish(
     let after = snapshot(&root.join(cohort.output()));
     let times = phase_times(directory);
     let seconds = |start: usize, end: usize| elapsed(times[start], times[end]);
+    // Steps between the two phases are not the cache path; keep them out of primary.
+    let primary = seconds(0, 1)
+        .zip(seconds(2, 3))
+        .map(|(lookup, prepare)| lookup + prepare);
     let prepare_outcome = env("PREPARE_OUTCOME");
     let outcome = after
         .as_ref()
@@ -489,7 +493,7 @@ fn finish(
         "output_after": after.as_ref().ok(),
         "prepare_outcome": prepare_outcome,
         "phases": PHASES.iter().zip(&times).map(|(phase, time)| ((*phase).to_owned(), time.map_or(Value::Null, |time| Value::from(isoformat(time))))).collect::<serde_json::Map<_, _>>(),
-        "seconds": {"lookup": seconds(0, 1), "prepare": seconds(2, 3), "primary": seconds(0, 3)},
+        "seconds": {"lookup": seconds(0, 1), "prepare": seconds(2, 3), "primary": primary},
         "run": run_identity(&env),
     });
     write_json(directory, "receipt.json", &receipt)?;

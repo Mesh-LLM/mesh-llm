@@ -34,7 +34,7 @@ on:
           - '5'
 
 concurrency:
-  group: linux-cache-measurement-${{ github.ref }}-${{ inputs.cohort }}
+  group: linux-cache-measurement-${{ github.ref }}-${{ inputs.cohort }}-${{ inputs.condition }}-${{ inputs.sample }}
   cancel-in-progress: false
 
 permissions:

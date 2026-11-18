@@ -740,6 +740,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   make it `admitted=false`. Typed `ci-ops linux-cache-measurement` receipts are
   evidence artifacts only. Production keys, the compiler-seed exclusion and the
   existing save clauses are unchanged; restores may update access metadata.
+  The receipt code is in the CPU runtime and hosted xtask keys, so warm samples
+  of those cohorts wait for a trusted `main` save of the new key. Primary time
+  is lookup plus preparation only.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.

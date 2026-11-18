@@ -1082,7 +1082,12 @@ admitted sample writes `receipt.json` even when preparation fails; a failed
 preparation, missing or out-of-order phases or an unreadable output make it
 `admitted=false`.
 Evidence retains for 14 days. The workflow is outside every inventory, so
-editing it does not move a measured key.
+editing it does not move a measured key. Its `ci-ops` receipt code is in the
+CPU runtime and hosted xtask inventories (`tools/xtask/src/**`), so merging a
+receipt change moves those two keys: their exact-warm and unrelated-edit
+samples wait for a trusted `main` run that saves the new key. The controller
+key does not include it. Primary time is lookup plus preparation only, and each
+cohort, condition and sample has its own concurrency group.
 
 Windows ABI key construction and retention share typed Rust identities.
 The existing warmer's maintenance job derives active families from CI runtime

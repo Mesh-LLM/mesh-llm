@@ -228,7 +228,7 @@ fn exact_warm_receipt_binds_key_phases_and_an_unchanged_output() {
     assert_eq!(receipt["admission"]["key"], RUNTIME_KEY);
     assert_eq!(receipt["admission"]["restored_key"], RUNTIME_KEY);
     assert_eq!(receipt["seconds"]["lookup"], 5.0);
-    assert_eq!(receipt["seconds"]["primary"], 15.0);
+    assert_eq!(receipt["seconds"]["primary"], 10.0);
     assert_eq!(receipt["run"]["GITHUB_EVENT_NAME"], "workflow_dispatch");
 
     fs::write(output.join("manifest.json"), "{\"rebuilt\":true}").unwrap();
@@ -309,7 +309,7 @@ fn failed_preparation_and_bad_phases_write_a_refused_receipt() {
     let receipt = json_file(&receipts.path().join("receipt.json"));
     assert_eq!(receipt["admitted"], false);
     assert_eq!(receipt["prepare_outcome"], "failure");
-    assert_eq!(receipt["seconds"]["primary"], 15.0);
+    assert_eq!(receipt["seconds"]["primary"], 10.0);
 
     fs::remove_file(receipts.path().join("phase-prepare_end.txt")).unwrap();
     let error = finish(checkout.path(), receipts.path(), Cohort::CpuRuntime, &env).unwrap_err();

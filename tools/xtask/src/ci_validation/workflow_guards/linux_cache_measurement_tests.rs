@@ -175,3 +175,15 @@ fn linux_cache_measurement_writes_receipts_for_failed_preparations() {
     .unwrap_err();
     assert!(error.contains("preparation outcome"), "{error}");
 }
+
+#[test]
+fn linux_cache_measurement_keeps_one_concurrency_group_per_sample() {
+    let error = mutated("-${{ inputs.sample }}\n", "\n").unwrap_err();
+    assert!(error.contains("inputs.sample"), "{error}");
+    let error = mutated(
+        "  cancel-in-progress: false\n",
+        "  cancel-in-progress: true\n",
+    )
+    .unwrap_err();
+    assert!(error.contains("cancel in progress"), "{error}");
+}

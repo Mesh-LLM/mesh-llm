@@ -1533,7 +1533,9 @@ moves the key is refused. An admitted sample still writes a refused receipt when
 preparation fails. It builds its own receipt tool outside the measured
 roots, never reaches `prepare-automation` or `prepare-ci-controller`, and
 uploads only its receipts for 14 days. Runtime slice, warmer and hosted action
-behavior is unchanged.
+behavior is unchanged. Merging a change to its receipt code moves the CPU
+runtime and hosted xtask keys, so their warm samples wait for a trusted `main`
+run that saves the new key. Each sample has its own concurrency group.
 
 Windows ABI retention runs in the existing warmer maintenance job. Rust derives
 the active compatibility roster from CI, release and warmer consumers and
