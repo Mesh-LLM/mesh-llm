@@ -612,12 +612,6 @@ row applies its startup deadline separately to candidate and reference HTTP
 servers. Embedding certification also requires the official Python SDK smoke;
 a missing SDK is a failure, not a skipped passing check.
 
-The competitive benchmark can optionally download exact-cohort history from
-`MESH_PERFORMANCE_HISTORY_DATASET`, validate the checked-in schema, report
-regression candidates, and append one immutable run shard using
-`MESH_PERFORMANCE_HISTORY_HF_TOKEN`. Performance thresholds are report-only
-during baseline collection.
-
 Each PR entry checks out the default branch for canonical planning, projects
 only its matching bounded lane, and invokes that lane at `@main` as a nested
 reusable workflow. GitHub therefore exposes five focused PR-associated runs

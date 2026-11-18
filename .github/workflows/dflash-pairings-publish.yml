@@ -105,7 +105,7 @@ jobs:
           echo "staging=$staging" >> "$GITHUB_OUTPUT"
       - name: Upload to Hugging Face
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_PUBLISH_TOKEN }}
           INDEX_SHA256: ${{ steps.stage.outputs.sha256 }}
           STAGING: ${{ steps.stage.outputs.staging }}
         run: |

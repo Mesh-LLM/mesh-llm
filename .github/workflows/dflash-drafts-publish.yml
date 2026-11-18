@@ -179,7 +179,7 @@ jobs:
       - name: Upload to Hugging Face
         if: ${{ steps.plan.outputs.count != '0' }}
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_PUBLISH_TOKEN }}
           PENDING: ${{ steps.plan.outputs.pending }}
           STAGING: ${{ steps.convert.outputs.staging }}
         run: |
