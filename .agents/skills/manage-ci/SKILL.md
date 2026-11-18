@@ -711,8 +711,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   restore, and no job reaches a cache save, save-and-verify, retention or
   publisher. The workflow is a registered retention consumer that adds no
   family. It is deliberately outside `CACHE_INPUT_HASH`, so editing it cannot
-  move the key it measures. Restores may update cache access metadata. Receipts
-  are evidence artifacts only.
+  move the key it measures, but its `ci-ops` receipt code is in that key, so
+  exact-warm samples wait for the warmer run on the merge commit. Primary time
+  is lookup plus preparation, excluding uncached toolkit installs. Restores may
+  update cache access metadata. Receipts are evidence artifacts only.
 - A workflow that is the only `main` producer of a key must wake on every input
   of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
   `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract

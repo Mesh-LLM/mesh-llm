@@ -33,7 +33,7 @@ on:
           - '5'
 
 concurrency:
-  group: windows-abi-measurement-${{ github.ref }}-${{ inputs.backend }}
+  group: windows-abi-measurement-${{ github.ref }}-${{ inputs.backend }}-${{ inputs.condition }}-${{ inputs.sample }}
   cancel-in-progress: false
 
 permissions:

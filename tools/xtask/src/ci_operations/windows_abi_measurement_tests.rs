@@ -252,7 +252,7 @@ fn exact_warm_receipt_binds_identity_phases_and_unchanged_tree() {
     assert_eq!(receipt["admission"]["key"], key.as_str());
     assert_eq!(receipt["admission"]["restored_key"], key.as_str());
     assert_eq!(receipt["seconds"]["lookup"], 5.0);
-    assert_eq!(receipt["seconds"]["primary"], 15.0);
+    assert_eq!(receipt["seconds"]["primary"], 10.0);
     assert_eq!(receipt["run"]["event"], "workflow_dispatch");
 
     fs::write(build.path().join(STAMP), "rebuilt\n").unwrap();
@@ -291,7 +291,7 @@ fn failed_preparation_writes_a_refused_receipt_with_its_phases() {
     assert_eq!(receipt["admitted"], false);
     assert_eq!(receipt["prepare_outcome"], "failure");
     assert!(receipt["phases"]["prepare_end"].is_string());
-    assert_eq!(receipt["seconds"]["primary"], 15.0);
+    assert_eq!(receipt["seconds"]["primary"], 10.0);
 
     fs::remove_dir_all(build.path()).unwrap();
     assert!(

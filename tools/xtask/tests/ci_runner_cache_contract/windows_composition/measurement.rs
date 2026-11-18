@@ -74,6 +74,15 @@ fn windows_abi_measurement_is_manual_read_only_and_secret_free() {
         .map(|(key, _)| key.as_str())
         .collect();
     assert_eq!(triggers, ["workflow_dispatch"]);
+    // One group per sample: GitHub keeps one pending run per group and cancels the rest.
+    let concurrency = document.get("concurrency").unwrap();
+    for input in ["backend", "condition", "sample"] {
+        assert!(
+            text(concurrency, "group").contains(&format!("${{{{ inputs.{input} }}}}")),
+            "concurrency group must include {input}"
+        );
+    }
+    assert_eq!(text(concurrency, "cancel-in-progress"), "false");
     for token in [
         "secrets.",
         "secrets:",

@@ -1098,7 +1098,12 @@ compiler, SDK, toolkit, automation and Depot cache authority is literal
 `false`, and the graph reaches no `actions/cache/save`, combined
 `actions/cache`, save-and-verify, retention or release step. Evidence retains
 for 14 days. The workflow is outside `CACHE_INPUT_HASH`, so changing it does
-not move the measured key.
+not move the measured key. Its `ci-ops` receipt code is inside it
+(`tools/xtask/src/**`), so merging a receipt change moves all four keys:
+exact-warm samples wait for the warmer run on that merge commit. Primary time
+is lookup plus preparation only; toolkit installs between them are excluded.
+Each backend, condition and sample has its own concurrency group, so samples
+dispatched back to back do not cancel one another.
 No live purge accompanies this source cutover.
 
 These source contracts require candidate and post-merge execution evidence;
