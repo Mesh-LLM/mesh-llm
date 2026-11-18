@@ -21,15 +21,10 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
-# Speech recognition folds the pinned whisper.cpp into llama.dll, as
-# skippy/scripts/build-llama.sh does for Linux, macOS and CI runtimes.
-# SKIPPY_SPEECH_RECOGNITION=OFF builds a runtime whose skippy_asr_* calls
-# report UNSUPPORTED.
-$speechRecognition = if ($env:SKIPPY_SPEECH_RECOGNITION) { $env:SKIPPY_SPEECH_RECOGNITION.ToUpperInvariant() } else { "ON" }
-if ($speechRecognition -notin @("ON", "OFF")) {
-    throw "Unsupported SKIPPY_SPEECH_RECOGNITION '$($env:SKIPPY_SPEECH_RECOGNITION)'. Expected ON or OFF."
-}
-$whisperDir = Join-Path $repoRoot ".deps\whisper.cpp"
+# The whisper.cpp tree speech recognition builds from: WHISPER_WORKDIR when set,
+# as skippy/scripts/build-llama.sh reads it, so an offline build can supply a
+# pre-staged checkout; otherwise .deps/whisper.cpp.
+$whisperDir = if ($env:WHISPER_WORKDIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:WHISPER_WORKDIR)) } else { Join-Path $repoRoot ".deps\whisper.cpp" }
 $meshUiDir = Join-Path $repoRoot "mesh\crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null
@@ -150,12 +145,21 @@ function Prepare-Llama {
     }
 }
 
-# Fetch the pinned whisper.cpp into .deps/whisper.cpp through the same script
-# build-llama.sh uses. A stray WHISPER_WORKDIR is cleared so the prepared tree
-# is always the one CMake builds.
+# Prepare the pinned whisper.cpp in $whisperDir through the same script
+# build-llama.sh uses, so bash prepares the tree CMake builds. Like
+# Prepare-Llama, only an override is passed, in the form bash reads: relative to
+# the repository root when it lies inside it, since WSL bash reads a
+# drive-letter path as a relative one. prepare-whisper.sh keeps a clean checkout
+# at the pin without fetching.
 function Prepare-Whisper {
     $previousWorkdir = $env:WHISPER_WORKDIR
-    Remove-Item Env:WHISPER_WORKDIR -ErrorAction SilentlyContinue
+    if ($previousWorkdir) {
+        $insideRepo = $whisperDir.StartsWith(
+            [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\",
+            [System.StringComparison]::OrdinalIgnoreCase)
+        $wsl = if ($insideRepo) { $false } else { Test-BashIsWsl }
+        $env:WHISPER_WORKDIR = ConvertTo-BashRepoPath $whisperDir -Wsl:$wsl
+    }
     try {
         Invoke-NativeCommand "bash" @("skippy/scripts/prepare-whisper.sh")
     } finally {
@@ -1096,6 +1100,16 @@ switch ($backendName) {
     default {
         throw "Unsupported backend '$backendName'. Use one of: cuda, rocm, hip, vulkan, cpu."
     }
+}
+
+# Speech recognition folds the pinned whisper.cpp into llama.dll, as
+# skippy/scripts/build-llama.sh does for Linux, macOS and CI runtimes.
+# SKIPPY_SPEECH_RECOGNITION=OFF builds a runtime whose skippy_asr_* calls
+# report UNSUPPORTED. Read only here, below the -HostOnly return: the
+# backend-neutral host never builds a runtime.
+$speechRecognition = if ($env:SKIPPY_SPEECH_RECOGNITION) { $env:SKIPPY_SPEECH_RECOGNITION.ToUpperInvariant() } else { "ON" }
+if ($speechRecognition -notin @("ON", "OFF")) {
+    throw "Unsupported SKIPPY_SPEECH_RECOGNITION '$($env:SKIPPY_SPEECH_RECOGNITION)'. Expected ON or OFF."
 }
 
 $packagingBash = Resolve-PackagingBash
