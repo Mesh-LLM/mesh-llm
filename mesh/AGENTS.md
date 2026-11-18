@@ -389,7 +389,8 @@ To override the runtime root (e.g., for tests or systemd):
 - `$HOME/.mesh-llm/runtime` — default fallback
 
 For stale instances (crashed mesh-llm leaving behind a runtime dir):
-- Other running mesh-llm instances GC dead-owner dirs older than 1 hour on startup
+- Each mesh-llm node that starts removes, in the background, the dirs of instances that are no longer running once seven days have passed since their last write (the dir, `owner.json`, `lock` or anything in `logs/`), so a crash's logs stay readable for a week
+- Only dirs holding the `lock` file every instance creates are considered, and a dir whose `owner.json` cannot be read is kept
 - Manual cleanup: `rm -rf ~/.mesh-llm/runtime/<stale_pid>/`
 
 ### Common failures

@@ -18,8 +18,9 @@
 //! - Downloaded model files (live under `~/.mesh-llm/models/`)
 //! - Any new file type not explicitly listed above — update this list first
 //!
-//! A stopped instance's directory, with its logs, is removed by the next run
-//! once seven days have passed since its last write (`dead_slots.rs`).
+//! A stopped instance's directory, with its logs, is removed by the next node
+//! that starts once seven days have passed since its last write, after that
+//! node claims the directory's lock (`dead_slots.rs`).
 //!
 //! # Runtime root resolution
 //!
@@ -212,35 +213,22 @@ impl InstanceRuntime {
             }
         }
 
-        let lock_path = dir.join("lock");
-        // The lock file is opened only to hold a flock — we never write to it.
-        // `truncate(false)` is the safe choice: existing locks must not be wiped.
-        let lock_file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .with_context(|| format!("failed to open lock file: {}", lock_path.display()))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-
-            let fd = lock_file.as_raw_fd();
-            // SAFETY: flock is safe to call with a valid fd
-            let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-            if ret != 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
-                    anyhow::bail!(
-                        "runtime directory for pid {pid} is already locked \
-                         (another live process owns this slot)"
-                    );
-                }
-                return Err(anyhow::Error::from(err)).context("flock failed on runtime lock file");
+        // The dead-slot cleanup of another instance may be claiming this
+        // directory, left by an earlier process with the same pid, at the
+        // moment this one starts. It renames the directory away once claimed,
+        // so a short retry opens a fresh slot instead of failing the start.
+        let mut attempt = 0;
+        let lock_file = loop {
+            attempt += 1;
+            match open_slot_lock(&dir)? {
+                Some(lock_file) => break lock_file,
+                None if attempt < SLOT_CLAIM_ATTEMPTS => std::thread::sleep(SLOT_CLAIM_RETRY),
+                None => anyhow::bail!(
+                    "runtime directory for pid {pid} is already locked \
+                     (another live process owns this slot)"
+                ),
             }
-        }
+        };
 
         Ok(Self {
             dir,
@@ -252,6 +240,69 @@ impl InstanceRuntime {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+}
+
+/// How often [`InstanceRuntime::acquire`] tries a slot that is held, and how
+/// long it waits between tries: half a second in all, far longer than the
+/// dead-slot cleanup holds a slot it claims.
+const SLOT_CLAIM_ATTEMPTS: u32 = 20;
+const SLOT_CLAIM_RETRY: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Create `dir` and open its lock, or `None` when the slot is held right now:
+/// by a live process or by a dead-slot cleanup that is claiming it.
+fn open_slot_lock(dir: &Path) -> Result<Option<File>> {
+    fs::create_dir_all(dir).context("failed to create runtime directory")?;
+    let lock_path = dir.join("lock");
+    // The lock file is opened only to hold a flock — we never write to it.
+    // `truncate(false)` is the safe choice: existing locks must not be wiped.
+    let lock_file = match fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    {
+        Ok(lock_file) => lock_file,
+        // The cleanup holds the lock open exclusively while it claims the
+        // slot (sharing violation), or has just renamed the directory away.
+        #[cfg(windows)]
+        Err(error) if matches!(error.raw_os_error(), Some(32 | 2 | 3)) => return Ok(None),
+        #[cfg(unix)]
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::Error::from(error))
+                .with_context(|| format!("failed to open lock file: {}", lock_path.display()));
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::io::AsRawFd;
+
+        let fd = lock_file.as_raw_fd();
+        // SAFETY: flock is safe to call with a valid fd
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                return Ok(None);
+            }
+            return Err(anyhow::Error::from(err)).context("flock failed on runtime lock file");
+        }
+        // A cleanup that claimed the slot first may have renamed it away
+        // before releasing the lock this process then took: the lock held is
+        // then the removed slot's, not the one at `lock_path`.
+        let held = lock_file
+            .metadata()
+            .context("failed to read the runtime lock")?;
+        let still_here = fs::metadata(&lock_path)
+            .is_ok_and(|current| current.dev() == held.dev() && current.ino() == held.ino());
+        if !still_here {
+            return Ok(None);
+        }
+    }
+    Ok(Some(lock_file))
 }
 
 /// Probe whether the flock at `lock_path` is currently held by a live process.

@@ -6,12 +6,17 @@
 //! each of them. A slot holds that run's native logs, which are what a person
 //! reads after a crash, so a dead slot is kept for [`DEAD_SLOT_RETENTION`]
 //! after its last write and removed after that.
+//!
+//! Only a directory with the `lock` file every instance opens counts as a
+//! slot, and a slot is removed only once claimed through that lock, so an
+//! instance that starts under a reused pid is never stripped of its files.
 
 use super::instance::validate::{self, PidIdentity};
 use serde::Deserialize;
 use std::fs;
+use std::io;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// How long a stopped instance's slot, and so its logs, stays on disk.
 pub(crate) const DEAD_SLOT_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -49,7 +54,7 @@ pub(crate) fn prune_dead_runtime_slots(
         else {
             continue;
         };
-        if dir_pid == my_pid || !dir.is_dir() || owner_may_be_running(&dir, dir_pid) {
+        if dir_pid == my_pid || !is_instance_slot(&dir) || owner_may_be_running(&dir, dir_pid) {
             continue;
         }
         let Some(last_write) = newest_write(&dir) else {
@@ -59,8 +64,9 @@ pub(crate) fn prune_dead_runtime_slots(
         if age < retention {
             continue;
         }
-        match fs::remove_dir_all(&dir) {
-            Ok(()) => removed += 1,
+        match remove_unclaimed_slot(root, &dir, dir_pid) {
+            Ok(true) => removed += 1,
+            Ok(false) => {}
             Err(error) => tracing::debug!(
                 path = %dir.display(),
                 %error,
@@ -74,12 +80,108 @@ pub(crate) fn prune_dead_runtime_slots(
     removed
 }
 
+/// Whether `dir` is a slot an instance created: it holds the `lock` file
+/// every instance opens, and nothing but what an instance writes there
+/// (`owner.json`, the temporary file it is written through, and `logs/`).
+/// Any other numeric directory under a custom root, such as an archive named
+/// after a year, is not ours to remove.
+fn is_instance_slot(dir: &Path) -> bool {
+    if !dir.join("lock").is_file() {
+        return false;
+    }
+    let Ok(mut entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.all(|entry| {
+        entry.is_ok_and(|entry| {
+            matches!(
+                entry.file_name().to_str(),
+                Some("lock" | "owner.json" | "owner.json.tmp" | "logs")
+            )
+        })
+    })
+}
+
+/// Removes `dir` unless an instance holds it, and says whether it did.
+///
+/// The slot is claimed through its lock first: the flock an instance takes on
+/// Unix, or an exclusive open that fails while an instance keeps the file open
+/// on Windows. It is then renamed out of the way and removed, so an instance
+/// starting under the same pid meanwhile finds no slot and creates a fresh
+/// one instead of losing its files. On Windows a directory with an open file
+/// cannot be renamed, so the claim is released first and a rename that fails
+/// means an instance has opened the lock since: the slot is kept.
+fn remove_unclaimed_slot(root: &Path, dir: &Path, pid: u32) -> io::Result<bool> {
+    let Some(claim) = claim_slot(&dir.join("lock"))? else {
+        return Ok(false);
+    };
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let removing = root.join(format!(".removing-{pid}-{nanos}"));
+    #[cfg(windows)]
+    drop(claim);
+    let renamed = fs::rename(dir, &removing);
+    #[cfg(not(windows))]
+    drop(claim);
+    if renamed.is_err() {
+        return Ok(false);
+    }
+    fs::remove_dir_all(&removing)?;
+    Ok(true)
+}
+
+/// The lock of a slot no instance holds, held until dropped; `None` when an
+/// instance holds it or it has gone.
+#[cfg(unix)]
+fn claim_slot(lock: &Path) -> io::Result<Option<fs::File>> {
+    use std::os::unix::io::AsRawFd;
+    let file = match fs::OpenOptions::new().read(true).write(true).open(lock) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // SAFETY: flock is safe to call with a valid fd.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Ok(None);
+        }
+        return Err(error);
+    }
+    Ok(Some(file))
+}
+
+#[cfg(windows)]
+fn claim_slot(lock: &Path) -> io::Result<Option<fs::File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    match fs::OpenOptions::new().read(true).share_mode(0).open(lock) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn claim_slot(_lock: &Path) -> io::Result<Option<fs::File>> {
+    Ok(None)
+}
+
 /// Whether the process that owns this slot may still be running. Only a
 /// process that is gone, or an id now held by another process, answers no.
+/// An `owner.json` that is present but unreadable or invalid establishes
+/// nothing, so the slot is kept; only an absent one falls back to the pid.
 fn owner_may_be_running(dir: &Path, dir_pid: u32) -> bool {
-    let owner = fs::read_to_string(dir.join("owner.json"))
-        .ok()
-        .and_then(|json| serde_json::from_str::<SlotOwner>(&json).ok());
+    let owner = match fs::read_to_string(dir.join("owner.json")) {
+        Ok(json) => match serde_json::from_str::<SlotOwner>(&json) {
+            Ok(owner) => Some(owner),
+            Err(_) => return true,
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => return true,
+    };
     let (pid, comm, started_at) = match owner {
         Some(owner) => (
             owner.pid,
@@ -220,6 +322,114 @@ mod tests {
         assert!(own.exists());
         assert!(stray.exists());
         assert!(root.path().join("12345").exists());
+    }
+
+    #[test]
+    fn keeps_a_numeric_directory_that_is_not_an_instance_slot() {
+        // An archive named after a number, under a custom runtime root.
+        let root = tempdir().unwrap();
+        let archive = root.path().join(DEAD_PID.to_string());
+        fs::create_dir_all(&archive).unwrap();
+        fs::write(archive.join("notes.txt"), "kept").unwrap();
+
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(archive.join("notes.txt").exists());
+    }
+
+    #[test]
+    fn keeps_a_numeric_directory_holding_files_no_instance_writes() {
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        fs::write(dir.join("report.pdf"), "kept").unwrap();
+
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("report.pdf").exists());
+    }
+
+    #[test]
+    fn keeps_a_slot_whose_owner_record_cannot_be_read() {
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, None);
+        fs::write(dir.join("owner.json"), "{\"pid\": 9").unwrap();
+
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("owner.json").exists());
+        assert!(dir.join("logs").join("skippy-native.log").exists());
+    }
+
+    #[test]
+    fn keeps_an_expired_slot_whose_lock_a_live_instance_holds() {
+        // A new instance under a reused pid holds the lock of an old slot.
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        let held = hold_lock(&dir.join("lock"));
+
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("logs").join("skippy-native.log").exists());
+        drop(held);
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            1
+        );
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn a_native_log_written_within_the_retention_keeps_the_slot() {
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        let created = SystemTime::now();
+        // Eight days on, the slot directory, its owner record and logs/ are
+        // past the retention, but the native log was appended two days ago.
+        let later = created + WEEK_AND_A_DAY;
+        let appended = created + Duration::from_secs(6 * 24 * 60 * 60);
+        let log = fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("logs").join("skippy-native.log"))
+            .unwrap();
+        log.set_modified(appended).unwrap();
+        drop(log);
+
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("logs").join("skippy-native.log").exists());
+    }
+
+    /// Holds a slot lock the way a running instance does.
+    fn hold_lock(lock: &Path) -> fs::File {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock)
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            // SAFETY: flock is safe to call with a valid fd.
+            assert_eq!(
+                unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+        }
+        file
     }
 
     #[test]
