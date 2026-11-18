@@ -312,7 +312,7 @@ impl Node {
                     control_tx.as_ref(),
                     &request,
                     provisional,
-                    &response,
+                    Ok(&response),
                 )
                 .await;
                 response
@@ -324,7 +324,7 @@ impl Node {
                 );
                 let response =
                     Self::stage_control_load_failure_response(remote, request.clone(), error)?;
-                self.settle_executed_stage_load(control_tx.as_ref(), &request, None, &response)
+                self.settle_executed_stage_load(control_tx.as_ref(), &request, None, Ok(&response))
                     .await;
                 response
             }

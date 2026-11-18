@@ -109,6 +109,7 @@ impl RunningStageNode {
         let mut takeover = self.running.clone();
         takeover.coordinator_id = None;
         takeover.coordinator_term = 0;
+        takeover.shutdown_generation = self.running.shutdown_generation + 1;
         takeover.topology_stages[0].node_id = usurper;
         takeover
     }
@@ -180,9 +181,19 @@ async fn refused_takeover_leaves_the_running_stage_and_its_routing() -> Result<(
     Ok(())
 }
 
-/// A stage control loop that passes every load's preflight, refuses the load
-/// itself, and reports that `running` still runs.
-fn spawn_refusing_stage_control_loop(
+/// How a scripted stage control loop answers a load that passed preflight.
+#[derive(Clone, Copy)]
+enum LoadAnswer {
+    /// A `Ready` response that does not accept the load.
+    Refuse,
+    /// An error, as when preparing the launch fails or the caller times out.
+    Fail,
+}
+
+/// A stage control loop that passes every load's preflight, answers the
+/// load itself as `answer` says, and reports that `running` runs.
+fn spawn_scripted_stage_control_loop(
+    answer: LoadAnswer,
     running: StageLoadRequest,
 ) -> tokio::sync::mpsc::UnboundedSender<StageControlCommand> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -197,14 +208,20 @@ fn spawn_refusing_stage_control_loop(
                     resp,
                     ..
                 } => {
-                    let mut status = stage_status_from_load(&load, StageRuntimeState::Failed);
-                    status.error = Some("refused after preflight".to_string());
-                    let _ = resp.send(Ok(StageControlResponse::Ready(StageReadyResponse {
-                        accepted: false,
-                        removed_running_stage: false,
-                        status,
-                        error: Some("refused after preflight".to_string()),
-                    })));
+                    let _ = resp.send(match answer {
+                        LoadAnswer::Refuse => {
+                            let mut status =
+                                stage_status_from_load(&load, StageRuntimeState::Failed);
+                            status.error = Some("refused after preflight".to_string());
+                            Ok(StageControlResponse::Ready(StageReadyResponse {
+                                accepted: false,
+                                removed_running_stage: false,
+                                status,
+                                error: Some("refused after preflight".to_string()),
+                            }))
+                        }
+                        LoadAnswer::Fail => Err(anyhow::anyhow!("launch preparation failed")),
+                    });
                 }
                 StageControlCommand::Execute {
                     request: StageControlRequest::Status(_),
@@ -226,8 +243,10 @@ fn spawn_refusing_stage_control_loop(
 #[tokio::test]
 async fn load_refused_after_its_topology_was_recorded_puts_the_registry_back() -> Result<()> {
     let setup = node_running_a_bound_stage().await?;
-    *setup.node.stage_control_tx.lock().await =
-        Some(spawn_refusing_stage_control_loop(setup.running.clone()));
+    *setup.node.stage_control_tx.lock().await = Some(spawn_scripted_stage_control_loop(
+        LoadAnswer::Refuse,
+        setup.running.clone(),
+    ));
     let before = registry(&setup.node).await;
     let usurper = make_test_endpoint_id(0xa2);
 
@@ -277,5 +296,136 @@ async fn refused_load_with_no_stage_in_its_place_is_reported_failed() -> Result<
             .await
     );
     control.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_load_failing_while_the_old_stage_runs_puts_the_registry_back() -> Result<()> {
+    let setup = node_running_a_bound_stage().await?;
+    *setup.node.stage_control_tx.lock().await = Some(spawn_scripted_stage_control_loop(
+        LoadAnswer::Fail,
+        setup.running.clone(),
+    ));
+    let before = registry(&setup.node).await;
+    let usurper = make_test_endpoint_id(0xa4);
+
+    let error = setup
+        .node
+        .send_local_stage_control(StageControlRequest::Load(setup.takeover(usurper)))
+        .await
+        .expect_err("the failed load must report its error");
+
+    assert!(
+        format!("{error:#}").contains("launch preparation failed"),
+        "{error:#}"
+    );
+    assert_eq!(registry(&setup.node).await, before);
+    setup.assert_routes_to_the_running_stage(usurper).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_the_loop_started_after_its_caller_gave_up_keeps_its_records() -> Result<()> {
+    // The caller saw an error, as when it stops waiting, but the loop went
+    // on to start the replacement: the registry follows the stage that runs.
+    let setup = node_running_a_bound_stage().await?;
+    let successor = make_test_endpoint_id(0xa5);
+    let replacement = setup.takeover(successor);
+    *setup.node.stage_control_tx.lock().await = Some(spawn_scripted_stage_control_loop(
+        LoadAnswer::Fail,
+        replacement.clone(),
+    ));
+
+    let response = setup
+        .node
+        .authorize_resolve_and_execute_stage_control(
+            successor,
+            "load",
+            StageControlRequest::Load(replacement),
+        )
+        .await?;
+
+    refused(&response);
+    let node = &setup.node;
+    assert!(
+        node.stage_transport_allowed(successor, &open_stage_one(successor))
+            .await,
+        "the running replacement's predecessor must have its transport edge"
+    );
+    assert!(
+        !node
+            .stage_transport_allowed(setup.predecessor, &open_stage_one(setup.predecessor))
+            .await
+    );
+    let (_, statuses) = registry(node).await;
+    let stage_one = statuses
+        .iter()
+        .find(|(_, status)| status.stage_id == "stage-1")
+        .map(|(_, status)| status)
+        .expect("the running replacement must have a status");
+    assert_eq!(stage_one.state, StageRuntimeState::Ready);
+    assert_eq!(
+        stage_one.shutdown_generation,
+        setup.running.shutdown_generation + 1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn refused_load_keeps_statuses_written_after_it() -> Result<()> {
+    let setup = node_running_a_bound_stage().await?;
+    let control_tx = spawn_scripted_stage_control_loop(LoadAnswer::Refuse, setup.running.clone());
+    let usurper = make_test_endpoint_id(0xa6);
+    let takeover = setup.takeover(usurper);
+    let (topologies_before, _) = registry(&setup.node).await;
+
+    let provisional = setup.node.record_provisional_stage_load(&takeover).await;
+    // A status refresh lands while the load is pending.
+    let mut refreshed = stage_status_from_load(&setup.running, StageRuntimeState::Ready);
+    refreshed.stage_id = "stage-0".to_string();
+    refreshed.stage_index = 0;
+    refreshed.error = Some("refreshed while the load was pending".to_string());
+    setup
+        .node
+        .record_stage_status(Some(usurper), refreshed)
+        .await;
+    let mut refusal = stage_status_from_load(&takeover, StageRuntimeState::Failed);
+    refusal.error = Some("refused".to_string());
+    let response = StageControlResponse::Ready(StageReadyResponse {
+        accepted: false,
+        removed_running_stage: false,
+        status: refusal,
+        error: Some("refused".to_string()),
+    });
+    setup
+        .node
+        .settle_executed_stage_load(
+            Some(&control_tx),
+            &StageControlRequest::Load(takeover),
+            Some(provisional),
+            Ok(&response),
+        )
+        .await;
+
+    let (topologies, statuses) = registry(&setup.node).await;
+    assert_eq!(topologies, topologies_before);
+    setup.assert_routes_to_the_running_stage(usurper).await;
+    let status = |stage_id: &str| {
+        statuses
+            .iter()
+            .find(|(_, status)| status.stage_id == stage_id)
+            .map(|(_, status)| status.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        status("stage-0").error.as_deref(),
+        Some("refreshed while the load was pending"),
+        "a status written after the load must survive its refusal"
+    );
+    assert_eq!(status("stage-1").state, StageRuntimeState::Ready);
+    assert_eq!(
+        status("stage-1").shutdown_generation,
+        setup.running.shutdown_generation
+    );
     Ok(())
 }

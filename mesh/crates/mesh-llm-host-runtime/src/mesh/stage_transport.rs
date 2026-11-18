@@ -959,11 +959,17 @@ impl Node {
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
-        let response = wait_local_stage_control_response(resp_rx, timeout).await?;
+        let response = wait_local_stage_control_response(resp_rx, timeout).await;
         if let Some(load_request) = &load_request {
-            self.settle_executed_stage_load(Some(&tx), load_request, provisional, &response)
-                .await;
+            self.settle_executed_stage_load(
+                Some(&tx),
+                load_request,
+                provisional,
+                response.as_ref(),
+            )
+            .await;
         }
+        let response = response?;
         drop(control_tx_guard);
         // The stage-to-stage transport bridge is aborted only after the
         // stage-control loop removed a running stage (#2217).

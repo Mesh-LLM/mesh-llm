@@ -1497,6 +1497,10 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                         error: None,
                     },
                 )),
+                // A failed load is settled by asking what the loop runs.
+                skippy::StageControlRequest::Status(_) => {
+                    Ok(skippy::StageControlResponse::Status(Vec::new()))
+                }
                 other => panic!("unexpected stage control request: {other:?}"),
             };
             let _ = resp.send(response);
