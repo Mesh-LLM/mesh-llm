@@ -679,11 +679,35 @@ mod relay_health_tests {
     /// keys on the CLAIMED event id, so a relay can replay a cached id
     /// over altered content and pass `verify_and_cache`. The collector
     /// verifies every raw event itself: hash and signature must match
-    /// the content actually received.
+    /// the content actually received. The forged event goes to a fresh
+    /// round of its own — sharing a round with the legitimate event
+    /// would collide in the `BTreeSet` (same created_at second, same
+    /// claimed id ⇒ `Ord::Equal`) and mask a missing verification.
     #[test]
     fn an_event_reusing_a_cached_id_with_altered_content_is_rejected() {
         use std::borrow::Cow;
         use std::collections::HashMap;
+
+        fn round_with(
+            id: &SubscriptionId,
+            relay_url: &nostr_sdk::prelude::RelayUrl,
+            event: Event,
+        ) -> RelayRound {
+            let mut rounds = HashMap::new();
+            rounds.insert(relay_url.clone(), RelayRound::default());
+            apply_discovery_notification(
+                &mut rounds,
+                id,
+                ClientNotification::Message {
+                    relay_url: relay_url.clone(),
+                    message: Box::new(RelayMessage::Event {
+                        subscription_id: Cow::Owned(id.clone()),
+                        event: Cow::Owned(event),
+                    }),
+                },
+            );
+            rounds.remove(relay_url).expect("round to exist")
+        }
 
         let id = SubscriptionId::generate();
         let relay_url: nostr_sdk::prelude::RelayUrl = "wss://relay.example".parse().unwrap();
@@ -701,27 +725,18 @@ mod relay_health_tests {
         value["id"] = serde_json::to_value(valid.id).expect("id json");
         let forged: Event = serde_json::from_value(value).expect("deserialize");
 
-        let mut rounds = HashMap::new();
-        rounds.insert(relay_url.clone(), RelayRound::default());
+        // The legitimate event is collected.
+        let accepted = round_with(&id, &relay_url, valid);
+        assert_eq!(accepted.events.len(), 1);
 
-        for event in [valid, forged] {
-            apply_discovery_notification(
-                &mut rounds,
-                &id,
-                ClientNotification::Message {
-                    relay_url: relay_url.clone(),
-                    message: Box::new(RelayMessage::Event {
-                        subscription_id: Cow::Owned(id.clone()),
-                        event: Cow::Owned(event),
-                    }),
-                },
-            );
-        }
-
-        let round = rounds.remove(&relay_url).expect("round to exist");
-        // Only the legitimate event survives; the forged replay is
-        // dropped by verification.
-        assert_eq!(round.events.len(), 1);
+        // The forged replay, alone in its own round, is dropped by
+        // verification — with no legitimate twin to collide with, a
+        // missing `verify()` would let it through.
+        let rejected = round_with(&id, &relay_url, forged);
+        assert!(
+            rejected.events.is_empty(),
+            "forged event reusing a cached id must be rejected"
+        );
     }
 
     #[test]
