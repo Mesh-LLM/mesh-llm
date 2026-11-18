@@ -457,10 +457,16 @@ async fn download_runtime_archive(
         .send()
         .await
         .map_err(reqwest::Error::without_url)
-        .with_context(|| format!("download native runtime {diagnostic_url}"))?
+        .with_context(|| {
+            NativeRuntimeFetchError(format!("download native runtime {diagnostic_url}"))
+        })?
         .error_for_status()
         .map_err(reqwest::Error::without_url)
-        .with_context(|| format!("native runtime request failed for {diagnostic_url}"))?;
+        .with_context(|| {
+            NativeRuntimeFetchError(format!(
+                "native runtime request failed for {diagnostic_url}"
+            ))
+        })?;
     let total = response.content_length();
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(path)
@@ -471,7 +477,9 @@ async fn download_runtime_archive(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk
             .map_err(reqwest::Error::without_url)
-            .with_context(|| format!("read native runtime body from {diagnostic_url}"))?;
+            .with_context(|| {
+                NativeRuntimeFetchError(format!("read native runtime body from {diagnostic_url}"))
+            })?;
         file.write_all(&chunk)
             .await
             .with_context(|| format!("write native runtime archive {}", path.display()))?;
@@ -486,6 +494,20 @@ async fn download_runtime_archive(
     verify_downloaded_archive(artifact, hasher)?;
     Ok(())
 }
+
+/// Context of a runtime archive that could not be fetched (no answer, an HTTP
+/// error such as a 404, or a broken body), so callers can tell that the
+/// runtime was unavailable without reading the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeRuntimeFetchError(pub String);
+
+impl std::fmt::Display for NativeRuntimeFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NativeRuntimeFetchError {}
 
 pub(crate) fn verify_download_policy_before_fetch(
     artifact: &NativeRuntimeArtifact,

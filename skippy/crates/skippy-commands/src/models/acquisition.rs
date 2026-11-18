@@ -34,7 +34,8 @@ pub(super) async fn download_model_ref_with_progress_details_direct(
         None,
         progress,
     )
-    .await?;
+    .await
+    .context(skippy_model_hf::ModelDownloadError)?;
     let paths = download.report["files"]
         .as_array()
         .context("download report missing files")?
