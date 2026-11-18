@@ -35,6 +35,7 @@ mod rolling_preview;
 mod replay;
 mod replay_admission;
 mod replay_environment;
+mod restored_scripts;
 mod runner_finalization;
 mod runtime_events;
 mod selected_ref;
@@ -86,6 +87,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     cancellation::check(&workflows)?;
     product_chains::check(&workflows)?;
     smoke_automation::check(root, &workflows)?;
+    restored_scripts::check(root, &workflows)?;
     quality_contracts::check(root, &workflows)?;
     quality_consistency::check(&workflows)?;
     selected_ref::check(&workflows)?;
