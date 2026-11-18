@@ -1060,6 +1060,11 @@ and `ImageVersion` separately from Rust's toolchain cache key. Conservative
 production source trees include embedded resources; uncompiled integration
 tests and READMEs no longer invalidate hosted executables. The packaged runtime
 inventory includes `skippy-package-builder` and its local dependency closure.
+The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
+`windows_warmer_paths` workflow guard requires `windows-warm-caches.yml` push
+paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
+exclusions), so a key input cannot change on `main` without waking its only
+producer.
 
 Windows ABI key construction and retention share typed Rust identities.
 The existing warmer's maintenance job derives active families from CI runtime

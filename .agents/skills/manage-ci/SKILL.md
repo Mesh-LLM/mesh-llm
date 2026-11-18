@@ -694,6 +694,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   and an insufficient budget before deletion. Unknown keys and other refs are
   outside its authority. Retain the plan as evidence; a source change does not
   authorize an operator to purge live caches.
+- A workflow that is the only `main` producer of a key must wake on every input
+  of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
+  `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract
+  gate refuses an uncovered input and any `!` exclusion in those paths.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.
