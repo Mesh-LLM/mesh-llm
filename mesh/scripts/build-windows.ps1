@@ -16,6 +16,18 @@ if ($HostOnly -and $SkippyOnly) {
     throw "-HostOnly and -SkippyOnly are mutually exclusive."
 }
 
+# A build changes the environment it runs in: the MSVC environment of its
+# target architecture, LLAMA_STAGE_BUILD_DIR, the compiler cache. Started with
+# `&` from a PowerShell session, the script shares that session's
+# environment, so it puts it back when it ends, however it ends: a later build
+# in the same session, for another architecture, starts from the session's
+# own environment instead of this build's.
+$callerEnvironment = @{}
+foreach ($variable in Get-ChildItem env:) {
+    $callerEnvironment[$variable.Name] = $variable.Value
+}
+try {
+
 $scriptDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../scripts"))
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 # A relative MESH_LLM_LLAMA_DIR is relative to the repository root, as in the
@@ -81,6 +93,42 @@ function ConvertTo-BashRepoPath {
         return "/mnt/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
     }
     return $full.Replace("\", "/")
+}
+
+# Cargo's output directory as cargo resolves it: CARGO_TARGET_DIR or a
+# build.target-dir setting can put it outside the checkout, even on another
+# drive, and the host looks for native-runtimes next to its own executable.
+function Resolve-CargoTargetDir {
+    # Windows PowerShell turns a native command's stderr into errors, which
+    # "Stop" would throw on; the exit code is checked instead.
+    $ErrorActionPreference = "Continue"
+    Push-Location $repoRoot
+    try {
+        $metadata = (& cargo metadata --format-version 1 --no-deps 2>$null) -join ""
+        if ($LASTEXITCODE -ne 0 -or -not $metadata) {
+            throw "cargo metadata failed, so Cargo's target directory is unknown."
+        }
+        return [System.IO.Path]::GetFullPath(($metadata | ConvertFrom-Json).target_directory)
+    } finally {
+        Pop-Location
+    }
+}
+
+# A path the packaging bash (Git Bash, MSYS2 or Cygwin, never WSL) reads from
+# the repository root: relative inside the repository, and `/d/...` outside
+# it, since GNU tar reads a `D:` prefix as a remote host.
+function ConvertTo-MsysPath {
+    param([string]$Path)
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\"
+    if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $full.Substring($root.Length).Replace("\", "/")
+    }
+    if ($full -notmatch '^[A-Za-z]:\\') {
+        throw "Cargo's target directory must be on a drive-letter path: $Path"
+    }
+    return "/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
 }
 
 # WSL bash reports a Linux kernel; Git Bash and Cygwin report their own.
@@ -458,7 +506,9 @@ function Import-CmdEnvironment {
     }
 
     foreach ($line in $output) {
-        if ($line -match '^(?<name>[^=]+)=(?<value>.*)$') {
+        # `set` also lists variables set to an empty string; writing one back
+        # would remove it, since Windows cannot set an empty value.
+        if ($line -match '^(?<name>[^=]+)=(?<value>.+)$') {
             Set-Item -Path "env:$($Matches.name)" -Value $Matches.value
         }
     }
@@ -680,7 +730,10 @@ function Ensure-MsvcToolchain {
         return
     }
     $missingTools = @(Get-MissingCommands -Commands $requiredTools)
-    if ($missingTools.Count -eq 0) {
+    # A shell initialized for ARM64 has cl, link and lib on PATH too, but
+    # they target ARM64: import the x64 environment over it.
+    $targetsOtherArch = $env:VSCMD_ARG_TGT_ARCH -and $env:VSCMD_ARG_TGT_ARCH -ne "x64"
+    if ($missingTools.Count -eq 0 -and -not $targetsOtherArch) {
         return
     }
 
@@ -1087,17 +1140,25 @@ if ($hostIsArm64 -and $windowsArch -eq "x64") {
     throw "Building x64 on an ARM64 machine is not supported. Omit -TargetArch or pass -TargetArch arm64."
 }
 $rustTarget = if ($windowsArch -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
-# x64 keeps cargo's default output directory, target\<profile>; an explicit
-# target writes to target\<triple>\<profile>.
+# x64 keeps cargo's default output directory, <target-dir>\<profile>; an
+# explicit target writes to <target-dir>\<triple>\<profile>.
 $cargoTargetArgs = @(if ($windowsArch -eq "arm64") { "--target", $rustTarget })
-$cargoOutputRoot = if ($windowsArch -eq "arm64") { "target\$rustTarget" } else { "target" }
+$cargoTargetDir = Resolve-CargoTargetDir
+$cargoOutputRoot = if ($windowsArch -eq "arm64") { Join-Path $cargoTargetDir $rustTarget } else { $cargoTargetDir }
 
-$backendName = Resolve-Backend $Backend
+# Only a runtime build probes this machine's GPU tools. The backend-neutral
+# host needs no backend, and ARM64 builds the CPU runtime only, so an ARM64
+# machine with the Vulkan SDK installed would otherwise pick Vulkan and stop.
+$backendName = if ($HostOnly -or ($windowsArch -eq "arm64" -and -not $Backend)) { "cpu" } else { Resolve-Backend $Backend }
 # The x64 stage directory keeps its name; another architecture gets its own,
 # so the two builds never mix objects or DLLs.
 $stageKey = if ($windowsArch -eq "x64") { $backendName } else { "$backendName-$windowsArch" }
 $buildDir = Resolve-StageBuildDir $stageKey
-Write-Host "Using Windows backend: $backendName ($windowsArch)"
+if ($HostOnly) {
+    Write-Host "Building the backend-neutral host ($windowsArch)"
+} else {
+    Write-Host "Using Windows backend: $backendName ($windowsArch)"
+}
 if ($windowsArch -eq "arm64" -and $backendName -ne "cpu") {
     throw "-TargetArch arm64 supports the cpu backend only; '$backendName' was requested."
 }
@@ -1328,7 +1389,7 @@ Invoke-InRepo {
     # remote host and fail after the expensive ABI build has already completed.
     # The host looks for native-runtimes next to its own executable, so the
     # runtime goes into the same cargo output directory as mesh-llm.exe.
-    $runtimeOut = "$($cargoOutputRoot -replace '\\', '/')/$profileDir/native-runtimes"
+    $runtimeOut = "$(ConvertTo-MsysPath $cargoOutputRoot)/$profileDir/native-runtimes"
     Invoke-NativeCommand $packagingBash @(
         "scripts/package-native-runtime.sh",
         "--backend", $backendName,
@@ -1387,6 +1448,27 @@ Invoke-InRepo {
         }
         default {
             throw "Unsupported MESH_LLM_BUILD_PROFILE/BuildProfile '$buildProfile'. Expected debug, dev, or release."
+        }
+    }
+}
+} finally {
+    # Only what the build changed is written back, compared against the
+    # environment as listed, which keeps variables set to an empty string
+    # (GitHub Actions runners have some): writing an empty value would
+    # remove them.
+    $buildEnvironment = @{}
+    foreach ($variable in Get-ChildItem env:) {
+        $buildEnvironment[$variable.Name] = $variable.Value
+    }
+    foreach ($name in $buildEnvironment.Keys) {
+        if (-not $callerEnvironment.ContainsKey($name)) {
+            [System.Environment]::SetEnvironmentVariable($name, $null, "Process")
+        }
+    }
+    foreach ($entry in $callerEnvironment.GetEnumerator()) {
+        $unchanged = $buildEnvironment.ContainsKey($entry.Key) -and $buildEnvironment[$entry.Key] -ceq $entry.Value
+        if (-not $unchanged -and $entry.Value) {
+            [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
         }
     }
 }
