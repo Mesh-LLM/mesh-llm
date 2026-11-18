@@ -135,12 +135,13 @@ fn compiler_seed_measurement_uses_cacheable_denominator_and_rejects_errors() {
         0.75
     );
     assert!(evidence::measurement(&serde_json::to_vec(&stats(0, 0)).unwrap()).is_err());
-    for name in [
-        "compile_fails",
-        "cache_read_errors",
-        "cache_write_errors",
-        "cache_timeouts",
-    ] {
+    // Cargo may handle failed compiler invocations and still finish successfully.
+    raw["stats"]["compile_fails"] = json!(11);
+    assert_eq!(
+        evidence::measurement(&serde_json::to_vec(&raw).unwrap()).unwrap()["compile_fails"],
+        11
+    );
+    for name in ["cache_read_errors", "cache_write_errors", "cache_timeouts"] {
         raw["stats"][name] = json!(1);
         assert!(evidence::measurement(&serde_json::to_vec(&raw).unwrap()).is_err());
         raw["stats"][name] = json!(0);
@@ -243,6 +244,39 @@ fn compiler_seed_git_admits_only_its_checkout_with_foreign_ownership() {
     assert_eq!(
         String::from_utf8(config).unwrap().trim(),
         root.to_str().unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn compiler_seed_redacted_stderr_does_not_invalidate_stdout() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let runner = Runner {
+        root: root.clone(),
+        environment: environment(&root, &root.join("cache"), &root.join("target")),
+        cancellation: Cancellation::default(),
+        deadline: Instant::now() + Duration::from_secs(30),
+    };
+    let receipt = root.join("command");
+    assert_eq!(
+        runner
+            .command(
+                "sh",
+                &["-c", "echo ready; echo 'secret=fixture' >&2"],
+                &receipt
+            )
+            .unwrap(),
+        b"ready\n"
+    );
+    assert_eq!(
+        fs::read_to_string(receipt.with_extension("stderr.log")).unwrap(),
+        "[output line suppressed]\n"
+    );
+    assert!(
+        runner
+            .command("sh", &["-c", "echo 'secret=fixture'"], &root.join("stdout"))
+            .is_err()
     );
 }
 

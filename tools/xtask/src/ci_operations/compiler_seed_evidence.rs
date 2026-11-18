@@ -60,12 +60,11 @@ pub(super) fn change(before: &Inventory, after: &Inventory) -> serde_json::Value
 pub(super) fn measurement(bytes: &[u8]) -> DynResult<serde_json::Value> {
     let snapshot = Snapshot::parse(bytes)?;
     let measurement = snapshot.measurement()?;
-    if snapshot.stats.scalars["compile_fails"] != 0 || snapshot.stats.scalars["cache_timeouts"] != 0
-    {
-        return Err("compiler failures or cache timeouts: inconclusive".into());
+    if snapshot.stats.scalars["cache_timeouts"] != 0 {
+        return Err("cache timeouts: inconclusive".into());
     }
     Ok(
-        serde_json::json!({"hit_rate":measurement.hit_rate,"hits":snapshot.stats.cache_hits.counts,"misses":snapshot.stats.cache_misses.counts,"compile_requests":snapshot.stats.scalars["compile_requests"],"interpretation":"phase counters reset before command; hit rate is hits/(hits+misses), not hits/compile_requests"}),
+        serde_json::json!({"hit_rate":measurement.hit_rate,"hits":snapshot.stats.cache_hits.counts,"misses":snapshot.stats.cache_misses.counts,"compile_requests":snapshot.stats.scalars["compile_requests"],"compile_fails":snapshot.stats.scalars["compile_fails"],"interpretation":"phase counters reset before command; hit rate is hits/(hits+misses), not hits/compile_requests"}),
     )
 }
 

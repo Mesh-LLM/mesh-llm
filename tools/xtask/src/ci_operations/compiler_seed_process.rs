@@ -153,18 +153,16 @@ impl Runner {
                 "failure":report.failure.as_ref().map(ToString::to_string),
                 "stdout_bytes":report.stdout.bytes_seen,"stderr_bytes":report.stderr.bytes_seen,
                 "stdout_truncated":report.stdout.truncated,"stderr_truncated":report.stderr.truncated,
+                "stdout_suppressed_lines":report.stdout.suppressed_lines,"stderr_suppressed_lines":report.stderr.suppressed_lines,
                 "peak_resources":null,"resource_note":"supervisor has no per-tree peak resource accounting; host/cgroup observations retained separately"
             }),
         )?;
         if !report.success() {
             return Err(format!("{program} failed; see {}", evidence.display()).into());
         }
-        if report.stdout.truncated
-            || report.stderr.truncated
-            || report.stdout.suppressed_lines != 0
-            || report.stderr.suppressed_lines != 0
-        {
-            return Err("incomplete diagnostic output: inconclusive".into());
+        // Only stdout is consumed as evidence. Sanitized stderr is diagnostic.
+        if report.stdout.truncated || report.stdout.suppressed_lines != 0 {
+            return Err("incomplete command stdout: inconclusive".into());
         }
         Ok(report.stdout.bytes_retained)
     }
