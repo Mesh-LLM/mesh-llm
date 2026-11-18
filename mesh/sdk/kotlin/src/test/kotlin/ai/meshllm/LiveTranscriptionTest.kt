@@ -18,7 +18,10 @@ class LiveTranscriptionTest {
     /** Explicit push-to-talk options survive the native round trip. */
     @Test
     fun optionsPreserveExplicitPushToTalk() {
-        val options = Json.parseToJsonElement(LiveTranscriptionOptions(sampleRate = 48000u, turnDetection = null).json()).jsonObject
+        val options = Json.parseToJsonElement(LiveTranscriptionOptions(model = "speech#fast", language = "de", prompt = "jargon", sampleRate = 48000u, turnDetection = null).json()).jsonObject
+        assertEquals(JsonPrimitive("speech#fast"), options["model"])
+        assertEquals(JsonPrimitive("de"), options["language"])
+        assertEquals(JsonPrimitive("jargon"), options["prompt"])
         assertEquals(JsonPrimitive(48000), options["sample_rate"])
         assertEquals(JsonNull, options["turn_detection"])
         val defaults = Json.parseToJsonElement(LiveTranscriptionOptions().json()).jsonObject

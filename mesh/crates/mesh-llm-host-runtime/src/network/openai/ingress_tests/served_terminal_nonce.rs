@@ -96,6 +96,7 @@ async fn route_on_a(client_nonce: Option<&str>) -> (OpenAiExchangeEnvelope, Vec<
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let (server_side, _client_side) = client_socket_pair().await;
@@ -143,6 +144,7 @@ async fn serve_on_b(forwarded: &[u8], requested_by: String) -> OpenAiExchangeEnv
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: Some(requested_by.clone()),
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let (server_side, mut client_side) = client_socket_pair().await;

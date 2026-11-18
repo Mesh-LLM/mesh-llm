@@ -954,6 +954,7 @@ pub(crate) fn local_ann_to_proto_ann(
         serialized_addr,
         hosted_models: ann.hosted_models.clone().unwrap_or_default(),
         hosted_models_known: Some(ann.hosted_models.is_some()),
+        legacy_lightning_offers: served_descriptors::relay_legacy_model_gates(&ann),
         served_model_identities,
         served_model_descriptors,
         served_model_runtime,
@@ -1008,9 +1009,18 @@ pub(crate) fn local_ann_to_proto_ann(
                     features: vec![mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE.into()],
                 });
             }
+            if ann.private_routing_supported {
+                subprotocols.push(crate::proto::node::MeshSubprotocol {
+                    name: mesh_llm_protocol::PRIVATE_ROUTING_SUBPROTOCOL.into(),
+                    major: 1,
+                    features: Vec::new(),
+                });
+            }
             subprotocols
         },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
+        // Sent only when set, so the bytes of a default node do not change.
+        refuses_peer_model_downloads: ann.refuses_peer_model_downloads.then_some(true),
         cache_affinity: ann
             .cache_affinity
             .as_ref()
@@ -1276,10 +1286,16 @@ pub(crate) fn proto_ann_to_local(
                     .iter()
                     .any(|feature| feature == mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE)
         }),
+        private_routing_supported: pa.subprotocols.iter().any(|subprotocol| {
+            subprotocol.name == mesh_llm_protocol::PRIVATE_ROUTING_SUBPROTOCOL
+                && subprotocol.major == 1
+        }),
         persistent_lane_marker_supported: supports_skippy_stage_feature(
             &pa.subprotocols,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
         ),
+        // Absent on older peers, which accept peer model downloads.
+        refuses_peer_model_downloads: pa.refuses_peer_model_downloads.unwrap_or(false),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()
@@ -1306,7 +1322,7 @@ pub(crate) fn proto_ann_to_local(
             .as_ref()
             .and_then(proto_claimed_log_head_to_local),
     };
-    served_descriptors::restore_served_descriptors(pa, &mut ann);
+    served_descriptors::restore_served_descriptors(pa, &mut ann)?;
     ann.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&ann);
     ann.cache_affinity = sanitize_cache_affinity_for_ann(&ann);
     Some((addr, ann))
@@ -1498,6 +1514,7 @@ fn legacy_proto_config_to_mesh(
         },
         mesh_requirements,
         owner_control: Default::default(),
+        private: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),

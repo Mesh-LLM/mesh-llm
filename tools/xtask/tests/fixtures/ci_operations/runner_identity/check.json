@@ -1,5 +1,5 @@
 {
   "code": 0,
   "stderr": "",
-  "stdout": "{\n  \"images\": 11,\n  \"roles\": 39,\n  \"runtime_rows\": 4,\n  \"seed_consumers\": 6,\n  \"workflow_bindings\": 39\n}\n"
+  "stdout": "{\n  \"images\": 10,\n  \"roles\": 39,\n  \"runtime_rows\": 4,\n  \"seed_consumers\": 6,\n  \"workflow_bindings\": 39\n}\n"
 }

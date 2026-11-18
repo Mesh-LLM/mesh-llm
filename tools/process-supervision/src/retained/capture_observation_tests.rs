@@ -1,5 +1,6 @@
 //! Retained callbacks classify only fixed test markers and never retain raw lines.
 use super::*;
+use crate::test_sleep::sleep_executable;
 use crate::{Completion, Limits, Readiness, Value};
 use std::{collections::BTreeMap, time::Duration};
 #[derive(Clone, Copy, Debug)]
@@ -76,7 +77,7 @@ fn retained_observer_receives_each_line_once_in_expected_stop_cleanup_and_reject
         let script = if matches!(end, End::Expected) {
             "printf 'early\\n'; printf tail"
         } else {
-            "trap 'printf tail; exit 0' TERM; printf 'early\\n'; while :; do /bin/sleep 0.01; done"
+            "trap 'printf tail; exit 0' TERM; printf 'early\\n'; while :; do \"$1\" 0.01; done"
         };
         let mut counter = Counter {
             end,
@@ -85,7 +86,12 @@ fn retained_observer_receives_each_line_once_in_expected_stop_cleanup_and_reject
                 spec: ProcessSpec {
                     executable: "/bin/sh".into(),
                     cwd: directory.path().into(),
-                    arguments: vec![Value::Public("-c".into()), Value::Public(script.into())],
+                    arguments: vec![
+                        Value::Public("-c".into()),
+                        Value::Public(script.into()),
+                        Value::Public("sh".into()),
+                        Value::Public(sleep_executable().into()),
+                    ],
                     environment: BTreeMap::new(),
                 },
                 files: OutputFiles::default(),
@@ -208,10 +214,10 @@ fn pair_fixture(end: PairEnd) {
     let health =
         r#"{"context":"event_system_health","message":"dropped_progress=7 secret=private"}"#;
     let seed = format!(
-        "health='{health}'; trap 'printf \"%s\\n\" \"$health\" >&2; : > stopped; while [ ! -f acknowledged ]; do /bin/sleep 0.01; done; exit 0' TERM; printf 'ready\\n'; while :; do /bin/sleep 0.01; done"
+        "health='{health}'; trap 'printf \"%s\\n\" \"$health\" >&2; : > stopped; while [ ! -f acknowledged ]; do \"$1\" 0.01; done; exit 0' TERM; printf 'ready\\n'; while :; do \"$1\" 0.01; done"
     );
     let survivor = format!(
-        "health='{health}'; trap 'if [ ! -f acknowledged ]; then printf \"%s\\n\" \"$health\" >&2; : > acknowledged; fi; exit 0' TERM; printf 'ready\\n'; while [ ! -f stopped ]; do /bin/sleep 0.01; done; printf '%s\\n' \"$health\" >&2; : > acknowledged; while :; do /bin/sleep 0.01; done"
+        "health='{health}'; trap 'if [ ! -f acknowledged ]; then printf \"%s\\n\" \"$health\" >&2; : > acknowledged; fi; exit 0' TERM; printf 'ready\\n'; while [ ! -f stopped ]; do \"$1\" 0.01; done; printf '%s\\n' \"$health\" >&2; : > acknowledged; while :; do \"$1\" 0.01; done"
     );
     let launches = [(MemberId::Seed, seed), (MemberId::WorkerOne, survivor)]
         .into_iter()
@@ -220,7 +226,12 @@ fn pair_fixture(end: PairEnd) {
             spec: ProcessSpec {
                 executable: "/bin/sh".into(),
                 cwd: directory.path().into(),
-                arguments: vec![Value::Public("-c".into()), Value::Public(script.into())],
+                arguments: vec![
+                    Value::Public("-c".into()),
+                    Value::Public(script.into()),
+                    Value::Public("sh".into()),
+                    Value::Public(sleep_executable().into()),
+                ],
                 environment: BTreeMap::new(),
             },
             files: OutputFiles {

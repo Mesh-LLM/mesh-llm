@@ -141,10 +141,9 @@ Additional memberships share loaded models while retaining their own mesh
 identity, allowlist, peers and API port. Native `node.models` discovery remains
 scoped to the primary mesh.
 
-> Draft, unshippable speech guidance. The currently admitted Python SDK
-> checkpoint `0357f19` does not provide the speech API below. It requires a
-> future combined checkpoint preserving thinking-effort metadata with
-> regenerated native bindings. This extraction does not change the SDK pin.
+> Draft, unshippable speech guidance. The in-tree Python SDK source checkpoint
+> `0357f19` does not provide the speech API below. It requires a future update
+> to the package wrapper and regenerated bindings for the native API.
 
 ```python
 from meshllm import LiveTranscriptionOptions
@@ -223,19 +222,28 @@ active_mesh_version=...)` defaults to `keep_active_and_previous`, with
 
 ## Source and native bindings
 
-The public Python wrapper, generated UniFFI bindings and component tests are
-maintained in [Mesh-LLM/mesh-llm-python-sdk](https://github.com/Mesh-LLM/mesh-llm-python-sdk).
-Mesh admits an immutable SDK source checkpoint for its compatibility workloads.
-Generation requires explicit absolute paths to Mesh source, the existing
-UniFFI 0.32.0 generator, and an already built native library:
+The public Python wrapper, generated UniFFI bindings, component tests and
+compatibility clients are maintained under
+[mesh/sdk/python](https://github.com/Mesh-LLM/mesh-llm/tree/main/mesh/sdk/python).
+Generation uses this repository's Mesh source, the existing UniFFI 0.32.0
+generator and an already built native library:
 
 ```bash
-"$SDK_SOURCE/sdk/scripts/generate-python-bindings.sh" "$MESH_SOURCE" "$UNIFFI_BINDGEN" "$PREBUILT_MESH_FFI_LIBRARY"
-"$SDK_SOURCE/sdk/scripts/build-native.sh" "$PREBUILT_MESH_FFI_LIBRARY"
-python3 -I -m pip install -e "$SDK_SOURCE/sdk"
+"$MESH_ROOT/mesh/sdk/python/scripts/generate-python-bindings.sh" "$UNIFFI_BINDGEN" "$PREBUILT_MESH_FFI_LIBRARY"
+"$MESH_ROOT/mesh/sdk/python/scripts/build-native.sh" "$PREBUILT_MESH_FFI_LIBRARY"
+python3 -I -m pip install -e "$MESH_ROOT/mesh/sdk/python"
 ```
 
 The stager never compiles a missing native bridge. Generate from the exact
 library's metadata so the wrapper checksums match the packaged artifact.
+After regeneration, update the matching generated file hash in
+`mesh/sdk/python/sdk-inputs.json`. For `mesh_ffi.py`, hash
+`mesh/sdk/python/src/meshllm/_generated/mesh_ffi.py` with `shasum -a 256` or
+`sha256sum`, replace its `files` entry, then validate the manifest from the
+repository root with `cargo xtool automation smoke-observation sdk-source
+--kind root`.
+The source distribution includes the prebuilt native bridge, allowing the
+default `python -m build` sdist-to-wheel flow to produce a platform wheel
+without compiling or downloading the bridge.
 Catalog queries are native; compatibility inference and some lifecycle queries
 still use the embedded listener. See [SDK overview](/docs/pages/sdk/).

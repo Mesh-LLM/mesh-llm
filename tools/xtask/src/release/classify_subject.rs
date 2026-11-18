@@ -1,6 +1,5 @@
-//! The `CONVENTIONAL` grammar `scripts/release-notes-classify.py` borrows
-//! from `check-conventional-commit.py`: `SUBJECT_RE`, `TYPES`, plus its own
-//! `INTERNAL_SCOPES` and the `str.title()` of a `Release-Notes` override.
+//! Optional subject-prefix classification for release notes, internal scopes,
+//! and `Release-Notes` section overrides. This does not enforce commit grammar.
 
 pub(crate) const HYGIENE: &str = "Refactors, docs, and hygiene";
 

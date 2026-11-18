@@ -29,20 +29,20 @@ loader variables. It restores the
 existing protected Linux automation artifact for model resolution and publishes
 only one-day CTest diagnostics. No new producer, remote model-cache publisher,
 runner authority, required entrypoint or production ABI dependency is added.
-The CPU image binding is recorded as consumer role `skippy-cpp-api`, using only
-the dedicated `public-cpp-api` image ID. Its new immutable CPU index
+The CPU image binding is recorded as consumer role `skippy-cpp-api`. Its former
+dedicated `public-cpp-api` image index
 `sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`
 was staged and verified on AMD64/ARM64 in runner-images main run `41127631709`,
 attempt 1, producer `2ca51592535c29ddbed768b75481451d3fa5a49e`. Trusted producer
 admission and native binding retain the complete cohort as evidence hash
 `189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8`.
-Existing CPU consumer, runtime and compiler-seed identities are unchanged.
+That admission preceded the shared CPU cohort described below.
 The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
 and real-model CI qualification remains pending protected-main execution.
 The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
 are required after Rust header generation; missing lint tools fail preflight.
 
-A second CPU image entry, `public-cpu-libclang` (immutable index
+The CPU image entry `public-cpu-libclang` (immutable index
 `sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`,
 evidence hash `032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153`,
 runner-images main run `41541864277` attempt 3, producer
@@ -51,8 +51,17 @@ toolchain addition so the skippy-ffi bindgen freshness gate runs without a
 job-time install. It binds the compiler-seed cohort (rust-tests, rust-clippy,
 linux-host, safetensors-runtime-smoke, compiler-seed-publisher,
 runtime-seed-canary), the linux-cpu runtime row, and the rolled-forward
-compiler seed (`img-aaa36843-epoch-aaa36843-v3-`); the previous `public-cpu`
-image remains admitted for consumers that stay on it.
+compiler seed (`img-aaa36843-epoch-aaa36843-v3-`).
+
+Runner-images run `43392701387` attempt 1 staged the current complete cohort
+at producer `c2a825a5f38a0ff8b3a87843d933ec3f89c1195a` and Mesh source
+`2c2051a4084ed8dcd8f93c0f7f1b14fd01ca9a5c`. The catalog now uses its
+`public-cpu` image for the C++ role and ordinary CPU consumers,
+and retains the cohort under evidence hash
+`88ea93ca4b1d70c4787cfe1ddf7857a25aa0d95112dbfaf34a23e2ab7e38e0ef`.
+The compiler seed, libclang roles, and protected runtime rows retain their
+previous images and epochs. Producer admission and offline binding do not
+themselves establish workload or GPU qualification.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
@@ -132,7 +141,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
+| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and identity-bound downstream `mesh-packaging` dispatch and readiness verification |
 | `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; grants `packages: read` to pull its pinned GHCR runner image; workflow-commit controller validates locked historical metadata and the source's literal roster through Rust, then publishes from the immutable release source |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `dflash-pairings-publish.yml` (`Publish DFlash pairing index`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**`, dispatch on `main` | Publishes the checked-in DFlash pairing index to Hugging Face `meshllm/dflash-pairings` with `HF_TOKEN`: uploads `index/<sha256>.json` only when absent (never overwritten or deleted; an existing copy must hash to its name), refreshes the human-facing root `index.json` and `README.md`, then re-downloads and hashes the published file. Releases pin the index by `DFLASH_PAIRING_INDEX_SHA256`. GitHub-hosted with the pinned `public cpu` image for the `hf` CLI; one non-cancelling concurrency group per commit, so no pending publication is replaced; only the run whose pairings still match `main` refreshes the root copies |
@@ -180,11 +189,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`nightly-stability.yml` calls the fixed GitHub-hosted
+`nightly-stability.yml` is manual-only while daily execution is paused pending
+setup qualification. It calls the fixed GitHub-hosted
 `nightly-stability-run.yml`; the reusable run executes both the general
 stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
 both evidence sets, and fails after both have had a chance to run.
-`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted schedule
+`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted manual workflow
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
@@ -340,10 +350,10 @@ independently of its 60-second Git command budget. `--timeout` overrides both.
 Both generation and idempotence remain required; deadline diagnostics retain
 readable child output and process cleanup status.
 
-The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
-runs in the repair session and trusted build. The Linux build job uses 4 to
-limit concurrent CUDA test memory pressure. The per-case timeout remains 900
-seconds.
+The macOS and Linux build jobs set `CTEST_PARALLEL_LEVEL=4` for complete
+upstream CTest runs in the repair session and trusted build. This limits
+contention between graph-contract cases and concurrent CUDA test memory
+pressure. The complete suite and 900-second per-case timeout remain unchanged.
 The build job prepares the locked canary Python SDK before its early Metal
 battery, so Nomic embedding uses the same interpreter as family workers.
 Non-chat certification starts the candidate through `skippy serve --model-path`
@@ -501,6 +511,9 @@ runner/workflow failures receive one targeted same-candidate recheck. A clean
 recheck plus the retained initial successes completes that immutable full pass;
 a repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success or successful same-candidate recovery permits publication.
+Unchanged selected-source publication retains `retry_recovered=true` through
+final selection and exports that exact reconciled repair commit from the frozen
+controller checkout; it does not require a skipped `verify-1` package.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 
@@ -568,42 +581,16 @@ Merge settings as of 2026-09-10: `allow_merge_commit=false`,
 `squash_merge_commit_title=PR_TITLE`, and
 `squash_merge_commit_message=PR_BODY`. The title and body settings were
 changed from `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES` on that date.
-`COMMIT_MESSAGES` composed the squash body from the branch commit messages,
-which carried agent and bot `Co-authored-by:` trailers onto `main` even when
-the pull request title was clean. Composing from the title and body instead
-means the squash commit contains only text CI has validated. GitHub may still
-add its own `Co-authored-by:` trailer for a pull request whose commits have
-several distinct authors; no message-level control prevents that.
+GitHub may add its own `Co-authored-by:` trailer for a pull request whose
+commits have several distinct authors. Attribution identities are no longer
+blacklisted in hooks or CI; these source changes do not modify merge settings
+or repository rulesets.
 
-Attribution-trailer enforcement is CI plus merge-message composition, not a
-ruleset. A negated `commit_message_pattern` ruleset was created, measured and
-deleted on 2026-09-10. Rulesets accept commit-metadata rules on any plan and
-report them `active`, but GitHub gates metadata restrictions to Enterprise
-organizations and this organization is on Team, so the rule was never
-evaluated. Four pushes carrying the denied literal were accepted: branch
-creation and branch update, with both the `regex` and `contains` operators,
-from a ruleset reporting `current_user_can_bypass: "never"`. Do not re-add a
-commit-metadata rule here expecting it to enforce anything.
-
-What enforces the convention instead:
-
-- `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
-  the first local development build on every platform. It invokes the Rust
-  `repository conventional-commits` command through `cargo xtool`.
-- The `commit_convention` job in `ci-quality-slice.yml`, which validates the
-  pull request title against Conventional Commits and scans every branch
-  commit message plus the pull request body for denied attribution trailers.
-  It runs `repository conventional-commits` through the `ci-controller`
-  executable from `prepare-ci-controller`. It declares no `needs`, so it fails
-  within a minute rather than after a lane has compiled anything, and runs
-  only for `pull_request` events.
-  Pull-request-authored text reaches the script through environment variables
-  and is never interpolated into the shell.
-- Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
-  `squash_merge_commit_message=PR_BODY` since 2026-09-10, replacing
-  `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`. The squash commit is built from
-  the title and body that CI validated, so a branch commit that skipped the
-  hook cannot carry a trailer onto `main`.
+Commit-message hooks, title validation and attribution scans are removed.
+Builds do not install hooks, and the Quality slice has no commit-convention
+job. Release-note classification remains advisory: recognized prefixes select
+a section; unclassified titles remain in Other changes. Merge-message
+composition and repository rulesets are unchanged.
 
 The four `main` ruleset bypass actors remain deliberately: maintainers need a
 fast merge path. Required checks therefore do not bind them, and the CI check
@@ -632,6 +619,31 @@ triggers or call the five lanes; remove it after the protected-main
 runner-contract update is active.
 
 ## Reusable workflows and slices
+
+The Quality lane's required `consistency` job checks the immutable candidate
+`source_sha` on GitHub-hosted Linux, alongside authority production and runner
+contracts. It prepares candidate xtask with the existing hosted-bare exact
+executable cache and runs crate-list, publish-chain, release-target, embedded
+client dependency, console-print and environment-mutation checks. It has no
+authority or full-contract dependency. The lane summary and validator require
+it whenever `quality` is selected. The original Quality slice retains both
+automation and legacy contracts and its protected authority dependency, so
+main/manual-full contracts still run after a consistency failure. This adds
+one hosted worker and checkout/bootstrap overhead; live timing is unmeasured.
+
+Linux calls runtime and product slices separately for CPU, CUDA, ROCm and
+Vulkan. All four runtimes retain their automation-only start dependencies,
+independent of the shared host. Products join that host and their own runtime;
+each smoke joins its consumed backend product. Rust SDK needs CPU only, while
+Kotlin SDK additionally needs its existing native SDK producer. Every call is
+included in the unchanged exhaustive lane summary policy. A failed backend
+fails that result while other same-lane backends may finish; the existing
+protected monitor cancels other PR lanes without new executor permissions.
+Each runtime/product call has one selected catalog row and max-parallel 1,
+so four calls stay within the existing Linux 7/12 matrix limits. Windows keeps
+its 1/2 shared native budget and matrix barriers pending bounded row admission.
+macOS has one Metal row. Release is deferred because its static extraction
+requires runner-image catalog changes. Slice IDs and catalog rows are unchanged.
 
 | Workflow | Contract |
 | --- | --- |
@@ -669,13 +681,16 @@ The `native-abi` domain selects `static-abi`, `runtime-product`,
 `windows-skippy-probes`.
 
 Native Quality contracts use a 60-minute job with a 40-minute full-contract
-step and restore the pinned external SDK and research sources before the
+step and admit the in-tree SDK and pinned external research source before the
 roster. Trusted runner-image work uses a 45-minute job (20-minute controller
 preparation, 15-minute managed package check, five-minute cleanup, five-minute
 setup reserve). The three hardware-backed Linux Laya jobs have a 100-minute
 floor while preserving a larger caller input; their 20-minute controller
 preparation precedes the 70-minute artifact/fixture/read composite and
 five-minute cleanup. Startup and each of eight reads remain 300 seconds.
+The trusted runner-image job builds only the narrow `runner-cleanup` executable
+(`just runner-cleanup-bootstrap`); the Laya jobs keep full xtask
+(`just automation-bootstrap`) because they run other xtask commands.
 Each persistent phase copies the source-built controller to an owned private
 `RUNNER_TEMP` directory, records its SHA-256 and selected source, and admits
 both before managed work and cleanup. Cleanup invokes that controller without
@@ -1038,6 +1053,36 @@ fail-open policy.
 
 ## Artifact and cache owners
 
+`ci-ops cache-inputs` owns the checked-in hosted executable and Linux CPU
+runtime key projections. Version 2 keys include the shared linker driver and
+the runtime packaging implementation. Hosted executable keys bind `ImageOS`
+and `ImageVersion` separately from Rust's toolchain cache key. Conservative
+production source trees include embedded resources; uncompiled integration
+tests and READMEs no longer invalidate hosted executables. The packaged runtime
+inventory includes `skippy-package-builder` and its local dependency closure.
+The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
+`windows_warmer_paths` workflow guard requires `windows-warm-caches.yml` push
+paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
+exclusions), so a key input cannot change on `main` without waking its only
+producer.
+
+Windows ABI key construction and retention share typed Rust identities.
+The existing warmer's maintenance job derives active families from CI runtime
+rows, release rows and warmer rows, including both CUDA release toolkits and
+the distinct ROCm architecture sets. It enumerates the main-ref ABI namespace
+with complete pagination, retains one useful entry per active family before
+history, and applies a 4 GiB aggregate bound. The existing retention input is
+the total entry limit per family, default two. An impossible minimum budget or
+malformed/incomplete inventory refuses deletion. Other refs and namespaces
+remain untouched. The job retains policy, inventory, plan and execution
+receipts for 14 days. Observed image cohorts for currently consumed toolkit
+and architecture combinations remain active during hosted image rollouts;
+one warmer's image cannot establish that other cohorts are obsolete.
+No live purge accompanies this source cutover.
+
+These source contracts require candidate and post-merge execution evidence;
+they do not establish a measured speedup or production retention qualification.
+
 `native runtime-manifest-write` owns Windows ROCm target admission after the
 shell copies SDK kernels. For configured targets with a declared `rocblas.dll`,
 it hashes staged rocBLAS `.co`/`.hsaco` files into `runtime.files` and advertises
@@ -1097,7 +1142,14 @@ statistics are retained in the job log. The nightly KV workflow no longer
 clears the repository Rust wrapper. Every managed Windows compile job uses
 sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
 asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
-boundary.
+boundary. Every Windows `mozilla-actions/sccache-action` install, in the managed
+jobs and in `prepare-automation`, pins `version: v0.16.0`; the
+`windows_build_paths` guard rejects any other version. sccache 0.17 and later
+expand Cargo's rustc argfile past the Windows command-line limit under Rust
+1.100's build-dir layout (os error 206, mozilla/sccache#2787). 0.16.0 passes an
+argfile call to rustc uncached, so the largest crates recompile on every Windows
+run. Lift the pin once an upstream fix is released and a Windows lane passes
+with it.
 
 - `restore-release-ui` / `prepared-input ui-distribution`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
@@ -1113,6 +1165,28 @@ boundary.
 
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
+- The Windows host slice retains Cargo timing HTML for its existing standalone
+  Skippy and Mesh compilations in a separate one-day architecture/attempt
+  artifact. Fingerprint diagnostics explain invalidations in the job log;
+  the existing statistics action retains cumulative counters after each phase.
+  The host job disables sccache idle expiry across long uncached links.
+  The shared Windows host action's optional prebuild snapshot keeps the
+  standalone producer/upload/host sequence contiguous.
+  These observations add no compilation, change no product features or
+  profiles, and do not enter immutable host/product inputs.
+  Both product steps set `LINK=--time-trace`; their timing artifact also retains
+  LLVM's per-output `.time-trace.json` files for independent linker evidence.
+  Restored Rust automation resets old linker traces after target-cache restore
+  and before both builds. Timing upload requires a successful reset, keeping
+  each attempt's evidence separate from cached traces.
+  Both compilations set `SOURCE_DATE_EPOCH=0` and enable the Rust-owned native
+  Windows linker adapter for non-primary proc-macro libraries only. Those
+  build-time DLLs omit PDBs whose GUID otherwise hashes a random rustc `.def`
+  path. Mesh's HostOnly configuration selects the CMD driver only with the
+  opt-in; default builds still select LLVM directly. Other links retain their
+  flags. The archive prefix binds adapter, Mesh configuration and workflow
+  sources. Archive identities remain reusable across runs within that
+  compatibility cohort; timing artifacts retain Cargo HTML and linker traces.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
@@ -1545,6 +1619,14 @@ product-version input defaults to the host version, never the runtime release.
 The product manifest records required and supplied ABI plus runtime release.
 No workflow dispatch, runner, or publication permissions change.
 
+Linux native packaging coalesces identical regular `.so` aliases after relocation
+through `native deduplicate-linux-libraries`; system tar stores their hard links.
+The product tar writer independently coalesces equal library bytes and modes
+within each `lib` directory, preserving names and manifest hashes even after
+composition copies. Ustar link targets longer than 100 bytes keep regular payloads.
+Windows ZIP, macOS libraries, workflow topology and publication identities do not
+change; cache importers may expand aliases back into separate files.
+
 Product schema coverage compares the composer's emitted root, host and runtime
 field sets with `schemas/product-v2.schema.json`, including required/supplied ABI
 and runtime release. Default bundled startup additionally verifies the complete
@@ -1663,9 +1745,6 @@ native `trajectory-reader` library and its `prompt_command` integration target. 
 `scripts/` ownership pattern; deployment assets live under `mesh/deploy/`.
 Protected catalogs and required checks are unchanged.
 
-The dormant `docker-precheck.yml` reusable validates the relocated product
-crate/script COPY roots and Mesh entrypoint path. It remains unreferenced;
-this repair does not add a workflow caller or change required checks.
 versioned local dependencies, and resolves each versioned sidecar from the same
 source layout, so a relocated-only checkout can propagate a version without a
 root `website/`, `sdk/` or `docs/` tree. The website recipes consume the
@@ -1706,6 +1785,10 @@ rerun, without starting an agent for the transient failure.
 
 Every coding turn saves an explicitly unverified source checkpoint; the native
 outer supervisor also attempts recovery after termination and cancellation.
+That supervisor gives the wrapper a private copy of its running automation
+executable outside both checkouts and retains it through final recovery. A
+candidate rebuild of `target/debug/xtask` cannot replace that controller; the
+wrapper's existing digest guards remain mandatory.
 When the native base commit is unavailable, recovery captures the complete
 tracked tree against an empty tree. Candidate processes cannot inherit GitHub
 workflow-control paths, and local repair uses a private home without Git credentials.
@@ -1754,10 +1837,9 @@ Runner provisioning owns the lock path: create
 pre-create `mesh-canary-family-host.lock` as root with mode `0666`. Jobs verify
 both owner and permissions and never create the path themselves.
 
-The shared `setup-canary-python` action restores the fixed external Python SDK
-checkout through `prepare-python-sdk-source` and admits its commit, tracked
-roster and file hashes through native `smoke-observation sdk-source`. Its
-embedding profile restores the external `ci/canary-python/uv.lock` into a
+The shared `setup-canary-python` action admits the checked-in Python SDK under
+`mesh/sdk/python` through native `smoke-observation sdk-source`. Its embedding
+profile restores `ci/canary-python/uv.lock` from that component into a
 controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
 Historical source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
@@ -1926,21 +2008,43 @@ and Windows X64. After checking out the protected default branch, it verifies
 the requested commit is an ancestor before selecting and compiling that source.
 Topic-scoped immutable artifacts retain for one day; unscoped release artifacts
 retain their existing name and 90-day policy. The upload action initializes the
-macOS automation environment for protected-clean producers. Native artifact IDs,
+macOS automation environment for protected-clean producers. Protected-clean
+producers build only the narrow `authority-automation` executable
+(`prepare-automation` `tool: authority-automation`, or `just
+authority-automation-bootstrap` on the Linux image fallback) and stage it as the
+unchanged `xtask` member with `source.txt` and `SHA256SUMS`; `product-clean` and
+`release-prepared` keep building full xtask. Native artifact IDs,
 source SHA, executable digest, and OS/architecture are independent outputs.
 Caller metadata and native producer dependencies are prepared across the five
 lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
 Seven root workflows freeze one protected source commit per run, then provision
-11 topic/native producer instances across those workflows. All 28 reusable calls
+11 topic/native producer instances across those workflows. All 34 reusable calls
 into the 17 audit workflows forward dependency-provided identities; lane summaries
 require the selected producer jobs to succeed. These metadata inputs are not yet
 consumed by the 27 existing audit steps, which retain their published immutable
 pin. Switching those steps requires a reviewed published replacement action.
 No hosted execution or cross-platform native qualification is recorded here.
 
-The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
+The existing Windows unit platform row prepares the repository automation tool and selects 23 exact native xtask binary methods: three build/path, one linker-metadata, seven installer-helper, eight whole-installer-consumer, two private-state handle-lock, one directory-DACL and one POSIX-path test. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of 23. It prebuilds the real xtask executable and inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This adds no runner or planner row and does not replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
-Windows row selection is conditional. This owning workflow edit maps through ci-control to all platform rows, and main/manual-full profiles select all rows. Standalone future changes under tools/xtask, just, Justfile or install.ps1 are not guaranteed to select Windows unit under the protected ownership catalog. The gate qualifies only a planner-selected Windows unit row; an unselected row records no native evidence. This proposal changes no protected catalog and adds no routing bypass.
+Windows row selection is conditional. The owning workflow maps through
+`ci-control` to all platform rows, and main/manual-full profiles select all rows.
+Standalone changes under `tools/xtask`, `just`, `Justfile`, or `install.ps1`
+are not guaranteed to select Windows unit unless an explicit protected catalog
+entry owns that selection.
+
+Windows linker/cache policy requires both `ci-control` and `platform-windows`
+ownership for `scripts/cargo-linker.cmd`,
+`tools/xtask/src/native_policy/windows_linker.rs`, and
+`mesh/scripts/build-windows.ps1`. The test paths
+`tools/xtask/src/native_policy/windows_linker_tests.rs` and
+`tools/xtask/src/ci_validation/windows_linker_native.rs` require
+`platform-windows` ownership to select the Windows unit row for ready PRs.
+Draft PRs keep row matrices empty unless all rows are forced. Land missing
+entries in the protected catalog before the dependent implementation;
+documenting these requirements does not activate routing or bypass the catalog
+comparison. The gate qualifies only a planner-selected Windows unit row; an
+unselected row records no native evidence.
 
 ## Same-run product-source automation
 
@@ -1957,8 +2061,8 @@ authority artifact, and `product-clean` claims no protected authority. Its
 `identity_json` output (source SHA, artifact ID, executable digest, producer
 OS/architecture) is the only value consumers receive.
 
-The static ABI producer, Rust test batches, host, native-runtime and product
-composition jobs of each lane list the producer in `needs`, take its identity as
+The static ABI producer, Rust test batches, host, native-runtime, native SDK, Swift target/assembly, SDK smoke and product smoke
+jobs of each lane list the producer in `needs`, take its identity as
 the `product_automation` input and run `restore-automation`, which verifies
 source, artifact ID, digest and that the producer ran on the same OS and
 architecture. They never rebuild xtask and have no `prepare-automation`
@@ -1971,77 +2075,59 @@ keep `cargo xtool`. The lane planner (`ci validate-lane`) lists the producers as
 required exactly when a restoring job is planned, so a selected consumer cannot
 run without its producer and an unplanned producer must be skipped.
 
+Product SDK and smoke restores require the product-clean source claim and exact lane source, artifact ID, digest, OS and architecture. Protected identities and incomplete identities fail before download with no compilation fallback. All Linux, macOS and Windows product smoke rows restore before shared restoration, SDK admission or cleanup freezing. Shared restoration gates both preparation branches on an empty MESH_LLM_AUTOMATION_BIN. Independent reusable and release callers explicitly prepare once; Swift target and assembly jobs prepare only when their optional product identity is absent.
+
 The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
-workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
-and Quality `commit_convention` do not wait on a producer and use
+workflows, `ci-control`, and `ci-pr-canary-lane`) and the five lane `summary` jobs
+do not wait on a producer and use
 `prepare-ci-controller` instead. It builds only the `ci-controller` executable
 on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
 `MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates
 --stdin` and `plan-ci` calls `ci plan` through that variable, and each prepares
 the controller only when it is unset, so a planner job builds it once. Lane
 summaries run `ci validate-lane`; the Quality summary also runs `repository
-llama-upstream-pin` on PRs. Its exact-key cache entry
-(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
-`Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
-drivers) is separate from the xtask entry. A miss runs `cargo build --locked
---release -p ci-controller --bin ci-controller` without Just or sccache and
-saves the result.
+llama-upstream-pin` on PRs. Each summary checks out the protected revision frozen
+by its `authority_source` job, so a default-branch update cannot change validation
+while producers run. If no authority producer is selected, the summary retains
+the protected default-branch checkout. Linux validation also admits the preceding
+grouped layout for in-flight workflows, identified by dependency names. Mixed
+layouts fail and every planned job must still succeed. Its exact-key cache entry uses the version 2 hosted-controller inventory and
+binds OS, architecture, Rust toolchain and hosted system image. A miss builds
+locked release ci-controller without Just or sccache and saves the result.
 
-Other jobs that must not wait on a producer keep `prepare-automation`: the
-release UI stamp and the
-Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
-`restore-smoke-inputs`, which already prefers an exported
-`MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
-workflows. The `hosted-bare` profile now restores a release executable from an
-exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
-`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
-`tools/process-supervision/**`, `tools/trajectory-reader/**`,
-`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/ci-controller/**` and `tools/process-supervision/**` because xtask
-compiles both libraries. The image
-profile never restores or saves an executable. The protected authority producers
-pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
-run from the frozen protected source. A first run after any hashed input changes
-is a cold miss. Pull requests execute main's reusable workflows, so none of this
-applies to a PR until it is merged. No hosted execution is recorded here.
+Other jobs without a producer use prepare-automation. Its hosted-bare profile
+restores the exact version 2 xtask inventory, compiles on a miss and saves on a
+miss. The inventory covers every local production dependency, build script,
+reviewed included resource and linker recipe; normal contract validation checks
+both the dependency closure and checked-in key projections. Only tool: xtask
+uses this cache. Image profiles never restore executables, and protected
+producers keep reuse-hosted-binary: false to compile their frozen source in-run.
+A changed compiled input or hosted image starts a new exact cohort. There are
+no restore prefixes. PRs may execute protected-main workflow definitions;
+candidate and production qualification must identify the definition that ran.
 
-## External Python SDK source preparation
+## Python SDK component and admission
 
-The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
-Laya product readiness and Decisions smoke discovery query
-`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
-model lists contain only LLMs. The golden and response checks remain required.
+The Python SDK package, generated bindings and four compatibility and embedding
+clients are maintained in `mesh/sdk/python`. Its `sdk-inputs.json` records the
+imported source checkpoint, matching Mesh native source revision, generator and
+SHA-256 hashes for every component file. Native `smoke-observation sdk-source`
+checks that manifest and exact source roster before consumers run. Dependency
+preparation uses the component's checked-in lock files. Runtime calls stay
+offline and do not compile a missing native bridge or install SDK dependencies.
 
-The current checkpoint includes typed Mesh model discovery, OCR uploads,
-membership/live-session controls, full node configuration and native-runtime
-management. Its generated bindings were produced from the coordinated Mesh
-implementation recorded in the SDK's `sdk-inputs.json`; keep that source
-checkpoint synchronized with native API changes.
-
-The Python SDK package, generated Python bindings and four genuine compatibility
-and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
-fixed commit and manifest in `ci/required-sdk-python/sdk-source.json`; source
-admission rejects changed bytes, unexpected tracked or nonignored files, and
-path substitution. Dependency preparation restores the original locked profiles
-from that admitted source. Runtime calls remain offline and never compile a
-missing native bridge or install missing SDK dependencies.
-
-`prepare-python-sdk-source` restores the fixed source before the Quality contract
-job and Rust/Kotlin/Swift SDK source consumers. `setup-canary-python` reuses it
-before compatibility or embedding dependency preparation. The bare macOS Swift SDK
-smoke restores the lane's `product_automation_macos_arm64` executable through
-`restore-automation` before admission and never compiles xtask. Required SDK cadence
-is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, set
-`MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
-inherits that input and does not acquire external source. The source-dependent
-`migration_repository` and `migration_lifecycle` fixtures use that same input.
-Both external checkpoints are published; fresh anonymous restore and native source admission passed.
-Hosted restore remains unqualified. A passing source contract or mock FFI test does not qualify the native
-bridge, model serving or real client requests.
+The `prepare-python-sdk-source` action admits the in-tree component and exports
+`MESH_PYTHON_SDK_SOURCE`. The Quality contract lane and shared smoke-input
+restoration call it directly; `setup-canary-python` calls it before compatibility
+or embedding dependency preparation. The bare macOS Swift SDK smoke restores the
+lane's `product_automation_macos_arm64` executable through `restore-automation`
+before admission and never compiles xtask. Required SDK cadence is unchanged.
+For local `just ci-automation-contracts` or `just ci-validate`, set
+`MESH_PYTHON_SDK_SOURCE="$PWD/mesh/sdk/python"` so source-dependent
+`migration_lifecycle` fixtures consume the same component. The
+`migration_repository` contract reads it through native source admission. A
+source contract or mock FFI test does not qualify the native bridge, model
+serving or real client requests.
 
 The unused local `audit-depot-pr-isolation` implementation is removed. All 27
 protected callers still use their immutable published `ed07043` action, and the

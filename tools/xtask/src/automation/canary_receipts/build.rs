@@ -81,20 +81,28 @@ fn execute(input: &Input) -> DynResult<()> {
         .as_ref()
         .map(|feedback| write_feedback_summary(input, &feedback.summary()?))
         .transpose()?;
+    let mut environment = environment::wrapper(
+        input,
+        previous
+            .as_ref()
+            .map(|(path, identity)| (path.as_path(), identity)),
+        feedback.as_ref().map(|feedback| feedback.directory()),
+        feedback_summary.as_deref(),
+    );
+    let _controller = match environment::freeze_controller(input, &mut environment) {
+        Ok(controller) => controller,
+        Err(error) => {
+            failure("infrastructure", "controller-snapshot")?;
+            return Err(error);
+        }
+    };
     admit_selected_contract(input)?;
     let previous_identity = previous.as_ref().map(|(_, identity)| identity);
     let spec = ProcessSpec {
         executable: PathBuf::from("/bin/bash"),
         arguments: vec![Value::Public(wrapper.into())],
         cwd: input.controller_root.clone(),
-        environment: environment::wrapper(
-            input,
-            previous
-                .as_ref()
-                .map(|(path, identity)| (path.as_path(), identity)),
-            feedback.as_ref().map(|feedback| feedback.directory()),
-            feedback_summary.as_deref(),
-        ),
+        environment,
     };
     let interrupt = Interrupt::install()?;
     let report = logs::supervise(

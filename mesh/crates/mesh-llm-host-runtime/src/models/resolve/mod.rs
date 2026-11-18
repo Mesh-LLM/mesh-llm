@@ -116,6 +116,14 @@ pub fn canonicalize_interest_model_ref(input: &str) -> Result<String> {
 }
 
 fn canonicalize_huggingface_interest_ref(repo: &str, revision: Option<&str>, file: &str) -> String {
+    // A bare repo ref (such as a layer package) names no file. Keep it as the
+    // repo ref a split coordinator compares against, without a trailing `/`.
+    if file.is_empty() {
+        return match revision {
+            Some(revision) => format!("{repo}@{revision}"),
+            None => repo.to_string(),
+        };
+    }
     if is_quant_like_selector(file) {
         return format_repo_selector_ref(repo, revision, file);
     }

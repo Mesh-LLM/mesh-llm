@@ -65,8 +65,8 @@ pub use private_file::{
 };
 pub use size::{IecSizeParseError, parse_iec_size};
 pub use store::{
-    ConfigStore, config_path, config_to_toml, load_config, parse_config_toml,
-    parse_config_toml_structural,
+    ConfigFileLock, ConfigStore, config_lock_path, config_path, config_to_toml, load_config,
+    lock_config_file, parse_config_toml, parse_config_toml_structural,
 };
 pub use validate::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
@@ -726,6 +726,25 @@ model_target_demand_upgrade_max_age_secs = 900
         assert!(config.runtime.reconcile_model_target_demand_upgrades);
         assert_eq!(config.runtime.model_target_demand_upgrade_min_requests, 4);
         assert_eq!(config.runtime.model_target_demand_upgrade_max_age_secs, 900);
+    }
+
+    #[test]
+    fn runtime_peer_model_downloads_defaults_on_and_parses_off() {
+        let unset = parse_config_toml("version = 1\n").unwrap();
+        assert_eq!(unset.runtime.peer_model_downloads, None);
+        assert!(unset.runtime.peer_model_downloads_enabled());
+
+        let off = parse_config_toml(
+            r#"
+version = 1
+
+[runtime]
+peer_model_downloads = false
+"#,
+        )
+        .unwrap();
+        assert_eq!(off.runtime.peer_model_downloads, Some(false));
+        assert!(!off.runtime.peer_model_downloads_enabled());
     }
 
     #[test]

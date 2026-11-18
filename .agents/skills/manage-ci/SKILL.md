@@ -37,14 +37,37 @@ modes. Preserve exact bytes where a caller consumes or hashes them.
 
 `tools/ci-controller` owns CI planning (`ci plan`), lane result admission
 (`ci validate-lane`), the planner-side repository checks
-(`repository affected-crates`, `repository conventional-commits`, and
-`repository llama-upstream-pin`), and the shared `automation bootstrap` check.
+(`repository affected-crates` and `repository llama-upstream-pin`), and the shared `automation bootstrap` check.
 Its normal dependencies are limited to serde, serde_json, sha2, and hex. Full
 xtask keeps every command and delegates these to the library, so outputs, exit
 codes, and refusals match. `ci family-plan`, `ci validate-graph`, and all
 product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
+
+`tools/authority-automation` owns the commands that consumers of the protected
+authority artifacts run: `models resolve`, `models restore-inputs`,
+`ci-ops authority-audit`, `ci-ops pr-authority-audit`, and
+`artifact file-projection`, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, serde_json,
+sha2, hex, and libc on Unix; it never links process supervision, HTTP, async
+runtime, archive, or product crates. Full xtask keeps every command and
+delegates these to the library. The protected authority producers compile only
+this executable and stage it under the unchanged `xtask` artifact member, so
+consumers restore and verify the same layout. A command joins it only when every
+consumer of those artifacts needs it and it fits that boundary.
+
+`tools/runner-cleanup` owns `ci-ops runner-cleanup`, the bounded deletion of a
+persistent job's own outputs, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, process
+supervision, and thiserror; it never links HTTP, async runtime, archive, or
+product crates. Full xtask keeps the command and delegates it to the library,
+so stdout, stderr, and exit codes match. A job whose only automation is that
+cleanup prepares this executable through `just runner-cleanup-bootstrap`
+instead of full xtask: today only the trusted runner-image job. Its private
+copy keeps the `xtask` name and the `ci-ops runner-cleanup` argv, so the
+cleanup and finalization guards are unchanged. Jobs that run any other xtask
+command keep `just automation-bootstrap`.
 
 `tools/process-supervision` owns bounded child-process supervision
 (`supervise*`, `retained`) and the command interruption scope (`interrupt`).
@@ -95,22 +118,25 @@ work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
 the `product-clean` source profile) that compiles `xtask` for the lane's
 `source_sha` on a GitHub-hosted runner with a read-only token and no secrets.
-Host, runtime, product, Rust-test and static-ABI jobs of that lane declare it in
+Host, runtime, product, Rust-test, static-ABI, native SDK, SDK smoke and product smoke jobs of that lane declare it in
 `needs` and restore it through `restore-automation`, which checks the
 producer's source, artifact ID, executable digest and runner OS/architecture;
 they never rebuild it and never fall back to `prepare-automation`. Its artifact
 name carries a `product-` prefix, so it cannot collide with or stand in for the
 protected `authority_*` artifacts, and it retains for one day. Jobs that must
 not wait on a producer and only plan or validate (the entry planners through
-`compute-changes` and `plan-ci`, commit convention, and lane summaries) use
+`compute-changes` and `plan-ci`, and lane summaries) use
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
-such as authority audits, canary summaries, Docker precheck, and preview
+such as authority audits, canary summaries, release receipt verification, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
-always compiled in-run.
+always compiled in-run. SDK and smoke consumers restore before source admission, composition verification and cleanup controller freezing. Product restores require the product-clean claim, the lane source SHA, and complete artifact/digest/platform outputs; protected authority identities are rejected. Shared smoke restoration prepares only when MESH_LLM_AUTOMATION_BIN is empty. Standalone and release SDK/smoke jobs own one explicit preparation path when no product identity is supplied. `prepare-automation` takes a closed `tool` input
+(`xtask` by default, or `authority-automation`); `upload-automation` selects
+`authority-automation` exactly for the `protected-clean` source profile, and
+only full xtask may use the hosted executable cache.
 
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
@@ -132,24 +158,32 @@ platform adapters may remain thin. Existing Python checks, Just recipes and
 workflow entrypoints remain operational during migration and are transitional,
 not templates for new tooling. Existing isolated compatibility or upstream
 fixtures may be retained only with an explicit maintainer decision; new Python
-tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
-Python-free or remove legacy validation before its Rust replacement passes.
+tooling requires an explicit maintainer decision to change that policy. The
+Python SDK is a product component under `mesh/sdk/python`; its package source,
+component tests, locked client environments and four ecosystem smoke clients
+are permitted there. `ci/python-tooling-policy.json` lists the exact in-tree
+Python source files and their interpreter invocations. This product-source
+exception does not permit generic repository automation. Do not claim the
+required path is Python-free or remove legacy validation before its Rust
+replacement passes.
 
-Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
-using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
-an immutable default source commit. These interfaces do not authorize new
-repository Python implementations. The canary Jinja environment belongs to its
-run's state directory and must use a preinstalled interpreter; dependency
-restoration must not download an interpreter or skip upstream tests. Freeze the
-Jinja project before selecting historical source checkouts so older sources do
-not need to contain the dependency manifest.
+Retained external Python dependencies have bounded owners: llama.cpp's upstream
+Jinja and FP8 conversion tests using the trusted controller's
+`ci/llama-canary/jinja/uv.lock`, the optional llama-benchy wrapper with an
+immutable default source commit, and the separate Python research project.
+These interfaces do not authorize new repository Python implementations. The
+canary Jinja environment belongs to its run's state directory and must use a
+preinstalled interpreter; dependency restoration must not download an
+interpreter or skip upstream tests. Freeze the Jinja project before selecting
+historical source checkouts so older sources do not need to contain the
+dependency manifest.
 
 `just ci-crate-lists`, selected by the normal Quality validation gate, also
 checks repository Python tooling. Its typed policy is
-`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
-and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. Platform-specific runner prerequisite lists require
+`ci/python-tooling-policy.json`: the exact in-tree Python SDK source roster,
+external dependency inputs, source pins and executable invocation exceptions
+must retain their documented owners and reviewed occurrence counts.
+Platform-specific runner prerequisite lists require
 separate exact entries; listing an interpreter as a prerequisite does not
 authorize executing or installing it. The census includes tracked and new
 nonignored files, including hidden directories. Python sources, shebangs, unapproved
@@ -333,6 +367,16 @@ retired parser behavior, and source review still owns semantic emulation.
   The planner must emit a versioned machine-readable plan containing the
   profile, source identity, direct domains, affected crates, required slice
   IDs, bounded matrices, dependency reasons, and fan-out budgets.
+- Windows linker/cache policy requires explicit `ci-control` and
+  `platform-windows` ownership for `scripts/cargo-linker.cmd`,
+  `tools/xtask/src/native_policy/windows_linker.rs`, and
+  `mesh/scripts/build-windows.ps1`. Its tests require `platform-windows`
+  ownership for `tools/xtask/src/native_policy/windows_linker_tests.rs` and
+  `tools/xtask/src/ci_validation/windows_linker_native.rs`, so their changes
+  select the Windows unit row for ready PRs. Draft PRs keep row matrices empty
+  unless all rows are forced. Land missing entries in the protected catalog
+  before the dependent implementation. Documenting these requirements does not
+  activate routing or relax the catalog comparison.
 - Supported profiles are semantic and closed: draft PR, ready PR, exhaustive
   main, and explicit full/manual validation. Do not add ad hoc boolean inputs
   when a profile or ownership rule expresses the decision.
@@ -357,6 +401,21 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Dependencies, summaries, and cancellation
 
+- Lane summaries restore their controller from the run's frozen protected
+  `authority_source` revision whenever that producer is selected. When it is
+  skipped, retain the protected default branch rather than an empty checkout
+  ref that would select PR code. During the Linux backend fan-out migration,
+  admit the earlier grouped job layout
+  only when its dependency names identify that layout; require every planned
+  grouped job to succeed and reject mixed grouped/per-backend results. This
+  lets in-flight summaries finish without rebuilding successful producers.
+- Quality candidate-source consistency runs in a required hosted peer job,
+  independent of protected authority production and the full contract suite.
+  Check crate lists, publishing, release targets, client dependency purity,
+  console output and environment mutation on `inputs.source_sha`. Keep the
+  full automation and legacy contract suite in the existing Quality slice,
+  with its authority dependencies intact. Consistency failure must not gate
+  that suite on main or manual-full; PR sibling cancellation remains unchanged.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
@@ -381,7 +440,19 @@ retired parser behavior, and source review still owns semantic emulation.
   workflow containing the first failure so that lane can publish its stable
   diagnostic result. This policy is PR-only; main, manual, release,
   deployment, cleanup, cache-warming, and newer PR revisions are never targets.
-- Within a PR platform lane, compilation, functional-test, product, and smoke
+- Linux backend runtimes start independently of the shared host. Each product
+  needs only its own runtime, the shared host, and its existing automation and
+  authority producers. Each smoke needs only its consumed backend product;
+  Rust and Kotlin SDK smokes consume CPU. Keep catalog rows and artifact IDs.
+  Four singleton runtime and product calls stay below Linux's existing 7-worker
+  PR and 12-worker main/manual matrix budgets. A failed backend fails the lane;
+  other backends in that lane may finish. The protected sibling monitor alone
+  cancels other PR lanes; never add cancellation credentials to executors.
+  Windows retains its shared 1-worker PR/2-worker main/manual matrices until
+  row-specific consumers can advance without multiplying native capacity.
+  macOS has one Metal row. Release restructuring remains deferred because its
+  literal image bindings require a separate runner-image catalog change.
+- Within other PR platform matrices, compilation, functional-test, product, and smoke
   matrices fail fast so a required row failure cancels their queued and
   in-progress sibling rows. Keep this profile-derived: exhaustive main/manual
   runs continue sibling rows to retain complete diagnostics, and Quality
@@ -557,10 +628,76 @@ checked-in expiry are the maintainer-controlled approval boundary.
   they stay cargo-free. `tools/xtask` rejects a cargo caller without
   initialization and any cargo call inside a composition-only job, because a
   canary cannot exercise the canary-skipped jobs.
+- Windows jobs that install sccache through `mozilla-actions/sccache-action`
+  pin `version: v0.16.0`. sccache 0.17 and later expand Cargo's rustc argfile,
+  and with Rust 1.100's build-dir layout the expanded command exceeds the
+  Windows command-line limit (os error 206, mozilla/sccache#2787). This matches
+  the 0.16.0 developer bootstrap. `tools/xtask` rejects an unpinned or
+  different version in a managed Windows compilation job and in
+  `prepare-automation`. 0.16.0 doesn't cache a rustc call that uses an argfile;
+  it hands it to rustc. Cargo uses an argfile only for over-long command lines,
+  so the largest crates (`skippy-commands`, `skippy-api`,
+  `mesh-llm-skippy-adapter`, likely `mesh-llm`) recompile on every Windows run,
+  warm or cold. A slow warm Windows lane is expected while the pin holds, not a
+  cache regression. Lift the pin once an upstream fix is released and a Windows
+  lane passes with it.
+- Windows host producers retain Cargo HTML timings from the existing standalone
+  Skippy and Mesh host compilations, plus cumulative sccache evidence after each
+  phase. Disable the job's sccache idle timeout so a long uncached link does not
+  expire the daemon and erase those counters. Capture does not run another
+  build or change product features/profiles.
+  Timing artifacts use architecture and run-attempt identities and retain for
+  one day; cache counters use the existing statistics action and its retention.
+  The two product steps also set `LINK=--time-trace` so LLVM writes one trace
+  beside each actual linker output. Upload those traces with Cargo timings;
+  they measure linker work separately without changing Rust codegen flags.
+  After target-cache restoration and before either product build, run the
+  restored automation's `ci-ops reset-linker-traces` through Just. It removes
+  old `.time-trace.json` files from `target` while preserving compiler outputs.
+  Upload timing evidence only after that reset succeeds, so restored traces
+  cannot be attributed to the current attempt.
+- Windows host builds set `SOURCE_DATE_EPOCH=0` and opt into
+  the Rust-owned `native windows-linker` adapter through the existing linker
+  driver. Only matching non-primary proc-macro libraries receive `/DEBUG:NONE`:
+  their otherwise unused PDB records a random rustc temporary export-file path
+  in the DLL's GUID. Shipping Skippy, Mesh, runtime DLLs and build scripts retain
+  their existing link flags, optimization, panic behavior and debug settings.
+  Mesh's HostOnly linker configuration selects that same CMD driver when opted
+  in; its ordinary direct LLVM selection remains the default. Require restored
+  product-source automation; never compile a helper from a linker invocation.
+  Its archive prefix binds the adapter, Mesh configuration and workflow sources
+  so older nondeterministic build-tool DLLs cannot be restored.
+  Archive identities remain reusable across runs within that compatibility
+  cohort.
+  The existing Windows unit row selects 23 exact nonignored native methods,
+  including the CMD/adapter contract for scope, unchanged response files,
+  inherited streams, native exit codes and missing-helper refusal.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
   restore prefixes across trust or ABI boundaries.
+- Hosted automation and Linux CPU packaged-runtime keys use the typed
+  `ci-ops cache-inputs` inventory. Its checked-in projections require freshness
+  validation; resolving a cache key must not compile an automation helper.
+  Include the complete local production dependency closure, build scripts,
+  included resources, native patches, packaging implementation and linker
+  recipes. Exclude integration tests or documentation only when the compiled
+  graph does not consume them. Hosted executable keys also bind the actual
+  runner image identity, separately from the Rust toolchain.
+- Windows ABI retention is planned by typed Rust automation against a complete
+  inventory of the trusted main ref. Preserve active toolkit, architecture,
+  backend and image compatibility families before retaining older generations,
+  with explicit byte and history limits. Hosted image rollouts are not atomic:
+  preserve observed image cohorts for currently consumed toolkit/architecture
+  combinations rather than declaring every image except one warmer obsolete.
+  Reject malformed or incomplete data
+  and an insufficient budget before deletion. Unknown keys and other refs are
+  outside its authority. Retain the plan as evidence; a source change does not
+  authorize an operator to purge live caches.
+- A workflow that is the only `main` producer of a key must wake on every input
+  of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
+  `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract
+  gate refuses an uncovered input and any `!` exclusion in those paths.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.
@@ -573,8 +710,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` and
-  `tools/process-supervision/**` because xtask compiles both libraries. A
+  executable, whose inventory also includes the manifests and production
+  sources of authority-automation, ci-controller, process-supervision and
+  runner-cleanup because xtask compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
@@ -619,8 +757,20 @@ checked-in expiry are the maintainer-controlled approval boundary.
   workflows. Every CI invocation of `mesh-llm` includes `--log-format json`.
 - Release and packaging wrap the same producers with signing, attestation,
   publication, and retention. They do not fork the underlying build commands.
+- Stable downstream packaging dispatch carries the published tag commit, native
+  runtime release manifest digest, and a run-attempt correlation ID. The tag
+  commit can differ from the build source after release resources are generated.
+  A separate wait job requires the matching successful downstream receipt and
+  every requested channel. Its two-hour deadline fails closed. The downstream
+  credential needs Contents write and Actions read; rerunning the wait job must
+  not dispatch another publication.
 
 ## Workflow definition and dependencies
+
+- Commit and PR prose is not a CI gate. Do not install commit-message hooks,
+  enforce title grammar, or blacklist attribution identities. Release-note
+  classification may recognize conventional prefixes without requiring them;
+  unclassified titles remain in Other changes.
 
 - Declare least-privilege `permissions` explicitly. Default to
   `contents: read`; grant write or OIDC permissions only to the owning job.
@@ -638,6 +788,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   device runner.
 
 ## Operational safety
+
+- Stability and KV ownership coverage are manual-only while their nightly
+  schedules are paused. Keep both manual entrypoints and their evidence gates;
+  restoring a schedule requires reviewed live qualification.
 
 - Self-hosted jobs must finish with bounded cleanup of their own generated
   files after artifact uploads and explicit cache saves. Preserve shared model,
@@ -709,6 +863,10 @@ The `retry_recovered` marker flows through attempt selection, the `result` job
 outputs and the publication input; the handoff gate admits the recovered
 `repair-*` package only when that marker is present, and ordinary candidates
 still require a `verify-*` package.
+This also applies to unchanged selected-source `certify-and-publish` runs:
+final selection retains the recovery marker, and the publisher exports the
+exact selected repair commit from the frozen controller checkout. It does not
+require a `verify-1` package after successful retry reconciliation.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,
@@ -728,6 +886,10 @@ unconfirmed.
 Bounded, explicitly unverified source checkpoints are retained after every coding
 turn and after supervised termination. Upload recovery before verbose evidence;
 never include the restored Python environment in the diagnostic upload.
+The native build supervisor freezes its running automation executable in a
+private directory outside both checkouts before launching the wrapper. Keep that
+copy alive through supervision and recovery: candidate Cargo builds may replace
+their own `target/debug/xtask`, but must not replace the admitted controller.
 If the recorded native base is unavailable, capture its complete tracked tree
 against an empty tree so committed repairs remain in the unverified checkpoint.
 
@@ -763,6 +925,11 @@ selection steps may receive the read-only GitHub token; workers and repair
 agents remain credential-free. Runner placement uses managed labels and queues
 when matching capacity is unavailable; it never queries the repository runner
 API or adds an administrator credential to repair workers.
+
+Native candidate producers on both macOS and Linux cap CTest concurrency at
+four processes. Graph-contract cases construct many full-model contexts; do
+not saturate the host with sixteen such cases or increase per-case timeouts
+to mask contention. Keep the complete suite and its 900-second case deadline.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation

@@ -1,6 +1,9 @@
-//! Export the exact independently certified selected commit without executing its code.
+//! Export the exact certified selected commit without executing its code.
 use super::{process, source};
-use crate::{automation::canary_receipts::ProducerIdentity, command::DynResult};
+use crate::{
+    automation::canary_receipts::{ProducerIdentity, pass_identity::PassId},
+    command::DynResult,
+};
 use std::path::Path;
 
 pub(crate) fn prepare(
@@ -8,14 +11,20 @@ pub(crate) fn prepare(
     package: &Path,
     controller: &str,
     identity: &ProducerIdentity,
+    recovered: bool,
 ) -> DynResult<()> {
     process::operation(|| {
         source::revision(controller)?;
         source::revision(&identity.candidate)?;
         source::branch(&identity.branch)?;
-        if !root.is_absolute() || identity.pass_id != "verify-1" {
+        let certified = if recovered {
+            PassId::parse(&identity.pass_id)?.is_repair()
+        } else {
+            identity.pass_id == "verify-1"
+        };
+        if !root.is_absolute() || !certified {
             return Err(
-                "selected publication requires an absolute source and independent verifier".into(),
+                "selected publication requires an absolute source and independent verifier or recovered repair pass".into(),
             );
         }
         if process::text(root, &["rev-parse", "HEAD"])? != controller {

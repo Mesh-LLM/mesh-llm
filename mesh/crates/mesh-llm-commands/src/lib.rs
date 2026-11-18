@@ -16,6 +16,7 @@ pub mod plugin;
 pub mod plugin_sets;
 #[cfg(test)]
 mod plugin_upgrade_test_support;
+pub mod private_nodes;
 pub mod runtime_native;
 pub mod setup;
 pub mod skills;

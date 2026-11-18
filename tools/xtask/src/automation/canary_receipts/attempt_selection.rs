@@ -214,7 +214,7 @@ fn select_final(
         return Ok(if publish_selected {
             FinalDecision::Publish {
                 candidate,
-                retry_recovered: false,
+                retry_recovered: selected.outputs.retry_recovered == "true",
             }
         } else {
             FinalDecision::Certified

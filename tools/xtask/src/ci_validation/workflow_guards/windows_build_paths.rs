@@ -4,6 +4,9 @@ use crate::command::DynResult;
 use std::{fs, path::Path};
 const ACTION: &str = "./.github/actions/setup-windows-short-paths";
 const WINDOWS_MATRIX: &str = "${{ matrix.check.platform == 'windows' }}";
+// sccache 0.17+ expands Cargo's rustc argfile past the Windows command-line
+// limit (mozilla/sccache#2787); keep Windows on the release that passes it through.
+const WINDOWS_SCCACHE: &str = "v0.16.0";
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
     for (workflow, jobs) in [
@@ -41,6 +44,23 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
             )?;
         }
     }
+    // The composite action installs sccache in its own Windows branch.
+    let action = fs::read_to_string(root.join(".github/actions/prepare-automation/action.yml"))?;
+    let action = workflow_yaml::parse(&action)?;
+    let Some(Node::Seq(steps)) = action.get("runs").and_then(|runs| runs.get("steps")) else {
+        return Err("prepare-automation action has no steps".into());
+    };
+    sccache_pinned(steps)
+}
+fn sccache_pinned(steps: &[Node]) -> DynResult<()> {
+    for step in steps {
+        let installs_sccache = field(step, "uses")
+            .is_some_and(|action| action.starts_with("mozilla-actions/sccache-action@"));
+        let version = step.get("with").and_then(|with| field(with, "version"));
+        if installs_sccache && version != Some(WINDOWS_SCCACHE) {
+            return Err("Windows sccache installation must pin the argfile-safe release".into());
+        }
+    }
     Ok(())
 }
 fn job_paths(job: &Node, condition: Option<&str>) -> DynResult<()> {
@@ -59,6 +79,7 @@ fn job_paths(job: &Node, condition: Option<&str>) -> DynResult<()> {
     if field(setup, "if") != condition {
         return Err("Windows short-path setup may not be skipped on its compilation branch".into());
     }
+    sccache_pinned(steps)?;
     for step in &steps[..position] {
         if compiler_cache(step) || compiler_command(step) {
             return Err(

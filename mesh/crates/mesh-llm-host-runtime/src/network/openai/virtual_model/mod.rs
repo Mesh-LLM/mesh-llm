@@ -13,6 +13,8 @@ mod progress;
 mod stream_adapters;
 
 #[cfg(test)]
+mod private_bridge_tests;
+#[cfg(test)]
 mod workload_admission_tests;
 
 #[derive(Clone)]
@@ -31,20 +33,25 @@ impl InferenceRpcBridge {
         }
     }
 
-    async fn infer(&self, params_json: &str) -> Result<RpcResult, proto::ErrorResponse> {
+    pub(crate) async fn infer(
+        &self,
+        plugin_name: &str,
+        params_json: &str,
+    ) -> Result<RpcResult, proto::ErrorResponse> {
         let mut request: HostInferenceRequest = serde_json::from_str(params_json)
             .map_err(|error| invalid_params(format!("invalid inference request: {error}")))?;
         let model_id = request.model_id.trim().to_string();
         if model_id.is_empty() {
             return Err(invalid_params("model_id is required"));
         }
-        if super::automatic::is_directive(&model_id)
-            || self
-                .plugins
-                .virtual_model_for_model(&model_id)
-                .await
-                .map_err(internal)?
-                .is_some()
+        if (super::automatic::is_directive(&model_id) && !request.single_model_only)
+            || (!super::automatic::is_directive(&model_id)
+                && self
+                    .plugins
+                    .virtual_model_for_model(&model_id)
+                    .await
+                    .map_err(internal)?
+                    .is_some())
         {
             return Err(invalid_params(format!(
                 "nested inference cannot target virtual model '{}'",
@@ -60,6 +67,9 @@ impl InferenceRpcBridge {
         let timeout = std::time::Duration::from_millis(
             request.timeout_ms.unwrap_or(60_000).clamp(1, 300_000),
         );
+        let capability = request
+            .single_model_only
+            .then(super::nested_inference::SingleModelCapability::new);
         let mut request_builder = self
             .client
             .post(format!(
@@ -68,6 +78,24 @@ impl InferenceRpcBridge {
             ))
             .timeout(timeout)
             .json(&request.request);
+        if let Some(capability) = capability.as_ref() {
+            request_builder = request_builder.header(
+                "x-request-id",
+                capability.request_id().as_uuid().to_string(),
+            );
+        }
+        if let Some(scope) = self.plugins.private_nested_scope(plugin_name) {
+            request_builder = request_builder.header(
+                super::routing_scope::MESH_SCOPE_HEADER,
+                super::routing_scope::PRIVATE_SCOPE,
+            );
+            if let crate::plugin::private_invocations::NestedScope::Nodes(nodes) = scope {
+                request_builder = request_builder.header(
+                    super::routing_scope::MESH_SCOPE_NODES_HEADER,
+                    nodes.node_ids().join(","),
+                );
+            }
+        }
         if let Some(target_node_id) = request.target_node_id {
             request_builder =
                 request_builder.header(super::request_parse::MESH_TARGET_HEADER, target_node_id);
@@ -94,14 +122,14 @@ impl InferenceRpcBridge {
 impl PluginRpcBridge for InferenceRpcBridge {
     fn handle_request(
         &self,
-        _plugin_name: String,
+        plugin_name: String,
         method: String,
         params_json: String,
     ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
         let this = self.clone();
         Box::pin(async move {
             match method.as_str() {
-                "inference/chat_completions" => this.infer(&params_json).await,
+                "inference/chat_completions" => this.infer(&plugin_name, &params_json).await,
                 _ => Err(proto::ErrorResponse {
                     code: -32601,
                     message: format!("Unsupported host RPC method '{method}'"),
@@ -301,6 +329,37 @@ fn validate_virtual_request(
     None
 }
 
+/// Invoke the plugin's turn. A private turn keeps the plugin's own inference
+/// calls private for as long as the turn runs, including after progress has
+/// been committed. The scope is read here, on the request's task, not when
+/// the returned future is first polled.
+fn invoke_in_scope<'a>(
+    plugins: &'a PluginManager,
+    route: &'a crate::plugin::VirtualModelRoute,
+    input_json: &'a str,
+) -> impl std::future::Future<Output = anyhow::Result<mesh_llm_plugin::VirtualModelResponse>> + 'a {
+    let private_turn = mesh::current_private_scope()
+        .map(|scope| plugins.begin_private_invocation(&route.plugin_name, Some(scope)));
+    let (manager, owned_route, input_json) =
+        (plugins.clone(), route.clone(), input_json.to_string());
+    // A private turn runs to the plugin's reply even if the client leaves,
+    // and lingers unless the plugin replied: a timed-out turn may still run.
+    // Any reply ends it, an error or invalid output included.
+    async move {
+        let response = crate::plugin::private_invocations::run_to_reply(private_turn, async move {
+            manager
+                .invoke_virtual_model_service(
+                    &owned_route,
+                    &input_json,
+                    Some(std::time::Duration::from_secs(300)),
+                )
+                .await
+        })
+        .await?;
+        PluginManager::virtual_model_response(route, response)
+    }
+}
+
 #[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 pub(crate) async fn try_handle_virtual_model(
     plugins: &PluginManager,
@@ -380,11 +439,7 @@ pub(crate) async fn try_handle_virtual_model(
         Ok(stream) => stream,
         Err(outcome) => return VirtualModelDispatchResult::Responded(*outcome),
     };
-    let invocation = plugins.invoke_virtual_model(
-        &route,
-        &input_json,
-        Some(std::time::Duration::from_secs(300)),
-    );
+    let invocation = invoke_in_scope(plugins, &route, &input_json);
     // A virtual model answers once, so a streaming caller would otherwise wait
     // out the whole turn with nothing on the wire. When the route declares
     // progress lines the host commits the head and drips them while the turn
@@ -520,7 +575,7 @@ pub(crate) async fn try_handle_virtual_model(
 
 /// The concrete models a virtual model may route to, with the capability and
 /// sizing facts a plugin needs to choose between them.
-async fn virtual_model_candidates(
+pub(super) async fn virtual_model_candidates(
     node: &mesh::Node,
     candidate_models: Vec<String>,
     virtual_ids: &std::collections::BTreeSet<String>,
@@ -558,6 +613,9 @@ async fn virtual_model_candidates(
     let plugin_descriptors = node.plugin_inference_descriptors().await;
     let mut candidates = Vec::new();
     for model_id in model_ids {
+        if node.model_unavailable_due_to_channels(&model_id).await {
+            continue;
+        }
         if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
             continue;
         }

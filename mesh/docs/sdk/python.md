@@ -1,10 +1,8 @@
 # Python SDK source ownership
 
-The Python package, generated UniFFI bindings, SDK tests and real OpenAI/LiteLLM/LangChain/embedding clients are owned by the separately versioned `Mesh-LLM/mesh-llm-python-sdk` project. Both extracted projects are published; fresh anonymous restore and native source admission passed for the [SDK descriptor](../../../ci/required-sdk-python/sdk-source.json) and [research descriptor](../../../ci/python-research-source.json). This source proof does not qualify hosted workflows, installed SDKs, native bridges, models or a new PyPI release.
+The Python package, generated UniFFI bindings, component tests, locked dependency environments, and OpenAI/LiteLLM/LangChain/embedding clients live in [mesh/sdk/python](../../sdk/python/README.md). Mesh CI admits the component's checked-in source manifest before preparing its locked environments. It no longer restores a second SDK repository. Compatibility and embedding checks keep their existing cadence.
 
-Mesh preparation restores the exact commit in `ci/required-sdk-python/sdk-source.json` and admits its manifest and all tracked file hashes through `automation smoke-observation sdk-source`. Local preparation must set `MESH_PYTHON_SDK_SOURCE` to an absolute checkout of that pinned source. Runtime SDK execution is offline and does not resolve dependencies or compile a native bridge. The compatibility and embedding checks keep their required cadence.
-
-SDK binding generation belongs to the external producer: pass an explicit Mesh source checkout and an existing UniFFI 0.32.0 generator. Packaging consumes an explicitly supplied, already built Mesh FFI library; it does not infer a neighboring Mesh checkout. The native bridge source/API and runtime ABI remain Mesh-owned and must match the generated binding artifact.
+Generate bindings from the Mesh source in this checkout with an existing UniFFI 0.32.0 generator and an already built Mesh FFI library. Packaging consumes the supplied native library; it does not build a bridge implicitly. The wrapper and generated bindings must match the Mesh native API and runtime ABI.
 
 # Python SDK
 
@@ -32,6 +30,24 @@ owner identity is required. The old in-memory keypair hex constructor and
 Streaming is available through `node.inference.stream_chat_completions(...)`
 and `stream_responses(...)`; each event carries the original SSE data and raw
 frame. See [native runtime guidance](../SDK.md#native-runtime-artifacts).
+
+## Local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```python
+capacity = await node.runtime_capacity("exact-serving-id")
+if capacity is not None:
+    print(capacity.execution_lanes, capacity.context_tokens_per_lane,
+          capacity.context_pool_tokens, capacity.captured_at_unix_ms)
+```
+
+`LaneCapacity` fields are unsigned 64-bit values preserved as Python `int`.
+This reads the latest native observation, including busy lanes, without HTTP
+or a reservation. Unknown, unsupported, unavailable or incomplete capacity
+returns `None`; stopped nodes raise the native error. The timestamp is the
+oldest observation in Unix milliseconds; callers choose the freshness policy.
+The total pool is not a per-request context limit.
 
 ## Thinking effort levels
 
@@ -81,8 +97,8 @@ and optional thinking observations and plugin requirements. See
 [Mesh model discovery](../MODEL_DISCOVERY.md) for complete HTTP and SDK shapes.
 
 Use a Python SDK release and native bridge containing these APIs together.
-The public wrapper and generated bindings live in the companion Python SDK
-repository; updating Mesh alone does not publish a new Python wheel.
+The public wrapper and generated bindings are maintained in this repository;
+publishing a new Python wheel remains a separate release step.
 
 ## Invoke document OCR
 
@@ -170,10 +186,9 @@ the node's loaded models. `node.models` remains scoped to the primary mesh.
 
 ## Live transcription
 
-> Draft, unshippable guidance. The currently admitted Python SDK checkpoint
+> Draft, unshippable guidance. The in-tree Python SDK source checkpoint
 > `0357f19` does not provide this speech API. This example requires a future
-> combined checkpoint with current thinking-effort metadata and regenerated
-> native bindings. This extraction does not change the admitted SDK pin.
+> update to the package wrapper and regenerated bindings for the native API.
 
 ```python
 from meshllm import LiveTranscriptionOptions

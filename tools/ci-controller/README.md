@@ -10,8 +10,8 @@ It owns:
 - `ci plan`: provider-neutral plan construction from `ci/ownership.yml` and
   `ci/slices.yml`.
 - `ci validate-lane`: lane result admission for the lane `summary` jobs.
-- `repository affected-crates`, `repository conventional-commits`, and
-  `repository llama-upstream-pin`: the planner-side repository checks.
+- `repository affected-crates` and `repository llama-upstream-pin`: the
+  planner-side repository checks.
 - `automation bootstrap`: the check that the executable is Cargo's build output
   and that only admitted workspace packages were compiled into it. Each binary
   passes its own `bootstrap::BootstrapTool` descriptor; this binary admits only
@@ -25,7 +25,7 @@ canary, or release automation. Those stay in [xtask](../xtask/README.md).
 - CI jobs that run
   [`prepare-ci-controller`](../../.github/actions/prepare-ci-controller/action.yml):
   the entry planners through `compute-changes` and `plan-ci`, the five lane
-  summaries, and Quality commit convention. They call the binary through
+  summaries. They call the binary through
   `MESH_CI_CONTROLLER_BIN`.
 - xtask, which links the library and delegates the same commands to it, so
   `cargo xtool` gives identical output, exit codes, and refusals.

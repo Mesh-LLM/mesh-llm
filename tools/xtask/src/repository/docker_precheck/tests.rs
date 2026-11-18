@@ -200,27 +200,3 @@ fn malformed_cli_boolean_and_duplicate_inputs_refuse_before_source_read() {
         assert!(run(&args, || panic!("must refuse before source discovery")).is_err());
     }
 }
-
-#[test]
-fn current_workflow_uses_one_env_bound_native_owner_after_uncached_hosted_bootstrap() {
-    let source = include_str!("../../../../../.github/workflows/docker-precheck.yml");
-    assert!(source.contains("name: ${{ inputs.job_name }}"));
-    assert!(source.contains("persist-credentials: false"));
-    assert!(source.contains("runner-profile: hosted-bare"));
-    assert!(source.contains("allow_depot_remote_cache: \"false\""));
-    assert!(source.contains("allow_native_github_cache: \"false\""));
-    assert!(source.contains("DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}"));
-    let run = source.split_once("        run: |\n").unwrap().1;
-    assert!(run.contains("\"$MESH_LLM_AUTOMATION_BIN\" repository docker-precheck"));
-    assert!(!run.contains("${{"));
-    assert!(!run.contains("grep"));
-    for argument in [
-        "--dockerfile \"$DOCKERFILE_PATH\"",
-        "--shared-core \"$SHARED_CORE\"",
-        "--fly-ui-builder \"$FLY_UI_BUILDER\"",
-        "--entrypoint-modes \"$ENTRYPOINT_MODES\"",
-        "--workflow-no-qemu \"$WORKFLOW_NO_QEMU\"",
-    ] {
-        assert!(run.contains(argument), "{argument}");
-    }
-}

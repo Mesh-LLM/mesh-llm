@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+#[path = "virtual_model_tests.rs"]
+mod tests;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct VirtualModelCandidate {
     pub model_id: String,
@@ -49,6 +53,10 @@ pub struct VirtualModelResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HostInferenceRequest {
     pub model_id: String,
+    /// Resolve an automatic directive through core single-model routing only.
+    /// The host must not invoke a virtual-model override for this nested call.
+    #[serde(default)]
+    pub single_model_only: bool,
     /// Force this nested request to the physical candidate selected by the
     /// virtual model. This is the same endpoint identity accepted by
     /// `x-mesh-target` at normal ingress.

@@ -75,7 +75,10 @@ pub struct JoiningOptions {
     pub auto: bool,
 
     /// Discovery provider for --auto, --discover, --publish, and the discover command.
-    #[arg(long, value_enum, default_value_t = MeshDiscoveryMode::Nostr, global = true)]
+    // Not `global`: clap would then accept (and silently ignore) it on every
+    // subcommand. `discover` — the one real subcommand that reads it — declares
+    // its own copy; serve/client reach this one through surface normalization.
+    #[arg(long, value_enum, default_value_t = MeshDiscoveryMode::Nostr)]
     pub mesh_discovery_mode: MeshDiscoveryMode,
 }
 

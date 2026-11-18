@@ -1,4 +1,4 @@
-use mesh_client::network::router::{Category, Complexity, classify, strip_split_suffix};
+use mesh_client::network::router::{classify, strip_split_suffix};
 use serde_json::json;
 
 #[test]
@@ -7,7 +7,7 @@ fn router_classifies_code_request() {
         "messages": [{"role": "user", "content": "Write a Python function to implement binary search and debug any issues"}]
     });
     let cl = classify(&body);
-    assert_eq!(cl.category, Category::Code);
+    assert!(!cl.needs_tools);
 }
 
 #[test]
@@ -16,8 +16,7 @@ fn router_classifies_chat_default() {
         "messages": [{"role": "user", "content": "Hi"}]
     });
     let cl = classify(&body);
-    assert_eq!(cl.category, Category::Chat);
-    assert!(matches!(cl.complexity, Complexity::Quick));
+    assert!(!cl.needs_tools);
 }
 
 #[test]

@@ -6,11 +6,14 @@ use super::{
 use crate::mesh::{PeerAnnouncement, ServedModelDescriptor};
 use crate::proto::node;
 
+mod legacy_model_gates;
+pub(super) use legacy_model_gates::relay as relay_legacy_model_gates;
+
 /// Only peers that omit descriptors may use identity/name-based legacy inference.
 pub(super) fn restore_served_descriptors(
     source: &node::PeerAnnouncement,
     ann: &mut PeerAnnouncement,
-) {
+) -> Option<()> {
     if source.served_model_descriptors.is_empty() {
         ann.served_model_descriptors = source
             .served_model_identities
@@ -26,6 +29,7 @@ pub(super) fn restore_served_descriptors(
             .filter_map(proto_descriptor_to_local)
             .collect();
     }
+    legacy_model_gates::restore(&source.legacy_lightning_offers, ann)
 }
 
 /// Convert a legacy identity without inventing capability or workload metadata.
@@ -108,6 +112,103 @@ fn proto_descriptor_to_local(
 mod tests {
     use super::*;
     use crate::protocol::convert::proto_ann_to_local;
+
+    /// The legacy wire schema is deliberately independent of the current reader.
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct LegacyAnnouncement {
+        #[prost(string, repeated, tag = "10")]
+        serving_models: Vec<String>,
+        #[prost(string, repeated, tag = "23")]
+        hosted_models: Vec<String>,
+        #[prost(message, repeated, tag = "52")]
+        lightning_offers: Vec<LegacyOffer>,
+    }
+
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct LegacyOffer {
+        #[prost(string, tag = "1")]
+        model: String,
+        #[prost(uint64, tag = "2")]
+        input_msat_per_million: u64,
+        #[prost(uint64, tag = "3")]
+        output_msat_per_million: u64,
+        #[prost(uint64, tag = "4")]
+        minimum_invoice_msat: u64,
+        #[prost(uint32, tag = "5")]
+        cache_discount_percent: u32,
+        #[prost(uint32, tag = "6")]
+        payment_protocol: u32,
+        #[prost(bytes = "vec", tag = "7")]
+        unknown_extension: Vec<u8>,
+    }
+
+    #[test]
+    fn legacy_paid_offer_survives_wire_decode_as_model_requirement() {
+        use prost::Message;
+
+        let source = node::PeerAnnouncement {
+            endpoint_id: vec![1; 32],
+            version: Some("0.78.0".into()),
+            serving_models: vec!["gated".into(), "free".into()],
+            hosted_models: vec!["gated".into(), "free".into()],
+            served_model_descriptors: ["gated", "free"]
+                .into_iter()
+                .map(|model| node::ServedModelDescriptor {
+                    identity: Some(node::ServedModelIdentity {
+                        model_name: model.into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut bytes = source.encode_to_vec();
+        bytes.extend(
+            LegacyAnnouncement {
+                lightning_offers: vec![LegacyOffer {
+                    model: "gated".into(),
+                    input_msat_per_million: 50_000_000,
+                    output_msat_per_million: 50_000_000,
+                    minimum_invoice_msat: 1,
+                    cache_discount_percent: 20,
+                    payment_protocol: 3,
+                    unknown_extension: vec![42],
+                }],
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        );
+        let decoded = node::PeerAnnouncement::decode(bytes.as_slice()).unwrap();
+        let (_, local) = proto_ann_to_local(&decoded).unwrap();
+        let gated = &local.served_model_descriptors[0];
+        assert_eq!(gated.identity.model_name, "gated");
+        assert_eq!(gated.requires.len(), 1, "a legacy paid offer is not free");
+        assert_eq!(
+            gated.requires[0].terms, decoded.legacy_lightning_offers[0],
+            "the old gate stays opaque"
+        );
+        assert!(local.served_model_descriptors[1].requires.is_empty());
+
+        let relayed = crate::protocol::local_ann_to_proto_ann(&local);
+        let old_source = LegacyAnnouncement::decode(bytes.as_slice()).unwrap();
+        let old_recipient = LegacyAnnouncement::decode(relayed.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(old_recipient.serving_models, vec!["gated", "free"]);
+        assert_eq!(old_recipient.hosted_models, vec!["gated", "free"]);
+        assert_eq!(
+            relayed.legacy_lightning_offers,
+            decoded.legacy_lightning_offers
+        );
+        assert_eq!(
+            old_recipient.lightning_offers, old_source.lightning_offers,
+            "an old recipient must receive the original gate, not an ungated model or fabricated prices"
+        );
+        let (_, restored) = proto_ann_to_local(&relayed).unwrap();
+        assert_eq!(
+            restored.served_model_descriptors,
+            local.served_model_descriptors
+        );
+    }
 
     #[test]
     fn system_one_capability_decodes_from_additive_proto_field() {

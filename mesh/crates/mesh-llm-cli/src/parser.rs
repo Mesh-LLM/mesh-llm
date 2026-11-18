@@ -10,8 +10,8 @@ mod validation;
 pub use commands::{
     AnalyticsCommand, AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope,
     DoctorCommand, GpuCommand, KvCacheCommand, MeshDiscoveryMode, MeshGuardrailCliMode,
-    PluginCommand, PluginSetsCommand, ServingStrategyCli, SkillAgentArg, SkillCommand,
-    TrustCommand, TrustPolicy,
+    PluginCommand, PluginSetsCommand, PrivateCommand, ServingStrategyCli, SkillAgentArg,
+    SkillCommand, TrustCommand, TrustPolicy,
 };
 pub use logging_help::logging_help;
 pub use normalization::{
@@ -233,6 +233,21 @@ mod tests {
             Some(std::path::PathBuf::from("/fast/mesh-kv"))
         );
         assert_eq!(cli.kv_cache.kv_cache_min_free.as_deref(), Some("16GiB"));
+    }
+
+    #[test]
+    fn serve_takes_no_peer_model_downloads_flag() {
+        let parse = |args: &[&str]| {
+            let normalized = super::normalize_runtime_surface_args(
+                args.iter()
+                    .map(std::ffi::OsString::from)
+                    .collect::<Vec<_>>(),
+            );
+            Cli::try_parse_from(normalized.normalized).expect("serve flags should parse")
+        };
+
+        assert!(!parse(&["mesh-llm", "serve"]).no_peer_model_downloads);
+        assert!(parse(&["mesh-llm", "serve", "--no-peer-model-downloads"]).no_peer_model_downloads);
     }
 
     #[test]

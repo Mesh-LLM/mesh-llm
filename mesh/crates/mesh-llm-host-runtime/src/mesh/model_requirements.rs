@@ -177,6 +177,45 @@ impl Node {
         }
     }
 
+    /// A hard exclusion for automatic selection, independent of transient readiness.
+    /// Local execution and an ungated replica remain usable even when another
+    /// provider requires a channel this client cannot consume.
+    pub(crate) async fn model_unavailable_due_to_channels(&self, model: &str) -> bool {
+        let peers = self.peers().await;
+        let supported = self.supported_model_channels(&peers).await;
+        let mut blocked = false;
+        for peer in &peers {
+            if model_requires_unsupported_channel(peer, model, &supported) {
+                blocked = true;
+            } else if super::routes_http_model(peer, model) {
+                return false;
+            }
+        }
+        if !blocked {
+            return false;
+        }
+        if self
+            .hosted_models()
+            .await
+            .iter()
+            .any(|local| local == model)
+            || self
+                .serving_models()
+                .await
+                .iter()
+                .any(|local| local == model)
+        {
+            return false;
+        }
+        !self
+            .local_descriptors_with_plugins()
+            .await
+            .iter()
+            .any(|descriptor| {
+                super::model_identity::descriptor_matches_routable_name(descriptor, model)
+            })
+    }
+
     pub(crate) async fn model_channels_unavailable(&self, peer: &PeerInfo, model: &str) -> bool {
         let supported = self
             .supported_model_channels(std::slice::from_ref(peer))

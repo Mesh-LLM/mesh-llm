@@ -1,5 +1,6 @@
 use super::{check, invocations, policy::POLICY_PATH};
 use crate::command::DynResult;
+use sha2::Digest as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -23,11 +24,11 @@ const POLICY: &str = r#"{
     ]
   }],
   "external_source_descriptors": [{
-    "descriptor_path": "ci/required-sdk-python/sdk-source.json",
-    "repository": "Mesh-LLM/mesh-llm-python-sdk",
-    "revision": "d2a881612186b0626a153ee237dfa3df00ab6087",
-    "manifest_sha256": "2844313b33527d1745d7208b568bdbab7984a0459172f5cfa305eacb35e2b9c7",
-    "purpose": "required external SDK compatibility and embedding clients"
+    "descriptor_path": "ci/python-research-source.json",
+    "repository": "Mesh-LLM/mesh-llm-research",
+    "revision": "d280c63122350fb3f3d91734d61eb836f37a15ee",
+    "manifest_sha256": "7f7b0fb96583b9acd09b3150cc8f85c1ed502ea57734c46b2b8f1e54e9b94761",
+    "purpose": "optional external research tools"
   }],
   "external_script_pins": [{
     "path": "scripts/run-llama-benchy-openai.sh",
@@ -36,7 +37,14 @@ const POLICY: &str = r#"{
     "assignment": "LLAMA_BENCHY_FROM",
     "purpose": "default benchmark CLI source; caller overrides remain caller-owned"
   }],
-  "allowed_invocations": []
+  "allowed_invocations": [],
+  "in_tree_python_component": {
+    "root": "mesh/sdk/python",
+    "manifest_path": "mesh/sdk/python/sdk-inputs.json",
+    "source_files": ["mesh/sdk/python/src/meshllm/client.py"],
+    "package_inputs": ["mesh/sdk/python/pyproject.toml"],
+    "purpose": "in-tree MeshLLM Python SDK fixture"
+  }
 }"#;
 
 fn fixture() -> (TempDir, PathBuf) {
@@ -50,8 +58,8 @@ fn fixture() -> (TempDir, PathBuf) {
     write(&root, POLICY_PATH, POLICY);
     write(
         &root,
-        "ci/required-sdk-python/sdk-source.json",
-        r#"{"repository":"Mesh-LLM/mesh-llm-python-sdk","revision":"d2a881612186b0626a153ee237dfa3df00ab6087","manifest_sha256":"2844313b33527d1745d7208b568bdbab7984a0459172f5cfa305eacb35e2b9c7"}"#,
+        "ci/python-research-source.json",
+        r#"{"repository":"Mesh-LLM/mesh-llm-research","revision":"d280c63122350fb3f3d91734d61eb836f37a15ee","manifest_sha256":"7f7b0fb96583b9acd09b3150cc8f85c1ed502ea57734c46b2b8f1e54e9b94761"}"#,
     );
     write(
         &root,
@@ -63,6 +71,18 @@ fn fixture() -> (TempDir, PathBuf) {
         "scripts/llama-canary-agent-repair.sh",
         "JINJA_PROJECT=\"$TRUSTED_ROOT/ci/llama-canary/jinja\"\n",
     );
+    write(&root, "mesh/sdk/python/.gitignore", ".venv/\n");
+    write(
+        &root,
+        "mesh/sdk/python/pyproject.toml",
+        "[project]\nname = \"mesh-llm\"\nversion = \"0.76.1\"\ndependencies = []\n",
+    );
+    write(
+        &root,
+        "mesh/sdk/python/src/meshllm/client.py",
+        "class Node: pass\n",
+    );
+    write_sdk_manifest(&root);
     write(
         &root,
         "ci/llama-canary/jinja/pyproject.toml",
@@ -74,6 +94,33 @@ fn fixture() -> (TempDir, PathBuf) {
         "version = 1\nrequires-python = \">=3.9\"\n\n[[package]]\nname = \"mesh-llama-canary-jinja-tests\"\nversion = \"0.1.0\"\nsource = { virtual = \".\" }\n\n[[package]]\nname = \"jinja2\"\nversion = \"3.1.6\"\nsource = { registry = \"https://pypi.org/simple\" }\nsdist = { hash = \"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\nwheels = [{ hash = \"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" }]\n\n[[package]]\nname = \"markupsafe\"\nversion = \"3.0.4\"\nsource = { registry = \"https://pypi.org/simple\" }\nsdist = { hash = \"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\" }\nwheels = [{ hash = \"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\" }]\n",
     );
     (temporary, root)
+}
+
+fn write_sdk_manifest(root: &Path) {
+    let component = root.join("mesh/sdk/python");
+    let mut source_files = vec![".gitignore", "pyproject.toml", "src/meshllm/client.py"];
+    if component.join("src/meshllm/unlisted.py").is_file() {
+        source_files.push("src/meshllm/unlisted.py");
+    }
+    let files = source_files
+        .into_iter()
+        .map(|relative| {
+            let bytes = fs::read(component.join(relative)).unwrap();
+            (relative, hex::encode(sha2::Sha256::digest(bytes)))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    write(
+        root,
+        "mesh/sdk/python/sdk-inputs.json",
+        &serde_json::json!({
+            "schema_version": 1,
+            "source_checkpoint": "0357f19f02cc3c2769ab46b0299af027e07049c1",
+            "mesh_source": "e819fd4fe8d3d87517708faa0f2589c05aa48d80",
+            "generator": {"uniffi":"0.32.0"},
+            "files": files,
+        })
+        .to_string(),
+    );
 }
 
 fn write(root: &Path, relative: &str, content: &str) {
@@ -127,6 +174,19 @@ fn hidden_sensitive_name_python_source_is_captured_from_raw_git_roster() {
     );
     let error = check_fixture(&root).unwrap_err().to_string();
     assert!(error.contains(".agents/private/access-token.py"));
+}
+
+#[test]
+fn in_tree_python_sdk_source_must_be_listed_in_the_typed_component_policy() {
+    let (_temporary, root) = fixture();
+    write(
+        &root,
+        "mesh/sdk/python/src/meshllm/unlisted.py",
+        "class Unlisted: pass\n",
+    );
+    write_sdk_manifest(&root);
+    let error = check_fixture(&root).unwrap_err().to_string();
+    assert!(error.contains("unreviewed repository Python source"));
 }
 
 #[test]

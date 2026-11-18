@@ -1,8 +1,6 @@
 //! `ci-ops`: Rust owners of the runner, cache and CI metrics helper scripts.
 //! Each command keeps its legacy script's argv, streams and exit statuses.
 
-mod authority_audit;
-mod authority_command;
 mod build_cache;
 mod build_cache_argv;
 mod build_cache_cargo;
@@ -14,6 +12,7 @@ mod build_cache_values;
 mod cache_configuration;
 mod cache_configuration_command;
 mod cache_home;
+pub(crate) mod cache_inputs;
 mod catalog_contracts;
 mod catalog_release_pair;
 mod catalog_validation;
@@ -48,11 +47,10 @@ mod evidence_timestamp;
 mod identity_text;
 pub(crate) mod json_access;
 pub(crate) mod json_decode;
+mod linker_traces;
 mod performance_history;
-mod pr_authority;
 mod prepared_images;
 mod registry_pulls;
-mod runner_cleanup;
 mod runner_identity;
 pub(crate) mod runner_identity_argv;
 mod runner_identity_check;
@@ -73,6 +71,10 @@ mod sccache_stats;
 mod sccache_summary;
 mod sdk_census;
 mod seed_census;
+mod windows_cache_consumers;
+mod windows_cache_identity;
+mod windows_cache_maintenance;
+mod windows_cache_retention;
 mod workflow_bindings;
 mod workflow_census;
 mod workflow_text;
@@ -96,6 +98,11 @@ pub(crate) enum CiOperationsCommand {
     ChatDisplay,
     RuntimeSeed,
     ConfigureCanaryCache,
+    ResetLinkerTraces,
+    WindowsCacheIdentity,
+    WindowsCacheRetention,
+    WindowsCacheMaintenance,
+    CacheInputs,
 }
 
 impl CiOperationsCommand {
@@ -114,6 +121,11 @@ impl CiOperationsCommand {
             "chat-display" => Some(Self::ChatDisplay),
             "runtime-seed" => Some(Self::RuntimeSeed),
             "configure-canary-cache" => Some(Self::ConfigureCanaryCache),
+            "reset-linker-traces" => Some(Self::ResetLinkerTraces),
+            "windows-cache-identity" => Some(Self::WindowsCacheIdentity),
+            "windows-cache-retention" => Some(Self::WindowsCacheRetention),
+            "windows-cache-maintenance" => Some(Self::WindowsCacheMaintenance),
+            "cache-inputs" => Some(Self::CacheInputs),
             _ => None,
         }
     }
@@ -126,6 +138,12 @@ pub(crate) fn run(
     args: &[String],
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
+    if matches!(command, CiOperationsCommand::CacheInputs) {
+        return cache_inputs::run(&root()?, args);
+    }
+    if matches!(command, CiOperationsCommand::ResetLinkerTraces) {
+        return linker_traces::run(args, root);
+    }
     if matches!(command, CiOperationsCommand::ConfigureCanaryCache) {
         return cache_configuration_command::run(args);
     }
@@ -136,11 +154,17 @@ pub(crate) fn run(
         return runner_cleanup::command::run(args);
     }
     let report = match command {
+        CiOperationsCommand::CacheInputs => unreachable!(),
+        CiOperationsCommand::ResetLinkerTraces => unreachable!(),
         CiOperationsCommand::ConfigureCanaryCache => unreachable!(),
         CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::ChatDisplay => unreachable!(),
-        CiOperationsCommand::AuthorityAudit => authority_command::run(args),
-        CiOperationsCommand::PrAuthorityAudit => pr_authority::run(args),
+        CiOperationsCommand::AuthorityAudit => {
+            authority_automation::ci_operations::authority_command::run(args)
+        }
+        CiOperationsCommand::PrAuthorityAudit => {
+            authority_automation::ci_operations::pr_authority::run(args)
+        }
         CiOperationsCommand::RuntimeSeed => runtime_seed::run(args),
         CiOperationsCommand::RegistryPulls => {
             let output = registry_pulls::run(args)?;
@@ -151,6 +175,11 @@ pub(crate) fn run(
             }
         }
         CiOperationsCommand::BuildCache => build_cache::run(args),
+        CiOperationsCommand::WindowsCacheIdentity => windows_cache_identity::run(args),
+        CiOperationsCommand::WindowsCacheRetention => windows_cache_retention::run(args),
+        CiOperationsCommand::WindowsCacheMaintenance => {
+            windows_cache_maintenance::run(args, &root()?)
+        }
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::SccacheSummary => sccache_summary::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),

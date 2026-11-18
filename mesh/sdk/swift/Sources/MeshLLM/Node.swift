@@ -45,6 +45,7 @@ public struct OpenAIResponse: Sendable {
 public struct OpenAIRequestFailure: Error, Sendable, CustomStringConvertible {
     public let statusCode: UInt16
     public let body: String
+    public var details: InferenceErrorDetails? { InferenceErrorDetails.decode(body) }
     public var description: String { "OpenAI-compatible request failed with HTTP \(statusCode): \(body)" }
 }
 
@@ -72,6 +73,7 @@ public struct OpenAIStreamFailure: Error, Sendable, CustomStringConvertible {
     public let statusCode: UInt16?
     public let message: String
     public let body: String?
+    public var details: InferenceErrorDetails? { InferenceErrorDetails.decode(body) }
 
     public var description: String {
         if let statusCode {
@@ -182,11 +184,18 @@ public final class Node: @unchecked Sendable {
         )
     }
 
+    /// Latest local observation, including busy lanes; nil means unavailable or incomplete.
+    public func runtimeCapacity(_ model: String) async throws -> LaneCapacity? {
+        let handle = self.handle
+        return try await runBlocking { try handle.runtimeCapacity(model: model) }.map(LaneCapacity.init)
+    }
+
     public func joinToken(_ token: String) async throws {
         let handle = self.handle
         try await runBlocking { try handle.joinToken(token: token) }
     }
 
+    /// Transcribe in process with a locally loaded speech model. Close the session to cancel inference.
     public func startLiveTranscription(_ options: LiveTranscriptionOptions = LiveTranscriptionOptions()) async throws -> LiveTranscription {
         let handle = self.handle
         let optionsJSON = try options.json()

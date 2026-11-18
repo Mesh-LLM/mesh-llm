@@ -96,6 +96,11 @@ class Node {
     return parse(await this._handle.statusJson())
   }
 
+  /** Fresh local observation; null means unavailable or incomplete. */
+  async runtimeCapacity(model) {
+    return await this._handle.runtimeCapacity(model) ?? null
+  }
+
   joinToken(token) {
     return this._handle.joinToken(token)
   }

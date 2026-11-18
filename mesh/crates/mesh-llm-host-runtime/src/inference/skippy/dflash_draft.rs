@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 
+use super::StageSourceFetch;
 use super::resolver::{
     DFlashDraft, DFlashPairingIndexPin, DefaultDFlash, check_split_dflash_draft,
     dflash_draft_cache_path, dflash_pairing_index_installed, install_dflash_pairing_index,
@@ -229,15 +230,19 @@ pub(crate) fn split_dflash_draft_source(
 /// planner) loads its path as sent. A source that does not pin an immutable
 /// commit, digest and size serves without speculation: the planner's path
 /// names a file on the planner's node, which this node cannot check.
+///
+/// A peer's load under `runtime.peer_model_downloads = false` uses a pinned
+/// draft only when it is already cached, and never starts its download.
 pub(crate) async fn materialize_split_dflash_draft(
     plan: &mut skippy_serving::split_dflash::SplitDFlashStage,
+    source_fetch: StageSourceFetch,
 ) {
     let resolved = plan.clone();
     let resolved = tokio::task::spawn_blocking(move || {
         let mut plan = resolved;
         resolve_split_dflash_draft(
             &mut plan,
-            split_draft_cached_or_fetch,
+            |draft, layers| split_draft_cached_or_fetch(draft, layers, source_fetch),
             |draft, layers, path| {
                 verify_dflash_draft(draft, path, |path| check_split_dflash_draft(path, layers))
             },
@@ -254,7 +259,14 @@ pub(crate) async fn materialize_split_dflash_draft(
     }
 }
 
-fn split_draft_cached_or_fetch(draft: &DFlashDraft, target_layers: &[u32]) -> bool {
+fn split_draft_cached_or_fetch(
+    draft: &DFlashDraft,
+    target_layers: &[u32],
+    source_fetch: StageSourceFetch,
+) -> bool {
+    if !source_fetch.allows_fetch() {
+        return dflash_draft_cache_path(draft).is_file();
+    }
     let draft_for_fetch = draft.clone();
     let layers = target_layers.to_vec();
     draft_cached_or_fetch(
@@ -545,6 +557,26 @@ mod tests {
             |_, _, _| anyhow::bail!("sha256 mismatch"),
         );
         assert_eq!(plan.draft_model_path, None);
+    }
+
+    #[tokio::test]
+    async fn a_peer_load_that_refuses_downloads_never_fetches_an_uncached_draft() {
+        let mut source = pinned_source();
+        source.repo = "mesh-llm-test/never-cached-split-draft".into();
+        let mut plan = final_stage_plan(Some(source));
+        let draft = split_dflash_pinned_draft(&mut plan).expect("a pinned draft");
+
+        assert!(!split_draft_cached_or_fetch(
+            &draft,
+            &plan.target_layers,
+            StageSourceFetch::LocalOnly,
+        ));
+        assert!(
+            !in_flight_fetches()
+                .lock()
+                .unwrap()
+                .contains(&draft_fetch_key(&draft))
+        );
     }
 
     #[test]

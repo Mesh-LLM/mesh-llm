@@ -291,6 +291,9 @@ message StageStatus {
   // Serial decode steps run on this stage, as its compute meter counts them.
   // Zero from older stages.
   uint64 compute_decode_tokens = 40;
+  // Token positions run in speculative verify windows on this stage, as its
+  // compute meter counts them. Zero from older stages.
+  uint64 compute_verify_tokens = 41;
   // Set by a split final stage that attached its DFlash draft. Unset when the
   // stage drafts nothing, and from older stages.
   optional StageDFlashDraftStatus dflash_draft = 39;
