@@ -13,8 +13,10 @@ use crate::terminal::{style_muted, style_ok};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// The console the service's node serves on its default port.
-pub(crate) const CONSOLE_URL: &str = "http://localhost:3131";
+/// The console the service's node serves on its default port. The browser
+/// opens the loopback address the status was read from: `localhost` could
+/// resolve to `::1`, where another program may listen.
+pub(crate) const CONSOLE_URL: &str = "http://127.0.0.1:3131";
 /// The status the console's node serves, which names the answering instance.
 const STATUS_URL: &str = "http://127.0.0.1:3131/api/status";
 /// Long enough for a first start that loads the native runtime.
@@ -75,7 +77,9 @@ pub(crate) async fn open_console_when_ready(setup_started: SystemTime) {
 }
 
 async fn wait_for_console(status_url: &str, since_unix: i64, timeout: Duration) -> bool {
-    let Ok(client) = reqwest::Client::builder()
+    // No proxy and no redirect: the answer must come from the listener on
+    // the console's port itself.
+    let Ok(client) = mesh_llm_system::local_http::local_http_client_builder()
         .timeout(STATUS_REQUEST_TIMEOUT)
         .build()
     else {
@@ -239,6 +243,15 @@ mod tests {
 
     /// Serves `body` with status 200 to every request on a free local port.
     async fn serve(body: &'static str) -> String {
+        serve_response(format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        ))
+        .await
+    }
+
+    /// Answers every request on a free local port with `response`.
+    async fn serve_response(response: String) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -249,10 +262,6 @@ mod tests {
                 };
                 let mut request = [0u8; 1024];
                 let _ = stream.read(&mut request).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
@@ -272,6 +281,12 @@ mod tests {
         let started =
             serve(r#"{"local_instances":[{"pid":8,"is_self":true,"started_at_unix":1000}]}"#).await;
         assert!(wait_for_console(&started, 1_000, Duration::from_millis(600)).await);
+        // Another program on the port redirects to that node's status.
+        let redirect = serve_response(format!(
+            "HTTP/1.1 302 Found\r\nlocation: {started}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+        ))
+        .await;
+        assert!(!wait_for_console(&redirect, 1_000, Duration::from_millis(600)).await);
     }
 
     #[test]
