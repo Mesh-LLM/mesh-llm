@@ -228,13 +228,7 @@ pub(crate) fn split_dflash_draft_source(
 pub(crate) fn configured_split_dflash_draft_source(
     path: &Path,
 ) -> Option<skippy_serving::split_dflash::SplitDFlashDraftSource> {
-    let Some(draft) = cached_draft_identity(path).filter(DFlashDraft::is_pinned) else {
-        tracing::warn!(
-            draft = %path.display(),
-            "split DFlash: the configured draft is not a pinned Hugging Face download, so the final stage serves without speculation"
-        );
-        return None;
-    };
+    let draft = cached_draft_identity(path).filter(DFlashDraft::is_pinned)?;
     Some(skippy_serving::split_dflash::SplitDFlashDraftSource {
         repo: draft.repo,
         revision: draft.revision,

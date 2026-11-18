@@ -1229,8 +1229,12 @@ const FALLBACK_DFLASH_DRAFT_KV_BYTES_PER_TOKEN: u64 = 8 * 8 * (128 + 128) * 2;
 /// The memory a split's final stage holds for its DFlash draft beyond its
 /// layers: the draft's weights, the target tensors it borrows, and its own
 /// context, which `draft_context_params` sizes to the target's context. Zero
-/// when the load resolves no draft. A default draft is charged whether or
-/// not this node has cached it, since the final stage fetches its own copy.
+/// when the load resolves no draft the final stage can run. A default draft
+/// is charged whether or not this node has cached it, since the final stage
+/// fetches its own copy. The final stage runs on another node (stage 0 is
+/// this one), so a configured draft is charged only when it reaches that
+/// node as a pinned download: the same check that gives the plan its
+/// [`split_dflash_plan`] source.
 pub(super) fn split_dflash_final_stage_charge(
     request: skippy::SkippyConfigResolveRequest<'_>,
     config_model_id: Option<&str>,
@@ -1249,9 +1253,13 @@ pub(super) fn split_dflash_final_stage_charge(
         return SplitDFlashFinalStageCharge::default();
     };
     let draft_path = &dflash.draft_model_path;
-    let draft_bytes = match resolved.speculative.default_dflash.as_ref() {
-        Some(chosen) => chosen.pairing.draft.bytes,
-        None => std::fs::metadata(draft_path).map_or(0, |meta| meta.len()),
+    let default_draft_bytes = resolved
+        .speculative
+        .default_dflash
+        .as_ref()
+        .map(|chosen| chosen.pairing.draft.bytes);
+    let Some(draft_bytes) = final_stage_draft_bytes(default_draft_bytes, draft_path) else {
+        return SplitDFlashFinalStageCharge::default();
     };
     SplitDFlashFinalStageCharge {
         reserve_bytes: draft_bytes.saturating_add(
@@ -1259,6 +1267,20 @@ pub(super) fn split_dflash_final_stage_charge(
         ),
         kv_bytes_per_token: dflash_draft_kv_bytes_per_token(draft_path),
     }
+}
+
+/// The size of the DFlash draft a split's final stage loads: a default
+/// draft's (`default_draft_bytes`), which the final stage fetches itself,
+/// else the configured draft's when it reaches that node as a pinned
+/// download. `None` when the final stage loads no draft.
+pub(super) fn final_stage_draft_bytes(
+    default_draft_bytes: Option<u64>,
+    configured: &Path,
+) -> Option<u64> {
+    default_draft_bytes.or_else(|| {
+        crate::inference::skippy::configured_split_dflash_draft_source(configured)
+            .map(|source| source.bytes)
+    })
 }
 
 /// KV bytes per context token of the DFlash draft at `path`, from its header,
@@ -1327,9 +1349,16 @@ fn split_dflash_plan(
             plan.draft_source = chosen
                 .map(crate::inference::skippy::split_dflash_draft_source)
                 .or_else(|| {
-                    crate::inference::skippy::configured_split_dflash_draft_source(
+                    let source = crate::inference::skippy::configured_split_dflash_draft_source(
                         &dflash.draft_model_path,
-                    )
+                    );
+                    if source.is_none() {
+                        tracing::warn!(
+                            draft = %dflash.draft_model_path.display(),
+                            "split DFlash: the configured draft is not a pinned Hugging Face download, so the final stage serves without speculation"
+                        );
+                    }
+                    source
                 });
             plan.draft_device = decode.draft_device.clone();
             dflash.target_layers = plan.target_layers.clone();

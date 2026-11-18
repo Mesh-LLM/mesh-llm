@@ -27,6 +27,7 @@ mod capacity_budget;
 mod content_attestation;
 mod coordinator_takeover;
 mod peer_model_downloads;
+mod split_dflash_charge;
 
 fn lifecycle_config() -> plugin::MeshConfig {
     toml::from_str(
