@@ -103,16 +103,19 @@ fn prune_slot(root: &Path, dir: &Path, my_pid: u32, now: SystemTime, retention: 
 /// numeric directory under a custom root, such as an archive named after a
 /// year, is not ours to remove.
 fn is_instance_slot(dir: &Path) -> bool {
-    let kind = |path: &Path| fs::symlink_metadata(path).map(|meta| meta.file_type());
-    if !kind(&dir.join("lock")).is_ok_and(|kind| kind.is_file()) {
-        return false;
-    }
+    fs::symlink_metadata(dir.join("lock")).is_ok_and(|meta| meta.is_file())
+        && holds_only_instance_files(dir)
+}
+
+/// Whether every entry of `dir` is one an instance writes in its slot, of
+/// the kind it makes, read without following symlinks.
+fn holds_only_instance_files(dir: &Path) -> bool {
     let Ok(mut entries) = fs::read_dir(dir) else {
         return false;
     };
     entries.all(|entry| {
         entry.is_ok_and(|entry| {
-            let Ok(kind) = kind(&entry.path()) else {
+            let Ok(kind) = fs::symlink_metadata(entry.path()).map(|meta| meta.file_type()) else {
                 return false;
             };
             match entry.file_name().to_str() {
@@ -124,12 +127,25 @@ fn is_instance_slot(dir: &Path) -> bool {
     })
 }
 
-/// A slot a cleanup renamed out of the way before removing it.
+/// A slot a cleanup renamed out of the way before removing it: a directory
+/// with the exact name the cleanup gives (`.removing-<pid>-<nanos>`) that
+/// still holds only what an instance writes. Its `lock` may already be gone,
+/// since an interrupted removal can take any entry first. Anything else that
+/// only shares the prefix is left alone.
 fn is_renamed_for_removal(dir: &Path) -> bool {
-    dir.file_name()
+    let generated = dir
+        .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(REMOVING_PREFIX))
+        .and_then(|name| name.strip_prefix(REMOVING_PREFIX))
+        .and_then(|rest| rest.split_once('-'))
+        .is_some_and(|(pid, nanos)| is_digits(pid) && is_digits(nanos));
+    generated
         && fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir())
+        && holds_only_instance_files(dir)
+}
+
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 const REMOVING_PREFIX: &str = ".removing-";
@@ -538,6 +554,23 @@ mod tests {
         prune_dead_runtime_slots(root.path(), 1, SystemTime::now(), DEAD_SLOT_RETENTION);
         assert!(!renamed.exists());
         assert!(file.exists());
+    }
+
+    #[test]
+    fn keeps_a_directory_that_only_shares_the_removal_prefix() {
+        let root = tempdir().unwrap();
+        // A user's directory whose name starts like a renamed slot.
+        let notes = root.path().join(format!("{REMOVING_PREFIX}notes"));
+        fs::create_dir_all(notes.join("logs")).unwrap();
+        fs::write(notes.join("owner.json"), "{}").unwrap();
+        // The generated name, but holding a file no instance writes.
+        let other = root.path().join(format!("{REMOVING_PREFIX}{DEAD_PID}-1"));
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("notes.txt"), "kept").unwrap();
+
+        prune_dead_runtime_slots(root.path(), 1, SystemTime::now(), DEAD_SLOT_RETENTION);
+        assert!(notes.join("owner.json").exists());
+        assert!(other.join("notes.txt").exists());
     }
 
     #[cfg(unix)]
