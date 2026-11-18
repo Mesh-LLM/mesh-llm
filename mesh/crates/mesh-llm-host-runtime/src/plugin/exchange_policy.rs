@@ -89,14 +89,15 @@ impl NodeExchangePolicy {
                 // the session fills in once the typed one is dropped.
                 Some(id) => {
                     event.as_object_mut().unwrap().remove("exchange_id");
-                    let result = manager.selected_exchange_phase(&id, event).await;
-                    if let Some(session_id) = manager.session_exchange_id(exchange_id) {
+                    // Before the plugin is asked: a request cancelled while it
+                    // answers still runs the dispatch's terminal.
+                    if let Some(session_id) = manager.session_exchange_id(&id) {
                         self.session_ids
                             .lock()
                             .unwrap()
                             .insert(exchange_id.to_owned(), session_id);
                     }
-                    result
+                    manager.selected_exchange_phase(&id, event).await
                 }
                 None => manager.exchange_phase(event).await,
             };
@@ -171,6 +172,8 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
+        // First, so a slow or failing hook below cannot skip the cleanup.
+        let exchange_id = self.channel_exchange_id(id, true);
         if let Some(manager) = self.node.plugin_manager().await {
             if let ChatCompletionOutcome::Success { response } = outcome {
                 manager.record_typed_usage(id, json!(response.usage));
@@ -188,7 +191,6 @@ impl InferenceHookPolicy for NodeExchangePolicy {
             };
             manager.record_typed_execution_outcome(id, execution_outcome);
         }
-        let exchange_id = self.channel_exchange_id(id, true);
         if let Some(bridge) = self.legacy_bridge().await {
             bridge
                 .on_chat_completion_terminal(request, &exchange_id, outcome)
@@ -196,6 +198,7 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         }
     }
     async fn on_completion_terminal(&self, exchange_id: &str, outcome: &str) {
+        self.channel_exchange_id(exchange_id, true);
         if let Some(manager) = self.node.plugin_manager().await {
             manager.record_typed_execution_outcome(exchange_id, outcome);
         }

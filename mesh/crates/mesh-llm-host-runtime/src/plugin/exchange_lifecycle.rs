@@ -140,17 +140,16 @@ fn project_event(mut event: Value, grant: &OpenAiExchangeGrant, name: &str) -> V
 }
 
 impl PluginManager {
-    /// The id of the exchange session a typed backend dispatch belongs to: what
-    /// the plugin's lifecycle callbacks carry as `exchange_id`. `None` when the
-    /// dispatch runs outside a session.
-    pub(crate) fn session_exchange_id(&self, backend_exchange_id: &str) -> Option<String> {
+    /// The exchange id of the session `observation_id` names: what the
+    /// plugin's lifecycle callbacks carry as `exchange_id`.
+    pub(crate) fn session_exchange_id(&self, observation_id: &str) -> Option<String> {
         let state = self
             .inner
             .exchange_observations
-            .1
+            .0
             .lock()
             .unwrap()
-            .get(backend_exchange_id)
+            .get(observation_id)
             .and_then(Weak::upgrade)?;
         let state = state.lock().unwrap();
         Some(state.exchange_id.clone())
