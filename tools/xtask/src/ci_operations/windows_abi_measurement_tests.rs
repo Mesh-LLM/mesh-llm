@@ -292,6 +292,17 @@ fn failed_preparation_writes_a_refused_receipt_with_its_phases() {
     assert_eq!(receipt["prepare_outcome"], "failure");
     assert!(receipt["phases"]["prepare_end"].is_string());
     assert_eq!(receipt["seconds"]["primary"], 15.0);
+
+    fs::remove_dir_all(build.path()).unwrap();
+    assert!(
+        finish(receipts.path(), failed)
+            .unwrap_err()
+            .contains("final ABI snapshot failed")
+    );
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(receipts.path().join("receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["admitted"], false);
+    assert!(receipt["tree_after"].is_null());
 }
 
 #[test]

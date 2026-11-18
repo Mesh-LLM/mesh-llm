@@ -329,18 +329,22 @@ fn finish(directory: &Path, env: impl Fn(&str) -> String) -> Result<String, Stri
     let condition = Condition::parse(admission["condition"].as_str().unwrap_or(""))?;
     let before: Tree =
         serde_json::from_value(admission["tree"].take()).map_err(|error| error.to_string())?;
-    let after = snapshot(Path::new(&env("BUILD_DIR")))?;
+    // Preparation may delete the build tree before failing; that is refusal evidence.
+    let after = snapshot(Path::new(&env("BUILD_DIR")));
     let times = phase_times(directory);
     let seconds = |start: usize, end: usize| elapsed(times[start], times[end]);
     let prepare_outcome = env("PREPARE_OUTCOME");
-    let outcome = complete_sample(condition, &prepare_outcome, &times, &before, &after);
+    let outcome = after
+        .as_ref()
+        .map_err(|error| format!("final ABI snapshot failed: {error}"))
+        .and_then(|after| complete_sample(condition, &prepare_outcome, &times, &before, after));
     let receipt = json!({
         "schema_version": 1,
         "admitted": outcome.is_ok(),
         "refusal": outcome.as_ref().err(),
         "admission": admission,
         "tree_before": before,
-        "tree_after": after,
+        "tree_after": after.as_ref().ok(),
         "prepare_outcome": prepare_outcome,
         "phases": PHASES.iter().zip(&times).map(|(phase, time)| (phase.to_string(), time.map_or(Value::Null, |time| Value::from(isoformat(time))))).collect::<serde_json::Map<_, _>>(),
         "seconds": {"lookup": seconds(0, 1), "prepare": seconds(2, 3), "primary": seconds(0, 3)},
