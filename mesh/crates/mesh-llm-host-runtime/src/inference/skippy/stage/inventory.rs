@@ -84,6 +84,21 @@ pub(super) fn resolve_inventory_source(
                 error
             })
             .ok()?;
+        // The package may have changed since its manifest was checked, or a
+        // cached revision may differ from the one the request names; its
+        // layers are reported under the requested manifest only if it is it.
+        if !identity
+            .manifest_sha256
+            .eq_ignore_ascii_case(&request.manifest_sha256)
+        {
+            tracing::debug!(
+                package_ref = request.package_ref,
+                requested = request.manifest_sha256,
+                inspected = identity.manifest_sha256,
+                "package inventory manifest differs from the requested manifest"
+            );
+            return None;
+        }
         let kind = if is_split_gguf_path(&identity.source_model_path) {
             SourceModelKind::SplitGguf
         } else {

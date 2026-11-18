@@ -490,12 +490,23 @@ fn a_peer_inventory_cannot_name_a_local_file_or_package() {
         &[("primary", "artifacts/primary.gguf", "input.weight")],
     )
     .unwrap();
+    let manifest_sha256 = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(
+            fs::read(package.join("model-package.json")).unwrap(),
+        ))
+    };
     let package = package.to_string_lossy().into_owned();
+    // This node names the package by its manifest; the peer does not know it.
     let request = |model_id: &str, package_ref: &str, from_peer| StageInventoryRequest {
         model_id: model_id.to_string(),
         runtime_profile: Some(String::new()),
         package_ref: package_ref.to_string(),
-        manifest_sha256: "manifest".to_string(),
+        manifest_sha256: if from_peer {
+            "manifest".to_string()
+        } else {
+            manifest_sha256.clone()
+        },
         expected_source_model_sha256: None,
         local_source_required: false,
         from_peer,
@@ -561,6 +572,46 @@ fn a_peer_inventory_names_a_package_directory_by_its_manifest() {
     );
 }
 
+#[test]
+fn package_inventory_reports_only_the_requested_manifest() {
+    use sha2::{Digest, Sha256};
+
+    // A local request skips the peer's manifest check, so this exercises the
+    // comparison with the package inventory actually inspected: a package
+    // that changed after its digest was checked, or a cached revision other
+    // than the requested one, reports nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("package");
+    crate::inference::skippy::write_test_package_v2_fixture(
+        &package,
+        "model-a",
+        &[("primary", "artifacts/primary.gguf", "input.weight")],
+    )
+    .unwrap();
+    let manifest_sha256 = hex::encode(Sha256::digest(
+        fs::read(package.join("model-package.json")).unwrap(),
+    ));
+    let request = |manifest_sha256: &str| StageInventoryRequest {
+        model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
+        package_ref: package.to_string_lossy().into_owned(),
+        manifest_sha256: manifest_sha256.to_string(),
+        expected_source_model_sha256: None,
+        local_source_required: false,
+        from_peer: false,
+    };
+
+    for requested in [manifest_sha256.clone(), manifest_sha256.to_uppercase()] {
+        assert!(
+            resolve_inventory_source(&request(&requested), StageSourceFetch::Allowed).is_some(),
+            "{requested}"
+        );
+    }
+    assert!(
+        resolve_inventory_source(&request(&"0".repeat(64)), StageSourceFetch::Allowed).is_none(),
+        "a package under another manifest must not be reported"
+    );
+}
 
 #[test]
 fn inventory_source_resolves_metadata_only_first_shard() {
