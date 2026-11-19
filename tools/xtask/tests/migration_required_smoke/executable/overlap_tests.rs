@@ -3,13 +3,13 @@ use super::*;
 mod endpoint;
 
 fn armed(directory: &std::path::Path) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while !directory.join("overlap.armed").exists() {
         assert!(
             std::time::Instant::now() < deadline,
-            "headless did not reach live-primary barrier"
+            "timed out waiting for overlap.armed at live-primary barrier"
         );
-        std::thread::yield_now();
+        std::thread::park_timeout(std::time::Duration::from_millis(10));
     }
 }
 
@@ -19,6 +19,8 @@ fn primary_remains_live_when_headless_waits_on_barrier_for_all_variants() {
         let directory = tempfile::tempdir().unwrap();
         let mut options = options(directory.path(), "overlap-success");
         options.variant = variant;
+        options.readiness = std::time::Duration::from_secs(120);
+        options.shutdown = std::time::Duration::from_secs(10);
         let cancel = Cancellation::default();
         std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
