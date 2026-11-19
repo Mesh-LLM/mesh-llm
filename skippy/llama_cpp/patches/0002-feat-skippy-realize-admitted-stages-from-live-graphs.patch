@@ -1,8 +1,9 @@
-From 5379c658181b619a90ac7abea47eb277b3115e24 Mon Sep 17 00:00:00 2001
+From 4bd3b1ac385aed049d9401a12293e1c58456c17e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
 
+Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cdc64c836b@buzz.gdk.so>
 ---
  common/common.cpp                       |  109 ---
  common/common.h                         |   20 +-
@@ -23,7 +24,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/llama-memory-hybrid-idx.cpp         |   10 +
  src/llama-memory-hybrid-idx.h           |    4 +
  src/skippy/abi.cpp                      |   59 ++
- src/skippy/activation.cpp               | 1028 ++++++++++++++++++++
+ src/skippy/activation.cpp               | 1028 +++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  164 ++++
  src/skippy/block_boundaries.cpp         |   64 ++
@@ -50,7 +51,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  213 ++++
  src/skippy/model_load_config_internal.h |   35 +
- src/skippy/model_loading.cpp            | 1189 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1189 ++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
@@ -73,7 +74,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  907 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  136 +++
- src/skippy/state.cpp                    | 1189 +++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1195 +++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/state_memory.cpp             |  116 +++
@@ -83,7 +84,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
  tests/test-batch-alloc.cpp              |   21 +
- 79 files changed, 16484 insertions(+), 407 deletions(-)
+ 79 files changed, 16490 insertions(+), 407 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -15201,10 +15202,10 @@ index 000000000..1cb24c7cb
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..f035ea13f
+index 000000000..d4a5c9673
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1189 @@
+@@ -0,0 +1,1195 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -15810,6 +15811,9 @@ index 000000000..f035ea13f
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session, descriptor, and payload are required");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
++    // Imports can write host-visible KV buffers before any backend submission.
++    session->ctx->synchronize();
++    skippy_mark_context_synchronized(session->stage_model);
 +    std::string error;
 +    bool ok = false;
 +    bool invalid_argument = false;
@@ -15873,6 +15877,9 @@ index 000000000..f035ea13f
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +
++    // Fence before either cache mutation or composite-import rollback.
++    session->ctx->synchronize();
++    skippy_mark_context_synchronized(session->stage_model);
 +    std::string error;
 +    bool        ok               = false;
 +    bool        unsupported      = false;
@@ -17946,3 +17953,6 @@ index c41e91d61..eee60d81d 100644
      t.test("token_batch_explicit_fields", [&](testing & t) {
          llama_token  token[3]    = { 5, 6, 7 };
          llama_pos    pos[3]      = { 3, 4, 5 };
+-- 
+2.54.0 (Apple Git-157)
+

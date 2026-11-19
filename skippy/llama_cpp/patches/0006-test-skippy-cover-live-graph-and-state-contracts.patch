@@ -1,9 +1,12 @@
-From 428a845a224e3677b44c0a06127f01881550f9f3 Mon Sep 17 00:00:00 2001
+From f0fc5baec3ec831709b1bd6f8458bca81c18d26e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
+Subject: [PATCH] test(skippy): cover live graph and state contracts
 
+Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cdc64c836b@buzz.gdk.so>
 ---
+ src/CMakeLists.txt                            |    9 +
+ src/skippy/tests/async_state.cpp              |  208 ++
  .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
  src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
@@ -40,7 +43,8 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 36 files changed, 10123 insertions(+), 30 deletions(-)
+ 38 files changed, 10340 insertions(+), 30 deletions(-)
+ create mode 100644 src/skippy/tests/async_state.cpp
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
@@ -73,6 +77,240 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  create mode 100644 tests/test-skippy-sampling-suppress.cpp
  create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 0a5980aaa..1c6f8b5ef 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -270,6 +270,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_runtime_event_native_model_load_production PROPERTIES
+         FIXTURES_REQUIRED skippy-model-loader-fixtures)
+ 
++    add_executable(skippy-async-state-test skippy/tests/async_state.cpp)
++    target_include_directories(skippy-async-state-test PRIVATE .)
++    target_compile_features(skippy-async-state-test PRIVATE cxx_std_17)
++    target_link_libraries(skippy-async-state-test PRIVATE llama)
++    add_test(NAME skippy_async_state_contracts COMMAND skippy-async-state-test
++        "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf")
++    set_tests_properties(skippy_async_state_contracts PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
+     add_executable(skippy-noalloc-graph-planning
+         skippy/tests/noalloc_graph_planning.cpp)
+     target_include_directories(skippy-noalloc-graph-planning PRIVATE .)
+diff --git a/src/skippy/tests/async_state.cpp b/src/skippy/tests/async_state.cpp
+new file mode 100644
+index 000000000..d74c28c8d
+--- /dev/null
++++ b/src/skippy/tests/async_state.cpp
+@@ -0,0 +1,208 @@
++#include "../runtime_support.h"
++#include "../runtime_types.h"
++#include "../selected_logits.h"
++#include "skippy.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++#define CHECK(condition)                                                                        \
++    do {                                                                                        \
++        if (!(condition)) {                                                                     \
++            std::fprintf(stderr, "CHECK failed: %s (%s:%d)\n", #condition, __FILE__, __LINE__); \
++            std::exit(1);                                                                       \
++        }                                                                                       \
++    } while (0)
++
++namespace {
++
++void queue_prefill(skippy_session * session) {
++    const llama_token        tokens[] = { 0, 1 };
++    skippy_iteration_request request{};
++    request.session        = session;
++    request.token_ids      = tokens;
++    request.token_count    = 2;
++    size_t         sampled = 0;
++    skippy_error * error   = nullptr;
++    CHECK(skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, &sampled,
++                                         &error) == SKIPPY_STATUS_OK);
++    CHECK(sampled == 0);
++    CHECK(session->stage_model->context_work_pending.load());
++}
++
++void test_import_error_fences(skippy_session * source, skippy_session * fresh) {
++    skippy_kv_page_desc page{};
++    page.codec             = UINT32_MAX;
++    const uint8_t  payload = 0;
++    skippy_error * error   = nullptr;
++    queue_prefill(source);
++    CHECK(skippy_import_kv_page(source, &page, &payload, 1, &error) == SKIPPY_STATUS_INVALID_ARGUMENT);
++    CHECK(!source->stage_model->context_work_pending.load());
++    skippy_error_free(error);
++    error = nullptr;
++
++    // A failed import has no trailing fence; it must drain the shared context
++    // before entering the mutation/rollback path, even on another lane.
++    queue_prefill(source);
++    skippy_cachegen_record_v1 record{};
++    CHECK(skippy_import_cachegen_kv_page_v1(fresh, &page, &record, 1, &error) == SKIPPY_STATUS_INVALID_ARGUMENT);
++    CHECK(!source->stage_model->context_work_pending.load());
++    skippy_error_free(error);
++}
++
++void test_plain_restore_parity(skippy_session * source, skippy_session * target) {
++    skippy_error * error = nullptr;
++    CHECK(skippy_session_reset(source, &error) == SKIPPY_STATUS_OK);
++    queue_prefill(source);
++    skippy_kv_page_desc page{};
++    size_t              bytes  = 0;
++    const int           layers = source->stage_model->model->hparams.n_layer();
++    CHECK(skippy_export_kv_page(source, 0, layers, 0, 2, &page, nullptr, 0, &bytes, &error) ==
++          SKIPPY_STATUS_BUFFER_TOO_SMALL);
++    skippy_error_free(error);
++    error = nullptr;
++    CHECK(bytes > 0);
++    std::vector<uint8_t> payload(bytes);
++    CHECK(skippy_export_kv_page(source, 0, layers, 0, 2, &page, payload.data(), payload.size(), &bytes, &error) ==
++          SKIPPY_STATUS_OK);
++
++    const int                vocab    = llama_vocab_n_tokens(llama_model_get_vocab(source->stage_model->model));
++    const int                selected = std::min(vocab, static_cast<int>(SKIPPY_MAX_SELECTED_TOKENS));
++    std::vector<llama_token> ids(selected);
++    for (int i = 0; i < selected; ++i) {
++        ids[i] = selected == 1 ? 0 : static_cast<int64_t>(i) * (vocab - 1) / (selected - 1);
++    }
++    std::vector<float> reference(selected);
++    for (int attempt = 0; attempt < 9; ++attempt) {
++        CHECK(skippy_session_reset(source, &error) == SKIPPY_STATUS_OK);
++        CHECK(skippy_session_reset(target, &error) == SKIPPY_STATUS_OK);
++        queue_prefill(source);
++        if (attempt == 0) {
++            source->ctx->synchronize();
++            skippy_mark_context_synchronized(source->stage_model);
++        }
++        CHECK(skippy_import_kv_page(target, &page, payload.data(), payload.size(), &error) == SKIPPY_STATUS_OK);
++        CHECK(!source->stage_model->context_work_pending.load());
++        std::vector<float>         scores(selected);
++        skippy_token_score_request readout{ ids.data(), ids.size(), scores.data() };
++        const llama_token          token = 2;
++        skippy_iteration_request   request{};
++        request.session     = target;
++        request.token_ids   = &token;
++        request.token_count = 1;
++        request.readout     = &readout;
++        size_t sampled      = 0;
++        CHECK(skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0,
++                                             &sampled, &error) == SKIPPY_STATUS_OK);
++        CHECK(sampled == 0);
++        if (attempt == 0) {
++            reference = scores;
++        }
++        for (int i = 0; i < selected; ++i) {
++            CHECK(std::isfinite(scores[i]));
++            CHECK(std::fabs(scores[i] - reference[i]) <= 1e-5f);
++        }
++    }
++    CHECK(skippy_session_reset(source, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_session_reset(target, &error) == SKIPPY_STATUS_OK);
++}
++
++void decode_attached_samplers(skippy_session * first, skippy_session * second, llama_pos position) {
++    llama_batch batch = llama_batch_init(2, 0, 1);
++    batch.n_tokens    = 2;
++    for (int i = 0; i < 2; ++i) {
++        batch.token[i]     = 1;
++        batch.pos[i]       = position;
++        batch.n_seq_id[i]  = 1;
++        batch.seq_id[i][0] = i == 0 ? first->seq_id : second->seq_id;
++        batch.logits[i]    = 1;
++    }
++    CHECK(llama_decode(first->ctx, batch) == 0);
++    first->ctx->synchronize();
++    CHECK(llama_get_sampled_token_ith(first->ctx, 0) != LLAMA_TOKEN_NULL);
++    CHECK(llama_get_sampled_token_ith(first->ctx, 1) != LLAMA_TOKEN_NULL);
++    llama_batch_free(batch);
++}
++
++void test_sampler_reservations(skippy_session * first, skippy_session * second) {
++    skippy_sampling_config sampling{};
++    sampling.version                 = 1;
++    sampling.flags                   = SKIPPY_SAMPLING_FLAG_ENABLED;
++    sampling.repeat_penalty          = 1.0f;
++    sampling.reasoning_budget_tokens = -1;
++    skippy_error * error             = nullptr;
++    CHECK(skippy_session_configure_chat_sampling(first, &sampling, "{}", 0, &error) == SKIPPY_STATUS_OK);
++    CHECK(first->sampling_backend_enabled);
++    first->ctx->sched_reserve();
++    uint64_t reserved = first->ctx->get_sched_reserve_count();
++
++    first->ctx->set_embeddings(true);
++    llama_sampler * shape_chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
++    llama_sampler_chain_add(shape_chain, llama_sampler_init_dist(42));
++    CHECK(llama_set_sampler(first->ctx, first->seq_id, shape_chain));
++    first->ctx->sched_reserve();
++    CHECK(first->ctx->get_sched_reserve_count() > reserved);
++    first->ctx->set_embeddings(false);
++    first->ctx->sched_reserve();
++    reserved = first->ctx->get_sched_reserve_count();
++
++    CHECK(skippy_session_configure_chat_sampling(second, &sampling, "{}", 0, &error) == SKIPPY_STATUS_OK);
++    CHECK(second->sampling_backend_enabled);
++    first->ctx->sched_reserve();
++    CHECK(first->ctx->get_sched_reserve_count() > reserved);
++    reserved = first->ctx->get_sched_reserve_count();
++
++    decode_attached_samplers(first, second, 0);
++    llama_sampler * replacement = llama_sampler_chain_init(llama_sampler_chain_default_params());
++    llama_sampler_chain_add(replacement, llama_sampler_init_top_k(20));
++    llama_sampler_chain_add(replacement, llama_sampler_init_dist(88));
++    CHECK(llama_set_sampler(first->ctx, first->seq_id, replacement));
++    first->ctx->sched_reserve();
++    CHECK(first->ctx->get_sched_reserve_count() > reserved);
++    decode_attached_samplers(first, second, 1);
++    CHECK(llama_set_sampler(first->ctx, first->seq_id, nullptr));
++    first->ctx->sched_reserve();
++    llama_sampler_free(replacement);
++    llama_sampler_free(shape_chain);
++}
++
++}  // namespace
++
++int main(int argc, char ** argv) {
++    CHECK(argc >= 2 && argc <= 4);
++    const char * mode = argc == 4 ? argv[3] : "all";
++    CHECK(std::strcmp(mode, "all") == 0 || std::strcmp(mode, "imports") == 0 || std::strcmp(mode, "restore") == 0 ||
++          std::strcmp(mode, "samplers") == 0);
++    skippy_runtime_config config   = skippy_runtime_config_default();
++    config.lane_count              = 2;
++    config.n_batch                 = 64;
++    config.n_ubatch                = 64;
++    config.selected_backend_device = argc >= 3 ? argv[2] : "CPU";
++    config.n_gpu_layers            = std::strcmp(config.selected_backend_device, "CPU") == 0 ? 0 : 99;
++    skippy_model * model           = nullptr;
++    skippy_error * error           = nullptr;
++    CHECK(skippy_model_open(argv[1], &config, &model, &error) == SKIPPY_STATUS_OK);
++    skippy_session * first  = nullptr;
++    skippy_session * second = nullptr;
++    CHECK(skippy_session_create(model, &first, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_session_create(model, &second, &error) == SKIPPY_STATUS_OK);
++    if (std::strcmp(mode, "all") == 0 || std::strcmp(mode, "imports") == 0) {
++        test_import_error_fences(first, second);
++    }
++    if (std::strcmp(mode, "all") == 0 || std::strcmp(mode, "restore") == 0) {
++        test_plain_restore_parity(first, second);
++    }
++    CHECK(skippy_session_reset(first, &error) == SKIPPY_STATUS_OK);
++    if (std::strcmp(mode, "all") == 0 || std::strcmp(mode, "samplers") == 0) {
++        test_sampler_reservations(first, second);
++    }
++    CHECK(skippy_session_free(first, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_session_free(second, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
++    return 0;
++}
 diff --git a/src/skippy/tests/cast_destination_regression.h b/src/skippy/tests/cast_destination_regression.h
 new file mode 100644
 index 000000000..84da82c91
@@ -10750,3 +10988,6 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

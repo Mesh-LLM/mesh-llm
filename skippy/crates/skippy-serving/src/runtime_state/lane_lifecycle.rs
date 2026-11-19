@@ -122,8 +122,8 @@ impl RuntimeState {
     /// runtime's lazy graph reservation charges that growth to the request
     /// that triggers it (a 314 ms `sched_reserve` on a GB10 spark for the
     /// first full ubatch). Warm both serving shapes at startup instead: one
-    /// single-session prefill of `prefill_tokens`, then one one-token decode
-    /// wave across every lane. Best-effort: a model that cannot run the
+    /// single-session prefill capped to the loaded batch limit, then one
+    /// one-token decode wave within that limit. Best-effort: a model that cannot run the
     /// larger shapes still serves, keeping the lazy reservation.
     pub(crate) fn warmup_serving_shapes(&mut self, prefill_tokens: usize) -> Result<()> {
         if !self.can_warm_generation_graph() || prefill_tokens == 0 {
@@ -155,8 +155,9 @@ impl RuntimeState {
                 }
             },
         };
-        let tokens = vec![token_id; prefill_tokens];
-        let warmed = {
+        let warmed = (|| {
+            // The native context clamps configured limits during loading.
+            let tokens = vec![token_id; prefill_tokens.min(lane.session.batch_size()?)];
             let request = IterationBatchRequest {
                 session: &mut lane.session,
                 token_ids: &tokens,
@@ -170,7 +171,7 @@ impl RuntimeState {
                 phase: IterationBatchPhase::Prefill,
             };
             StageSession::iteration_batch_sampled(&mut [request]).map(|_| ())
-        };
+        })();
         let result = warmed.and_then(|_| lane.session.reset());
         if let Err(error) = self.finish_generation_warmup(lane, result, idle_index.is_some()) {
             tracing::warn!(
@@ -182,14 +183,27 @@ impl RuntimeState {
 
     fn warmup_concurrent_decode_shape(&mut self, token_id: i32) {
         let mut lanes = Vec::new();
-        while lanes.len() < self.lane_count as usize {
-            match self.idle_sessions.pop() {
-                Some(lane) => lanes.push(lane),
+        let mut wave_limit = self.lane_count as usize;
+        while lanes.len() < wave_limit {
+            let idle_index = self
+                .idle_sessions
+                .iter()
+                .position(|idle| idle.resident_prefix.is_none());
+            let lane = match idle_index {
+                Some(index) => self.idle_sessions.swap_remove(index),
                 None => match self.create_lane_session() {
-                    Ok(lane) => lanes.push(lane),
+                    Ok(lane) => lane,
                     Err(_) => break,
                 },
+            };
+            match lane.session.batch_size() {
+                Ok(batch_size) => wave_limit = wave_limit.min(batch_size),
+                Err(error) => {
+                    let _ = self.finish_generation_warmup(lane, Err(error), false);
+                    break;
+                }
             }
+            lanes.push((lane, idle_index.is_some()));
         }
         if lanes.is_empty() {
             return;
@@ -205,7 +219,7 @@ impl RuntimeState {
         // warmup exists to provoke never happened. A minimal grammar-free
         // metadata document reaches the real configure path.
         const WARMUP_SAMPLING_METADATA: &str = r#"{"grammar":""}"#;
-        for lane in lanes.iter_mut() {
+        for (lane, _) in lanes.iter_mut() {
             // Real requests configure chat sampling through the frontend
             // before their first iteration; that configuration is what
             // attaches the backend sampler and grows the reservation. Walk
@@ -239,11 +253,12 @@ impl RuntimeState {
                 "serving decode-wave warmup failed; keeping lazy reservation"
             );
         }
-        for mut lane in lanes {
-            // Resetting clears any partially-written warmup state; a failed
-            // warmup discards the lane rather than returning it to the pool.
+        for (mut lane, borrowed) in lanes {
+            // Only successfully warmed and reset borrowed lanes are reusable.
             let result = lane.session.reset();
-            if let Err(error) = self.finish_generation_warmup(lane, result, false) {
+            if let Err(error) =
+                self.finish_generation_warmup(lane, result, borrowed && warmed.is_ok())
+            {
                 tracing::warn!(?error, "serving decode-wave warmup cleanup failed");
             }
         }
