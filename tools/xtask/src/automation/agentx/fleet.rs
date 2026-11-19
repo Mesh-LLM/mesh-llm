@@ -6,6 +6,7 @@
 //! run root; `fleet-harvest` summarizes a completed run. The worker contract and the
 //! fleet's hard-won operational rules are documented in
 //! `.agents/skills/agentx-fleet-bench/SKILL.md`.
+use super::Model;
 use crate::command::DynResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -123,6 +124,7 @@ fn run_spec(
     run: &FleetRun,
     worker_b64: &str,
     worker_sha: &str,
+    model_key: &str,
     pins: &BTreeMap<String, String>,
 ) -> DynResult<Value> {
     for field in [
@@ -150,7 +152,9 @@ fn run_spec(
     for (key, value) in pins {
         env_obj.insert(key.clone(), json!(value));
     }
-    env_obj.insert("MODEL_KEY".into(), json!(run.model));
+    // The strict comparison admission resolves this key against the
+    // authoritative catalog, so it must be the canonical catalog key.
+    env_obj.insert("MODEL_KEY".into(), json!(model_key));
     env_obj.insert(
         "THREADS".into(),
         json!(run.probe.get("threads").copied().unwrap_or(20).to_string()),
@@ -242,8 +246,8 @@ fn submit(root: &Path, manifest_path: &Path) -> DynResult<()> {
         resolved.push((run, resolve_pins(root, run)?));
     }
     let mut submitted = Vec::new();
-    for (run, pins) in resolved {
-        let spec = run_spec(&manifest, run, &worker_b64, &worker_sha, &pins)?;
+    for (run, (model_key, pins)) in resolved {
+        let spec = run_spec(&manifest, run, &worker_b64, &worker_sha, &model_key, &pins)?;
         let path = run_root.join(format!("spec-{}-{}.json", run.model, run.backend));
         std::fs::write(&path, serde_json::to_vec_pretty(&json!({"spec": spec}))?)?;
         let output = std::process::Command::new("jy")
@@ -303,18 +307,52 @@ fn status(run_root: &Path) -> DynResult<()> {
     Ok(())
 }
 
-fn resolve_pins(root: &Path, run: &FleetRun) -> DynResult<BTreeMap<String, String>> {
-    // Model pins live in the same shape the campaign specs use, kept in the
-    // manifest directory as models.json so a manifest is self-contained.
-    let catalog_path = root.join("skippy/evals/agentx/fleet-models.json");
-    let catalog: BTreeMap<String, BTreeMap<String, String>> =
-        serde_json::from_slice(&std::fs::read(&catalog_path)?)
-            .map_err(|e| format!("{}: {e}", catalog_path.display()))?;
-    let mut pins = catalog.get(&run.model).cloned().unwrap_or_default();
+/// Resolves a run's model to its canonical catalog key and the pins the
+/// worker contract needs. Short manifest aliases map through
+/// `skippy/evals/agentx/fleet-models.json`; every repo/revision/file/tokenizer
+/// pin comes from the authoritative
+/// `skippy/evals/kv-validation/models.json` catalog, which is the same source
+/// the comparison admission resolves against. A second pin catalog here would
+/// drift from the admitted one, so none is kept.
+fn resolve_pins(root: &Path, run: &FleetRun) -> DynResult<(String, BTreeMap<String, String>)> {
+    let alias_path = root.join("skippy/evals/agentx/fleet-models.json");
+    let aliases: BTreeMap<String, String> = serde_json::from_slice(&std::fs::read(&alias_path)?)
+        .map_err(|e| format!("{}: {e}", alias_path.display()))?;
+    let model_key = aliases
+        .get(&run.model)
+        .cloned()
+        .unwrap_or_else(|| run.model.clone());
+    let catalog_path = root.join("skippy/evals/kv-validation/models.json");
+    let catalog: Vec<Model> = serde_json::from_slice(&std::fs::read(&catalog_path)?)
+        .map_err(|e| format!("{}: {e}", catalog_path.display()))?;
+    let model = catalog
+        .iter()
+        .find(|model| model.key == model_key)
+        .ok_or_else(|| {
+            format!(
+                "run {}: model {model_key} is not in the authoritative catalog {}",
+                run.model,
+                catalog_path.display()
+            )
+        })?;
+    let file = model
+        .files
+        .first()
+        .ok_or_else(|| format!("catalog model {} pins no weight files", model.key))?;
+    let mut pins = BTreeMap::from([
+        ("MODEL_REPO".to_string(), model.repo.clone()),
+        ("MODEL_REV".to_string(), model.revision.clone()),
+        ("MODEL_FILE".to_string(), file.name.clone()),
+        ("MODEL_SHA".to_string(), file.sha256.clone()),
+        // The tokenizer pin is independent of the GGUF revision; the catalog
+        // owns the tokenizer repository and its own revision.
+        ("TOK_REPO".to_string(), model.tokenizer.clone()),
+        ("TOK_REV".to_string(), model.tokenizer_revision.clone()),
+    ]);
     for (key, value) in &run.model_pin {
         pins.insert(key.clone(), value.clone());
     }
-    Ok(pins)
+    Ok((model_key, pins))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -371,7 +409,15 @@ mod tests {
                 "cdbee75f17c01a7cc42f958dc650907174af0554".to_string(),
             ),
         ]);
-        let spec = run_spec(&m, &m.runs[0], "dzByaw==", &"c".repeat(64), &pins).unwrap();
+        let spec = run_spec(
+            &m,
+            &m.runs[0],
+            "dzByaw==",
+            &"c".repeat(64),
+            "qwen3-4b-q4-k-m",
+            &pins,
+        )
+        .unwrap();
         assert_eq!(spec["target"]["os"], "linux");
         assert!(
             spec["target"].get("nodes").is_none(),
@@ -398,5 +444,114 @@ mod tests {
     #[test]
     fn smoke_manifest_accepts_without_corpus() {
         assert!(validate(&manifest()).is_ok());
+    }
+
+    /// Writes a self-contained root with an alias map and an authoritative
+    /// catalog whose hybrid tokenizer pin is independent of the GGUF revision.
+    fn catalog_root(temp: &tempfile::TempDir) -> std::path::PathBuf {
+        let agentx = temp.path().join("skippy/evals/agentx");
+        let kv = temp.path().join("skippy/evals/kv-validation");
+        std::fs::create_dir_all(&agentx).unwrap();
+        std::fs::create_dir_all(&kv).unwrap();
+        std::fs::write(
+            agentx.join("fleet-models.json"),
+            r#"{"qwen3.5-4b": "qwen3.5-4b-q4-k-m"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            kv.join("models.json"),
+            r#"[
+  {
+    "key": "qwen3.5-4b-q4-k-m",
+    "family": "hybrid-dense",
+    "repo": "unsloth/Qwen3.5-4B-GGUF",
+    "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+    "tokenizer": "Qwen/Qwen3.5-4B",
+    "files": [
+      {
+        "name": "Qwen3.5-4B-Q4_K_M.gguf",
+        "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+      }
+    ],
+    "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+  }
+]"#,
+        )
+        .unwrap();
+        temp.path().to_path_buf()
+    }
+
+    #[test]
+    fn fleet_alias_resolves_to_the_admitted_catalog_key_and_pins() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = catalog_root(&temp);
+        let run = FleetRun {
+            model: "qwen3.5-4b".into(),
+            backend: "cuda".into(),
+            probe: BTreeMap::new(),
+            model_pin: BTreeMap::new(),
+        };
+        let (model_key, pins) = resolve_pins(&root, &run).unwrap();
+        assert_eq!(model_key, "qwen3.5-4b-q4-k-m");
+        assert_eq!(pins["MODEL_REPO"], "unsloth/Qwen3.5-4B-GGUF");
+        assert_eq!(
+            pins["MODEL_REV"],
+            "e87f176479d0855a907a41277aca2f8ee7a09523"
+        );
+        assert_eq!(pins["MODEL_FILE"], "Qwen3.5-4B-Q4_K_M.gguf");
+        assert_eq!(
+            pins["MODEL_SHA"],
+            "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+        );
+        // The tokenizer pin is the catalog's own tokenizer revision, not the
+        // GGUF revision the alias catalog used to reuse.
+        assert_eq!(pins["TOK_REPO"], "Qwen/Qwen3.5-4B");
+        assert_eq!(pins["TOK_REV"], "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a");
+        assert_ne!(pins["TOK_REV"], pins["MODEL_REV"]);
+        // The generated key must pass the existing strict comparison
+        // admission that the pinned campaign resolves with.
+        crate::automation::agentx::inputs::select_model(&root, &model_key).unwrap();
+    }
+
+    #[test]
+    fn unknown_fleet_model_names_the_authoritative_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = catalog_root(&temp);
+        let run = FleetRun {
+            model: "qwen3-4b".into(),
+            backend: "cuda".into(),
+            probe: BTreeMap::new(),
+            model_pin: BTreeMap::new(),
+        };
+        let error = format!("{}", resolve_pins(&root, &run).unwrap_err());
+        assert!(error.contains("authoritative catalog"), "{error}");
+    }
+
+    #[test]
+    fn every_checked_in_fleet_alias_admits_through_the_comparison_catalog() {
+        // The fleet aliases must resolve to canonical keys the strict
+        // comparison admission accepts, with the catalog's own tokenizer pin.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let alias_path = root.join("skippy/evals/agentx/fleet-models.json");
+        let aliases: BTreeMap<String, String> =
+            serde_json::from_slice(&std::fs::read(&alias_path).unwrap()).unwrap();
+        assert!(!aliases.is_empty(), "the alias map must not be empty");
+        for (alias, model_key) in aliases {
+            let run = FleetRun {
+                model: alias.clone(),
+                backend: "cuda".into(),
+                probe: BTreeMap::new(),
+                model_pin: BTreeMap::new(),
+            };
+            let (resolved_key, pins) =
+                resolve_pins(&root, &run).unwrap_or_else(|error| panic!("alias {alias}: {error}"));
+            assert_eq!(resolved_key, model_key, "alias map and resolution agree");
+            crate::automation::agentx::inputs::select_model(&root, &resolved_key)
+                .unwrap_or_else(|error| panic!("generated model key {resolved_key}: {error}"));
+            assert!(
+                pins.contains_key("TOK_REV"),
+                "the catalog pins the tokenizer revision"
+            );
+        }
     }
 }

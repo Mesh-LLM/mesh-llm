@@ -47,6 +47,10 @@ git commits, evidence by jy artifacts.
 
 Model references resolve to repo/rev/file/sha entries that live in
 `skippy/evals/kv-validation/models.json` plus the manifest's per-run overrides.
+Short manifest aliases map to canonical catalog keys through
+`skippy/evals/agentx/fleet-models.json`, which is an alias map only and carries
+no pins of its own; the canonical key is what reaches the strict comparison
+admission.
 
 ## Hard rules (learned expensively)
 
