@@ -87,7 +87,8 @@ fn windows_abi_publication_rejects_untrusted_save_or_missing_recovery_path() {
         (
             "if: ${{ github.repository == 'Mesh-LLM/mesh-llm'",
             "if: ${{ false && github.repository == 'Mesh-LLM/mesh-llm'",
-            "remain enabled",
+            // A never-true save satisfies every required clause, including the PR-only one.
+            "require one exact",
         ),
         (
             "      - name: Prepare immutable Windows native runtime\n",
@@ -118,13 +119,28 @@ fn windows_abi_publication_rejects_untrusted_save_or_missing_recovery_path() {
         let changed = original.replacen(before, after, 1);
         assert_ne!(changed, original);
         let document = workflow_yaml::parse(&changed).unwrap();
-        assert!(
-            publication(&document)
-                .unwrap_err()
-                .to_string()
-                .contains(diagnostic)
-        );
+        let error = publication(&document).unwrap_err().to_string();
+        assert!(error.contains(diagnostic), "{after}: {error}");
     }
+}
+
+#[test]
+fn windows_abi_publication_counts_a_save_that_merely_mentions_pull_request() {
+    let original = source(RUNTIME);
+    let extra = "      - name: Second shared Windows ABI save\n        if: ${{ inputs.original_event_name != 'pull_request' }}\n        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0\n        with:\n          path: ${{ steps.llama_cache.outputs.cache-path }}\n          key: ${{ steps.llama_cache.outputs.cache-primary-key }}\n";
+    let changed = original.replacen(
+        "      - name: Save exact PR-scoped Windows ABI build\n",
+        &format!("{extra}      - name: Save exact PR-scoped Windows ABI build\n"),
+        1,
+    );
+    assert_ne!(changed, original);
+    let document = workflow_yaml::parse(&changed).unwrap();
+    assert!(
+        publication(&document)
+            .unwrap_err()
+            .to_string()
+            .contains("require one exact")
+    );
 }
 
 #[test]

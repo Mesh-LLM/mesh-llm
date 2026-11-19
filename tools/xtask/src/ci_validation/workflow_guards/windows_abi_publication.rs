@@ -11,7 +11,9 @@ const CACHE_SAVE: &str = "actions/cache/save@caa296126883cff596d87d8935842f9db88
 
 fn is_runtime_save(step: &Node) -> bool {
     field(step, "uses").is_some_and(|uses| uses.starts_with(CACHE_SAVE))
-        && field(step, "if").is_some_and(|condition| !condition.contains("pull_request"))
+        && !field(step, "if").is_some_and(|condition| {
+            cache_predicate::requires(condition, "inputs.original_event_name == 'pull_request'")
+        })
 }
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
