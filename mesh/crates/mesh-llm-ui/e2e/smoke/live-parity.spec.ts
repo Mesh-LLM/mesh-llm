@@ -335,6 +335,37 @@ test('live shell metadata shows status-backed API and operator-ready private inv
   await expect(joinCard.getByRole('button', { name: 'Copy Client-only join command' })).toBeEnabled()
 })
 
+for (const width of [1440, 390]) {
+  test(`remote Console keeps native API guidance separate at ${width}px`, async ({ page }, testInfo) => {
+    const localUrl = new URL(resolveAppUrl('/', testInfo))
+    const remoteOrigin = `http://console.example.test:${localUrl.port}`
+    await page.route(`${remoteOrigin}/**`, async (route) => {
+      const upstream = new URL(route.request().url())
+      upstream.hostname = localUrl.hostname
+      await route.fulfill({ response: await route.fetch({ url: upstream.toString() }) })
+    })
+    await installLiveBackend(page, { statusPayload: { ...LIVE_STATUS, api_port: 9447 } })
+    await page.setViewportSize({ width, height: 960 })
+    await page.goto(`${remoteOrigin}/`)
+
+    const connect = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Connect', exact: true }) })
+    await expect(connect.getByRole('paragraph').getByText('http://127.0.0.1:9337/v1', { exact: true })).toBeVisible()
+    await expect(connect.getByText('configured target', { exact: true })).toBeVisible()
+    await expect(page.getByText(/The Console URL serves browser Chat, not the inference API/)).toBeVisible()
+    if (width >= 1024) {
+      await page.getByRole('button', { name: 'API target instructions' }).click()
+    } else {
+      await page.getByRole('button', { name: 'Open navigation actions' }).click()
+      await page.getByRole('button', { name: /^API access/ }).click()
+    }
+    await expect(page.getByText(/Use the separate inference listener, not the Console URL/)).toBeVisible()
+    await expect(page.getByText('OPENAI_BASE_URL=http://127.0.0.1:9337/v1', { exact: true })).toBeVisible()
+    await expect(page.getByText(`${remoteOrigin}/v1`, { exact: true })).toHaveCount(0)
+    await expect(page.getByText('http://127.0.0.1:9447/v1', { exact: true })).toHaveCount(0)
+    await page.screenshot({ path: testInfo.outputPath(`console-api-${width}.png`), fullPage: true })
+  })
+}
+
 test('missing private invite token shows unavailable live shell guidance', async ({ page }, testInfo) => {
   const statusWithoutToken = { ...LIVE_STATUS, token: '' }
   await installLiveBackend(page, { statusPayload: statusWithoutToken })

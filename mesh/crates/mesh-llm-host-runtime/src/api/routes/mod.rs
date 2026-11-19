@@ -205,21 +205,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                     objects::handle(stream, state, method, path_only, body).await?;
                     Ok(true)
                 }
-                (m, p)
-                    if matches!(m, "GET" | "POST" | "OPTIONS")
-                        && chat::is_inference_passthrough(p) =>
-                {
-                    chat::handle(stream, state, method, path_only, raw_request, caller).await?;
-                    Ok(true)
-                }
-                (m, p)
-                    if m != "POST"
-                        && (p.starts_with("/api/chat") || p.starts_with("/api/responses")) =>
-                {
-                    chat::handle(stream, state, method, path_only, raw_request, caller).await?;
-                    Ok(true)
-                }
-                ("POST", p) if p.starts_with("/api/chat") || p.starts_with("/api/responses") => {
+                (_, "/api/chat" | "/api/responses") => {
                     chat::handle(stream, state, method, path_only, raw_request, caller).await?;
                     Ok(true)
                 }

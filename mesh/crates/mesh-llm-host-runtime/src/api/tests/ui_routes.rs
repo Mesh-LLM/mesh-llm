@@ -300,11 +300,11 @@ fn headless_custom_console_port_keeps_api_and_disables_ui() {
         "/api/events must not be blocked"
     );
     assert!(
-        !is_ui_only_route("/v1/models"),
-        "/v1/models must not be blocked"
+        !is_ui_only_route("/api/chat"),
+        "browser Chat must remain available"
     );
     assert!(
-        !is_ui_only_route("/v1/chat/completions"),
-        "/v1/chat/completions must not be blocked"
+        !is_ui_only_route("/api/responses"),
+        "browser Responses must remain available"
     );
 }

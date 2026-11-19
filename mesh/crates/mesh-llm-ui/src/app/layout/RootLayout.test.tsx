@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppProviders } from '@/app/providers/AppProviders'
 import { RootLayout } from '@/app/layout/RootLayout'
 import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
@@ -93,6 +93,22 @@ describe('RootLayout', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => jsonResponse([]))
+    )
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('does not infer a local native listener is live from remote Console status', () => {
+    vi.stubGlobal('location', new URL('https://console.example.com'))
+    useStatusQuerySpy.mockReturnValue({ data: liveStatus({ api_port: 9447 }) })
+
+    renderRootLayout('live')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        apiUrl: 'http://127.0.0.1:9337/v1',
+        apiTargetLiveness: 'configured'
+      })
     )
   })
 

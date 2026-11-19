@@ -7,7 +7,7 @@ import { ModelCatalog } from '@/features/network/components/ModelCatalog'
 import { NetworkHeroBanner } from '@/features/network/components/NetworkHeroBanner'
 import { PeersTable } from '@/features/network/components/PeersTable'
 import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
-import { resolveOpenAIBaseUrl } from '@/app/layout/shell-adapter'
+import { isLocalConsole, resolveOpenAIBaseUrl } from '@/app/layout/shell-adapter'
 import { DashboardLayout } from '@/features/network/layouts/DashboardLayout'
 import {
   DASHBOARD_MESH_ID,
@@ -49,7 +49,7 @@ function resolveConnectApiTargetLiveness(
   statusQuery: ReturnType<typeof useStatusQuery>,
   liveMode: boolean
 ): ConnectApiTargetLiveness {
-  if (!liveMode) return 'configured'
+  if (!liveMode || !isLocalConsole()) return 'configured'
   if (statusQuery.isError) return 'unavailable'
   if (statusQuery.data) return 'live'
   return 'checking'
@@ -245,7 +245,7 @@ function DashboardPageContent({
         <ConnectBlock
           installHref={displayData.connect.installHref}
           apiUrl={connectApiUrl}
-          apiStatus={displayData.connect.apiStatus}
+          apiStatus={connectApiTargetLiveness === 'configured' ? 'configured target' : displayData.connect.apiStatus}
           apiTargetLiveness={connectApiTargetLiveness}
           runCommand={displayData.connect.runCommand}
           description={displayData.connect.description}

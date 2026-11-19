@@ -197,7 +197,7 @@ describe('TopNav', () => {
     installClipboard(writeText)
 
     renderTopNav({
-      apiUrl: 'http://mesh.local:3131/v1',
+      apiUrl: 'http://mesh.local:9337/v1',
       apiAccessLinks: [
         { href: 'https://meshllm.cloud/docs/', label: 'Docs' },
         { href: 'https://meshllm.cloud/#install', label: 'Install' }
@@ -228,8 +228,8 @@ describe('TopNav', () => {
     })
 
     await user.click(screen.getByRole('button', { name: 'API target instructions' }))
-    expect(screen.getByText('http://mesh.local:3131/v1')).toBeInTheDocument()
-    expect(screen.getByText('curl http://mesh.local:3131/v1/models')).toBeInTheDocument()
+    expect(screen.getByText('http://mesh.local:9337/v1')).toBeInTheDocument()
+    expect(screen.getByText('curl http://mesh.local:9337/v1/models')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Mesh join and invite instructions' }))
     expect(screen.getByText('invite-token-123')).toHaveClass('whitespace-nowrap')
@@ -242,7 +242,7 @@ describe('TopNav', () => {
     const user = userEvent.setup()
 
     renderTopNav({
-      apiUrl: 'http://mesh.local:3131/v1',
+      apiUrl: 'http://mesh.local:9337/v1',
       joinCommands: [
         {
           label: 'Invite token',

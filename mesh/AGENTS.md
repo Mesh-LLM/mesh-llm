@@ -370,7 +370,7 @@ bash -c './target/debug/mesh-llm serve --model "..." --auto > /tmp/mesh.log 2>&1
     from both nodes before attributing failures to candidate selection or
     collecting performance data.
 14. Test inference through every model in `/v1/models`.
-15. Test `/v1/` passthrough on port 3131.
+15. Verify browser Chat works on port 3131, native `/v1/` inference works on port 9337 (or its configured replacement), and native inference routes return 404 on the Console port.
 
 ### Debugging Embedded Runtime Startup
 

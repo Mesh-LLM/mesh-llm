@@ -52,7 +52,7 @@ type TopNavProps = {
   onPluginPageChange?: (item: TopNavPluginPageItem) => void
 }
 
-export type ApiTargetLiveness = 'checking' | 'live' | 'unavailable'
+export type ApiTargetLiveness = 'configured' | 'checking' | 'live' | 'unavailable'
 
 const tabs: {
   value: AppTab
@@ -344,7 +344,7 @@ function ApiAccessContent({ apiUrl, dataMode, links }: { apiUrl: string; dataMod
           <span>
             {harnessMode
               ? 'Available for copying, but not currently driving the UI.'
-              : 'Point OpenAI-compatible tools at this local mesh target.'}
+              : 'Use the separate inference listener, not the Console URL. For a remote Console, start a local Mesh client or configure an inference endpoint.'}
           </span>
         }
       />
@@ -452,12 +452,12 @@ function ApiStatusChip({
           </span>
         </button>
       )}
-      eyebrow={harnessMode ? 'Fixture data' : 'Local endpoint'}
+      eyebrow={harnessMode ? 'Fixture data' : 'Inference endpoint'}
       title="API access"
       description={
         harnessMode
           ? 'The app is not using live backend data right now. The configured endpoint is still available below.'
-          : 'Copy the current local target and a couple of ready commands for OpenAI-compatible clients.'
+          : 'Copy the configured inference target and ready commands for OpenAI-compatible clients.'
       }
       triggerMode="click"
     >

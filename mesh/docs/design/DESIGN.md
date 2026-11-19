@@ -364,8 +364,17 @@ and the embedded web dashboard.
 | `/api/events` | GET | SSE stream of status updates (2s interval + on change) |
 | `/api/discover` | GET | Browse Nostr-published meshes, or LAN mDNS advertisements when `--mesh-discovery-mode mdns` is active |
 | `/api/discovery/lan-details` | POST | Return local LAN discovery detail after invite-token proof; advertised only when the management API is LAN-reachable, and the raw token is never returned |
-| `/api/chat` | POST | Proxy to inference API (`/v1/chat/completions`) |
+| `/api/chat` | POST | Browser Chat proxy to inference API (`/v1/chat/completions`) |
+| `/api/responses` | POST | Browser Chat proxy to inference API (`/v1/responses`) |
 | `/` | GET | Embedded web dashboard |
+
+The Console does not expose native inference routes: `/v1/*`, `/models*`, and
+`/mesh/v1/*` return 404 on this listener, including preflight requests.
+OpenAI-compatible clients use the native inference listener at port 9337 (or
+its configured replacement), not the Console origin. Browser Chat retains its
+two exact `/api/` routes, caller-trust propagation, and sandboxed responses.
+Single-port Console deployments provide browser Chat, not a public inference API;
+operators needing remote API access must expose the native listener separately.
 
 The dashboard is a thin client. Live node state comes from `/api/status` and
 `/api/events`, while model inventory comes from `/api/models`. `/api/search`
