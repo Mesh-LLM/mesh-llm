@@ -2,8 +2,10 @@ use super::*;
 #[path = "overlap.rs"]
 mod endpoint;
 
-fn armed(directory: &std::path::Path) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+// The primary may take its readiness budget plus coordinated.rs's 300 s
+// allowance before it answers and the headless writes overlap.armed.
+fn armed(directory: &std::path::Path, readiness: std::time::Duration) {
+    let deadline = std::time::Instant::now() + readiness + std::time::Duration::from_secs(300 + 30);
     while !directory.join("overlap.armed").exists() {
         assert!(
             std::time::Instant::now() < deadline,
@@ -27,7 +29,7 @@ fn primary_remains_live_when_headless_waits_on_barrier_for_all_variants() {
                 command::execute(directory.path(), &options, &cancel)
                     .map_err(|error| error.to_string())
             });
-            armed(directory.path());
+            armed(directory.path(), options.readiness);
             endpoint::query(directory.path()).unwrap();
             std::fs::write(directory.path().join("overlap.release"), b"release").unwrap();
             let receipt = worker.join().unwrap().unwrap();
@@ -58,7 +60,7 @@ fn cancellation_retains_both_reports_when_headless_waits_on_barrier() {
                     .collect::<Vec<_>>(),
             )
         });
-        armed(directory.path());
+        armed(directory.path(), options.readiness);
         endpoint::query(directory.path()).unwrap();
         cancel.cancel();
         let (reason, reports) = worker.join().unwrap();
@@ -81,7 +83,7 @@ fn primary_early_exit_rejects_when_headless_waits_on_barrier() {
                 output::reports(error.as_ref()).len(),
             )
         });
-        armed(directory.path());
+        armed(directory.path(), options.readiness);
         std::fs::write(directory.path().join("primary.exit"), b"exit").unwrap();
         let (reason, count) = worker.join().unwrap();
         assert_eq!(reason, Rejection::EarlyExit.to_string());
