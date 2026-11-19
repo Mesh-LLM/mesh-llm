@@ -24,8 +24,7 @@ does not by itself mean a mesh is private:
   unpublished or published mesh; reading a file does not enable admission control.
 - **Discoverability:** `--publish` advertises a mesh for discovery. A mesh you
   create without publishing is **unpublished**, not necessarily access-controlled.
-  The existing publication status value `private` means unpublished; it is not
-  evidence of an admission policy. `--auto` discovers published meshes.
+  `--auto` discovers published meshes.
 - **Admission:** describe the actual enforced policy, such as owner allowlisting
   or mesh version/build requirements. For a controlled private deployment,
   configure and verify that policy on the participating nodes rather than relying
@@ -477,14 +476,11 @@ detector errors are ever encoded in gossip.
 
 ### Discovery-mode identity transitions
 
-Here, `private mode` is the runtime's name for unpublished operation, not a
-guarantee of restricted membership.
-
-Switching between private mode and Nostr public discovery (`--auto`,
+Switching between unpublished operation and Nostr public discovery (`--auto`,
 `--publish`, or `--discover`) starts a fresh node and mesh identity in either
 direction. The active node key, Nostr key, mesh ID, last-mesh hint, signed
 genesis policy, and adopted membership are cleared. Other node-key namespaces,
 owner-account credentials, and trust-store settings are preserved. Restarts
-within the same mode retain identity; an expired invite cannot restore private
+within the same discovery mode retain identity; an expired invite cannot restore prior
 membership after crossing this boundary. A supplied fresh invite can still join
 its intended mesh normally.
