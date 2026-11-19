@@ -80,15 +80,72 @@ fn validate(manifest: &FleetManifest) -> DynResult<()> {
     Ok(())
 }
 
-/// Pre-flight: the pinned product commit must exist in the product repository
-/// before any job is generated or submitted.
-fn commit_exists(repo_url: &str, commit: &str) -> DynResult<bool> {
-    let output = std::process::Command::new("git")
-        .args(["ls-remote", repo_url])
+fn checked_git(cwd: &Path, args: &[&str]) -> DynResult<()> {
+    let output = git_output(Some(cwd), args)?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn git_output(cwd: Option<&Path>, args: &[&str]) -> DynResult<std::process::Output> {
+    let mut command = std::process::Command::new("git");
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    command.args(args);
+    Ok(command
         .output()
-        .map_err(|e| format!("git ls-remote {repo_url}: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text.contains(commit))
+        .map_err(|e| format!("git {}: {e}", args.first().unwrap_or(&"")))?)
+}
+
+/// Pre-flight: the pinned product commit must be resolvable in the product
+/// repository before any job is generated or submitted. `git ls-remote`
+/// lists only advertised ref tips, so a reachable historical baseline that is
+/// no longer a tip would be rejected. Instead, fetch the exact object into a
+/// throwaway repository and resolve it there; servers that do not accept
+/// SHA-in-want falls back to fetching branch heads, which brings every
+/// reachable ancestor with them.
+fn commit_exists(repo_url: &str, commit: &str) -> DynResult<bool> {
+    let temp = tempfile::tempdir()?;
+    let workdir = temp.path();
+    checked_git(workdir, &["init", "--quiet"])?;
+    let exact = git_output(
+        Some(workdir),
+        &["fetch", "--quiet", "--no-tags", repo_url, commit],
+    )?;
+    if !exact.status.success() {
+        // Most servers refuse SHA-in-want for unpinned objects; fetch branch
+        // heads instead, which bring every reachable ancestor along.
+        let heads = git_output(
+            Some(workdir),
+            &[
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                repo_url,
+                "+refs/heads/*:refs/heads/*",
+            ],
+        )?;
+        if !heads.status.success() {
+            return Err(format!(
+                "pre-flight fetch from {repo_url} failed: {}",
+                String::from_utf8_lossy(&heads.stderr).trim()
+            )
+            .into());
+        }
+    }
+    let resolved = git_output(
+        Some(workdir),
+        &["cat-file", "-t", &format!("{commit}^{{commit}}")],
+    )?;
+    Ok(resolved.status.success())
 }
 
 fn worker_script(root: &Path) -> DynResult<String> {
@@ -479,6 +536,77 @@ mod tests {
         )
         .unwrap();
         temp.path().to_path_buf()
+    }
+
+    /// A two-commit local repository whose branch tip is the second commit,
+    /// so the first commit is a reachable non-tip ancestor.
+    fn ancestor_fixture() -> (tempfile::TempDir, String, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path();
+        checked_git(repo, &["init", "--quiet", "-b", "main"]).unwrap();
+        let commit = |message: &str| {
+            let output = git_output(
+                Some(repo),
+                &[
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "--quiet",
+                    "-m",
+                    message,
+                ],
+            )
+            .unwrap();
+            assert!(output.status.success(), "fixture commit failed");
+        };
+        let tip = |repo: &Path| -> String {
+            let output = git_output(Some(repo), &["rev-parse", "HEAD"]).unwrap();
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        commit("base");
+        let base = tip(repo);
+        commit("tip");
+        let tip = tip(repo);
+        (temp, base, tip)
+    }
+
+    #[test]
+    fn commit_preflight_accepts_a_non_tip_ancestor_pin() {
+        let (temp, base, tip) = ancestor_fixture();
+        assert!(commit_exists(temp.path().to_str().unwrap(), &base).unwrap());
+        assert!(commit_exists(temp.path().to_str().unwrap(), &tip).unwrap());
+    }
+
+    #[test]
+    fn commit_preflight_uses_the_exact_object_fetch_when_allowed() {
+        let (temp, base, tip) = ancestor_fixture();
+        checked_git(
+            temp.path(),
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        )
+        .unwrap();
+        assert!(commit_exists(temp.path().to_str().unwrap(), &base).unwrap());
+        assert!(commit_exists(temp.path().to_str().unwrap(), &tip).unwrap());
+    }
+
+    #[test]
+    fn commit_preflight_rejects_an_unreachable_object() {
+        let (temp, _base, _tip) = ancestor_fixture();
+        let missing = "0".repeat(39) + "1";
+        assert!(!commit_exists(temp.path().to_str().unwrap(), &missing).unwrap());
+    }
+
+    #[test]
+    fn commit_preflight_reports_fetch_infrastructure_failures() {
+        let error = commit_exists(
+            "/nonexistent-repository-path-for-fleet-preflight-test",
+            &"a".repeat(40),
+        )
+        .unwrap_err();
+        assert!(format!("{error}").contains("pre-flight fetch"), "{error}");
     }
 
     #[test]
