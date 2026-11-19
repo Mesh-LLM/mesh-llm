@@ -24,6 +24,9 @@ struct Case {
     fault: Fault,
     help: bool,
     invalid_value: bool,
+    /// What the installed `mesh-llm --version` prints; the fixture's default
+    /// when unset.
+    host_version: Option<&'static str>,
 }
 
 fn execute(
@@ -143,6 +146,12 @@ fn run(case: Case, prepare_existing: impl FnOnce(&Path)) -> Installed {
         "MESH_LLM_REQUIRE_CHECKSUM".into(),
         Value::Public("1".into()),
     );
+    if let Some(version) = case.host_version {
+        env.insert(
+            "MESH_WINDOWS_INSTALL_FIXTURE_VERSION".into(),
+            Value::Public(version.into()),
+        );
+    }
     if matches!(case.fault, Fault::RuntimeReplacement) {
         // The preceding native preparation already executed actual x64 admission.
         // Only this failure case uses the two existing production fault-hook flags.
@@ -217,7 +226,13 @@ fn native_windows_consumer_interactive_runs_setup_and_warns_for_legacy_flavor() 
 }
 #[test]
 fn native_windows_consumer_noninteractive_prints_setup_and_installs_runtime() {
-    let result = run(Case::default(), |_| {});
+    let result = run(
+        Case {
+            host_version: Some("0.81.0"),
+            ..Case::default()
+        },
+        |_| {},
+    );
     result.accepted();
     assert_eq!(result.calls(), ["--version"]);
     assert!(result.output().contains("Run this next:"));
@@ -227,9 +242,32 @@ fn native_windows_consumer_noninteractive_prints_setup_and_installs_runtime() {
             .path("bin/native-runtimes/test-runtime/manifest.json")
             .is_file()
     );
-    assert!(result.path("start-menu/MeshLLM.lnk").is_file());
-    assert!(result.path("bin/mesh-llm-console.ps1").is_file());
+    let shortcut = result.path("start-menu/MeshLLM.lnk");
+    let launcher = result.path("bin/mesh-llm-console.ps1");
+    assert!(shortcut.is_file());
     assert!(result.output().contains("Added MeshLLM to the Start menu"));
+    // The launcher records its shortcut for uninstall, by absolute path.
+    let script = fs::read_to_string(&launcher).unwrap();
+    let recorded = script
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# Start menu shortcut: "))
+        .unwrap_or_else(|| panic!("no recorded shortcut in {script}"));
+    assert!(Path::new(recorded).is_absolute(), "{recorded}");
+    assert_eq!(
+        fs::canonicalize(recorded).unwrap(),
+        fs::canonicalize(&shortcut).unwrap()
+    );
+    result.finish();
+}
+#[test]
+fn native_windows_consumer_skips_the_shortcut_for_a_bundle_that_cannot_remove_it() {
+    // The fixture's default version predates uninstall support for the entry.
+    let result = run(Case::default(), |_| {});
+    result.accepted();
+    assert!(!result.path("start-menu/MeshLLM.lnk").exists());
+    assert!(!result.path("bin/mesh-llm-console.ps1").exists());
+    assert!(result.output().contains("Skipping the Start menu shortcut"));
+    assert!(result.output().contains("Run this next:"));
     result.finish();
 }
 #[test]

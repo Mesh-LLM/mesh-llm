@@ -69,6 +69,11 @@ pub enum UninstallStep {
         path: PathBuf,
         purpose: RemovePurpose,
     },
+    /// Remove the console launcher `install.ps1` put beside the binary, and
+    /// the Start menu shortcut it records when that shortcut opens it.
+    RemoveStartMenuEntry {
+        launcher: PathBuf,
+    },
     RemoveBinary {
         path: PathBuf,
     },
@@ -85,8 +90,6 @@ pub enum RemovePurpose {
     LaunchdLogs,
     ScheduledTaskDefinition,
     WindowsServiceLogs,
-    StartMenuShortcut,
-    ConsoleLauncher,
     NativeRuntimeCache,
     ConfigAndIdentity,
 }
@@ -173,7 +176,7 @@ pub fn plan_uninstall(options: &UninstallOptions, env: &UninstallEnvironment) ->
         }
         UninstallPlatform::Windows => {
             steps.extend(windows_task::task_file_steps(env));
-            steps.extend(windows_task::start_menu_steps(env));
+            steps.push(windows_task::start_menu_step(env));
         }
         UninstallPlatform::Other => {}
     }
@@ -314,6 +317,10 @@ where
         UninstallStep::RemovePath { path, purpose } => {
             remove_path(path, *purpose, outcome)
                 .with_context(|| format!("failed to remove {}", path.display()))?;
+        }
+        UninstallStep::RemoveStartMenuEntry { launcher } => {
+            windows_task::remove_start_menu_entry(launcher, outcome)
+                .with_context(|| format!("failed to remove {}", launcher.display()))?;
         }
         UninstallStep::RemoveBinary { path } => remove_binary(path, outcome)
             .with_context(|| format!("failed to remove {}", path.display()))?,
@@ -625,6 +632,10 @@ fn step_label(step: &UninstallStep) -> String {
         UninstallStep::RemovePath { path, purpose } => {
             format!("remove {}: {}", purpose_label(*purpose), path.display())
         }
+        UninstallStep::RemoveStartMenuEntry { launcher } => format!(
+            "remove the console launcher and its Start menu shortcut: {}",
+            launcher.display()
+        ),
         UninstallStep::RemoveBinary { path } => format!("remove binary: {}", path.display()),
     }
 }
@@ -639,8 +650,6 @@ fn purpose_label(purpose: RemovePurpose) -> &'static str {
         RemovePurpose::LaunchdLogs => "launchd logs",
         RemovePurpose::ScheduledTaskDefinition => "scheduled task definition",
         RemovePurpose::WindowsServiceLogs => "service logs",
-        RemovePurpose::StartMenuShortcut => "Start menu shortcut",
-        RemovePurpose::ConsoleLauncher => "console launcher",
         RemovePurpose::NativeRuntimeCache => "native runtime cache",
         RemovePurpose::ConfigAndIdentity => "configuration and identity",
     }

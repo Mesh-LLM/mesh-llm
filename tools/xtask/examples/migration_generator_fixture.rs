@@ -108,7 +108,10 @@ fn installer_host(arguments: &[String], calls: &Path) -> Result<(), Box<dyn std:
     let mut file = OpenOptions::new().create(true).append(true).open(calls)?;
     writeln!(file, "{argument}")?;
     if argument == "--version" {
-        io::stdout().write_all(b"mesh-llm 0.73.1\n")?;
+        // The installer reads the version to decide on the Start menu entry.
+        let version = std::env::var("MESH_WINDOWS_INSTALL_FIXTURE_VERSION")
+            .unwrap_or_else(|_| "0.73.1".to_owned());
+        writeln!(io::stdout(), "mesh-llm {version}")?;
     }
     Ok(())
 }

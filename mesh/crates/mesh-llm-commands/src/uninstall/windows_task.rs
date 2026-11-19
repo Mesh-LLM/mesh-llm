@@ -26,36 +26,93 @@ pub(super) fn remove_task_step(env: &UninstallEnvironment) -> UninstallStep {
     }
 }
 
-/// What `install.ps1` adds beside the binary on Windows: the MeshLLM Start menu
-/// shortcut and the console launcher it runs. Without these steps both would
-/// outlive the binary and the shortcut would point at a launcher that fails.
-pub(super) fn start_menu_steps(env: &UninstallEnvironment) -> [UninstallStep; 2] {
+/// What `install.ps1` adds beside the binary on Windows: the console launcher,
+/// and the MeshLLM Start menu shortcut that runs it. Without this step both
+/// would outlive the binary and the shortcut would open a launcher that fails.
+pub(super) fn start_menu_step(env: &UninstallEnvironment) -> UninstallStep {
     let install_dir = env
         .binary_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    [
-        UninstallStep::RemovePath {
-            path: env
-                .config_root
-                .join("Microsoft")
-                .join("Windows")
-                .join("Start Menu")
-                .join("Programs")
-                .join(START_MENU_SHORTCUT),
-            purpose: RemovePurpose::StartMenuShortcut,
-        },
-        UninstallStep::RemovePath {
-            path: install_dir.join(CONSOLE_LAUNCHER),
-            purpose: RemovePurpose::ConsoleLauncher,
-        },
-    ]
+    UninstallStep::RemoveStartMenuEntry {
+        launcher: install_dir.join(CONSOLE_LAUNCHER),
+    }
 }
 
-/// The names `install.ps1` gives the shortcut and the launcher.
-const START_MENU_SHORTCUT: &str = "MeshLLM.lnk";
+/// The name `install.ps1` gives the launcher, and the line in it that records
+/// where the installer put the shortcut.
 const CONSOLE_LAUNCHER: &str = "mesh-llm-console.ps1";
+const SHORTCUT_RECORD: &str = "# Start menu shortcut: ";
+
+/// Remove this copy's launcher, and the shortcut it records when that shortcut
+/// still opens this launcher: a shortcut another installation has since put
+/// in the same place opens that copy and is left. Only files are removed.
+pub(super) fn remove_start_menu_entry(
+    launcher: &Path,
+    outcome: &mut UninstallOutcome,
+) -> std::io::Result<()> {
+    let contents = match fs::symlink_metadata(launcher) {
+        Ok(metadata) if metadata.is_file() => fs::read_to_string(launcher)?,
+        Ok(_) => {
+            outcome.warnings.push(format!(
+                "leaving {}: it is not a launcher file",
+                launcher.display()
+            ));
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            outcome.already_absent.push(launcher.to_path_buf());
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let shortcut = contents
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(SHORTCUT_RECORD))
+        .map(|path| Path::new(path.trim()).to_path_buf());
+    if let Some(shortcut) = shortcut {
+        match fs::symlink_metadata(&shortcut) {
+            Ok(metadata) if metadata.is_file() => {
+                if shortcut_opens(&fs::read(&shortcut)?, launcher) {
+                    fs::remove_file(&shortcut)?;
+                    outcome.removed.push(shortcut);
+                } else {
+                    outcome.warnings.push(format!(
+                        "leaving the Start menu shortcut {}: it opens another installation",
+                        shortcut.display()
+                    ));
+                }
+            }
+            Ok(_) => outcome.warnings.push(format!(
+                "leaving {}: it is not a shortcut file",
+                shortcut.display()
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                outcome.already_absent.push(shortcut);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    fs::remove_file(launcher)?;
+    outcome.removed.push(launcher.to_path_buf());
+    Ok(())
+}
+
+/// Whether a `.lnk` file runs `launcher`. Shell links keep their arguments as
+/// UTF-16 strings, so the launcher's path is looked for in that encoding,
+/// ignoring case as Windows paths do.
+fn shortcut_opens(link: &[u8], launcher: &Path) -> bool {
+    let wanted = launcher.to_string_lossy().to_lowercase();
+    // A string can start on an odd byte, so both alignments are read.
+    [0, 1].into_iter().any(|start| {
+        let (pairs, _) = link.get(start..).unwrap_or_default().as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
+        String::from_utf16_lossy(&units)
+            .to_lowercase()
+            .contains(&wanted)
+    })
+}
 
 /// What setup wrote for the task: its definition and the service logs.
 pub(super) fn task_file_steps(env: &UninstallEnvironment) -> [UninstallStep; 2] {
@@ -331,28 +388,111 @@ mod tests {
             .binary_path
             .parent()
             .expect("binary has a directory");
-        assert!(
-            plan.steps.contains(&UninstallStep::RemovePath {
-                path: temp
-                    .path()
-                    .join("config/Microsoft/Windows/Start Menu/Programs/MeshLLM.lnk"),
-                purpose: RemovePurpose::StartMenuShortcut,
-            })
-        );
-        assert!(plan.steps.contains(&UninstallStep::RemovePath {
-            path: install_dir.join("mesh-llm-console.ps1"),
-            purpose: RemovePurpose::ConsoleLauncher,
+        assert!(plan.steps.contains(&UninstallStep::RemoveStartMenuEntry {
+            launcher: install_dir.join("mesh-llm-console.ps1"),
         }));
         for platform in [UninstallPlatform::Linux, UninstallPlatform::MacOs] {
             let plan = plan_uninstall(&options(), &env(temp.path(), platform));
-            assert!(!plan.steps.iter().any(|step| matches!(
-                step,
-                UninstallStep::RemovePath {
-                    purpose: RemovePurpose::StartMenuShortcut | RemovePurpose::ConsoleLauncher,
-                    ..
-                }
-            )));
+            assert!(
+                !plan
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, UninstallStep::RemoveStartMenuEntry { .. }))
+            );
         }
+    }
+
+    /// A launcher as `install.ps1` writes it, recording `shortcut`.
+    fn write_launcher(dir: &Path, shortcut: &Path) -> std::path::PathBuf {
+        let launcher = dir.join("mesh-llm-console.ps1");
+        fs::write(
+            &launcher,
+            format!(
+                "# Opens the MeshLLM console.\r\n# Start menu shortcut: {}\r\n$ErrorActionPreference = 'Stop'\r\n",
+                shortcut.display()
+            ),
+        )
+        .unwrap();
+        launcher
+    }
+
+    /// A stand-in `.lnk` whose arguments name `launcher` in UTF-16, after an
+    /// odd-length header so the string starts on an odd byte.
+    fn write_link(path: &Path, launcher: &Path) {
+        let mut bytes = vec![0x4c, 0, 0, 0, 1];
+        let arguments = format!("-File \"{}\"", launcher.display());
+        for unit in arguments.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn outcome() -> UninstallOutcome {
+        UninstallOutcome {
+            dry_run: false,
+            removed: Vec::new(),
+            scheduled_removal: Vec::new(),
+            already_absent: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn removes_the_launcher_and_the_shortcut_that_opens_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let shortcut = temp.path().join("MeshLLM.lnk");
+        let launcher = write_launcher(temp.path(), &shortcut);
+        // Windows paths ignore case, and so does the check.
+        write_link(
+            &shortcut,
+            Path::new(&launcher.to_string_lossy().to_uppercase()),
+        );
+        let mut done = outcome();
+        remove_start_menu_entry(&launcher, &mut done).unwrap();
+        assert!(!shortcut.exists() && !launcher.exists());
+        assert_eq!(done.removed, [shortcut, launcher]);
+    }
+
+    #[test]
+    fn leaves_a_shortcut_that_opens_another_installation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let shortcut = temp.path().join("MeshLLM.lnk");
+        let other = temp.path().join("other");
+        fs::create_dir(&other).unwrap();
+        write_link(&shortcut, &other.join("mesh-llm-console.ps1"));
+        let launcher = write_launcher(temp.path(), &shortcut);
+        let mut done = outcome();
+        remove_start_menu_entry(&launcher, &mut done).unwrap();
+        assert!(shortcut.is_file(), "the other copy's shortcut stays");
+        assert!(!launcher.exists());
+        assert!(done.warnings[0].contains("opens another installation"));
+    }
+
+    #[test]
+    fn removes_only_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // A directory where the shortcut is recorded is not removed.
+        let shortcut = temp.path().join("MeshLLM.lnk");
+        fs::create_dir(&shortcut).unwrap();
+        fs::write(shortcut.join("keep.txt"), b"kept").unwrap();
+        let launcher = write_launcher(temp.path(), &shortcut);
+        let mut done = outcome();
+        remove_start_menu_entry(&launcher, &mut done).unwrap();
+        assert!(shortcut.join("keep.txt").is_file());
+        assert!(!launcher.exists());
+
+        // Nor is a directory at the launcher's path.
+        let dir_launcher = temp.path().join("nested").join("mesh-llm-console.ps1");
+        fs::create_dir_all(dir_launcher.join("inner")).unwrap();
+        let mut done = outcome();
+        remove_start_menu_entry(&dir_launcher, &mut done).unwrap();
+        assert!(dir_launcher.join("inner").is_dir());
+        assert!(done.warnings[0].contains("not a launcher file"));
+
+        // A launcher this copy never wrote is already absent.
+        let mut done = outcome();
+        remove_start_menu_entry(&temp.path().join("missing.ps1"), &mut done).unwrap();
+        assert_eq!(done.already_absent.len(), 1);
     }
 
     #[test]
