@@ -1537,6 +1537,21 @@ and refs are outside the plan. This change adds no cache authority and performs
 no operator purge. Candidate execution and post-merge qualification remain
 separate from local contract checks.
 
+The manual `windows-abi-measurement.yml` diagnostic measures one Windows
+runtime row cold or exact-warm without publishing. Nothing calls it: it has
+only a `workflow_dispatch` trigger, compiles automation once through
+`product-automation-artifact.yml`, and runs one hosted `windows-2022` job with a
+read-only token. Both conditions compute the same exact key through
+`restore-windows-abi-cache`. Only exact-warm retrieves it, and only that
+read-only restore has cache authority. A warm miss, a different restored key, a
+rebuild during canonical runtime preparation, a failed preparation or
+out-of-order phase timestamps refuse the sample; nothing relabels it cold. The job uploads phase timestamps and the admission or refusal
+receipt for 14 days. It does not change the runtime slice, the warmer, release
+or retention. A restore may still update an entry's access time. Merging a
+change to its `ci-ops` receipt code moves all four keys, so exact-warm samples
+wait for the warmer run on that merge commit. Primary time excludes the
+uncached toolkit installs, and each sample has its own concurrency group.
+
 The Windows host slice uploads Cargo HTML timings from its existing standalone
 Skippy and Mesh compilations as a separate one-day architecture/attempt
 artifact. Each phase also records Cargo fingerprint diagnostics and cumulative
