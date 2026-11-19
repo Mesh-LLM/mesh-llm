@@ -78,9 +78,15 @@ impl Node {
             .iter()
             .find(|ann| ann.addr.id == local_id)
             .map(|ann| (local_ann_to_proto_ann(ann), &ann.addr));
-        let node_body = local_wire
-            .as_ref()
-            .map(|(wire, addr)| node_record_from_wire_ann(wire, addr).encode_to_vec());
+        let evidence = match self.plugin_manager().await {
+            Some(manager) => manager.peer_evidence().publications(),
+            None => Default::default(),
+        };
+        let node_body = local_wire.as_ref().map(|(wire, addr)| {
+            let mut record = node_record_from_wire_ann(wire, addr);
+            record.peer_evidence = evidence;
+            record.encode_to_vec()
+        });
         let cache_body = local_wire
             .as_ref()
             .and_then(|(wire, _)| wire.cache_affinity.as_ref())

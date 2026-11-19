@@ -171,6 +171,7 @@ impl PluginIdentitySnapshot<'_> {
 
 pub(crate) fn is_identity_method(method: &str) -> bool {
     matches!(method, "ReadIdentityBundle" | "DelegatePluginSigningKey")
+        || super::peer_evidence::is_method(method)
 }
 
 /// This broker receives the connection's authenticated name, never the envelope
@@ -180,6 +181,9 @@ pub(crate) async fn handle_request(
     plugin_id: &str,
     request: super::proto::RpcRequest,
 ) -> Result<super::proto::RpcResponse, super::proto::ErrorResponse> {
+    if super::peer_evidence::is_method(&request.method) {
+        return super::peer_evidence::handle_request(node, plugin_id, request).await;
+    }
     let result = match node.plugin_manager().await {
         Some(manager) => {
             let admitted = admit_identity_service(&manager, plugin_id).await;

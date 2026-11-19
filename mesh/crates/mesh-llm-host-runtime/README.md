@@ -1,5 +1,7 @@
 # mesh-llm-host-runtime
 
+This revision prepares bounded local publication and withdrawal through authenticated `PublishPeerEvidence` RPC, including references in origin-signed node records. The plugin manifest declares the versioned verifier contract, namespace and handler, with no separate evidence grant. Plugins obtain identity through the existing identity API and mesh ID through snapshots/events. Declared verifiers remain rejected until provider verification and enforcement are available.
+
 `mesh-llm-host-runtime` composes the host-side mesh node runtime. It wires
 model resolution, local serving, discovery, networking, runtime state, plugins,
 the management API, and the shipped CLI entrypoint used by the `mesh-llm`

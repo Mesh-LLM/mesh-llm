@@ -415,6 +415,8 @@ sampling at the backend when it selects mode `1` or `2`.
 
 ## Group 10: plugins
 
+Peer-evidence publication is prepared through the plugin manifest's namespace and versioned verifier declaration, without a separate configuration grant. Declared verifiers remain rejected until provider enforcement is available.
+
 | Key path | Type | Allowed values / default (`auto`) | Scope | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `plugin.<name>.name` | string | required | plugin entry | plugin process restart | wired | none |

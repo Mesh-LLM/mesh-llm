@@ -481,6 +481,9 @@ impl Node {
                 Ok(())
             }
             crate::plugin::PluginMeshEvent::PluginStopped { plugin_id } => {
+                if let Some(manager) = self.plugin_manager().await {
+                    manager.peer_evidence().clear_plugin(&plugin_id);
+                }
                 // A disabled or removed plugin no longer runs here, so this
                 // node stops vouching for its key and showing its status.
                 self.plugin_keys.remove_own(&plugin_id);

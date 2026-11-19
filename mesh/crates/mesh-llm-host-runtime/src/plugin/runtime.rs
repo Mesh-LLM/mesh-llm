@@ -446,8 +446,10 @@ impl ExternalPlugin {
             );
         }
         if let Some(manifest) = &init.manifest {
+            mesh_llm_plugin::peer_evidence::validate_manifest(manifest)?;
             socket_auth::validate_lifecycle_declaration(
-                manifest.openai_exchange_hook.is_some(),
+                manifest.openai_exchange_hook.is_some()
+                    || manifest.peer_evidence_verifier.is_some(),
                 self.authenticated_peer.load(Ordering::Acquire),
             )?;
             if manifest.openai_exchange_hook.as_ref().is_some_and(|hook| {
