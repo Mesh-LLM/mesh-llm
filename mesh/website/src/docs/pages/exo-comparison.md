@@ -37,7 +37,7 @@ layer splits, and one OpenAI-compatible endpoint served through a mesh of peers.
 - **Use Mesh when you want:**
   - One OpenAI-compatible endpoint across a mesh of machines, no matter what hardware each runs
   - Cross-platform support spanning CUDA, ROCm, Vulkan, Metal, and CPU
-  - A public or private mesh with catalog-backed model references and operator controls
+  - Catalog-backed model references and operator controls, with optional [admission-controlled membership](/docs/pages/private-meshes/#restrict-membership)
   - Layer packages for very large GGUF models that won't fit on a single device
   - Agent and tool integrations with built-in launchers for Goose, Claude Code, OpenCode, and Pi
   - An opt-in Mixture-of-Agents plugin that answers non-streaming `model: "mesh"` text chat with a committee of models (one model when only small or single candidates are eligible)
