@@ -170,8 +170,8 @@ fn validate_role(
         let job = at("job").as_str().filter(|name| is_identifier(name));
         require(job.is_some(), || format!("{role_id}: invalid job"))?;
         let selector = at("matrix_selector");
-        let release_binding =
-            workflow == Some("release.yml") || eq(selector, &release_tag("nonempty"));
+        let release_binding = matches!(workflow, Some("release.yml" | "release-promote.yml"))
+            || eq(selector, &release_tag("nonempty"));
         require(release_binding == release, || {
             format!("{role_id}: release scope mismatch")
         })?;

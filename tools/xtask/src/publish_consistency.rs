@@ -372,6 +372,8 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
     let release_script = fs::read_to_string(repo_root.join("scripts/release.sh"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
+    let promote_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/release-promote.yml"))?;
     let quality_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/ci-quality-lane.yml"))?;
 
@@ -381,19 +383,19 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "RELEASE publish-chain consistency command",
     )?;
     ensure_contains(
-        &release_workflow,
+        &promote_workflow,
         "publish_crates_preflight:",
-        "release workflow crates.io preflight job",
+        "promote workflow crates.io preflight job",
     )?;
     ensure_contains(
-        &release_workflow,
+        &promote_workflow,
         "cargo run -p xtask -- repo-consistency publish-crates",
-        "release workflow publish-chain consistency check",
+        "promote workflow publish-chain consistency check",
     )?;
     ensure_contains(
-        &release_workflow,
+        &promote_workflow,
         "scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0",
-        "release workflow publish-chain dry-run",
+        "promote workflow publish-chain dry-run",
     )?;
     let publish_job = workflow_job_section(&release_workflow, "publish")
         .ok_or("release workflow: missing `publish` job for release tag staging check")?;
@@ -432,11 +434,11 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "local release must not maintain a second version mutation path",
     )?;
     ensure_contains_normalized(
-        &release_workflow,
+        &promote_workflow,
         "publish_crates_preflight:
           name: Preflight crates.io packages
-          needs: [metadata, publish]
-          if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+          needs: [candidate, promote]
+          if: ${{ needs.promote.result == 'success' }}
           runs-on: ubuntu-24.04
           container:
             image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
@@ -446,7 +448,7 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
           steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
-                ref: ${{ needs.metadata.outputs.tag }}
+                ref: ${{ needs.candidate.outputs.tag }}
                 persist-credentials: false
             - name: Trust checkout directory
               run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
@@ -458,14 +460,14 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
             - name: Prepare dispatched release version
               if: github.event_name == 'workflow_dispatch'
               env:
-                RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+                RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
               run: scripts/release-version.sh \"$RELEASE_TAG\"",
-        "release workflow publish preflight dispatched version preparation",
+        "promote workflow publish preflight dispatched version preparation",
     )?;
     ensure_contains(
-        &release_workflow,
-        "needs: [metadata, publish, publish_crates_preflight]",
-        "release workflow real publish preflight dependency",
+        &promote_workflow,
+        "needs: [candidate, promote, publish_crates_preflight]",
+        "promote workflow real publish preflight dependency",
     )?;
     ensure_contains(
         &quality_workflow,

@@ -2,6 +2,7 @@ use crate::command::{DynResult, ensure_contains, ensure_not_contains};
 
 pub(super) fn check_workflow_invariants(
     release_workflow: &str,
+    promote_workflow: &str,
     pr_workflows: &[(&str, String)],
     main_workflows: &[(&str, String)],
     website_pages: &str,
@@ -13,7 +14,7 @@ pub(super) fn check_workflow_invariants(
             "release Windows GPU composition",
         ),
         (
-            release_workflow,
+            promote_workflow,
             "publish_crates_preflight:",
             "release crates.io preflight",
         ),

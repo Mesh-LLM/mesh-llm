@@ -1,13 +1,16 @@
-//! `release notes-base <target-tag>`: `scripts/select-release-notes-base.py`.
-//! Reads candidate tags from stdin and prints the newest stable `vX.Y.Z` tag
-//! older than the target, or nothing when there is none.
+//! `release notes-base <target-tag> [--unpromoted <file>]`:
+//! `scripts/select-release-notes-base.py`. Reads candidate tags from stdin and
+//! prints the newest stable `vX.Y.Z` tag older than the target, or nothing
+//! when there is none. A candidate that was cut but never promoted carries a
+//! stable-looking tag without being a release, so the tags listed in the
+//! `--unpromoted` file are never selected.
 
 use crate::prepared_input::text_io::decode_utf8;
 use crate::repository::check_report::CheckReport;
 use crate::repository::text::strip;
 use std::cmp::Ordering;
 
-const USAGE: &str = "usage: select-release-notes-base.py <target-tag>\n";
+const USAGE: &str = "usage: select-release-notes-base.py <target-tag> [--unpromoted <file>]\n";
 
 /// One version component: an unbounded Python `int` of ASCII digits, kept
 /// as its digits without leading zeros so comparison never overflows.
@@ -74,9 +77,14 @@ fn stable_version(tag: &str) -> Option<Version> {
 }
 
 /// `select_release_notes_base`: `max((version, tag))` below the target.
-fn select<'a>(target: &Version, lines: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+fn select<'a>(
+    target: &Version,
+    lines: impl Iterator<Item = &'a str>,
+    unpromoted: &[&str],
+) -> Option<&'a str> {
     lines
         .map(strip)
+        .filter(|tag| !unpromoted.contains(tag))
         .filter_map(|tag| stable_version(tag).map(|version| (version, tag)))
         .filter(|(version, _)| version < target)
         .max()
@@ -92,12 +100,16 @@ pub(crate) fn run(
     args: &[String],
     read_stdin: impl FnOnce() -> std::io::Result<Vec<u8>>,
 ) -> CheckReport {
-    let [target] = args else {
-        return CheckReport {
-            stdout: String::new(),
-            stderr: USAGE.to_owned(),
-            code: 2,
-        };
+    let (target, unpromoted) = match args {
+        [target] => (target, None),
+        [target, option, path] if option == "--unpromoted" => (target, Some(path)),
+        _ => {
+            return CheckReport {
+                stdout: String::new(),
+                stderr: USAGE.to_owned(),
+                code: 2,
+            };
+        }
     };
     let Some(version) = target_version(strip(target)) else {
         return usage_failure(format!("invalid release tag: {target}"));
@@ -110,7 +122,12 @@ pub(crate) fn run(
         },
         Err(error) => return usage_failure(error.to_string()),
     };
-    let stdout = select(&version, stdin_lines(&text))
+    let unpromoted = match unpromoted.map(std::fs::read_to_string).transpose() {
+        Ok(text) => text.unwrap_or_default(),
+        Err(error) => return usage_failure(format!("unpromoted candidates: {error}")),
+    };
+    let unpromoted: Vec<&str> = unpromoted.lines().map(strip).collect();
+    let stdout = select(&version, stdin_lines(&text), &unpromoted)
         .map(|tag| format!("{tag}\n"))
         .unwrap_or_default();
     CheckReport::success(stdout)
@@ -140,6 +157,22 @@ mod tests {
         assert_eq!(pick("v1.0.0", tags).stdout, "v0.9.9\n");
         assert_eq!(pick("v0.9.9", tags).stdout, "");
         assert_eq!(pick("v1.0.0\r", "v0.1.0\rv0.2.0\n").stdout, "");
+    }
+
+    #[test]
+    fn release_notes_base_skips_candidates_that_were_never_promoted() {
+        let directory = tempfile::tempdir().unwrap();
+        let list = directory.path().join("unpromoted");
+        std::fs::write(&list, "v1.1.0\nv1.0.0-rc.1\n").unwrap();
+        let pick = |target: &str, list: &std::path::Path| {
+            let args = [target, "--unpromoted", list.to_str().unwrap()].map(str::to_owned);
+            run(&args, || Ok(b"v0.9.9\nv1.0.0\nv1.1.0\n".to_vec()))
+        };
+        assert_eq!(pick("v1.1.1", &list).stdout, "v1.0.0\n");
+        assert_eq!(pick("v1.0.0", &list).stdout, "v0.9.9\n");
+        let absent = pick("v1.1.1", &directory.path().join("absent"));
+        assert_eq!((absent.code, absent.stdout.as_str()), (2, ""));
+        assert!(absent.stderr.starts_with("unpromoted candidates: "));
     }
 
     #[test]

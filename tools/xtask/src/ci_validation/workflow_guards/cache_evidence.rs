@@ -290,9 +290,15 @@ fn explicit_native_policy(name: &str, job: &str, steps: &[Node]) -> Result<(), S
         ("node-sdk-addon-artifact.yml", "linux_addon" | "macos_addon" | "windows_addon") => {
             Some("true")
         }
-        ("release.yml", "metadata" | "publish" | "publish_crates_preflight" | "publish_crates") => {
-            Some("false")
-        }
+        ("release.yml", "metadata" | "publish") => Some("false"),
+        (
+            "release-promote.yml",
+            "candidate"
+            | "release_notes"
+            | "await_packaging_release"
+            | "publish_crates_preflight"
+            | "publish_crates",
+        ) => Some("false"),
         (
             "release.yml",
             "build"

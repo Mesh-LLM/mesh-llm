@@ -100,7 +100,8 @@ fn release_notes_helper_mention_in_a_comment_is_not_an_invocation() {
 #[test]
 fn real_release_notes_job_keeps_remote_caches_disabled() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let source = std::fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap();
+    let source =
+        std::fs::read_to_string(root.join(".github/workflows/release-promote.yml")).unwrap();
     let document = workflow_yaml::parse(&source).unwrap();
     let job = document.get("jobs").unwrap().get("release_notes").unwrap();
     let configure = steps(job)

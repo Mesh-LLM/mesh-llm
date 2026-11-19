@@ -148,22 +148,35 @@ fn graph_release_metadata_trust_and_canonical_version_precede_runner_selection()
             "git merge-base --is-ancestor \"$GITHUB_SHA\" refs/remotes/origin/main",
             "Manual release tag already exists and is immutable",
             "git ls-remote --tags origin",
-            "Canary/preview release: leaving main unchanged",
-            "does not contain its complete version update",
         ],
     );
+    // A cut reads main and never writes it: the frozen dispatch commit is the
+    // release source and the version stamp is only proved to apply cleanly.
+    let permissions = metadata.get("permissions").unwrap();
+    assert_eq!(text(permissions, "contents"), Some("read"));
+    let all_runs = runs(metadata);
+    for forbidden in ["git push", "git commit", "git add"] {
+        assert!(
+            !all_runs.contains(forbidden),
+            "metadata must not {forbidden}"
+        );
+    }
+    assert!(
+        items[canonical]
+            .get("env")
+            .unwrap()
+            .get("GITHUB_TOKEN")
+            .is_none()
+    );
     let run = text(&items[canonical], "run").unwrap();
+    let source_sha = run.find("source_sha=\"$GITHUB_SHA\"").unwrap();
     let version = run
         .find("scripts/release-version.sh \"$RELEASE_TAG\"")
         .unwrap();
     let fmt = run[version..].find("cargo fmt --all -- --check").unwrap() + version;
     let whitespace = run[fmt..].find("git diff --check").unwrap() + fmt;
-    let stage = run[whitespace..].find("git add --update").unwrap() + whitespace;
-    let push = run[stage..]
-        .find("git push \"$release_remote\" \"$source_sha:refs/heads/main\"")
-        .unwrap()
-        + stage;
-    assert!(version < fmt && fmt < whitespace && whitespace < stage && stage < push);
+    assert!(source_sha < version && version < fmt && fmt < whitespace);
+    assert_eq!(run.matches("source_sha=").count(), 1);
     let outputs = metadata.get("outputs").unwrap();
     assert_eq!(
         text(outputs, "source_sha"),
@@ -173,7 +186,9 @@ fn graph_release_metadata_trust_and_canonical_version_precede_runner_selection()
         text(outputs, "release_notes_base"),
         Some("${{ steps.source.outputs.release_notes_base }}")
     );
-    assert!(run.contains("cargo xtool release notes-base \"$RELEASE_TAG\""));
+    assert!(run.contains(
+        "cargo xtool release notes-base \"$RELEASE_TAG\" --unpromoted \"$UNPROMOTED_TAGS\""
+    ));
     let publish = job(&doc, "publish");
     let checkout = steps(publish)
         .iter()
@@ -503,13 +518,25 @@ fn graph_release_cpu_cache_authority_uses_the_selected_architecture_runner() {
     }
 }
 #[test]
-fn graph_release_prerelease_and_notes_base_outputs_bind_actual_native_selection() {
+fn graph_release_candidate_version_and_notes_base_outputs_bind_actual_native_selection() {
     let doc = document("release.yml");
     let metadata = job(&doc, "metadata");
     let outputs = metadata.get("outputs").unwrap();
+    // Every cut is the candidate for its final version: there is no
+    // prerelease classification to carry and no suffixed version to accept.
+    assert!(outputs.get("prerelease").is_none());
+    assert!(outputs.get("preview").is_none());
+    let inputs = doc
+        .get("on")
+        .unwrap()
+        .get("workflow_dispatch")
+        .unwrap()
+        .get("inputs")
+        .unwrap();
+    assert!(inputs.get("preview").is_none());
     assert_eq!(
-        text(outputs, "prerelease"),
-        Some("${{ steps.meta.outputs.prerelease }}")
+        text(inputs.get("promote").unwrap(), "type"),
+        Some("boolean")
     );
     let meta = steps(metadata)
         .iter()
@@ -519,19 +546,18 @@ fn graph_release_prerelease_and_notes_base_outputs_bind_actual_native_selection(
     require(
         run,
         &[
-            "prerelease=false",
-            "[[ \"$version\" == *-* ]]",
-            "prerelease=true",
-            "echo \"prerelease=$prerelease\"",
+            "[[ ! \"$version\" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]",
+            "A candidate without GPU bundles cannot be promoted.",
         ],
     );
+    assert!(!run.contains("prerelease="));
     let source = named(metadata, "Prepare canonical release source");
     let run = text(source, "run").unwrap();
     require(
         run,
         &[
             "git tag --list 'v*'",
-            "cargo xtool release notes-base \"$RELEASE_TAG\"",
+            "cargo xtool release notes-base \"$RELEASE_TAG\" --unpromoted \"$UNPROMOTED_TAGS\"",
             "echo \"release_notes_base=$release_notes_base\"",
         ],
     );
