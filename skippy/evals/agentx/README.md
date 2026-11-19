@@ -200,16 +200,11 @@ benchmark owner does not mark the long-prefix/cancellation/L3 TODO complete.
 
 ## Prefix-reuse probe
 
-`prefix-reuse-probe.py` reproduces the exact-state retention regression: N
-interleaved multi-turn conversations with append-only histories against one
-`skippy serve`, reporting `cached_tokens` per request. Any miss after each
-conversation's first turn is a retention defect, not prompt churn. Exit code 1
-on any post-first-turn miss.
-
-```
-# serve with the knobs under test, then:
-python3 skippy/evals/agentx/prefix-reuse-probe.py 64000 4 6 6300
-```
+The fleet smoke (`fleet-worker.sh`, via `xtask automation agentx fleet`)
+reproduces the exact-state retention regression: interleaved multi-turn
+conversations with append-only histories against one `skippy serve`. Any
+`cached_tokens` miss after a conversation's first turn is a retention defect,
+not prompt churn.
 
 Two distinct prefix-cache budgets matter for retention experiments, and A/B
 runs must move the intended one:

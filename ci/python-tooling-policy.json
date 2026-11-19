@@ -429,6 +429,72 @@
   ],
   "allowed_invocations": [
     {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "python3 - <<PYEOF",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "PY",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "DIGEST=$(python3 - \"$MANIFEST\" <<'PY'",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "python3 - \"$PORT\" \"$CHUNK\" <<'SWEEPPY'",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "kill -0 $NP 2>/dev/null && echo \"-- skippy nocache profile:\" && python3 \"$W/profile.py\" \"$PORT\" \"$PROBE_CONVERSATIONS\" 256 || echo \"-- skippy nocache: SERVER_DIED\"",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "kill -0 $NPID 2>/dev/null && python3 - \"$PORT\" <<'NSYSPY'",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "python3 \"$W/profile.py\" \"$PORT\" \"$PROBE_CONVERSATIONS\" 256 || true",
+      "occurrences": 2,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "python3 \"$W/smoke.py\" \"$PORT\" \"$PROBE_CONVERSATIONS\" \"$PROBE_TURNS\" \"$PROBE_BLOCK_CHARS\" \"$PROBE_MAX_TOKENS\" || true",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "&& tar xzf \"$W/py312.tgz\" -C \"$W/py312\" && export PATH=\"$W/py312/python/bin:$PATH\" \\",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "mkdir -p \"$W/py312\"",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
+      "path": "skippy/evals/agentx/fleet-worker.sh",
+      "line": "if ! command -v python3.12 >/dev/null; then",
+      "occurrences": 1,
+      "purpose": "AgentX fleet GPU worker: bounded smoke/profile probes on lab hosts"
+    },
+    {
       "path": ".github/actions/setup-canary-runner/action.yml",
       "line": "for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do",
       "occurrences": 1,
