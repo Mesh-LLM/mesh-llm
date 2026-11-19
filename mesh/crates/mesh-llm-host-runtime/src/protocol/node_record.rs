@@ -18,6 +18,7 @@ pub(crate) fn node_record_from_wire_ann(
     addr: &EndpointAddr,
 ) -> wire::NodeRecord {
     wire::NodeRecord {
+        peer_evidence: Default::default(),
         role: ann.role,
         http_port: ann.http_port,
         version: ann.version.clone().unwrap_or_default(),
