@@ -317,7 +317,7 @@ pub(in crate::frontend) fn generation_event_to_completion_chunk(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::frontend) enum TokenControl {
     Continue,
     Stop,
@@ -364,6 +364,9 @@ where
     ignore_eos: bool,
     /// Tokens counted as completion tokens, in order, to align logprobs.
     emitted_tokens: Vec<i32>,
+    /// Set once a token returned `Stop`. Later tokens are refused, so text
+    /// trimmed at a stop sequence cannot come back and counts stay exact.
+    stopped: bool,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
@@ -395,6 +398,7 @@ where
             emulation_active: false,
             ignore_eos: false,
             emitted_tokens: Vec::new(),
+            stopped: false,
         })
     }
 
@@ -422,18 +426,29 @@ where
         {
             self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
             self.finish_reason = finish_reason_for_generation(false);
+            self.stopped = true;
             return Ok(TokenControl::Stop);
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
-        self.completion_tokens += 1;
-        self.emitted_tokens.push(token);
         let detokenize_timer = Instant::now();
         let piece = self
             .model
             .detokenize_bytes(&[token])
             .map_err(openai_backend_error)?;
-        self.generated_text_bytes.extend_from_slice(&piece);
         self.metrics.detokenize_ms += detokenize_timer.elapsed().as_secs_f64() * 1000.0;
+        self.push_piece(token, &piece)
+    }
+
+    /// Applies one detokenized token. Once a token has returned `Stop`, later
+    /// tokens are refused: a producer that decoded ahead of the stop must not
+    /// change the text, the streamed output, or the completion count.
+    fn push_piece(&mut self, token: i32, piece: &[u8]) -> InferenceResult<TokenControl> {
+        if self.stopped {
+            return Ok(TokenControl::Stop);
+        }
+        self.completion_tokens += 1;
+        self.emitted_tokens.push(token);
+        self.generated_text_bytes.extend_from_slice(piece);
         let valid_len = valid_utf8_prefix_len(&self.generated_text_bytes);
         if valid_len > 0 {
             let candidate = std::str::from_utf8(&self.generated_text_bytes[..valid_len])
@@ -458,11 +473,13 @@ where
             self.text = trim_at_stop(&self.text, &self.stop_values).to_string();
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
+            self.stopped = true;
             return Ok(TokenControl::Stop);
         }
         if self.emulation_active && tool_emulation::emulated_tool_call_complete(&self.text) {
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
+            self.stopped = true;
             return Ok(TokenControl::Stop);
         }
         self.emit_safe_delta(false)?;
@@ -592,6 +609,36 @@ mod tests {
         }))
         .expect("valid chat request")
         .into()
+    }
+
+    /// A producer that decoded ahead of the stop delivers one more token.
+    /// Without the latch the text is rebuilt from the untrimmed bytes as
+    /// "abcENDx", the stop sequence falls behind the search window, and
+    /// "ENDx" is streamed.
+    #[test]
+    fn token_after_stop_sequence_does_not_bring_back_trimmed_text() {
+        let chunks = std::cell::RefCell::new(Vec::<String>::new());
+        // No token here is detokenized, so the reader needs no loaded model.
+        let model = skippy_runtime::StageModel::new_dummy().reader();
+        let mut collector = TextGenerationCollector::new(model, vec!["END"], |chunk| {
+            chunks.borrow_mut().push(chunk.to_string());
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            collector.push_piece(1, b"abc").unwrap(),
+            TokenControl::Continue
+        );
+        assert_eq!(collector.push_piece(2, b"END").unwrap(), TokenControl::Stop);
+        let late = collector.push_piece(3, b"x").unwrap();
+        collector.emit_safe_delta(true).unwrap();
+
+        assert_eq!(collector.text, "abc");
+        assert_eq!(chunks.borrow().concat(), "abc");
+        assert_eq!(collector.completion_tokens, 2);
+        assert_eq!(collector.emitted_tokens, vec![1, 2]);
+        assert_eq!(late, TokenControl::Stop);
     }
 
     #[test]

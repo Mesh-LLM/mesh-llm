@@ -80,14 +80,14 @@ themselves establish workload or GPU qualification.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
-L2 post-checkout planning, the five lane summaries, and Quality commit
-convention use the narrow `ci-controller` executable through
+L2 post-checkout planning, the five lane summaries, and the Quality llama.cpp
+upstream pin guard use the narrow `ci-controller` executable through
 `prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release
 Cargo bypasses compiler wrappers and Just and reuses an exact-key cached
 release executable when present. Other automation keeps the closed
 `prepare-automation` hosted-bare profile under the same rules, while
-image callers retain verification and sccache unchanged. Quality convention
-and environment ownership checks, runner-contract cleanup, registry summary,
+image callers retain verification and sccache unchanged. Quality environment
+ownership checks, runner-contract cleanup, registry summary,
 and runtime-seed lifecycle have Rust callers. Runtime-seed preparation uses
 step-local runner-temp Cargo home/target paths before the measured section.
 The protected `ed07043b` audit, `38d63b2f` resolver and no-checkout sentinel
@@ -164,6 +164,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
+| `windows-abi-measurement.yml` (`Diagnostic · Windows ABI cache measurement`) | dispatch only | Nonpublishing cold versus exact-warm sample of one Windows runtime row; read-only token, no secrets, hosted `windows-2022`, evidence artifact only |
 | `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
@@ -1075,6 +1076,11 @@ and `ImageVersion` separately from Rust's toolchain cache key. Conservative
 production source trees include embedded resources; uncompiled integration
 tests and READMEs no longer invalidate hosted executables. The packaged runtime
 inventory includes `skippy-package-builder` and its local dependency closure.
+The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
+`windows_warmer_paths` workflow guard requires `windows-warm-caches.yml` push
+paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
+exclusions), so a key input cannot change on `main` without waking its only
+producer.
 
 Windows ABI key construction and retention share typed Rust identities.
 The existing warmer's maintenance job derives active families from CI runtime
@@ -1088,6 +1094,31 @@ remain untouched. The job retains policy, inventory, plan and execution
 receipts for 14 days. Observed image cohorts for currently consumed toolkit
 and architecture combinations remain active during hosted image rollouts;
 one warmer's image cannot establish that other cohorts are obsolete.
+
+`windows-abi-measurement.yml` is a registered `windows_cache_consumers`
+diagnostic, not a family owner: its rows come from the same Windows
+`ci/slices.yml` runtime rows, so it adds no retained key. Inputs are closed
+choices (`backend` cpu/cuda/rocm/vulkan, `condition` cold/exact-warm, `sample`
+1-5). Its one product automation producer is the existing
+`product-automation-artifact.yml`. `ci-ops windows-abi-measurement` selects the
+row, records lookup and preparation phase times, and admits a sample: cold
+requires no retrieval and an empty build directory, and exact-warm requires an
+exact hit on the computed key and an unchanged ABI tree (paths, sizes, mtimes
+and stamp digest) after canonical `prepare-native-runtime-input`. An admitted
+sample writes its receipt even when preparation fails; a failed preparation or
+missing or out-of-order phase timestamps make it `admitted=false`. Any refusal
+fails the job and uploads `refusal.json` or a `receipt.json` with
+`admitted=false`. The ABI restore is enabled only for exact-warm. Every
+compiler, SDK, toolkit, automation and Depot cache authority is literal
+`false`, and the graph reaches no `actions/cache/save`, combined
+`actions/cache`, save-and-verify, retention or release step. Evidence retains
+for 14 days. The workflow is outside `CACHE_INPUT_HASH`, so changing it does
+not move the measured key. Its `ci-ops` receipt code is inside it
+(`tools/xtask/src/**`), so merging a receipt change moves all four keys:
+exact-warm samples wait for the warmer run on that merge commit. Primary time
+is lookup plus preparation only; toolkit installs between them are excluded.
+Each backend, condition and sample has its own concurrency group, so samples
+dispatched back to back do not cancel one another.
 No live purge accompanies this source cutover.
 
 These source contracts require candidate and post-merge execution evidence;

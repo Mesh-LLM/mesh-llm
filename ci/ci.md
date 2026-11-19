@@ -1531,6 +1531,12 @@ well as the Rust toolchain, and include the common linker driver. Runtime
 version 2 keys include packaging policy and the packaged Rust tool's local
 dependency closure. Key lookup remains compilation-free; a miss follows the
 existing build path and a hit retains its existing verification.
+The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`, and
+`windows-warm-caches.yml` is the only job that saves it on `main`, so the
+contract gate also checks that the warmer's `push` paths cover every input of
+that key, by equality or a literal `<dir>/**`, and refuses `!` exclusions there:
+an input it does not watch would move the key on `main` with no warmed entry,
+and the next Windows runtime run of each PR would build cold.
 
 Windows ABI retention runs in the existing warmer maintenance job. Rust derives
 the active compatibility roster from CI, release and warmer consumers and
@@ -1545,6 +1551,21 @@ the inventory, policy, plan and deletion receipt for 14 days. Other namespaces
 and refs are outside the plan. This change adds no cache authority and performs
 no operator purge. Candidate execution and post-merge qualification remain
 separate from local contract checks.
+
+The manual `windows-abi-measurement.yml` diagnostic measures one Windows
+runtime row cold or exact-warm without publishing. Nothing calls it: it has
+only a `workflow_dispatch` trigger, compiles automation once through
+`product-automation-artifact.yml`, and runs one hosted `windows-2022` job with a
+read-only token. Both conditions compute the same exact key through
+`restore-windows-abi-cache`. Only exact-warm retrieves it, and only that
+read-only restore has cache authority. A warm miss, a different restored key, a
+rebuild during canonical runtime preparation, a failed preparation or
+out-of-order phase timestamps refuse the sample; nothing relabels it cold. The job uploads phase timestamps and the admission or refusal
+receipt for 14 days. It does not change the runtime slice, the warmer, release
+or retention. A restore may still update an entry's access time. Merging a
+change to its `ci-ops` receipt code moves all four keys, so exact-warm samples
+wait for the warmer run on that merge commit. Primary time excludes the
+uncached toolkit installs, and each sample has its own concurrency group.
 
 The Windows host slice uploads Cargo HTML timings from its existing standalone
 Skippy and Mesh compilations as a separate one-day architecture/attempt
@@ -2053,7 +2074,10 @@ not a handle.
 The gate checks Cargo metadata on every invocation and rejects an exempt crate
 that becomes a transitive normal dependency of `mesh-llm`, including optional
 and platform-specific dependencies. Tests cover that guard and the scope rules.
-The Quality workflow still invokes the same `just no-console-print` gate.
+The Quality workflow no longer runs this gate. Its candidate source consistency
+job runs the crate-list, publish crate-chain, release-target and process
+environment mutation checks, and `repo-consistency no-console-print` now only
+reports that the gate is retired.
 
 The CPU native runtime-event gate selects `family-qwen3-dense` from the
 `skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The

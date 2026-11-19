@@ -22,7 +22,8 @@ pub(in crate::frontend) use token_generation::resident_capacity_admission_error;
 
 #[cfg(test)]
 pub(super) use token_generation::{
-    linear_proposal_allowed, native_mtp_dispatch_counts_for_test, post_decode_checkpoint_tokens,
+    include_undelivered_samples, linear_proposal_allowed, native_mtp_dispatch_counts_for_test,
+    post_decode_checkpoint_tokens,
 };
 
 use crate::frontend::generation::StageOpenAiBackend;

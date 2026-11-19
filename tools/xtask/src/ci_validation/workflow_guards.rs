@@ -35,6 +35,7 @@ mod rolling_preview;
 mod replay;
 mod replay_admission;
 mod replay_environment;
+mod restored_scripts;
 mod runner_finalization;
 mod runtime_events;
 mod selected_ref;
@@ -42,6 +43,7 @@ mod shell;
 mod smoke_automation;
 mod windows_build_paths;
 mod windows_skippy_probes;
+mod windows_warmer_paths;
 
 use super::lane_results::workflow_yaml::{self, Node};
 use crate::command::DynResult;
@@ -53,6 +55,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     automation_tool::check(root)?;
     windows_build_paths::check(root)?;
     windows_skippy_probes::check(root)?;
+    windows_warmer_paths::check(root)?;
     compute_changes_budget::check(root)?;
     action_pins::check(root)?;
     let mut workflows = BTreeMap::new();
@@ -84,6 +87,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     cancellation::check(&workflows)?;
     product_chains::check(&workflows)?;
     smoke_automation::check(root, &workflows)?;
+    restored_scripts::check(root, &workflows)?;
     quality_contracts::check(root, &workflows)?;
     quality_consistency::check(&workflows)?;
     selected_ref::check(&workflows)?;

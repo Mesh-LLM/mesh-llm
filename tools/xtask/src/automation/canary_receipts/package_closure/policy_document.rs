@@ -63,24 +63,20 @@ pub(super) fn json(root: &Path, relative: &str) -> DynResult<Value> {
 
 /// Match the opened handle to the pathname witness; Unix identity includes device/inode.
 pub(super) fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    if !right.is_file()
-        || left.len() != right.len()
-        || !matches!((left.modified(), right.modified()), (Ok(left), Ok(right)) if left == right)
-    {
-        return false;
-    }
+    let same_contents = right.is_file()
+        && left.len() == right.len()
+        && matches!((left.modified(), right.modified()), (Ok(left), Ok(right)) if left == right);
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if left.dev() != right.dev()
-            || left.ino() != right.ino()
-            || left.ctime() != right.ctime()
-            || left.ctime_nsec() != right.ctime_nsec()
-        {
-            return false;
-        }
+        same_contents
+            && left.dev() == right.dev()
+            && left.ino() == right.ino()
+            && left.ctime() == right.ctime()
+            && left.ctime_nsec() == right.ctime_nsec()
     }
-    true
+    #[cfg(not(unix))]
+    same_contents
 }
 #[cfg(test)]
 #[path = "policy_document_tests.rs"]
