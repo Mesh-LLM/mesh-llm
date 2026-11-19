@@ -576,8 +576,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Main Windows runtime jobs own shared Windows ABI publication after successful
   package verification, on trusted main pushes only. Every subsequent main
   miss retries publication, so recovery does not depend on another recipe edit.
-  The manual Windows warmer only restores, verifies and maintains existing
-  entries; it never builds or publishes ABI trees and has no push trigger.
+  The Windows warmer runs daily and on manual dispatch. It only restores,
+  verifies and maintains existing entries; it never builds or publishes ABI
+  trees and has no push trigger. Retention needs only the current CPU identity,
+  so a missing or unverifiable entry does not stop pruning.
   Release jobs publish their distinct GPU families, but leave shared main-ref
   CPU and Vulkan keys to Main Windows.
   Preserve exact keys, restored-byte verification and isolated PR cache policy.

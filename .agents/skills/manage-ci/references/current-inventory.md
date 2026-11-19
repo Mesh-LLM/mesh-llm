@@ -151,7 +151,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
 | `windows-abi-measurement.yml` (`Diagnostic · Windows ABI cache measurement`) | dispatch only | Nonpublishing cold versus exact-warm sample of one Windows runtime row; read-only token, no secrets, hosted `windows-2022`, evidence artifact only |
-| `windows-warm-caches.yml` | dispatch only | Verify existing exact Windows ABI entries and run bounded retention; Main Windows runtime jobs own builds and publication |
+| `windows-warm-caches.yml` | daily schedule, dispatch | Verify existing exact Windows ABI entries and run bounded retention; Main Windows runtime jobs own builds and publication |
 | `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
@@ -1067,8 +1067,10 @@ The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory. Main Windows
 runtime jobs save shared ABI misses with the exact pinned cache save after package verification,
 only on trusted main pushes with native cache permission. Every main run can
 repair a failed save or populate its actual hosted image cohort. The manual
-`windows-warm-caches.yml` restores and verifies existing entries and retains
-its bounded maintenance job; it has no push trigger, native build or ABI save.
+`windows-warm-caches.yml` runs daily and on dispatch. It restores and verifies
+existing entries and runs bounded maintenance once the current CPU identity
+resolves, even if an entry is missing; it has no push trigger, native build or
+ABI save.
 The `windows_abi_publication` guard pins that ownership and publication order.
 
 `linux-cache-measurement.yml` measures those three Linux identities without

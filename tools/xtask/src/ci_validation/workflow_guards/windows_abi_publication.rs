@@ -59,8 +59,13 @@ fn maintenance(document: &Node) -> DynResult<()> {
     let events = document
         .get("on")
         .ok_or("Windows maintenance events missing")?;
-    if events.entries().len() != 1 || events.get("workflow_dispatch").is_none() {
-        return Err(format!("{WARMER}: maintenance must remain manual-only").into());
+    if events.get("workflow_dispatch").is_none()
+        || events.get("schedule").is_none()
+        || events.entries().len() != 2
+    {
+        return Err(
+            format!("{WARMER}: maintenance runs only on schedule and manual dispatch").into(),
+        );
     }
     for (_, job) in document
         .get("jobs")

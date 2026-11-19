@@ -21,7 +21,12 @@ fn windows_abi_publication_rejects_automatic_or_duplicate_maintenance_production
         (
             "on:\n",
             "on:\n  push:\n    branches: [main]\n",
-            "manual-only",
+            "schedule and manual dispatch",
+        ),
+        (
+            "  schedule:\n    - cron: '17 6 * * *'\n",
+            "",
+            "schedule and manual dispatch",
         ),
         (
             "      - name: Verify Windows CPU ABI cache\n",

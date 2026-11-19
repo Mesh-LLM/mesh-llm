@@ -1,7 +1,10 @@
 name: Warm Windows ABI CI caches
-# ABI publication belongs to Main Windows. This manual entry verifies and prunes.
+# ABI publication belongs to Main Windows. This entry verifies existing entries
+# and prunes old generations, daily and on manual dispatch.
 
 on:
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       retention:
@@ -195,7 +198,8 @@ jobs:
     needs:
       - warm_windows_cpu
       - warm_windows_gpu
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.warm_windows_cpu.result == 'success' && (needs.warm_windows_gpu.result == 'success' || needs.warm_windows_gpu.result == 'skipped') }}
+    # Retention needs only the current identity; a missing or unverifiable entry must not stop it.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.warm_windows_cpu.outputs.toolchain_epoch != '' && needs.warm_windows_cpu.outputs.input_hash != '' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
