@@ -21,6 +21,7 @@ mod mlflow_publish;
 mod native_kv_span;
 mod overlap;
 mod phase_outcome;
+mod prefix_reuse_probe;
 mod prepared_launch;
 mod prepared_tools;
 mod results;
@@ -128,6 +129,9 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     ) {
         let root = std::env::current_dir()?;
         return fleet::command(&root, args);
+    }
+    if args.first().map(String::as_str) == Some("prefix-reuse-probe") {
+        return prefix_reuse_probe::command(&args[1..]);
     }
     if args.first().map(String::as_str) != Some("worker") {
         return Err("AgentX accepts comparison --input JSON --output DIR or mlflow-export; legacy unpinned launch modes are not admitted".into());

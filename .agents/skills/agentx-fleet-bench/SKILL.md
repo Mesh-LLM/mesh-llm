@@ -66,8 +66,11 @@ Model references resolve to repo/rev/file/sha entries that live in
 6. **A/B experiments must target the intended budget knob.** `AGENTX_SKIPPY_PREFIX_CACHE_BUDGET`
    (exact-state catalog cap) is distinct from `AGENTX_SKIPPY_PREFIX_CACHE_RAM` (resident
    checkpoint RAM).
-7. The prefix-reuse regression probe is `skippy/evals/agentx/prefix-reuse-probe.py` (exit 1 on
-   any post-first-turn miss).
+7. The prefix-reuse regression probe is the typed owner
+   `cargo xtool automation agentx prefix-reuse-probe --port PORT --conversations N --turns T
+   --block-chars B`: warm-up turn per conversation, histories grown with returned assistant
+   replies, nonzero exit on any conversation-specific retention miss, missing usage, or HTTP
+   error.
 8. `jy` sessions expire; empty CLI output means `jy login` and retry.
 9. Watch long runs with a paseo heartbeat that carries these rules; 10-minute cadence for smoke,
    30 for full campaigns.

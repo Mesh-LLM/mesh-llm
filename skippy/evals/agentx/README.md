@@ -200,15 +200,18 @@ benchmark owner does not mark the long-prefix/cancellation/L3 TODO complete.
 
 ## Prefix-reuse probe
 
-`prefix-reuse-probe.py` reproduces the exact-state retention regression: N
-interleaved multi-turn conversations with append-only histories against one
-`skippy serve`, reporting `cached_tokens` per request. Any miss after each
-conversation's first turn is a retention defect, not prompt churn. Exit code 1
-on any post-first-turn miss.
+The typed retention probe reproduces the exact-state retention regression: N
+interleaved multi-turn conversations against one OpenAI-compatible server.
+Every conversation sends turn 1 as a warm-up, then grows the real chat history
+with the server's own assistant replies and reports `cached_tokens` per
+request. A scored turn passes only when its cached tokens cover at least half
+of that conversation's previous prompt, so a shared system prefix or one
+cached template token cannot pass. Missing usage, HTTP errors, and retention
+misses exit nonzero.
 
 ```
 # serve with the knobs under test, then:
-python3 skippy/evals/agentx/prefix-reuse-probe.py 64000 4 6 6300
+cargo xtool automation agentx prefix-reuse-probe --port 64000   --conversations 4 --turns 6 --block-chars 6300
 ```
 
 Two distinct prefix-cache budgets matter for retention experiments, and A/B
