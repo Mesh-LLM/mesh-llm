@@ -14,8 +14,8 @@ use crate::frontend::generation::{
 };
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::local_generation::{
-    linear_proposal_allowed, native_mtp_dispatch_counts_for_test, post_decode_checkpoint_tokens,
-    prompt_fits_single_prefill_sample,
+    include_undelivered_samples, linear_proposal_allowed, native_mtp_dispatch_counts_for_test,
+    post_decode_checkpoint_tokens, prompt_fits_single_prefill_sample,
 };
 use crate::frontend::{
     EmbeddedOpenAiRequestDefaults, GenerationAbort, GenerationCommit, GenerationReceipt,
@@ -372,6 +372,28 @@ fn post_decode_checkpoint_names_only_tokens_consumed_by_runtime() {
         Some(vec![10, 11, 12, 20, 21])
     );
     assert_eq!(post_decode_checkpoint_tokens(&prompt, &[]), None);
+}
+
+#[test]
+fn resumed_checkpoint_keeps_the_stop_token_and_omits_the_queued_sample() {
+    let prompt = [10, 11, 12];
+    // A resumed decode delivered 20, then the stop token 21. Before the
+    // worker read the Stop, it fed 21 to the session and sampled 22, which
+    // was never delivered.
+    let mut decoded_tokens = 2;
+    let mut generated = vec![20, 21];
+
+    include_undelivered_samples(&mut decoded_tokens, &mut generated, &[22]);
+
+    // The worker decoded three samples. The session consumed the stop token
+    // but not the queued sample, so dropping 22 here would leave the
+    // checkpoint one token short of the session and the recorder would skip
+    // it.
+    assert_eq!(decoded_tokens, 3);
+    assert_eq!(
+        post_decode_checkpoint_tokens(&prompt, &generated),
+        Some(vec![10, 11, 12, 20, 21])
+    );
 }
 
 #[test]

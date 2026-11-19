@@ -307,6 +307,19 @@ pub(in crate::frontend) fn post_decode_checkpoint_tokens(
     Some(checkpoint)
 }
 
+/// Adds the samples a resumed scheduler decode produced after a Stop. They
+/// were never delivered, but the worker decoded each one, and the session
+/// consumed every one except the newest, so both the decode count and the
+/// post-decode checkpoint must include them.
+pub(in crate::frontend) fn include_undelivered_samples(
+    decoded_tokens: &mut usize,
+    generated_token_ids: &mut Vec<i32>,
+    samples: &[i32],
+) {
+    *decoded_tokens = decoded_tokens.saturating_add(samples.len());
+    generated_token_ids.extend_from_slice(samples);
+}
+
 pub(in crate::frontend) fn linear_proposal_allowed(
     recurrent_checkpoint_required: bool,
     checkpoint_attempted: bool,
@@ -1595,6 +1608,11 @@ impl StageOpenAiBackend {
                 },
             )?;
             cache_stats.predicted_ms = stats.predicted_ms;
+            include_undelivered_samples(
+                &mut state.decoded_tokens,
+                &mut state.generated_token_ids,
+                &stats.undelivered_tokens,
+            );
             let model_generation_elapsed =
                 self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
             if state.generated_token_ids.len() > 1 {
