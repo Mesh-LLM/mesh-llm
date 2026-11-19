@@ -13,13 +13,23 @@ pub fn detect_local_fit_bytes(max_vram_gb: Option<f64>, host_ram_offload: bool) 
 }
 
 pub(super) async fn startup_secret_key(role: &NodeRole) -> Result<SecretKey> {
-    if matches!(role, NodeRole::Client) || std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok() {
+    let explicit_key =
+        std::env::var_os("MESH_LLM_NODE_KEY_PATH").is_some_and(|path| !path.is_empty());
+    if ephemeral_startup_key(
+        matches!(role, NodeRole::Client),
+        explicit_key,
+        std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok(),
+    ) {
         let key = SecretKey::generate();
         tracing::info!("Using ephemeral key (unique identity)");
         Ok(key)
     } else {
         load_or_create_key().await
     }
+}
+
+fn ephemeral_startup_key(client: bool, explicit_key: bool, force_ephemeral: bool) -> bool {
+    force_ephemeral || (client && !explicit_key)
 }
 
 /// Where the node saves a renewed ownership certificate. Renewal still works
@@ -359,5 +369,19 @@ impl Node {
             StartupResolution::Names(names) => names.iter().any(|name| name == model_name),
             StartupResolution::AnyName => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_selection_tests {
+    use super::ephemeral_startup_key;
+
+    #[test]
+    fn clients_opt_into_persistence_only_with_an_explicit_key_path() {
+        assert!(ephemeral_startup_key(true, false, false));
+        assert!(!ephemeral_startup_key(true, true, false));
+        assert!(ephemeral_startup_key(true, true, true));
+        assert!(ephemeral_startup_key(false, true, true));
+        assert!(!ephemeral_startup_key(false, false, false));
     }
 }

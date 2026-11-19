@@ -261,7 +261,7 @@ a new requirement-aware mesh; it does not mutate a running mesh.
 ## Passive Mode
 
 Two flavors:
-- **`--client`**: pure consumer, ephemeral key, no gossip, routing table only
+- **`--client`**: pure consumer, ephemeral key by default, no gossip, routing table only. A nonempty `MESH_LLM_NODE_KEY_PATH` opts into persistent identity; `MESH_LLM_EPHEMERAL_KEY` overrides it.
 - **Standby GPU**: has VRAM + models on disk, watches for topology changes, promotes when needed
 
 Passive nodes get routing tables via `STREAM_ROUTE_REQUEST` (0x05), not full gossip.
