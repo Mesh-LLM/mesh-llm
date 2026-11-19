@@ -10,6 +10,8 @@ const SAVE: &str = "actions/cache/save@caa296126883cff596d87d8935842f9db880ef25"
 const RESTORE: &str = "actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25";
 const SCRIPT: &str = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd";
 const RETRY: &str = "steps.initial-publication.outputs.result != 'published' || steps.current-version.outputs.cache-hit != 'true'";
+const PROBE_MISSED: &str = "steps.current-version.outputs.cache-hit != 'true'";
+const COOLDOWN: &str = "Cool down before the final version lookup";
 fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap_or("")
 }
@@ -67,14 +69,26 @@ fn check(document: &Node) -> Result<(), String> {
     let (final_index, final_probe) = unique(steps, "name", "Verify exact cache publication")?;
     let (version_index, version) = unique(steps, "id", "current-version")?;
     let (lookup_index, lookup) = unique(steps, "name", "Verify current cache version lookup")?;
+    let (cooldown_index, cooldown) = unique(steps, "name", COOLDOWN)?;
     if !(snapshot_index < save_index
         && save_index < initial_index
         && initial_index < version_index
         && version_index < *retry_index
         && *retry_index < final_index
-        && final_index < lookup_index)
+        && final_index < cooldown_index
+        && cooldown_index + 1 == lookup_index)
     {
-        return Err("snapshot/save/probe/retry/proof/lookup order changed".into());
+        return Err("snapshot/save/probe/retry/proof/cooldown/lookup order changed".into());
+    }
+    // A rate-limited (HTTP 429) version probe reads as a miss; the final lookup
+    // gets one bounded cooldown instead of failing on the same throttle window.
+    exact(cooldown, "uses", SCRIPT)?;
+    exact(cooldown, "if", PROBE_MISSED)?;
+    if cooldown.get("continue-on-error").is_some() {
+        return Err("cooldown cannot mask failure".into());
+    }
+    if !text(fields(cooldown, "with")?, "script").contains("setTimeout(resolve, 60000)") {
+        return Err("cooldown must wait a bounded 60 s".into());
     }
     for probe in [snapshot, initial, final_probe] {
         exact(probe, "uses", SCRIPT)?;
@@ -351,6 +365,14 @@ fn cache_publication_required_bindings_and_lookup_refusal_cannot_drift() {
             "other-key",
         ),
         ("Save exact cache", "with", "path", "other-path"),
+        (COOLDOWN, "", "if", "true"),
+        (COOLDOWN, "", "continue-on-error", "true"),
+        (
+            COOLDOWN,
+            "with",
+            "script",
+            "await new Promise((resolve) => setTimeout(resolve, 0));",
+        ),
         (
             "Snapshot existing exact cache entries",
             "with",

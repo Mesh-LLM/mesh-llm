@@ -55,24 +55,35 @@ impl DeferredSteps {
     }
 }
 
-fn replay_steps(engine: &Arc<RuntimeEventEngine>, steps: Vec<DeferredStep>) {
+/// What [`replay_deferred_resolution`] did, so a test failure can tell an
+/// empty slot from a refused reservation.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DeferredReplay {
+    NothingPending,
+    ReservationRefused,
+    Replayed,
+}
+
+fn replay_steps(engine: &Arc<RuntimeEventEngine>, steps: Vec<DeferredStep>) -> DeferredReplay {
     let Some(root) = engine.reserve_root(OperationId::new(), synthetic_terminal) else {
-        return;
+        return DeferredReplay::ReservationRefused;
     };
     for (kind, data) in steps {
         submit(&root, kind, data);
     }
+    DeferredReplay::Replayed
 }
 
 /// Replays a resolution that completed before `engine` was installed. Call
 /// right after installing the process runtime event engine.
-pub(crate) fn replay_deferred_resolution(engine: &Arc<RuntimeEventEngine>) {
+pub(crate) fn replay_deferred_resolution(engine: &Arc<RuntimeEventEngine>) -> DeferredReplay {
     let pending = PENDING
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take();
-    if let Some(steps) = pending {
-        replay_steps(engine, steps);
+    match pending {
+        Some(steps) => replay_steps(engine, steps),
+        None => DeferredReplay::NothingPending,
     }
 }
 
