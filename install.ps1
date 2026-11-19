@@ -863,6 +863,9 @@ try {
     }
 
     # The shortcut is a convenience: a failure to add it must not stop setup.
+    # A launcher an earlier install left may still back a working shortcut,
+    # so only one this attempt created is removed.
+    $launcherExisted = Test-Path -LiteralPath (Join-Path $InstallDir $ConsoleLauncherName)
     try {
         $shortcutPath = Install-StartMenuShortcut -MeshBinary $meshBinary -VersionText $versionText
         if ($shortcutPath) {
@@ -870,7 +873,9 @@ try {
         }
     } catch {
         Write-Warning "Could not add MeshLLM to the Start menu: $($_.Exception.Message)"
-        Remove-Item -LiteralPath (Join-Path $InstallDir $ConsoleLauncherName) -Force -ErrorAction SilentlyContinue
+        if (-not $launcherExisted) {
+            Remove-Item -LiteralPath (Join-Path $InstallDir $ConsoleLauncherName) -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Invoke-SetupOrPrint -MeshBinary $meshBinary

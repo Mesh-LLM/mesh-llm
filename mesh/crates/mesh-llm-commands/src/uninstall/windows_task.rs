@@ -30,11 +30,10 @@ pub(super) fn remove_task_step(env: &UninstallEnvironment) -> UninstallStep {
 /// and the MeshLLM Start menu shortcut that runs it. Without this step both
 /// would outlive the binary and the shortcut would open a launcher that fails.
 pub(super) fn start_menu_step(env: &UninstallEnvironment) -> UninstallStep {
-    let install_dir = env
-        .binary_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
+    // The installer records the launcher by absolute path, so a relative
+    // `--binary-path` is made absolute before the launcher path is derived.
+    let binary = std::path::absolute(&env.binary_path).unwrap_or_else(|_| env.binary_path.clone());
+    let install_dir = binary.parent().map(Path::to_path_buf).unwrap_or_default();
     UninstallStep::RemoveStartMenuEntry {
         launcher: install_dir.join(CONSOLE_LAUNCHER),
     }
@@ -99,11 +98,13 @@ pub(super) fn remove_start_menu_entry(
     Ok(())
 }
 
-/// Whether a `.lnk` file runs `launcher`. Shell links keep their arguments as
-/// UTF-16 strings, so the launcher's path is looked for in that encoding,
-/// ignoring case as Windows paths do.
+/// Whether a `.lnk` file runs `launcher`. `install.ps1` writes the arguments as
+/// `-File "<launcher>"`, and shell links keep their arguments as UTF-16
+/// strings, so that exact quoted argument is looked for in that encoding,
+/// ignoring case as Windows paths do. The closing quote keeps a longer path
+/// such as `<launcher>.backup.ps1` from matching.
 fn shortcut_opens(link: &[u8], launcher: &Path) -> bool {
-    let wanted = launcher.to_string_lossy().to_lowercase();
+    let wanted = format!("-file \"{}\"", launcher.to_string_lossy()).to_lowercase();
     // A string can start on an odd byte, so both alignments are read.
     [0, 1].into_iter().any(|start| {
         let (pairs, _) = link.get(start..).unwrap_or_default().as_chunks::<2>();
@@ -466,6 +467,27 @@ mod tests {
         assert!(shortcut.is_file(), "the other copy's shortcut stays");
         assert!(!launcher.exists());
         assert!(done.warnings[0].contains("opens another installation"));
+
+        // A path that only starts with this launcher's is another file.
+        let launcher = write_launcher(temp.path(), &shortcut);
+        let mut longer = launcher.clone().into_os_string();
+        longer.push(".backup.ps1");
+        write_link(&shortcut, Path::new(&longer));
+        let mut done = outcome();
+        remove_start_menu_entry(&launcher, &mut done).unwrap();
+        assert!(shortcut.is_file(), "a shortcut to a longer path stays");
+    }
+
+    #[test]
+    fn a_relative_binary_path_gives_an_absolute_launcher() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut windows = env(temp.path(), UninstallPlatform::Windows);
+        windows.binary_path = Path::new("bin").join("mesh-llm.exe");
+        let UninstallStep::RemoveStartMenuEntry { launcher } = start_menu_step(&windows) else {
+            panic!("expected the Start menu step");
+        };
+        assert!(launcher.is_absolute(), "{}", launcher.display());
+        assert!(launcher.ends_with(Path::new("bin").join("mesh-llm-console.ps1")));
     }
 
     #[test]
