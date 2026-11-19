@@ -362,7 +362,7 @@ fn agentx_admission_keeps_python_source_and_command_occurrences_closed() {
         check_fixture(&root)
             .unwrap_err()
             .to_string()
-            .contains("repository Python source is forbidden")
+            .contains("unreviewed repository Python source")
     );
     fs::remove_file(root.join("skippy/evals/agentx/local-harness.py")).unwrap();
     let setup = fs::read_to_string(root.join("just/skippy.just")).unwrap();

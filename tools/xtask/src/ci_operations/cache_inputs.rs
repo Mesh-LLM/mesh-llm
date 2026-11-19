@@ -134,6 +134,7 @@ impl Inventory {
                         "ci/python-research-source.json",
                         "scripts/ci-compat-smoke.sh",
                         "scripts/linux-glibc-floor.txt",
+                        "skippy/evals/kv-validation/models.json",
                         "skippy/crates/skippy-gpu-bench/native/**",
                         ".github/workflows/ci-windows-runtime-slice.yml",
                         ".github/workflows/windows-warm-caches.yml",
@@ -153,6 +154,7 @@ impl Inventory {
                         "ci/python-research-source.json",
                         "scripts/ci-compat-smoke.sh",
                         "scripts/linux-glibc-floor.txt",
+                        "skippy/evals/kv-validation/models.json",
                     ]
                     .map(str::to_owned),
                 );

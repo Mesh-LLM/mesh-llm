@@ -54,6 +54,7 @@ on:
       - 'mesh/crates/mesh-llm-release-footer/src/**'
       - 'scripts/**'
       - 'skippy/crates/skippy-gpu-bench/native/**'
+      - 'skippy/evals/kv-validation/models.json'
       - 'skippy/llama_cpp/**'
       - 'skippy/scripts/**'
       - 'tools/authority-automation/Cargo.toml'
