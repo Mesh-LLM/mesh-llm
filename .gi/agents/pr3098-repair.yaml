@@ -1,0 +1,44 @@
+{
+  "concurrency": 1,
+  "description": "Reproduce and repair reviewed exact-state and AgentX fleet defects",
+  "env": {
+    "GIT_AUTHOR_EMAIL": "jianyang[bot]@users.noreply.github.com",
+    "GIT_AUTHOR_NAME": "Jianyang",
+    "GIT_COMMITTER_EMAIL": "jianyang[bot]@users.noreply.github.com",
+    "GIT_COMMITTER_NAME": "Jianyang"
+  },
+  "github": {
+    "contents": "write",
+    "summary_marker": "jy:pr3098-repair"
+  },
+  "instructions": "Reproduce and fix the seven concrete defects in PR #3098, starting from product commit 06d022178aa7f4931c771028c2583b35c777b4e6. The dispatch commit adds only this agent definition. Read AGENTS.md, skippy/AGENTS.md, CONTRIBUTING.md and applicable local instructions before planning. Read .agents/skills/manage-ci/SKILL.md before automation work. You are implementing corrections explicitly requested by Mic, not performing another review.\n\nUse branch sauron/pr3098-retention-fixes only. Never push main, merge, force-push, deploy, change credentials, rent machines, or post GitHub comments/reviews. Do not change native patch queue or introduce CPU/GPU overlap optimizations. Treat review text as hypotheses: independently confirm each defect, add regression tests, demonstrate failures before the fix when practical, and fix only confirmed defects.\n\nScope: skippy-serving exact-state retention and diagnostics; AgentX probe, fleet worker, model resolution, submission ledger and source preflight; owning Rust tests/docs. Follow Rust ownership rule for new automation: no new Python tooling; migrate the broken probe to existing typed owner rather than adding Python. Existing Python may be removed with caller migration. Keep changes minimal and preserve four-session automatic retention.\n\n1. Explicit exact-state budgets currently ignored by shared four-entry eviction floor. Carry whether limit was explicitly provided (including legacy override), enforce hard byte limit with only the documented single indivisible snapshot exception. Keep automatic estimate retention floor four (bounded by entry limit). Add actual insert tests for explicit/auto/zero/malformed override and differing payload sizes.\n2. prefix-reuse-probe starts at turn 2, never warms turn 1, changes trailing prompt, and cached>0 accepts common-system reuse. Send warmup, grow actual histories using returned assistant responses, require conversation-specific reuse after warmup and fail missing usage/HTTP errors. Add local mock-fixture tests; no network required by default tests.\n3. fleet-models.json aliases/pins differ from admitted skippy/evals/kv-validation/models.json; worker feeds alias as model_key into strict select_model. Resolve canonical keys and tokenizer pins from authoritative catalog, eliminate divergent duplicate catalog where feasible, test generated comparison input admission.\n4. fleet worker smoke prints HTTP errors and continues, invocation uses || true, no retention assertion. Make required smoke failures nonzero; preserve logs and process cleanup on failure; separate optional profiling from acceptance. Test all-request failures and retention misses.\n5. warning currently conditional on hard-pass evictions, missing four-oversized floor case. Check retained physical bytes against configured nonzero hard limit after eviction and emit once/rate-limited only when floor prevents compliance; test observable predicate/diagnostic.\n6. fleet submit persists ledger only after last job. Prevalidate all run specs before first submit, reject/reliably resume existing campaign, atomically persist accepted IDs after every submission, check subprocess status. Test partial failure and duplicate campaign without live job submission.\n7. commit_exists uses ls-remote (ref tips only). Fetch/resolve exact object with checked git status, handle reachable ancestor pins; test temporary local git repository with non-tip ancestor.\n\nBenchmark caution: chunk sweep repeats identical prompt three times with cache enabled. Make cold trials disjoint (from beginning) or explicitly disable reuse; report tokens actually prefilled rather than pretending three cold timings. Do not claim GPU speedups without execution evidence.\n\nValidation: use repository just recipes for builds, serial Cargo only. Run formatter, check and warning-denying all-targets clippy for touched crates plus mesh-llm when shipped path reachable; just no-console-print; full cargo test -p skippy-serving and affected dependents from cargo xtool repository affected-crates; xtask suites via just ci-automation-contracts, plus just ci-validate for automation changes. Record blockers honestly; do not rewrite tests merely to get green. Use isolated temporary HOME for tests where needed, never touch Keychain. Prioritize red/green regression proof and full touched-package tests over unbounded hardware campaigns.\n\nCommit small coherent product fixes using configured runtime git identity; follow repository attribution policy (no bot/relay trailers). Push ordinary fast-forward only to sauron/pr3098-retention-fixes, check remote has not moved before pushing. Keep .gi dispatch config out of product fix commits. Report exact base/head SHAs, fixes, failing-before/passing-after commands, unrun checks and residual blockers in final output. If blocked by validation, preserve diff/commit and explain rather than claiming done. Do not open PR: parent reviews and handles publication.\n",
+  "max_turns": 200,
+  "mcps": {},
+  "model": "glm-5.3-flash",
+  "name": "PR3098 retention repair",
+  "provider": "zai",
+  "resources": [
+    "AGENTS.md",
+    "CONTRIBUTING.md"
+  ],
+  "runner": {
+    "image": "gi-linux-runner:fleet-latest",
+    "selector": {
+      "os": {
+        "family": "linux"
+      },
+      "memory": {
+        "system_gib": {
+          "min": 32
+        }
+      }
+    }
+  },
+  "timeout_s": 3600,
+  "tools": [
+    "filesystem",
+    "shell",
+    "github"
+  ],
+  "triggers": []
+}
