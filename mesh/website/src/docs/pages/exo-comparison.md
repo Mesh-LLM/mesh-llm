@@ -61,7 +61,7 @@ single-point writer bottleneck.
 Mesh uses a **decentralized mesh** with QUIC/iroh peer-to-peer connections and
 gossip protocol for state dissemination. There is no single master; nodes coordinate
 through peer membership, heartbeats, and capability advertisement. Published meshes
-use Nostr for public discovery while private meshes stay invite-token based.
+use Nostr for public discovery. Unpublished meshes can be located through join tokens; private membership requires enforced admission control, not just a token or a name.
 
 ## Splitting philosophy
 

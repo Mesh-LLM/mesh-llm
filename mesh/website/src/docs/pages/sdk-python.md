@@ -36,12 +36,16 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-For a private mesh, use `join_tokens=(token,)` instead of `auto_join=True`.
+To join a mesh by token, use `join_tokens=(token,)` instead of `auto_join=True`.
 Pass `owner_key_path` when an owner keystore is required. To serve local models,
 select `mode="serve"` or `"combined"` and pass
 `models=("publisher/model:quant",)`. Local serving requires a compatible installed
 native runtime. Client mode does not load a model-serving runtime. A serve-only
 node rejects SDK inference calls.
+
+Join tokens locate a mesh; they do not make membership private. Configure
+[admission control](/docs/pages/private-meshes/#discovery-and-admission) separately
+when participation must be restricted.
 
 ## Discover every advertised workload
 

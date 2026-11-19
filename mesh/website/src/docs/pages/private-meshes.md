@@ -2,11 +2,13 @@
 
 # Meshes for Your Own Machines
 
-Use a named mesh to connect your own machines through Nostr discovery. This
-is not a private-mesh setup: the name is not an access-control credential.
-For an unpublished mesh, start without `--discover` or `--publish` and share its
-join token out of band; see the
-[token-based setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md#create-an-unpublished-mesh-and-join-by-token).
+Publishing a mesh to Nostr makes its discovery information public, whether or
+not it has a name. A name helps people find a mesh; it does not restrict access.
+Private membership requires enforced admission control. An unpublished mesh is
+not automatically private.
+
+This guide separates public discovery, restricted membership, and private
+request routing.
 
 Traffic between those Mesh nodes is end-to-end
 encrypted by QUIC. If iroh uses a relay, the relay forwards encrypted packets
@@ -26,15 +28,37 @@ not bearer authorization. `--join` and `--join-file` can target published or
 unpublished meshes. For controlled private deployments, configure and verify
 owner/trust policy rather than relying on the mesh name or token secrecy. Signed
 bootstrap tokens bind policy but do not by themselves imply owner allowlisting.
-See [ownership and admission control](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md#ownership-and-admission-control).
+See [ownership and admission control](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/MESHES.md#ownership-and-admission-control).
 
-## Start the first serving node
+## Restrict membership
+
+Configure owner allowlisting on each participating node. The default trust policy
+is `off`; `require-owned` checks for an owner identity but does not limit admission
+to owners you trust. Use `allowlist` with your trusted owner IDs for that boundary.
+A discovery name or a join token is not a substitute.
+
+See [ownership and admission control](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/MESHES.md#ownership-and-admission-control)
+for owner setup and commands.
+
+## Connect without public discovery
+
+Start a node without `--discover`, `--auto`, or `--publish`, then share its join
+token out of band. Recipients use `--join <token>` or `--join-file <path>`.
+Configure admission control separately if membership must be restricted.
+See the [token-based setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/MESHES.md#create-an-unpublished-mesh-and-join-by-token).
+
+## Connect through named public discovery
+
+The following commands publish discovery information to Nostr. Anyone who learns
+the name can find the mesh; admission policy determines whether they can join.
+
+### Start the first serving node
 
 ```sh
 mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
-## Add another serving machine
+### Add another serving machine
 
 Install Mesh on the second machine, then use the same mesh name:
 
@@ -42,7 +66,7 @@ Install Mesh on the second machine, then use the same mesh name:
 mesh-llm serve --discover=my-mesh --model <model-ref>
 ```
 
-## Join as an API-only client
+### Join as an API-only client
 
 Use this for a laptop that should send requests but not serve a model:
 
@@ -50,7 +74,7 @@ Use this for a laptop that should send requests but not serve a model:
 mesh-llm client --discover=my-mesh
 ```
 
-## Check that peers are visible
+### Check that peers are visible
 
 Open the console:
 

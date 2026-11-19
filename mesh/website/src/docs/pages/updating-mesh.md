@@ -13,10 +13,10 @@ mesh-llm stop
 mesh-llm serve --auto
 ```
 
-For a private mesh, restart with the same mesh name and model you used before:
+For a mesh using named discovery, restart with the same discovery name and model you used before:
 
 ```sh
-mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Release checks
@@ -63,3 +63,7 @@ mesh-llm update --version v0.X.Y --flavor vulkan
 ```
 
 Update serving nodes one at a time when a mesh is actively handling traffic. Mixed-version meshes are expected to keep operating during rolling updates.
+
+Named discovery publishes mesh discovery information to Nostr. It is public even
+when the name is only shared with your team. For restricted membership, configure
+[admission control](/docs/pages/private-meshes/#discovery-and-admission).

@@ -9,6 +9,12 @@ join as an API-only client, or do both.
 
 ## Join tokens, discovery, and admission
 
+Publishing discovery information to Nostr makes it public, with or without a
+mesh name. Names help people find meshes; they do not restrict access. Private
+membership requires enforced admission control. Private request routing is a
+separate choice about which nodes may compute a request; see
+[private routing](https://meshllm.cloud/docs/pages/private-routing/).
+
 These are separate properties; a **join token** (also called an invite token)
 does not by itself mean a mesh is private:
 
@@ -469,7 +475,10 @@ Advertisement behavior is configured via `[runtime.activity].advertisement`:
 data, input events, app/window names, usernames, idle durations, timestamps, or
 detector errors are ever encoded in gossip.
 
-### Public/private identity transitions
+### Discovery-mode identity transitions
+
+Here, `private mode` is the runtime's name for unpublished operation, not a
+guarantee of restricted membership.
 
 Switching between private mode and Nostr public discovery (`--auto`,
 `--publish`, or `--discover`) starts a fresh node and mesh identity in either

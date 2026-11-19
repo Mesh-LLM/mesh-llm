@@ -31,14 +31,18 @@ Add another machine when:
 - you want a second machine to serve a different model
 - you want a laptop to use a workstation through a local API
 
-Start every serving machine with the same private mesh name:
+Start every serving machine with the same discovery name:
 
 ```sh
-mesh-llm serve --discover=my-private-mesh --model <model-ref>
+mesh-llm serve --discover=my-mesh --model <model-ref>
 ```
 
 Join from an API-only laptop:
 
 ```sh
-mesh-llm client --discover=my-private-mesh
+mesh-llm client --discover=my-mesh
 ```
+
+Named discovery publishes mesh discovery information to Nostr. It is public even
+when the name is only shared with your team. For restricted membership, configure
+[admission control](/docs/pages/private-meshes/#discovery-and-admission).

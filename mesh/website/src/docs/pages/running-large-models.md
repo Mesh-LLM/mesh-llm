@@ -6,10 +6,10 @@ If you are just trying Mesh for the first time, do not start here. Run the [Quic
 
 ## Add serving machines
 
-Run the same private mesh name on each machine:
+Run the same discovery name on each machine:
 
 ```sh
-mesh-llm serve --discover=my-private-mesh --model <model-ref>
+mesh-llm serve --discover=my-mesh --model <model-ref>
 ```
 
 Each serving node advertises its available models. Your local API stays:
@@ -29,7 +29,7 @@ mesh-llm models search gemma
 Serve a selected ref:
 
 ```sh
-mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M
 ```
 
 ## Layer packages
@@ -58,3 +58,7 @@ flowchart LR
 ```
 
 The [architecture hub](/docs/pages/architecture/) explains how Mesh routes requests into Skippy. See the [model package specification](/docs/pages/model-package-spec/) for the manifest schema, artifact checksums, and stage-selection rules. For package publishing and validation, see [Layer package repositories](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/LAYER_PACKAGE_REPOS.md).
+
+Named discovery publishes mesh discovery information to Nostr. It is public even
+when the name is only shared with your team. For restricted membership, configure
+[admission control](/docs/pages/private-meshes/#discovery-and-admission).
