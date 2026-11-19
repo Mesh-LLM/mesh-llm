@@ -1,0 +1,73 @@
+From b772e13e4a821f8de821b82f1fafee990724969e Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 02:59:27 +1100
+Subject: [PATCH] models: support Kolibri biased-logit sigmoid routing
+
+---
+ src/llama-graph.cpp     | 1 +
+ src/llama-hparams.h     | 1 +
+ src/llama-model.cpp     | 1 +
+ src/models/kolibri1.cpp | 4 +++-
+ 4 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index ca460424b..158ddf564 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2783,6 +2783,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+                 probs = ggml_soft_max(ctx0, logits); // [n_expert, n_tokens]
+             } break;
+         case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID:
++        case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD:
+             {
+                 probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
+             } break;
+diff --git a/src/llama-hparams.h b/src/llama-hparams.h
+index e685800f3..c08710ea8 100644
+--- a/src/llama-hparams.h
++++ b/src/llama-hparams.h
+@@ -19,6 +19,7 @@ enum llama_expert_gating_func_type {
+     LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID        = 2,
+     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3, // applied to the router weights instead of the logits
+     LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS  = 4,
++    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD = 5,
+ };
+ 
+ enum llama_swa_type {
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index ff95ba534..1d278bf71 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1159,6 +1159,7 @@ static const char * llama_expert_gating_func_name(llama_expert_gating_func_type
+     switch (type) {
+         case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX: return "softmax";
+         case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID: return "sigmoid";
++        case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD: return "sigmoid_logit_add";
+         case LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS: return "sqrtsoftplus";
+         default:                                    return "unknown";
+     }
+diff --git a/src/models/kolibri1.cpp b/src/models/kolibri1.cpp
+index 6eb21c121..2fb2e5752 100644
+--- a/src/models/kolibri1.cpp
++++ b/src/models/kolibri1.cpp
+@@ -9,7 +9,8 @@ void llama_model_kolibri1::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
+     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
+ 
+-    if (hparams.n_swa == 0 || hparams.n_expert_shared != 1 || hparams.n_ff_shexp == 0) {
++    if (hparams.n_swa == 0 || hparams.n_expert_shared != 1 || hparams.n_ff_shexp == 0 ||
++        hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD) {
+         throw std::runtime_error("Kolibri-1: invalid sliding window or shared expert configuration");
+     }
+ 
+@@ -125,6 +126,7 @@ llama_model_kolibri1::graph::graph(const llm_graph_params & params)
+ 
+         // The selection adds the bias to the logits, the weights are the sigmoid of the unbiased logits, so the same logits feed both.
+         ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
++        ggml_prec_set_acc(logits, GGML_PREC_F32);
+         cb(logits, "ffn_moe_logits", il);
+ 
+         ggml_tensor * selection = ggml_add(ctx0, logits, layer.ffn_exp_probs_b);
+-- 
+2.56.0
+

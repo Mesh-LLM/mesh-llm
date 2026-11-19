@@ -234,12 +234,17 @@ fn summarize_controls(observations: &[(ProbeCase, ProbeRender)]) -> ThinkingCont
         (Some(_), Some(_)) => ThinkingToggle::NotObserved,
         _ => ThinkingToggle::Unknown,
     };
-    let reasoning_parser = match find_render(observations, ProbeCase::Default) {
-        Some(ProbeRender::Rendered {
-            reasoning_parser, ..
-        }) => *reasoning_parser,
-        _ => None,
-    };
+    // Some templates reject the default off request but expose a parser when
+    // thinking is explicitly enabled. Report that available parser capability.
+    let reasoning_parser = observations
+        .iter()
+        .filter_map(|(_, observation)| match observation {
+            ProbeRender::Rendered {
+                reasoning_parser, ..
+            } => *reasoning_parser,
+            ProbeRender::Error(_) => None,
+        })
+        .reduce(|observed, supported| observed || supported);
     let efforts = on
         .map(|on| {
             PROBE_EFFORTS
@@ -391,6 +396,29 @@ mod tests {
         let defaults = defaults();
         let report = run_thinking_probe(&ReasoningWithoutControls, &inputs(&defaults));
         assert_eq!(report.controls().toggle, ThinkingToggle::NotObserved);
+        assert_eq!(report.controls().reasoning_parser, Some(true));
+    }
+
+    #[test]
+    fn reasoning_parser_is_detected_when_default_render_is_rejected() {
+        struct ThinkingRequired;
+        impl ChatTemplateProbeRenderer for ThinkingRequired {
+            fn render(
+                &self,
+                _: &str,
+                options: ChatTemplateJsonOptions,
+            ) -> Result<ChatTemplateJsonResult, String> {
+                if options.enable_thinking != Some(true) {
+                    return Err("thinking cannot be disabled".into());
+                }
+                Ok(ChatTemplateJsonResult {
+                    prompt: "<|start|>assistant to=self".into(),
+                    metadata_json: r#"{"supports_thinking":true}"#.into(),
+                })
+            }
+        }
+        let defaults = defaults();
+        let report = run_thinking_probe(&ThinkingRequired, &inputs(&defaults));
         assert_eq!(report.controls().reasoning_parser, Some(true));
     }
 

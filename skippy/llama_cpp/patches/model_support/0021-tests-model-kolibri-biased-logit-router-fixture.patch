@@ -1,0 +1,26 @@
+From 82eeeb82596a1f51374ecdee2d5ab8311e2031ae Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 9 Nov 2026 03:01:20 +1100
+Subject: [PATCH] tests: model Kolibri biased-logit router fixture
+
+---
+ tests/test-llama-archs.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index ddebf70d8..5e2c717c7 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -803,6 +803,9 @@ static gguf_context_ptr get_gguf_ctx(
+             case LLM_ARCH_DEEPSEEK41:
+                 gating_func = 4;
+                 break;
++            case LLM_ARCH_KOLIBRI1:
++                gating_func = 5;
++                break;
+             default:
+                 break;
+         }
+-- 
+2.56.0
+

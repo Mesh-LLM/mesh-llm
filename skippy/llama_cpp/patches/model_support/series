@@ -14,3 +14,10 @@
 0014-test-skippy-cover-head-input-publication.patch
 0015-models-add-laguna-dflash-drafts.patch
 0016-models-add-dspine-block-parallel-drafter-support.patch
+0017-fix-sensenova-u1-bind-custom-position-input-for-stag.patch
+0018-fix-llama-admit-clover-state-and-legacy-limite-metad.patch
+0019-fix-llama-recognize-kolibri1-qwen2-compatible-tokeni.patch
+0020-models-support-kolibri-biased-logit-sigmoid-routing.patch
+0021-tests-model-kolibri-biased-logit-router-fixture.patch
+0022-models-admit-legacy-clover-shared-expert-metadata.patch
+0023-models-register-deepseek41-request-inputs.patch

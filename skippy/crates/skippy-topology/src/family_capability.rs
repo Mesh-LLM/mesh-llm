@@ -3,6 +3,8 @@ use crate::{
     SidebandRequirement, SplitConstraint, SplitConstraintKind,
 };
 
+mod mistral_large4;
+
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TestLlamaArchitecture {
@@ -952,6 +954,9 @@ fn infer_mistral_olmo_llama_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
+    if compact.contains("mistrallarge4") && layer_count == 72 {
+        return Some(mistral_large4::capability(layer_count, activation_width));
+    }
     if compact.contains("mistral4") {
         return Some(dense_family_capability(
             "mistral4",

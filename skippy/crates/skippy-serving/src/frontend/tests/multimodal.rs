@@ -9,6 +9,7 @@ const MM_SPLIT_LAYER_ENV: &str = "SKIPPY_MM_SPLIT_LAYER";
 const MM_CTX_SIZE_ENV: &str = "SKIPPY_MM_CTX_SIZE";
 const MM_MAX_TOKENS_ENV: &str = "SKIPPY_MM_MAX_TOKENS";
 const MM_N_GPU_LAYERS_ENV: &str = "SKIPPY_MM_N_GPU_LAYERS";
+const MM_REASONING_EFFORT_ENV: &str = "SKIPPY_MM_REASONING_EFFORT";
 
 struct MultimodalSmokeFixture {
     model_path: PathBuf,
@@ -19,6 +20,7 @@ struct MultimodalSmokeFixture {
     ctx_size: u32,
     max_tokens: u32,
     n_gpu_layers: i32,
+    reasoning_effort: String,
 }
 
 fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
@@ -70,6 +72,7 @@ fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
     let ctx_size = env_u32(MM_CTX_SIZE_ENV)?.unwrap_or(2048);
     let max_tokens = env_u32(MM_MAX_TOKENS_ENV)?.unwrap_or(256);
     let n_gpu_layers = env_i32(MM_N_GPU_LAYERS_ENV)?.unwrap_or(0);
+    let reasoning_effort = env::var(MM_REASONING_EFFORT_ENV).unwrap_or_else(|_| "none".into());
     Ok(Some(MultimodalSmokeFixture {
         model_path,
         projector_path,
@@ -79,6 +82,7 @@ fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
         ctx_size,
         max_tokens,
         n_gpu_layers,
+        reasoning_effort,
     }))
 }
 
@@ -279,9 +283,9 @@ fn multimodal_chat_request_with_max_tokens(
             }],
             "max_tokens": max_tokens,
             "temperature": 0.0,
-            "reasoning_effort": "none",
+            "reasoning_effort": fixture.reasoning_effort,
             "reasoning_format": "auto",
-            "chat_template_kwargs": {"reasoning_strength": "none"}
+            "chat_template_kwargs": {"reasoning_strength": fixture.reasoning_effort}
         }))
         .map(Into::into)
         .context("build multimodal smoke request")
