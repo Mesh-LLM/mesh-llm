@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use super::web_ui::PackagedPluginWebUiPagePlacement;
-use super::{PackagedPluginManifest, PackagedPluginValueKind};
+use super::{PackagedPluginValueKind, packaged::PackagedPluginManifest};
 
 fn web_ui_exemplar_path(file_name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
