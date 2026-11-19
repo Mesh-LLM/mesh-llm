@@ -1842,8 +1842,17 @@ zero reuse in run `34272984200/1`.
 The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
 graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
-and the isolated default-feature `xtask` Clippy graph with all targets. The
-workflow-level debug-information overrides apply to every seed profile and its
+and the isolated default-feature `xtask` Clippy graph with all targets, then
+appends `just skippy-cli-release-build` for the standalone Skippy default-feature
+release graph with `dynamic-native-runtime`. Three paired runs in
+[44228295870](https://github.com/Mesh-LLM/mesh-llm/actions/runs/44228295870)
+at `83a16398df` measured a median 204.3 s (59.5%) standalone saving, 296-331 s
+extra seed work, and about 291 MB more data (1.52 GB total, no observed eviction).
+The observed main-host mean of 7.38 reuses per saved key exceeds the conservative
+1.82-reuse compute break-even; incremental archive transfer remains unmeasured.
+The experiment harness remains on its qualification branch; production adopts
+only its additional build. Native-runtime seed restoration remains excluded.
+The workflow-level debug-information overrides apply to every seed profile and its
 consumers. Root and workspace package Cargo manifests and the
 warmer workflow, along with `Justfile` and `just/**`, are part of the exact
 seed key.

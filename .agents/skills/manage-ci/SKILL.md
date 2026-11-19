@@ -593,7 +593,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   Keep compiler-seed publishers and consumers aligned, and change the cache
   epoch with this policy.
 - The trusted seed also builds the isolated default-feature `xtask` Clippy
-  graph with `--all-targets`, independently of the product graph. All seed
+  graph with `--all-targets`, independently of the product graph, then appends
+  `just skippy-cli-release-build` to seed the standalone Skippy default-feature
+  release graph with `dynamic-native-runtime`. Keep this after the existing
+  seed builds, matching the measured extended recipe. This does not qualify
+  native-runtime seed restoration; keep its recorded exclusion. All seed
   builds use the same debug-information settings as their consumers.
   Seed compatibility keys include the root and workspace
   package Cargo manifests and the warmer workflow's build configuration as well
