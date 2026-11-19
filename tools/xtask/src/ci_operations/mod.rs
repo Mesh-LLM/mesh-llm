@@ -48,6 +48,7 @@ mod identity_text;
 pub(crate) mod json_access;
 pub(crate) mod json_decode;
 mod linker_traces;
+mod linux_cache_measurement;
 mod performance_history;
 mod prepared_images;
 mod registry_pulls;
@@ -104,6 +105,7 @@ pub(crate) enum CiOperationsCommand {
     WindowsCacheRetention,
     WindowsCacheMaintenance,
     WindowsAbiMeasurement,
+    LinuxCacheMeasurement,
     CacheInputs,
 }
 
@@ -128,6 +130,7 @@ impl CiOperationsCommand {
             "windows-cache-retention" => Some(Self::WindowsCacheRetention),
             "windows-cache-maintenance" => Some(Self::WindowsCacheMaintenance),
             "windows-abi-measurement" => Some(Self::WindowsAbiMeasurement),
+            "linux-cache-measurement" => Some(Self::LinuxCacheMeasurement),
             "cache-inputs" => Some(Self::CacheInputs),
             _ => None,
         }
@@ -184,6 +187,7 @@ pub(crate) fn run(
             windows_cache_maintenance::run(args, &root()?)
         }
         CiOperationsCommand::WindowsAbiMeasurement => windows_abi_measurement::run(args, &root()?),
+        CiOperationsCommand::LinuxCacheMeasurement => linux_cache_measurement::run(args, &root()?),
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::SccacheSummary => sccache_summary::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),

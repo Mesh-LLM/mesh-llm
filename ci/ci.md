@@ -1523,6 +1523,20 @@ that key, by equality or a literal `<dir>/**`, and refuses `!` exclusions there:
 an input it does not watch would move the key on `main` with no warmed entry,
 and the next Windows runtime run of each PR would build cold.
 
+The manual `linux-cache-measurement.yml` diagnostic measures the Linux CPU
+runtime package, hosted xtask and hosted controller caches without publishing.
+Nothing calls it. One hosted `ubuntu-24.04` job per cohort computes the same
+production key, restores it only for exact-warm and unrelated-edit arms, and
+then runs the production verification or preparation path. A missing trusted
+entry records BLOCKED rather than a cold sample, and an unrelated edit that
+moves the key is refused. An admitted sample still writes a refused receipt when
+preparation fails. It builds its own receipt tool outside the measured
+roots, never reaches `prepare-automation` or `prepare-ci-controller`, and
+uploads only its receipts for 14 days. Runtime slice, warmer and hosted action
+behavior is unchanged. Merging a change to its receipt code moves the CPU
+runtime and hosted xtask keys, so their warm samples wait for a trusted `main`
+run that saves the new key. Each sample has its own concurrency group.
+
 Windows ABI retention runs in the existing warmer maintenance job. Rust derives
 the active compatibility roster from CI, release and warmer consumers and
 uses the same identity constructor as restoration. Complete main-ref namespace

@@ -719,6 +719,30 @@ checked-in expiry are the maintainer-controlled approval boundary.
   of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
   `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract
   gate refuses an uncovered input and any `!` exclusion in those paths.
+- Linux CPU runtime package, hosted full xtask and hosted controller cache
+  qualification uses only the manual `linux-cache-measurement.yml` diagnostic.
+  It has only a `workflow_dispatch` trigger, hosted `ubuntu-24.04` jobs, a
+  `contents: read` token (plus `packages: read` to pull the pinned CPU image),
+  no secrets and no Depot. Each cohort job restores its unchanged production
+  key, the `ci-ops cache-inputs` expression, through one exact
+  `actions/cache/restore` in warm arms only. Cold computes and records the same
+  key without retrieval. Exact-warm and unrelated-edit without an exact trusted
+  entry are recorded BLOCKED, never relabelled cold, and no entry is
+  manufactured. Unrelated-edit applies the cohort's first admitted Rust edit
+  from the identity-preservation fixture and refuses the sample unless the full
+  key is unchanged. Each arm uses fresh output and native build roots, and the
+  measurement automation builds outside them. The `linux_cache_measurement`
+  workflow guard refuses any reached `actions/cache` or `actions/cache/save`,
+  save-and-verify, `prepare-automation`, `prepare-ci-controller`, cache prune,
+  release or non-evidence artifact upload, including through local actions,
+  and any other trigger. An admitted sample always reaches its receipt: a failed
+  preparation, missing or out-of-order phase timestamps, or an unreadable output
+  make it `admitted=false`. Typed `ci-ops linux-cache-measurement` receipts are
+  evidence artifacts only. Production keys, the compiler-seed exclusion and the
+  existing save clauses are unchanged; restores may update access metadata.
+  The receipt code is in the CPU runtime and hosted xtask keys, so warm samples
+  of those cohorts wait for a trusted `main` save of the new key. Primary time
+  is lookup plus preparation only.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.
