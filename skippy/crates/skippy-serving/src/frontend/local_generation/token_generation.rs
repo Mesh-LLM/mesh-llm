@@ -981,12 +981,12 @@ impl StageOpenAiBackend {
                 },
             )?;
             cache_stats.predicted_ms = stats.predicted_ms;
-            drop(decoding);
             include_undelivered_samples(
                 &mut state.decoded_tokens,
                 &mut state.generated_token_ids,
                 &stats.undelivered_tokens,
             );
+            drop(decoding);
             let model_generation_elapsed =
                 self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
             if state.generated_token_ids.len() > 1 {

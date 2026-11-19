@@ -196,10 +196,12 @@ mod tests {
         assert_eq!(OpenSpan::NONE.take::<u32>(), None);
     }
 
+    type StartedSpanRecord = (&'static str, SpanLevel, SpanContext, Option<[u8; 8]>);
+
     /// A sink that acts at both ends of a live span, as Tracy must.
     #[derive(Default)]
     struct Seen {
-        started: Mutex<Vec<(&'static str, SpanLevel, SpanContext, Option<[u8; 8]>)>>,
+        started: Mutex<Vec<StartedSpanRecord>>,
         ended: Mutex<Vec<(String, SpanContext, Option<u64>)>>,
         discarded: Mutex<Vec<Option<u64>>>,
     }

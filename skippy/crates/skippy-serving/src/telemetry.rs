@@ -233,26 +233,9 @@ impl Telemetry {
     }
 
     /// The live span `begin_span` saw ends: export it with its frame's events.
-    pub(crate) fn end_span(
-        &self,
-        open: OpenSpans,
-        frame: &Frame,
-        name: &str,
-        mut attributes: BTreeMap<String, Value>,
-        start_time_unix_nanos: u64,
-        end_time_unix_nanos: u64,
-        links: Vec<SpanContext>,
-    ) {
+    pub(crate) fn end_span(&self, open: OpenSpans, frame: &Frame, mut record: SpanRecord) {
         let events = frame.take_events();
-        self.add_common_attributes(&mut attributes);
-        let mut record = SpanRecord::of_frame(
-            frame,
-            name,
-            attributes,
-            start_time_unix_nanos,
-            end_time_unix_nanos,
-        );
-        record.links = links;
+        self.add_common_attributes(&mut record.attributes);
         record.events = events;
         self.sinks
             .iter()

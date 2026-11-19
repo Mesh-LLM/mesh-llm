@@ -348,7 +348,7 @@ pub(in crate::frontend) struct TextGenerationCollector<'a, F>
 where
     F: FnMut(&str) -> InferenceResult<()>,
 {
-    model: StageModelReader,
+    model: Option<StageModelReader>,
     stop_values: Vec<&'a str>,
     on_text_chunk: F,
     text: String,
@@ -375,6 +375,19 @@ where
 {
     pub(in crate::frontend) fn new(
         model: StageModelReader,
+        stop_values: Vec<&'a str>,
+        on_text_chunk: F,
+    ) -> InferenceResult<Self> {
+        Self::with_model(Some(model), stop_values, on_text_chunk)
+    }
+
+    #[cfg(test)]
+    fn without_model(stop_values: Vec<&'a str>, on_text_chunk: F) -> InferenceResult<Self> {
+        Self::with_model(None, stop_values, on_text_chunk)
+    }
+
+    fn with_model(
+        model: Option<StageModelReader>,
         stop_values: Vec<&'a str>,
         on_text_chunk: F,
     ) -> InferenceResult<Self> {
@@ -417,13 +430,12 @@ where
     }
 
     pub(in crate::frontend) fn push_token(&mut self, token: i32) -> InferenceResult<TokenControl> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| InferenceError::backend("token decoding requires a loaded model"))?;
         let eog_timer = Instant::now();
-        if !self.ignore_eos
-            && self
-                .model
-                .token_is_eog(token)
-                .map_err(openai_backend_error)?
-        {
+        if !self.ignore_eos && model.token_is_eog(token).map_err(openai_backend_error)? {
             self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
             self.finish_reason = finish_reason_for_generation(false);
             self.stopped = true;
@@ -431,8 +443,7 @@ where
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
         let detokenize_timer = Instant::now();
-        let piece = self
-            .model
+        let piece = model
             .detokenize_bytes(&[token])
             .map_err(openai_backend_error)?;
         self.metrics.detokenize_ms += detokenize_timer.elapsed().as_secs_f64() * 1000.0;
@@ -566,9 +577,12 @@ where
                 "recorded logprobs do not match the generated tokens",
             ));
         }
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| InferenceError::backend("logprob decoding requires a loaded model"))?;
         let candidate = |token: i32, logprob: f32| -> InferenceResult<GeneratedLogprobCandidate> {
-            let bytes = self
-                .model
+            let bytes = model
                 .detokenize_bytes(&[token])
                 .map_err(openai_backend_error)?;
             Ok(GeneratedLogprobCandidate {
@@ -618,9 +632,7 @@ mod tests {
     #[test]
     fn token_after_stop_sequence_does_not_bring_back_trimmed_text() {
         let chunks = std::cell::RefCell::new(Vec::<String>::new());
-        // No token here is detokenized, so the reader needs no loaded model.
-        let model = skippy_runtime::StageModel::new_dummy().reader();
-        let mut collector = TextGenerationCollector::new(model, vec!["END"], |chunk| {
+        let mut collector = TextGenerationCollector::without_model(vec!["END"], |chunk| {
             chunks.borrow_mut().push(chunk.to_string());
             Ok(())
         })

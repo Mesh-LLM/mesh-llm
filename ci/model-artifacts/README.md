@@ -6,11 +6,12 @@ to this contract. Every artifact records an immutable
 Hugging Face revision, its exact file set, byte sizes, SHA-256 digests, family
 capabilities, and the suites and cadences allowed to use it.
 
-A suite built from models pinned elsewhere is declared, not typed in:
-`derived_suites` names a pinned evals model list
-(`skippy/evals/kv-validation/models.json`), the selectors to register it at
-and an id prefix, and the generator refuses the registry until every derived
-row exists, so a member cannot be forgotten. `cargo xtool models pin` with no
+A suite built from models pinned elsewhere can be declared in `derived_suites`:
+it names a pinned evals model list (`skippy/evals/kv-validation/models.json`),
+the selectors to register it at and an id prefix. Keep that declaration out
+until every derived artifact has an immutable source and integrity metadata;
+once declared, the generator refuses the registry until every derived row
+exists, so a member cannot be forgotten. `cargo xtool models pin` with no
 arguments registers exactly the missing rows: each file name is the list's
 with its selector suffix swapped (`Qwen3.5-4B-Q4_K_M.gguf` at `BF16` is
 `Qwen3.5-4B-BF16.gguf`), each id is `<prefix>-<key>` with the selector slug
@@ -48,11 +49,12 @@ transfer and is held to the manifest's size and SHA-256; a file that already
 verifies is kept, one that does not is reported and left for the operator.
 `--dry-run` lists what would be fetched and how much, `--artifact-id` limits
 the fetch to one artifact, and `models resolve --artifact-id <id>
---verify-root <root>/<id>` checks a fetched artifact afterwards. The
-`performance-*` suites are the manual performance tiers: `performance-coverage`
-pins one representative of each architecture class (dense, MoE, MLA, MXFP4,
-sliding window, Mamba2, RWKV7, Granite hybrid, embedding, reranker) at the
-same revision the family battery certifies.
+--verify-root <root>/<id>` checks a fetched artifact afterwards.
+`performance-coverage` is the manual performance tier, pinning one
+representative of each architecture class (dense, MoE, MLA, MXFP4, sliding
+window, Mamba2, RWKV7, Granite hybrid, embedding, reranker) at the same revision
+the family battery certifies. Additional derived Qwen performance suites stay
+undeclared until their complete artifact pins are available.
 
 Multi-artifact manifests may declare `default_artifact_id` for callers that
 intentionally consume the suite's canonical fixture without selecting an
