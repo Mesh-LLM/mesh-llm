@@ -69,7 +69,13 @@ pub fn load_local_native_runtime(args: &NativeRuntimeOptions) -> Result<()> {
     let plan = local_native_runtime_plan(args)?;
     // The normal reader verified the selected bundle's ABI metadata and payload hashes.
     // The dynamic loader additionally checks the ABI exported by the actual library.
-    unsafe { skippy_runtime::load_native_runtime_libraries(&plan.libraries) }.with_context(|| {
+    unsafe {
+        skippy_runtime::load_native_runtime_libraries_with_cpu_backend_dir(
+            &plan.libraries,
+            plan.cpu_backend_dir.as_deref(),
+        )
+    }
+    .with_context(|| {
         format!(
             "load Skippy runtime {} from {}",
             plan.native_runtime_id,

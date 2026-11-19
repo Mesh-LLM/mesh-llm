@@ -190,6 +190,8 @@ fn linux_x86_64_default_pins_a_sandy_bridge_compatible_isa_in_configure_and_stam
         "-DGGML_AVX512_BF16=OFF",
         "-DGGML_FMA=OFF",
         "-DGGML_F16C=OFF",
+        "-DGGML_BACKEND_DL=ON",
+        "-DGGML_CPU_ALL_VARIANTS=ON",
     ] {
         assert!(
             fixture.log().contains(argument),
@@ -201,6 +203,57 @@ fn linux_x86_64_default_pins_a_sandy_bridge_compatible_isa_in_configure_and_stam
         );
     }
 }
+
+#[test]
+fn linux_x86_64_cross_compile_keeps_the_pre_avx_baseline() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .args([
+                "-DCMAKE_SYSTEM_NAME=Linux",
+                "-DCMAKE_SYSROOT=/opt/westmere-sysroot",
+            ])
+            .output()
+            .unwrap(),
+    );
+    for argument in [
+        "-DGGML_SSE42=OFF",
+        "-DGGML_AVX=OFF",
+        "-DGGML_AVX_VNNI=OFF",
+        "-DGGML_AVX2=OFF",
+        "-DGGML_BMI2=OFF",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_FMA=OFF",
+        "-DGGML_F16C=OFF",
+        "-DGGML_BACKEND_DL=ON",
+        "-DGGML_CPU_ALL_VARIANTS=ON",
+    ] {
+        assert!(
+            fixture.log().contains(argument),
+            "missing cross-build argument {argument}"
+        );
+        assert!(fixture.stamp().contains(&format!("cmake-arg={argument}")));
+    }
+    assert!(!fixture.log().contains("-DGGML_AVX=ON"));
+    assert!(!fixture.log().contains("-DGGML_SSE42=ON"));
+}
+
+#[test]
+fn linux_x86_64_toolchain_option_keeps_the_pre_avx_baseline() {
+    let fixture = Fixture::new(true);
+    success(
+        fixture
+            .command("Linux")
+            .args(["--toolchain", "/opt/westmere-toolchain.cmake"])
+            .output()
+            .unwrap(),
+    );
+    assert!(fixture.log().contains("-DGGML_SSE42=OFF"));
+    assert!(fixture.log().contains("-DGGML_AVX=OFF"));
+    assert!(!fixture.log().contains("-DGGML_AVX=ON"));
+}
+
 #[test]
 fn reproducible_linux_x86_64_configure_disables_avx_and_sse42() {
     for epoch in ["", "1700000000"] {
@@ -287,6 +340,8 @@ fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
             .unwrap(),
     );
     assert!(fixture.log().contains("-DGGML_NATIVE=ON"));
+    assert!(!fixture.log().contains("-DGGML_BACKEND_DL=ON"));
+    assert!(!fixture.log().contains("-DGGML_CPU_ALL_VARIANTS=ON"));
     for argument in [
         "-DGGML_SSE42=ON",
         "-DGGML_AVX=ON",

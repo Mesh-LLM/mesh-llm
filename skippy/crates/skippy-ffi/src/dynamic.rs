@@ -1,4 +1,6 @@
 use libloading::Library;
+#[cfg(target_os = "linux")]
+use std::{ffi::CString, os::unix::ffi::OsStrExt};
 use std::{
     ffi::{c_char, c_int, c_void},
     sync::OnceLock,
@@ -62,11 +64,33 @@ where
     I: IntoIterator<Item = P>,
     P: AsRef<std::path::Path>,
 {
+    unsafe { load_native_runtime_libraries_with_cpu_backend_dir(paths, None) }
+}
+
+/// Load native runtime libraries and register CPU backend variants from their
+/// verified runtime artifact directory when one is declared by its manifest.
+///
+/// # Safety
+///
+/// The caller must ensure every library and the optional backend directory
+/// belong to the same verified MeshLLM native runtime artifact for the running
+/// MeshLLM version and Skippy ABI.
+pub unsafe fn load_native_runtime_libraries_with_cpu_backend_dir<I, P>(
+    paths: I,
+    cpu_backend_dir: Option<&std::path::Path>,
+) -> Result<(), NativeRuntimeLoadError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<std::path::Path>,
+{
     let collected = paths
         .into_iter()
         .map(|path| path.as_ref().to_path_buf())
         .collect::<Vec<_>>();
     let symbols = unsafe { Symbols::load_paths(&collected) }?;
+    if let Some(directory) = cpu_backend_dir {
+        symbols.load_cpu_backend_variants(directory)?;
+    }
     SYMBOLS
         .set(symbols)
         .map_err(|_| NativeRuntimeLoadError::AlreadyLoaded)
@@ -116,6 +140,43 @@ macro_rules! dynamic_symbols {
         }
 
         impl Symbols {
+            fn load_cpu_backend_variants(
+                &self,
+                directory: &std::path::Path,
+            ) -> Result<(), NativeRuntimeLoadError> {
+                #[cfg(target_os = "linux")]
+                {
+                    if !directory.is_dir() {
+                        return Err(NativeRuntimeLoadError::Load(format!(
+                            "native runtime CPU backend directory is missing: {}",
+                            directory.display()
+                        )));
+                    }
+                    let directory = CString::new(directory.as_os_str().as_bytes()).map_err(|_| {
+                        NativeRuntimeLoadError::Load(
+                            "native runtime CPU backend directory contains a NUL byte".to_string(),
+                        )
+                    })?;
+                    let loader = self._libraries.iter().rev().find_map(|library| unsafe {
+                        library
+                            .get::<unsafe extern "C" fn(*const c_char)>(
+                                b"ggml_backend_load_all_from_path\0",
+                            )
+                            .ok()
+                    });
+                    let Some(loader) = loader else {
+                        return Err(NativeRuntimeLoadError::Load(
+                            "native runtime does not export ggml_backend_load_all_from_path"
+                                .to_string(),
+                        ));
+                    };
+                    unsafe { loader(directory.as_ptr()) };
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = directory;
+                Ok(())
+            }
+
             unsafe fn load_paths<P>(paths: &[P]) -> Result<Self, NativeRuntimeLoadError>
             where
                 P: AsRef<std::path::Path>,

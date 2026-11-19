@@ -288,20 +288,79 @@ CMAKE_ARGS=(
   # platforms.
   -DMTMD_VIDEO=OFF
 )
+
+cmake_cross_compilation_requested() {
+  local variable argument definition variable_name expect_definition=0 expect_toolchain=0
+  for variable in \
+    CMAKE_SYSTEM_NAME \
+    CMAKE_SYSTEM_PROCESSOR \
+    CMAKE_TOOLCHAIN_FILE \
+    CMAKE_SYSROOT \
+    CMAKE_SYSROOT_COMPILE \
+    CMAKE_SYSROOT_LINK \
+    CMAKE_C_COMPILER_TARGET \
+    CMAKE_CXX_COMPILER_TARGET \
+    CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN \
+    CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN; do
+    [[ -n "${!variable:-}" ]] && return 0
+  done
+
+  for argument in "$@"; do
+    if [[ "$expect_toolchain" == "1" ]]; then
+      return 0
+    fi
+    if [[ "$argument" == "--toolchain" ]]; then
+      expect_toolchain=1
+      continue
+    fi
+    if [[ "$argument" == --toolchain=* ]]; then
+      return 0
+    fi
+    if [[ "$argument" == "-D" ]]; then
+      expect_definition=1
+      continue
+    fi
+    if [[ "$argument" == -D* ]]; then
+      definition="${argument#-D}"
+      expect_definition=0
+    elif [[ "$expect_definition" == "1" ]]; then
+      definition="$argument"
+      expect_definition=0
+    else
+      continue
+    fi
+    variable_name="${definition%%=*}"
+    variable_name="${variable_name%%:*}"
+    case "$variable_name" in
+      CMAKE_SYSTEM_NAME|CMAKE_SYSTEM_PROCESSOR|CMAKE_TOOLCHAIN_FILE|\
+        CMAKE_SYSROOT|CMAKE_SYSROOT_COMPILE|CMAKE_SYSROOT_LINK|\
+        CMAKE_C_COMPILER_TARGET|CMAKE_CXX_COMPILER_TARGET|\
+        CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN|CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
   LLAMA_GGML_NATIVE_NORMALIZED="$(printf '%s' "$LLAMA_GGML_NATIVE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]')"
   case "$LLAMA_GGML_NATIVE_NORMALIZED" in
     OFF|NO|FALSE|N|0|IGNORE|NOTFOUND|*-NOTFOUND|'')
-      # Reproducible builds previously used ggml's generic x86 baseline.
-      # Explicit values also replace ISA settings from an existing cache.
-      LLAMA_BASELINE_AVX=ON
+      # Keep native builds Sandy Bridge compatible, but leave reproducible and
+      # cross builds on ggml's generic x86 baseline. Explicit values also
+      # replace ISA settings from an existing cache.
+      LLAMA_BASELINE_SSE42_AVX=ON
       if [[ -n "${SOURCE_DATE_EPOCH+x}" ]]; then
-        LLAMA_BASELINE_AVX=OFF
+        LLAMA_BASELINE_SSE42_AVX=OFF
+      fi
+      if cmake_cross_compilation_requested "$@"; then
+        LLAMA_BASELINE_SSE42_AVX=OFF
       fi
       CMAKE_ARGS+=(
         -DGGML_NATIVE=OFF
-        "-DGGML_SSE42=$LLAMA_BASELINE_AVX"
-        "-DGGML_AVX=$LLAMA_BASELINE_AVX"
+        "-DGGML_SSE42=$LLAMA_BASELINE_SSE42_AVX"
+        "-DGGML_AVX=$LLAMA_BASELINE_SSE42_AVX"
         -DGGML_AVX_VNNI=OFF
         -DGGML_AVX2=OFF
         -DGGML_BMI2=OFF
@@ -312,6 +371,9 @@ if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
         -DGGML_FMA=OFF
         -DGGML_F16C=OFF
       )
+      if [[ "$LLAMA_LINK_MODE" == "dynamic" ]]; then
+        CMAKE_ARGS+=(-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON)
+      fi
       ;;
   esac
 fi
