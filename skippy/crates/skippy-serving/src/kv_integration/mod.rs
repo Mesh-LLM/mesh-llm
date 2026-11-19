@@ -150,13 +150,19 @@ pub enum StageKvMode {
 /// metadata and therefore cannot account for the recurrent and convolution
 /// buffers an exact-state snapshot also carries. A single snapshot can
 /// legitimately exceed it, so the soft budget only bounds the catalog once it
-/// already holds a working set. `hard_bytes` bounds that allowance except that
-/// the last indivisible snapshot is retained even when it exceeds the limit.
-/// Zero means unbounded for either field.
+/// already holds a working set. `hard_bytes` bounds that allowance. When
+/// `hard_limit_explicit` is set, the limit is operator truth and only the
+/// last indivisible snapshot is retained even when it exceeds the limit;
+/// otherwise the limit is an automatic estimate and the concurrent-session
+/// working set stays above it. Zero means unbounded for either field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ExactStateByteLimits {
     pub(crate) soft_bytes: u64,
     pub(crate) hard_bytes: u64,
+    /// Whether `hard_bytes` was explicitly provided (the configured exact
+    /// budget, or the legacy environment override). See
+    /// `config::exact_state_retention` for how the two provenances differ.
+    pub(crate) hard_limit_explicit: bool,
 }
 
 #[derive(Clone)]

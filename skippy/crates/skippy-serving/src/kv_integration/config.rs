@@ -23,26 +23,20 @@ use super::cache_payload::{durable_cache_payload, effective_cache_payload};
 
 pub(super) mod durable_spill;
 mod exact_state_limits;
+mod exact_state_retention;
 mod resident_policy;
 mod runtime_identity;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
 use exact_state_limits::exact_state_byte_limits;
+use exact_state_retention::{
+    RetentionOutcome, retain_working_set, warn_when_floor_prevents_hard_limit_compliance,
+};
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
 const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
-
-// Exact-state snapshots are indivisible and carry architecture-specific state
-// (recurrent and convolution buffers) that `estimate_stage_cache_max_bytes`
-// cannot see, because that estimate is derived from attention KV metadata
-// alone. A single snapshot therefore routinely exceeds the soft cap. Keep this
-// many snapshots (subject to the configured entry limit) before the soft cap
-// evicts anything: falling to one entry
-// turns the catalog into a single-entry cache, where two concurrent sessions
-// on the same stage evict each other on every request.
-const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
 
 // Operator override for the limit above, in bytes, for workers whose memory
 // headroom does not match the attention-derived estimate. The last indivisible
@@ -816,47 +810,13 @@ fn store_exact_radix_record_with_codec(
     // Exact snapshots are indivisible, and the soft cap is estimated from
     // attention KV metadata that cannot include architecture-specific
     // recurrent state, so one snapshot can legitimately exceed it. Hold a
-    // working set past the soft cap (never more than the configured entry
+    // working set past the byte limits (never more than the configured entry
     // limit) so concurrent sessions on a stage stop evicting each other, then
-    // apply the hard limit so that allowance stays bounded.
-    //
-    // Both passes retain the same floor. A hard pass that fell to a single
-    // entry defeated the working-set guarantee whenever hybrid snapshots
-    // (whose recurrent state the attention-derived estimate cannot see)
-    // pushed the retained set past the hard cap: the catalog collapsed to a
-    // single entry and concurrent sessions evicted each other on every
-    // request, which is the regression this policy exists to prevent. The
-    // retention floor may exceed either byte limit by design; operators who
-    // need a tighter bound set an explicit exact-state budget.
-    let retention_floor = EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries);
-    evict_exact_entries_over(radix, blobs, limits.soft_bytes, retention_floor)?;
-    // The hard cap must be able to hold the retention floor's working set.
-    // With the attention-derived estimate alone, a hybrid snapshot can exceed
-    // the configured hard cap by itself; the eviction passes then share the
-    // same floor and the hard pass can never evict — the cap is dead code and
-    // the blob store accumulates retained copies past it without bound. The
-    // effective backstop adapts to the largest snapshot actually stored, so
-    // it trims growth above the working set instead of against the floor.
-    let floor_bytes = logical_bytes
-        .max(1)
-        .saturating_mul(u64::try_from(retention_floor).unwrap_or(u64::MAX));
-    let effective_hard = limits.hard_bytes.max(floor_bytes);
-    if evict_exact_entries_over(radix, blobs, effective_hard, retention_floor)? > 0 {
-        // Observable signal that the attention-derived estimate undercounts
-        // this stage's snapshots: the exact-state catalog held more than the
-        // hard limit even with the retention floor binding. Set an explicit
-        // exact-state budget when this repeats and memory must stay bounded.
-        let _ = skippy_events::diagnostics::emit(
-            skippy_events::diagnostics::ServingDiagnostic::Warning {
-                message: "exact-state catalog exceeded its hard byte limit at the retention floor"
-                    .to_string(),
-                context: Some(format!(
-                    "soft_bytes={} hard_bytes={} effective_hard={effective_hard} floor_entries={retention_floor}",
-                    limits.soft_bytes, limits.hard_bytes
-                )),
-            },
-        );
-    }
+    // apply the hard limit so that allowance stays bounded. An explicit
+    // exact-state budget is honored with only the single indivisible-snapshot
+    // exception; see `exact_state_retention` for the floor contract.
+    let retention: RetentionOutcome = retain_working_set(radix, blobs, &limits, max_entries)?;
+    warn_when_floor_prevents_hard_limit_compliance(&retention, &limits);
     #[cfg(test)]
     crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
 
@@ -930,52 +890,6 @@ fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
             | (skippy_runtime::GGML_TYPE_F32, skippy_runtime::GGML_TYPE_F16)
             | (skippy_runtime::GGML_TYPE_F16, skippy_runtime::GGML_TYPE_F32)
     )
-}
-
-/// Evicts least-recently-used exact entries while the catalog holds more than
-/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
-/// means the catalog has no byte ceiling and nothing is evicted.
-fn evict_exact_entries_over(
-    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
-    blobs: &Mutex<CacheBlobStore>,
-    limit_bytes: u64,
-    min_retained_entries: usize,
-) -> Result<usize> {
-    if limit_bytes == 0 {
-        return Ok(0);
-    }
-    let floor = min_retained_entries.max(1);
-    let mut evicted_total = 0usize;
-    loop {
-        let over_bytes = blobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .physical_bytes()
-            > limit_bytes;
-        let above_floor = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .stats()
-            .recurrent_entries
-            > floor;
-        if !over_bytes || !above_floor {
-            break;
-        }
-        let evicted = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_lru_recurrent();
-        let Some(evicted) = evicted else {
-            break;
-        };
-        evicted_total += 1;
-        evicted.value.payload.release_from(
-            &mut blobs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )?;
-    }
-    Ok(evicted_total)
 }
 
 /// Either kill-switch variable resolving to `off` disables the cache, so an
@@ -1065,6 +979,14 @@ mod tests {
         ExactStateByteLimits {
             soft_bytes,
             hard_bytes,
+            hard_limit_explicit: false,
+        }
+    }
+    fn explicit_limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
+        ExactStateByteLimits {
+            soft_bytes,
+            hard_bytes,
+            hard_limit_explicit: true,
         }
     }
 
@@ -1315,10 +1237,12 @@ mod tests {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
         let budget = StorageBudget::new();
-        // Each snapshot is 32 bytes; four of them (128) exceed the hard cap
-        // of 80 even though each individually fits the 8x headroom.
+        // Each snapshot is 32 distinct bytes; four of them (128 physical
+        // bytes) exceed the hard cap of 80 even though each individually fits
+        // the 8x headroom. The payloads must not dedupe below their real
+        // size, or the scenario would never cross the cap.
         let oversized_for_attention_estimate = limits(10, 80);
-        for index in 0..4 {
+        for index in 0..4usize {
             store_exact_radix_record(
                 &radix,
                 &blobs,
@@ -1328,8 +1252,8 @@ mod tests {
                 None,
                 pending(
                     &format!("session-{index}"),
-                    &[1, index + 2],
-                    &[index as u8 + 1; 32],
+                    &[1, index as i32 + 2],
+                    &varied_payload(index, 32),
                     &budget,
                 ),
             )
@@ -1343,6 +1267,258 @@ mod tests {
                 "session {index} must retain its exact-state entry"
             );
         }
+    }
+
+    /// Records Warning diagnostics so a test can observe the retention
+    /// warning without touching product output facilities.
+    struct WarningSink {
+        warnings: Mutex<Vec<String>>,
+    }
+    impl skippy_events::diagnostics::DiagnosticSink for WarningSink {
+        fn emit(
+            &self,
+            diagnostic: skippy_events::diagnostics::ServingDiagnostic,
+        ) -> std::io::Result<()> {
+            if let skippy_events::diagnostics::ServingDiagnostic::Warning { message, .. } =
+                diagnostic
+            {
+                self.warnings.lock().unwrap().push(message);
+            }
+            Ok(())
+        }
+    }
+    struct SilenceSink;
+    impl skippy_events::diagnostics::DiagnosticSink for SilenceSink {
+        fn emit(&self, _: skippy_events::diagnostics::ServingDiagnostic) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Builds payload bytes whose every block is content-distinct within and
+    /// across payloads, so the blob store cannot dedupe a scenario below its
+    /// real physical size.
+    fn varied_payload(index: usize, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|k| {
+                let k = k as u8;
+                if k.is_multiple_of(4) { index as u8 } else { k }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn explicit_exact_budget_retains_one_indivisible_snapshot_past_the_ceiling() {
+        // Regression: the four-entry working set is an allowance for the
+        // AUTOMATIC estimate, whose attention-derived bytes undercount hybrid
+        // snapshots. An explicitly configured ceiling is operator truth: only
+        // the documented single indivisible snapshot may remain above it, so
+        // four distinct 32-byte snapshots against a 16-byte budget must end
+        // at one retained snapshot.
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let budget = StorageBudget::new();
+        for index in 0..4usize {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                8,
+                explicit_limits(10, 16),
+                None,
+                None,
+                pending(
+                    &format!("session-{index}"),
+                    &[1, index as i32 + 2],
+                    &varied_payload(index, 32),
+                    &budget,
+                ),
+            )
+            .unwrap();
+        }
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(
+            radix.stats().recurrent_entries,
+            1,
+            "an explicit ceiling retains only one indivisible snapshot"
+        );
+        assert!(
+            radix.lookup_recurrent("model", &[1, 5]).is_some(),
+            "the newest snapshot survives as the indivisible exception"
+        );
+        for tokens in [[1, 2], [1, 3], [1, 4]] {
+            assert!(radix.lookup_recurrent("model", &tokens).is_none());
+        }
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 32);
+    }
+
+    #[test]
+    fn malformed_legacy_override_falls_back_to_the_automatic_working_set() {
+        // A malformed legacy override resolves to the automatic estimate, so
+        // the actual inserts must retain the concurrent-session working set
+        // past the derived ceiling rather than collapsing it.
+        let resolved = exact_state_byte_limits(10, None, Some("not-a-number"));
+        assert!(!resolved.hard_limit_explicit);
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let budget = StorageBudget::new();
+        for index in 0..4usize {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                8,
+                resolved,
+                None,
+                None,
+                pending(
+                    &format!("session-{index}"),
+                    &[1, index as i32 + 2],
+                    &varied_payload(index, 32),
+                    &budget,
+                ),
+            )
+            .unwrap();
+        }
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 4);
+        for index in 0..4 {
+            assert!(radix.lookup_recurrent("model", &[1, index + 2]).is_some());
+        }
+    }
+
+    #[test]
+    fn zero_exact_budget_is_unbounded_up_to_the_entry_limit() {
+        // Zero means unbounded: with both byte limits at zero nothing evicts,
+        // and the configured entry limit is the only retention bound.
+        let resolved = exact_state_byte_limits(0, Some(0), None);
+        assert!(resolved.hard_limit_explicit);
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(8));
+        let budget = StorageBudget::new();
+        for index in 0..5usize {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                6,
+                resolved,
+                None,
+                None,
+                pending(
+                    &format!("session-{index}"),
+                    &[1, index as i32 + 2],
+                    &varied_payload(index, 32),
+                    &budget,
+                ),
+            )
+            .unwrap();
+        }
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 5);
+        for index in 0..5 {
+            assert!(radix.lookup_recurrent("model", &[1, index + 2]).is_some());
+        }
+    }
+
+    #[test]
+    fn explicit_exact_budget_enforces_the_ceiling_across_differing_payload_sizes() {
+        // Distinct payload sizes must not change the explicit-ceiling contract:
+        // eviction walks LRU until the ceiling holds or one indivisible
+        // snapshot remains.
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let budget = StorageBudget::new();
+        let payloads: [(usize, &[i32], usize); 4] = [
+            (0, &[1, 2], 8),
+            (1, &[1, 3], 8),
+            (2, &[1, 4], 8),
+            (3, &[1, 5], 64),
+        ];
+        for (index, tokens, len) in payloads {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                8,
+                explicit_limits(4, 24),
+                None,
+                None,
+                pending(
+                    &format!("session-{index}"),
+                    tokens,
+                    &varied_payload(index, len),
+                    &budget,
+                ),
+            )
+            .unwrap();
+        }
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(
+            radix.stats().recurrent_entries,
+            1,
+            "the ceiling walks LRU down to the single indivisible snapshot"
+        );
+        assert!(radix.lookup_recurrent("model", &[1, 5]).is_some());
+        // The surviving 64-byte snapshot exceeds the 24-byte ceiling: the
+        // documented indivisible exception.
+        assert!(blobs.lock().unwrap().physical_bytes() > 24);
+    }
+
+    #[test]
+    fn four_oversized_snapshots_emit_the_over_limit_warning_once_per_process() {
+        // Regression: with automatic limits the soft pass leaves four
+        // snapshots above the hard cap and the hard pass cannot evict below
+        // the floor, so the retired eviction-count trigger never fired. The
+        // observable predicate compares retained physical bytes with the
+        // configured nonzero hard limit after eviction, rate-limited to one
+        // warning per process.
+        exact_state_retention::reset_over_limit_warning_for_tests();
+        let sink = std::sync::Arc::new(WarningSink {
+            warnings: Mutex::new(Vec::new()),
+        });
+        skippy_events::diagnostics::set_diagnostic_sink(sink.clone());
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(8));
+        let budget = StorageBudget::new();
+        // Four distinct 32-byte snapshots: 128 physical bytes against an
+        // 80-byte hard cap that the four-entry floor must hold above.
+        for index in 0..4usize {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                8,
+                limits(10, 80),
+                None,
+                None,
+                pending(
+                    &format!("session-{index}"),
+                    &[1, index as i32 + 2],
+                    &varied_payload(index, 32),
+                    &budget,
+                ),
+            )
+            .unwrap();
+        }
+        // A fifth oversized snapshot exercises the rate limit at the same
+        // condition: still exactly one warning for the process.
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            8,
+            limits(10, 80),
+            None,
+            None,
+            pending("session-4", &[1, 6], &varied_payload(4, 32), &budget),
+        )
+        .unwrap();
+        let warnings = sink
+            .warnings
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.contains("hard byte limit"))
+            .count();
+        skippy_events::diagnostics::set_diagnostic_sink(std::sync::Arc::new(SilenceSink));
+        assert_eq!(
+            warnings, 1,
+            "the over-limit condition must warn exactly once per process"
+        );
     }
 
     #[test]
