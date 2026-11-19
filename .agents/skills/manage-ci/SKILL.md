@@ -573,6 +573,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- Main Windows runtime jobs own shared Windows ABI publication after successful
+  package verification, on trusted main pushes only. Every subsequent main
+  miss retries publication, so recovery does not depend on another recipe edit.
+  The manual Windows warmer only restores, verifies and maintains existing
+  entries; it never builds or publishes ABI trees and has no push trigger.
+  Release jobs publish their distinct GPU families, but leave shared main-ref
+  CPU and Vulkan keys to Main Windows.
+  Preserve exact keys, restored-byte verification and isolated PR cache policy.
 - Disable Rust debug information in every CI workflow with workflow- or job-level
   `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
   `CARGO_PROFILE_RELEASE_DEBUG=0`, and `CARGO_PROFILE_BENCH_DEBUG=0`.
