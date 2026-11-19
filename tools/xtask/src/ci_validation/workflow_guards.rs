@@ -23,6 +23,7 @@ mod cpu_runtime_cache;
 mod crates_recovery;
 mod handoffs;
 mod laya;
+mod linux_cache_measurement;
 mod nightly_stability;
 mod permissions;
 mod pr_canary;
@@ -58,6 +59,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     windows_warmer_paths::check(root)?;
     compute_changes_budget::check(root)?;
     action_pins::check(root)?;
+    linux_cache_measurement::check(root)?;
     let mut workflows = BTreeMap::new();
     for entry in std::fs::read_dir(root.join(".github/workflows"))? {
         let path = entry?.path();
