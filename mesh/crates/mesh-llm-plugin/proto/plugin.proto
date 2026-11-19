@@ -241,6 +241,8 @@ message PluginManifest {
   // installed package's requests are granted at install; a `[[plugin]]`
   // `operation_bindings` entry in the operator config replaces them.
   optional PluginGrantRequests grant_requests = 17;
+  // Optional peer evidence verifier served by one of this plugin's operations.
+  optional PeerEvidenceVerifierManifest peer_evidence_verifier = 18;
 }
 
 message InferenceObservationManifest {
@@ -1036,3 +1038,10 @@ message InferenceObservationLoss {
 // Provider plans are authorized against host-selected model configuration.
 message PrepareModelAssetsRequest { string plan_json = 1; }
 message PrepareModelAssetsResponse { string assets_json = 1; }
+
+// Versioned, currency-agnostic verification over an existing operation handler.
+message PeerEvidenceVerifierManifest {
+  uint32 contract_version = 1;
+  string namespace = 2;
+  string handler = 3;
+}

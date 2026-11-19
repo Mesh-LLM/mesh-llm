@@ -40,3 +40,7 @@ Callbacks already running may finish, but cannot keep a completed invocation ope
 for new callbacks. Legacy plugins retain per-plugin serialization. The new proto3
 fields are optional, and the protocol version and existing field numbers stay
 unchanged.
+
+## Peer evidence verification
+
+A plugin declares `peer_evidence::peer_evidence_verifier(namespace, handler)` alongside its operation handler. Contract version 1 uses `PeerEvidenceVerificationRequest` and `PeerEvidenceVerificationResult` over the existing operation transport. Hosts reject unsupported versions, empty or oversized namespaces/handlers and undeclared handlers, and run at most one verifier. A host treats a provider that published no evidence as ineligible without calling the verifier. Plugins that require this contract must check the `peer_evidence.v1` host capability during initialization.
