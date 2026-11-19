@@ -1,6 +1,6 @@
 use super::config::{ExternalPluginSpec, PluginConfigEntry};
 use super::startup::PluginStartupOptions;
-use super::{PluginSummary, PluginWebUiState, derive_plugin_web_ui_state};
+use super::{PluginSummary, derive_plugin_web_ui_state};
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
@@ -85,12 +85,17 @@ pub(crate) fn configured_external_plugin_spec(
                 .as_deref()
                 .is_none_or(|command| Path::new(command) == metadata.executable_path())
         });
-    // A bare entry (no `command` of its own) runs the store's copy, which the
-    // operator did not choose by path; it starts optional so a broken plugin
-    // install never stops the node. The store's enabled flag
-    // (`mesh-llm plugins disable`) decides whether it starts at all.
+    // Bare entries use the store's enabled flag and normally start optional.
+    // Manifest-declared verifiers are required below.
     if command.is_none() && installed_metadata.is_some() {
         startup.optional = true;
+    }
+    if installed_metadata
+        .as_ref()
+        .is_some_and(installed_has_peer_evidence_verifier)
+    {
+        startup.optional = false;
+        startup.lazy_start = false;
     }
 
     // An entry without its own command runs the store's copy, so the store's
@@ -173,23 +178,19 @@ pub(crate) fn append_installed_plugins(
     externals: &mut Vec<ExternalPluginSpec>,
     inactive: &mut Vec<PluginSummary>,
     names: &mut BTreeMap<String, ()>,
-) {
+) -> Result<()> {
     #[cfg(test)]
     if std::env::var_os("MESH_LLM_PLUGIN_DIR").is_none() {
-        return;
+        return Ok(());
     }
 
     let Ok(root) = default_store_root() else {
-        return;
+        return Ok(());
     };
     let store = PluginStore::new(root);
-    let installed = match store.list() {
-        Ok(installed) => installed,
-        Err(error) => {
-            inactive.push(installed_store_error_summary(error));
-            return;
-        }
-    };
+    let installed = store
+        .list()
+        .context("Cannot discover installed plugin policies")?;
     for metadata in installed {
         if names.contains_key(&metadata.name) {
             continue;
@@ -199,13 +200,15 @@ pub(crate) fn append_installed_plugins(
             inactive.push(disabled_installed_plugin_summary(&metadata));
             continue;
         }
+        let spec = installed_plugin_spec(&metadata);
         let command = installed_plugin_command(&metadata);
-        if !command.exists() {
+        if !command.exists() && spec.startup.optional {
             inactive.push(missing_installed_plugin_summary(&metadata, &command));
             continue;
         }
-        externals.push(installed_plugin_spec(&metadata));
+        externals.push(spec);
     }
+    Ok(())
 }
 
 fn installed_plugin_command_for_name(name: &str) -> Result<String> {
@@ -299,6 +302,13 @@ pub(crate) fn installed_peer_blocks(metadata: &InstalledPluginMetadata) -> bool 
         .is_some_and(|manifest| manifest.peer_blocks)
 }
 
+fn installed_has_peer_evidence_verifier(metadata: &InstalledPluginMetadata) -> bool {
+    metadata
+        .manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.peer_evidence_verifier.is_some())
+}
+
 fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSpec {
     ExternalPluginSpec {
         operation_bindings: installed_operation_bindings(metadata),
@@ -309,10 +319,9 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         url: None,
         env: BTreeMap::new(),
         settings: Default::default(),
-        // An installed plugin a config entry does not name starts optional:
-        // the node must start with or without it.
+        // Verifier packages are required even without an explicit config entry.
         startup: PluginStartupOptions {
-            optional: true,
+            optional: !installed_has_peer_evidence_verifier(metadata),
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
@@ -373,25 +382,6 @@ fn missing_installed_plugin_summary(
             command.display()
         )),
     )
-}
-
-fn installed_store_error_summary(error: anyhow::Error) -> PluginSummary {
-    PluginSummary {
-        name: "installed-plugins".to_string(),
-        kind: "installed".to_string(),
-        enabled: false,
-        status: "error".to_string(),
-        pid: None,
-        version: None,
-        capabilities: Vec::new(),
-        command: None,
-        args: Vec::new(),
-        tools: Vec::new(),
-        manifest: None,
-        web_ui: PluginWebUiState::default(),
-        startup: None,
-        error: Some(error.to_string()),
-    }
 }
 
 fn installed_plugin_summary(

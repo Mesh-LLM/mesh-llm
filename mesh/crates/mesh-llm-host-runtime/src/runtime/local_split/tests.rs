@@ -965,6 +965,8 @@ fn split_stage_topology_instance_populates_stage_zero_endpoint() {
         },
     ];
 
+    assert_eq!(split_stage_peers(&stages, make_id(1)), vec![make_id(2)]);
+    assert!(split_stage_peers(&stages[..1], make_id(1)).is_empty());
     let initial_topology = split_stage_topology_instance(
         "topology-a",
         "run-a",

@@ -43,12 +43,16 @@ async fn a_plugin_started_again_by_a_request_gets_the_mesh_snapshot_before_it() 
                     match &incoming.payload {
                         Some(proto::envelope::Payload::InitializeRequest(_)) => {
                             let manifest = proto::PluginManifest {
-                                mesh_event_subscriptions: [Kind::LocalStandby, Kind::PeerUp]
-                                    .into_iter()
-                                    .map(|kind| proto::MeshEventSubscriptionManifest {
-                                        kind: kind as i32,
-                                    })
-                                    .collect(),
+                                mesh_event_subscriptions: [
+                                    Kind::LocalStandby,
+                                    Kind::MeshIdUpdated,
+                                    Kind::PeerUp,
+                                ]
+                                .into_iter()
+                                .map(|kind| proto::MeshEventSubscriptionManifest {
+                                    kind: kind as i32,
+                                })
+                                .collect(),
                                 ..Default::default()
                             };
                             let init = proto::InitializeResponse {
@@ -65,7 +69,11 @@ async fn a_plugin_started_again_by_a_request_gets_the_mesh_snapshot_before_it() 
                             reply(&mut stream, &incoming, payload).await?;
                         }
                         Some(proto::envelope::Payload::MeshEvent(event)) => {
-                            let what = format!("event {} {}", event.kind, event.local_peer_id);
+                            let what = if event.kind == Kind::MeshIdUpdated as i32 {
+                                format!("mesh ID {}", event.mesh_id)
+                            } else {
+                                format!("event {} {}", event.kind, event.local_peer_id)
+                            };
                             seen.lock().unwrap().push((name, process, what));
                         }
                         Some(proto::envelope::Payload::InvokeServiceRequest(request)) => {
@@ -91,6 +99,7 @@ async fn a_plugin_started_again_by_a_request_gets_the_mesh_snapshot_before_it() 
     let a = make_test_node(super::NodeRole::Worker)
         .await
         .expect("test node must start");
+    a.set_mesh_id_force("initial".into()).await;
     // Not accepting: `start_accepting` would race its own event in.
     a.insert_test_peer(make_test_peer_info(make_test_endpoint_id(42)))
         .await;
@@ -123,6 +132,7 @@ async fn a_plugin_started_again_by_a_request_gets_the_mesh_snapshot_before_it() 
     let own_id = hex::encode(a.id().as_bytes());
     let snapshot = [
         format!("event {} {own_id}", Kind::LocalStandby as i32),
+        "mesh ID initial".into(),
         format!("event {} {own_id}", Kind::PeerUp as i32),
     ];
     let of = |plugin: &'static str, process: usize| {
@@ -140,6 +150,28 @@ async fn a_plugin_started_again_by_a_request_gets_the_mesh_snapshot_before_it() 
     assert_eq!(of("restarted", 1), snapshot);
     assert_eq!(of("steady", 1), snapshot);
 
+    // Delay a snapshot and a live update until the new ID is installed.
+    // Both paths must read the ID after entering the delivery lock.
+    let delivery = a.mesh_id_event_delivery.lock().await;
+    let pending_snapshot = a.broadcast_existing_mesh_snapshot(&manager, Vec::new());
+    tokio::pin!(pending_snapshot);
+    assert!(futures_util::poll!(&mut pending_snapshot).is_pending());
+    let update = a.set_mesh_id_force("current".into());
+    tokio::pin!(update);
+    assert!(futures_util::poll!(&mut update).is_pending());
+    assert_eq!(a.mesh_id().await.as_deref(), Some("current"));
+    drop(delivery);
+    tokio::join!(pending_snapshot, update);
+    settle().await;
+    let mut after_update = snapshot.to_vec();
+    after_update.extend([
+        format!("event {} {own_id}", Kind::LocalStandby as i32),
+        "mesh ID current".into(),
+        "mesh ID current".into(),
+    ]);
+    assert_eq!(of("restarted", 1), after_update);
+    assert_eq!(of("steady", 1), after_update);
+
     // The process exits; the next request starts another one.
     manager
         .call_tool("restarted", "exit", "{}")
@@ -155,10 +187,16 @@ async fn a_plugin_started_again_by_a_request_gets_the_mesh_snapshot_before_it() 
     settle().await;
 
     let second = of("restarted", 2);
-    assert_eq!(second.len(), 3, "{second:?}");
-    assert_eq!(second[..2], snapshot, "the snapshot comes first");
-    assert_eq!(second[2], "call after", "then the request that started it");
+    let mut current_snapshot = snapshot;
+    current_snapshot[1] = "mesh ID current".into();
+    assert_eq!(second.len(), 4, "{second:?}");
+    assert_eq!(second[..3], current_snapshot, "the snapshot comes first");
+    assert_eq!(second[3], "call after", "then the request that started it");
     assert!(of("restarted", 3).is_empty(), "one start, not a loop");
-    assert_eq!(of("steady", 1), snapshot, "the other plugin got nothing new");
+    assert_eq!(
+        of("steady", 1),
+        after_update,
+        "the other plugin got nothing new"
+    );
     manager.shutdown().await;
 }

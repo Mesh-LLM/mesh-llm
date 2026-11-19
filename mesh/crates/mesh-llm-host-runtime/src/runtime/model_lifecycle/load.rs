@@ -342,6 +342,15 @@ async fn finish_runtime_model_load(
     // Publish Skippy's render-only reasoning-control observations for this model,
     // so `/v1/models` can attach them to the entry this node serves.
     skippy::register_local_thinking(&loaded_name, handle.thinking.as_ref());
+    let lifecycle = std::sync::Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
+        InstanceLifecycleState::Serving,
+        50,
+    )));
+    ctx.node.register_runtime_instance_admission(
+        handle.port,
+        lifecycle.clone(),
+        handle.provider_dependencies.as_ref(),
+    );
     register_runtime_instance(
         ctx.runtime_instance_registry,
         ctx.node,
@@ -409,12 +418,6 @@ async fn finish_runtime_model_load(
     let loaded_port = handle.port;
     let loaded_backend = handle.backend.clone();
     let loaded_context_length = handle.context_length;
-    let lifecycle = std::sync::Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
-        InstanceLifecycleState::Serving,
-        50,
-    )));
-    ctx.node
-        .register_runtime_instance_lifecycle(handle.port, lifecycle.clone());
     ctx.runtime_models.insert(
         instance_id.clone(),
         RuntimeModelHandleEntry {

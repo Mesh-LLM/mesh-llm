@@ -624,15 +624,20 @@ impl Node {
         self.ensure_peer_in_current_private_scope(peer_id).await?;
         let conn = self.connection_to_peer(peer_id).await?;
         self.ensure_peer_in_current_private_scope(peer_id).await?;
+        let mut eligibility_rejected = false;
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let (mut send, recv) = conn.open_bi().await?;
+            if let Err(error) = self.require_current_peer_evidence(peer_id).await {
+                eligibility_rejected = true;
+                return Err(error);
+            }
             send.write_all(&[STREAM_TUNNEL_HTTP]).await?;
             Ok::<_, anyhow::Error>((send, recv))
         })
         .await
         .map_err(|_| anyhow::anyhow!("Timeout opening tunnel to {}", peer_id.fmt_short()))?;
 
-        if result.is_err() {
+        if result.is_err() && !eligibility_rejected {
             // Connection failed — peer is likely dead, broadcast it
             tracing::info!(
                 "Tunnel to {} failed, broadcasting death",
@@ -650,8 +655,9 @@ impl Node {
     pub(crate) async fn accept_loop(&self) {
         // Wait until start_accepting() is called before processing any connections.
         // Check flag first to handle the case where start_accepting() was called before we got here.
+        let accepting = self.accepting.0.notified();
         if !self.accepting.1.load(std::sync::atomic::Ordering::Acquire) {
-            self.accepting.0.notified().await;
+            accepting.await;
         }
         tracing::info!("Accept loop: now accepting inbound connections");
 

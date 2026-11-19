@@ -14,7 +14,8 @@ use crate::proto::node::{
     SignedNodeRecord,
 };
 use crate::protocol::node_record::{
-    hop_observation_from_ann, node_record_from_wire_ann, node_record_to_local,
+    MAX_NODE_RECORD_BODY_BYTES, hop_observation_from_ann, node_record_from_wire_ann,
+    node_record_to_local,
 };
 use crate::protocol::{
     InboundGossip, OutboundGossip, local_ann_to_proto_ann, proto_cache_affinity_to_local,
@@ -30,16 +31,36 @@ use std::collections::HashMap;
 
 type Announcement = (EndpointAddr, PeerAnnouncement);
 
-mod verification;
+pub(super) mod verification;
 mod verification_cache;
 pub(crate) use verification::VerificationGate;
 
 impl Node {
     pub(super) async fn collect_outbound_gossip(&self) -> OutboundGossip {
-        let mut announcements = self.collect_announcements().await;
-        let (signed_records, signed_cache_affinity) =
-            self.collect_signed_records(&announcements).await;
-        if self.requires_signed_gossip().await {
+        let filtering = self
+            .plugin_manager()
+            .await
+            .is_some_and(|manager| manager.peer_evidence().has_verifiers());
+        let mut pins = filtering.then(HashMap::new);
+        let mut announcements = Vec::new();
+        for ann in self.collect_announcements().await {
+            if ann.addr.id == self.id() {
+                announcements.push(ann);
+            } else if let Some((eligible, record)) = self
+                .evidence_announcement_with_record(ann.addr.id, &ann, true)
+                .await
+            {
+                if let Some(pins) = &mut pins {
+                    pins.insert(ann.addr.id, record);
+                }
+                announcements.push(eligible);
+            }
+        }
+        let requires_signed_gossip = self.requires_signed_gossip().await;
+        let (signed_records, signed_cache_affinity) = self
+            .collect_signed_records(&mut announcements, pins.as_ref())
+            .await;
+        if requires_signed_gossip {
             // The direct entry retains merged demand, admission proof and
             // plugin keys. Third-party descriptions travel only as signed bytes.
             announcements.retain(|ann| ann.addr.id == self.id());
@@ -55,9 +76,9 @@ impl Node {
     /// records, with no rebroadcast of other peers.
     pub(super) async fn collect_own_outbound_gossip(&self) -> OutboundGossip {
         let local = self.snapshot_local_announcement_data().await;
-        let announcements = vec![self.build_local_announcement(local)];
+        let mut announcements = vec![self.build_local_announcement(local)];
         let (signed_records, signed_cache_affinity) =
-            self.collect_signed_records(&announcements).await;
+            self.collect_signed_records(&mut announcements, None).await;
         OutboundGossip {
             announcements,
             signed_records,
@@ -68,9 +89,10 @@ impl Node {
     /// This node's own records plus every held record for a peer we are
     /// rebroadcasting. Each relayed node record carries our latency view of
     /// that peer as unsigned hop data.
-    async fn collect_signed_records(
+    pub(super) async fn collect_signed_records(
         &self,
-        announcements: &[PeerAnnouncement],
+        announcements: &mut Vec<PeerAnnouncement>,
+        pins: Option<&HashMap<EndpointId, Option<Vec<u8>>>>,
     ) -> (Vec<SignedNodeRecord>, Vec<SignedCacheAffinity>) {
         let local_id = self.endpoint.id();
         let now = current_time_unix_ms();
@@ -78,22 +100,69 @@ impl Node {
             .iter()
             .find(|ann| ann.addr.id == local_id)
             .map(|ann| (local_ann_to_proto_ann(ann), &ann.addr));
-        let evidence = match self.plugin_manager().await {
-            Some(manager) => manager.peer_evidence().publications(),
-            None => Default::default(),
-        };
-        let node_body = local_wire.as_ref().map(|(wire, addr)| {
-            let mut record = node_record_from_wire_ann(wire, addr);
-            record.peer_evidence = evidence;
-            record.encode_to_vec()
-        });
+        let manager = self.plugin_manager().await;
         let cache_body = local_wire
             .as_ref()
             .and_then(|(wire, _)| wire.cache_affinity.as_ref())
             .map(Message::encode_to_vec);
         let signing_key =
             ed25519_dalek::SigningKey::from_bytes(&self.endpoint_secret_key.to_bytes());
+        let mesh = self.mesh_id().await;
         let mut state = self.state.lock().await;
+        let evidence = match &manager {
+            Some(manager) => manager.peer_evidence().publications(),
+            None => Default::default(),
+        };
+        let node_body = local_wire.as_ref().and_then(|(wire, addr)| {
+            let mut record = node_record_from_wire_ann(wire, addr);
+            record.peer_evidence = evidence;
+            if record.encoded_len() > MAX_NODE_RECORD_BODY_BYTES {
+                tracing::warn!("local node record exceeds the signed record size limit; reduce advertised metadata");
+                return None;
+            }
+            Some(record.encode_to_vec())
+        });
+        if let Some(pins) = pins {
+            announcements.retain(|ann| {
+                ann.addr.id == local_id
+                    || pins.get(&ann.addr.id).is_some_and(|expected| {
+                        let current = state
+                            .node_records
+                            .fresh(&ann.addr.id, current_time_unix_ms());
+                        let Some(manager) = &manager else {
+                            return false;
+                        };
+                        let registry = manager.peer_evidence();
+                        let provider = super::peer_evidence::announcement_is_provider(ann);
+                        match expected {
+                            Some(bytes) => current
+                                .filter(|record| record.signed_bytes() == bytes)
+                                .and_then(|held| NodeRecord::decode(held.body()).ok())
+                                .is_some_and(|record| {
+                                    (!provider && !super::peer_evidence::is_provider(&record))
+                                        || (mesh
+                                            .as_deref()
+                                            .is_none_or(|mesh| mesh == record.mesh_id)
+                                            && registry.provider_cached(
+                                                &record.mesh_id,
+                                                &ann.addr.id.to_string(),
+                                                &record.peer_evidence,
+                                            ))
+                                }),
+                            None => {
+                                current.is_none()
+                                    && (!provider
+                                        || (state.has_fresh_direct_admission(&ann.addr.id)
+                                            && registry.provider_cached(
+                                                mesh.as_deref().unwrap_or_default(),
+                                                &ann.addr.id.to_string(),
+                                                &Default::default(),
+                                            )))
+                            }
+                        }
+                    })
+            });
+        }
         let mut node_records = Vec::with_capacity(announcements.len());
         let mut cache_records = Vec::with_capacity(announcements.len());
         if let Some(body) = node_body {
@@ -125,6 +194,17 @@ impl Node {
             self.local_mesh_requirements.require_signed_gossip,
             |state| state.policy.requirements.require_signed_gossip,
         )
+    }
+
+    pub(super) async fn signed_cache_affinity(
+        &self,
+        peer: EndpointId,
+    ) -> Option<CacheAffinityAdvertisement> {
+        let state = self.state.lock().await;
+        let held = state
+            .cache_affinity_records
+            .fresh(&peer, current_time_unix_ms())?;
+        decode_cache_affinity(held.body()).ok()
     }
 
     /// Verify off the membership lock and commit against the current sequence.
@@ -328,7 +408,9 @@ fn decode_node_record(body: &[u8]) -> Result<Box<NodeRecord>, RecordError> {
 }
 
 /// Applies the same bounds and freshness checks as unsigned cache affinity.
-fn decode_cache_affinity(body: &[u8]) -> Result<CacheAffinityAdvertisement, RecordError> {
+pub(super) fn decode_cache_affinity(
+    body: &[u8],
+) -> Result<CacheAffinityAdvertisement, RecordError> {
     let advertisement = WireCacheAffinity::decode(body).map_err(|_| RecordError::Decode)?;
     proto_cache_affinity_to_local(&advertisement).ok_or(RecordError::Decode)
 }

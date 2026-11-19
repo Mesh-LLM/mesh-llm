@@ -375,15 +375,21 @@ impl Node {
             }
             crate::plugin::PluginMeshEvent::IdentityService {
                 plugin_id,
+                generation,
                 request,
                 response_tx,
             } => {
                 let node = self.clone();
                 tokio::spawn(async move {
-                    let response = crate::plugin::identity_services::handle_request(
-                        &node, &plugin_id, request,
-                    )
-                    .await;
+                    let response = if crate::plugin::peer_evidence::is_method(&request.method) {
+                        crate::plugin::peer_evidence::handle_request(
+                            &node, &plugin_id, generation, request,
+                        )
+                        .await
+                    } else {
+                        crate::plugin::identity_services::handle_request(&node, &plugin_id, request)
+                            .await
+                    };
                     let _ = response_tx.send(response);
                 });
                 Ok(())
@@ -459,8 +465,7 @@ impl Node {
                 plugin_id,
                 generation,
             } => {
-                self.runtime_data_collector()
-                    .mark_plugin_status_unavailable(&plugin_id, generation);
+                self.mark_plugin_disconnected(&plugin_id, generation).await;
                 Ok(())
             }
             crate::plugin::PluginMeshEvent::InferenceObservationGrant {
@@ -500,15 +505,37 @@ impl Node {
                 // Before the manager is installed, installing it sends the
                 // snapshot to every plugin.
                 let sent = match self.plugin_manager().await {
-                    Some(plugin_manager) => self
-                        .send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
-                        .await
-                        .is_ok(),
+                    Some(plugin_manager) => async {
+                        let verifier_restarted = plugin_manager
+                            .refresh_peer_evidence_verifier(&plugin_id, generation)
+                            .await?;
+                        self.send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
+                            .await?;
+                        if verifier_restarted {
+                            self.queue_peer_evidence_refresh().await;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    .await
+                    .inspect_err(
+                        |error| tracing::warn!(%plugin_id, %error, "plugin start snapshot failed"),
+                    )
+                    .is_ok(),
                     None => true,
                 };
                 let _ = delivered.send(sent);
                 Ok(())
             }
+        }
+    }
+
+    async fn mark_plugin_disconnected(&self, plugin_id: &str, generation: u64) {
+        self.runtime_data_collector()
+            .mark_plugin_status_unavailable(plugin_id, generation);
+        if let Some(manager) = self.plugin_manager().await {
+            manager
+                .peer_evidence_disconnected(plugin_id, generation)
+                .await;
         }
     }
 
@@ -561,18 +588,18 @@ impl Node {
                 .await,
         )
         .await;
-        if self.mesh_id().await.is_some() {
-            result = result.and(
-                send(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
-                        None,
-                        String::new(),
-                    )
-                    .await,
+        {
+            let _delivery = self.mesh_id_event_delivery.lock().await;
+            let event = self
+                .build_mesh_event(
+                    crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
+                    None,
+                    String::new(),
                 )
-                .await,
-            );
+                .await;
+            if !event.mesh_id.is_empty() {
+                result = result.and(send(event).await);
+            }
         }
         for peer in peers {
             if let Err(err) = send(
@@ -907,8 +934,10 @@ impl Node {
         let node = self.clone();
         tokio::spawn(async move {
             let result = async {
+                let peer = super::plugin_streams::endpoint_id_from_hex(&target)
+                    .context("invalid target peer")?;
                 let conn = node
-                    .connection_for_peer_hex(&target)
+                    .admitted_connection_to_peer(peer)
                     .await
                     .with_context(|| format!("target peer {target} is not routable"))?;
                 let (mut send, _recv) = conn.open_bi().await?;

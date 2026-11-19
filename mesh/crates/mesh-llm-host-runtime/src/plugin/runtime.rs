@@ -49,7 +49,7 @@ use self::status_publication::StatusDeclaration;
 const PLUGIN_STOPPED_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub(crate) struct ExternalPlugin {
-    spec: ExternalPluginSpec,
+    pub(super) spec: ExternalPluginSpec,
     installed_artifact_sha256: Option<String>,
     authenticated_peer: Arc<AtomicBool>,
     web_ui_enabled: Arc<Mutex<Option<bool>>>,
@@ -59,7 +59,8 @@ pub(crate) struct ExternalPlugin {
     summary: Arc<Mutex<PluginSummary>>,
     server_info: Arc<Mutex<Option<ServerConfig>>>,
     manifest: Arc<Mutex<Option<proto::PluginManifest>>>,
-    runtime: Arc<Mutex<Option<PluginRuntime>>>,
+    pub(super) runtime: Arc<Mutex<Option<PluginRuntime>>>,
+    pub(super) active_generation: Arc<AtomicU64>,
     mesh_tx: mpsc::Sender<super::PluginMeshEvent>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     runtime_data_producer: RuntimeDataProducer,
@@ -79,6 +80,7 @@ pub(crate) struct ExternalPlugin {
 }
 
 pub(crate) struct PluginRuntime {
+    pub(crate) active_generation: Arc<AtomicU64>,
     pub(crate) managed_models: Vec<mesh_llm_plugin::models::ManagedModelConfig>,
     pub(crate) generation: u64,
     /// Its start finished: initialized and, after `spawn`, given the mesh
@@ -169,6 +171,7 @@ impl ExternalPlugin {
             server_info: Arc::new(Mutex::new(None)),
             manifest: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
+            active_generation: Arc::default(),
             mesh_tx,
             rpc_bridge,
             runtime_data_producer,
@@ -345,7 +348,10 @@ impl ExternalPlugin {
             generation,
             self.authenticated_peer.clone(),
         ));
-        *self.runtime.lock().await = Some(PluginRuntime {
+        let mut runtime = self.runtime.lock().await;
+        self.active_generation.store(0, Ordering::Release);
+        *runtime = Some(PluginRuntime {
+            active_generation: self.active_generation.clone(),
             managed_models,
             generation,
             started: false,
@@ -392,6 +398,8 @@ impl ExternalPlugin {
                         mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
                         mesh_llm_plugin::host_capabilities::LOCAL_CHANNELS.to_string(),
                         mesh_llm_plugin::host_capabilities::REQUEST_TRANSFORM.to_string(),
+                        mesh_llm_plugin::peer_evidence::HOST_CAPABILITY.to_string(),
+                        super::peer_evidence::MANIFEST_ENFORCEMENT_CAPABILITY.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -410,6 +418,19 @@ impl ExternalPlugin {
             Some(proto::envelope::Payload::ErrorResponse(err))
                 if err.code == STARTUP_DISABLED_ERROR_CODE =>
             {
+                if self
+                    .spec
+                    .installed_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.manifest.as_ref())
+                    .is_some_and(|manifest| manifest.peer_evidence_verifier.is_some())
+                {
+                    bail!(
+                        "required peer evidence verifier '{}' refused startup: {}",
+                        self.spec.name,
+                        err.message
+                    );
+                }
                 self.mark_disabled(generation, err.message).await;
                 bail!("Plugin '{}' is disabled", self.spec.name);
             }
@@ -425,7 +446,17 @@ impl ExternalPlugin {
                 self.spec.name
             ),
         };
-        self.validate_initialize_response(&init)?;
+        self.validate_initialize_response(&init).map_err(|error| {
+            if init
+                .manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.peer_evidence_verifier.is_some())
+            {
+                error.context(super::peer_evidence::VerifierStartupFailure)
+            } else {
+                error
+            }
+        })?;
         Ok(init)
     }
 
@@ -445,8 +476,8 @@ impl ExternalPlugin {
                 PROTOCOL_VERSION
             );
         }
+        super::peer_evidence::validate_startup(&self.spec, init.manifest.as_ref())?;
         if let Some(manifest) = &init.manifest {
-            mesh_llm_plugin::peer_evidence::validate_manifest(manifest)?;
             socket_auth::validate_lifecycle_declaration(
                 manifest.openai_exchange_hook.is_some()
                     || manifest.peer_evidence_verifier.is_some(),
@@ -852,6 +883,15 @@ impl ExternalPlugin {
     }
 
     pub(crate) async fn send_mesh_event(&self, event: proto::MeshEvent) -> Result<()> {
+        if event.kind == proto::mesh_event::Kind::MeshIdUpdated as i32 {
+            // A replacement process receives a fresh snapshot during its own
+            // start. Waiting for that start here would block the snapshot.
+            let generation = self.active_generation.load(Ordering::Acquire);
+            if generation == 0 {
+                return Ok(());
+            }
+            return self.send_mesh_event_to_generation(generation, event).await;
+        }
         self.send_unsolicited(proto::envelope::Payload::MeshEvent(event), "mesh events")
             .await
     }
@@ -920,6 +960,7 @@ impl ExternalPlugin {
 
             self.authenticated_peer.store(false, Ordering::Release);
 
+            self.active_generation.store(0, Ordering::Release);
             let failed_runtime = runtime.take();
             *self.server_info.lock().await = None;
             *self.manifest.lock().await = None;
@@ -994,10 +1035,16 @@ impl ExternalPlugin {
         .then(|| runtime.take())
         .flatten();
         if disabled_runtime.is_some() {
+            self.active_generation.store(0, Ordering::Release);
             self.authenticated_peer.store(false, Ordering::Release);
         }
         drop(runtime);
         if let Some(runtime) = disabled_runtime {
+            status_publication::announce_disconnected(
+                &self.mesh_tx,
+                &self.spec.name,
+                runtime.generation,
+            );
             stop_runtime(runtime, "plugin disabled").await;
         }
 

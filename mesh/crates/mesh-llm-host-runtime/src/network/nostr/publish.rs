@@ -531,11 +531,12 @@ async fn build_publish_listing(
     name: Option<String>,
     region: Option<String>,
 ) -> MeshListing {
-    let serving = collect_actually_serving_models(node, peers).await;
+    let eligible_peers = node.eligible_peers().await;
+    let serving = collect_actually_serving_models(node, &eligible_peers).await;
     let served_set: std::collections::HashSet<&str> = serving.iter().map(String::as_str).collect();
     let wanted = collect_wanted_models(node, &served_set).await;
-    let on_disk = collect_available_models(node, peers, &served_set).await;
-    let total_vram_bytes = peers
+    let on_disk = collect_available_models(node, &eligible_peers, &served_set).await;
+    let total_vram_bytes = eligible_peers
         .iter()
         .filter(|peer| !matches!(peer.role, crate::mesh::NodeRole::Client))
         .map(|peer| peer.vram_bytes)

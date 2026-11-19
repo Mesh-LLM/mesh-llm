@@ -192,6 +192,7 @@ pub(super) fn plugin_for_spec_with_mesh_tx(
     let plugin_name = spec.name.clone();
     let web_ui_enabled = spec.web_ui_enabled;
     let plugin = ExternalPlugin {
+        active_generation: Default::default(),
         installed_artifact_sha256: None,
         // These helpers construct trusted in-memory/mock test hosts.
         authenticated_peer: Arc::new(AtomicBool::new(true)),
@@ -276,6 +277,7 @@ pub(super) async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64
     let pid = child.id();
     let (outbound_tx, _outbound_rx) = mpsc::channel(1);
     *plugin.runtime.lock().await = Some(PluginRuntime {
+        active_generation: Default::default(),
         managed_models: Vec::new(),
         generation,
         started: true,
@@ -581,71 +583,99 @@ async fn locally_connected_stream_completes_plugin_initialize_without_child_proc
 }
 
 #[tokio::test]
-async fn startup_disabled_response_remains_a_successful_disabled_plugin() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("remote plugin listener");
-    let address = listener.local_addr().expect("listener address");
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("remote connection");
-        let mut stream = LocalStream::Tcp(stream);
-        let request = read_envelope(&mut stream)
+async fn startup_disabled_cannot_disable_a_required_peer_evidence_verifier() {
+    for verifier in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
-            .expect("initialize request");
-        write_envelope(
-            &mut stream,
-            &proto::Envelope {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request.request_id,
-                plugin_id: "remote-disabled".into(),
-                payload: Some(proto::envelope::Payload::ErrorResponse(
-                    proto::ErrorResponse {
-                        code: STARTUP_DISABLED_ERROR_CODE,
-                        message: "operator disabled this plugin".into(),
-                        data_json: String::new(),
-                    },
-                )),
-            },
-        )
-        .await
-        .expect("disabled response");
-        let mut byte = [0_u8; 1];
-        let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+            .expect("remote plugin listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("remote connection");
+            let mut stream = LocalStream::Tcp(stream);
+            let request = read_envelope(&mut stream)
+                .await
+                .expect("initialize request");
+            write_envelope(
+                &mut stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request.request_id,
+                    plugin_id: "remote-disabled".into(),
+                    payload: Some(proto::envelope::Payload::ErrorResponse(
+                        proto::ErrorResponse {
+                            code: STARTUP_DISABLED_ERROR_CODE,
+                            message: "operator disabled this plugin".into(),
+                            data_json: String::new(),
+                        },
+                    )),
+                },
+            )
             .await
-            .expect("self-disable must close the remote control socket")
-            .unwrap_or(0);
-        assert_eq!(read, 0);
-    });
-    let mut spec = plugin_spec(
-        &TempDir::new().expect("temp dir"),
-        None,
-        InstalledPluginWebUiValidationStatus::Valid,
-        None,
-    );
-    spec.name = "remote-disabled".into();
-    spec.command.clear();
-    let plugin = plugin_for_spec(spec);
-    let stream = tokio::net::TcpStream::connect(address)
-        .await
-        .expect("local test connection");
-    let (generation, outbound_tx, pending) = plugin
-        .install_runtime(None, LocalStream::Tcp(stream))
-        .await
-        .expect("valid managed model configuration");
-    plugin
-        .finish_startup(generation, outbound_tx, pending)
-        .await
-        .expect("plugin-owned disable is a successful startup outcome");
-    let summary = plugin.summary().await;
+            .expect("disabled response");
+            let mut byte = [0_u8; 1];
+            let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+                .await
+                .expect("self-disable must close the remote control socket")
+                .unwrap_or(0);
+            assert_eq!(read, 0);
+        });
+        let mut spec = plugin_spec(
+            &TempDir::new().expect("temp dir"),
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            None,
+        );
+        spec.name = "remote-disabled".into();
+        spec.command.clear();
+        if verifier {
+            spec.installed_metadata
+                .as_mut()
+                .unwrap()
+                .manifest
+                .as_mut()
+                .unwrap()
+                .peer_evidence_verifier = Some(
+                mesh_llm_plugin_manager::store::InstalledPeerEvidenceVerifier {
+                    contract_version: 1,
+                    namespace: "test.bond.v1".into(),
+                    handler: "verify".into(),
+                },
+            );
+        }
+        let plugin = plugin_for_spec(spec);
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("local test connection");
+        let (generation, outbound_tx, pending) = plugin
+            .install_runtime(None, LocalStream::Tcp(stream))
+            .await
+            .expect("valid managed model configuration");
+        let result = plugin
+            .finish_startup(generation, outbound_tx, pending)
+            .await;
+        if verifier {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("required peer evidence verifier")
+            );
+            assert!(plugin.runtime.lock().await.is_none());
+            server.await.expect("remote server task");
+            continue;
+        }
+        result.expect("a non-verifier plugin can disable itself");
+        let summary = plugin.summary().await;
 
-    assert!(!summary.enabled);
-    assert_eq!(summary.status, "disabled");
-    assert_eq!(
-        summary.error.as_deref(),
-        Some("operator disabled this plugin")
-    );
-    assert!(plugin.runtime.lock().await.is_none());
-    server.await.expect("remote server task");
+        assert!(!summary.enabled);
+        assert_eq!(summary.status, "disabled");
+        assert_eq!(
+            summary.error.as_deref(),
+            Some("operator disabled this plugin")
+        );
+        assert!(plugin.runtime.lock().await.is_none());
+        server.await.expect("remote server task");
+    }
 }
 
 #[tokio::test]
@@ -858,6 +888,7 @@ async fn try_send_channel_message_does_not_block_on_a_full_outbound_queue() {
         .expect("sleep process should start for outbound-queue test");
     let (outbound_tx, outbound_rx) = mpsc::channel(1);
     *plugin.runtime.lock().await = Some(PluginRuntime {
+        active_generation: Default::default(),
         managed_models: Vec::new(),
         generation: 1,
         started: true,

@@ -168,6 +168,37 @@ async fn start_as_the_node_answers(
     (plugin_id, generation)
 }
 
+#[tokio::test]
+async fn mesh_id_updates_do_not_start_or_wait_for_a_plugin() {
+    let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+    let plugin = spawn_in_process("mesh-id", true, mesh_tx).await;
+    let event = proto::MeshEvent {
+        kind: proto::mesh_event::Kind::MeshIdUpdated as i32,
+        mesh_id: "current".into(),
+        ..Default::default()
+    };
+    plugin.send_mesh_event(event.clone()).await.unwrap();
+    assert_eq!(plugin.runtime_started().await, None);
+
+    let start = plugin.ensure_running();
+    tokio::pin!(start);
+    let (_, _, delivered) = tokio::select! {
+        started = &mut start => panic!("started before the node was told: {started:?}"),
+        event = next_started(&mut mesh_rx) => event,
+    };
+    // Live delivery must return while the process awaits the node's snapshot.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        plugin.send_mesh_event(event),
+    )
+    .await
+    .expect("mesh ID delivery must not wait on the snapshot")
+    .unwrap();
+    delivered.send(true).unwrap();
+    start.await.unwrap();
+    plugin.shutdown().await;
+}
+
 /// The node sends every plugin its mesh snapshot (this node's id among
 /// it) when the manager is installed, and otherwise only on a mesh
 /// change. A plugin that starts after that (restarted after it exited or

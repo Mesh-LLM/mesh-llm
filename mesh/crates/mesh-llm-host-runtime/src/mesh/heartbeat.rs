@@ -482,13 +482,15 @@ impl Node {
     pub fn start_heartbeat(&self) {
         let node = self.clone();
         tokio::spawn(async move {
-            let mut fail_counts: std::collections::HashMap<EndpointId, u32> =
-                std::collections::HashMap::new();
-
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                node.run_heartbeat_cycle(&mut fail_counts).await;
-            }
+            let heartbeats = async {
+                let mut fail_counts: std::collections::HashMap<EndpointId, u32> =
+                    std::collections::HashMap::new();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    node.run_heartbeat_cycle(&mut fail_counts).await;
+                }
+            };
+            tokio::join!(heartbeats, node.maintain_peer_evidence());
         });
     }
 
@@ -505,6 +507,7 @@ impl Node {
                 .await;
         }
 
+        self.queue_peer_evidence_refresh().await;
         self.prune_stale_heartbeat_peers().await;
         self.gc_heartbeat_state().await;
         self.gc_demand().await;

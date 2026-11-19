@@ -181,7 +181,7 @@ impl Node {
     /// Local execution and an ungated replica remain usable even when another
     /// provider requires a channel this client cannot consume.
     pub(crate) async fn model_unavailable_due_to_channels(&self, model: &str) -> bool {
-        let peers = self.peers().await;
+        let peers = self.eligible_peers().await;
         let supported = self.supported_model_channels(&peers).await;
         let mut blocked = false;
         for peer in &peers {

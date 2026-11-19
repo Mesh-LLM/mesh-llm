@@ -1,6 +1,6 @@
 # mesh-llm-protocol
 
-Signed node records optionally carry bounded, namespaced opaque peer evidence at protobuf field 27. The existing origin signature covers the evidence and supply claims together. Relays retain the original signed bytes, including unknown fields; eligibility verification belongs to the receiving host's explicitly granted plugins.
+Signed node records optionally carry bounded, namespaced opaque peer evidence at protobuf field 27. The existing origin signature covers the evidence and supply claims together. Relays retain the original signed bytes, including unknown fields; eligibility verification belongs to the receiving host's manifest-declared local verifiers.
 
 Wire protocol ownership for Mesh LLM control-plane traffic.
 

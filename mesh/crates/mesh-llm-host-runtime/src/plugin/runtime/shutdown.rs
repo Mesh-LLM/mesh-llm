@@ -22,8 +22,17 @@ impl ExternalPlugin {
             summary.error = None;
         }
 
-        let runtime = self.runtime.lock().await.take();
+        let runtime = {
+            let mut runtime = self.runtime.lock().await;
+            self.active_generation.store(0, Ordering::Release);
+            runtime.take()
+        };
         if let Some(runtime) = runtime {
+            super::status_publication::announce_disconnected(
+                &self.mesh_tx,
+                &self.spec.name,
+                runtime.generation,
+            );
             stop_runtime(runtime, "plugin shutting down").await;
         }
 

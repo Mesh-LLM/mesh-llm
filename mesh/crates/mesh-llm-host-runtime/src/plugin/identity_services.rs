@@ -181,9 +181,6 @@ pub(crate) async fn handle_request(
     plugin_id: &str,
     request: super::proto::RpcRequest,
 ) -> Result<super::proto::RpcResponse, super::proto::ErrorResponse> {
-    if super::peer_evidence::is_method(&request.method) {
-        return super::peer_evidence::handle_request(node, plugin_id, request).await;
-    }
     let result = match node.plugin_manager().await {
         Some(manager) => {
             let admitted = admit_identity_service(&manager, plugin_id).await;

@@ -98,8 +98,11 @@ impl Node {
             message: None,
         };
 
+        let node = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = bridge_outbound_plugin_mesh_stream(listener, conn, request).await {
+            if let Err(error) =
+                bridge_outbound_plugin_mesh_stream(node, listener, conn, request).await
+            {
                 tracing::debug!("Plugin mesh stream bridge failed: {error}");
             }
         });
@@ -152,13 +155,38 @@ impl Node {
     }
 }
 
+#[cfg(unix)]
+struct AttachmentSocketPath(String);
+
+#[cfg(unix)]
+impl Drop for AttachmentSocketPath {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub(crate) async fn bridge_outbound_plugin_mesh_stream(
+    node: Node,
     listener: crate::plugin::LocalListener,
     conn: Connection,
     request: crate::plugin::proto::OpenMeshStreamRequest,
 ) -> Result<()> {
-    let local = listener.accept().await?;
+    let local = {
+        // A cancelled accept does not unlink the listener's socket pathname.
+        #[cfg(unix)]
+        let _path = AttachmentSocketPath(listener.endpoint());
+        tokio::select! {
+            result = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept()) => {
+                result.context("local mesh stream attachment timed out")??
+            }
+            _ = conn.closed() => anyhow::bail!("mesh connection closed before local attachment"),
+        }
+    };
+    let peer = endpoint_id_from_hex(&request.target_peer_id).context("invalid target peer")?;
+    node.require_current_peer_evidence(peer).await?;
     let (mut send, recv) = conn.open_bi().await?;
+    node.require_current_peer_evidence(peer).await?;
+    drop(node);
     send.write_all(&[STREAM_PLUGIN_MESH_STREAM]).await?;
     write_len_prefixed(&mut send, &request.encode_to_vec()).await?;
     if request.bidirectional {

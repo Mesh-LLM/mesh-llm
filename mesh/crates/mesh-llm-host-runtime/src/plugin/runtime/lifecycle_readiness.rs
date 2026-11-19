@@ -40,6 +40,8 @@ impl ExternalPlugin {
             .is_some_and(|manifest| manifest.inference_observation.is_some());
         runtime.status_declaration =
             super::StatusDeclaration::from_manifest(init.manifest.as_ref());
+        self.active_generation
+            .store(generation, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 

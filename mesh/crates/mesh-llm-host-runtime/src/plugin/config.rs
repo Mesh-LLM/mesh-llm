@@ -382,7 +382,7 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         }
     }
 
-    append_installed_plugins(&mut externals, &mut inactive, &mut names);
+    append_installed_plugins(&mut externals, &mut inactive, &mut names)?;
 
     if blobstore_enabled {
         externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID, &[])?);

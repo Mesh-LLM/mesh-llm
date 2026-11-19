@@ -22,6 +22,7 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
     }));
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
     *plugin.runtime.lock().await = Some(PluginRuntime {
+        active_generation: Default::default(),
         managed_models: Vec::new(),
         generation: 7,
         started: true,

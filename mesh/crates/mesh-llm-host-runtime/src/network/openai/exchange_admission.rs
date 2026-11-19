@@ -108,7 +108,7 @@ pub(super) async fn selected_model_identity(
     let descriptors = match target {
         InferenceTarget::Local(_) => node.served_model_descriptors().await,
         InferenceTarget::Remote(peer_id) => {
-            node.peers()
+            node.eligible_peers()
                 .await
                 .into_iter()
                 .find(|peer| peer.id == *peer_id)?

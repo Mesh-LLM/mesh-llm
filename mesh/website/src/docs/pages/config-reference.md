@@ -415,7 +415,7 @@ sampling at the backend when it selects mode `1` or `2`.
 
 ## Group 10: plugins
 
-Peer-evidence publication is prepared through the plugin manifest's namespace and versioned verifier declaration, without a separate configuration grant. Declared verifiers remain rejected until provider enforcement is available.
+Peer-evidence verification is discovered from authenticated manifests, without an evidence grant or configuration table. Installed verifier declarations require eager, non-optional startup before peers are accepted; the live declaration must match the package. Command-only verifiers must use eager, required startup. The plugin owns its namespace, handler and provider policy, including whether missing evidence qualifies. Mesh validates declarations at startup and shares verifier decisions across provider propagation, routing and new streams until the plugin's deadline. Signed records are retained on eligibility expiry for revalidation.
 
 | Key path | Type | Allowed values / default (`auto`) | Scope | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|

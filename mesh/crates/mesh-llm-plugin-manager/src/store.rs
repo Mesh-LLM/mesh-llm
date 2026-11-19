@@ -384,7 +384,10 @@ impl PluginStore {
     pub fn try_load(&self, name: &str) -> Result<Option<InstalledPluginMetadata>> {
         validate_plugin_name(name)?;
         let metadata_path = self.metadata_path(name);
-        if !metadata_path.exists() {
+        if !metadata_path
+            .try_exists()
+            .with_context(|| format!("inspect plugin metadata {}", metadata_path.display()))?
+        {
             return Ok(None);
         }
         let contents = fs::read(&metadata_path)
@@ -399,7 +402,11 @@ impl PluginStore {
     }
 
     pub fn list(&self) -> Result<Vec<InstalledPluginMetadata>> {
-        if !self.root.exists() {
+        if !self
+            .root
+            .try_exists()
+            .with_context(|| format!("inspect plugin store {}", self.root.display()))?
+        {
             return Ok(Vec::new());
         }
 
@@ -419,8 +426,10 @@ impl PluginStore {
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
-            if is_valid_name(&name) && self.metadata_path(&name).exists() {
-                plugins.push(self.load(&name)?);
+            if is_valid_name(&name)
+                && let Some(metadata) = self.try_load(&name)?
+            {
+                plugins.push(metadata);
             }
         }
         plugins.sort_by(|left, right| left.name.cmp(&right.name));
@@ -703,6 +712,22 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "blackboard");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_lookup_errors_are_not_reported_as_absence() {
+        use std::os::unix::fs::symlink;
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path().join("plugins"));
+        let plugin_dir = store.root().join("broken");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        symlink(METADATA_FILE, plugin_dir.join(METADATA_FILE)).unwrap();
+        assert!(store.try_load("broken").is_err());
+        assert!(store.list().is_err());
+        let loop_root = temp.path().join("loop");
+        symlink("loop", &loop_root).unwrap();
+        assert!(PluginStore::new(loop_root).list().is_err());
     }
 
     #[test]

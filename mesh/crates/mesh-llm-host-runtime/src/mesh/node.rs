@@ -128,6 +128,8 @@ pub struct Node {
     /// Ticks whenever `mesh_id` is stored, so the runtime can keep the saved
     /// rejoin preference on the current ID.
     pub(crate) mesh_id_changed: Arc<tokio::sync::watch::Sender<()>>,
+    /// Orders mesh ID event construction and delivery across snapshots and live updates.
+    pub(super) mesh_id_event_delivery: Arc<Mutex<()>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
     pub(crate) bootstrap_token: Arc<Mutex<Option<crate::SignedBootstrapToken>>>,
@@ -246,9 +248,7 @@ pub struct Node {
     pub(crate) peer_stage_source_fetch: crate::inference::skippy::StageSourceFetch,
     pub(crate) runtime_intents: Arc<std::sync::Mutex<Vec<crate::runtime::DesiredRuntimeIntent>>>,
     pub(crate) runtime_instance_lifecycles: Arc<
-        std::sync::Mutex<
-            HashMap<u16, Arc<tokio::sync::Mutex<crate::runtime::InstanceLifecycleRecord>>>,
-        >,
+        std::sync::Mutex<HashMap<u16, Arc<super::runtime_admission::RuntimeInstanceAdmission>>>,
     >,
     pub(crate) owner_lifecycle_response_cache: OwnerLifecycleResponseCache,
     /// Shared request leases and residency policy across host memberships.
@@ -672,6 +672,14 @@ impl Node {
         }
 
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
+        // Keep the stopped verifier registry until every work entry point has
+        // closed, then release runner references before an embedded restart.
+        drop(self.take_plugin_manager().await);
+        // Release an accept task parked before startup so it observes closure.
+        self.accepting
+            .1
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.accepting.0.notify_waiters();
     }
 
     fn spawn_accept_loop(&self) {
@@ -766,6 +774,7 @@ impl Node {
             full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
+            mesh_id_event_delivery: Arc::default(),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
@@ -1239,16 +1248,15 @@ impl Node {
             .and_then(ModelRuntimeDescriptor::advertised_context_length)
     }
 
+    /// Context limit from the peer's current eligible supply view.
     pub async fn peer_model_context_length(
         &self,
         peer_id: EndpointId,
         model_name: &str,
     ) -> Option<u32> {
-        self.state
-            .lock()
+        self.eligible_peer(peer_id)
             .await
-            .peers
-            .get(&peer_id)
+            .as_ref()
             .and_then(|peer| advertised_context_length(peer, model_name))
     }
 
@@ -1283,20 +1291,18 @@ impl Node {
         self.served_model_descriptors.lock().await.clone()
     }
 
+    /// Local descriptors and the current eligible descriptors of remote peers.
     pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         // Local descriptors carry the channel requirements plugins attached,
         // exactly as peers see them in announcements.
         let hosted_models = self.hosted_models.lock().await.clone();
         let mut descriptors = self.descriptors_with_requirements(&hosted_models).await;
-        let peer_descriptors = {
-            let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .flat_map(|peer| peer.served_model_descriptors.clone())
-                .collect::<Vec<_>>()
-        };
-        descriptors.extend(peer_descriptors);
+        descriptors.extend(
+            self.eligible_peers()
+                .await
+                .into_iter()
+                .flat_map(|peer| peer.served_model_descriptors),
+        );
         descriptors
     }
 
@@ -1310,54 +1316,6 @@ impl Node {
 
     pub async fn hosted_models(&self) -> Vec<String> {
         self.hosted_models.lock().await.clone()
-    }
-
-    pub(crate) fn register_runtime_instance_lifecycle(
-        &self,
-        port: u16,
-        lifecycle: Arc<tokio::sync::Mutex<crate::runtime::InstanceLifecycleRecord>>,
-    ) {
-        self.runtime_instance_lifecycles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(port, lifecycle);
-    }
-
-    pub(crate) fn unregister_runtime_instance_lifecycle(&self, port: u16) {
-        self.runtime_instance_lifecycles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&port);
-    }
-
-    pub(crate) async fn begin_runtime_instance_request(
-        &self,
-        port: u16,
-    ) -> Result<Option<crate::runtime::InstanceRequestGuard>, crate::runtime::InstanceAdmissionError>
-    {
-        let lifecycle = self
-            .runtime_instance_lifecycles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&port)
-            .cloned();
-        let Some(lifecycle) = lifecycle else {
-            return Ok(None);
-        };
-        let residency = match self.native_model_lifecycle.get() {
-            Some(service) => service.lease_port(port).await,
-            None => None,
-        };
-        let record = lifecycle.lock().await;
-        if !record.is_accepting_work() {
-            return Err(crate::runtime::InstanceAdmissionError::NotAccepting {
-                state: record.state(),
-            });
-        }
-        Ok(Some(
-            crate::runtime::InstanceRequestGuard::new(record.in_flight_tracker())
-                .with_residency(residency),
-        ))
     }
 
     pub(crate) async fn refresh_served_model_descriptors(&self) {
@@ -1452,6 +1410,11 @@ impl Node {
         detail_json: String,
     ) {
         let plugin_manager = self.plugin_manager.lock().await.clone();
+        let _delivery = if kind == crate::plugin::proto::mesh_event::Kind::MeshIdUpdated {
+            Some(self.mesh_id_event_delivery.lock().await)
+        } else {
+            None
+        };
         if let Some(plugin_manager) = plugin_manager
             && let Err(err) = plugin_manager
                 .broadcast_mesh_event(

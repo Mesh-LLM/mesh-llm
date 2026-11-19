@@ -215,10 +215,16 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
     };
 
     let old_port = old_handle.port;
+    let retired = ctx
+        .node
+        .retire_runtime_instance_lifecycle(old_port, ctx.lifecycle);
+    ctx.lifecycle_port.store(0, Ordering::Release);
     remove_runtime_local_target(ctx.target_tx, &old_loaded_name, old_port);
     remove_dashboard_context_usage(ctx.dashboard_context_usage, &old_loaded_name, &old_handle)
         .await;
     old_handle.shutdown().await;
+    ctx.node
+        .unregister_retired_runtime_instance(old_port, retired.as_ref());
     ctx.survey_telemetry
         .record_unload(&state.survey_loaded_model);
     if let Some(cleanup) = state.split_cleanup.take() {
@@ -380,8 +386,10 @@ pub(in crate::runtime) async fn startup_handle_replace_event(
 
     let old_port = old_handle.port;
     let old_context_length = old_handle.context_length;
+    let retired = ctx
+        .node
+        .retire_runtime_instance_lifecycle(old_port, ctx.lifecycle);
     remove_runtime_local_target(ctx.target_tx, &old_loaded_name, old_port);
-    add_runtime_local_target(ctx.target_tx, &next.loaded_name, next.handle.port);
     if old_loaded_name != next.loaded_name
         && startup_unregister_runtime_instance(ctx, &old_loaded_name).await
     {
@@ -432,6 +440,8 @@ pub(in crate::runtime) async fn startup_handle_replace_event(
     state.handle = Some(next.handle);
     let _ = event.ack.send(SplitCoordinatorAck::Accepted);
     old_handle.shutdown().await;
+    ctx.node
+        .unregister_retired_runtime_instance(old_port, retired.as_ref());
     drop(state.capacity_reservation.take());
     let _ = emit_event(OutputEvent::Info {
         message: format!(
@@ -538,6 +548,9 @@ pub(in crate::runtime) async fn startup_shutdown_local_model_loop(
         return;
     };
     let port = handle.port;
+    let retired = ctx
+        .node
+        .retire_runtime_instance_lifecycle(port, ctx.lifecycle);
     remove_runtime_local_target(ctx.target_tx, &state.loaded_name, port);
     if startup_unregister_runtime_instance(ctx, &state.loaded_name).await {
         publish_runtime_llama_unavailable(
@@ -558,6 +571,8 @@ pub(in crate::runtime) async fn startup_shutdown_local_model_loop(
     }
     remove_dashboard_context_usage(ctx.dashboard_context_usage, &state.loaded_name, &handle).await;
     handle.shutdown().await;
+    ctx.node
+        .unregister_retired_runtime_instance(port, retired.as_ref());
     drop(state.capacity_reservation.take());
     if let Some(cleanup) = state.split_cleanup.take() {
         stop_split_generation_cleanup(ctx.node, cleanup, u64::MAX).await;

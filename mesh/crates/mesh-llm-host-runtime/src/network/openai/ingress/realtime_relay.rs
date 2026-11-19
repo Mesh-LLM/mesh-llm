@@ -381,23 +381,19 @@ async fn first_realtime_model(
             return Some(model);
         }
     }
-    let now = crate::network::peer_blocks::now_ms();
-    let state = node.state.lock().await;
-    state.peers.iter().find_map(|(id, peer)| {
-        if node.peer_blocks.is_blocked(id, now) {
-            return None;
+    for peer in node.routable_peers().await {
+        for descriptor in &peer.served_model_descriptors {
+            let model = &descriptor.identity.model_name;
+            if crate::network::openai::workload_routing::model_satisfies_request(
+                model,
+                REALTIME_PATH,
+                std::slice::from_ref(descriptor),
+            ) {
+                return Some(model.clone());
+            }
         }
-        peer.served_model_descriptors
-            .iter()
-            .find(|descriptor| {
-                crate::network::openai::workload_routing::model_satisfies_request(
-                    &descriptor.identity.model_name,
-                    REALTIME_PATH,
-                    std::slice::from_ref(*descriptor),
-                )
-            })
-            .map(|descriptor| descriptor.identity.model_name.clone())
-    })
+    }
+    None
 }
 
 fn query_model(path: &str) -> Option<String> {
@@ -501,6 +497,108 @@ mod quic_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn realtime_default_excludes_rejected_provider_models() -> anyhow::Result<()> {
+        use crate::plugin::{BridgeFuture, PluginManager, PluginRpcBridge, RpcResult, proto};
+        use serde_json::json;
+        struct Verifier(String);
+        impl PluginRpcBridge for Verifier {
+            fn handle_request(
+                &self,
+                _: String,
+                _: String,
+                params: String,
+            ) -> BridgeFuture<anyhow::Result<RpcResult, proto::ErrorResponse>> {
+                let input: serde_json::Value = serde_json::from_str(&params).unwrap();
+                let accepted = input["arguments"]["node_id"] == self.0;
+                Box::pin(async move {
+                    Ok(RpcResult {
+                        result_json: json!({"accepted":accepted,"cache_until_restart":true})
+                            .to_string(),
+                    })
+                })
+            }
+            fn handle_notification(&self, _: String, _: String, _: String) -> BridgeFuture<()> {
+                Box::pin(async {})
+            }
+        }
+        let rejected = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 9337 }).await?;
+        let accepted = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 9338 }).await?;
+        let buyer = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+        for (node, name) in [(&rejected, "rejected-audio"), (&accepted, "accepted-audio")] {
+            node.set_hosted_models(vec![name.into()]).await;
+            node.set_serving_models(vec![name.into()]).await;
+            node.set_served_model_descriptors(vec![mesh::ServedModelDescriptor {
+                identity: mesh::ServedModelIdentity {
+                    model_name: name.into(),
+                    ..Default::default()
+                },
+                metadata: Some(mesh::ServedModelMetadata {
+                    workload_class: Some(mesh::ModelWorkloadClass::SpeechRecognition),
+                    ..Default::default()
+                }),
+                capabilities_known: true,
+                capabilities: crate::models::ModelCapabilities {
+                    audio: crate::models::CapabilityLevel::Supported,
+                    multimodal: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }])
+            .await;
+        }
+        let mut accept_loops = Vec::new();
+        for node in [&rejected, &accepted, &buyer] {
+            node.set_mesh_id("realtime-evidence".into()).await;
+            let server = node.clone();
+            accept_loops.push(tokio::spawn(async move { server.accept_loop().await }));
+            node.start_accepting();
+        }
+        let manager = PluginManager::for_test_peer_evidence(
+            Arc::new(Verifier(accepted.id().to_string())),
+            None,
+        );
+        *buyer.plugin_manager.lock().await = Some(manager.clone());
+        buyer
+            .connect_to_peer(rejected.endpoint_addr_for_advertisement())
+            .await?;
+        manager
+            .verify_provider_evidence(
+                "realtime-evidence",
+                &rejected.id().to_string(),
+                &Default::default(),
+            )
+            .await;
+        assert!(
+            first_realtime_model(&buyer, &election::ModelTargets::default())
+                .await
+                .is_none()
+        );
+        buyer
+            .connect_to_peer(accepted.endpoint_addr_for_advertisement())
+            .await?;
+        manager
+            .verify_provider_evidence(
+                "realtime-evidence",
+                &accepted.id().to_string(),
+                &Default::default(),
+            )
+            .await;
+        assert_eq!(
+            first_realtime_model(&buyer, &election::ModelTargets::default())
+                .await
+                .as_deref(),
+            Some("accepted-audio")
+        );
+        for node in [&buyer, &accepted, &rejected] {
+            node.close_endpoint().await;
+        }
+        for task in accept_loops {
+            tokio::time::timeout(Duration::from_secs(5), task).await??;
+        }
+        Ok(())
+    }
 
     #[test]
     fn query_models_are_percent_decoded() {

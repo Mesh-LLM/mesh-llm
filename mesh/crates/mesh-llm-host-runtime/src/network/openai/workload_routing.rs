@@ -476,7 +476,7 @@ pub(super) async fn eligible_targets(
     // Local inference targets are native serving ports. Plugin descriptors are
     // advertised separately for peer discovery and dispatched by the plugin path.
     let local = node.served_model_descriptors().await;
-    let peers = node.peers().await;
+    let peers = node.eligible_peers().await;
     let supported = node.supported_model_channels(&peers).await;
     let peers = peers
         .into_iter()
@@ -509,7 +509,7 @@ pub(super) async fn eligible_targets(
 /// copy of it that cannot see the input must not take the request. When no
 /// target's descriptor says so, the list is returned unchanged rather than
 /// failing a request the model-level check already admitted.
-pub(super) async fn media_capable_targets(
+pub(crate) async fn media_capable_targets(
     node: &mesh::Node,
     model: &str,
     path: &str,
@@ -521,15 +521,15 @@ pub(super) async fn media_capable_targets(
         return candidates;
     }
     let local = node.served_model_descriptors().await;
-    let state = node.state.lock().await;
+    let peers = node.eligible_peers().await;
     let capable = candidates
         .iter()
         .filter(|target| {
             let descriptors = match target {
                 InferenceTarget::Local(_) => local.as_slice(),
-                InferenceTarget::Remote(peer_id) => state
-                    .peers
-                    .get(peer_id)
+                InferenceTarget::Remote(peer_id) => peers
+                    .iter()
+                    .find(|peer| peer.id == *peer_id)
                     .map_or(&[][..], |peer| peer.served_model_descriptors.as_slice()),
                 InferenceTarget::None => return false,
             };
@@ -542,7 +542,6 @@ pub(super) async fn media_capable_targets(
         })
         .cloned()
         .collect::<Vec<_>>();
-    drop(state);
     if capable.is_empty() {
         candidates
     } else {

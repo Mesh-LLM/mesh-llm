@@ -362,7 +362,11 @@ impl PluginManager {
                     plugins.insert(spec.name.clone(), plugin);
                 }
                 Err(error) => {
-                    if spec.startup.optional {
+                    if spec.startup.optional
+                        && error
+                            .downcast_ref::<peer_evidence::VerifierStartupFailure>()
+                            .is_none()
+                    {
                         failed.push(Self::plugin_load_failure_summary(spec, &error));
                     } else {
                         for plugin in plugins.values() {
@@ -741,6 +745,7 @@ impl PluginManager {
     pub async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         for plugin in self.inner.plugins.values() {
+            self.inner.peer_evidence.clear_plugin(plugin.name());
             plugin.shutdown().await;
         }
         self.inner.endpoint_health.lock().await.clear();
@@ -1351,6 +1356,10 @@ impl PluginManager {
                 Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
             )
             .await?;
+        anyhow::ensure!(
+            !response.is_error,
+            "Service '{service_name}' from plugin '{plugin_name}' returned an error"
+        );
         serde_json::from_str(&response.output_json).with_context(|| {
             format!(
                 "Decode service response '{}' from plugin '{}'",
@@ -1520,15 +1529,28 @@ impl PluginManager {
     /// does not keep it from the plugins after it; the first error is
     /// returned once all were tried.
     pub async fn broadcast_mesh_event(&self, event: proto::MeshEvent) -> Result<()> {
+        let sends = self.inner.plugins.iter().map(|(name, plugin)| {
+            let event = &event;
+            async move {
+                if !self.plugin_subscribes_mesh_event(name, event.kind).await {
+                    return Ok(());
+                }
+                plugin.send_mesh_event(event.clone()).await.inspect_err(|error| {
+                    tracing::debug!(plugin = %name, "Plugin did not take a mesh event: {error:#}");
+                })
+            }
+        });
+        if event.kind == proto::mesh_event::Kind::MeshIdUpdated as i32 {
+            // A delivery may be holding up a restart snapshot. Slow plugins
+            // should use their send deadlines concurrently.
+            return futures_util::future::join_all(sends)
+                .await
+                .into_iter()
+                .collect();
+        }
         let mut result = Ok(());
-        for (name, plugin) in &self.inner.plugins {
-            if !self.plugin_subscribes_mesh_event(name, event.kind).await {
-                continue;
-            }
-            if let Err(error) = plugin.send_mesh_event(event.clone()).await {
-                tracing::debug!(plugin = %name, "Plugin did not take a mesh event: {error:#}");
-                result = result.and(Err(error));
-            }
+        for send in sends {
+            result = result.and(send.await);
         }
         result
     }

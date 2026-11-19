@@ -198,6 +198,7 @@ impl Node {
         );
         let conn = self.connection_to_peer(provider).await?;
         let (mut send, recv) = conn.open_bi().await?;
+        self.require_current_peer_evidence(provider).await?;
         send.write_all(&[STREAM_NATIVE_CHAT]).await?;
         let frame = crate::proto::node::NativeChatFrame {
             generation: 1,

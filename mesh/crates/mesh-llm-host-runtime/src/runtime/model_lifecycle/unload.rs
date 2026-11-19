@@ -144,9 +144,13 @@ pub(crate) async fn run_auto_unload_runtime_model(
                     }
                 }
             }
+            // The startup task owns listener shutdown and registration cleanup.
+            // If it is aborted, retain the retired entry until port reuse.
+            let _ = ctx
+                .node
+                .retire_runtime_instance_lifecycle(active_port, &lifecycle);
             let _ = stop_tx.send(true);
             await_managed_model_stop(task, drain_delay, options.force, &model).await;
-            ctx.node.unregister_runtime_instance_lifecycle(active_port);
             let process_already_crashed = {
                 let mut record = lifecycle.lock().await;
                 let crashed = record.state() == InstanceLifecycleState::Failed;
@@ -340,9 +344,11 @@ pub(crate) async fn run_auto_unload_runtime_entry(
             );
         }
     }
-    ctx.node.unregister_runtime_instance_lifecycle(port);
     remove_dashboard_context_usage(ctx.dashboard_context_usage, &model, &handle).await;
+    let retired = ctx.node.retire_runtime_instance_lifecycle(port, &lifecycle);
     handle.shutdown().await;
+    ctx.node
+        .unregister_retired_runtime_instance(port, retired.as_ref());
     // Native/process-supervision reconciliation: a racing exit-watcher event
     // may have already marked this instance Failed before this orderly
     // unload reached here. Read the state BEFORE the Stopped transition
@@ -414,7 +420,7 @@ pub(crate) async fn run_auto_handle_runtime_exit(
             lifecycle,
             ..
         } = entry;
-        ctx.node.unregister_runtime_instance_lifecycle(port);
+        let retired = ctx.node.retire_runtime_instance_lifecycle(port, &lifecycle);
         let _ = lifecycle
             .lock()
             .await
@@ -452,6 +458,8 @@ pub(crate) async fn run_auto_handle_runtime_exit(
         }
         remove_dashboard_context_usage(ctx.dashboard_context_usage, &model, &handle).await;
         handle.shutdown().await;
+        ctx.node
+            .unregister_retired_runtime_instance(port, retired.as_ref());
         drop(capacity_reservation);
         unregister_local_source_policy_if_unused(ctx, &model, &profile);
     }

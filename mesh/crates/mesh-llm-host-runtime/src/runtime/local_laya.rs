@@ -241,6 +241,7 @@ pub(super) async fn start_local_laya_model(
         model_name,
         LocalRuntimeModelHandle {
             port: http.port(),
+            provider_dependencies: None,
             backend: "skippy".into(),
             context_length,
             // The native runtime serializes reads on one lane per model.

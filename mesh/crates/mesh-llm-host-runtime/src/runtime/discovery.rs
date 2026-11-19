@@ -157,7 +157,7 @@ async fn reset_rediscovery_timer_if_peers_recovered(
     alone_since: &mut Option<std::time::Instant>,
     label: &str,
 ) -> bool {
-    if node.peers().await.is_empty() {
+    if node.connectivity_snapshot().await.admitted_peer_count == 0 {
         return false;
     }
     if alone_since.is_some() {

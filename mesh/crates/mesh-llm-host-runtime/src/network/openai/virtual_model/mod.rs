@@ -591,7 +591,7 @@ pub(super) async fn virtual_model_candidates(
     // `hosted_models` once it can answer.
     let local_assignments = node.serving_models().await;
     let deprioritized_peers = node
-        .peers()
+        .eligible_peers()
         .await
         .into_iter()
         .filter(|peer| {
