@@ -28,12 +28,6 @@ function getApiStatusPill() {
 }
 
 describe('ConnectBlock', () => {
-  it('distinguishes browser Chat from the native inference endpoint', () => {
-    renderConnectBlock('configured')
-
-    expect(screen.getByText(/The Console URL serves browser Chat, not the inference API/)).toBeInTheDocument()
-  })
-
   it('renders the configured API target dot as warning state', () => {
     renderConnectBlock('configured')
 

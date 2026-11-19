@@ -11,7 +11,7 @@ export type TopNavShellData = {
   topNavJoinLinks: LinkItem[]
 }
 
-const LOCAL_API_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0'])
+const LOCAL_API_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0'])
 
 function normalizeOpenAIBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, '')

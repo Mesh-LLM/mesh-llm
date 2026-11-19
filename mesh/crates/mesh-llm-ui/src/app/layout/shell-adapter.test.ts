@@ -16,17 +16,23 @@ describe('Console inference endpoint instructions', () => {
     vi.unstubAllGlobals()
   })
 
-  it('never advertises a remote Console origin as an inference endpoint', () => {
-    vi.stubGlobal('location', new URL('https://console.example.com'))
-    expect(resolveOpenAIBaseUrl({ api_port: 9447 } as StatusPayload)).toBe('http://127.0.0.1:9337/v1')
-    expect(isLocalConsole()).toBe(false)
-  })
+  it.each(['https://console.example.com', 'http://[::1]:3131'])(
+    'does not substitute the Console origin or status port at %s',
+    (origin) => {
+      vi.stubGlobal('location', new URL(origin))
+      expect(resolveOpenAIBaseUrl({ api_port: 9447 } as StatusPayload)).toBe('http://127.0.0.1:9337/v1')
+      expect(isLocalConsole()).toBe(false)
+    }
+  )
 
-  it('keeps an explicitly configured native endpoint', () => {
-    vi.stubGlobal('location', new URL('https://console.example.com'))
-    env.apiUrl = 'https://inference.example.com/v1/'
-    expect(resolveOpenAIBaseUrl()).toBe('https://inference.example.com/v1')
-  })
+  it.each(['https://console.example.com', 'http://[::1]:3131'])(
+    'keeps an explicitly configured native endpoint at %s',
+    (origin) => {
+      vi.stubGlobal('location', new URL(origin))
+      env.apiUrl = 'https://inference.example.com/v1/'
+      expect(resolveOpenAIBaseUrl({ api_port: 9447 } as StatusPayload)).toBe('https://inference.example.com/v1')
+    }
+  )
 
   it('uses the native listener port for a local Console', () => {
     vi.stubGlobal('location', new URL('http://localhost:3131'))
