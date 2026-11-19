@@ -774,7 +774,11 @@ function Install-StartMenuShortcut {
     $shortcutPath = Join-Path (Resolve-Path -LiteralPath $startMenu).ProviderPath "MeshLLM.lnk"
 
     $script = $ConsoleLauncherScript.Replace("__MESH_LLM_START_MENU_SHORTCUT__", $shortcutPath)
-    Set-Content -Path $launcher -Value $script -Encoding UTF8
+    # Written beside it, then moved over it, so a failed write leaves an
+    # earlier launcher whole.
+    $pending = "$launcher.tmp"
+    Set-Content -LiteralPath $pending -Value $script -Encoding UTF8
+    Move-Item -LiteralPath $pending -Destination $launcher -Force
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -873,6 +877,7 @@ try {
         }
     } catch {
         Write-Warning "Could not add MeshLLM to the Start menu: $($_.Exception.Message)"
+        Remove-Item -LiteralPath (Join-Path $InstallDir "$ConsoleLauncherName.tmp") -Force -ErrorAction SilentlyContinue
         if (-not $launcherExisted) {
             Remove-Item -LiteralPath (Join-Path $InstallDir $ConsoleLauncherName) -Force -ErrorAction SilentlyContinue
         }
