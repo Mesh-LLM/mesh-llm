@@ -418,6 +418,7 @@ fn delta_chunk(content: Option<&str>, tool_calls: Option<serde_json::Value>) -> 
         }],
         usage: None,
         timings: None,
+        receipt: None,
     }
 }
 

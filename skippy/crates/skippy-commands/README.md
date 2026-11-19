@@ -8,6 +8,12 @@ Skippy command execution and output formatting. This crate owns the `models` arg
 interactive chat or raw-completion client. It does not load a native runtime or
 manage stage processes.
 
+`receipts` runs `skippy audit-receipt` and `skippy recheck-receipt`. It sends
+the chat request, opens the challenge on the node over HTTP, writes the
+evidence file, prints the report, and ends with the exit code of the outcome.
+The audit itself is in [`skippy-receipt-audit`](../skippy-receipt-audit/README.md),
+which the Mesh host also uses.
+
 Responses stream as they arrive. After each response, a single-line emoji footer
 shows generation speed, time to first token (TTFT), total elapsed time, input and
 output token counts, and cached input tokens with their reuse percentage. The

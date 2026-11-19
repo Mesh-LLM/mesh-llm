@@ -26,6 +26,7 @@ use crate::mesh;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::request_parse::{header_values_from_raw, internal_model_for_public_id};
 use crate::network::openai::transport as proxy;
+use crate::network::openai::trust_policy;
 use crate::network::openai::workload_routing::eligible_targets;
 
 pub(super) const REALTIME_PATH: &str = "/v1/realtime";
@@ -50,6 +51,8 @@ pub(super) fn is_realtime_upgrade(request: &proxy::BufferedHttpRequest) -> bool 
 fn opens_realtime_session(method: &str, path: &str, raw: &[u8]) -> bool {
     method.eq_ignore_ascii_case("GET")
         && path.split('?').next() == Some(REALTIME_PATH)
+        // A head that does not read back opens no session: the request goes
+        // on as an ordinary one, and what cannot be read is rejected there.
         && header_values_from_raw(raw, "upgrade")
             .unwrap_or_default()
             .iter()
@@ -67,6 +70,14 @@ pub(super) async fn relay(
     ingress_type: crate::runtime::IngressType,
     requested_by: Option<iroh::EndpointId>,
 ) {
+    // A session has no receipts. Ingress answers a request whose trust
+    // policy requires them before it gets here; this keeps a session from
+    // starting for one that was never decided, too.
+    if let Some(rejection) = trust_policy::unprovable(request, "a live transcription session") {
+        let observer = crate::logging::OpenAiRouteObserver::default();
+        let _ = trust_policy::answer(client, rejection, observer).await;
+        return;
+    }
     let _inflight = node.begin_inflight_request();
     // A session from one of this node's private nodes is admitted as local, as
     // buffered requests are.

@@ -227,6 +227,7 @@ async fn cache_context(
         timeout_attempts: 0,
         refreshed: false,
         prompt_bytes: None,
+        refused_by_trust_policy: false,
     };
     (node, affinity, target, selection, state)
 }
@@ -563,6 +564,7 @@ async fn a_retry_to_a_different_target_does_not_inherit_the_previous_peers_stale
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     let outcome = route_model_request(
@@ -747,6 +749,7 @@ async fn route_across_mock_backends(
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     let outcome = route_model_request(

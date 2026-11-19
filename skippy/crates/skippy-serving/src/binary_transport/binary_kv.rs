@@ -339,6 +339,7 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
         || message.kind.requires_predicted_reply()
         || !kv.should_lookup()
         || token_ids.is_empty()
+        || !runtime.restores_prefixes_alone()
     {
         return result;
     }
@@ -1062,6 +1063,59 @@ mod tests {
         assert_eq!(lookup_counts, vec![2231]);
         assert_eq!(record_plan[0].namespace, lookup_plan[0].namespace);
         assert_ne!(record_plan[0].page_id, lookup_plan[0].page_id);
+    }
+
+    // Stage 0 computes a prefill from the first position when no restore
+    // ran through the chain; a final stage that restored part of it from
+    // its own cache would hold a turn that starts later than stage 0's.
+    #[test]
+    fn a_stage_that_issues_receipts_does_not_restore_a_prefill_alone() {
+        use crate::telemetry::{Telemetry, TelemetryLevel};
+        let mut config = prefix_cache_test_config();
+        config.stage_index = 1;
+        config.downstream = None;
+        let kv = std::sync::Arc::new(
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident prefix cache enabled"),
+        );
+        let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
+        let mut message = prefill_message();
+        let tokens = (0..512).collect::<Vec<_>>();
+        message.token_count = 512;
+        let lookup = |runtime: &mut crate::runtime_state::RuntimeState| {
+            super::maybe_lookup_binary_prefill(
+                &config,
+                runtime,
+                Some(&kv),
+                &telemetry,
+                "session",
+                &message,
+                &tokens,
+                0,
+            )
+            .stats
+        };
+
+        let mut runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(1);
+        assert_eq!(
+            lookup(&mut runtime).kv_lookup_misses,
+            1,
+            "without receipts the stage looks its cache up"
+        );
+        runtime.set_receipts(std::sync::Arc::new(
+            crate::receipts::StageReceipts::for_test(1),
+        ));
+        let stats = lookup(&mut runtime);
+        assert_eq!(
+            (
+                stats.kv_lookup_hits,
+                stats.kv_lookup_misses,
+                stats.kv_lookup_errors
+            ),
+            (0, 0, 0),
+            "a stage that issues receipts computes what stage 0 computes"
+        );
     }
 }
 

@@ -13,6 +13,12 @@
 //! re-blocking over a plugin's block takes it over. Every change is published
 //! once as a [`RoutingChoice`] on [`ROUTING_CHOICE_CHANNEL`] to the local
 //! plugins that declare it. The host keeps no ranking and no history.
+//!
+//! When this node audits receipts, a peer whose receipt audit fails is
+//! blocked for seven days with `receipts` as its requester and the failure,
+//! with the path of its evidence, as its reason. Those blocks are saved in a
+//! file of their own (`peer_blocks/persistence.rs`), and their reason is cut
+//! to size rather than refused (`peer_blocks/reason.rs`).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -24,9 +30,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::inference::election::{InferenceTarget, ModelTargets};
 
+mod persistence;
+mod reason;
+
+#[cfg(test)]
+use persistence::FILE_NAME;
+
 /// The local plugin channel a [`RoutingChoice`] is published on.
 pub(crate) const ROUTING_CHOICE_CHANNEL: &str = "routing.choice.v1";
-const FILE_NAME: &str = "peer_blocks.json";
 pub(crate) const TIMED_BLOCK_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// The largest `reason` the host keeps, as serialized JSON.
 pub(crate) const MAX_REASON_BYTES: usize = 4096;
@@ -51,6 +62,9 @@ pub(crate) enum BlockLength {
 pub(crate) enum Requester {
     Operator,
     Plugin(String),
+    /// This node's receipt audits, after a peer's audit failed
+    /// (`network::receipt_audit`).
+    Receipts,
 }
 
 impl fmt::Display for Requester {
@@ -58,6 +72,7 @@ impl fmt::Display for Requester {
         match self {
             Self::Operator => f.write_str("operator"),
             Self::Plugin(id) => write!(f, "plugin:{id}"),
+            Self::Receipts => f.write_str("receipts"),
         }
     }
 }
@@ -74,6 +89,7 @@ impl<'de> Deserialize<'de> for Requester {
         match text.strip_prefix("plugin:") {
             Some(id) if !id.is_empty() => Ok(Self::Plugin(id.to_string())),
             _ if text == "operator" => Ok(Self::Operator),
+            _ if text == "receipts" => Ok(Self::Receipts),
             _ => Err(serde::de::Error::custom(format!(
                 "unknown requester `{text}`"
             ))),
@@ -203,60 +219,36 @@ impl PeerBlocks {
     /// Load the store saved in `directory`.
     ///
     /// A missing file is an empty store. A bad file must never stop routing,
-    /// so any other failure starts with no blocks, but never at the cost of
-    /// the file: a file that cannot be read, or that cannot be decoded and
-    /// then cannot be set aside as `peer_blocks.json.corrupt-<ms>`, is left
-    /// where it is and nothing is saved for the rest of the process (see
+    /// so any other failure starts without that file's blocks, and keeps
+    /// those of the files read before it (an unreadable receipts file keeps
+    /// the operator's and plugins' blocks), but never at the cost
+    /// of the file: a file that cannot be read, or that cannot be decoded
+    /// and then cannot be set aside as `<name>.corrupt-<ms>`, is left where
+    /// it is and nothing is saved for the rest of the process (see
     /// [`Self::not_saved`]), so a later change can never overwrite it.
     pub(crate) fn load(directory: &Path) -> Self {
         Self::load_at(directory, now_ms())
     }
 
     fn load_at(directory: &Path, now_ms: u64) -> Self {
-        let path = directory.join(FILE_NAME);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Self::with_store(Store::default(), Some(directory.to_path_buf()));
-            }
-            Err(error) => {
-                return Self::not_persisting(format!(
-                    "{} could not be read ({error})",
-                    path.display()
-                ));
-            }
-        };
-        let error = match serde_json::from_slice(&bytes) {
-            Ok(store) => return Self::with_store(store, Some(directory.to_path_buf())),
-            Err(error) => error,
-        };
-        let aside = path.with_extension(format!("json.corrupt-{now_ms}"));
-        match std::fs::rename(&path, &aside) {
-            Ok(()) => {
-                tracing::warn!(
-                    "peer blocks: {} is unreadable ({error}); moved to {} and starting empty",
-                    path.display(),
-                    aside.display()
-                );
-                Self::with_store(Store::default(), Some(directory.to_path_buf()))
-            }
-            Err(rename_error) => Self::not_persisting(format!(
-                "{} is unreadable ({error}) and could not be moved to {} ({rename_error})",
-                path.display(),
-                aside.display()
-            )),
+        let loaded = persistence::load(directory, now_ms);
+        match loaded.not_saved {
+            None => Self::with_store(loaded.store, Some(directory.to_path_buf())),
+            Some(problem) => Self::not_persisting(loaded.store, problem),
         }
     }
 
-    /// An empty store that never saves, because the file on disk could not
-    /// be loaded or set aside and must not be overwritten.
-    fn not_persisting(problem: String) -> Self {
+    /// A store that never saves, because a file on disk could not be loaded
+    /// or set aside and must not be overwritten. It keeps whatever blocks
+    /// were read before the failure.
+    fn not_persisting(store: Store, problem: String) -> Self {
         tracing::error!(
-            "peer blocks: {problem}; starting with no blocks, and changes this run will not be saved"
+            "peer blocks: {problem}; starting with the {} block(s) read before it, and changes this run will not be saved",
+            store.blocks.len()
         );
         Self {
             not_saved: Some(Arc::from(problem)),
-            ..Self::with_store(Store::default(), None)
+            ..Self::with_store(store, None)
         }
     }
 
@@ -281,25 +273,12 @@ impl PeerBlocks {
         }
     }
 
-    /// Write the store durably: the new file is synced before it replaces
-    /// the old one, and the directory is synced after, so a crash or power
-    /// loss leaves either the old store or the new one, never a torn file.
+    /// Write the store durably, unless it is kept in memory only.
     fn save(&self, store: &Store) -> std::io::Result<()> {
-        use std::io::Write as _;
-
-        let Some(directory) = &self.directory else {
-            return Ok(());
-        };
-        std::fs::create_dir_all(directory)?;
-        let path = directory.join(FILE_NAME);
-        let temp = path.with_extension("json.tmp");
-        {
-            let mut file = std::fs::File::create(&temp)?;
-            file.write_all(&serde_json::to_vec_pretty(store)?)?;
-            file.sync_all()?;
+        match &self.directory {
+            Some(directory) => persistence::save(directory, store),
+            None => Ok(()),
         }
-        std::fs::rename(&temp, &path)?;
-        sync_directory(directory)
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, Store> {
@@ -369,6 +348,7 @@ impl PeerBlocks {
         reason: Option<serde_json::Value>,
         now_ms: u64,
     ) -> Result<RoutingChoice, BlockError> {
+        let reason = reason::kept_for(&requested_by, reason);
         if reason
             .as_ref()
             .is_some_and(|reason| reason.to_string().len() > MAX_REASON_BYTES)
@@ -451,20 +431,6 @@ impl PeerBlocks {
         store.prune(now_ms);
         store.blocks
     }
-}
-
-/// Make a rename inside `directory` durable. On Unix that means syncing the
-/// directory itself. The standard library cannot open a directory as a file
-/// on Windows, so there the file is synced before the rename and the
-/// rename's own durability is left to the filesystem.
-#[cfg(unix)]
-fn sync_directory(directory: &Path) -> std::io::Result<()> {
-    std::fs::File::open(directory)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_directory: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 /// Deliver `choice` once to the local plugins that declare

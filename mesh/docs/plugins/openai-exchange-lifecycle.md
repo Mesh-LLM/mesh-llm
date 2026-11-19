@@ -57,6 +57,8 @@ selected phase names the backend in `target` and, for a remote peer, carries
 `target_peer_id`: the peer's endpoint id as lowercase hex, the same encoding the
 serving node's `request_received` and terminal events use for
 `requested_by_node_id`. It is absent for a local or URL backend.
+When the selected model descriptor is unambiguous, `required_model_channels`
+lists the Mesh channel names that its backend requires.
 
 When a mesh route has several candidates, a `deny` at the selected phase rules
 out that candidate only: the host asks about the next one, with the next
@@ -120,6 +122,54 @@ boolean fields `evidence_complete` and `observer_evidence_complete`. An absent
 field means unknown, rather than false. The old `evidence_completeness` string
 field is retained for SDK source compatibility but is not emitted by v1 hosts.
 The raw payload remains available for additive fields outside the typed view.
+
+### Receipt audit evidence
+
+On the requesting node, a remote attempt using the `receipts` trust policy
+carries `receipt_audit: "pending"` at `backend_selected` when the host can
+audit the attempt with its own key. At
+`exchange_finished`, the host reports one of five statuses for the selected
+attempt:
+
+| Status | Meaning |
+|---|---|
+| `passed` | The host audited the turn, and the audit passed |
+| `not_drawn` | The receipt is the peer's, bound to this request and names the model asked for. The draw did not pick the turn |
+| `not_audited` | The same receipt, and the draw picked the turn. The host did not complete the audit for a reason that is not in the receipt |
+| `unverified` | The receipt supports no audit of what was asked for, the response did not end whole, or no verdict arrived in time |
+| `failed` | The audit failed, or the peer owed a receipt or an answer to a challenge and gave none |
+
+The host draws the turns it audits at the rate of `[receipts] audit_one_in`,
+1 in 10 by default, after the peer has signed its receipt, and the peer can
+neither predict nor influence the draw. Until a peer's drawn turns have
+passed, the host draws every turn of it.
+Both phases carry the same
+host-generated `receipt_audit_attempt_id` and authenticated `target_peer_id`.
+The field reports the local verifier's result, which peers cannot set.
+
+A settlement plugin can record the requirement at selection and use the
+terminal result when deciding whether to make the final usage payment. Match
+the event to the recorded local exchange, authenticated peer, and audit
+attempt ID. The intended rule is to make a gated payment after `passed` and
+`not_drawn`, and to withhold it after `not_audited`, `unverified` and
+`failed`. A drawn turn is paid only when its audit passed, so that neither
+side gains when an audit does not run. `not_audited` is told apart from
+`unverified` so that an operator can see that the host did not complete the
+audit of a receipt that was fit for one. An unpaid final is a debt at the
+seller, so a buyer whose audits do not run loses its sellers. The host
+bounds what a peer gains from the turns that are not drawn; see
+[Consequences](../design/RECEIPTS.md#consequences) for the rules and for
+what they leave open. Keep the payment withheld if the verdict is absent or
+arrives after settlement state has expired. A status that a plugin does not
+know parses as `unverified`.
+Admission and final usage have separate rules. This evidence carries no
+invoice, wallet, or payment-rail data.
+
+`exchange_finished` waits for the verdict of a drawn turn. Most audits end
+in seconds. A drawn turn can wait in the host's audit queue for up to 10
+minutes when the host audits many turns at once, and the event waits a
+little over 11 minutes before it reports `unverified`. A turn that was not drawn
+does not wait.
 
 Final client cancellation, timeout, or transport failure takes precedence over
 the admission outcome. The optional `admission_denied` and

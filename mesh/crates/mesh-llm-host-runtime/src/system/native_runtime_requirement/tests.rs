@@ -327,3 +327,18 @@ async fn unavailable_manifest_transport_is_recoverable_but_invalid_url_is_not() 
     let invalid_url = client.get("http://[").build().unwrap_err();
     assert!(!is_runtime_availability_error(&invalid_url.into()));
 }
+
+#[test]
+fn a_client_that_audits_receipts_needs_the_runtime() {
+    let receipts = |audit, require, offline| mesh_llm_config::ReceiptsConfig {
+        audit,
+        require,
+        offline,
+        ..Default::default()
+    };
+    assert!(!client_audits_receipts(&receipts(false, false, false)));
+    assert!(client_audits_receipts(&receipts(true, false, false)));
+    assert!(client_audits_receipts(&receipts(false, true, false)));
+    // a node that never audits never needs the runtime for it
+    assert!(!client_audits_receipts(&receipts(true, true, true)));
+}

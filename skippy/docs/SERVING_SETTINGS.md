@@ -188,6 +188,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--quant` | `quant` | See `skippy serve --help` for values and defaults. |
 | `--checkpoint-imatrix` | `checkpoint_imatrix` | See `skippy serve --help` for values and defaults. |
 | `--hash-cache` | `hash_cache` | See `skippy serve --help` for values and defaults. |
+| `--receipts` | `receipts` | Issue inference receipts on a later stage of a binary split, without a receipts API; see [RECEIPTS.md](RECEIPTS.md). The settings resolver files this key in `[model]`, not in `[distributed]` with the other receipts keys |
 
 ### [execution]
 
@@ -386,6 +387,11 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--async-prefill-forward` | `async_prefill_forward` | See `skippy serve --help` for values and defaults. |
 | `--no-async-prefill-forward` | `no_async_prefill_forward` | See `skippy serve --help` for values and defaults. |
 | `--downstream-connect-timeout-secs` | `downstream_connect_timeout_secs` | See `skippy serve --help` for values and defaults. |
+| `--receipts-listen` | `receipts_listen` | Issue inference receipts and serve the receipts API on this address; see [RECEIPTS.md](RECEIPTS.md). Use it or `--receipts`, not both |
+| `--receipts-allow-remote` | `receipts_allow_remote` | Permit a receipts address that is not loopback |
+| `--receipts-downstream` | `receipts_downstream` | Receipts API of the next stage. Without it, receipts use the stage connection |
+| `--receipts-claimed-model` | `receipts_claimed_model` | Model named in receipts. The default is the stage model id |
+| `--receipts-signing-key` | `receipts_signing_key` | File with the Ed25519 seed that signs receipts, as 64 hex digits |
 
 ### [runtime]
 

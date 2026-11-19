@@ -283,14 +283,30 @@ impl PredictionReturnHub {
         Ok(PredictionReturnReceiver {
             key,
             hub: self.clone(),
-            receiver,
+            receiver: Mutex::new(receiver),
         })
+    }
+
+    /// Gives the waiter of `key` a new channel and closes the streams read
+    /// for it so far. Their readers keep the old channel, so what they
+    /// report next, such as the end of their stream, reaches nobody.
+    fn restart_waiter(&self, key: PredictionReturnKey) -> ReturnChannel {
+        let (sender, receiver) = mpsc::channel();
+        if let Ok(mut waiters) = self.waiters.lock() {
+            waiters.insert(key, sender);
+        }
+        self.close_streams(key);
+        receiver
     }
 
     pub(crate) fn unregister(&self, key: PredictionReturnKey) {
         if let Ok(mut waiters) = self.waiters.lock() {
             waiters.remove(&key);
         }
+        self.close_streams(key);
+    }
+
+    fn close_streams(&self, key: PredictionReturnKey) {
         let streams = self
             .streams
             .lock()
@@ -464,8 +480,12 @@ impl Drop for TrackedStream<'_> {
 pub(crate) struct PredictionReturnReceiver {
     key: PredictionReturnKey,
     hub: Arc<PredictionReturnHub>,
-    receiver: mpsc::Receiver<Result<StageReply, String>>,
+    /// Replaced by [`Self::restart`], which the request's own thread calls
+    /// between its waits.
+    receiver: Mutex<ReturnChannel>,
 }
+
+type ReturnChannel = mpsc::Receiver<Result<StageReply, String>>;
 
 impl PredictionReturnReceiver {
     pub(crate) fn attach_opened_stream(&self, stream: TcpStream) {
@@ -478,18 +498,43 @@ impl PredictionReturnReceiver {
         });
     }
 
+    /// Starts the request's replies over, after a stop ended an attempt that
+    /// used the same request ids, such as a missed prefix restore. The stop
+    /// closes the attempt's return streams, and the end of each stream is
+    /// reported to the channel its reader took. Those ends belong to the
+    /// attempt: the next attempt's replies arrive on a new channel, so the
+    /// end of a stream the stop closed cannot fail them.
+    pub(crate) fn restart(&self) {
+        let receiver = self.hub.restart_waiter(self.key);
+        *self
+            .receiver
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = receiver;
+    }
+
+    fn recv_timeout(&self, timeout: Duration) -> Result<Option<StageReply>> {
+        let received = self
+            .receiver
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recv_timeout(timeout);
+        match received {
+            Ok(Ok(reply)) => Ok(Some(reply)),
+            Ok(Err(error)) => Err(anyhow!(error)),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err(anyhow!("prediction return channel disconnected"))
+            }
+        }
+    }
+
     pub(crate) fn recv_expected_timeout(
         &self,
         expected: WireReplyKind,
         timeout: Duration,
     ) -> Result<Option<StageReply>> {
-        let reply = match self.receiver.recv_timeout(timeout) {
-            Ok(Ok(reply)) => reply,
-            Ok(Err(error)) => return Err(anyhow!(error)),
-            Err(RecvTimeoutError::Timeout) => return Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                return Err(anyhow!("prediction return channel disconnected"));
-            }
+        let Some(reply) = self.recv_timeout(timeout)? else {
+            return Ok(None);
         };
         validate_expected_reply(reply, std::slice::from_ref(&expected)).map(Some)
     }
@@ -501,13 +546,8 @@ impl PredictionReturnReceiver {
         expected: &[WireReplyKind],
         timeout: Duration,
     ) -> Result<Option<StageReply>> {
-        let reply = match self.receiver.recv_timeout(timeout) {
-            Ok(Ok(reply)) => reply,
-            Ok(Err(error)) => return Err(anyhow!(error)),
-            Err(RecvTimeoutError::Timeout) => return Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                return Err(anyhow!("prediction return channel disconnected"));
-            }
+        let Some(reply) = self.recv_timeout(timeout)? else {
+            return Ok(None);
         };
         validate_expected_reply(reply, expected).map(Some)
     }
@@ -744,7 +784,8 @@ fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWire
 mod tests {
     use super::*;
     use skippy_protocol::binary::{
-        recv_ready, recv_reply, send_reply_predicted_with_stats, state_flags,
+        recv_ready, recv_reply, send_reply_ack_with_stats, send_reply_predicted_with_stats,
+        state_flags,
     };
     use std::io::Write;
 
@@ -958,6 +999,58 @@ mod tests {
             .expect_err("closed prediction return must wake the waiter");
         assert!(error.to_string().contains("closed before the next reply"));
         handle.join().unwrap().unwrap();
+    }
+
+    /// Opens a return stream for `request_id`/`session_id` on `hub`, as the
+    /// final stage does, and returns its peer end and reader.
+    fn open_return_stream(
+        hub: &Arc<PredictionReturnHub>,
+        request_id: u64,
+        session_id: u64,
+    ) -> (TcpStream, JoinHandle<Result<()>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let open = prediction_return_open_message(request_id, session_id);
+        let hub = hub.clone();
+        let reader = thread::spawn(move || hub.handle_return_connection(open, server));
+        (client, reader)
+    }
+
+    // A missed prefix restore ends with a stop that closes the final stage's
+    // return stream; the request then prefills in full under the same ids.
+    #[test]
+    fn a_return_stream_closed_by_a_restore_cleanup_does_not_fail_the_retry() {
+        let (request_id, session_id) = (71, 73);
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(request_id, session_id).unwrap();
+
+        // the restore attempt: the final stage misses and says so
+        let (mut attempt, attempt_reader) = open_return_stream(&hub, request_id, session_id);
+        send_reply_ack_with_stats(&mut attempt, Default::default()).unwrap();
+        let miss = receiver
+            .recv_one_of_timeout(
+                &[WireReplyKind::PredictedToken, WireReplyKind::Ack],
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .expect("the miss reply");
+        assert_eq!(miss.kind, WireReplyKind::Ack);
+        // the cleanup stop closes the stream before it is acknowledged
+        drop(attempt);
+        attempt_reader.join().unwrap().unwrap();
+        receiver.restart();
+
+        // the full prefill: the final stage opens a new stream
+        let (mut retry, retry_reader) = open_return_stream(&hub, request_id, session_id);
+        send_reply_predicted_with_stats(&mut retry, 42, Default::default()).unwrap();
+        let reply = receiver
+            .recv_expected_timeout(WireReplyKind::PredictedToken, Duration::from_secs(5))
+            .expect("the retry's reply, not the end of the restore's stream")
+            .expect("a reply within the timeout");
+        assert_eq!(reply.predicted, 42);
+        drop(retry);
+        retry_reader.join().unwrap().unwrap();
     }
 
     /// Direct-return transport preserves typed native MTP draft evidence.

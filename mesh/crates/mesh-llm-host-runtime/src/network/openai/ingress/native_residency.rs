@@ -1,5 +1,6 @@
 //! Hold native residency through the complete response, including SSE forwarding.
 use super::*;
+use crate::network::request_trust::RequestTrust;
 
 /// Defer a configured cold model's workload decision until its verified descriptor exists.
 pub(super) fn named_model_route(
@@ -77,6 +78,7 @@ pub(super) async fn route_request(
         &request.client_path,
         local_only || target.is_some(),
         &excluded,
+        request.trust,
     )
     .await
     {
@@ -129,29 +131,32 @@ pub(super) async fn route_request(
 }
 
 /// Consult workload-compatible hosts in this membership before demanding local memory.
+/// Only hosts the request's trust policy permits count.
 async fn ready_targets(
     ctx: &IngressRouteContext<'_>,
     model: &str,
     path: &str,
     local_only: bool,
     excluded: &[iroh::EndpointId],
+    trust: RequestTrust,
 ) -> Option<election::ModelTargets> {
-    let candidates = workload_routing::ingress_candidates(ctx.node, model, path, ctx.targets)
-        .await
-        .into_iter()
-        .filter(|candidate| match candidate {
-            election::InferenceTarget::Local(_) => true,
-            election::InferenceTarget::Remote(peer) => {
-                !local_only
-                    && !excluded.contains(peer)
-                    && !ctx
-                        .node
-                        .peer_blocks
-                        .is_blocked(peer, crate::network::peer_blocks::now_ms())
-            }
-            election::InferenceTarget::None => false,
-        })
-        .collect::<Vec<_>>();
+    let candidates =
+        workload_routing::ingress_candidates(ctx.node, model, path, ctx.targets, trust)
+            .await
+            .into_iter()
+            .filter(|candidate| match candidate {
+                election::InferenceTarget::Local(_) => true,
+                election::InferenceTarget::Remote(peer) => {
+                    !local_only
+                        && !excluded.contains(peer)
+                        && !ctx
+                            .node
+                            .peer_blocks
+                            .is_blocked(peer, crate::network::peer_blocks::now_ms())
+                }
+                election::InferenceTarget::None => false,
+            })
+            .collect::<Vec<_>>();
     if candidates.is_empty() {
         return None;
     }
@@ -266,6 +271,7 @@ pub(super) async fn cold_failure(
             &request.client_path,
             local_only || target.is_some(),
             &excluded,
+            request.trust,
         )
         .await
     {
@@ -366,7 +372,9 @@ mod tests {
             automatic_retry: None,
             exchange_channel: None,
         };
-        let ready = ready_targets(&ctx, "cold", "/v1/chat/completions", false, &[])
+        let any = RequestTrust::UNRESTRICTED;
+        let chat = "/v1/chat/completions";
+        let ready = ready_targets(&ctx, "cold", chat, false, &[], any)
             .await
             .unwrap();
         assert_eq!(
@@ -374,17 +382,25 @@ mod tests {
             vec![election::InferenceTarget::Remote(peer_id)]
         );
         assert!(
-            ready_targets(&ctx, "cold", "/v1/chat/completions", true, &[])
+            ready_targets(&ctx, "cold", chat, true, &[], any)
                 .await
                 .is_none()
         );
         assert!(
-            ready_targets(&ctx, "cold", "/v1/chat/completions", false, &[peer_id])
+            ready_targets(&ctx, "cold", chat, false, &[peer_id], any)
                 .await
                 .is_none()
         );
         assert!(
-            ready_targets(&ctx, "cold", "/v1/embeddings", false, &[])
+            ready_targets(&ctx, "cold", "/v1/embeddings", false, &[], any)
+                .await
+                .is_none()
+        );
+        // a peer that issues no receipts is not ready for a request that
+        // requires them, so the cold model is not skipped for it
+        let receipts = RequestTrust::Receipts { audit: true };
+        assert!(
+            ready_targets(&ctx, "cold", chat, false, &[], receipts)
                 .await
                 .is_none()
         );

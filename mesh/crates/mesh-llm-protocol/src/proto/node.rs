@@ -768,6 +768,11 @@ pub struct ServedModelDescriptor {
     pub metadata: ::core::option::Option<ServedModelMetadata>,
     #[prost(message, repeated, tag = "6")]
     pub requires: ::prost::alloc::vec::Vec<ChannelRequirement>,
+    /// This node issues inference receipts for the model, so a client can
+    /// audit the turns it serves (RECEIPTS.md). Absent from older nodes: no
+    /// receipts.
+    #[prost(bool, optional, tag = "7")]
+    pub receipts: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChannelRequirement {

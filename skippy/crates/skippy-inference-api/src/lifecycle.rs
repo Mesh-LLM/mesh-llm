@@ -10,7 +10,7 @@ use skippy_events::lifecycle::LifecycleState;
 use skippy_events::usage::TokenUsage;
 use uuid::Uuid;
 
-use crate::{common::Usage, errors::InferenceError};
+use crate::{common::Usage, errors::InferenceError, receipts::ReceiptRequest};
 
 /// The canonical request correlation header used by the inference frontend.
 pub static REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -42,6 +42,9 @@ pub struct InferenceLifecycleContext {
     pub request_id: RequestId,
     pub method: InferenceRequestMethod,
     pub route: InferenceFrontendRoute,
+    /// The receipt binding the request's headers ask for
+    /// ([`ReceiptRequest::from_headers`]).
+    pub receipt: Option<ReceiptRequest>,
 }
 
 impl InferenceLifecycleContext {
@@ -54,7 +57,13 @@ impl InferenceLifecycleContext {
             request_id,
             method,
             route,
+            receipt: None,
         }
+    }
+
+    pub const fn with_receipt(mut self, receipt: Option<ReceiptRequest>) -> Self {
+        self.receipt = receipt;
+        self
     }
 }
 

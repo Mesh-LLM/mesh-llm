@@ -49,6 +49,7 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         reasoning_budget: skippy_runtime::ReasoningBudget::Resolved(
             sampling.reasoning_budget_tokens,
         ),
+        indexed_draw: (sampling.flags & sampling_flags::INDEXED_DRAW) != 0,
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling

@@ -73,6 +73,7 @@ pub(super) async fn terminal(config: StageConfig) -> Result<EmbeddedServerHandle
         compute_meter: None,
         split_dflash: None,
         l3_manager: None,
+        receipts: None,
     });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {

@@ -170,6 +170,124 @@ async fn empty_manager() -> PluginManager {
     .unwrap()
 }
 
+#[tokio::test(start_paused = true)]
+async fn receipt_verdict_is_bound_to_the_selected_attempt_and_completed_delivery() {
+    let manager = empty_manager().await;
+    let peer = iroh::SecretKey::from_bytes(&[1; 32]).public();
+    let another_peer = iroh::SecretKey::from_bytes(&[2; 32]).public();
+    for (verdict, outcome, matching_attempt, matching_peer, expected) in [
+        (
+            Some(ReceiptAuditStatus::Passed),
+            "completed",
+            true,
+            true,
+            "passed",
+        ),
+        (
+            Some(ReceiptAuditStatus::Failed),
+            "completed",
+            true,
+            true,
+            "failed",
+        ),
+        (
+            Some(ReceiptAuditStatus::NotDrawn),
+            "completed",
+            true,
+            true,
+            "not_drawn",
+        ),
+        (
+            Some(ReceiptAuditStatus::NotAudited),
+            "completed",
+            true,
+            true,
+            "not_audited",
+        ),
+        (
+            Some(ReceiptAuditStatus::NotDrawn),
+            "client_cancelled",
+            true,
+            true,
+            "unverified",
+        ),
+        (
+            Some(ReceiptAuditStatus::Passed),
+            "client_cancelled",
+            true,
+            true,
+            "unverified",
+        ),
+        (
+            Some(ReceiptAuditStatus::Passed),
+            "completed",
+            false,
+            true,
+            "unverified",
+        ),
+        (
+            Some(ReceiptAuditStatus::Passed),
+            "completed",
+            true,
+            false,
+            "unverified",
+        ),
+        (None, "completed", true, true, "unverified"),
+    ] {
+        let (mut session, _) = ExchangeSession::begin(
+            &manager,
+            request_event(
+                "buyer-exchange".into(),
+                "chat_completions",
+                "POST",
+                "/v1/chat/completions",
+                b"{}",
+                Default::default(),
+                false,
+            ),
+        )
+        .await;
+        let attempt = uuid::Uuid::new_v4();
+        let selected = json!({
+            "phase": "backend_selected", "attempt": 2,
+            "target_peer_id": hex::encode(peer.as_bytes()),
+            "receipt_audit": "pending", "receipt_audit_attempt_id": attempt,
+        });
+        manager
+            .selected_exchange_phase(session.observation_id(), selected)
+            .await;
+        session.observer().response_status(200);
+        let (sender, receiver) = oneshot::channel();
+        manager.record_receipt_audit(
+            session.observation_id(),
+            if matching_attempt {
+                attempt
+            } else {
+                uuid::Uuid::new_v4()
+            },
+            if matching_peer { peer } else { another_peer },
+            receiver,
+        );
+        // When no output arrives, keep the sender alive through the timeout.
+        let _pending = if let Some(verdict) = verdict {
+            assert_eq!(
+                sender.send(verdict).is_ok(),
+                matching_attempt && matching_peer
+            );
+            None
+        } else {
+            Some(sender)
+        };
+        let terminal = session.final_terminal_event(outcome).await;
+        assert_eq!(terminal["exchange_id"], "buyer-exchange");
+        assert_eq!(terminal["target_peer_id"], hex::encode(peer.as_bytes()));
+        assert_eq!(terminal["receipt_audit_attempt_id"], json!(attempt));
+        assert_eq!(terminal["receipt_audit"], expected);
+        session.finish(outcome).await;
+    }
+    manager.shutdown().await;
+}
+
 #[tokio::test]
 async fn typed_denial_body_drop_reports_cancellation_and_exact_polled_prefix() {
     for denied in [false, true] {

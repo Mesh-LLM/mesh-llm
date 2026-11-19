@@ -2,6 +2,7 @@ mod built_in_schema;
 mod multimodal;
 mod private;
 mod profile;
+mod receipts;
 mod runtime;
 mod schema_types;
 mod updates;
@@ -14,6 +15,7 @@ pub use built_in_schema::{
 pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
 pub use private::{PrivateConfig, is_node_id};
+pub use receipts::{DEFAULT_AUDIT_THREADS, MAX_AUDIT_THREADS, ReceiptsConfig};
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
@@ -62,6 +64,8 @@ pub struct MeshConfig {
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
+    #[serde(default, skip_serializing_if = "ReceiptsConfig::is_default")]
+    pub receipts: ReceiptsConfig,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, toml::Value>,
 }
@@ -1246,6 +1250,8 @@ struct RawMeshConfig {
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
+    #[serde(default)]
+    receipts: ReceiptsConfig,
     #[serde(flatten, default)]
     extra: BTreeMap<String, toml::Value>,
 }
@@ -1367,6 +1373,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
+            receipts: raw.receipts,
             extra: raw.extra,
         })
     }

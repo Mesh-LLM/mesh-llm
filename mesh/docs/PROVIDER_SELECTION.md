@@ -91,6 +91,68 @@ cannot attach this HTTP header, selecting only a model name does not pin a peer.
 These headers constrain local-user ingress routing. They never authorize an
 incoming peer request to hop to another peer.
 
+## Require verifiable receipts
+
+Inference receipts are experimental. Read
+[what a pass proves](design/RECEIPTS.md#what-a-pass-proves) and the
+[open limitations](design/RECEIPTS.md#open-limitations) before you rely on
+them.
+
+Send `x-mesh-trust: receipts` to serve a chat completion only on a runtime
+that issues [inference receipts](../../skippy/docs/RECEIPTS.md): this node's
+own, or a peer that advertises receipts for the model. Your node then audits
+about one turn in ten from those peers, also when `[receipts] audit` is off.
+It blocks a peer for 7 days when an audit fails in something that the peer
+signed. It also checks the receipt of every turn. A peer that advertises
+receipts and returns no usable receipt gets a strike, and three strikes in
+24 hours block the peer for 7 days. The other results of an audit are in
+[Audit policy in Mesh](design/RECEIPTS.md#audit-policy-in-mesh).
+
+Your node audits a turn only when it can tie the model name of the request
+to a Hugging Face file. Name the model as `owner/repo:selector`, as
+`owner/repo@revision/path/file.gguf`, or by a name in the loaded catalog of
+your node. A bare runtime name of a peer, an alias, `local-gguf/sha256-...`
+and `owner/repo` without a selector get no audit.
+
+```bash
+curl -sS "$BASE_URL/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -H 'x-mesh-trust: receipts' \
+  --data "$(jq -nc --arg model "$MODEL" '{
+    model: $model,
+    messages: [{role: "user", content: "Reply with a short greeting."}]
+  }')"
+```
+
+When no candidate serves the model with receipts, the request fails with
+HTTP 409 and the error code `trust_policy_unsatisfied`:
+
+```json
+{"error":{"message":"no candidate serves model 'Qwen3-4B-Q8_0' with receipts, which the request's trust policy requires","type":"invalid_request_error","code":"trust_policy_unsatisfied"}}
+```
+
+- Receipts cover `/v1/chat/completions` only. Other inference endpoints fail
+  with the same code under this policy.
+- `x-mesh-trust: any` is ordinary routing. An unknown tier, or an empty entry,
+  returns HTTP 400. So do the tiers `trusted`, `measured` and `tee`, which
+  are not built.
+- `x-mesh-target` and `x-mesh-exclude` still apply. A target that does not
+  serve the model with receipts is rejected with HTTP 409.
+- Virtual models, pipeline dispatch, plugin endpoints, and model-less
+  requests reject the policy with HTTP 409.
+- A model that is still loading on your node answers HTTP 409 to a request
+  under the policy.
+- A split with a stage on another node does not serve the model with
+  receipts, on your node or on a peer.
+- An operator can make `receipts` the node default with
+  `[receipts] require = true`. A request then cannot ask for `any`: that
+  returns HTTP 400.
+- With `[receipts] offline = true`, your node does no audit, and no peer
+  satisfies the policy. Only your node's own runtime can serve the request.
+
+The rules of the tier are in
+[TRUST_TIERS.md](design/TRUST_TIERS.md#receipts).
+
 ## Gated providers
 
 A provider pin does not bypass a plugin gate: a model that advertises `requires`

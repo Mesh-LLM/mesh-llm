@@ -1108,12 +1108,14 @@ gpu_id = "pci:0000:65:00.0"
             source_model,
             source_multimodal,
             source_runtime,
+            include_str!("model/receipts.rs"),
             include_str!("managed_models.rs"),
             include_str!("openai_exchange.rs"),
         ];
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
+            ("ReceiptsConfig", 1),
             ("GpuConfig", 1),
             ("RuntimeConfig", 1),
             ("NativeRuntimeConfig", 1),
@@ -1147,6 +1149,7 @@ gpu_id = "pci:0000:65:00.0"
             "GpuConfig",
             "MeshRequirementsConfig",
             "OwnerControlConfig",
+            "ReceiptsConfig",
             "RuntimeConfig",
             "NativeRuntimeConfig",
             "RuntimeKvCacheConfig",

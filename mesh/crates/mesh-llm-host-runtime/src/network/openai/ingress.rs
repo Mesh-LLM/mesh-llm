@@ -30,6 +30,9 @@ mod missing_model;
 mod private_scope_tests;
 mod realtime_relay;
 mod rejection_telemetry;
+mod routing_headers;
+mod trust_routing;
+mod unnamed_model;
 use buffered_exchange::handle_buffered_api_request;
 pub(super) use exchange_events::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use exchange_events::{
@@ -46,6 +49,10 @@ use missing_model::route_missing_local_model;
 #[cfg(test)]
 use missing_model::{has_local_unavailable_candidates, route_self_targeted_model};
 use rejection_telemetry::record_pre_routing_rejection;
+pub(crate) use routing_headers::mesh_routing_headers_requested;
+pub(super) use routing_headers::parse_mesh_routing_headers;
+use routing_headers::{mesh_headers_force_remote, parse_endpoint_id_hex, twin_bracket_id};
+use trust_routing::try_route_plugin_model;
 
 use crate::inference::election;
 use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
@@ -56,6 +63,7 @@ use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
+use crate::network::openai::trust_policy;
 use crate::network::openai::workload_routing::{
     self, is_audio_upload_path, is_document_ocr_path, model_satisfies_request,
     request_workload_class, required_request_workload, unsupported_workload_message,
@@ -411,8 +419,9 @@ async fn auto_route_model_has_ready_ingress_target(
     request_path: &str,
     affinity: &affinity::AffinityRouter,
 ) -> bool {
+    let trust = crate::network::request_trust::RequestTrust::UNRESTRICTED;
     let local_candidates =
-        workload_routing::ingress_candidates(node, model, request_path, targets).await;
+        workload_routing::ingress_candidates(node, model, request_path, targets, trust).await;
     if contains_routable_candidate(&local_candidates) {
         return auto_route::model_has_eligible_target(
             node,
@@ -521,8 +530,10 @@ async fn try_plugin_when_no_mesh_candidate_serves(
     excluded: &[iroh::EndpointId],
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<proxy::RouteDispatchOutcome, ClientStream> {
-    // Tokenize is not an inference endpoint a plugin serves.
-    if request.is_tokenize_request() {
+    // Tokenize is not an inference endpoint a plugin serves. Nor does a
+    // plugin serve a request whose trust policy requires receipts: it cannot
+    // prove the tier, so the mesh routes the request or fails it closed.
+    if request.is_tokenize_request() || trust_policy::restricts(request) {
         return Err(tcp_stream);
     }
     let Some(plugin_manager) = ctx.plugin_manager else {
@@ -540,6 +551,7 @@ async fn try_plugin_when_no_mesh_candidate_serves(
         model_name,
         &request.client_path,
         ctx.targets,
+        request.trust,
     )
     .await;
     // `ingress_candidates` falls back to `hosts_for_model`, which reads mesh
@@ -589,11 +601,15 @@ enum RemoteMeshRoute {
 /// `Some`) or returns the full filtered pool. Returns
 /// [`RemoteMeshRoute::TargetUnavailable`] when an explicit `target` is not
 /// in the candidate set -- the caller must fail closed, never substitute.
+/// Under the trust policy `trust` of a request on `path`, only the hosts
+/// that qualify right now are candidates.
 async fn resolve_remote_mesh_route(
     ctx: &IngressRouteContext<'_>,
     model_name: &str,
     target: Option<iroh::EndpointId>,
     excluded: &[iroh::EndpointId],
+    trust: crate::network::request_trust::RequestTrust,
+    path: &str,
 ) -> RemoteMeshRoute {
     let mut remote_hosts: Vec<iroh::EndpointId> = ctx
         .node
@@ -620,6 +636,14 @@ async fn resolve_remote_mesh_route(
             .candidates(model_name);
         remote_hosts.retain(|id| kept.contains(&election::InferenceTarget::Remote(*id)));
     }
+    let remote_hosts = crate::network::request_trust::permitted_hosts(
+        ctx.node,
+        trust,
+        model_name,
+        path,
+        remote_hosts,
+    )
+    .await;
 
     if let Some(target) = target {
         return if remote_hosts.contains(&target) {
@@ -654,127 +678,16 @@ async fn resolve_remote_mesh_route(
     RemoteMeshRoute::Targets(mesh_targets)
 }
 
-/// Decode a hex-encoded 32-byte `EndpointId` from a header value string.
-/// Leading/trailing whitespace is trimmed before decoding. Returns `None` on
-/// any decode or length error — the caller is responsible for turning `None`
-/// into an appropriate rejection (400 or 409).
-fn parse_endpoint_id_hex(value: &str) -> Option<iroh::EndpointId> {
-    let bytes = hex::decode(value.trim()).ok()?;
-    let bytes: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    iroh::EndpointId::from_bytes(&bytes).ok()
-}
-
-/// Parse the (possibly repeated) `x-mesh-target` header values. Zero values
-/// is a no-op; exactly one must decode as an `EndpointId`; more than one is
-/// ambiguous and rejected rather than silently picking one.
-fn parse_mesh_target_header(values: &[String]) -> Result<Option<iroh::EndpointId>, String> {
-    match values {
-        [] => Ok(None),
-        [only] => parse_endpoint_id_hex(only)
-            .map(Some)
-            .ok_or_else(|| format!("invalid x-mesh-target value '{only}'")),
-        _ => Err("multiple x-mesh-target headers are ambiguous".to_string()),
-    }
-}
-
-/// Parse the `x-mesh-exclude` header value(s), each a comma-separated list of
-/// `EndpointId`s. Any unparseable OR empty entry rejects the whole request
-/// rather than silently dropping an exclusion the client asked for.
-fn parse_mesh_exclude_header(values: &[String]) -> Result<Vec<iroh::EndpointId>, String> {
-    let mut excluded = Vec::new();
-    for value in values {
-        for part in value.split(',') {
-            let part = part.trim();
-            if part.is_empty() {
-                return Err("x-mesh-exclude contains an empty entry".to_string());
-            }
-            let id = parse_endpoint_id_hex(part)
-                .ok_or_else(|| format!("invalid x-mesh-exclude value '{part}'"))?;
-            excluded.push(id);
-        }
-    }
-    Ok(excluded)
-}
-
-/// The longest `x-mesh-twin-bracket` value the host copies.
-const MAX_TWIN_BRACKET_LEN: usize = 128;
-
-/// Parse the (possibly repeated) `x-mesh-twin-bracket` header values. Zero
-/// values is a no-op; exactly one must be 1..=128 characters of
-/// `[A-Za-z0-9._:-]` once HTTP whitespace (SP/HTAB) is trimmed from its ends;
-/// any other whitespace, at the ends or inside, makes it malformed. More than
-/// one value is ambiguous and rejected. The value is otherwise opaque: the
-/// host copies it and never reads it.
-fn parse_twin_bracket_header(values: &[String]) -> Result<Option<String>, String> {
-    match values {
-        [] => Ok(None),
-        [only] => {
-            let value = only.trim_matches([' ', '\t']);
-            let valid = !value.is_empty()
-                && value.len() <= MAX_TWIN_BRACKET_LEN
-                && value
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | ':' | '-'));
-            valid
-                .then(|| value.to_string())
-                .map(Some)
-                .ok_or_else(|| format!("invalid x-mesh-twin-bracket value '{value}'"))
-        }
-        _ => Err("multiple x-mesh-twin-bracket headers are ambiguous".to_string()),
-    }
-}
-
-fn twin_bracket_id(request: &proxy::BufferedHttpRequest) -> Result<Option<String>, String> {
-    parse_twin_bracket_header(&request.twin_bracket_header_values()?)
-}
-
-/// Parse and validate the raw `x-mesh-target` / `x-mesh-exclude` header
-/// values off `request` in one place, so every caller enforces them the same
-/// way before making a routing decision.
-pub(super) fn parse_mesh_routing_headers(
-    request: &proxy::BufferedHttpRequest,
-) -> Result<(Option<iroh::EndpointId>, Vec<iroh::EndpointId>), String> {
-    let (target_values, exclude_values) = request.mesh_routing_header_values()?;
-    let target = parse_mesh_target_header(&target_values)?;
-    let excluded = parse_mesh_exclude_header(&exclude_values)?;
-    Ok((target, excluded))
-}
-
-/// Whether `request` carries a non-trivial `x-mesh-target`/`x-mesh-exclude`
-/// ask. Malformed headers are already rejected with 400 wherever this
-/// request is validated before reaching MoA, so a parse failure here (which
-/// should not happen at this point) is treated as "no ask" rather than
-/// re-rejecting. Shared by virtual-model and ordinary routing call sites
-/// and the passive mesh-request path in `transport.rs`) so "does this
-/// request want routing headers honored" is answered the same way in both
-/// places.
-pub(crate) fn mesh_routing_headers_requested(request: &proxy::BufferedHttpRequest) -> bool {
-    matches!(
-        parse_mesh_routing_headers(request),
-        Ok((target, excluded)) if target.is_some() || !excluded.is_empty()
-    )
-}
-
-/// Whether `x-mesh-target`/`x-mesh-exclude` must force this request away from
-/// local candidates: an exclude naming this node, or a target naming some
-/// other peer. A target naming this node is not forcing -- it is allowed to
-/// serve locally (checked by the ordinary local-candidate path) and only
-/// changes whether `x-mesh-served-by` is echoed.
-fn mesh_headers_force_remote(
-    self_id: iroh::EndpointId,
-    target: Option<iroh::EndpointId>,
-    excluded: &[iroh::EndpointId],
-) -> bool {
-    excluded.contains(&self_id) || target.is_some_and(|id| id != self_id)
-}
-
 /// Dispatch an inference request to an out-of-process plugin endpoint that
 /// serves `model_name` (path 2 / `RawProxy` dispatch). Checks activity policy
 /// admission first; resolves the plugin endpoint via `plugin_manager`; emits
 /// an effective and a terminal OpenAI exchange event to the plugin bus so any
 /// observing plugin can track the full lifecycle of each exchange, including
 /// cases where the backend returns an error or the connection is dropped.
-async fn try_route_plugin_model(
+///
+/// Callers go through [`trust_routing::try_route_plugin_model`], which first
+/// refuses a request whose trust policy a plugin cannot satisfy.
+async fn route_plugin_model(
     ctx: &IngressRouteContext<'_>,
     mut tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
@@ -943,17 +856,17 @@ async fn route_prepared_request(
         // `x-mesh-exclude` BEFORE the local-candidate check below -- a
         // targeted or excluded request must never be silently served from
         // local candidates without ever consulting these headers.
-        let parsed = parse_mesh_routing_headers(request)
-            .and_then(|routing| twin_bracket_id(request).map(|_| routing));
-        let (target, excluded) = match parsed {
-            Ok(parsed) => parsed,
-            Err(message) => {
-                return response_outcome(
-                    400,
-                    proxy::send_400_observed(tcp_stream, &message, route_observer).await,
-                );
-            }
-        };
+        // The request trust policy narrows the candidates the same way.
+        let (tcp_stream, ask) =
+            match trust_routing::routing_ask(tcp_stream, ctx, request, model_name, route_observer)
+                .await
+            {
+                trust_routing::Ask::Route(stream, ask) => (stream, ask),
+                trust_routing::Ask::Answered(outcome) => return outcome,
+            };
+        let trusted_ctx = ask.trusted_targets.as_ref().map(|t| ctx.with_targets(t));
+        let ctx = trusted_ctx.as_ref().unwrap_or(ctx);
+        let (target, excluded) = (ask.target, ask.excluded);
         let self_id = ctx.node.id();
         let forced_remote = mesh_headers_force_remote(self_id, target, &excluded);
 
@@ -1128,34 +1041,7 @@ async fn route_prepared_request(
         outcome
     } else {
         // No model specified — generic fallback routing to first available target.
-        let target = first_available_target(ctx.targets);
-        let mut tcp_stream = tcp_stream;
-        if let Some(outcome) = super::exchange_admission::admit_selected_route(
-            ctx.node,
-            &mut tcp_stream,
-            request,
-            None,
-            "mesh",
-            super::exchange_admission::SelectedRouteTarget::Mesh(&target),
-            1,
-        )
-        .await
-        {
-            return outcome;
-        }
-        proxy::route_to_target(
-            ctx.node.clone(),
-            tcp_stream,
-            None,
-            target,
-            &request.raw,
-            proxy::RouteTargetContext {
-                request_id: request.request_id,
-                response_adapter: request.response_adapter,
-                route_observer,
-            },
-        )
-        .await
+        unnamed_model::route_unnamed_model_request(tcp_stream, request, ctx, route_observer).await
     }
 }
 
@@ -1397,23 +1283,27 @@ async fn enforce_mesh_routing_headers_before_dispatch(
             ));
         }
     };
-    if target.is_none() && excluded.is_empty() {
+    if target.is_none() && excluded.is_empty() && !trust_policy::restricts(request) {
         return Ok(tcp_stream);
     }
-    match mesh_routing_unsupported_dispatch_kind(request, decision, routing_model) {
-        Some(kind) => Err(response_outcome(
-            409,
-            proxy::send_409_observed(
-                tcp_stream,
-                &format!(
-                    "routing headers present but this dispatch does not support them ({kind})"
-                ),
-                route_observer,
-            )
-            .await,
-        )),
-        None => Ok(tcp_stream),
+    let Some(kind) = mesh_routing_unsupported_dispatch_kind(request, decision, routing_model)
+    else {
+        return Ok(tcp_stream);
+    };
+    // A dispatch that cannot honor the trust policy answers with the policy's
+    // own error code, whatever routing headers came with the request.
+    if let Some(rejection) = trust_policy::unprovable(request, &format!("this dispatch ({kind})")) {
+        return Err(trust_policy::answer(tcp_stream, rejection, route_observer).await);
     }
+    Err(response_outcome(
+        409,
+        proxy::send_409_observed(
+            tcp_stream,
+            &format!("routing headers present but this dispatch does not support them ({kind})"),
+            route_observer,
+        )
+        .await,
+    ))
 }
 
 /// Apply activity-policy admission to an inference request that has already
@@ -1473,6 +1363,11 @@ async fn try_handle_virtual_model_intercept(
         .is_some();
     if !is_virtual {
         return VirtualModelInterceptResult::NotVirtual(tcp_stream);
+    }
+    if let Some(rejection) = trust_policy::unprovable(request, "a virtual model") {
+        return VirtualModelInterceptResult::Handled(
+            trust_policy::answer(tcp_stream, rejection, route_observer).await,
+        );
     }
     if mesh_routing_headers_requested(request) {
         let outcome = response_outcome(
@@ -1606,16 +1501,32 @@ async fn handle_api_proxy_connection_inner(
     // Boxed: the dispatch future is large, and the scope wrapper would
     // otherwise move it across another stack frame.
     let dispatch = Box::pin(async move {
+        let mut request = request;
+        // The one trust policy decision of the request, made before any
+        // path is chosen for it, and inside the request's private scope so
+        // it sees the same peers the routing does.
+        // Each step is boxed: together their states made this future too
+        // large for a test thread's stack in a debug build.
+        let decided = Box::pin(trust_policy::decide(
+            &node,
+            &mut request,
+            requested_by.is_some(),
+        ))
+        .await;
         if realtime_relay::is_realtime_upgrade(&request) {
-            realtime_relay::relay(
-                &node,
-                tcp_stream,
-                &request,
-                &targets,
-                ingress_type,
-                requested_by,
-            )
-            .await;
+            let admitted =
+                Box::pin(trust_policy::admit_session(tcp_stream, &request, decided)).await;
+            if let Some(tcp_stream) = admitted {
+                Box::pin(realtime_relay::relay(
+                    &node,
+                    tcp_stream,
+                    &request,
+                    &targets,
+                    ingress_type,
+                    requested_by,
+                ))
+                .await;
+            }
             return;
         }
         let route = IngressRouteContext {
@@ -1628,13 +1539,14 @@ async fn handle_api_proxy_connection_inner(
             #[cfg(test)]
             exchange_channel: None,
         };
-        handle_buffered_api_request(
+        Box::pin(handle_buffered_api_request(
             tcp_stream,
             request,
             ProxyConnectionContext { route },
             source_addr,
             ingress_type,
-        )
+            decided,
+        ))
         .await;
     });
     mesh::with_private_scope(scope, dispatch).await;
@@ -1777,17 +1689,6 @@ pub(crate) async fn bootstrap_proxy(
             }
         }
     }
-}
-
-fn first_available_target(targets: &election::ModelTargets) -> election::InferenceTarget {
-    for hosts in targets.targets.values() {
-        for target in hosts {
-            if !matches!(target, election::InferenceTarget::None) {
-                return target.clone();
-            }
-        }
-    }
-    election::InferenceTarget::None
 }
 
 fn has_available_candidates(targets: &election::ModelTargets, model: &str) -> bool {

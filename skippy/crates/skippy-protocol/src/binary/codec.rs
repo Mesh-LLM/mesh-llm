@@ -187,9 +187,40 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
     Ok(())
 }
 
+/// The bound on the body a message kind carries in `raw_bytes`, and how
+/// its violations read.
+pub(super) struct RawBytes {
+    pub(super) max: usize,
+    pub(super) mismatch: &'static str,
+    pub(super) too_large: &'static str,
+    pub(super) count_too_large: &'static str,
+    pub(super) over_budget: &'static str,
+}
+
+impl RawBytes {
+    fn of(kind: WireMessageKind) -> Self {
+        if kind == WireMessageKind::Receipts {
+            super::receipts::REQUEST_BODY
+        } else {
+            Self {
+                max: MAX_STAGE_STATE_IMPORT_BYTES,
+                mismatch: "state import raw byte count mismatch",
+                too_large: "state import raw byte count exceeds maximum",
+                count_too_large: "state import byte count exceeds maximum",
+                over_budget: "state import byte count exceeds frame budget",
+            }
+        }
+    }
+}
+
 /// Decode and validate a typed reply before exposing its payload to the caller.
 pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let kind = WireReplyKind::try_from(read_i32(&mut reader)?)?;
+    if kind == WireReplyKind::Receipts {
+        return Err(invalid_data(
+            "a receipts reply is read by recv_receipts_reply",
+        ));
+    }
     let predicted = read_i32(&mut reader)?;
     let predicted_count = checked_i32_len(
         read_i32(&mut reader)?,
@@ -410,14 +441,15 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
     if message.kind == WireMessageKind::PrefillReadout {
         super::readout::write_tokens(&mut writer, &message.readout_tokens)?;
     }
-    if message.kind == WireMessageKind::StateImport {
-        let raw_byte_count = usize::try_from(message.token_count)
-            .map_err(|_| invalid_input("state import raw byte count mismatch"))?;
+    if message.kind.carries_raw_bytes() {
+        let limits = RawBytes::of(message.kind);
+        let raw_byte_count =
+            usize::try_from(message.token_count).map_err(|_| invalid_input(limits.mismatch))?;
         if raw_byte_count != message.raw_bytes.len() {
-            return Err(invalid_input("state import raw byte count mismatch"));
+            return Err(invalid_input(limits.mismatch));
         }
-        if raw_byte_count > MAX_STAGE_STATE_IMPORT_BYTES {
-            return Err(invalid_input("state import raw byte count exceeds maximum"));
+        if raw_byte_count > limits.max {
+            return Err(invalid_input(limits.too_large));
         }
         writer.write_all(&message.raw_bytes)?;
         return Ok(());
@@ -609,18 +641,19 @@ fn read_stage_message_inner(
             + position_sideband_count * std::mem::size_of::<i32>(),
         "sideband value count exceeds frame budget",
     )?;
-    if kind == WireMessageKind::StateImport {
+    if kind.carries_raw_bytes() {
+        let limits = RawBytes::of(kind);
         let raw_byte_count = checked_i32_len(
             token_count,
-            MAX_STAGE_STATE_IMPORT_BYTES,
+            limits.max,
             "negative wire count",
-            "state import byte count exceeds maximum",
+            limits.count_too_large,
         )?;
         admit_frame_bytes(
             &frame_budget,
             &mut frame_used,
             raw_byte_count,
-            "state import byte count exceeds frame budget",
+            limits.over_budget,
         )?;
         let mut raw_bytes = vec![0; raw_byte_count];
         reader.read_exact(&mut raw_bytes)?;
@@ -1073,13 +1106,13 @@ fn write_i32_slice(mut writer: impl Write, values: &[i32]) -> io::Result<()> {
     Ok(())
 }
 
-fn read_i32(mut reader: impl Read) -> io::Result<i32> {
+pub(super) fn read_i32(mut reader: impl Read) -> io::Result<i32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(i32::from_le_bytes(bytes))
 }
 
-fn write_i32(mut writer: impl Write, value: i32) -> io::Result<()> {
+pub(super) fn write_i32(mut writer: impl Write, value: i32) -> io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
 
@@ -1093,13 +1126,13 @@ fn write_i64(mut writer: impl Write, value: i64) -> io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
 
-fn read_u32(mut reader: impl Read) -> io::Result<u32> {
+pub(super) fn read_u32(mut reader: impl Read) -> io::Result<u32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(u32::from_le_bytes(bytes))
 }
 
-fn write_u32(mut writer: impl Write, value: u32) -> io::Result<()> {
+pub(super) fn write_u32(mut writer: impl Write, value: u32) -> io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
 

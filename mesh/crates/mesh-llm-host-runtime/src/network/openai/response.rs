@@ -9,6 +9,7 @@ mod json_adaptation;
 mod models;
 pub(crate) mod prepared_dispatch;
 mod probe;
+mod receipt_watch;
 mod relay;
 mod routing;
 mod send;
@@ -18,7 +19,7 @@ mod stream_translation;
 pub(super) use cache_cost::CacheCostObservation;
 pub(crate) use common::{PeerCapsuleIdSink, ServedByNodeIdSink};
 pub(super) use common::{
-    ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
+    ReceiptAuditAttempt, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     attempt_outcome_for_result, attempt_report_for_result, completion_tokens_for_result,
     parse_token_usage_from_json_body, request_outcome_for_status, request_service_for_target,
     route_attempt_result_label, target_health_outcome_for_attempt,

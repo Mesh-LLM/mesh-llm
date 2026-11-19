@@ -8,6 +8,7 @@ use super::probe::{
     PEER_CAPSULE_ID_HEADER, ResponseProbe, peer_response_header_value, probe_http_response,
     probe_http_response_local,
 };
+use super::receipt_watch::{ReceiptWatch, refuse_unwatched};
 use super::served_model_headers::{ServedModelHeaders, set_served_model_headers};
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
@@ -36,6 +37,8 @@ pub(in crate::network::openai) async fn route_local_attempt(
         route_observer,
         served_by,
         peer_capsule_id,
+        trust: _,
+        receipt_audit: _,
     } = logging;
     let marked;
     let prefetched = match mesh::current_private_scope() {
@@ -254,7 +257,23 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         route_observer,
         served_by,
         peer_capsule_id,
+        trust,
+        receipt_audit,
     } = logging;
+    let mut watch = match ReceiptWatch::begin(
+        node,
+        trust,
+        tcp_stream,
+        host_id,
+        prefetched,
+        receipt_audit.is_some(),
+    )
+    .await
+    {
+        Ok(watch) => watch,
+        Err(why) => return refuse_unwatched(tcp_stream, host_id, &why, route_observer).await,
+    };
+    let prefetched = watch.request(prefetched);
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
         Err(err) => {
@@ -266,14 +285,16 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         }
     };
 
-    if forward_peer_request(&mut quic_send, host_id, prefetched)
+    if forward_peer_request(&mut quic_send, host_id, prefetched, watch.receipt_id())
         .await
         .is_err()
     {
         return RouteAttemptResult::RetryableUnavailable;
     }
 
-    route_remote_attempt_after_forward(
+    watch.observe(tcp_stream, response_adapter);
+    let mut quic_recv = watch.upstream(&mut quic_recv, response_adapter);
+    let result = route_remote_attempt_after_forward(
         tcp_stream,
         &mut quic_recv,
         host_id,
@@ -284,16 +305,32 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         peer_capsule_id,
         route_observer,
     )
-    .await
+    .await;
+    quic_recv.finish();
+    watch.stop_observing(tcp_stream);
+    if matches!(
+        result,
+        RouteAttemptResult::Delivered {
+            status_code: 200..=299,
+            ..
+        }
+    ) && let Some(attempt) = receipt_audit
+        && let Some(verdict) = watch.take_verdict()
+        && let Some(manager) = node.plugin_manager().await
+    {
+        manager.record_receipt_audit(attempt.observation_id, attempt.attempt_id, host_id, verdict);
+    }
+    result
 }
 
 async fn forward_peer_request(
     quic_send: &mut iroh::endpoint::SendStream,
     host_id: iroh::EndpointId,
     prefetched: &[u8],
+    receipt_id: Option<&str>,
 ) -> Result<(), ()> {
     // Caller credentials are meaningful at ingress, not on a remote peer.
-    let peer_request = match prepare_peer_forwarded_request(prefetched) {
+    let peer_request = match prepare_peer_forwarded_request(prefetched, receipt_id) {
         Ok(request) => request,
         Err(err) => {
             tracing::warn!(

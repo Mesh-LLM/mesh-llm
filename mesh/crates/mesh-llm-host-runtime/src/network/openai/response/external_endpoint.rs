@@ -34,6 +34,8 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
         route_observer,
         served_by: _,
         peer_capsule_id: _,
+        trust: _,
+        receipt_audit: _,
     } = logging;
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
         Ok(target) => target,
@@ -517,6 +519,8 @@ mod tests {
                     route_observer: OpenAiRouteObserver::default(),
                     served_by: None,
                     peer_capsule_id: None,
+                    trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
+                    receipt_audit: None,
                 },
             )
         );
