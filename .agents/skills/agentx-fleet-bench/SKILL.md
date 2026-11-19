@@ -63,8 +63,12 @@ admission.
 4. **Guard-exits requeue; real errors diagnose.** `NO_PYTHON312`/`NO_AARCH64_HOST`/placement
    bounces: `jy requeue <job>` (submit dedupes identical specs). Anything else: read
    `jy logs <job> | tail -30` first.
-5. **`fleet` pre-flights the pinned commit** (`git ls-remote`) before submitting, and the
-   worker builds everything from that commit. Never distribute binaries through external object
+5. **`fleet` pre-flights the pinned commit** by fetching and resolving the exact object before
+   submitting, and the worker builds everything from that commit. Every run spec is generated
+   before the first submission, and each accepted job ID is written to the run-root's
+   `fleet.json` ledger atomically as it arrives; rerunning the same manifest resumes only the
+   runs the ledger is still missing, and a different manifest under the same campaign name is
+   rejected. Never distribute binaries through external object
    storage: source pins + jy artifacts only. The historical CDN path-keyed negative-cache
    (404s pinned for hours per URL path) is exactly why.
 6. **A/B experiments must target the intended budget knob.** `AGENTX_SKIPPY_PREFIX_CACHE_BUDGET`

@@ -277,20 +277,94 @@ pub(super) fn command(root: &Path, args: &[String]) -> DynResult<()> {
 }
 
 fn submit(root: &Path, manifest_path: &Path) -> DynResult<()> {
+    let jy = |spec_path: &Path| -> DynResult<String> { jy_submit(spec_path) };
+    let preflight =
+        |repo_url: &str, commit: &str| -> DynResult<bool> { commit_exists(repo_url, commit) };
+    submit_with(root, manifest_path, &jy, &preflight)
+}
+
+fn jy_submit(spec_path: &Path) -> DynResult<String> {
+    let output = std::process::Command::new("jy")
+        .arg("submit")
+        .arg(spec_path)
+        .output()
+        .map_err(|e| format!("jy submit: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "jy submit {} exited with {}: {}",
+            spec_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    text.lines()
+        .find(|l| l.starts_with("job"))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            format!(
+                "jy submit printed no job id for {}: {}",
+                spec_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+            .into()
+        })
+}
+
+/// Submit every validated run spec, persisting each accepted job ID to the
+/// campaign ledger atomically as it arrives.
+///
+/// Every run spec is generated before the first submission so a rejected pin
+/// or corpus cannot leave earlier jobs running without a ledger. An existing
+/// campaign run-root is rejected unless it carries this exact manifest, in
+/// which case only the runs the ledger is still missing are submitted, so a
+/// partial failure resumes without duplicating jobs.
+fn submit_with(
+    root: &Path,
+    manifest_path: &Path,
+    submit_job: &dyn Fn(&Path) -> DynResult<String>,
+    preflight: &dyn Fn(&str, &str) -> DynResult<bool>,
+) -> DynResult<()> {
     let manifest: FleetManifest = serde_json::from_slice(
         &crate::automation::receipt_files::bounded(manifest_path, 1024 * 1024)?,
     )?;
     validate(&manifest)?;
-    let script = worker_script(root)?;
     use sha2::{Digest, Sha256};
+    let manifest_sha = hex(&Sha256::digest(serde_json::to_vec(&manifest)?.as_slice()));
+    let script = worker_script(root)?;
     let worker_sha = hex(&Sha256::digest(script.as_bytes()));
     let worker_b64 = {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(script.as_bytes())
     };
     let run_root = root.join("target/agentx-fleet").join(&manifest.campaign);
-    std::fs::create_dir_all(&run_root)?;
-    if !commit_exists(&manifest.repo_url, &manifest.product_source_commit)? {
+    let ledger_path = run_root.join("fleet.json");
+    // Reject or resume an existing campaign before any expensive pre-flight
+    // or submission: a re-used campaign name with different inputs must not
+    // strand new jobs under an old ledger.
+    let mut ledger_runs = match std::fs::read(&ledger_path) {
+        Ok(existing) => {
+            let ledger: Value = serde_json::from_slice(&existing)
+                .map_err(|e| format!("{}: {e}", ledger_path.display()))?;
+            let recorded = ledger
+                .get("manifest_sha256")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if recorded != manifest_sha {
+                return Err(format!(
+                    "campaign {} already has a ledger at {} recorded for a different manifest; choose a new campaign name or remove the run root",
+                    manifest.campaign,
+                    ledger_path.display()
+                )
+                .into());
+            }
+            ledger["runs"].as_array().cloned().unwrap_or_default()
+        }
+        Err(_) => Vec::new(),
+    };
+    if !preflight(&manifest.repo_url, &manifest.product_source_commit)? {
         return Err(format!(
             "pre-flight failed: commit {} not found in {}",
             &manifest.product_source_commit[..12.min(manifest.product_source_commit.len())],
@@ -298,45 +372,58 @@ fn submit(root: &Path, manifest_path: &Path) -> DynResult<()> {
         )
         .into());
     }
-    let mut resolved = Vec::new();
+    // Prevalidate every run before the first submission.
+    let mut planned = Vec::new();
     for run in &manifest.runs {
-        resolved.push((run, resolve_pins(root, run)?));
-    }
-    let mut submitted = Vec::new();
-    for (run, (model_key, pins)) in resolved {
+        let (model_key, pins) = resolve_pins(root, run)?;
         let spec = run_spec(&manifest, run, &worker_b64, &worker_sha, &model_key, &pins)?;
+        planned.push((run, spec));
+    }
+    std::fs::create_dir_all(&run_root)?;
+    let mut newly_submitted = 0usize;
+    for (run, spec) in planned {
+        let already = ledger_runs.iter().any(|entry| {
+            entry["model"].as_str() == Some(run.model.as_str())
+                && entry["backend"].as_str() == Some(run.backend.as_str())
+        });
+        if already {
+            continue;
+        }
         let path = run_root.join(format!("spec-{}-{}.json", run.model, run.backend));
         std::fs::write(&path, serde_json::to_vec_pretty(&json!({"spec": spec}))?)?;
-        let output = std::process::Command::new("jy")
-            .arg("submit")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("jy submit: {e}"))?;
-        let text = String::from_utf8_lossy(&output.stdout).to_string();
-        let job = text
-            .lines()
-            .find(|l| l.starts_with("job"))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .ok_or_else(|| {
-                format!(
-                    "jy submit rejected {}: {}",
-                    path.display(),
-                    String::from_utf8_lossy(&output.stderr)
-                )
-            })?;
-        submitted
-            .push(json!({"model": run.model, "backend": run.backend, "job": job, "spec": path}));
+        let job = submit_job(&path)?;
+        ledger_runs.push(
+            json!({"model": run.model, "backend": run.backend, "job": job, "spec": path.to_string_lossy()}),
+        );
+        write_ledger_atomically(&ledger_path, &manifest, &manifest_sha, &ledger_runs)?;
+        newly_submitted += 1;
     }
-    let ledger = json!({"campaign": manifest.campaign, "mode": manifest.mode, "runs": submitted});
-    std::fs::write(
-        run_root.join("fleet.json"),
-        serde_json::to_vec_pretty(&ledger)?,
-    )?;
     println!(
-        "fleet: {} runs submitted under {}",
-        submitted.len(),
-        run_root.display()
+        "fleet: {} runs submitted, {} already recorded, ledger at {}",
+        newly_submitted,
+        ledger_runs.len() - newly_submitted,
+        ledger_path.display()
     );
+    Ok(())
+}
+
+/// Persists the campaign ledger in one rename so an interrupted submission
+/// never loses the accepted job IDs that came before it.
+fn write_ledger_atomically(
+    ledger_path: &Path,
+    manifest: &FleetManifest,
+    manifest_sha: &str,
+    runs: &[Value],
+) -> DynResult<()> {
+    let ledger = json!({
+        "campaign": manifest.campaign,
+        "mode": manifest.mode,
+        "manifest_sha256": manifest_sha,
+        "runs": runs,
+    });
+    let temp = ledger_path.with_extension("json.tmp");
+    std::fs::write(&temp, serde_json::to_vec_pretty(&ledger)?)?;
+    std::fs::rename(&temp, ledger_path)?;
     Ok(())
 }
 
@@ -349,11 +436,15 @@ fn status(run_root: &Path) -> DynResult<()> {
             .arg(job)
             .output()?;
         let text = String::from_utf8_lossy(&output.stdout).to_string();
-        let state = text
-            .lines()
-            .find(|l| l.contains("\"status\""))
-            .and_then(|l| l.split('"').nth(3))
-            .unwrap_or("unknown");
+        let state = if output.status.success() {
+            text.lines()
+                .find(|l| l.contains("\"status\""))
+                .and_then(|l| l.split('"').nth(3))
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            format!("jy-error({})", output.status)
+        };
         println!(
             "{} {:8} {}",
             run["model"].as_str().unwrap_or("?"),
@@ -681,5 +772,219 @@ mod tests {
                 "the catalog pins the tokenizer revision"
             );
         }
+    }
+
+    /// A self-contained submission root: worker script plus a two-model
+    /// authoritative catalog with aliases.
+    fn submission_root() -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let agentx = root.join("skippy/evals/agentx");
+        let kv = root.join("skippy/evals/kv-validation");
+        std::fs::create_dir_all(&agentx).unwrap();
+        std::fs::create_dir_all(&kv).unwrap();
+        std::fs::write(
+            agentx.join("fleet-worker.sh"),
+            "#!/usr/bin/env bash\necho fixture worker\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agentx.join("fleet-models.json"),
+            r#"{"qwen3-4b": "qwen3-4b-q4-k-m", "qwen3.5-4b": "qwen3.5-4b-q4-k-m"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            kv.join("models.json"),
+            r#"[
+  {"key": "qwen3-4b-q4-k-m", "family": "dense", "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+   "revision": "a06e946bb6b655725eafa393f4a9745d460374c9", "tokenizer": "Qwen/Qwen3-4B-Instruct-2507",
+   "files": [{"name": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"}],
+   "tokenizer_revision": "cdbee75f17c01a7cc42f958dc650907174af0554"},
+  {"key": "qwen3.5-4b-q4-k-m", "family": "hybrid-dense", "repo": "unsloth/Qwen3.5-4B-GGUF",
+   "revision": "e87f176479d0855a907a41277aca2f8ee7a09523", "tokenizer": "Qwen/Qwen3.5-4B",
+   "files": [{"name": "Qwen3.5-4B-Q4_K_M.gguf", "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"}],
+   "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"}
+]"#,
+        )
+        .unwrap();
+        (temp, root)
+    }
+
+    fn two_run_manifest() -> FleetManifest {
+        serde_json::from_value(json!({
+            "campaign": "test-20260101",
+            "product_source_commit": "e821ec38b1479cc2dd41da40e1b46e90b4a29850",
+            "mode": "smoke",
+            "runs": [
+                {"model": "qwen3-4b", "backend": "cuda"},
+                {"model": "qwen3.5-4b", "backend": "cuda"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn write_manifest(manifest: &FleetManifest) -> (tempfile::NamedTempFile, std::path::PathBuf) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), serde_json::to_vec_pretty(manifest).unwrap()).unwrap();
+        let path = file.path().to_path_buf();
+        (file, path)
+    }
+
+    fn ledger_path(root: &Path, manifest: &FleetManifest) -> std::path::PathBuf {
+        root.join("target/agentx-fleet")
+            .join(&manifest.campaign)
+            .join("fleet.json")
+    }
+
+    fn ledger_runs(root: &Path, manifest: &FleetManifest) -> Vec<Value> {
+        let ledger: Value =
+            serde_json::from_slice(&std::fs::read(ledger_path(root, manifest)).unwrap()).unwrap();
+        ledger["runs"].as_array().cloned().unwrap()
+    }
+
+    #[test]
+    fn prevalidation_fails_before_any_submission() {
+        let (_temp, root) = submission_root();
+        let mut bad = two_run_manifest();
+        bad.runs.push(
+            serde_json::from_value(json!({"model": "unknown-model", "backend": "cuda"})).unwrap(),
+        );
+        let (_file, manifest_path) = write_manifest(&bad);
+        let calls = std::cell::Cell::new(0usize);
+        let submit = |_spec: &Path| -> DynResult<String> {
+            calls.set(calls.get() + 1);
+            Ok("job-should-never-happen".into())
+        };
+        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
+        let error = submit_with(&root, &manifest_path, &submit, &preflight).unwrap_err();
+        assert_eq!(
+            calls.get(),
+            0,
+            "no job may launch when a later run prevalidation fails"
+        );
+        assert!(
+            format!("{error}").contains("unknown-model")
+                || format!("{error}").contains("authoritative catalog"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn partial_failure_keeps_the_accepted_job_ids_in_the_ledger() {
+        let (_temp, root) = submission_root();
+        let manifest = two_run_manifest();
+        let (_file, manifest_path) = write_manifest(&manifest);
+        let submit = |spec: &Path| -> DynResult<String> {
+            if spec.to_string_lossy().contains("spec-qwen3-4b-cuda.json") {
+                Ok("job-first-1".into())
+            } else {
+                Err("jy submit rejected: quota exhausted".into())
+            }
+        };
+        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
+        let error = submit_with(&root, &manifest_path, &submit, &preflight).unwrap_err();
+        assert!(format!("{error}").contains("quota exhausted"), "{error}");
+        let runs = ledger_runs(&root, &manifest);
+        assert_eq!(
+            runs.len(),
+            1,
+            "the accepted job must already be in the ledger"
+        );
+        assert_eq!(runs[0]["job"], "job-first-1");
+        assert_eq!(runs[0]["model"], "qwen3-4b");
+    }
+
+    #[test]
+    fn ledger_is_persisted_after_each_acceptance() {
+        let (_temp, root) = submission_root();
+        let manifest = two_run_manifest();
+        let (_file, manifest_path) = write_manifest(&manifest);
+        let seen_mid_flight = std::cell::RefCell::new(None);
+        let submit = |spec: &Path| -> DynResult<String> {
+            if spec.to_string_lossy().contains("spec-qwen3.5-4b-cuda.json") {
+                let runs = ledger_runs(&root, &manifest);
+                *seen_mid_flight.borrow_mut() = Some(runs.len());
+            }
+            Ok("job-accepted".into())
+        };
+        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
+        submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
+        assert_eq!(
+            seen_mid_flight.borrow().as_ref(),
+            Some(&1usize),
+            "the first accepted ID must be on disk before the second submission starts"
+        );
+        assert_eq!(ledger_runs(&root, &manifest).len(), 2);
+    }
+
+    #[test]
+    fn rerunning_the_same_manifest_resumes_without_duplicating_jobs() {
+        let (_temp, root) = submission_root();
+        let manifest = two_run_manifest();
+        let (_file, manifest_path) = write_manifest(&manifest);
+        let calls = std::cell::Cell::new(0usize);
+        {
+            let calls = &calls;
+            let submit = |_spec: &Path| -> DynResult<String> {
+                let n = calls.get() + 1;
+                calls.set(n);
+                Ok(format!("job-{n}"))
+            };
+            let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
+            submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
+        }
+        assert_eq!(calls.get(), 2);
+        {
+            let submit = |_spec: &Path| -> DynResult<String> {
+                calls.set(calls.get() + 1);
+                Ok("job-duplicate".into())
+            };
+            let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
+            submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
+        }
+        assert_eq!(calls.get(), 2, "the resume must not resubmit recorded runs");
+        assert_eq!(ledger_runs(&root, &manifest).len(), 2);
+    }
+
+    #[test]
+    fn reused_campaign_with_a_different_manifest_is_rejected() {
+        let (_temp, root) = submission_root();
+        let manifest = two_run_manifest();
+        let (_file, manifest_path) = write_manifest(&manifest);
+        let calls = std::cell::Cell::new(0usize);
+        let submit = |_spec: &Path| -> DynResult<String> {
+            calls.set(calls.get() + 1);
+            Ok("job-1".into())
+        };
+        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
+        submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
+        assert_eq!(calls.get(), 2);
+        let mut divergent = two_run_manifest();
+        divergent.mode = "comparison".into();
+        divergent.corpus = Some(FleetCorpus {
+            repo: "semianalysisai/cc-traces-weka-062126-256k".into(),
+            rev: "8fecd2fc56694469f758f0afbbb6335ad3043740".into(),
+            sha256: "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef".into(),
+        });
+        let (_file2, divergent_path) = write_manifest(&divergent);
+        let error = submit_with(&root, &divergent_path, &submit, &preflight).unwrap_err();
+        assert_eq!(calls.get(), 2, "a divergent manifest must not launch jobs");
+        assert!(format!("{error}").contains("different manifest"), "{error}");
+        assert_eq!(
+            ledger_runs(&root, &manifest).len(),
+            2,
+            "the old ledger survives"
+        );
+    }
+
+    #[test]
+    fn jy_submit_requires_a_successful_status_and_a_job_id() {
+        // jy_submit shells out to jy, which this environment does not have;
+        // verify the failure contract through the command-missing path.
+        let error = format!(
+            "{}",
+            jy_submit(Path::new("/nonexistent-spec.json")).unwrap_err()
+        );
+        assert!(error.contains("jy submit"), "{error}");
     }
 }
