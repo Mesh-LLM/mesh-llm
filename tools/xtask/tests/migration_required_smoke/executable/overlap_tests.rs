@@ -4,9 +4,17 @@ mod endpoint;
 
 // The primary may take its readiness budget plus coordinated.rs's 300 s
 // allowance before it answers and the headless writes overlap.armed.
-fn armed(directory: &std::path::Path, readiness: std::time::Duration) {
+fn armed<T>(
+    directory: &std::path::Path,
+    readiness: std::time::Duration,
+    worker: &std::thread::ScopedJoinHandle<'_, T>,
+) {
     let deadline = std::time::Instant::now() + readiness + std::time::Duration::from_secs(300 + 30);
     while !directory.join("overlap.armed").exists() {
+        assert!(
+            !worker.is_finished(),
+            "worker finished before overlap.armed was written"
+        );
         assert!(
             std::time::Instant::now() < deadline,
             "timed out waiting for overlap.armed at live-primary barrier"
@@ -29,7 +37,7 @@ fn primary_remains_live_when_headless_waits_on_barrier_for_all_variants() {
                 command::execute(directory.path(), &options, &cancel)
                     .map_err(|error| error.to_string())
             });
-            armed(directory.path(), options.readiness);
+            armed(directory.path(), options.readiness, &worker);
             endpoint::query(directory.path()).unwrap();
             std::fs::write(directory.path().join("overlap.release"), b"release").unwrap();
             let receipt = worker.join().unwrap().unwrap();
@@ -60,7 +68,7 @@ fn cancellation_retains_both_reports_when_headless_waits_on_barrier() {
                     .collect::<Vec<_>>(),
             )
         });
-        armed(directory.path(), options.readiness);
+        armed(directory.path(), options.readiness, &worker);
         endpoint::query(directory.path()).unwrap();
         cancel.cancel();
         let (reason, reports) = worker.join().unwrap();
@@ -83,7 +91,7 @@ fn primary_early_exit_rejects_when_headless_waits_on_barrier() {
                 output::reports(error.as_ref()).len(),
             )
         });
-        armed(directory.path(), options.readiness);
+        armed(directory.path(), options.readiness, &worker);
         std::fs::write(directory.path().join("primary.exit"), b"exit").unwrap();
         let (reason, count) = worker.join().unwrap();
         assert_eq!(reason, Rejection::EarlyExit.to_string());
