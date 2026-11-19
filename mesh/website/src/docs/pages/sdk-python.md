@@ -44,7 +44,7 @@ native runtime. Client mode does not load a model-serving runtime. A serve-only
 node rejects SDK inference calls.
 
 Join tokens locate a mesh; they do not make membership private. Configure
-[admission control](/docs/pages/private-meshes/#discovery-and-admission) separately
+[admission control](/docs/pages/private-meshes/#restrict-membership) separately
 when participation must be restricted.
 
 ## Discover every advertised workload

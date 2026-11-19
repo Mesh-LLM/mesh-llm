@@ -35,7 +35,7 @@ Use `joinTokens: [token]` to join a mesh by token and `ownerKeyPath` for an exis
 Mesh LLM owner keystore. Client mode loads no serving runtime.
 
 Join tokens locate a mesh; they do not make membership private. Configure
-[admission control](/docs/pages/private-meshes/#discovery-and-admission) separately
+[admission control](/docs/pages/private-meshes/#restrict-membership) separately
 when participation must be restricted.
 
 ## Read local runtime capacity

@@ -19,6 +19,11 @@ mesh, such as the public one, use [private routing](/docs/pages/private-routing/
 
 ## Discovery and admission
 
+A **private mesh** restricts membership through enforced
+[admission control](#restrict-membership). Public discovery and private membership
+are independent: publication reveals discovery information; admission controls
+who may participate.
+
 A mesh created without `--publish` is **unpublished**, not necessarily
 access-controlled. Named discovery (`--discover`) and public discovery (`--auto`)
 are ways to find a mesh; neither defines who is allowed to participate.

@@ -9,6 +9,11 @@ join as an API-only client, or do both.
 
 ## Join tokens, discovery, and admission
 
+A **private mesh** restricts membership through enforced
+[admission control](#ownership-and-admission-control). Public discovery and
+private membership are independent: advertising a mesh reveals its discovery
+information, while admission policy determines who may participate.
+
 Publishing discovery information to Nostr makes it public, with or without a
 mesh name. Names help people find meshes; they do not restrict access. Private
 membership requires enforced admission control. Private request routing is a
@@ -467,7 +472,7 @@ Advertisement behavior is configured via `[runtime.activity].advertisement`:
   explicitly-known-and-empty while non-admitting.
 - `coarse_state` (default): emit the admission enum and also publish
   known-empty availability for old peers.
-- `private_coarse_state`: emit the enum only on private meshes; use
+- `private_coarse_state`: emit the enum only when public-discovery mode is off; use
   known-empty availability publicly.
 
 **Privacy**: only the coarse admission state is advertised. No raw activity

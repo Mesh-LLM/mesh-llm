@@ -61,4 +61,4 @@ The [architecture hub](/docs/pages/architecture/) explains how Mesh routes reque
 
 Named discovery publishes mesh discovery information to Nostr. It is public even
 when the name is only shared with your team. For restricted membership, configure
-[admission control](/docs/pages/private-meshes/#discovery-and-admission).
+[admission control](/docs/pages/private-meshes/#restrict-membership).

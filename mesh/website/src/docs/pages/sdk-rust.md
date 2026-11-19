@@ -70,7 +70,7 @@ The former thin client facade, `ClientBuilder`, and `client`/`node` feature spli
 have been removed from this SDK. Migrate callers to the embedded `MeshNode`.
 
 Join tokens locate a mesh; they do not make membership private. Configure
-[admission control](/docs/pages/private-meshes/#discovery-and-admission) separately
+[admission control](/docs/pages/private-meshes/#restrict-membership) separately
 when participation must be restricted.
 
 ## Read local runtime capacity
