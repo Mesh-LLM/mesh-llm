@@ -363,4 +363,4 @@ model, fixed-work, raw artifacts and GPU clock/temperature evidence are retained
 in the independent comparison receipts.
 
 The reusable four-model CUDA/Metal/CPU validation work is tracked in
-[todo.md](../../../todo.md).
+[PLAN.md](../../evals/kv-validation/PLAN.md).

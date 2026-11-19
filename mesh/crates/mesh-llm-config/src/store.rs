@@ -62,6 +62,47 @@ pub fn config_to_toml(config: &MeshConfig) -> Result<String> {
     toml::to_string(config).context("toml serialization failed")
 }
 
+/// An exclusive hold on a config file, for one read-modify-write of it.
+///
+/// Every process that rewrites the file from what it read takes this first:
+/// the CLI's edits and a running node's owner-control applies. It is an
+/// advisory lock on a `<file>.lock` beside the config, released on drop.
+#[derive(Debug)]
+pub struct ConfigFileLock {
+    _file: std::fs::File,
+}
+
+/// The lock file guarding the config file at `path`.
+pub fn config_lock_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_else(|| "config".into());
+    name.push(".lock");
+    path.with_file_name(name)
+}
+
+/// Wait for the exclusive hold on the config file at `path`.
+pub fn lock_config_file(path: &Path) -> Result<ConfigFileLock> {
+    let lock_path = config_lock_path(path);
+    if let Some(parent) = lock_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        crate::private_file::create_private_dirs(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open config lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("failed to lock config {}", lock_path.display()))?;
+    Ok(ConfigFileLock { _file: file })
+}
+
 #[derive(Clone, Debug)]
 pub struct ConfigStore {
     path: PathBuf,
@@ -86,6 +127,9 @@ impl ConfigStore {
         load_config(Some(&self.path))
     }
 
+    /// Write `config` over the file. This does not take the config file's
+    /// lock: for a read-modify-write, use [`Self::update`] or
+    /// [`Self::edit_preserving`], or hold [`lock_config_file`] across it.
     pub fn save(&self, config: &MeshConfig) -> Result<()> {
         let toml_str = config_to_toml(config)?;
         crate::private_file::write_private_file(&self.path, toml_str.as_bytes())
@@ -96,6 +140,7 @@ impl ConfigStore {
     where
         F: FnOnce(&mut ConfigEditor) -> Result<()>,
     {
+        let _lock = lock_config_file(&self.path)?;
         let mut editor = ConfigEditor::new(self.load()?);
         edit(&mut editor)?;
         let config = editor.into_config();
@@ -107,6 +152,7 @@ impl ConfigStore {
     where
         F: FnOnce(&mut DocumentMut) -> Result<()>,
     {
+        let _lock = lock_config_file(&self.path)?;
         let mut doc = self.read_document()?;
         edit(&mut doc)?;
         let config = parse_config_toml(&doc.to_string())
@@ -202,4 +248,35 @@ fn normalize_model_ref(model_ref: &str) -> Result<&str> {
         bail!("model ref cannot be empty");
     }
     Ok(model_ref)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn edits_create_missing_config_directories_owner_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let updated = temp.path().join("a").join("b").join("config.toml");
+        ConfigStore::open(&updated).update(|_| Ok(())).unwrap();
+        assert_eq!(mode(&temp.path().join("a")), 0o700);
+        assert_eq!(mode(&temp.path().join("a").join("b")), 0o700);
+        assert_eq!(mode(&updated), 0o600);
+
+        let edited = temp.path().join("c").join("config.toml");
+        ConfigStore::open(&edited)
+            .edit_preserving(|_| Ok(()))
+            .unwrap();
+        assert_eq!(mode(&temp.path().join("c")), 0o700);
+        assert_eq!(mode(&edited), 0o600);
+        // A parent that already existed is not ours to tighten.
+        assert_eq!(mode(temp.path()), 0o755);
+    }
 }

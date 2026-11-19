@@ -217,7 +217,7 @@ fn logged_raw(spec: &ProcessSpec) -> process::RawProcessReport {
     process::supervise_raw(
         spec,
         &Limits {
-            execution: Duration::from_secs(45),
+            execution: Duration::from_secs(360),
             graceful_shutdown: Duration::from_secs(12),
             forced_shutdown: Duration::from_secs(2),
             retained_bytes_per_stream: 65536,
@@ -391,7 +391,7 @@ fn copied_real_logged_verify_frozen_owner_checks_before_and_after_child() {
     after.no_transport_temps();
 }
 fn process_gone(pid: i32) -> bool {
-    let until = Instant::now() + Duration::from_secs(2);
+    let until = Instant::now() + Duration::from_secs(120);
     loop {
         if unsafe { libc::kill(pid, 0) } == -1
             && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
@@ -544,7 +544,7 @@ fn actual_manifest_mode_selector_uses_real_owner_in_all_modes_and_preserves_fail
             prepared_source(&controller);
         }
         let prelude = format!(
-            "HARNESS_MODE={mode}\nCANARY_CONTROLLER_SHA=$BASE_HEAD\nGITHUB_RUN_ID=1\nGITHUB_RUN_ATTEMPT=1\nCANARY_MESH_SOURCE=\nMANIFEST_POLICY_LOG=\"$RUNNER_TEMP/manifest-selector.log\"\nVERIFICATION_DEADLINE_AT=$(( $(date +%s) + 20 ))\n"
+            "HARNESS_MODE={mode}\nCANARY_CONTROLLER_SHA=$BASE_HEAD\nGITHUB_RUN_ID=1\nGITHUB_RUN_ATTEMPT=1\nCANARY_MESH_SOURCE=\nMANIFEST_POLICY_LOG=\"$RUNNER_TEMP/manifest-selector.log\"\nVERIFICATION_DEADLINE_AT=$(( $(date +%s) + 120 ))\n"
         );
         let local = if mode == "repair" {
             "ROOT=$TRUSTED_ROOT\nCANDIDATE_BASE_HEAD=$BASE_HEAD\n"

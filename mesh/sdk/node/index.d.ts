@@ -110,9 +110,17 @@ export type OpenAIStreamSSE = {
 
 export type OpenAIStreamEvent = OpenAIStreamStarted | OpenAIStreamSSE
 
+export type InferenceErrorDetails = {
+  message: string
+  type: string
+  code: string | null
+  param: string | null
+}
+
 export declare class OpenAIRequestError extends Error {
   readonly statusCode: number | null
   readonly body: string | null
+  readonly details: InferenceErrorDetails | null
 }
 
 export declare class Inference {
@@ -214,6 +222,14 @@ export type NativeRuntimePruneResult = {
 }
 
 export type NodeMode = 'client' | 'serve' | 'combined'
+
+/** Local capacity, including busy lanes. BigInt preserves native u64 values. */
+export type LaneCapacity = {
+  executionLanes: bigint
+  contextTokensPerLane: bigint
+  contextPoolTokens: bigint
+  capturedAtUnixMs: bigint
+}
 
 /** Known values are listed for completion; newer peers may advertise other workloads. */
 export type ModelWorkloadClass =
@@ -363,6 +379,8 @@ export type EmbeddedMeshNodeConfig = {
 }
 
 export declare class Node {
+  /** Reads the latest observation; null for unknown, unsupported or incomplete capacity. */
+  runtimeCapacity(model: string): Promise<LaneCapacity | null>
   static create(options?: NodeOptions): Node
   static fromConfig(config: EmbeddedMeshNodeConfig): Node
   readonly inference: Inference
@@ -390,12 +408,18 @@ export type LiveTranscriptionOptions = {
   sampleRate?: number
   /** null uses explicit commit calls; omission uses server-side turn detection. */
   turnDetection?: { threshold?: number; prefixPaddingMs?: number; silenceDurationMs?: number } | null
+  /** Audio between transcription passes, 200 to 5000 ms; omission uses the node's 1000 ms default. */
+  stepMs?: number
+  /** Report replaceable, unconfirmed text before confirmed deltas. Defaults to false. */
+  tentative?: boolean
 }
 
 export type LiveTranscriptionEvent =
   | { type: 'speech_started'; item_id: string; audio_start_ms: number }
   | { type: 'speech_stopped'; item_id: string; audio_end_ms: number }
   | { type: 'delta'; item_id: string; text: string }
+  /** Replace the previous tentative text; an empty string clears it. Completed supersedes it. */
+  | { type: 'tentative'; item_id: string; text: string }
   | { type: 'committed'; item_id: string }
   | { type: 'completed'; item_id: string; transcript: string }
   | { type: 'error'; message: string }

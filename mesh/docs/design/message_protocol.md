@@ -332,6 +332,26 @@ Validation:
 nodes are the sender's claims, not the described node's. Signed node records
 close that gap.
 
+### Peer model download refusal
+
+`PeerAnnouncement.refuses_peer_model_downloads` (55) and
+`NodeRecord.refuses_peer_model_downloads` (26) are set when a node runs with
+`runtime.peer_model_downloads = false`. Such a node accepts a peer's
+split-stage load only when the model files are already on its disk. A split
+coordinator still queries its stage inventory, which never downloads, and
+leaves it out of the split with `peer_model_downloads_refused` when the
+inventory shows it would have to fetch. The split readiness API reports the
+same reason from gossip alone.
+
+Both fields are optional and additive:
+
+- A node that does not refuse leaves them unset, so its bytes do not change.
+- An older node ignores them. A field that is not there means the node
+  accepts peer model downloads, which is the behavior before the field
+  existed.
+- A transitive relay cannot clear a refusal that the peer announced
+  directly, because an older relay drops the field.
+
 ### Signed records
 
 Node descriptions and cache-affinity records are signed by the node they
@@ -359,8 +379,8 @@ kind never verifies as another.
 
 `NodeRecord` holds only what a node asserts about itself: role, version,
 addresses, hardware, mesh and policy ids, served and requested models,
-subprotocols, admission state, throughput, payment offers, and the owner,
-genesis-policy and release attestations. It leaves out:
+subprotocols, admission state, throughput, payment offers, peer model download
+refusal, and the owner, genesis-policy and release attestations. It leaves out:
 
 - hop measurements (`rtt_ms`, `latency_*`), which each relay sends unsigned in
   `SignedNodeRecord.hop`;

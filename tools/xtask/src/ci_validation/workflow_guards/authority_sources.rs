@@ -231,7 +231,6 @@ pub(super) fn reusable(workflows: &BTreeMap<String, Node>) -> Result<(), String>
             if (name.starts_with("ci-")
                 || name.starts_with("main_")
                 || name.starts_with("pr_")
-                || name == "docker-precheck.yml"
                 || name == "static-abi-artifact.yml")
                 && let Some(Node::Seq(steps)) = job.get("steps")
             {
@@ -257,6 +256,11 @@ pub(super) fn reusable(workflows: &BTreeMap<String, Node>) -> Result<(), String>
     ] {
         let document = workflows.get(name).ok_or("SDK slice absent")?;
         for (job, kind) in jobs {
+            let selected = if name == "ci-linux-sdk-slice.yml" {
+                format!("inputs.sdk_kind == '{kind}' && ")
+            } else {
+                String::new()
+            };
             let job = document
                 .get("jobs")
                 .and_then(|n| n.get(job))
@@ -264,7 +268,9 @@ pub(super) fn reusable(workflows: &BTreeMap<String, Node>) -> Result<(), String>
             exact(
                 job,
                 "if",
-                &format!("${{{{ contains(fromJson(inputs.sdk_matrix).*.id, '{kind}') }}}}"),
+                &format!(
+                    "${{{{ {selected}contains(fromJson(inputs.sdk_matrix).*.id, '{kind}') }}}}"
+                ),
             )?;
         }
     }

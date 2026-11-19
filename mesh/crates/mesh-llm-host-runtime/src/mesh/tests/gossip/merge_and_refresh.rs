@@ -487,6 +487,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_advertised_model_throughput() 
         avg_tokens_per_second_milli: 35_000,
         throughput_samples: 4,
         measurement: None,
+        prefill: None,
     }];
 
     apply_transitive_ann(
@@ -582,6 +583,7 @@ pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
         avg_tokens_per_second_milli: 20_000,
         throughput_samples: 2,
         measurement: None,
+        prefill: None,
     }];
 
     node.add_peer(peer_id, addr.clone(), &ann, None).await;
@@ -614,6 +616,7 @@ pub(crate) async fn test_peer_throughput_hint_counts_only_while_fresh() {
         avg_tokens_per_second_milli: 30_000,
         throughput_samples: 5,
         measurement,
+        prefill: None,
     };
     let measured = |age_ms: u64| {
         Some(ThroughputMeasurement {

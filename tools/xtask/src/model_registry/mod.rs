@@ -8,23 +8,23 @@
 //! suite's cadence-admitted artifacts under one root through the pinned
 //! transfer.
 
-mod argv;
 mod certification;
 mod derived;
+mod dflash_draft;
 mod family_roster;
 mod fetch;
-mod fields;
 mod generate;
-pub(crate) mod json_bytes;
-mod manifest;
 pub(crate) mod parity_download;
 mod pin;
 mod projection;
 mod projector_download;
 mod registry;
-mod resolve;
-mod restore_inputs;
-pub(crate) mod serving_entry;
+
+// Transitional: `resolve` and `restore-inputs` and the modules they share live in
+// authority-automation; the remaining `models` commands import them from here.
+pub(crate) use authority_automation::model_registry::{
+    argv, fields, json_bytes, manifest, resolve, restore_inputs, serving_entry,
+};
 
 use crate::command::DynResult;
 use std::path::Path;
@@ -39,6 +39,7 @@ pub(crate) enum ModelsCommand {
     ParityDownload,
     Pin,
     ProjectorDownload,
+    DflashDraftConvert,
 }
 
 impl ModelsCommand {
@@ -51,6 +52,7 @@ impl ModelsCommand {
             "projector-download" => Some(Self::ProjectorDownload),
             "parity-download" => Some(Self::ParityDownload),
             "pin" => Some(Self::Pin),
+            "dflash-draft-convert" => Some(Self::DflashDraftConvert),
             _ => None,
         }
     }
@@ -67,6 +69,9 @@ pub(crate) fn run(
     if matches!(command, ModelsCommand::ProjectorDownload) {
         return projector_download::run(args);
     }
+    if matches!(command, ModelsCommand::DflashDraftConvert) {
+        return dflash_draft::run(args);
+    }
     let report = match command {
         ModelsCommand::Fetch => fetch::run(args),
         ModelsCommand::Generate => generate::run(Path::new(&root()?), args),
@@ -74,7 +79,9 @@ pub(crate) fn run(
         ModelsCommand::RestoreInputs => restore_inputs::run(args),
         ModelsCommand::ParityDownload => parity_download::run(args),
         ModelsCommand::Pin => pin::run(Path::new(&root()?), args),
-        ModelsCommand::ProjectorDownload => unreachable!("projector dispatch returned"),
+        ModelsCommand::ProjectorDownload | ModelsCommand::DflashDraftConvert => {
+            unreachable!("direct dispatch returned")
+        }
     };
     report.emit()
 }

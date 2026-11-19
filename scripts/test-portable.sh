@@ -33,7 +33,6 @@ website_build() {
 }
 
 script_and_sdk_tests() {
-    just ci-legacy-contracts
     node --test scripts/console-format.test.js
     npm test --prefix mesh/sdk/node
     scripts/check-sdk-contract.sh

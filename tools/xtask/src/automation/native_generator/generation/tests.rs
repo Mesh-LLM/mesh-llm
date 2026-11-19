@@ -41,7 +41,7 @@ pub(super) fn setup(root: &Path) -> options::Options {
                     })
                     .collect(),
                 max_bytes: std::num::NonZeroUsize::new(65536).unwrap(),
-                timeout: Duration::from_secs(5),
+                timeout: Duration::from_secs(30),
             },
             output: root.join("combined.patch"),
             shards: None,

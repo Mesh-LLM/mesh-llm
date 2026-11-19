@@ -1,8 +1,7 @@
 name: Nightly Stability
 
 on:
-  schedule:
-    - cron: "37 9 * * *"
+  # Daily execution is paused until the stability setup is qualified.
   workflow_dispatch:
     inputs:
       base_url:
@@ -55,6 +54,8 @@ env:
 
 jobs:
   stability:
+    # MESH_NIGHTLY_STABILITY_ENABLED gates the daily schedule again once it is
+    # restored; workflow_dispatch ignores it.
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_STABILITY_ENABLED == '1' }}
     uses: ./.github/workflows/nightly-stability-run.yml
     with:

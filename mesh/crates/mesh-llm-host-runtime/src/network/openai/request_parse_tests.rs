@@ -147,9 +147,13 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
     let request_id = RequestId::new();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        read_http_request_with_plugin_manager_with_context(&mut stream.into(), None)
-            .await
-            .unwrap_err()
+        read_http_request_with_plugin_manager_with_context(
+            &mut stream.into(),
+            None,
+            RequestTransforms::Apply,
+        )
+        .await
+        .unwrap_err()
     });
     let mut client = TcpStream::connect(address).await.unwrap();
     let request = format!(
@@ -166,9 +170,13 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        read_http_request_with_plugin_manager_with_context(&mut stream.into(), None)
-            .await
-            .unwrap_err()
+        read_http_request_with_plugin_manager_with_context(
+            &mut stream.into(),
+            None,
+            RequestTransforms::Apply,
+        )
+        .await
+        .unwrap_err()
     });
     let mut client = TcpStream::connect(address).await.unwrap();
     client
@@ -422,6 +430,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     rewrite_public_model_alias(&mut request, &models, &descriptors);
@@ -494,25 +503,6 @@ async fn tokenizer_identity_is_not_alias_rewritten() {
     assert_eq!(request.model_name.as_deref(), Some(public));
     assert!(request.body_json.is_none());
     assert!(!request.body_json_attempted);
-}
-#[test]
-fn test_pipeline_request_supported_chat_completions() {
-    let body = serde_json::json!({"messages":[{"role":"user","content":"hi"}]});
-    assert!(pipeline_request_supported(
-        "/v1/chat/completions?stream=1",
-        &body
-    ));
-}
-
-#[test]
-fn test_pipeline_request_supported_rejects_other_endpoint() {
-    let body = serde_json::json!({"messages":[{"role":"user","content":"hi"}]});
-    assert!(!pipeline_request_supported("/v1/responses", &body));
-}
-#[test]
-fn test_pipeline_request_supported_rejects_missing_messages() {
-    let body = serde_json::json!({"input":"hi"});
-    assert!(!pipeline_request_supported("/v1/chat/completions", &body));
 }
 
 #[test]
@@ -945,6 +935,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
             exchange_observation_id: None,
+            automatic_route: false,
         };
 
     rewrite_model_field(&mut request, "SmolLM2-135M-Instruct-Q8_0");
@@ -992,6 +983,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     };
 
     assert_eq!(
@@ -1242,6 +1234,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        automatic_route: false,
     }
 }
 

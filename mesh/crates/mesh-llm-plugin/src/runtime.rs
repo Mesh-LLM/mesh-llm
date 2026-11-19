@@ -454,10 +454,31 @@ pub trait Plugin: Send {
                 self.observe_openai_exchange(&request.service_name, input, context)
                     .await
             }
+            proto::ServiceKind::RequestTransform => {
+                let input = parse_service_input::<crate::request_transform::RequestTransformInput>(
+                    &request.input_json,
+                )?;
+                match self.transform_request(input, context).await? {
+                    Some(output) => Ok(Some(proto::InvokeServiceResponse {
+                        output_json: serialize_service_output(&output)?,
+                        is_error: false,
+                    })),
+                    None => Ok(None),
+                }
+            }
             proto::ServiceKind::Unspecified => Err(PluginError::invalid_request(
                 "Service invocation kind is required",
             )),
         }
+    }
+
+    /// Host-private request transform. It is not included in MCP tools.
+    async fn transform_request(
+        &mut self,
+        _input: crate::request_transform::RequestTransformInput,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<crate::request_transform::RequestTransformOutput>> {
+        Ok(None)
     }
 
     /// Host-private observer invocation. It is not included in MCP tools.

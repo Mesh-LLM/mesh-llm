@@ -158,7 +158,9 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
             worker: Mutex::new(None),
         }),
     };
-    let deadline = Instant::now() + Duration::from_millis(10);
+    // The caller checks the deadline before it enqueues, so a short deadline can
+    // expire while its thread starts on a busy machine, and nothing is sent.
+    let deadline = Instant::now() + Duration::from_secs(1);
     let caller = thread::spawn(move || {
         let channel = scheduler.direct_iteration_channel();
         scheduler.execute_iteration_on(
@@ -418,6 +420,58 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     ack.send(TokenControl::Stop).unwrap();
     worker.apply_pending_controls();
     assert!(!worker.requests.contains_key("slow-consumer"));
+}
+
+/// The worker decodes ahead of acknowledgements, so a token can already be
+/// queued when the caller says Stop. That token is acknowledged with Stop,
+/// never reaches the caller's token callback, and is reported as undelivered.
+#[test]
+fn tokens_queued_after_a_stop_are_not_delivered() {
+    let (commands, _commands_rx) = std_mpsc::sync_channel(8);
+    let scheduler = IterationScheduler {
+        shared: Arc::new(IterationSchedulerShared {
+            commands,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
+            owner_count: AtomicUsize::new(1),
+            worker: Mutex::new(None),
+        }),
+    };
+    let (reply, events) = std_mpsc::channel();
+    let (stop_ack, stop_control) = std_mpsc::sync_channel(1);
+    let (late_ack, late_control) = std_mpsc::sync_channel(1);
+    reply
+        .send(SchedulerEvent::Token {
+            token: 10,
+            ack: stop_ack,
+        })
+        .unwrap();
+    reply
+        .send(SchedulerEvent::Token {
+            token: 11,
+            ack: late_ack,
+        })
+        .unwrap();
+    reply.send(SchedulerEvent::Complete).unwrap();
+
+    let mut delivered = Vec::new();
+    let stats = scheduler
+        .drive_generation_events(
+            "stopped",
+            None,
+            events,
+            &mut |token| {
+                delivered.push(token);
+                Ok(TokenControl::Stop)
+            },
+            Instant::now(),
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(delivered, vec![10]);
+    assert_eq!(stats.undelivered_tokens, vec![11]);
+    assert_eq!(stop_control.try_recv(), Ok(TokenControl::Stop));
+    assert_eq!(late_control.try_recv(), Ok(TokenControl::Stop));
 }
 
 #[test]

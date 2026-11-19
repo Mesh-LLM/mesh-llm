@@ -88,6 +88,7 @@ pub(super) fn stage_runtime_status_from_snapshot(
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
         compute_decode_tokens: status.compute_decode_tokens,
+        compute_verify_tokens: status.compute_verify_tokens,
     }
 }
 
@@ -136,9 +137,10 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         coordinator_term: 0,
         coordinator_id: None,
         lease_until_unix_ms: 0,
-        compute_busy_nanos: 0,
-        compute_operations: 0,
-        compute_decode_tokens: 0,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
+        compute_decode_tokens: status.compute_decode_tokens,
+        compute_verify_tokens: status.compute_verify_tokens,
         dflash_target_layers: None,
         dflash_context_window: None,
         dflash_feature_encodings: Vec::new(),
@@ -840,6 +842,7 @@ pub(super) fn stage_control_unavailable_response(
                 compute_busy_nanos: 0,
                 compute_operations: 0,
                 compute_decode_tokens: 0,
+                compute_verify_tokens: 0,
                 dflash_target_layers: None,
                 dflash_context_window: None,
                 dflash_feature_encodings: Vec::new(),
@@ -926,6 +929,7 @@ pub(crate) fn stage_status_from_load(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
         dflash_feature_encodings: Vec::new(),
@@ -1218,6 +1222,7 @@ pub(super) fn stage_status_to_proto(
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
         compute_decode_tokens: status.compute_decode_tokens,
+        compute_verify_tokens: status.compute_verify_tokens,
         dflash_draft: status.dflash_target_layers.map(|target_layers| {
             skippy_stage_proto::StageDFlashDraftStatus {
                 target_layers,
@@ -1305,6 +1310,7 @@ pub(super) fn stage_status_from_proto(
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
         compute_decode_tokens: status.compute_decode_tokens,
+        compute_verify_tokens: status.compute_verify_tokens,
         dflash_context_window: status
             .dflash_draft
             .as_ref()

@@ -46,6 +46,11 @@ on:
         required: false
         default: false
         type: boolean
+      backend:
+        description: Optional single backend from the unchanged catalog rows.
+        required: false
+        default: ''
+        type: string
       runtime_matrix:
         description: JSON Linux runtime rows from the versioned CI plan.
         required: true
@@ -87,6 +92,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      runtime_matrix: ${{ steps.rows.outputs.runtime_matrix }}
       runner_16: ${{ steps.policy.outputs.runner_16 }}
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
       allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
@@ -94,6 +100,17 @@ jobs:
       runner_cpu: ${{ steps.cpu_policy.outputs.runner_16 }}
       allow_native_github_cache_cpu: ${{ steps.cpu_policy.outputs.allow_native_github_cache }}
     steps:
+      - name: Select requested backend rows
+        id: rows
+        shell: bash
+        env:
+          RUNTIME_MATRIX: ${{ inputs.runtime_matrix }}
+          BACKEND: ${{ inputs.backend }}
+        run: |
+          set -euo pipefail
+          case "$BACKEND" in ''|cpu|cuda|rocm|vulkan) ;; *) exit 1 ;; esac
+          rows="$(jq -c --arg backend "$BACKEND" '[.[] | select($backend == "" or .backend == $backend)]' <<< "$RUNTIME_MATRIX")"
+          printf 'runtime_matrix=%s\n' "$rows" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.policy_source_sha || github.event.repository.default_branch }}
@@ -140,7 +157,7 @@ jobs:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
-        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+        runtime: ${{ fromJson(needs.runner_policy.outputs.runtime_matrix) }}
     container:
       image: ${{ matrix.runtime.container_image }}
     defaults:
@@ -202,7 +219,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: runtime-input
-          key: skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}
+          key: skippy-runtime-linux-v2-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('.cargo/**', '.github/actions/prepare-native-runtime-input/**', '.github/actions/resolve-native-toolchain-epoch/**', '.github/cache-version.txt', '.github/workflows/ci-linux-runtime-slice.yml', 'Cargo.lock', 'Cargo.toml', 'ci/python-research-source.json', 'mesh/crates/mesh-llm-release-footer/Cargo.toml', 'mesh/crates/mesh-llm-release-footer/src/**', 'scripts/**', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/ci-compat-smoke.sh', 'scripts/lib/lld.sh', 'scripts/linux-glibc-floor.txt', 'skippy/crates/skippy-cache/Cargo.toml', 'skippy/crates/skippy-cache/src/**', 'skippy/crates/skippy-ffi/Cargo.toml', 'skippy/crates/skippy-ffi/bindgen/**', 'skippy/crates/skippy-ffi/build.rs', 'skippy/crates/skippy-ffi/build/**', 'skippy/crates/skippy-ffi/src/**', 'skippy/crates/skippy-gpu-bench/native/**', 'skippy/crates/skippy-hf-hub/Cargo.toml', 'skippy/crates/skippy-hf-hub/src/**', 'skippy/crates/skippy-model-artifact/Cargo.toml', 'skippy/crates/skippy-model-artifact/src/**', 'skippy/crates/skippy-model-hf/Cargo.toml', 'skippy/crates/skippy-model-hf/src/**', 'skippy/crates/skippy-model-ref/Cargo.toml', 'skippy/crates/skippy-model-ref/src/**', 'skippy/crates/skippy-model-resolver/Cargo.toml', 'skippy/crates/skippy-model-resolver/src/**', 'skippy/crates/skippy-model/Cargo.toml', 'skippy/crates/skippy-model/src/**', 'skippy/crates/skippy-native-runtime/RUNTIME_VERSION', 'skippy/crates/skippy-package-builder/Cargo.toml', 'skippy/crates/skippy-package-builder/src/**', 'skippy/crates/skippy-package-format/Cargo.toml', 'skippy/crates/skippy-package-format/src/**', 'skippy/crates/skippy-protocol/Cargo.toml', 'skippy/crates/skippy-protocol/build.rs', 'skippy/crates/skippy-protocol/proto/**', 'skippy/crates/skippy-protocol/src/**', 'skippy/crates/skippy-runtime/Cargo.toml', 'skippy/crates/skippy-runtime/src/**', 'skippy/crates/skippy-tokenizer/Cargo.toml', 'skippy/crates/skippy-tokenizer/src/**', 'skippy/evals/kv-validation/models.json', 'skippy/llama_cpp/**', 'skippy/scripts/**', 'tools/authority-automation/Cargo.toml', 'tools/authority-automation/src/**', 'tools/ci-controller/Cargo.toml', 'tools/ci-controller/src/**', 'tools/process-supervision/Cargo.toml', 'tools/process-supervision/src/**', 'tools/runner-cleanup/Cargo.toml', 'tools/runner-cleanup/src/**', 'tools/trajectory-reader/Cargo.toml', 'tools/trajectory-reader/src/**', 'tools/xtask/Cargo.toml', 'tools/xtask/build.rs', 'tools/xtask/src/**') }}
       - name: Verify restored Linux CPU runtime
         id: cached_runtime
         if: ${{ steps.runtime_cache.outputs.cache-hit == 'true' }}

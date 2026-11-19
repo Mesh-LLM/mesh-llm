@@ -224,18 +224,30 @@ pub fn scaffold_prefix_hash_from_body(
     body: &Value,
     prefix_fallback_to_first_user: bool,
 ) -> Option<u64> {
+    scaffold_prefix_from_body(body, prefix_fallback_to_first_user).map(|scaffold| scaffold.hash)
+}
+
+/// The hashed scaffold and how many request bytes it covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScaffoldPrefix {
+    pub hash: u64,
+    pub bytes: usize,
+}
+
+/// One walk for the prefix hash and its size, so the size always describes
+/// exactly the content that was hashed.
+pub fn scaffold_prefix_from_body(
+    body: &Value,
+    prefix_fallback_to_first_user: bool,
+) -> Option<ScaffoldPrefix> {
     let mut hash = 0u64;
+    let mut bytes = 0usize;
     let mut found = false;
 
-    for key in [
-        "tools",
-        "functions",
-        "response_format",
-        "tool_choice",
-        "parallel_tool_calls",
-    ] {
+    for key in SCAFFOLD_FIELDS {
         if let Some(value) = body.get(key) {
             hash = hash_tagged_json(hash, key, value);
+            bytes = bytes.saturating_add(value.to_string().len());
             found = true;
         }
     }
@@ -247,6 +259,7 @@ pub fn scaffold_prefix_hash_from_body(
                 "system" | "developer" => {
                     if let Some(text) = message_text(msg) {
                         hash = hash_tagged_text(hash, role, &text);
+                        bytes = bytes.saturating_add(text.len());
                         found = true;
                     }
                 }
@@ -258,27 +271,63 @@ pub fn scaffold_prefix_hash_from_body(
 
     if prefix_fallback_to_first_user
         && !found
-        && let Some(user_hash) = first_user_hash_from_body(body)
+        && let Some((user_hash, user_bytes)) = first_user_text_from_body(body)
     {
         hash = hash_combine(hash, user_hash);
+        bytes = bytes.saturating_add(user_bytes);
         found = true;
     }
 
-    found.then_some(hash)
+    found.then_some(ScaffoldPrefix { hash, bytes })
+}
+
+/// Request fields that belong to the reusable scaffold.
+const SCAFFOLD_FIELDS: [&str; 5] = [
+    "tools",
+    "functions",
+    "response_format",
+    "tool_choice",
+    "parallel_tool_calls",
+];
+
+/// Bytes of everything the backend will prefill for this request: the
+/// scaffold fields, every message's text and a legacy `prompt`.
+pub fn prompt_bytes_from_body(body: &Value) -> usize {
+    let scaffold = SCAFFOLD_FIELDS
+        .iter()
+        .filter_map(|key| body.get(*key))
+        .map(|value| value.to_string().len());
+    let messages = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(message_text)
+        .map(|text| text.len());
+    let prompt = body.get("prompt").and_then(Value::as_str).map(str::len);
+    scaffold
+        .chain(messages)
+        .chain(prompt)
+        .fold(0usize, usize::saturating_add)
 }
 
 /// Compute the first user/prompt hash used as the sticky-routing fallback.
 pub fn first_user_hash_from_body(body: &Value) -> Option<u64> {
+    first_user_text_from_body(body).map(|(hash, _)| hash)
+}
+
+fn first_user_text_from_body(body: &Value) -> Option<(u64, usize)> {
     if let Some(messages) = body.get("messages").and_then(Value::as_array) {
         for msg in messages {
             if msg.get("role").and_then(Value::as_str) == Some("user") {
-                return message_text(msg).map(|text| hash_tagged_text(0, "user", &text));
+                return message_text(msg)
+                    .map(|text| (hash_tagged_text(0, "user", &text), text.len()));
             }
         }
     }
     body.get("prompt")
         .and_then(Value::as_str)
-        .map(|prompt| hash_tagged_text(0, "prompt", prompt))
+        .map(|prompt| (hash_tagged_text(0, "prompt", prompt), prompt.len()))
 }
 
 /// Select a model target after the consumer has applied any local eligibility

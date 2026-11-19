@@ -42,6 +42,7 @@ fn owner_config(name: &str, seed: u8) -> OwnerRuntimeConfig {
         drain_timeout_secs: 30,
         drain_timeout_max_secs: 30,
         public_mesh: false,
+        peer_model_downloads: true,
     }
 }
 

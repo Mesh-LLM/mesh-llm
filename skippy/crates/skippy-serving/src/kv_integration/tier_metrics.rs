@@ -18,8 +18,37 @@ use crate::telemetry::resource_metrics::kv_tiers::{
 
 type Radix = Mutex<UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>>;
 
+/// The radix component that holds this stage's recurrent checkpoints, and so
+/// the byte count its checkpoint budget is charged against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckpointOwner {
+    /// Native checkpoints recorded with resident prefixes: their bytes are
+    /// the resident entries'.
+    Resident,
+    /// Serialized exact-state entries.
+    ExactState,
+}
+
+impl CheckpointOwner {
+    fn of(integration: &KvStageIntegration) -> Self {
+        if integration.records_resident_prefixes() {
+            Self::Resident
+        } else {
+            Self::ExactState
+        }
+    }
+
+    fn bytes(self, stats: &UnifiedRadixCacheStats) -> u64 {
+        match self {
+            Self::Resident => stats.resident_logical_bytes,
+            Self::ExactState => stats.recurrent_logical_bytes,
+        }
+    }
+}
+
 struct StageTierSource {
     radix: Weak<Radix>,
+    checkpoints: CheckpointOwner,
     recurrent_limit_bytes: u64,
     l2: Option<Weak<L2Tier>>,
     l3: Option<Weak<L3Tier>>,
@@ -34,6 +63,7 @@ struct StageTierSource {
 pub(super) fn register(integration: &KvStageIntegration) {
     kv_tiers::register(Box::new(StageTierSource {
         radix: Arc::downgrade(&integration.radix),
+        checkpoints: CheckpointOwner::of(integration),
         recurrent_limit_bytes: integration.resident_checkpoint_max_bytes,
         l2: integration.l2.as_ref().map(|l2| Arc::downgrade(l2.tier())),
         l3: integration.l3.as_ref().map(Arc::downgrade),
@@ -126,7 +156,7 @@ impl StageTierSource {
     fn l1(&self, radix: &Radix) -> L1Reading {
         let mut last = self.last_l1.lock().unwrap_or_else(PoisonError::into_inner);
         if let Ok(radix) = radix.try_lock() {
-            *last = l1(&radix.stats(), self.recurrent_limit_bytes);
+            *last = l1(&radix.stats(), self.checkpoints, self.recurrent_limit_bytes);
         }
         *last
     }
@@ -138,12 +168,16 @@ fn load(counter: &Weak<AtomicU64>) -> u64 {
         .map_or(0, |counter| counter.load(Ordering::Relaxed))
 }
 
-fn l1(stats: &UnifiedRadixCacheStats, recurrent_limit_bytes: u64) -> L1Reading {
+fn l1(
+    stats: &UnifiedRadixCacheStats,
+    checkpoints: CheckpointOwner,
+    recurrent_limit_bytes: u64,
+) -> L1Reading {
     L1Reading {
         entries: stats.resident_entries as u64,
         tokens: stats.resident_tokens,
         pinned_tokens: stats.resident_pinned_tokens,
-        recurrent_bytes: stats.recurrent_logical_bytes,
+        recurrent_bytes: checkpoints.bytes(stats),
         recurrent_limit_bytes,
         attention_evictions: stats.resident_evictions,
         recurrent_evictions: stats.recurrent_evictions,
@@ -200,7 +234,7 @@ mod tests {
             recurrent_evictions: 1,
             ..UnifiedRadixCacheStats::default()
         };
-        let reading = l1(&stats, 4096);
+        let reading = l1(&stats, CheckpointOwner::ExactState, 4096);
         assert_eq!(
             reading,
             L1Reading {
@@ -216,10 +250,48 @@ mod tests {
     }
 
     #[test]
+    fn a_native_checkpoint_counts_against_the_checkpoint_budget() {
+        let radix: Arc<Radix> = Arc::new(Mutex::new(UnifiedRadixCache::new()));
+        radix
+            .lock()
+            .expect("radix lock")
+            .insert_resident(
+                "model",
+                &[1, 2, 3],
+                3072,
+                RadixResidentEntry {
+                    page_id: "0".to_string(),
+                    seq_id: 0,
+                    token_count: 3,
+                    recompute_cost: 1,
+                },
+            )
+            .expect("resident checkpoint");
+        let source = StageTierSource {
+            radix: Arc::downgrade(&radix),
+            checkpoints: CheckpointOwner::Resident,
+            recurrent_limit_bytes: 4096,
+            l2: None,
+            l3: None,
+            records_pending: Weak::new(),
+            record_queue_bytes: Weak::new(),
+            records_dropped: Weak::new(),
+            last_l1: Mutex::new(L1Reading::default()),
+        };
+        let reading = source.read().expect("live stage").l1;
+        assert_eq!(
+            (reading.recurrent_bytes, reading.recurrent_limit_bytes),
+            (3072, 4096)
+        );
+        assert_eq!(reading.entries, 1);
+    }
+
+    #[test]
     fn a_dropped_stage_stops_reporting_and_a_held_lock_reuses_the_last_reading() {
         let radix: Arc<Radix> = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let source = StageTierSource {
             radix: Arc::downgrade(&radix),
+            checkpoints: CheckpointOwner::ExactState,
             recurrent_limit_bytes: 64,
             l2: None,
             l3: None,

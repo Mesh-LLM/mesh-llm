@@ -43,14 +43,20 @@ int inspect(llama_context * ctx, ggml_type type_k, ggml_type type_v,
         const auto backend = ggml_backend_sched_get_tensor_backend(ctx->get_sched(), node);
         require(backend && std::strcmp(ggml_backend_name(backend), expected_backend) == 0,
                 "real attention executed on the wrong backend");
-        require(node->src[5] && node->src[6], "real flash attention missing request indices/lengths");
+        // src[5] is the per-request row list, absent where attention reads the cache directly
+        const auto rows = node->src[5];
+        require(node->src[6] == nullptr, "real flash attention carries an unexpected source");
+        require(!rows || (rows->type == GGML_TYPE_I32 && rows->ne[1] == node->src[0]->ne[3]),
+                "real flash attention row list is not one I32 list per request");
         require(node->src[1]->type == type_k && node->src[2]->type == type_v, "actual K/V dtype changed");
         ++attention;
         if (step == 0 && attention == 1) {
-            std::printf("REAL_FA backend=%s K=%s V=%s q=%lld physical=%lld logical=%lld requests=%lld\n",
+            std::printf("REAL_FA backend=%s K=%s V=%s q=%lld physical=%lld rows=%s logical=%lld requests=%lld\n",
                     ggml_backend_name(backend), ggml_type_name(type_k), ggml_type_name(type_v),
                     (long long) node->src[0]->ne[1], (long long) node->src[1]->ne[1],
-                    (long long) node->src[5]->ne[0], (long long) node->src[5]->ne[3]);
+                    rows ? "list" : "direct",
+                    (long long) (rows ? rows->ne[0] : node->src[1]->ne[1]),
+                    (long long) node->src[0]->ne[3]);
         }
     }
     require(attention > 0, "no real flash attention operations");

@@ -215,3 +215,29 @@ pub(crate) fn routable_descriptor_for_name<'a>(
                 .find(|descriptor| descriptor_matches_routable_name(descriptor, name))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Legacy peers advertise top-level repositories with the explicit default
+    /// ports; both spellings must yield the same HuggingFace identity.
+    #[test]
+    fn legacy_peer_explicit_default_port_urls_preserve_hf_identity() {
+        for url in [
+            "http://huggingface.co:80/gpt2/resolve/main/m.gguf",
+            "https://huggingface.co:443/gpt2/resolve/main/m.gguf",
+        ] {
+            let identity = identity_from_model_source(url).unwrap_or_else(|| panic!("{url}"));
+            assert_eq!(identity.source_kind, ModelSourceKind::HuggingFace, "{url}");
+            assert_eq!(identity.repository.as_deref(), Some("gpt2"), "{url}");
+            assert_eq!(identity.revision.as_deref(), Some("main"), "{url}");
+            assert_eq!(identity.artifact.as_deref(), Some("m.gguf"), "{url}");
+            assert_eq!(
+                public_model_id_from_identity(&identity).as_deref(),
+                Some("gpt2@main:m.gguf"),
+                "{url}"
+            );
+        }
+    }
+}

@@ -248,6 +248,7 @@ impl StageOpenAiBackend {
                     request.prompt_token_ids[..boundary].to_vec(),
                     kind.decision_prefix(),
                     true,
+                    ExactStateKvExport::Now,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -292,6 +293,7 @@ impl StageOpenAiBackend {
                     self.kv.as_ref().is_some_and(|kv| {
                         kv.full_exact_state_writes_through_l3(request.prompt_token_ids.len())
                     }),
+                    ExactStateKvExport::Now,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -661,6 +663,7 @@ impl StageOpenAiBackend {
                     checkpoint_tokens,
                     "chat_prefix_checkpoint",
                     true,
+                    ExactStateKvExport::Now,
                 );
                 prefill_cache_chunks(
                     runtime,

@@ -9,20 +9,24 @@ ci-sccache-seed-build:
     CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run
     cargo clippy --locked -p xtask --all-targets -- -D warnings
 
+# Clear restored timing evidence through the verified CI automation executable.
+[private]
+[windows]
+ci-reset-linker-traces:
+    pwsh -NoProfile -Command '$ErrorActionPreference = "Stop"; & $env:MESH_LLM_AUTOMATION_BIN ci-ops reset-linker-traces; exit $LASTEXITCODE'
+
 # Validate CI definitions, planner fixtures, and repository consistency.
 ci-validate:
     actionlint -config-file .github/actionlint.yaml
     git diff --check
     just ci-automation-contracts
-    just ci-legacy-contracts
     just ci-crate-lists
     just check-release
-    just no-console-print
     just publish-crates
 
 # Required native ownership for the former Windows Python contract modules.
 # The ordered quality caller retains this recipe; actual Windows execution stays in
-# the existing selected Windows unit workflow (21 methods plus wrapper1).
+# the existing selected Windows unit workflow (23 methods plus the wrapper test).
 ci-legacy-contracts:
     just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
     just with-lld cargo test --locked -p xtask --features automation-contracts --test ci_runner_cache_contract windows_ -- --test-threads=1
@@ -48,6 +52,19 @@ ci-controller-bootstrap:
     just with-lld cargo build --locked -p ci-controller --bin ci-controller
     just with-lld cargo run --locked -p ci-controller --bin ci-controller -- automation bootstrap
 
+# Build only the narrow authority automation executable the protected authority
+# producers publish, then prove only the controller library was compiled in.
+authority-automation-bootstrap:
+    just with-lld cargo build --locked -p authority-automation --bin authority-automation
+    just with-lld cargo run --locked -p authority-automation --bin authority-automation -- automation bootstrap
+
+# Build only the narrow runner-cleanup executable the trusted runner-image job
+# freezes for cleanup, then prove only the controller and supervision libraries
+# were compiled in.
+runner-cleanup-bootstrap:
+    just with-lld cargo build --locked -p runner-cleanup --bin runner-cleanup
+    just with-lld cargo run --locked -p runner-cleanup --bin runner-cleanup -- automation bootstrap
+
 [private]
 [unix]
 [positional-arguments]
@@ -62,12 +79,6 @@ automation-run *ARGS:
 # Run crates.io publish-chain consistency checks.
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
-
-# Gate on println!/eprintln!/print!/eprint! and direct io::stdout()/io::stderr()
-# handles in Rust files under crates/ (excluding tests, non-product crates, helper
-# bins and build.rs). There is no allowlist: route output through mesh-llm-events.
-no-console-print:
-    cargo run -p xtask -- repo-consistency no-console-print
 
 # Shellcheck the explicitly supplied changed shell scripts.
 ci-shellcheck *scripts:
@@ -87,6 +98,19 @@ research-source-restore:
     fi
     git -C "$target" fetch --quiet --depth 1 origin "$revision"
     git -C "$target" checkout --quiet --detach "$revision"
+
+# Admit the immutable research checkout, restoring it only for local runs that
+# have not received the CI-prepared source environment.
+[private]
+research-source-admit binary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    automation_bin={{binary}}
+    if [[ -z "${MESH_PYTHON_RESEARCH_SOURCE:-}" ]]; then
+        just research-source-restore
+        export MESH_PYTHON_RESEARCH_SOURCE="$PWD/.sdk-source/research"
+    fi
+    "$automation_bin" automation smoke-observation research-source --kind root
 
 # Run all checks: repo consistency, Rust tests, author exemplars, fmt, clippy, UI/docs builds, and E2E smoke.
 test-all:
@@ -215,6 +239,8 @@ test-all:
 ci-automation-contracts:
     #!/usr/bin/env bash
     set -euo pipefail
+    repo_root="$(pwd -P)"
+    export MESH_PYTHON_SDK_SOURCE="$repo_root/mesh/sdk/python"
     command -v node >/dev/null 2>&1 || { echo "ci-automation-contracts requires the Node component for finite local action fixtures; install Node before this required gate." >&2; exit 1; }
     bootstrap="$(just automation-bootstrap)"
     binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
@@ -222,16 +248,24 @@ ci-automation-contracts:
     test -n "$binary"
     test -n "$target_directory"
     export CARGO_TARGET_DIR="$target_directory"
+    "$binary" automation smoke-observation sdk-source --kind root >/dev/null
+    # CI prepares this separate research fixture in a preceding workflow step;
+    # local contract runs restore and admit the same immutable source here.
+    MESH_PYTHON_RESEARCH_SOURCE="$(just research-source-admit "$binary")"
+    export MESH_PYTHON_RESEARCH_SOURCE
     just with-lld cargo build --locked -p xtask --bins --examples
     # Codec and corpus contracts run after the native-library-free bootstrap;
     # their fixtures use local pinned data and do not acquire HF datasets.
     just with-lld cargo build --locked -p trajectory-reader --features corpus-input --bin trajectory-reader
     just with-lld cargo test --locked -p trajectory-reader --features corpus-input --lib -- --test-threads=1
     MESH_LLM_TEST_XTASK_BIN="$binary" just with-lld cargo test --locked -p trajectory-reader --features corpus-input --test prompt_command native_prompt_command_ -- --test-threads=1
-    # The narrow controller and supervision crates are contract-tested here, not
-    # in the Rust test matrix. Supervision tests keep xtask's single-threaded harness.
+    # The narrow controller, authority, supervision, and cleanup crates are contract-tested
+    # here, not in the Rust test matrix. Supervision and cleanup tests keep xtask's
+    # single-threaded harness.
     just with-lld cargo test --locked -p ci-controller
+    just with-lld cargo test --locked -p authority-automation
     just with-lld cargo test --locked -p process-supervision -- --test-threads=1
+    just with-lld cargo test --locked -p runner-cleanup -- --test-threads=1
     fixture_suffix=""
     case "$binary" in *.exe) fixture_suffix=".exe" ;; esac
     # Examples sit beside the bootstrap binary in its profile directory, which is

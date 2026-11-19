@@ -4,9 +4,23 @@ pub use mesh_llm_skippy_adapter::package::acquisition::{StagePackageRef, is_laye
 use skippy_package_format::stage_admission::StageAdmissionDescriptor as PackageV2StageAdmissionDescriptor;
 use std::path::PathBuf;
 
+use crate::inference::skippy::StageSourceFetch;
+
 fn acquisition() -> skippy_api::package::acquisition::remote::PackageAcquisition {
-    mesh_llm_skippy_adapter::package::acquisition::with_client(|| {
-        crate::models::build_hf_api(false)
+    acquisition_for(StageSourceFetch::Allowed)
+}
+
+/// Skippy builds the Hugging Face client only on a cache miss, so a factory
+/// that refuses keeps a `LocalOnly` resolution to cached files.
+fn acquisition_for(
+    fetch: StageSourceFetch,
+) -> skippy_api::package::acquisition::remote::PackageAcquisition {
+    mesh_llm_skippy_adapter::package::acquisition::with_client(move || {
+        if fetch.allows_fetch() {
+            crate::models::build_hf_api(false)
+        } else {
+            Err(StageSourceFetch::refusal("layer package"))
+        }
     })
 }
 
@@ -25,11 +39,116 @@ pub fn resolve_hf_package_to_local(
         include_output,
     )
 }
-pub fn resolve_package_v2_stage_to_local(
+/// Resolve an `hf://` package for metadata inspection from the hub, skipping
+/// the cache-first lookup. See `PackageAcquisition::resolve_hf_package_upstream_to_local`.
+pub fn resolve_hf_package_upstream_to_local(package_ref: &str) -> Result<String> {
+    acquisition().resolve_hf_package_upstream_to_local(package_ref)
+}
+
+/// Whether a package-v2 manifest and its shared metadata are already cached.
+///
+/// A cached schema-v1 package does not count: inspecting one asks the hub for
+/// a newer package-v2 revision.
+pub(crate) fn package_metadata_is_local(package_ref: &str) -> bool {
+    acquisition_for(StageSourceFetch::LocalOnly)
+        .resolve_hf_package_to_local(package_ref, 0, 0, false, false)
+        .is_ok_and(|local_ref| mesh_llm_skippy_adapter::package::is_package_v2_ref(&local_ref))
+}
+
+/// Which layers of a cached package-v2 have their artifacts on local disk,
+/// without any network access.
+///
+/// Artifacts are checked by path and size, not hashed: a stage load verifies
+/// them. Artifacts that no layer owns (embeddings, output) count toward the
+/// first and last layer, the layers of the stages that load them.
+pub(crate) fn package_v2_local_layers(package_ref: &str) -> Result<Vec<bool>> {
+    let local_ref = acquisition_for(StageSourceFetch::LocalOnly).resolve_hf_package_to_local(
+        package_ref,
+        0,
+        0,
+        false,
+        false,
+    )?;
+    let package_dir = std::path::Path::new(&local_ref);
+    let manifest_path = package_dir.join("model-package.json");
+    let manifest: skippy_package_format::PackageManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    let manifest =
+        skippy_model::package_carrier::resolve_package_carrier_from_dir(manifest, package_dir)?;
+    Ok(layers_with_local_artifacts(&manifest, package_dir))
+}
+
+fn layers_with_local_artifacts(
+    manifest: &skippy_package_format::PackageManifest,
+    package_dir: &std::path::Path,
+) -> Vec<bool> {
+    use skippy_package_format::TensorStorage;
+    use std::collections::HashMap;
+
+    let on_disk = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.id.as_str(),
+                artifact_on_disk(package_dir, &artifact.path, artifact.byte_size),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let owners = manifest
+        .tensor_catalog
+        .entries
+        .iter()
+        .filter_map(|tensor| match &tensor.storage {
+            TensorStorage::Owned { artifact_id, .. } => {
+                Some((tensor.id.as_str(), artifact_id.as_str()))
+            }
+            TensorStorage::Alias { .. } => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let mut layers = vec![true; manifest.layer_count as usize];
+    let mut shared = true;
+    for tensor in &manifest.tensor_catalog.entries {
+        let artifact = match &tensor.storage {
+            TensorStorage::Owned { artifact_id, .. } => Some(artifact_id.as_str()),
+            TensorStorage::Alias { target_tensor_id } => {
+                owners.get(target_tensor_id.as_str()).copied()
+            }
+        };
+        let present = artifact.is_some_and(|id| on_disk.get(id).copied().unwrap_or(false));
+        match tensor
+            .layer_ordinal
+            .and_then(|ordinal| layers.get_mut(ordinal as usize))
+        {
+            Some(layer) => *layer &= present,
+            None => shared &= present,
+        }
+    }
+    if !shared {
+        if let Some(first) = layers.first_mut() {
+            *first = false;
+        }
+        if let Some(last) = layers.last_mut() {
+            *last = false;
+        }
+    }
+    layers
+}
+
+fn artifact_on_disk(package_dir: &std::path::Path, path: &str, byte_size: u64) -> bool {
+    skippy_api::materialization::safe_manifest_file_path(path)
+        .ok()
+        .and_then(|relative| std::fs::metadata(package_dir.join(relative)).ok())
+        .is_some_and(|metadata| metadata.is_file() && metadata.len() == byte_size)
+}
+
+pub(crate) fn resolve_package_v2_stage_to_local(
     package_ref: &str,
     admission: &PackageV2StageAdmissionDescriptor,
+    fetch: StageSourceFetch,
 ) -> Result<(String, Vec<PathBuf>, Option<PathBuf>)> {
-    acquisition().resolve_package_v2_stage_to_local(package_ref, admission)
+    acquisition_for(fetch).resolve_package_v2_stage_to_local(package_ref, admission)
 }
 pub fn resolve_package_v2_full_model_to_local(
     package_ref: &str,
@@ -603,5 +722,242 @@ mod tests {
         // Should be non-trivial size (layer files are typically > 1 MB)
         let size = std::fs::metadata(&layer0_path).unwrap().len();
         assert!(size > 1_000_000, "layer file should be > 1MB, got {size}");
+    }
+
+    const STALE_COMMIT: &str = "1111111111111111111111111111111111111111";
+    const UPSTREAM_COMMIT: &str = "2222222222222222222222222222222222222222";
+
+    /// A minimal hub serving the files under `root` at `commit` for every
+    /// revision. Returns its endpoint and the number of requests it answered.
+    fn spawn_fake_hub(
+        root: std::path::PathBuf,
+        commit: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let root = root.clone();
+                let counter = counter.clone();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() {
+                        return;
+                    }
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).unwrap_or(0) <= 2 {
+                            break;
+                        }
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().unwrap_or_default().to_string();
+                    let path = parts.next().unwrap_or_default().replace("%2F", "/");
+                    // /{owner}/{name}/resolve/{revision}/{file}
+                    let file = path.splitn(6, '/').nth(5).unwrap_or_default();
+                    let file = file.split('?').next().unwrap_or_default();
+                    let response = match fs::read(root.join(file)) {
+                        Ok(body) => {
+                            let mut response = format!(
+                                "HTTP/1.1 200 OK\r\nETag: \"{}\"\r\nX-Repo-Commit: {commit}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                sha256_hex(&body),
+                                body.len()
+                            )
+                            .into_bytes();
+                            if method != "HEAD" {
+                                response.extend_from_slice(&body);
+                            }
+                            response
+                        }
+                        Err(_) => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_vec(),
+                    };
+                    let _ = stream.write_all(&response);
+                });
+            }
+        });
+        (endpoint, hits)
+    }
+
+    /// Point the HF cache at `temp/hf/hub` and the hub client at `endpoint`.
+    /// The returned guards restore the environment.
+    fn isolated_hub_env(temp: &Path, endpoint: &str) -> Vec<EnvRestore> {
+        let guards = [
+            "HF_HOME",
+            "HF_HUB_CACHE",
+            "HUGGINGFACE_HUB_CACHE",
+            "XDG_CACHE_HOME",
+            "HF_ENDPOINT",
+            "HF_HUB_OFFLINE",
+        ]
+        .into_iter()
+        .map(EnvRestore::capture)
+        .collect();
+        // Every caller is `#[serial]`; `restore_env` is this file's audited
+        // mutation site, so the setup goes through it.
+        restore_env("HF_HOME", Some(temp.join("hf").into_os_string()));
+        restore_env(
+            "XDG_CACHE_HOME",
+            Some(temp.join("mesh-cache").into_os_string()),
+        );
+        restore_env("HF_ENDPOINT", Some(OsString::from(endpoint)));
+        for key in ["HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HUB_OFFLINE"] {
+            restore_env(key, None);
+        }
+        guards
+    }
+
+    /// Cache `meshllm/demo` with a complete schema-v1 snapshot that
+    /// `refs/main` still names, as an older clone leaves it.
+    fn cache_stale_v1_main(temp: &Path) -> std::path::PathBuf {
+        let repo = temp.join("hf/hub/models--meshllm--demo");
+        write_cached_package_snapshot(
+            &repo.join("snapshots").join(STALE_COMMIT),
+            sha256_hex(b"layer"),
+        );
+        fs::create_dir_all(repo.join("refs")).unwrap();
+        fs::write(repo.join("refs/main"), STALE_COMMIT).unwrap();
+        repo
+    }
+
+    fn write_upstream_v2(root: &Path) {
+        crate::inference::skippy::write_test_package_v2_fixture(
+            root,
+            "meshllm/demo",
+            &[
+                (
+                    "layer-00000",
+                    "layers/layer-00000.gguf",
+                    "blk.0.attn.weight",
+                ),
+                (
+                    "layer-00001",
+                    "layers/layer-00001.gguf",
+                    "blk.1.attn.weight",
+                ),
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn a_stale_v1_cache_re_resolves_main_from_the_hub_before_failing() {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = temp.path().join("upstream");
+        write_upstream_v2(&upstream);
+        let (endpoint, hits) = spawn_fake_hub(upstream, UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        let repo = cache_stale_v1_main(temp.path());
+
+        crate::inference::skippy::identity_from_layer_package("hf://meshllm/demo")
+            .expect("the hub's package-v2 main should be inspected");
+
+        assert!(hits.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        // The ref moved, so later stage loads resolve the same commit, and
+        // the stale snapshot is still there: nothing was deleted.
+        assert_eq!(
+            fs::read_to_string(repo.join("refs/main")).unwrap().trim(),
+            UPSTREAM_COMMIT
+        );
+        assert!(
+            repo.join("snapshots")
+                .join(STALE_COMMIT)
+                .join("model-package.json")
+                .is_file()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_v1_package_upstream_too_still_fails_as_before() {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = temp.path().join("upstream");
+        write_cached_package_snapshot(&upstream, sha256_hex(b"layer"));
+        let (endpoint, _hits) = spawn_fake_hub(upstream, UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        cache_stale_v1_main(temp.path());
+
+        let error = crate::inference::skippy::identity_from_layer_package("hf://meshllm/demo")
+            .expect_err("a v1 package everywhere is still refused");
+
+        assert!(
+            error.to_string().contains("schema v1 is offline-only"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_cached_v2_package_never_asks_the_hub() {
+        let temp = tempfile::tempdir().unwrap();
+        let (endpoint, hits) = spawn_fake_hub(temp.path().join("empty"), UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        let repo = temp.path().join("hf/hub/models--meshllm--demo");
+        write_upstream_v2(&repo.join("snapshots").join(UPSTREAM_COMMIT));
+        fs::create_dir_all(repo.join("refs")).unwrap();
+        fs::write(repo.join("refs/main"), UPSTREAM_COMMIT).unwrap();
+
+        crate::inference::skippy::identity_from_layer_package("hf://meshllm/demo").unwrap();
+
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[serial]
+    fn only_a_cached_v2_package_counts_as_local_package_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = temp.path().join("upstream");
+        write_upstream_v2(&upstream);
+        let (endpoint, hits) = spawn_fake_hub(upstream, UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        let repo = cache_stale_v1_main(temp.path());
+
+        // Inspecting the stale v1 snapshot would ask the hub for package-v2.
+        assert!(!package_metadata_is_local("hf://meshllm/demo"));
+
+        write_upstream_v2(&repo.join("snapshots").join(UPSTREAM_COMMIT));
+        fs::write(repo.join("refs/main"), UPSTREAM_COMMIT).unwrap();
+        assert!(package_metadata_is_local("hf://meshllm/demo"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[serial]
+    fn local_layers_are_the_ones_whose_files_are_cached() {
+        let temp = tempfile::tempdir().unwrap();
+        let (endpoint, hits) = spawn_fake_hub(temp.path().join("empty"), UPSTREAM_COMMIT);
+        let _env = isolated_hub_env(temp.path(), &endpoint);
+        let repo = temp.path().join("hf/hub/models--meshllm--demo");
+        let snapshot = repo.join("snapshots").join(UPSTREAM_COMMIT);
+        write_upstream_v2(&snapshot);
+        fs::create_dir_all(repo.join("refs")).unwrap();
+        fs::write(repo.join("refs/main"), UPSTREAM_COMMIT).unwrap();
+
+        assert_eq!(
+            package_v2_local_layers("hf://meshllm/demo").unwrap(),
+            [true, true]
+        );
+
+        // Metadata cached, one layer file not: only the other layer is local.
+        fs::remove_file(snapshot.join("layers/layer-00001.gguf")).unwrap();
+        assert_eq!(
+            package_v2_local_layers("hf://meshllm/demo").unwrap(),
+            [true, false]
+        );
+        // A truncated file is not the artifact either.
+        fs::write(snapshot.join("layers/layer-00000.gguf"), b"partial").unwrap();
+        assert_eq!(
+            package_v2_local_layers("hf://meshllm/demo").unwrap(),
+            [false, false]
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

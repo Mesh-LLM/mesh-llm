@@ -3,13 +3,49 @@ import XCTest
 @testable import MeshLLM
 
 final class LiveTranscriptionTests: XCTestCase {
+    /// Explicit sample-rate and push-to-talk options survive the round trip.
     func testOptionsPreserveSampleRateAndExplicitPushToTalk() throws {
-        let options = LiveTranscriptionOptions(sampleRate: 48000, turnDetection: nil)
+        let options = LiveTranscriptionOptions(model: "speech#fast", language: "de", prompt: "jargon", sampleRate: 48000, turnDetection: nil)
         let value = try JSONSerialization.jsonObject(with: Data(options.json().utf8)) as! [String: Any]
+        XCTAssertEqual(value["model"] as? String, "speech#fast")
+        XCTAssertEqual(value["language"] as? String, "de")
+        XCTAssertEqual(value["prompt"] as? String, "jargon")
         XCTAssertEqual(value["sample_rate"] as? Int, 48000)
         XCTAssertTrue(value["turn_detection"] is NSNull)
         let defaults = try JSONSerialization.jsonObject(with: Data(LiveTranscriptionOptions().json().utf8)) as! [String: Any]
         XCTAssertNotNil(defaults["turn_detection"] as? [String: Any])
+        XCTAssertNil(defaults["step_ms"])
+        XCTAssertEqual(defaults["tentative"] as? Bool, false)
+    }
+
+    /// Incremental options serialize under their native keys.
+    func testIncrementalOptionsUseNativeKeys() throws {
+        let options = LiveTranscriptionOptions(stepMs: 400, tentative: true)
+        let value = try JSONSerialization.jsonObject(with: Data(options.json().utf8)) as! [String: Any]
+        XCTAssertEqual(value["step_ms"] as? Int, 400)
+        XCTAssertEqual(value["tentative"] as? Bool, true)
+        XCTAssertNil(value["stepMs"])
+    }
+
+    /// Tentative replacements and clear remain distinct from final text.
+    func testTentativeReplacementsAndClearRemainDistinctFromFinalText() async throws {
+        for text in ["hel", "hello", ""] {
+            let live = LiveTranscription(
+                audio: { _ in }, floatAudio: { _ in }, commit: {},
+                eventJSON: { "{\"type\":\"tentative\",\"item_id\":\"turn\",\"text\":\"\(text)\"}" },
+                stopJSON: { #"[{"type":"completed","item_id":"turn","transcript":"Hello!"}]"# },
+                close: {}
+            )
+            let event = try await live.nextEvent()
+            XCTAssertEqual(event?.type, "tentative")
+            XCTAssertEqual(event?.itemId, "turn")
+            XCTAssertEqual(event?.text, text)
+            XCTAssertNil(event?.transcript)
+            let remaining = try await live.stop()
+            XCTAssertEqual(remaining.first?.type, "completed")
+            XCTAssertEqual(remaining.first?.transcript, "Hello!")
+            await live.close()
+        }
     }
 
     func testSessionPreservesAudioEventsAndRemainingTranscript() async throws {

@@ -21,6 +21,10 @@ These instructions apply under `mesh/` in addition to the root `AGENTS.md`. Path
 | `mesh/website/src/docs/pages/analytics.md` | Public analytics disclosure |
 | `tools/relay-fly-legacy/README.md` | Archived relay reference; production uses services.iroh.computer |
 
+The Python SDK source and package are maintained in `mesh/sdk/python/` alongside
+the other Mesh SDKs. Keep its generated bindings, native API revision, tests and
+maintained examples synchronized with the native FFI surface.
+
 ## Public Website
 
 The maintained website source lives in `mesh/website/`. Eleventy writes generated static-hosting output into root `docs/`; authored documentation lives under `mesh/docs/` and `skippy/docs/`. Do not hand-edit generated website files.
@@ -159,7 +163,6 @@ Host runtime (main monolith — `mesh/crates/mesh-llm-host-runtime/src/`):
 - `mesh/heartbeat.rs` — heartbeat publishing and freshness.
 - `inference/election.rs` — host election, tensor split calculation.
 - `inference/skippy/` — embedded staged runtime integration.
-- `inference/pipeline.rs` — inference pipeline coordination.
 - `inference/virtual_llm.rs` — virtual LLM (inter-model collaboration).
 - `network/proxy.rs` — HTTP proxy: request parsing, model routing, response helpers.
 - `network/router.rs` — request classification, model scoring, multimodal routing.
@@ -290,7 +293,6 @@ you want quiet output, use `--log-format json` and parse what you need.
 
 ## Rust validation
 
-- After Rust changes, run `just no-console-print`. There is no allowlist. It forbids `println!` / `eprintln!` / `print!` / `eprint!` and direct `io::stdout()` / `io::stderr()` handles in product code. Route operational output through `mesh_llm_events::emit_event` or `tracing`, human-facing CLI prose through `mesh_llm_events::console_out` / `console_err`, and a `--json` payload through `mesh_llm_events::machine_out`. Only the console output facility may hold a terminal handle; its roster is `CONSOLE_OUTPUT_OWNERS` in `tools/xtask/src/no_console_print/scope.rs`.
 - If a change is reachable from the shipped binary, run at least `cargo check -p mesh-llm` and `cargo clippy -p mesh-llm --all-targets -- -D warnings`.
 - Changes to `proto/`, any Mesh `protocol/` module, `mesh-llm-host-runtime/src/mesh/gossip.rs`, `mesh-llm-host-runtime/src/mesh/mod.rs`, routing, election, or API serialization need `cargo test -p mesh-llm-host-runtime --lib`; do not stop at build-only validation.
 

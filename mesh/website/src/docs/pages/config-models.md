@@ -92,6 +92,16 @@ configuration](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/plugins/
 
 The `[[plugin]]` array configures local plugin processes, which can attach to external services.
 
+Built-in plugins need only a name. For example, the Mixture-of-Agents plugin
+(off by default) answers non-streaming `model: "mesh"` text chat with a
+committee when at least two placements are eligible and at least one has a
+known size of 10B or larger, and from one model otherwise — see [Automatic routing](/docs/pages/automatic-routing/):
+
+```toml
+[[plugin]]
+name = "mesh-moa"
+```
+
 ```toml
 [[plugin]]
 name    = "my-plugin"

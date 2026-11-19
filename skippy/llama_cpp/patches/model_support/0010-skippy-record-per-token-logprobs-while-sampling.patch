@@ -1,7 +1,7 @@
-From 76c1598c4144f104a0b8946f6533619fd9ad6b33 Mon Sep 17 00:00:00 2001
+From 8e35697c719ba37463b8c2e00e678b2cef436682 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
-Subject: [PATCH] skippy: record per-token logprobs while sampling
+Subject: [PATCH 26/32] skippy: record per-token logprobs while sampling
 
 A sampling config with SKIPPY_SAMPLING_FLAG_LOGPROBS records, for every
 token skippy_sample_token_ith samples, the token's log-probability under the
@@ -20,11 +20,11 @@ to touch common.h it carries the queue's ABI version, 0.1.77.
  include/skippy/sampling.h      |  4 ++
  src/CMakeLists.txt             |  1 +
  src/skippy/logprobs.cpp        | 94 ++++++++++++++++++++++++++++++++++
+ src/skippy/resident_prefix.cpp |  1 +
  src/skippy/runtime_types.h     |  2 +
  src/skippy/sampling.cpp        | 21 +++++++-
  src/skippy/sampling_internal.h |  7 +++
  src/skippy/session.cpp         |  1 +
- src/skippy/resident_prefix.cpp     |  1 +
  src/skippy/workloads.cpp       |  1 +
  12 files changed, 193 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/logprobs.h
@@ -144,7 +144,7 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index ea0cdd178..beded64e4 100644
+index 19ba7e532..db89cc245 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -84,6 +84,7 @@ add_library(llama
@@ -256,10 +256,10 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
-index 418ebabaf..3e2d65a21 100644
+index 317c96b46..bbd592fe8 100644
 --- a/src/skippy/resident_prefix.cpp
 +++ b/src/skippy/resident_prefix.cpp
-@@ -183,6 +183,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
+@@ -168,6 +168,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
      session->n_past = static_cast<int32_t>(count);
      session->token_history = std::move(history);
      session->signal_history.clear();
@@ -351,10 +351,10 @@ index 7bbf16016..81bc26ff5 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index a9251d2c9..13e318534 100644
+index 9d0ba6ee5..ce5a349e7 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -379,6 +379,7 @@ enum skippy_status skippy_session_reset(
+@@ -384,6 +384,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();
@@ -374,6 +374,3 @@ index d3de66cbe..3ca967bf3 100644
  }
  
  namespace {
--- 
-2.54.0 (Apple Git-157)
-

@@ -255,6 +255,7 @@ jobs:
       state: ${{ steps.select.outputs.state }}
       green: ${{ steps.select.outputs.green }}
       repairable: ${{ steps.select.outputs.repairable }}
+      retry_recovered: ${{ steps.select.outputs.retry_recovered }}
       resume_package: ${{ steps.select.outputs.resume_package }}
       resume_identity: ${{ steps.select.outputs.resume_identity }}
       resume_head: ${{ steps.select.outputs.resume_head }}
@@ -454,6 +455,7 @@ jobs:
       head: ${{ steps.result.outputs.head }}
       branch: ${{ steps.result.outputs.branch }}
       publish: ${{ steps.result.outputs.publish }}
+      retry_recovered: ${{ steps.result.outputs.retry_recovered }}
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -534,6 +536,7 @@ jobs:
           CANARY_CONTROLLER_SHA: ${{ needs.resolve.outputs.source }}
           CANARY_MESH_SOURCE: ${{ needs.resolve.outputs.mesh_source }}
           CANARY_CHANGED: ${{ needs.resolve.outputs.changed }}
+          CANARY_RETRY_RECOVERED: ${{ needs.result.outputs.retry_recovered }}
         run: |
           set -euo pipefail
           if [[ -n "$CANARY_MESH_SOURCE" ]]; then
@@ -544,9 +547,11 @@ jobs:
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg controller_revision "$CANARY_CONTROLLER_SHA" --arg selected_source "$CANARY_MESH_SOURCE" \
             --arg repository "$GITHUB_REPOSITORY" \
+            --arg retry_recovered "$CANARY_RETRY_RECOVERED" \
             --arg source_root "$GITHUB_WORKSPACE" --arg changed "$CANARY_CHANGED" \
             '{package:$package,identity_sha256:$identity_sha256,run_id:$run_id,run_attempt:$run_attempt,
               controller_revision:$controller_revision,selected_source:$selected_source,repository:$repository,
+              retry_recovered:$retry_recovered,
               source_root:(if $selected_source == "" or $changed == "true" then null else $source_root end)}' > "$input"
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts publication --input "$input"
       - name: Publish ready pull request

@@ -12,6 +12,9 @@ Traffic between those Mesh nodes is end-to-end
 encrypted by QUIC. If iroh uses a relay, the relay forwards encrypted packets
 and cannot read prompts, responses, or split-model activations.
 
+To keep some requests on your own machines while they also serve a shared
+mesh, such as the public one, use [private routing](/docs/pages/private-routing/).
+
 ## Discovery and admission
 
 A mesh created without `--publish` is **unpublished**, not necessarily

@@ -1,8 +1,6 @@
 #![cfg(feature = "automation-contracts")]
-#[path = "../src/ci_operations/authority_audit.rs"]
-mod authority_audit;
-
 use authority_audit::{AuthorityFailure, DockerFailure, attest_endpoint, audit_docker_json};
+use authority_automation::ci_operations::authority_audit;
 
 #[test]
 fn rejects_all_loopback_address_forms() {

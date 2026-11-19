@@ -68,6 +68,61 @@ async fn exchange_deadline_sends_once_without_restarting_observer() {
 }
 
 #[tokio::test]
+async fn private_exchange_held_past_its_limit_restarts_the_hook() {
+    let (plugin, mut outbound) = running_observer().await;
+    let result = plugin
+        .invoke_private_exchange_service(
+            &mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
+            "{}",
+            Instant::now() + Duration::from_millis(20),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(outbound.try_recv().is_ok());
+    assert!(outbound.try_recv().is_err(), "a hook must never retry");
+    assert!(
+        plugin.runtime.lock().await.is_none(),
+        "a hook still holding a private request is stopped"
+    );
+    assert_eq!(plugin.summary.lock().await.status, "restarting");
+}
+
+#[tokio::test]
+async fn private_exchange_that_replies_keeps_the_hook_running() {
+    let (plugin, mut outbound) = running_observer().await;
+    let pending = plugin
+        .runtime
+        .lock()
+        .await
+        .as_ref()
+        .unwrap()
+        .pending
+        .clone();
+    let caller = plugin.clone();
+    let task = tokio::spawn(async move {
+        caller
+            .invoke_private_exchange_service(
+                &mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
+                "{}",
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
+    });
+    let request = outbound.recv().await.unwrap();
+    let reply = pending.lock().await.remove(&request.request_id).unwrap();
+    reply
+        .send(Ok(super::proto::Envelope {
+            payload: Some(super::proto::envelope::Payload::InvokeServiceResponse(
+                super::proto::InvokeServiceResponse::default(),
+            )),
+            ..Default::default()
+        }))
+        .unwrap();
+    assert!(task.await.unwrap().is_ok());
+    assert_running_without_pending(&plugin).await;
+}
+
+#[tokio::test]
 async fn cancelled_exchange_removes_only_its_pending_request() {
     let (plugin, mut outbound) = running_observer().await;
     let pending = plugin

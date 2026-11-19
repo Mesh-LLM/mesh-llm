@@ -612,7 +612,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(command.contains(&"/tmp/out/model-q4".to_string()));
+        // `with_file_name` rejoins with the native separator (`\` on Windows).
+        let prefix = Path::new("/tmp/out").join("model-q4").display().to_string();
+        assert!(command.contains(&prefix));
         assert!(!command.contains(&"/tmp/out/model-q4.gguf".to_string()));
         assert_eq!(
             llama_split_output_prefix(Path::new("/tmp/out/model-q4.gguf")),

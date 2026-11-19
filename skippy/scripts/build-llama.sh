@@ -528,9 +528,7 @@ if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
 fi
 if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
   BUILD_TARGETS+=(
-    skippy-asr-decode-boundary
     skippy-backend-sample-capacity
-    skippy-diffusion-host-fallback
     skippy-graph-build-inputs
     skippy-hardware-application-probe
     skippy-model-fixture-generator
@@ -555,6 +553,7 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
     test-skippy-kv-page-export
     test-skippy-kv-rows-aligned
     test-skippy-kv-place-together
+    test-skippy-kv-release-compact
     test-skippy-task-pool
     test-skippy-model-loader-accounting
     test-skippy-recurrent-state-roundtrip

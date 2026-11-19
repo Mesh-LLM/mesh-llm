@@ -221,6 +221,8 @@ fn graph_windows_release_abi_cache_is_saved_only_after_package_verification() {
             assert_eq!(input(save, key), Some(value));
         }
         let position = |n: &Node| steps(j).iter().position(|s| std::ptr::eq(s, n)).unwrap();
+        let automation = action(j, "./.github/actions/prepare-automation");
+        assert!(position(automation) < position(restore));
         assert!(position(restore) < position(package));
         assert!(position(package) < position(save));
         assert!(position(save) < position(named(j, "Upload native runtime")));

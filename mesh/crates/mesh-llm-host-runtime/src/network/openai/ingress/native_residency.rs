@@ -15,7 +15,6 @@ pub(super) fn named_model_route(
     {
         AutoRouteResolution::Continue {
             effective_model: Some(model.to_owned()),
-            classification: None,
         }
     } else {
         explicit_model_route(request, model, descriptors)
@@ -105,6 +104,18 @@ pub(super) async fn route_request(
         Ok(outcome) => return outcome,
         Err(stream) => stream,
     };
+    if !local_may_serve_current_request(ctx.node).await {
+        return cold_failure(
+            local_only,
+            stream,
+            request,
+            ctx,
+            model_name,
+            required_tokens,
+            observer,
+        )
+        .await;
+    }
     dispatch_cold(
         local_only,
         stream,
@@ -149,6 +160,15 @@ async fn ready_targets(
     Some(targets)
 }
 
+/// False for a private request this node is outside of: it loads no model
+/// for it.
+async fn local_may_serve_current_request(node: &crate::mesh::Node) -> bool {
+    match crate::mesh::current_private_scope() {
+        Some(scope) => node.local_in_private_scope(&scope),
+        None => true,
+    }
+}
+
 /// Load a cold named model, verify its descriptor, then dispatch to its owned instance.
 async fn dispatch_cold(
     local_only: bool,
@@ -189,11 +209,15 @@ async fn dispatch_cold(
         }
     };
     let execution_model = lifecycle.execution_model(model_name);
-    let mut targets = refresh_local_targets(
-        ctx.targets,
-        &lifecycle.targets_for(model_name),
-        &execution_model,
-    );
+    // The refreshed local target gets a private request's scope check again.
+    let mut targets = ctx
+        .node
+        .targets_in_current_private_scope(refresh_local_targets(
+            ctx.targets,
+            &lifecycle.targets_for(model_name),
+            &execution_model,
+        ))
+        .await;
     let descriptors = ctx.node.all_served_model_descriptors().await;
     if let Some(workload) = required_request_workload(&request.client_path)
         && !model_satisfies_request(&execution_model, &request.client_path, &descriptors)
@@ -339,6 +363,7 @@ mod tests {
             affinity: &affinity,
             plugin_manager: None,
             requested_by_node_id: None,
+            automatic_retry: None,
             exchange_channel: None,
         };
         let ready = ready_targets(&ctx, "cold", "/v1/chat/completions", false, &[])

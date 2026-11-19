@@ -1,6 +1,9 @@
 use super::*;
-use contract::{Case, digest, tree};
+#[cfg(unix)]
+use contract::tree;
+use contract::{Case, digest};
 use std::collections::BTreeMap;
+#[cfg(unix)]
 pub(super) fn tokenizer() -> Vec<u8> {
     serde_json::to_vec_pretty(&json!({"version":"1.0","truncation":null,"padding":null,"added_tokens":[{"id":0,"content":"[UNK]","single_word":false,"lstrip":false,"rstrip":false,"normalized":false,"special":true},{"id":1,"content":"[BOS]","single_word":false,"lstrip":false,"rstrip":false,"normalized":false,"special":true}],"normalizer":{"type":"Lowercase"},"pre_tokenizer":{"type":"Whitespace"},"post_processor":null,"decoder":null,"model":{"type":"WordLevel","vocab":{"[UNK]":0,"[BOS]":1,"hello":2,"world":3},"unk_token":"[UNK]"}})).unwrap()
 }
@@ -24,6 +27,7 @@ pub(super) fn cases() -> Vec<Case> {
         },
     ]
 }
+#[cfg(unix)]
 pub(super) fn expected() -> String {
     let serialized = tokenizers::Tokenizer::from_bytes(tokenizer())
         .unwrap()

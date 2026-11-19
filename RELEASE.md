@@ -67,11 +67,14 @@ bundle validation.
 - Node/npm installed for the UI build
 - `gh` CLI authenticated if publishing manually
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
-  token or GitHub App token with Contents write access to
-  `Mesh-LLM/mesh-packaging`, which is the permission required to create a
-  repository dispatch event. The workflow checks this access without printing
-  the credential before it sends the event. The legacy secret name is retained
-  so existing release environments do not require a coordinated secret rename.
+  token or GitHub App token with Contents write and Actions read access to
+  `Mesh-LLM/mesh-packaging`. These permissions allow the workflow to dispatch
+  packaging and read its readiness artifact. Before dispatch, the workflow
+  checks repository push permission and probes the run-list endpoint without
+  printing the credential. Public run-list access does not prove that the token
+  can download an artifact; a denied artifact download fails the wait. The
+  legacy secret name is retained so existing release environments do not
+  require a coordinated secret rename.
 
 ## Release Attestation Signing Keys
 
@@ -157,20 +160,13 @@ release archives contain `mesh-llm`, `host-imports.json`,
 `native-runtimes/<runtime-id>` directory. Backend-flavored archive names select
 different runtimes while retaining byte-identical host input for an OS/arch.
 
-macOS and Linux release archives also carry `plugins/`, holding the release
-archive of each default plugin the host pins for that target
-(`DEFAULT_PLUGINS` in `mesh-llm-plugin-manager`). `scripts/package-release.sh`
-lists them with `cargo xtool repository bundled-plugins --target <triple>`,
-downloads each from the plugin's own GitHub release, and fails unless it
-matches the pinned SHA-256 and the bundle's own host installs it as a default
-(`cargo xtool repository bundled-plugins-check --bundle <dir>`). The check runs
-even when nothing is listed, and fails if the host reports a default it pins for
-that platform as missing from the bundle. Packaging
-needs network access to GitHub; for an offline run, set
-`MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR` to a directory that already holds the
-archives, which are checked against the pins all the same. Windows packaging
-(`package-release.ps1`) bundles no plugins; no default pins a Windows build
-today.
+Linux runtime and product tar archives store identical shared-library aliases
+as hard links: every loader filename, mode and manifest checksum is retained,
+without repeating its payload. Runtime staging deduplicates only after ELF
+relocation; product archiving compares bytes even if composition copied aliases
+into separate files. Extractors must support tar hard links. Later cache imports
+may copy aliases again, so this reduces downloads but does not guarantee smaller
+installed caches. Windows ZIP and macOS library packaging are unchanged.
 
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
@@ -285,9 +281,15 @@ have published successfully. Prereleases never dispatch it. The upstream
 `docker.yml` workflow performs Dockerfile validation only and is not a
 distribution channel.
 
+The dispatch binds the published tag commit and native runtime manifest digest
+to an upstream run-attempt correlation ID. A separate job waits up to two hours
+for the matching downstream run and successful readiness receipt. It checks
+every requested publication result and fails on ambiguous or stale evidence.
+Retrying the wait job does not dispatch packaging again.
+
 If the downstream dispatch preflight fails, update the repository Actions secret
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
-that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
+that has Contents write and Actions read access to `Mesh-LLM/mesh-packaging`, then retry the
 failed dispatch job. A repository secret's presence does not prove that its
 credential can write the target repository. Do not put the token in workflow
 logs or command output.

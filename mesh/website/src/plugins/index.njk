@@ -1,0 +1,58 @@
+---
+layout: docs-base.njk
+title: Extending Mesh
+description: Published Mesh plugins for alternative inference engines, agent tools, observability and Lightning payments.
+permalink: /plugins/index.html
+pluginDirectory: true
+---
+<main class="shell min-w-0 py-12 sm:py-16" data-pagefind-body>
+  <header class="docs-page-hero">
+    <h1 class="text-balance font-display text-[clamp(2.5rem,12vw,5rem)] leading-[0.95] text-fg">Extending Mesh</h1>
+    <p class="lead mt-4 max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">Bring another inference engine, connect agent tools, or add evidence, energy and payment capabilities. Plugins run as managed processes alongside Mesh, not as additions to its core.</p>
+    <p class="mt-4 max-w-[48rem] text-sm leading-6 text-muted">Mesh {{ plugins.hostVersion }} does not bundle plugins. These {{ plugins.count }} integrations have published binary releases in the Mesh-LLM organization. Choose a plugin below, download the release for your machine, and follow its setup instructions.</p>
+    <div class="mt-6 flex flex-wrap gap-x-6 gap-y-3 text-sm">
+      <a class="inline-flex min-h-11 items-center text-blue-3 underline underline-offset-4" href="/docs/pages/plugins/#install-a-plugin">Install and configure plugins →</a>
+      <a class="inline-flex min-h-11 items-center text-blue-3 underline underline-offset-4" href="/docs/pages/developing-plugins/">Build a plugin →</a>
+    </div>
+  </header>
+
+  <nav class="mt-8 flex flex-wrap gap-x-6 gap-y-2 border-y border-line-soft py-3 text-sm" aria-label="Plugin categories">
+    {% for group in plugins.groups %}
+      <a class="inline-flex min-h-11 items-center text-muted hover:text-fg" href="#{{ group.id }}">{{ group.title }} ({{ group.plugins.length }})</a>
+    {% endfor %}
+  </nav>
+
+  <p class="mt-5 max-w-[48rem] text-sm leading-6 text-muted">Release snapshot checked {{ plugins.checkedOn }}. Platform labels describe available archives, not a guarantee that every model, GPU or wallet has been qualified. Check the linked release notes for host compatibility and prerequisites. Plugins are trusted native code, not sandboxed extensions.</p>
+
+  {% for group in plugins.groups %}
+    <section class="mt-12 scroll-mt-24" id="{{ group.id }}" aria-labelledby="{{ group.id }}-title">
+      <h2 class="font-display text-2xl leading-tight text-fg sm:text-3xl" id="{{ group.id }}-title">{{ group.title }}</h2>
+      <p class="mt-3 mb-6 max-w-[48rem] text-base leading-7 text-muted">{{ group.description }}</p>
+      {% for plugin in group.plugins %}
+        <article class="grid min-w-0 scroll-mt-24 gap-3 border-t border-line-soft py-6 sm:grid-cols-[minmax(10rem,1fr)_minmax(0,3fr)] sm:gap-8" id="{{ plugin.name }}" aria-labelledby="{{ plugin.name }}-title">
+          <div class="min-w-0">
+            <h3 class="text-lg font-semibold leading-snug text-fg" id="{{ plugin.name }}-title">{{ plugin.title }}</h3>
+            <code class="mt-2 block break-words text-xs text-muted">{{ plugin.name }}</code>
+          </div>
+          <div class="min-w-0">
+            <p class="text-base leading-7 text-fg">{{ plugin.summary }}</p>
+            {% if plugin.note %}<p class="mt-2 text-sm leading-6 text-muted">{{ plugin.note }}</p>{% endif %}
+            <p class="mt-3 text-sm leading-6 text-muted">Binaries: {{ plugin.platforms }}</p>
+            <div class="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+              <a class="inline-flex min-h-11 items-center text-blue-3 underline underline-offset-4" href="https://github.com/Mesh-LLM/{{ plugin.repository }}#readme">Setup and source</a>
+              <a class="inline-flex min-h-11 items-center text-blue-3 underline underline-offset-4" href="https://github.com/Mesh-LLM/{{ plugin.repository }}/releases/tag/{{ plugin.version }}">{{ plugin.version }} binaries</a>
+              {% if plugin.archiveInstall %}<a class="inline-flex min-h-11 items-center text-blue-3 underline underline-offset-4" href="/docs/pages/plugins/#install-a-downloaded-archive">Install downloaded archive</a>{% endif %}
+            </div>
+            {% if plugin.archiveInstall %}<p class="mt-1 text-sm leading-6 text-muted">On Mesh 0.79, use the downloaded archive with <code>--name {{ plugin.name }}</code>; the GitHub installer's name matching does not resolve this release's archive.</p>{% endif %}
+          </div>
+        </article>
+      {% endfor %}
+    </section>
+  {% endfor %}
+
+  <section class="mt-12 border-t border-line-soft pt-8" aria-labelledby="more-plugins-title">
+    <h2 class="font-display text-2xl leading-tight text-fg" id="more-plugins-title">Find more, or build your own</h2>
+    <p class="mt-3 max-w-[48rem] text-base leading-7 text-muted">Run <code>mesh-llm plugins search</code> to browse the plugin catalog. A catalog entry is a discovery aid, not a trust or compatibility guarantee. Repositories without published binary releases are not included above.</p>
+    <p class="mt-4 text-sm leading-6"><a class="text-blue-3 underline underline-offset-4" href="/docs/pages/plugin-architecture/">Plugin architecture</a> · <a class="text-blue-3 underline underline-offset-4" href="/docs/pages/developing-plugins/">Authoring and packaging</a> · <a class="text-blue-3 underline underline-offset-4" href="/docs/pages/plugins/">Configuration and troubleshooting</a></p>
+  </section>
+</main>

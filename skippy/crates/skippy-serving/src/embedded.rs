@@ -356,6 +356,9 @@ impl SkippyRuntimeHandle {
         }
     }
 
+    /// Stop this model's runtime. The host and its other models keep the
+    /// process trace; the host ends it with
+    /// [`crate::telemetry::finish_process_telemetry`] when it exits.
     pub fn shutdown(&self) {
         self.tokenizer_active.store(false, Ordering::Release);
         let runtime = lock_runtime(&self.runtime);
@@ -370,7 +373,7 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_stopped",
             lifecycle_attrs(&self.config),
         );
-        self.telemetry.finish_process();
+        self.telemetry.flush_queued();
     }
 }
 

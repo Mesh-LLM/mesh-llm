@@ -45,6 +45,7 @@ fn test_stage_status(
         compute_busy_nanos: 0,
         compute_operations: 0,
         compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
     }
 }
 
@@ -280,6 +281,34 @@ fn status_conversions_preserve_activation_codec_policy() {
         None,
     );
     assert_eq!(snapshot.activation_codec_policy, load.activation_codec_policy);
+}
+
+#[test]
+fn status_conversions_preserve_the_compute_meter() {
+    let node_id = make_test_endpoint_id(0x92);
+    let load = test_stage_load_request();
+    let mut status =
+        stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Ready);
+    status.compute_busy_nanos = 9_000;
+    status.compute_operations = 3;
+    status.compute_decode_tokens = 40;
+    status.compute_verify_tokens = 12;
+    let runtime = stage_runtime_status_from_snapshot(Some(node_id), status);
+    // a stage's last status, kept once it has stopped, keeps the count it reached
+    let snapshot = stage_snapshot_from_runtime_status(
+        &runtime,
+        crate::inference::skippy::StageRuntimeState::Stopped,
+        None,
+    );
+    assert_eq!(
+        (
+            snapshot.compute_busy_nanos,
+            snapshot.compute_operations,
+            snapshot.compute_decode_tokens,
+            snapshot.compute_verify_tokens,
+        ),
+        (9_000, 3, 40, 12)
+    );
 }
 
 #[test]
@@ -953,4 +982,45 @@ fn passive_streams_are_gated_when_trust_policy_enforces_ownership() {
             policy
         ));
     }
+}
+
+#[tokio::test]
+async fn peer_load_without_downloads_is_refused_before_execution() -> Result<()> {
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let executed_by_loop = Arc::clone(&executed);
+    tokio::spawn(async move {
+        while let Some(command) = rx.recv().await {
+            match command {
+                crate::inference::skippy::StageControlCommand::ValidateLoad { resp, .. } => {
+                    let _ = resp.send(None);
+                }
+                crate::inference::skippy::StageControlCommand::Execute { .. } => {
+                    executed_by_loop.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+    });
+    let mut load = test_stage_load_request();
+    load.model_path = Some("/nonexistent/peer-requested.gguf".to_string());
+    let mut request = crate::inference::skippy::StageControlRequest::Load(load);
+
+    let error = node
+        .resolve_stage_control_request(
+            Some(&tx),
+            &mut request,
+            crate::inference::skippy::StageSourceFetch::LocalOnly,
+        )
+        .await
+        .expect_err("a peer load with no local source must be refused");
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("model model-a is not on local disk"),
+        "{message}"
+    );
+    assert!(message.contains("refuses peer model downloads"), "{message}");
+    assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
+    Ok(())
 }

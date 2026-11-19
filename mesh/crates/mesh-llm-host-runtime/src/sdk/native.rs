@@ -1,11 +1,13 @@
 //! Native model discovery and provider-specific inference.
 
 use super::EmbeddedServeHandle;
+pub mod transcription;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub use skippy_inference_api::common::ReasoningEffort;
+pub use skippy_inference_api::errors::{InferenceError, InferenceErrorKind};
 pub use skippy_inference_api::{ChatCompletionRequest, ChatMessage, MessageContent};
 
 /// One provider's exact serving ID, returned by native model discovery.
@@ -112,7 +114,7 @@ impl Drop for ChatCompletionStream {
 }
 
 impl EmbeddedServeHandle {
-    fn native_node(&self) -> Result<&crate::mesh::Node> {
+    pub(super) fn native_node(&self) -> Result<&crate::mesh::Node> {
         anyhow::ensure!(
             !*self.shutdown.borrow(),
             "embedded runtime is shutting down"

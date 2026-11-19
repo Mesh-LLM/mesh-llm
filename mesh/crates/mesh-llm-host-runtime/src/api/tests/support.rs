@@ -677,7 +677,9 @@ fn make_test_peer(
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         cache_affinity: None,
@@ -1038,6 +1040,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
                 }],
             },
         );
+        inner.runtime_data_producer.publish_runtime_instance_registered("collector-model", "runtime-1");
         inner.runtime_data_producer.publish_llama_slots_snapshot(
             runtime_data::RuntimeLlamaSlotsSnapshot {
                 status: runtime_data::RuntimeLlamaEndpointStatus::Ready,
@@ -1106,6 +1109,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             compute_busy_nanos: 0,
             compute_operations: 0,
             compute_decode_tokens: 0,
+            compute_verify_tokens: 0,
             dflash_target_layers: None,
             dflash_context_window: None,
             dflash_feature_encodings: Vec::new(),

@@ -293,7 +293,7 @@ fn graph_release_selector_and_secret_hosts_keep_approved_effective_runner_author
 #[test]
 fn graph_release_linux_composers_keep_cpu_tools_readiness_and_no_compiler_cache() {
     let doc = document("release.yml");
-    let image = "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7";
+    let image = "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338";
     for name in [
         "compose_linux_aarch64_cuda",
         "compose_linux_cuda",

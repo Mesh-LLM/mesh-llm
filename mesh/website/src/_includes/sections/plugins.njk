@@ -3,9 +3,10 @@
 <section class="sec" id="plugins" style="padding-top: 56px;">
   <div class="shell">
     {{ sectionHead(
-      '<span class="title-line">Pluggable architecture</span><br/><span class="title-line">for distributed agents.</span>',
-      "Plugins declare what they provide in a manifest. The runtime starts them, routes calls, and exposes capabilities over MCP, HTTP, inference, and mesh events."
+      '<span class="title-line">Extend Mesh</span><br/><span class="title-line">with plugins.</span>',
+      "Add another inference engine, agent tools, observability or Lightning payments. Plugins declare their capabilities; Mesh manages their lifecycle and exposes them over MCP, HTTP and the console."
     ) }}
+    <p class="mb-8"><a class="inline-flex min-h-11 items-center text-blue-3 underline underline-offset-4" href="/plugins/">Explore {{ plugins.count }} released plugins →</a></p>
 
     {% include "components/plugin-architecture.njk" %}
   </div>

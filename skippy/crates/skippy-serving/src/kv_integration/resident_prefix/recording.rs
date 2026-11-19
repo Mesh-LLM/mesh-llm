@@ -74,6 +74,7 @@ impl KvStageIntegration {
                 session_id,
                 StagePrefixCachePayload::ResidentKv,
                 token_count as u64,
+                None,
             ) else {
                 return Ok(ResidentRecordOutcome::Skipped(ResidentRecordSkip::NoRoom {
                     bytes: checkpoint_bytes,

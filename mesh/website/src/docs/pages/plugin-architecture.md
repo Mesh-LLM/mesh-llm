@@ -60,11 +60,11 @@ There is no separate top-level `services` section in the preferred DSL.
 
 ## Core Principles
 
-### 1. Bundled Plugins Are Allowed
+### 1. Plugins Are Explicit
 
-Plugins shipped in this source tree may be auto-registered by the host.
+MeshLLM ships no bundled plugins: a plugin reaches a node only when its operator installs it with `mesh-llm plugins install`.
 
-That is acceptable coupling. What is not acceptable is embedding one plugin's runtime behavior directly into core mesh logic. Core mesh transport and state should stay generic.
+What is not acceptable is embedding one plugin's runtime behavior directly into core mesh logic. Core mesh transport and state should stay generic.
 
 ### 2. One Control Connection, Many Data Streams
 
@@ -141,7 +141,7 @@ The single-socket framed-envelope design is vulnerable to head-of-line blocking.
 
 ## What The Host Owns
 
-- launching and registering bundled plugins
+- launching and registering installed plugins
 - validating plugin identity
 - keeping the control session alive
 - stream negotiation and cleanup
@@ -184,7 +184,7 @@ The plugin system should also avoid:
 
 ## Architecture Baseline
 
-- bundled plugins may be auto-registered
+- installed plugins are registered by the host
 - core mesh logic remains plugin-agnostic
 - MCP and HTTP are first-class host projections
 - product APIs depend on capabilities, not plugin IDs

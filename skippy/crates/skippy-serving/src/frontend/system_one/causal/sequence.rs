@@ -107,8 +107,12 @@ impl<'a> DecisionSequence<'a> {
             };
             scores = self.step(&job.prompt[self.position..end], selection)?;
         }
-        self.backend
-            .record_embedded_stage0_full_prefill(&self.session, self.ids, &job.prompt)?;
+        self.backend.record_embedded_stage0_full_prefill(
+            &self.session,
+            self.ids,
+            &job.prompt,
+            crate::kv_integration::ExactStateKvExport::Now,
+        )?;
         if job.method == Some(ReadoutMethod::CandidateLogLikelihood) {
             let candidate = &job.candidates[0];
             for tokens in candidate.windows(2) {

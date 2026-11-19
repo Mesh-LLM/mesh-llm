@@ -41,7 +41,7 @@ on:
         default: ''
         type: string
       product_automation:
-        description: Same-run product-source automation identity JSON from the lane's product_automation producer. Required for Swift, whose bare macOS runner restores that executable instead of compiling xtask.
+        description: Same-run product-source automation identity JSON. Lane SDK consumers restore it; independent Linux callers prepare once when empty.
         required: false
         default: ''
         type: string
@@ -103,7 +103,7 @@ env:
   # and linker/profile recipe separate from the action's own rustc/manifest
   # suffix so a compatible cache can never cross a toolchain or image epoch.
   SDK_RUST_TARGET: x86_64-unknown-linux-gnu
-  SDK_RUST_IMAGE_DIGEST: f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+  SDK_RUST_IMAGE_DIGEST: fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338
   SDK_RUST_TOOLCHAIN_EPOCH: rust-stable-2026-08-20-4360b52568e2003a75bf9bc1d59f33a8e3fc893c
   SDK_RUST_PROFILE_LINKER: debug-no-debuginfo-repository-mold-driver
 
@@ -124,7 +124,7 @@ jobs:
     # per-run. The truthy value must stay first in the `&&` here --
     # see smoke.yml's container block for what breaks if it isn't.
     container:
-      image: ${{ inputs.sdk_kind != 'swift' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7' || '' }}
+      image: ${{ inputs.sdk_kind != 'swift' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:fa696b3ce312f26b35d2193c48a89b5766be141f04f8574daca8072537569338' || '' }}
     defaults:
       run:
         shell: bash
@@ -272,20 +272,25 @@ jobs:
         if: ${{ inputs.sdk_kind != 'swift' }}
         run: verify-runner-image public cpu
 
-      # Bare macos-15 has no runner image, linker, or compiler cache; restore
-      # the lane's xtask so admission never compiles it here.
       - name: Restore product automation
-        if: ${{ inputs.sdk_kind == 'swift' }}
+        if: ${{ inputs.product_automation != '' }}
         uses: ./.github/actions/restore-automation
         with:
           source_sha: ${{ inputs.source_sha }}
+          require_product: 'true'
+          product_source_sha: ${{ fromJson(inputs.product_automation).source_sha }}
+          source_profile: ${{ fromJson(inputs.product_automation).source_profile }}
           artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
           binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
           producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
           producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
 
-      - name: Prepare external Python SDK contract source
-        uses: ./.github/actions/prepare-python-sdk-source
+      - name: Prepare standalone automation
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && job.container.id == '' && runner.environment == 'github-hosted' && 'hosted-bare' || 'image' }}
+
       - uses: ./.github/actions/restore-smoke-inputs
         id: model_inputs
         with:
