@@ -1,18 +1,16 @@
 # skippy-inference-api
 
-Reusable inference HTTP and WebSocket frontend primitives for standalone
-Skippy and embedding runtimes. The router serves OpenAI-compatible routes,
-Anthropic Messages, and SystemOne through one backend and lifecycle contract.
+Reusable inference HTTP frontend primitives for mesh and staged runtime entry
+points. The router serves OpenAI-compatible routes, Anthropic Messages, and
+SystemOne through one backend and lifecycle contract.
 
 This crate owns the public API shapes and route machinery that should not be
 duplicated inside `skippy-serving`. Stage server code should provide a thin
 backend adapter that implements the frontend trait, while this crate handles
 request/response JSON, OpenAI-style errors, model discovery, generation,
-embedding, rerank, audio, streaming Server-Sent Events framing, and the direct
-Responses WebSocket adapter. Mesh uses the HTTP portions as the shared
-inference frontend for embedded single-stage and stage-split serving; its
-public ingress also exposes the Responses WebSocket adapter while keeping each
-turn at the original ingress for independent routing.
+embedding, rerank, audio, and streaming Server-Sent Events framing. Mesh uses
+this as the shared inference frontend for embedded single-stage and stage-split
+serving.
 
 Mesh-local compatibility wrappers should stay thin. Request normalization,
 Responses API translation, stream-chunk parsing, stream usage conversion, and
@@ -82,9 +80,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `GET /v1/models` | Supported | Returns backend-provided model objects with opaque ids such as `org/repo:Q4_K_M`. |
 | `POST /v1/chat/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/completions` | Supported | Handles streaming and non-streaming response shapes. |
-| `POST /v1/responses` | HTTP/SSE subset | Uses the shared Responses state machine described below; unsupported capabilities fail explicitly. |
-| `GET /v1/responses` | Standalone WebSocket subset | Accepts sequential `response.create` turns and emits the same JSON event objects as Responses SSE, without SSE framing or `[DONE]`. |
-| `POST /v1/responses/compact` | Supported subset | Produces process-local, model-bound encrypted compaction items for a later Responses request. |
+| `POST /v1/responses` | Supported | Adapts OpenAI responses requests onto chat/completion backend calls and preserves response metadata where possible. |
 | `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared generation backend and returns Anthropic JSON or SSE. |
 | `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
 | `POST /v1/systemone` (canonical; legacy alias `POST /systemone`) | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
@@ -99,17 +95,13 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `model` | Supported | Opaque exact-match id; Mesh-style refs such as `org/repo:Q4_K_M` pass through without frontend parsing. |
 | `messages` | Supported | String and text-part content are parsed; stage backend applies the model chat template through llama.cpp `llama-common`. |
 | `prompt` | Supported | String and string-array prompts are accepted; token prompts parse but are rejected until a backend can honor token IDs directly. |
-| `max_tokens` / `max_completion_tokens` | Parsed | Chat/Completions behavior is unchanged; the backend decides enforcement. |
-| Responses `max_output_tokens` | Frontend-validated | Accepts `null` or JSON integers from 16 through `u32::MAX`. For compatibility, Responses also accepts `max_tokens`, `max_completion_tokens`, and the legacy llama.cpp `n_predict`; canonical `max_output_tokens` wins by presence, including `null`, then `max_tokens`, `max_completion_tokens`, and `n_predict`. Only the effective value is validated; every losing alias is removed before capture and forwarding so mixed-version peers receive one `max_tokens` field. The effective value is echoed and inherited. The Open Responses schema has no upper bound; larger schema-valid integers fail explicitly as unsupported because the current Chat generation boundary is `u32`, and are never clamped. Ordinary Chat Completions handling of `n_predict` is unchanged. |
+| `max_tokens` / `max_completion_tokens` | Parsed | Backend decides enforcement. |
 | `stop` | Parsed | Backend decides enforcement. |
 | `n` / `best_of` | Parsed | Single-choice requests are accepted; multi-choice generation is rejected until the response/backend path supports it. |
 | `temperature`, `top_p`, `seed` | Supported | Stage backend passes supported sampling controls to llama.cpp sampling. |
 | penalties / `logit_bias` | Supported | Presence/frequency/repeat penalties and token-id logit bias are passed to llama.cpp. |
-| Chat `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved with the existing Chat contract. Backend decides whether logits/probability data can be produced. |
-| Responses `top_logprobs` | Frontend-validated | Accepts `null` or integers from 0 through 20. Any non-null value, including zero, enables backend logprobs without requiring the non-schema `logprobs` field; `include: ["message.output_text.logprobs"]` also enables them. |
-| `tools` / `tool_choice` | Responses-enforced; Chat backend-gated | Responses validates function identifiers and references at ingress. Its `allowed_tools` keeps the complete `tools` array visible to the backend, reduces only the backend choice to its effective mode, and rejects terminal calls outside the original allowed set. Chat Completions preserves tool settings; the backend decides generation support. |
-| `max_tool_calls` | Responses-enforced | Accepts positive JSON integers through `u64::MAX` or `null`, inherits across continuations, and fails the whole response with `tool_call_limit_exceeded` when generated calls exceed the effective cap. The field is never forwarded to Chat backends. |
-| `parallel_tool_calls` | Responses-enforced | `false` permits at most one function call generated for the current response. The backend still receives the hint, while the ingress rejects a backend that returns multiple calls. Omitted, `true`, and `null` permit multiple calls. |
+| `logprobs` / `top_logprobs` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether logits/probability data can be produced. |
+| `tools` / `tool_choice` | Frontend-compatible | Parsed, validated, and preserved. Backend decides whether tool-call generation is available. |
 | `response_format` | Frontend-compatible | Text and structured-output shapes are parsed and preserved. Backend decides whether constrained decoding is available. |
 | OpenAI-style error envelope | Supported | Includes strict `type`, `param`, and `code` fields. |
 | OpenAI-style HTTP fallbacks | Supported | Unknown routes, unsupported methods, invalid JSON, and oversized JSON return the shared error envelope. |
@@ -121,139 +113,6 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | Vision input | Supported | Preserved through chat/Responses content parts and executed by projector-backed runtimes. |
 | Non-chat staging | Fail closed | Embedding, rerank, encoder-decoder, and speech-synthesis models currently require an unsplit full-model runtime. |
 | Mesh routing headers | Supported (remote-mesh routing only) | Implemented by the host runtime's public `:9337` proxy, not this crate, but documented here as part of the same header contract. `x-mesh-target: <EndpointId>` forces dispatch to exactly that peer if it currently advertises the requested model; otherwise the request fails closed with a `409` naming the mismatch — it is never silently rerouted to another peer or served locally. `x-mesh-exclude: <EndpointId>[,...]` removes one or more peers from the candidate set before selection (comma-separated within one header, or repeated). The routing node echoes the resolved peer back as `x-mesh-served-by: <EndpointId>` on the response when `x-mesh-target` resolves to a remote peer or a locally-served (non-plugin) model; plugin-served self-targets do not yet echo this header. Both request headers are no-ops when absent, and an unparseable value is a `400`, never a silently ignored one. `x-mesh-twin-bracket: <id>` (1–128 characters of `A-Za-z0-9._:-`; spaces or tabs around it are trimmed, any other whitespace is a `400`) lets a client mark requests it sent to different nodes as one pair: the routing node copies the value, unread, onto each of the request's `openai.exchange.v1` remote-mesh envelopes as `twin_bracket_id` (including the terminal of a request that a node serving the model itself handed to a peer), and strips the header before forwarding, so the serving peer never sees it. The host never sends a second request or compares answers. |
-
-### Responses lifecycle and continuation
-
-The shared Responses adapter owns JSON and SSE lifecycle events, reasoning and
-function-call output items, structured-output request translation, usage detail
-objects, and terminal status mapping. A caller that supplies a
-`ResponseContinuation` can store completed turns and restore the full input and
-output transcript for `previous_response_id`. Effective generation controls
-inherit when omitted and explicit child values override them. For
-`max_output_tokens` and `top_logprobs`, explicit `null` clears an inherited
-value; the response resource reports the effective configuration, including
-the default `top_logprobs: 0` after a clear. Instructions are per-turn and never
-inherit. Failed and incomplete turns are never retained. The store is bounded,
-in-memory, and caller-scoped.
-
-Streamed Responses use provider-profile payload padding by default. Omitted or
-`null` `stream_options`, and an empty object, enable it;
-`stream_options.include_obfuscation: false` disables it for HTTP/SSE. The
-recognized member is captured by the ingress turn and removed before Chat
-backend passthrough, while `include_usage` and unknown stream-option extensions
-retain their existing behavior. WebSocket `response.create` continues to reject
-`stream_options` by presence and therefore always uses the enabled default.
-
-The implemented profile adds an `obfuscation` string only to output-text,
-reasoning-text, reasoning-summary-text, and function-call-argument delta events.
-It uses 1–256 operating-system-random URL-safe Base64-alphabet characters so
-each event's compact JSON body is a multiple of 256 bytes; an already aligned
-placeholder receives a full 256-character block. Padding is applied after the
-final event type and sequence number are assigned and before bounded replay or
-quarantine admission and storage commit. Response resources and stored output
-remain unchanged. This 256-byte profile is an implementation choice, not a
-mandatory Open Responses algorithm, and it provides no redaction, encryption,
-privacy, or traffic-analysis guarantee.
-
-Responses input is never silently compacted. An omitted or `null` `truncation`
-field and explicit `"disabled"` all normalize to the internal
-`mesh_compact: false` backend marker, overriding a conflicting caller extension;
-`"auto"` remains unsupported and is rejected. This guarantee applies to HTTP,
-SSE, and WebSocket turns. Ordinary Chat Completions keeps its existing
-`mesh_compact` behavior, and `/v1/responses/compact` remains the separate,
-explicit compaction operation.
-
-The request boundary validates the schema shapes it consumes before response
-capture, continuation lookup, or backend translation. `instructions` is a
-string or `null`. `metadata` is `null` or an object of at most 16 string pairs;
-keys are at most 64 Unicode characters and values at most 512. Both
-`safety_identifier` and `prompt_cache_key` are `null` or strings of at most 64
-Unicode characters. A safety identifier remains opaque correlation metadata:
-it is echoed with the response and does not activate a monitoring or protection
-service in Mesh.
-
-`text` and `reasoning` are each `null` or objects. Existing `text.format`
-translation is supported, while a non-null `text.verbosity` is unsupported.
-`reasoning.effort` accepts the schema values `none`, `low`, `medium`, `high`,
-and `xhigh`, subject to the selected model's existing capability checks. A
-non-null `reasoning.summary` is rejected as unsupported because Mesh does not
-honor reasoning-summary requests; `null` or omission keeps the default. This
-is bounded validation of known Responses controls, not blanket rejection of
-unknown compatibility extensions.
-
-Tool authorization belongs to that ingress-owned turn. Continuations inherit
-the original `allowed_tools` object, including an omitted `mode` defaulting to
-`auto`; response resources echo that effective mode while backend requests
-retain every declared schema. JSON output is validated before storage. SSE and
-WebSocket streams quarantine the bounded suffix beginning with the first tool
-fragment, assemble the complete function name, ID, and string arguments, then
-atomically replay only authorized calls. A rejection emits a gap-free failed
-terminal, exposes no executable call event, and updates neither shared nor
-connection-local continuation state. `required` is enforced on completed
-responses; an incomplete response may end without a call. `none` rejects any
-tool-call fragment. `max_tool_calls` counts every generated function call in
-the current response, including repeated names. Reaching the cap completes;
-exceeding it fails the entire response with empty output, and quarantined calls
-are neither exposed nor retained. An omitted child value inherits the cap,
-explicit `null` clears it, and every response starts a fresh count.
-
-Enforcement is post-generation because the cap is not forwarded to Chat
-backends. Values above 128 are accepted and echoed without clamping, but the
-independent internal 128-call safety ceiling still applies. Parsing is exact
-for positive JSON integers through `u64::MAX`; larger mathematical integers
-are rejected. This layer executes no tools, so rejection creates no hidden tool
-side effects here. `parallel_tool_calls: false` uses the same original-ingress
-policy and quarantine boundary: it permits zero or one generated call for the
-current response, does not count calls restored in input history, and fails a
-two-call result with `tool_call_limit_exceeded`. The raw `false` hint remains in
-the normalized Chat backend request, while ingress validation remains
-authoritative if a backend or later transform returns multiple calls. Omitted
-and `true` values permit multiple calls; `null` resets the effective value to
-`true`. Continuations
-inherit a prior raw value when omitted, while each response starts a fresh
-count.
-
-`GET /v1/responses` upgrades the standalone Axum frontend to the April 2026
-Open Responses WebSocket transport. It processes exactly one turn at a time,
-keeps a bounded pending queue, applies the ordinary request-body limit to both
-messages and frames, and closes after an absolute 60-minute lifetime including
-active generation. Each turn uses the same `ResponsesTurn`, backend request,
-`ResponsesStream`, cancellation, usage, and lifecycle machinery as HTTP/SSE.
-The wire carries the streaming JSON objects directly; it does not carry SSE
-`event:`/`data:` lines or `[DONE]`.
-
-The connection retains only its latest completed response, including
-`store:false`, and charges the entire ancestor transcript against a byte cap.
-A `store:true` turn may fall back to the caller-scoped process-memory store;
-`store:false` never does. Failed continuations evict only the referenced local
-entry. The reusable `ResponsesSession` prepares expanded, transport-neutral
-turns so another ingress can route each turn independently rather than pinning
-or tunnelling the socket to a worker.
-
-`POST /v1/responses/compact` runs a non-streaming summary pass over explicit
-input and, optionally, the transcript resolved from `previous_response_id`.
-Its `response.compaction` output retains user messages and seals the summary
-plus unresolved typed function calls in authenticated `encrypted_content`.
-Restoration expands the summary and then those pending calls before any newly
-appended `function_call_output`; calls already completed in a parallel group
-are omitted.
-
-The encryption key exists only in the ingress process. An item is accepted
-only at that same process with the exact model ID; restart, another ingress,
-model changes, tampering, malformed data, and size violations fail closed.
-Compaction resources are not stored Responses turns and do not provide a
-continuation `previous_response_id`: clients continue by resending the returned
-`output` items, not by referencing the compaction resource ID. A compact
-request may still consume a previously stored response ID as source history.
-
-This is not a claim of full Open Responses conformance. Background execution,
-automatic truncation, hosted tools, encrypted reasoning,
-non-default service tiers, and verbosity are unsupported and are rejected.
-Compaction is limited to the process-local contract above; it is not portable
-provider state. Mesh reuses this session at its full public ingress and routes
-each turn independently; the startup bootstrap proxy deliberately refuses the
-upgrade until full ingress is ready, and peer HTTP ingress never accepts an
-already-upgraded Responses session.
 
 ## Shape
 
@@ -331,8 +190,7 @@ chain remains backend-owned.
 | `/v1/models` | Route shape and model-object serialization | Advertise exact full model refs accepted by the runtime | Supported |
 | `/v1/chat/completions` | Parse common and advanced fields, stream/non-stream envelopes | Tokenization, sampling, stop handling, usage, feature execution | Supported with backend feature guards |
 | `/v1/completions` | Prompt parsing and response envelopes | Token prompts, sampling, stop handling, usage | Supported with backend feature guards |
-| `/v1/responses` | Own the shared HTTP/SSE and WebSocket lifecycle and continuation state for standalone Skippy and full Mesh ingress | Execute the resulting chat/completion request | Partial; explicit gaps above |
-| `/v1/responses/compact` | Resolve history, validate terminal summary/usage, and seal process-local state | Produce one complete summary with usage | Supported subset; non-streaming and ingress-bound |
+| `/v1/responses` | Translate request/response shapes onto the backend contract | Execute the resulting chat/completion request | Supported |
 | `/v1/embeddings` | Parse OpenAI input/encoding shapes and serialize vectors | Tokenize or accept token IDs, pool, normalize, and report usage | Supported for compatible local full models |
 | `/v1/rerank` | Parse query/documents and serialize ranked results | Execute classifier scoring and report usage | Supported for compatible local full models |
 | `/v1/audio/*` | Parse JSON or bounded multipart bodies; return JSON, text, or binary media | Execute TTS or projector-backed speech recognition | Supported for compatible local full models |

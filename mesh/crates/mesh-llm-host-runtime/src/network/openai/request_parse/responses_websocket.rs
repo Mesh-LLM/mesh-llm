@@ -8,7 +8,7 @@ use super::*;
 /// transforms that follow normalization on the HTTP path.
 pub(in crate::network::openai) async fn buffer_prepared_responses_turn(
     handshake: &BufferedHttpRequest,
-    prepared: skippy_inference_api::responses::PreparedResponsesTurn,
+    prepared: mesh_openresponses::PreparedResponsesTurn,
     plugin_manager: Option<&plugin::PluginManager>,
 ) -> Result<BufferedHttpRequest> {
     let ingress_body = serde_json::to_vec(prepared.ingress_body())

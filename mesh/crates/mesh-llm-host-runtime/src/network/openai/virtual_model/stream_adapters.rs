@@ -168,7 +168,7 @@ pub(super) async fn send_responses_sse(
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     continuation: Option<ProgressContinuation>,
-    turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
+    turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> std::io::Result<()> {
     if continuation.is_none() {
         write_sse_headers(&mut stream, extra_headers).await?;
@@ -217,29 +217,29 @@ pub(super) async fn send_anthropic_messages_sse(
 fn responses_stream_events(
     response: &serde_json::Value,
     continuation: Option<ProgressContinuation>,
-    turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
+    turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Vec<Value> {
     match (turn, continuation) {
         (Some(turn), Some(continuation)) => {
-            skippy_inference_api::responses::responses_stream_events_for_chat_completion_after_progress(
+            mesh_openresponses::responses_stream_events_for_chat_completion_after_progress(
                 turn,
                 response,
                 continuation.next_sequence_number as u64,
             )
         }
         (Some(turn), None) => {
-            skippy_inference_api::responses_stream_events_for_chat_completion(turn, response)
+            mesh_openresponses::responses_stream_events_for_chat_completion(turn, response)
         }
         (None, continuation) => {
             let responses = chat_completion_to_responses_json(response);
             match continuation {
                 Some(continuation) => {
-                    skippy_inference_api::responses::responses_stream_events_for_response_after_progress(
+                    mesh_openresponses::responses_stream_events_for_response_after_progress(
                         &responses,
                         continuation.next_sequence_number as u64,
                     )
                 }
-                None => skippy_inference_api::responses_stream_events_for_response(&responses),
+                None => mesh_openresponses::responses_stream_events_for_response(&responses),
             }
         }
     }
@@ -403,9 +403,9 @@ mod tests {
             "stream":true,
             "stream_options":{"include_obfuscation":false},
         });
-        let turn = skippy_inference_api::responses::ResponsesTurn::prepare(
+        let turn = mesh_openresponses::ResponsesTurn::prepare(
             &mut request,
-            skippy_inference_api::responses::ResponseContinuation::disabled(),
+            mesh_openresponses::ResponseContinuation::disabled(),
         )
         .unwrap();
         turn.normalize_backend_request("/v1/responses", &mut request)

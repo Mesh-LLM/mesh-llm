@@ -14,7 +14,7 @@ use chacha20poly1305::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 use super::{
     continuation::ResponseContinuation,
@@ -98,7 +98,7 @@ pub(super) fn prepare(
     }
     Ok(PreparedCompaction {
         id: new_response_id(),
-        created_at: crate::responses::now_unix_secs_i64(),
+        created_at: crate::now_unix_secs_i64(),
         model,
         input,
         parent,
@@ -520,7 +520,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::responses::{
+    use crate::{
         ResponseContinuation, ResponsesTurn,
         store::{CallerScope, ResponseStore},
     };
@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(body["messages"][1]["type"], "function_call");
         assert_eq!(body["messages"][2]["type"], "function_call_output");
 
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
         assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "pending");
         assert_eq!(body["messages"][1]["role"], "tool");
         assert_eq!(body["messages"][1]["tool_call_id"], "pending");
@@ -709,7 +709,7 @@ mod tests {
         let mut valid = json!({"model":"m","input":item});
         ResponsesTurn::prepare(&mut valid, ResponseContinuation::disabled()).unwrap();
         assert_eq!(valid["input"][1]["type"], "function_call");
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut valid).unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut valid).unwrap();
         assert_eq!(valid["messages"][0]["tool_calls"][0]["id"], "pending");
     }
 
@@ -720,8 +720,7 @@ mod tests {
         ResponsesTurn::prepare(&mut null_input, ResponseContinuation::disabled()).unwrap();
         assert!(null_input["input"].is_null());
         assert_eq!(null_input["messages"], item);
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut null_input)
-            .unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut null_input).unwrap();
         assert!(null_input.get("messages").is_none());
 
         let malformed_alias = json!({"legacy":true});
@@ -731,8 +730,7 @@ mod tests {
         });
         ResponsesTurn::prepare(&mut explicit_input, ResponseContinuation::disabled()).unwrap();
         assert_eq!(explicit_input["messages"], malformed_alias);
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut explicit_input)
-            .unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut explicit_input).unwrap();
         assert_eq!(explicit_input["messages"][0]["content"], "input wins");
     }
 
@@ -761,8 +759,7 @@ mod tests {
                 .iter()
                 .any(|item| { item["type"] == "function_call" && item["call_id"] == "pending" })
         );
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut child_body)
-            .unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut child_body).unwrap();
         let child = child_turn.finish_chat_completion(&chat("child answer"));
 
         let stored = store

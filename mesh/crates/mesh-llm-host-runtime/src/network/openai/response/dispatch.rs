@@ -26,7 +26,7 @@ pub(in crate::network::openai::response) struct RelayAttemptContext<'a> {
     pub(in crate::network::openai::response) served_by: Option<&'a str>,
     pub(in crate::network::openai::response) route_observer: OpenAiRouteObserver<'a>,
     pub(in crate::network::openai::response) responses_turn:
-        Option<&'a std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+        Option<&'a std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
 }
 
 /// Relay one probed upstream response through the adapter, error, or success path.
@@ -40,7 +40,7 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
-    responses_turn: Option<&std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    responses_turn: Option<&std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
 ) -> Result<RouteAttemptResult> {
     if let Some(result) = relay_adapted_response(
         tcp_stream,
@@ -110,7 +110,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
-    responses_turn: Option<&std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    responses_turn: Option<&std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
 ) -> Result<Option<RouteAttemptResult>> {
     match response_adapter {
         ResponseAdapter::AnthropicMessagesJson => Ok(Some(
@@ -321,9 +321,9 @@ mod tests {
         );
         let mut request = serde_json::json!({"model":"m","input":"remember"});
         let turn = std::sync::Arc::new(
-            skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+            mesh_openresponses::ResponsesTurn::prepare_compact(
                 &mut request,
-                skippy_inference_api::responses::ResponseContinuation::disabled(),
+                mesh_openresponses::ResponseContinuation::disabled(),
             )
             .unwrap(),
         );

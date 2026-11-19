@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 #[cfg(test)]
 use super::obfuscation::RandomSource;
 use super::{ResponsesStreamEvent, obfuscation::ObfuscationPolicy, patch_response_store};
-use crate::responses::{
+use crate::{
     resource::{ResponseEnvelope, ResponseError, ResponseSnapshot, ResponseStatus},
     tools::MAX_TOOL_CALLS,
     turn::ResponsesTurn,

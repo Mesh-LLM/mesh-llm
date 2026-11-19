@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 const MAX_METADATA_KEYS: usize = 16;
 const MAX_METADATA_KEY_CHARS: usize = 64;
@@ -330,7 +330,7 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::{MAX_METADATA_KEY_CHARS, MAX_METADATA_KEYS};
-    use crate::responses::{
+    use crate::{
         CallerScope, ResponseContinuation, ResponseStore, ResponsesTurn,
         normalize_openai_compat_request, store::StoredResponse,
     };

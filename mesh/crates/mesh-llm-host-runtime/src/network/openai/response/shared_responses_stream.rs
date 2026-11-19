@@ -9,8 +9,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
+use mesh_openresponses::{ResponsesStream, ResponsesStreamEvent, ResponsesTurn};
 use serde_json::Value;
-use skippy_inference_api::responses::{ResponsesStream, ResponsesStreamEvent, ResponsesTurn};
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
 use super::body_reader::BodyReader;
@@ -305,7 +305,7 @@ async fn write_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_inference_api::responses::{CallerScope, ResponseContinuation, ResponseStore};
+    use mesh_openresponses::{CallerScope, ResponseContinuation, ResponseStore};
     use skippy_inference_api::wire_bytes::{WireBytesCommitment, WireBytesObserver};
     use std::sync::Mutex;
 

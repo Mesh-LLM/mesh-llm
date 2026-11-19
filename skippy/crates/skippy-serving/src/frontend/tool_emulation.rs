@@ -89,14 +89,15 @@ const FORCE_EMULATION_ENV: &str = "MESH_FORCE_TOOL_EMULATION";
 /// Decides whether a tools request should be served via emulation rather than
 /// the native template path. Emulation is used when the template does not
 /// natively support tool calling, or when the force-emulation override is set.
-pub(super) fn should_emulate_tool_calls_with_override(
-    metadata_json: &str,
-    force_emulation: bool,
-) -> bool {
+pub(super) fn should_emulate_tool_calls(metadata_json: &str) -> bool {
+    should_emulate_tool_calls_with_override(metadata_json, force_emulation_enabled())
+}
+
+fn should_emulate_tool_calls_with_override(metadata_json: &str, force_emulation: bool) -> bool {
     force_emulation || !template_supports_native_tool_calls(metadata_json)
 }
 
-pub(super) fn force_emulation_enabled() -> bool {
+fn force_emulation_enabled() -> bool {
     let value = std::env::var(FORCE_EMULATION_ENV).ok();
     force_emulation_value_enabled(value.as_deref())
 }
@@ -327,18 +328,36 @@ fn arguments_to_json_value(arguments: &Value) -> Value {
     }
 }
 
-/// Projects conversation history so a non-tool-capable template never sees
+/// Rewrites conversation history so a non-tool-capable template never sees
 /// `tool` roles or assistant `tool_calls`:
 /// - assistant `tool_calls` become assistant text using the `TOOL_CALL`
 ///   convention (so the model sees its own prior calls in the same form),
 /// - `role: "tool"` messages become `user` messages prefixed with
 ///   `Tool result:`.
-pub(super) fn project_tool_history_for_template(
+///
+/// The emulation instruction is prepended to (or merged into) the first system
+/// message, or inserted as a new leading system message.
+pub(super) fn rewrite_history_for_emulation(
     messages: &[GenerationMessage],
+    instruction: &str,
 ) -> Vec<GenerationMessage> {
-    let mut rewritten = Vec::with_capacity(messages.len());
+    let mut rewritten: Vec<GenerationMessage> = Vec::with_capacity(messages.len() + 1);
+    let mut instruction_placed = false;
+
     for message in messages {
         match message.role.as_str() {
+            "system" if !instruction_placed => {
+                instruction_placed = true;
+                let existing = content_text(message.content.as_ref());
+                let merged = if existing.trim().is_empty() {
+                    instruction.to_string()
+                } else {
+                    // Emulation frame takes the dominant leading position; the
+                    // client's system content is preserved below it as context.
+                    format!("{instruction}\n\n# Task context\n\n{existing}")
+                };
+                rewritten.push(plain_message("system", merged));
+            }
             "tool" => {
                 let result = content_text(message.content.as_ref());
                 rewritten.push(plain_message("user", format!("Tool result: {result}")));
@@ -360,28 +379,7 @@ pub(super) fn project_tool_history_for_template(
         }
     }
 
-    rewritten
-}
-
-/// Adds active tool-call emulation instructions to projected tool history.
-pub(super) fn rewrite_history_for_emulation(
-    messages: &[GenerationMessage],
-    instruction: &str,
-) -> Vec<GenerationMessage> {
-    let mut rewritten = project_tool_history_for_template(messages);
-
-    if let Some(system) = rewritten
-        .iter_mut()
-        .find(|message| message.role == "system")
-    {
-        let existing = content_text(system.content.as_ref());
-        let merged = if existing.trim().is_empty() {
-            instruction.to_string()
-        } else {
-            format!("{instruction}\n\n# Task context\n\n{existing}")
-        };
-        system.content = Some(MessageContent::Text(merged));
-    } else {
+    if !instruction_placed {
         rewritten.insert(0, plain_message("system", instruction.to_string()));
     }
 
@@ -788,35 +786,5 @@ mod tests {
         assert!(text.contains("\"command\":\"ls\""));
         // Rewritten message must not leak the raw tool_calls field to the template.
         assert!(!asst.extra.contains_key("tool_calls"));
-    }
-
-    #[test]
-    fn history_projection_has_no_active_tool_instruction_or_schema() {
-        let mut assistant = msg("assistant", "");
-        assistant.extra.insert(
-            "tool_calls".to_string(),
-            serde_json::json!([{
-                "type": "function",
-                "function": {"name": "shell", "arguments": "{\"command\":\"pwd\"}"}
-            }]),
-        );
-        let messages = vec![msg("user", "run the check"), assistant, msg("tool", "done")];
-
-        let projected = project_tool_history_for_template(&messages);
-        let text = projected
-            .iter()
-            .filter_map(|message| message.content.as_ref())
-            .filter_map(skippy_inference_api::message_content_to_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert_eq!(projected.len(), messages.len());
-        assert!(projected.iter().all(|message| message.extra.is_empty()));
-        assert!(projected.iter().all(|message| message.role != "tool"));
-        assert!(text.contains("TOOL_CALL"));
-        assert!(text.contains("Tool result: done"));
-        assert!(!text.contains("You can call tools"));
-        assert!(!text.contains("Available tools"));
-        assert!(!text.contains("Run a shell command"));
     }
 }

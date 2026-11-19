@@ -1,0 +1,30 @@
+[package]
+name = "mesh-openresponses"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+publish = false
+description = "OpenResponses conversation state and translation owned by Mesh ingress"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[dependencies]
+skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api" }
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+skippy-guardrails = { path = "../../../skippy/crates/skippy-guardrails" }
+base64 = "0.22"
+chacha20poly1305 = "0.11"
+futures-core = "0.3"
+futures-util = { version = "0.3", features = ["sink"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "net", "rt", "test-util", "time"] }
+
+[lints]
+workspace = true

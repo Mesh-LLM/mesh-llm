@@ -388,7 +388,7 @@ pub(crate) async fn try_handle_virtual_model(
     candidate_models: Vec<String>,
     required_tokens: Option<u32>,
     response_adapter: proxy::ResponseAdapter,
-    responses_turn: Option<std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    responses_turn: Option<std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
     route_observer: OpenAiRouteObserver<'_>,
     observation_id: Option<&str>,
     exchange_id: String,
@@ -853,7 +853,7 @@ pub(super) fn translated_json_body(
     body: &serde_json::Value,
     response_adapter: proxy::ResponseAdapter,
     status: u16,
-    responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
+    responses_turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Result<serde_json::Value, skippy_inference_api::InferenceError> {
     match response_adapter {
         proxy::ResponseAdapter::OpenAiResponsesJson if (200..300).contains(&status) => {

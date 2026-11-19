@@ -2485,7 +2485,6 @@
           "logprobs": null,
           "max_completion_tokens": null,
           "max_tokens": null,
-          "mesh_compact": false,
           "mesh_internal_agent_session_id": "fixture-session",
           "mesh_internal_agent_session_source": "x-agent-session",
           "messages": [
@@ -2518,11 +2517,12 @@
     ],
     "body": {
       "background": false,
-      "completed_at": "<frontend-time>",
-      "created_at": "<frontend-time>",
+      "completed_at": 42,
+      "conversation": null,
+      "created_at": 42,
       "error": null,
-      "frequency_penalty": 0.0,
-      "id": "<resp-frontend-id>",
+      "finish_reason": "stop",
+      "id": "scripted-generation",
       "incomplete_details": null,
       "instructions": null,
       "max_output_tokens": null,
@@ -2534,24 +2534,15 @@
         {
           "content": [
             {
-              "text": "reason",
-              "type": "reasoning_text"
-            }
-          ],
-          "id": "<rs-frontend-id>",
-          "summary": [],
-          "type": "reasoning"
-        },
-        {
-          "content": [
-            {
               "annotations": [],
-              "logprobs": [],
+              "logprobs": {
+                "content": []
+              },
               "text": "answer",
               "type": "output_text"
             }
           ],
-          "id": "<msg-frontend-id>",
+          "id": "msg_42",
           "role": "assistant",
           "status": "completed",
           "type": "message"
@@ -2559,18 +2550,18 @@
       ],
       "output_text": "answer",
       "parallel_tool_calls": true,
-      "presence_penalty": 0.0,
       "previous_response_id": null,
+      "prompt": null,
       "prompt_cache_key": null,
+      "prompt_cache_retention": null,
       "reasoning": {
         "effort": null,
         "summary": null
       },
       "safety_identifier": null,
-      "service_tier": "default",
+      "service_tier": null,
       "status": "completed",
-      "store": false,
-      "temperature": 1.0,
+      "temperature": null,
       "text": {
         "format": {
           "type": "text"
@@ -2578,20 +2569,18 @@
       },
       "tool_choice": "auto",
       "tools": [],
-      "top_logprobs": 0,
-      "top_p": 1.0,
+      "top_logprobs": null,
+      "top_p": null,
       "truncation": "disabled",
       "usage": {
         "input_tokens": 21,
         "input_tokens_details": {
-          "cached_tokens": 0
+          "cached_tokens": null
         },
         "output_tokens": 7,
-        "output_tokens_details": {
-          "reasoning_tokens": 0
-        },
         "total_tokens": 28
-      }
+      },
+      "user": null
     },
     "headers": {
       "content-type": "application/json",
@@ -2616,7 +2605,6 @@
           "logprobs": null,
           "max_completion_tokens": null,
           "max_tokens": null,
-          "mesh_compact": false,
           "mesh_internal_agent_session_id": "fixture-session",
           "mesh_internal_agent_session_source": "x-agent-session",
           "messages": [
@@ -2637,9 +2625,7 @@
           "seed": null,
           "stop": null,
           "stream": true,
-          "stream_options": {
-            "include_usage": true
-          },
+          "stream_options": null,
           "temperature": null,
           "tool_choice": null,
           "tools": null,
@@ -2657,9 +2643,9 @@
             "response": {
               "background": false,
               "completed_at": null,
+              "conversation": null,
               "created_at": "<frontend-time>",
               "error": null,
-              "frequency_penalty": 0.0,
               "id": "<resp-frontend-id>",
               "incomplete_details": null,
               "instructions": null,
@@ -2671,18 +2657,18 @@
               "output": [],
               "output_text": "",
               "parallel_tool_calls": true,
-              "presence_penalty": 0.0,
               "previous_response_id": null,
+              "prompt": null,
               "prompt_cache_key": null,
+              "prompt_cache_retention": null,
               "reasoning": {
                 "effort": null,
                 "summary": null
               },
               "safety_identifier": null,
-              "service_tier": "default",
+              "service_tier": null,
               "status": "in_progress",
-              "store": false,
-              "temperature": 1.0,
+              "temperature": null,
               "text": {
                 "format": {
                   "type": "text"
@@ -2690,158 +2676,14 @@
               },
               "tool_choice": "auto",
               "tools": [],
-              "top_logprobs": 0,
-              "top_p": 1.0,
+              "top_logprobs": null,
+              "top_p": null,
               "truncation": "disabled",
-              "usage": null
-            },
-            "sequence_number": 0,
-            "type": "response.created"
-          }
-        }
-      ],
-      [
-        "event: response.in_progress",
-        {
-          "data": {
-            "response": {
-              "background": false,
-              "completed_at": null,
-              "created_at": "<frontend-time>",
-              "error": null,
-              "frequency_penalty": 0.0,
-              "id": "<resp-frontend-id>",
-              "incomplete_details": null,
-              "instructions": null,
-              "max_output_tokens": null,
-              "max_tool_calls": null,
-              "metadata": {},
-              "model": "fixture-model",
-              "object": "response",
-              "output": [],
-              "output_text": "",
-              "parallel_tool_calls": true,
-              "presence_penalty": 0.0,
-              "previous_response_id": null,
-              "prompt_cache_key": null,
-              "reasoning": {
-                "effort": null,
-                "summary": null
-              },
-              "safety_identifier": null,
-              "service_tier": "default",
-              "status": "in_progress",
-              "store": false,
-              "temperature": 1.0,
-              "text": {
-                "format": {
-                  "type": "text"
-                }
-              },
-              "tool_choice": "auto",
-              "tools": [],
-              "top_logprobs": 0,
-              "top_p": 1.0,
-              "truncation": "disabled",
-              "usage": null
+              "usage": null,
+              "user": null
             },
             "sequence_number": 1,
-            "type": "response.in_progress"
-          }
-        }
-      ],
-      [
-        "event: response.output_item.added",
-        {
-          "data": {
-            "item": {
-              "content": [],
-              "id": "<rs-frontend-id>",
-              "summary": [],
-              "type": "reasoning"
-            },
-            "output_index": 0,
-            "sequence_number": 2,
-            "type": "response.output_item.added"
-          }
-        }
-      ],
-      [
-        "event: response.content_part.added",
-        {
-          "data": {
-            "content_index": 0,
-            "item_id": "<rs-frontend-id>",
-            "output_index": 0,
-            "part": {
-              "text": "",
-              "type": "reasoning_text"
-            },
-            "sequence_number": 3,
-            "type": "response.content_part.added"
-          }
-        }
-      ],
-      [
-        "event: response.reasoning.delta",
-        {
-          "data": {
-            "content_index": 0,
-            "delta": "reason",
-            "item_id": "<rs-frontend-id>",
-            "output_index": 0,
-            "sequence_number": 4,
-            "type": "response.reasoning.delta"
-          }
-        }
-      ],
-      [
-        "event: response.reasoning.done",
-        {
-          "data": {
-            "content_index": 0,
-            "item_id": "<rs-frontend-id>",
-            "output_index": 0,
-            "sequence_number": 5,
-            "text": "reason",
-            "type": "response.reasoning.done"
-          }
-        }
-      ],
-      [
-        "event: response.content_part.done",
-        {
-          "data": {
-            "content_index": 0,
-            "item_id": "<rs-frontend-id>",
-            "output_index": 0,
-            "part": {
-              "text": "reason",
-              "type": "reasoning_text"
-            },
-            "sequence_number": 6,
-            "type": "response.content_part.done"
-          }
-        }
-      ],
-      [
-        "event: response.output_item.done",
-        {
-          "data": {
-            "item": {
-              "content": [
-                {
-                  "text": "reason",
-                  "type": "reasoning_text"
-                }
-              ],
-              "id": "<rs-frontend-id>",
-              "summary": [],
-              "type": "reasoning"
-            },
-            "output_index": 0,
-            "sequence_number": 7,
-            "type": "response.output_item.done"
+            "type": "response.created"
           }
         }
       ],
@@ -2856,8 +2698,8 @@
               "status": "in_progress",
               "type": "message"
             },
-            "output_index": 1,
-            "sequence_number": 8,
+            "output_index": 0,
+            "sequence_number": 2,
             "type": "response.output_item.added"
           }
         }
@@ -2868,13 +2710,13 @@
           "data": {
             "content_index": 0,
             "item_id": "<msg-frontend-id>",
-            "output_index": 1,
+            "output_index": 0,
             "part": {
               "annotations": [],
               "text": "",
               "type": "output_text"
             },
-            "sequence_number": 9,
+            "sequence_number": 3,
             "type": "response.content_part.added"
           }
         }
@@ -2886,9 +2728,8 @@
             "content_index": 0,
             "delta": "an",
             "item_id": "<msg-frontend-id>",
-            "logprobs": [],
-            "output_index": 1,
-            "sequence_number": 10,
+            "output_index": 0,
+            "sequence_number": 4,
             "type": "response.output_text.delta"
           }
         }
@@ -2900,9 +2741,8 @@
             "content_index": 0,
             "delta": "swer",
             "item_id": "<msg-frontend-id>",
-            "logprobs": [],
-            "output_index": 1,
-            "sequence_number": 11,
+            "output_index": 0,
+            "sequence_number": 5,
             "type": "response.output_text.delta"
           }
         }
@@ -2913,9 +2753,8 @@
           "data": {
             "content_index": 0,
             "item_id": "<msg-frontend-id>",
-            "logprobs": [],
-            "output_index": 1,
-            "sequence_number": 12,
+            "output_index": 0,
+            "sequence_number": 6,
             "text": "answer",
             "type": "response.output_text.done"
           }
@@ -2927,13 +2766,13 @@
           "data": {
             "content_index": 0,
             "item_id": "<msg-frontend-id>",
-            "output_index": 1,
+            "output_index": 0,
             "part": {
               "annotations": [],
               "text": "answer",
               "type": "output_text"
             },
-            "sequence_number": 13,
+            "sequence_number": 7,
             "type": "response.content_part.done"
           }
         }
@@ -2955,8 +2794,8 @@
               "status": "completed",
               "type": "message"
             },
-            "output_index": 1,
-            "sequence_number": 14,
+            "output_index": 0,
+            "sequence_number": 8,
             "type": "response.output_item.done"
           }
         }
@@ -2968,9 +2807,9 @@
             "response": {
               "background": false,
               "completed_at": "<frontend-time>",
+              "conversation": null,
               "created_at": "<frontend-time>",
               "error": null,
-              "frequency_penalty": 0.0,
               "id": "<resp-frontend-id>",
               "incomplete_details": null,
               "instructions": null,
@@ -2980,17 +2819,6 @@
               "model": "fixture-model",
               "object": "response",
               "output": [
-                {
-                  "content": [
-                    {
-                      "text": "reason",
-                      "type": "reasoning_text"
-                    }
-                  ],
-                  "id": "<rs-frontend-id>",
-                  "summary": [],
-                  "type": "reasoning"
-                },
                 {
                   "content": [
                     {
@@ -3007,18 +2835,18 @@
               ],
               "output_text": "answer",
               "parallel_tool_calls": true,
-              "presence_penalty": 0.0,
               "previous_response_id": null,
+              "prompt": null,
               "prompt_cache_key": null,
+              "prompt_cache_retention": null,
               "reasoning": {
                 "effort": null,
                 "summary": null
               },
               "safety_identifier": null,
-              "service_tier": "default",
+              "service_tier": null,
               "status": "completed",
-              "store": false,
-              "temperature": 1.0,
+              "temperature": null,
               "text": {
                 "format": {
                   "type": "text"
@@ -3026,22 +2854,13 @@
               },
               "tool_choice": "auto",
               "tools": [],
-              "top_logprobs": 0,
-              "top_p": 1.0,
+              "top_logprobs": null,
+              "top_p": null,
               "truncation": "disabled",
-              "usage": {
-                "input_tokens": 21,
-                "input_tokens_details": {
-                  "cached_tokens": 0
-                },
-                "output_tokens": 7,
-                "output_tokens_details": {
-                  "reasoning_tokens": 0
-                },
-                "total_tokens": 28
-              }
+              "usage": null,
+              "user": null
             },
-            "sequence_number": 15,
+            "sequence_number": 9,
             "type": "response.completed"
           }
         }
@@ -3074,7 +2893,6 @@
           "logprobs": null,
           "max_completion_tokens": null,
           "max_tokens": null,
-          "mesh_compact": false,
           "mesh_internal_agent_session_id": "fixture-session",
           "mesh_internal_agent_session_source": "x-agent-session",
           "messages": [
@@ -3117,14 +2935,12 @@
     ],
     "body": {
       "background": false,
-      "completed_at": null,
-      "created_at": "<frontend-time>",
-      "error": {
-        "code": "tool_choice_violation",
-        "message": "upstream response called a tool that was not allowed by the request"
-      },
-      "frequency_penalty": 0.0,
-      "id": "<resp-frontend-id>",
+      "completed_at": 42,
+      "conversation": null,
+      "created_at": 42,
+      "error": null,
+      "finish_reason": "tool_calls",
+      "id": "scripted-generation",
       "incomplete_details": null,
       "instructions": null,
       "max_output_tokens": null,
@@ -3132,52 +2948,57 @@
       "metadata": {},
       "model": "fixture-model",
       "object": "response",
-      "output": [],
+      "output": [
+        {
+          "arguments": "{\"x\":1}",
+          "call_id": "call_alpha",
+          "id": "fc_42_0",
+          "name": "alpha",
+          "status": "completed",
+          "type": "function_call"
+        },
+        {
+          "arguments": "{}",
+          "call_id": "call_beta",
+          "id": "fc_42_1",
+          "name": "beta",
+          "status": "completed",
+          "type": "function_call"
+        }
+      ],
       "output_text": "",
       "parallel_tool_calls": true,
-      "presence_penalty": 0.0,
       "previous_response_id": null,
+      "prompt": null,
       "prompt_cache_key": null,
+      "prompt_cache_retention": null,
       "reasoning": {
         "effort": null,
         "summary": null
       },
       "safety_identifier": null,
-      "service_tier": "default",
-      "status": "failed",
-      "store": false,
-      "temperature": 1.0,
+      "service_tier": null,
+      "status": "completed",
+      "temperature": null,
       "text": {
         "format": {
           "type": "text"
         }
       },
       "tool_choice": "auto",
-      "tools": [
-        {
-          "description": null,
-          "name": "alpha",
-          "parameters": {
-            "type": "object"
-          },
-          "strict": null,
-          "type": "function"
-        }
-      ],
-      "top_logprobs": 0,
-      "top_p": 1.0,
+      "tools": [],
+      "top_logprobs": null,
+      "top_p": null,
       "truncation": "disabled",
       "usage": {
         "input_tokens": 21,
         "input_tokens_details": {
-          "cached_tokens": 0
+          "cached_tokens": null
         },
         "output_tokens": 7,
-        "output_tokens_details": {
-          "reasoning_tokens": 0
-        },
         "total_tokens": 28
-      }
+      },
+      "user": null
     },
     "headers": {
       "content-type": "application/json",

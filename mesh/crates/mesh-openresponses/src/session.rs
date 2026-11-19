@@ -14,7 +14,7 @@ use super::{
     CallerScope, ResponseAdapterMode, ResponseContinuation, ResponseStore, ResponsesTurn,
     store::ResponseSessionCache,
 };
-use crate::{
+use skippy_inference_api::{
     AgentSessionIdentity, AgentSessionSource, ChatCompletionRequest, InferenceError,
     generation::GenerationRequest,
 };
@@ -127,17 +127,6 @@ impl PreparedResponsesTurn {
     /// ingress-owned router or executor.
     pub fn into_parts(self) -> (Arc<ResponsesTurn>, GenerationRequest) {
         (self.turn, self.request)
-    }
-
-    pub(crate) fn into_execution_parts(
-        self,
-    ) -> (Arc<ResponsesTurn>, GenerationRequest, bool, Option<String>) {
-        (
-            self.turn,
-            self.request,
-            self.trusted_agent_session,
-            self.previous_response_id,
-        )
     }
 }
 
@@ -266,7 +255,10 @@ pub(crate) fn prepare_request(
         .agent_session_id
         .map(|id| AgentSessionIdentity::new(id, AgentSessionSource::ResponsesConversation))
         .transpose()?;
-    request.set_agent_session(resolve_agent_session(header_session, responses_session)?);
+    crate::request_compat::set_agent_session(
+        &mut request,
+        resolve_agent_session(header_session, responses_session)?,
+    );
     request.validate()?;
     Ok(PreparedResponsesTurn {
         turn,
@@ -299,7 +291,7 @@ pub struct WebSocketErrorEvent {
     #[serde(rename = "type")]
     event_type: &'static str,
     status: u16,
-    error: crate::errors::ErrorBody,
+    error: skippy_inference_api::errors::ErrorBody,
 }
 
 impl WebSocketErrorEvent {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::store::{
     CallerScope, ResponseSessionCache, ResponseStore, StoredResponse, previous_response_not_found,
 };
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 /// Where a request may look up and save earlier responses.
 ///

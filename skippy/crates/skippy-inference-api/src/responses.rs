@@ -1,53 +1,17 @@
-mod compaction;
 mod content_items;
-mod continuation;
 mod conversation;
-mod execution;
-mod lineage;
-#[cfg(test)]
-mod max_tool_calls_tests;
-#[cfg(test)]
-mod numeric_controls_tests;
-#[cfg(test)]
-mod parallel_tool_calls_tests;
-mod request_translation;
-mod request_validation;
-mod resource;
-mod session;
-mod store;
-mod stream;
-mod terminal;
 mod tools;
-#[cfg(test)]
-mod truncation_tests;
-mod turn;
 
-pub use continuation::ResponseContinuation;
-pub use execution::{ResponsesSessionExecutor, ResponsesTurnEventStream};
-pub use resource::{ResponseStatus, ResponsesUsage};
-pub(crate) use session::prepare_request;
-pub use session::{
-    PreparedResponsesTurn, ResponsesSession, ResponsesSessionConfig, WebSocketErrorEvent,
-};
-pub use store::{
-    CallerScope, FORWARDING_HEADERS, RESPONSE_STORAGE_ENV, ResponseStore, ResponseStoreLimits,
-    caller_scope_for_http_peer, configured_response_storage,
-};
-pub use stream::{
-    ResponsesStream, ResponsesStreamEvent, responses_stream_events_for_chat_completion,
-    responses_stream_events_for_chat_completion_after_progress,
-    responses_stream_events_for_response, responses_stream_events_for_response_after_progress,
-    stream_events_for_response,
-};
-pub use turn::ResponsesTurn;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
     common::{THINKING_BOOLEAN_ALIASES, Usage, normalize_reasoning_compat_fields},
     errors::InferenceError,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use content_items::translate_responses_content_item;
+use conversation::{is_responses_tool_item, translate_responses_conversation_items};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseAdapterMode {
@@ -148,6 +112,199 @@ fn rewrite_path_preserving_query(path: &str, new_path: &str) -> String {
     }
 }
 
+fn alias_max_tokens(object: &mut Map<String, Value>) -> bool {
+    let mut changed = false;
+    for alias in ["max_completion_tokens", "max_output_tokens"] {
+        let Some(value) = object.remove(alias) else {
+            continue;
+        };
+        changed = true;
+        object.entry("max_tokens".to_string()).or_insert(value);
+    }
+    changed
+}
+
+fn map_response_role(role: &str) -> String {
+    match role {
+        "developer" => "system".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn collapse_blocks_if_text_only(blocks: Vec<Value>) -> Value {
+    if blocks.len() == 1
+        && let Some(text) = blocks[0].get("text").and_then(Value::as_str)
+    {
+        return Value::String(text.to_string());
+    }
+    Value::Array(blocks)
+}
+
+fn translate_responses_message_content(content: &Value) -> Result<Value, InferenceError> {
+    match content {
+        Value::String(text) => Ok(Value::String(text.clone())),
+        Value::Array(items) => {
+            let blocks = items
+                .iter()
+                .map(translate_responses_content_item)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(collapse_blocks_if_text_only(blocks))
+        }
+        Value::Object(_) => Ok(collapse_blocks_if_text_only(vec![
+            translate_responses_content_item(content)?,
+        ])),
+        _ => Err(InferenceError::unsupported(
+            "unsupported /v1/responses input content shape",
+        )),
+    }
+}
+
+fn translate_responses_input_message(
+    message: &Value,
+) -> Result<Map<String, Value>, InferenceError> {
+    let Some(object) = message.as_object() else {
+        return Err(InferenceError::unsupported(
+            "unsupported /v1/responses message shape",
+        ));
+    };
+
+    let role = map_response_role(object.get("role").and_then(Value::as_str).unwrap_or("user"));
+    let content_value = object
+        .get("content")
+        .map(translate_responses_message_content)
+        .transpose()?
+        .unwrap_or_else(|| Value::String(String::new()));
+
+    Ok(Map::from_iter([
+        ("role".to_string(), Value::String(role)),
+        ("content".to_string(), content_value),
+    ]))
+}
+
+fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, InferenceError> {
+    match input {
+        Value::String(text) => Ok(vec![serde_json::json!({
+            "role": "user",
+            "content": text,
+        })]),
+        Value::Array(items) if items.iter().any(is_responses_tool_item) => {
+            translate_responses_conversation_items(items)
+        }
+        Value::Array(items) => {
+            let looks_like_messages = items.iter().all(|item| {
+                item.as_object()
+                    .map(|object| object.contains_key("role") || object.contains_key("content"))
+                    .unwrap_or(false)
+            });
+            if looks_like_messages {
+                items
+                    .iter()
+                    .map(translate_responses_input_message)
+                    .map(|result| result.map(Value::Object))
+                    .collect()
+            } else {
+                let content = translate_responses_message_content(input)?;
+                Ok(vec![serde_json::json!({
+                    "role": "user",
+                    "content": content,
+                })])
+            }
+        }
+        Value::Object(object) => {
+            if object.contains_key("role") || object.contains_key("content") {
+                Ok(vec![Value::Object(translate_responses_input_message(
+                    input,
+                )?)])
+            } else {
+                let content = translate_responses_message_content(input)?;
+                Ok(vec![serde_json::json!({
+                    "role": "user",
+                    "content": content,
+                })])
+            }
+        }
+        _ => Err(InferenceError::unsupported(
+            "unsupported /v1/responses input shape",
+        )),
+    }
+}
+
+fn translate_openai_responses_input(
+    object: &mut Map<String, Value>,
+) -> Result<bool, InferenceError> {
+    let mut changed = tools::normalize(object)?;
+    let mut messages = Vec::new();
+    let mut state_cache_key = None;
+
+    if let Some(instructions_value) = object.remove("instructions") {
+        if let Some(instructions) = instructions_value.as_str().map(str::trim)
+            && !instructions.is_empty()
+        {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": instructions,
+            }));
+        }
+        changed = true;
+    }
+
+    if let Some(input) = object.remove("input") {
+        messages.extend(translate_responses_input_to_messages(&input)?);
+        changed = true;
+    } else if let Some(existing_messages) = object.remove("messages") {
+        messages.extend(translate_responses_input_to_messages(&existing_messages)?);
+        changed = true;
+    }
+
+    if !messages.is_empty() {
+        object.insert("messages".to_string(), Value::Array(messages));
+    }
+
+    if let Some(value) = object.get("previous_response_id") {
+        state_cache_key = value.as_str().map(ToString::to_string);
+    }
+    if state_cache_key.is_none()
+        && let Some(value) = object.get("conversation")
+    {
+        state_cache_key = responses_conversation_id(value);
+    }
+    if let Some(cache_key) = state_cache_key {
+        object
+            .entry("prompt_cache_key".to_string())
+            .or_insert(Value::String(cache_key));
+    }
+
+    for key in [
+        "conversation",
+        "include",
+        "output",
+        "output_text",
+        "previous_response_id",
+        "store",
+        "text",
+        "truncation",
+    ] {
+        if object.remove(key).is_some() {
+            changed = true;
+        }
+    }
+
+    Ok(changed)
+}
+
+fn responses_conversation_id(value: &Value) -> Option<String> {
+    if let Some(id) = value.as_str() {
+        return Some(id.to_string());
+    }
+    let object = value.as_object()?;
+    for key in ["id", "conversation_id"] {
+        if let Some(id) = object.get(key).and_then(Value::as_str) {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 /// Fast-path detection for request bodies that need OpenAI compatibility
 /// normalization before forwarding. This intentionally mirrors the ingress
 /// byte-level check: it avoids parsing ordinary chat bodies while retaining
@@ -157,10 +314,7 @@ pub fn request_body_requires_json_normalization(path: &str, body: &[u8]) -> bool
         return false;
     }
     let path_only = path_only(path);
-    if matches!(
-        path_only,
-        "/v1/responses" | "/v1/responses/compact" | "/v1/messages"
-    ) {
+    if matches!(path_only, "/v1/responses" | "/v1/messages") {
         return true;
     }
     if path_only != "/v1/chat/completions" {
@@ -185,14 +339,6 @@ pub fn normalize_openai_compat_request(
     path: &str,
     body: &mut Value,
 ) -> Result<NormalizationOutcome, InferenceError> {
-    normalize_openai_compat_request_with_policy(path, body, false)
-}
-
-fn normalize_openai_compat_request_with_policy(
-    path: &str,
-    body: &mut Value,
-    responses_policy_enforced: bool,
-) -> Result<NormalizationOutcome, InferenceError> {
     if path_only(path) == "/v1/messages" {
         crate::anthropic::normalize_messages_request(body)?;
         let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -216,41 +362,21 @@ fn normalize_openai_compat_request_with_policy(
         });
     };
 
-    let path_only = path_only(path);
-    let mut changed = false;
-    if path_only == "/v1/responses" {
-        changed |= request_validation::canonicalize_max_output_tokens(object);
-        // Validate the raw Responses shape before translation removes fields
-        // such as `instructions` or turns `input` into Chat messages.
-        request_validation::validate_request_fields(object)?;
-    }
-
-    changed |= if path_only == "/v1/responses" {
-        request_validation::translate_max_output_tokens(object)
-    } else {
-        request_translation::alias_chat_max_tokens(object)
-    };
+    let mut changed = alias_max_tokens(object);
     let mut rewritten_path = None;
     let mut response_adapter = ResponseAdapterMode::None;
     let mut agent_session_id = None;
 
-    if path_only == "/v1/responses/compact" {
-        changed = true;
-        rewritten_path = Some(rewrite_path_preserving_query(path, "/v1/chat/completions"));
-        response_adapter = ResponseAdapterMode::OpenAiResponsesJson;
-    }
+    let path_only = path_only(path);
     if path_only == "/v1/responses" {
         agent_session_id = object
             .get("conversation")
-            .and_then(request_translation::responses_conversation_id);
+            .and_then(responses_conversation_id);
         let is_stream = object
             .get("stream")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        changed |= request_translation::translate_openai_responses_input(
-            object,
-            responses_policy_enforced,
-        )?;
+        changed |= translate_openai_responses_input(object)?;
         rewritten_path = Some(rewrite_path_preserving_query(path, "/v1/chat/completions"));
         response_adapter = if is_stream {
             ResponseAdapterMode::OpenAiResponsesStream
@@ -258,10 +384,7 @@ fn normalize_openai_compat_request_with_policy(
             ResponseAdapterMode::OpenAiResponsesJson
         };
     }
-    if matches!(
-        path_only,
-        "/v1/chat/completions" | "/v1/responses" | "/v1/responses/compact"
-    ) {
+    if matches!(path_only, "/v1/chat/completions" | "/v1/responses") {
         changed |= normalize_reasoning_compat_fields(object)?;
     }
 
@@ -749,6 +872,140 @@ pub fn responses_stream_completed_event_with_sequence(
     event
 }
 
+/// Expand a complete `/v1/responses` body into the SSE events that stream it.
+///
+/// This is the buffered→stream adapter for producers that answer with a
+/// finished response body instead of a live upstream stream (a virtual model
+/// served by a plugin). Walking `output` keeps every item the buffered
+/// translation produced — in particular the `function_call` items it derives
+/// from `message.tool_calls`, which projecting `choices[0].message.content`
+/// alone would drop.
+pub fn responses_stream_events_for_response(response: &Value) -> Vec<Value> {
+    let output = response
+        .get("output")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut sequence_number = 0_i32;
+    let mut next_sequence_number = || {
+        let current = sequence_number;
+        sequence_number += 1;
+        current
+    };
+
+    // `response.created` carries the envelope with no output produced yet.
+    let mut created = response.clone();
+    if let Some(object) = created.as_object_mut() {
+        object.insert("status".into(), Value::String("in_progress".into()));
+        object.insert("output".into(), Value::Array(Vec::new()));
+        object.insert("output_text".into(), Value::String(String::new()));
+    }
+    let mut events = vec![serde_json::json!({
+        "type": "response.created",
+        "sequence_number": next_sequence_number(),
+        "response": created,
+    })];
+
+    for (output_index, item) in output.iter().enumerate() {
+        let output_index = output_index as i32;
+        let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        let mut in_progress = item.clone();
+        if let Some(object) = in_progress.as_object_mut() {
+            object.insert("status".into(), Value::String("in_progress".into()));
+        }
+        events.push(serde_json::json!({
+            "type": "response.output_item.added",
+            "sequence_number": next_sequence_number(),
+            "output_index": output_index,
+            "item": in_progress,
+        }));
+        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+            let arguments = item
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            events.push(serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "delta": arguments,
+            }));
+            events.push(serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "arguments": arguments,
+            }));
+        } else {
+            let text = response_item_text(item);
+            events.push(serde_json::json!({
+                "type": "response.content_part.added",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            }));
+            if !text.is_empty() {
+                events.push(serde_json::json!({
+                    "type": "response.output_text.delta",
+                    "sequence_number": next_sequence_number(),
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "content_index": 0,
+                    "delta": text,
+                }));
+            }
+            events.push(serde_json::json!({
+                "type": "response.output_text.done",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "text": text,
+            }));
+            events.push(serde_json::json!({
+                "type": "response.content_part.done",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": text, "annotations": []},
+            }));
+        }
+        events.push(serde_json::json!({
+            "type": "response.output_item.done",
+            "sequence_number": next_sequence_number(),
+            "output_index": output_index,
+            "item": item,
+        }));
+    }
+
+    events.push(serde_json::json!({
+        "type": "response.completed",
+        "sequence_number": next_sequence_number(),
+        "response": response,
+    }));
+    events
+}
+
+/// The first text part of a Responses output item, empty when it has none.
+fn response_item_text(item: &Value) -> String {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
 pub fn chat_usage_to_responses_usage(usage: &Value) -> Value {
     let cached_tokens = usage
         .get("prompt_tokens_details")
@@ -991,6 +1248,7 @@ mod tests {
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}},
+            "logprobs": true,
             "top_logprobs": 3
         });
         normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
@@ -1001,59 +1259,6 @@ mod tests {
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["logprobs"], true);
         assert_eq!(body["top_logprobs"], 3);
-    }
-
-    #[test]
-    fn normalize_responses_validates_effective_typed_input_and_preserves_legacy_messages() {
-        for mut body in [
-            json!({
-                "model":"qwen",
-                "messages":[{"type":"function_call_output","call_id":"orphan","output":"x"}]
-            }),
-            json!({
-                "model":"qwen",
-                "input":{"type":"function_call_output","call_id":"orphan","output":"x"}
-            }),
-            json!({
-                "model":"qwen",
-                "messages":[{"type":"function_call","name":"missing_call_id","arguments":"{}"}]
-            }),
-            json!({
-                "model":"qwen",
-                "input":{"type":"function_call_output","call_id":"","output":"x"}
-            }),
-        ] {
-            let error = normalize_openai_compat_request("/v1/responses", &mut body).unwrap_err();
-            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
-            assert_eq!(error.body().error.param.as_deref(), Some("input"));
-        }
-
-        let legacy = json!([
-            {"role":"user","content":"hello"},
-            {"role":"assistant","content":"hi"}
-        ]);
-        let mut body = json!({"model":"qwen","messages":legacy});
-        normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
-        assert_eq!(body["messages"], legacy);
-
-        let mut explicit_input = json!({
-            "model":"qwen",
-            "input":[{"role":"user","content":"input wins"}],
-            "messages":[{"type":"function_call_output","call_id":"ignored","output":"x"}]
-        });
-        normalize_openai_compat_request("/v1/responses", &mut explicit_input).unwrap();
-        assert_eq!(
-            explicit_input["messages"],
-            json!([{"role":"user","content":"input wins"}])
-        );
-
-        let mut null_input = json!({
-            "model":"qwen",
-            "input":null,
-            "messages":[{"type":"function_call_output","call_id":"ignored","output":"x"}]
-        });
-        normalize_openai_compat_request("/v1/responses", &mut null_input).unwrap();
-        assert!(null_input.get("messages").is_none());
     }
 
     #[test]
@@ -1128,48 +1333,16 @@ mod tests {
     }
 
     #[test]
-    fn normalize_responses_fails_closed_on_unrestored_previous_response() {
+    fn normalize_responses_maps_state_to_prompt_cache_key() {
         let mut body = json!({
             "model": "qwen",
             "input": "continue",
             "previous_response_id": "resp_abc"
         });
-        let error = normalize_openai_compat_request("/v1/responses", &mut body).unwrap_err();
-
-        assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
-        assert_eq!(
-            error.body().error.code.as_deref(),
-            Some("previous_response_not_found")
-        );
-    }
-
-    #[test]
-    fn normalize_responses_maps_text_format_and_requests_stream_usage() {
-        let mut body = json!({
-            "model": "qwen",
-            "input": "json please",
-            "stream": true,
-            "store": true,
-            "truncation": "disabled",
-            "text": {"format": {"type": "json_schema", "name": "r", "schema": {"type": "object"}, "strict": true}}
-        });
         normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
 
-        assert_eq!(body["response_format"]["type"], "json_schema");
-        assert_eq!(body["response_format"]["json_schema"]["name"], "r");
-        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
-        assert_eq!(body["stream_options"]["include_usage"], true);
-        for key in ["text", "store", "truncation"] {
-            assert!(body.get(key).is_none(), "{key} is not forwarded");
-        }
-    }
-
-    #[test]
-    fn normalize_responses_rejects_unsupported_text_format() {
-        let mut body = json!({"input": "x", "text": {"format": {"type": "grammar"}}});
-        assert!(normalize_openai_compat_request("/v1/responses", &mut body).is_err());
-        let mut body = json!({"input": "x", "background": true});
-        assert!(normalize_openai_compat_request("/v1/responses", &mut body).is_err());
+        assert_eq!(body["prompt_cache_key"], "resp_abc");
+        assert!(body.get("previous_response_id").is_none());
     }
 
     #[test]

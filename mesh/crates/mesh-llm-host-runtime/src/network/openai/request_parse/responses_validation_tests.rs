@@ -3,7 +3,7 @@ use tokio::io::AsyncWriteExt;
 
 async fn parse_responses_http_request(
     body: serde_json::Value,
-    store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
+    store: std::sync::Arc<mesh_openresponses::ResponseStore>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     let body = body.to_string();
     let request = format!(
@@ -15,7 +15,7 @@ async fn parse_responses_http_request(
 
 async fn parse_raw_http_request(
     request: &[u8],
-    store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
+    store: std::sync::Arc<mesh_openresponses::ResponseStore>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
     client.write_all(request).await.unwrap();
@@ -83,8 +83,7 @@ async fn mesh_http_and_sse_reject_malformed_responses_controls_before_lookup_or_
                 .unwrap()
                 .extend(fields.as_object().unwrap().clone());
             let body = serde_json::to_vec(&request).unwrap();
-            let store =
-                std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+            let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
             let error = match rewrite_request_body_for_forwarding(
                 "/v1/responses",
                 &body,
@@ -95,9 +94,9 @@ async fn mesh_http_and_sse_reject_malformed_responses_controls_before_lookup_or_
                     node_limit: None,
                 },
                 true,
-                Some(skippy_inference_api::responses::ResponseContinuation::new(
+                Some(mesh_openresponses::ResponseContinuation::new(
                     Some(store),
-                    Some(skippy_inference_api::responses::CallerScope::LocalHost),
+                    Some(mesh_openresponses::CallerScope::LocalHost),
                 )),
             )
             .await
@@ -138,7 +137,7 @@ async fn mesh_ingress_preserves_numeric_boundaries_and_maps_responses_logprobs()
                 node_limit: None,
             },
             true,
-            Some(skippy_inference_api::responses::ResponseContinuation::disabled()),
+            Some(mesh_openresponses::ResponseContinuation::disabled()),
         )
         .await
         .unwrap();
@@ -148,7 +147,7 @@ async fn mesh_ingress_preserves_numeric_boundaries_and_maps_responses_logprobs()
         assert_eq!(normalized["top_logprobs"], top_logprobs);
         assert_eq!(normalized["logprobs"], true);
         let response = outcome.responses_turn.unwrap().response(
-            skippy_inference_api::responses::ResponseStatus::InProgress,
+            mesh_openresponses::ResponseStatus::InProgress,
             &[],
             None,
             None,
@@ -177,7 +176,7 @@ async fn mesh_ingress_rejects_unrepresentable_output_limit_before_forwarding() {
             node_limit: None,
         },
         true,
-        Some(skippy_inference_api::responses::ResponseContinuation::disabled()),
+        Some(mesh_openresponses::ResponseContinuation::disabled()),
     )
     .await
     {
@@ -237,7 +236,7 @@ async fn full_http_parser_budgets_from_the_effective_responses_limit() {
     ];
 
     for (body, expected) in cases {
-        let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+        let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
         let request = parse_responses_http_request(body, store).await.unwrap();
         assert_eq!(request.completion_tokens, expected);
         let forwarded = request.body_json.as_ref().unwrap();
@@ -251,7 +250,7 @@ async fn full_http_parser_budgets_from_the_effective_responses_limit() {
             assert!(forwarded.get(alias).is_none(), "forwarded {alias}");
         }
         let response = request.responses_turn.as_ref().unwrap().response(
-            skippy_inference_api::responses::ResponseStatus::InProgress,
+            mesh_openresponses::ResponseStatus::InProgress,
             &[],
             None,
             None,
@@ -298,7 +297,7 @@ async fn full_http_parser_routes_from_effective_body_when_losing_aliases_are_mal
         body.as_object_mut()
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
-        let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+        let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
         let request = parse_responses_http_request(body, store)
             .await
             .unwrap_or_else(|error| panic!("{case}: {error}"));
@@ -326,7 +325,7 @@ async fn full_http_parser_routes_from_effective_body_when_losing_aliases_are_mal
 
 #[tokio::test]
 async fn full_http_parser_budgets_inherited_alias_overrides_and_null_resets() {
-    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
     let parent = parse_responses_http_request(
         serde_json::json!({
             "model":"m",
@@ -375,7 +374,7 @@ async fn full_http_parser_budgets_inherited_alias_overrides_and_null_resets() {
 
         assert_eq!(request.completion_tokens, expected);
         let response = request.responses_turn.as_ref().unwrap().response(
-            skippy_inference_api::responses::ResponseStatus::InProgress,
+            mesh_openresponses::ResponseStatus::InProgress,
             &[],
             None,
             None,
@@ -389,7 +388,7 @@ async fn full_http_parser_budgets_inherited_alias_overrides_and_null_resets() {
 
 #[tokio::test]
 async fn full_http_parser_routes_with_inherited_model_and_actual_stream() {
-    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
     let parent = parse_responses_http_request(
         serde_json::json!({
             "model":"m",
@@ -446,14 +445,14 @@ async fn current_peer_recovers_concrete_model_when_an_unknown_responses_extensio
         "max_output_tokens":16,
         "expected_identity":[],
     });
-    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
     let mut request = parse_responses_http_request(body, store).await.unwrap();
     rewrite_model_field(&mut request, "selected-local-model");
     inject_skippy_hooks_flag(&mut request.raw, true);
 
     let peer_request = parse_raw_http_request(
         &request.raw,
-        std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default()),
+        std::sync::Arc::new(mesh_openresponses::ResponseStore::default()),
     )
     .await
     .unwrap();

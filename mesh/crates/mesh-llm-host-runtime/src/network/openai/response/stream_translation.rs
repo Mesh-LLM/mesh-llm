@@ -206,7 +206,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
-    responses_turn: Option<std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    responses_turn: Option<std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
 ) -> Result<RouteAttemptResult> {
     let turn = responses_turn.context("Responses stream requires a prepared request")?;
     Box::pin(super::shared_responses_stream::relay(
@@ -267,14 +267,14 @@ mod tests {
         }
     }
 
-    fn test_turn() -> std::sync::Arc<skippy_inference_api::responses::ResponsesTurn> {
-        test_turn_with(skippy_inference_api::responses::ResponseContinuation::disabled())
+    fn test_turn() -> std::sync::Arc<mesh_openresponses::ResponsesTurn> {
+        test_turn_with(mesh_openresponses::ResponseContinuation::disabled())
     }
 
     fn test_turn_with(
-        continuation: skippy_inference_api::responses::ResponseContinuation,
-    ) -> std::sync::Arc<skippy_inference_api::responses::ResponsesTurn> {
-        use skippy_inference_api::responses::ResponsesTurn;
+        continuation: mesh_openresponses::ResponseContinuation,
+    ) -> std::sync::Arc<mesh_openresponses::ResponsesTurn> {
+        use mesh_openresponses::ResponsesTurn;
         let mut request = serde_json::json!({
             "model":"qwen", "input":"test", "stream_options":{"include_obfuscation":false},
             "tools":[{"type":"function","name":"read"},{"type":"function","name":"write"},
@@ -619,7 +619,7 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        use skippy_inference_api::responses::{CallerScope, ResponseContinuation, ResponseStore};
+        use mesh_openresponses::{CallerScope, ResponseContinuation, ResponseStore};
         let store = std::sync::Arc::new(ResponseStore::default());
         let turn = test_turn_with(ResponseContinuation::new(
             Some(store.clone()),

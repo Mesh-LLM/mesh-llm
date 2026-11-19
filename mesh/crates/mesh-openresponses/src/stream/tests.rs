@@ -6,7 +6,7 @@ use super::{
     ResponsesStream, ResponsesStreamEvent, obfuscation, retained_chunk_bytes,
     stream_events_for_response,
 };
-use crate::responses::{
+use crate::{
     ResponseContinuation,
     store::{CallerScope, ResponseSessionCache, ResponseStore},
     turn::ResponsesTurn,

@@ -20,9 +20,6 @@ use uuid::Uuid;
 use super::*;
 use crate::AudioTranscriptionRequest;
 
-#[path = "router_tests/responses_numeric_controls.rs"]
-mod responses_numeric_controls;
-
 /// A valid UUIDv4 the frontend will now accept and forward verbatim.
 const CLIENT_NONCE: &str = "6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f";
 
@@ -1039,8 +1036,6 @@ async fn models_route_returns_model_list() {
 mod decisions;
 #[path = "router_tests/non_chat.rs"]
 mod non_chat;
-#[path = "router_tests/responses_retention.rs"]
-mod responses_retention;
 #[path = "router_tests/system_one.rs"]
 mod system_one;
 
@@ -1766,8 +1761,7 @@ async fn responses_stream_frames_backend_errors_without_completed_tail() {
     assert!(body.contains(r#""message":"stream backend failed""#));
     assert!(body.contains(r#""code":"service_unavailable""#));
     assert!(!body.contains("event: response.completed"));
-    assert!(body.contains("event: response.failed"));
-    assert!(!body.contains("data: [DONE]"));
+    assert!(body.contains("data: [DONE]"));
 }
 
 #[tokio::test]
@@ -1866,7 +1860,7 @@ async fn chat_completion_route_accepts_tools_structured_output_and_logprobs() {
                 "parallel_tool_calls": true,
                 "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}},
                 "logprobs": true,
-                "top_logprobs": 21
+                "top_logprobs": 2
             }),
         )
         .await;
@@ -1921,9 +1915,10 @@ async fn responses_route_translates_to_chat_and_back() {
                 "model": "test-model",
                 "instructions": "be concise",
                 "input": "hi",
-                "max_output_tokens": 16,
+                "max_output_tokens": 12,
                 "tools": [{"type": "function", "function": {"name": "lookup"}}],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}},
+                "logprobs": true,
                 "top_logprobs": 1
             }),
         )
@@ -1937,87 +1932,6 @@ async fn responses_route_translates_to_chat_and_back() {
 }
 
 #[tokio::test]
-async fn responses_http_sse_and_compaction_reject_orphans_before_backend_execution() {
-    let backend = Arc::new(SessionCaptureBackend::default());
-    let app = router_for(backend.clone());
-    let orphan = json!({"type":"function_call_output","call_id":"orphan","output":"x"});
-    let mut cases = Vec::new();
-    for stream in [false, true] {
-        cases.extend([
-            (
-                "/v1/responses",
-                json!({"model":"capture-model","stream":stream,"input":[orphan.clone()]}),
-            ),
-            (
-                "/v1/responses",
-                json!({"model":"capture-model","stream":stream,"messages":[orphan.clone()]}),
-            ),
-            (
-                "/v1/responses",
-                json!({"model":"capture-model","stream":stream,"input":orphan.clone()}),
-            ),
-        ]);
-    }
-    cases.extend([
-        (
-            "/v1/responses/compact",
-            json!({"model":"capture-model","input":[orphan.clone()]}),
-        ),
-        (
-            "/v1/responses/compact",
-            json!({"model":"capture-model","input":orphan}),
-        ),
-    ]);
-    for (path, body) in cases {
-        let response = post_json_with_app_and_request_id(app.clone(), path, body, None).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = response_body_json(response).await;
-        assert_eq!(body["error"]["type"], "invalid_request_error");
-        assert_eq!(body["error"]["code"], "invalid_value");
-        assert_eq!(body["error"]["param"], "input");
-    }
-    assert!(backend.requests.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn responses_http_and_sse_reject_malformed_request_controls_before_backend_execution() {
-    let backend = Arc::new(SessionCaptureBackend::default());
-    let app = router_for(backend.clone());
-    let cases = [
-        (json!({"instructions": []}), "instructions"),
-        (json!({"metadata": []}), "metadata"),
-        (json!({"metadata": {"key": 7}}), "metadata"),
-        (
-            json!({"safety_identifier": "🦀".repeat(65)}),
-            "safety_identifier",
-        ),
-        (json!({"prompt_cache_key": []}), "prompt_cache_key"),
-        (json!({"text": "plain"}), "text"),
-        (json!({"reasoning": []}), "reasoning"),
-        (
-            json!({"reasoning": {"summary": "auto"}}),
-            "reasoning.summary",
-        ),
-    ];
-    for stream in [false, true] {
-        for (fields, expected_param) in &cases {
-            let mut request = json!({"model":"capture-model", "input":"hi", "stream":stream});
-            request
-                .as_object_mut()
-                .unwrap()
-                .extend(fields.as_object().unwrap().clone());
-            let response =
-                post_json_with_app_and_request_id(app.clone(), "/v1/responses", request, None)
-                    .await;
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-            let body = response_body_json(response).await;
-            assert_eq!(body["error"]["param"], *expected_param);
-        }
-    }
-    assert!(backend.requests.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn responses_route_preserves_tool_calls_and_logprobs() {
     let response = post_json(
         "/v1/responses",
@@ -2025,6 +1939,7 @@ async fn responses_route_preserves_tool_calls_and_logprobs() {
             "model": "tool-call",
             "input": "hi",
             "tools": [{"type": "function", "function": {"name": "lookup"}}],
+            "logprobs": true,
             "top_logprobs": 1
         }),
     )
@@ -2033,12 +1948,12 @@ async fn responses_route_preserves_tool_calls_and_logprobs() {
     let body = response_body_json(response).await;
     assert_eq!(body["output_text"], "calling lookup");
     assert_eq!(
-        body["output"][0]["content"][0]["logprobs"][0]["token"],
+        body["output"][0]["content"][0]["logprobs"]["content"][0]["token"],
         "calling"
     );
     assert_eq!(body["output"][1]["type"], "function_call");
     assert_eq!(body["output"][1]["call_id"], "call_123");
-    assert_eq!(body["status"], "completed");
+    assert_eq!(body["finish_reason"], "tool_calls");
 }
 
 #[tokio::test]
@@ -2137,55 +2052,10 @@ async fn responses_stream_route_returns_responses_sse() {
     assert!(body.contains("event: response.output_text.done"));
     assert!(body.contains("event: response.content_part.done"));
     assert!(body.contains("event: response.output_item.done"));
-    assert!(body.contains("event: response.incomplete"));
-    assert!(body.contains(r#""reason":"max_output_tokens""#));
+    assert!(body.contains("event: response.completed"));
     assert!(body.contains(r#""sequence_number":1"#));
     assert!(body.contains(r#""output_text":"hello""#));
     assert!(body.contains("data: [DONE]"));
-    let delta: Value = body
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .filter_map(|data| serde_json::from_str(data).ok())
-        .find(|event: &Value| event["type"] == "response.output_text.delta")
-        .expect("output text delta");
-    assert!(delta["obfuscation"].as_str().is_some());
-    assert_eq!(serde_json::to_vec(&delta).unwrap().len() % 256, 0);
-}
-
-#[tokio::test]
-async fn responses_stream_can_disable_obfuscation_without_changing_text() {
-    let response = post_json(
-        "/v1/responses",
-        json!({
-            "model":"test-model",
-            "input":"hi",
-            "stream":true,
-            "stream_options":{"include_obfuscation":false},
-        }),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_body_text(response).await;
-    let deltas: Vec<Value> = body
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .filter_map(|data| serde_json::from_str(data).ok())
-        .filter(|event: &Value| event["type"] == "response.output_text.delta")
-        .collect();
-    assert!(!deltas.is_empty());
-    assert!(
-        deltas
-            .iter()
-            .all(|delta| delta.get("obfuscation").is_none())
-    );
-    assert_eq!(
-        deltas
-            .iter()
-            .filter_map(|delta| delta["delta"].as_str())
-            .collect::<String>(),
-        "hello"
-    );
-    assert!(body.contains(r#""output_text":"hello""#));
 }
 
 #[tokio::test]
@@ -2203,7 +2073,7 @@ async fn responses_stream_route_preserves_logprobs() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_body_text(response).await;
     assert!(body.contains("event: response.output_text.delta"));
-    assert!(body.contains(r#""logprobs":[{"logprob":-0.1,"token":"tok"}]"#));
+    assert!(body.contains(r#""logprobs":{"content":[{"logprob":-0.1,"token":"tok"}]}"#));
 }
 
 #[tokio::test]
@@ -2432,126 +2302,4 @@ async fn response_body_json(response: axum::response::Response) -> Value {
 async fn response_body_text(response: axum::response::Response) -> String {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(body.to_vec()).unwrap()
-}
-
-#[tokio::test]
-async fn compact_endpoint_requires_an_explicit_model() {
-    let response = post_json(
-        "/v1/responses/compact",
-        json!({"input":"compact this conversation"}),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = response_body_json(response).await;
-    assert_eq!(body["error"]["param"], "model");
-}
-
-#[tokio::test]
-async fn compact_invalid_terminal_is_non_success_and_lifecycle_failed() {
-    let observer = Arc::new(RecordingLifecycleObserver::default());
-    let app = router_for_with_config(
-        Arc::new(FakeBackend),
-        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
-    );
-    let response = post_json_with_app_and_request_id(
-        app,
-        "/v1/responses/compact",
-        json!({"model":"tool-call","input":"compact this conversation"}),
-        Some("00000000-0000-4000-8000-000000000041"),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-    let body = response_body_json(response).await;
-    assert_eq!(body["error"]["code"], "upstream_response_invalid");
-    let events = observer.events();
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, InferenceLifecycleEvent::ResponseCompleted { .. }))
-    );
-    assert!(events.iter().any(|event| matches!(
-        event,
-        InferenceLifecycleEvent::NonStreamTerminal {
-            result: InferenceTerminalResult::Failed {
-                status_code: 502,
-                failure: InferenceFailure::Backend,
-            },
-            ..
-        }
-    )));
-}
-
-#[tokio::test]
-async fn live_socket_compact_output_starts_a_genuine_new_responses_turn() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    async fn live_post(address: std::net::SocketAddr, path: &str, body: Value) -> Value {
-        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-        let body = body.to_string();
-        stream
-            .write_all(
-                format!(
-                    "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).await.unwrap();
-        let body_start = response
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .unwrap()
-            + 4;
-        serde_json::from_slice(&response[body_start..]).unwrap()
-    }
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            router_for(Arc::new(FakeBackend))
-                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-    let compacted = live_post(
-        address,
-        "/v1/responses/compact",
-        json!({
-            "model":"gpt-mesh",
-            "input":[
-                {"type":"message","role":"user","content":"Remember slate."},
-                {"type":"message","role":"assistant","content":"OK."}
-            ]
-        }),
-    )
-    .await;
-    assert_eq!(compacted["object"], "response.compaction");
-    assert_eq!(compacted["usage"]["total_tokens"], 5);
-    let encrypted = compacted["output"].as_array().unwrap().last().unwrap()["encrypted_content"]
-        .as_str()
-        .unwrap();
-    assert!(!encrypted.contains("Remember slate"));
-
-    let mut input = compacted["output"].as_array().unwrap().clone();
-    input.push(json!({"type":"message","role":"user","content":"What was the word?"}));
-    let response = live_post(
-        address,
-        "/v1/responses",
-        json!({"model":"gpt-mesh","input":input}),
-    )
-    .await;
-    assert_eq!(response["object"], "response");
-    assert!(
-        response["output_text"]
-            .as_str()
-            .unwrap()
-            .contains("Provider-verified compacted conversation context")
-    );
-    server.abort();
 }

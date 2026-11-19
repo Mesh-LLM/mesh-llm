@@ -7,7 +7,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::common::Usage;
+use skippy_inference_api::common::Usage;
 
 /// Fields every `ResponseResource` must carry, with the value reported when
 /// the request did not set them. Values the backend does not report (sampling
@@ -120,7 +120,7 @@ impl ResponseEnvelope {
         response.insert(
             "completed_at".into(),
             match snapshot.status {
-                ResponseStatus::Completed => Value::from(crate::responses::now_unix_secs_i64()),
+                ResponseStatus::Completed => Value::from(crate::now_unix_secs_i64()),
                 _ => Value::Null,
             },
         );

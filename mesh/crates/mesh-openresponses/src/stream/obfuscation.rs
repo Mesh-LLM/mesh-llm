@@ -8,7 +8,7 @@
 use chacha20poly1305::aead::Generate;
 use serde_json::{Map, Value};
 
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 const PROFILE_BLOCK_BYTES: usize = 256;
 const URL_SAFE_BASE64_ALPHABET: &[u8; 64] =
@@ -18,18 +18,18 @@ const URL_SAFE_BASE64_ALPHABET: &[u8; 64] =
 pub(super) type RandomSource = fn() -> Result<[u8; PROFILE_BLOCK_BYTES], ObfuscationError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::responses) struct ObfuscationPolicy {
+pub(crate) struct ObfuscationPolicy {
     enabled: bool,
 }
 
 impl ObfuscationPolicy {
-    pub(in crate::responses) const fn enabled() -> Self {
+    pub(crate) const fn enabled() -> Self {
         Self { enabled: true }
     }
 
     /// Capture and remove the Responses-only transport control before the
     /// request is translated into a Chat Completions backend body.
-    pub(in crate::responses) fn capture_and_strip(
+    pub(crate) fn capture_and_strip(
         request: &mut Map<String, Value>,
     ) -> Result<Self, InferenceError> {
         let Some(stream_options) = request.get_mut("stream_options") else {

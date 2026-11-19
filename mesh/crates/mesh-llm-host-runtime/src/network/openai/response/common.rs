@@ -29,7 +29,7 @@ pub(crate) struct RouteAttemptLoggingContext<'a> {
     pub(in crate::network::openai) retry_policy: ResponseRetryPolicy,
     pub(in crate::network::openai) response_adapter: ResponseAdapter,
     pub(in crate::network::openai) responses_turn:
-        Option<&'a std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+        Option<&'a std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
     pub(in crate::network::openai) route_observer: OpenAiRouteObserver<'a>,
     /// Hex-encoded `EndpointId` to echo back as `x-mesh-served-by` on
     /// delivery. See `RouteModelRequestContext::served_by_header`.

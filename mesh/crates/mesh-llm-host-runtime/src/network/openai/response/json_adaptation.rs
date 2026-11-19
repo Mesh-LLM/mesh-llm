@@ -77,7 +77,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
-    responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
+    responses_turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Result<RouteAttemptResult> {
     relay_translated_json(
         tcp_stream,
@@ -128,7 +128,7 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
     anthropic: bool,
-    responses_turn: Option<&skippy_inference_api::responses::ResponsesTurn>,
+    responses_turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Result<RouteAttemptResult> {
     if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
         return Ok(result);
@@ -338,9 +338,9 @@ mod tests {
             "model":"qwen",
             "input":[{"type":"message","role":"user","content":"remember slate"}]
         });
-        let turn = skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+        let turn = mesh_openresponses::ResponsesTurn::prepare_compact(
             &mut request,
-            skippy_inference_api::responses::ResponseContinuation::disabled(),
+            mesh_openresponses::ResponseContinuation::disabled(),
         )
         .unwrap();
         let chat = serde_json::json!({
@@ -362,9 +362,9 @@ mod tests {
     #[test]
     fn shared_responses_adapter_rejects_truncated_compaction() {
         let mut request = serde_json::json!({"model":"qwen","input":"remember slate"});
-        let turn = skippy_inference_api::responses::ResponsesTurn::prepare_compact(
+        let turn = mesh_openresponses::ResponsesTurn::prepare_compact(
             &mut request,
-            skippy_inference_api::responses::ResponseContinuation::disabled(),
+            mesh_openresponses::ResponseContinuation::disabled(),
         )
         .unwrap();
         let error = crate::network::openai::virtual_model::translated_json_body(
@@ -386,9 +386,9 @@ mod tests {
             "model":"qwen", "input":"one call only", "max_tool_calls":1,
             "tools":[{"type":"function","name":"same"}]
         });
-        let turn = skippy_inference_api::responses::ResponsesTurn::prepare(
+        let turn = mesh_openresponses::ResponsesTurn::prepare(
             &mut request,
-            skippy_inference_api::responses::ResponseContinuation::disabled(),
+            mesh_openresponses::ResponseContinuation::disabled(),
         )
         .unwrap();
         let chat = serde_json::json!({
@@ -416,9 +416,9 @@ mod tests {
             "model":"qwen", "input":"one call only", "parallel_tool_calls":false,
             "tools":[{"type":"function","name":"same"}]
         });
-        let turn = skippy_inference_api::responses::ResponsesTurn::prepare(
+        let turn = mesh_openresponses::ResponsesTurn::prepare(
             &mut request,
-            skippy_inference_api::responses::ResponseContinuation::disabled(),
+            mesh_openresponses::ResponseContinuation::disabled(),
         )
         .unwrap();
         let chat = serde_json::json!({

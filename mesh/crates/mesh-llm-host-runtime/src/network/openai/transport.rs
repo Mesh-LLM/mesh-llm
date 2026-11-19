@@ -1693,8 +1693,7 @@ fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
 pub(crate) struct RouteTargetContext<'a> {
     pub(crate) request_id: RequestId,
     pub(crate) response_adapter: ResponseAdapter,
-    pub(crate) responses_turn:
-        Option<&'a std::sync::Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    pub(crate) responses_turn: Option<&'a std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
 }
 

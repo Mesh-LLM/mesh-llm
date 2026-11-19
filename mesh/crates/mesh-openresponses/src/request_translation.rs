@@ -7,7 +7,7 @@ use skippy_guardrails::MESH_COMPACT_FIELD;
 use super::content_items::translate_responses_content_item;
 use super::conversation::{is_responses_tool_item, translate_responses_conversation_items};
 use super::{request_validation, store, stream, tools, turn};
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 pub(super) fn alias_chat_max_tokens(object: &mut Map<String, Value>) -> bool {
     let mut changed = false;

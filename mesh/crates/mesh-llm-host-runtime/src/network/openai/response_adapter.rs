@@ -1,7 +1,7 @@
 use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
 
-pub(crate) use skippy_inference_api::translate_chat_completion_to_responses;
+pub(crate) use mesh_openresponses::translate_chat_completion_to_responses;
 
 pub(crate) fn sse_frame(event: Option<&str>, data: &str) -> Vec<u8> {
     let mut frame = Vec::new();

@@ -37,6 +37,7 @@ members = [
     "mesh/crates/mesh-native-serving-plugin-api",
     "mesh/crates/mesh-native-serving-plugin-host",
     "mesh/crates/mesh-client",
+    "mesh/crates/mesh-openresponses",
     "mesh/crates/mesh-llm-transport",
     "mesh/crates/mesh-llm-api-client",
     "mesh/crates/mesh-llm-api-server",

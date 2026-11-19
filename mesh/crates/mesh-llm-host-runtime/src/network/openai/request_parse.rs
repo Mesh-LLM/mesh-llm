@@ -200,7 +200,7 @@ pub struct BufferedHttpRequest {
     /// The caller-ingress Responses turn. It never crosses to a worker: its
     /// expanded chat history does, while this state builds and stores the
     /// client-facing terminal response after any worker returns.
-    pub responses_turn: Option<Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    pub responses_turn: Option<Arc<mesh_openresponses::ResponsesTurn>>,
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
@@ -392,7 +392,7 @@ struct RequestRewriteOutcome {
     request_object_request_ids: Vec<String>,
     request_path: String,
     response_adapter: ResponseAdapter,
-    responses_turn: Option<Arc<skippy_inference_api::responses::ResponsesTurn>>,
+    responses_turn: Option<Arc<mesh_openresponses::ResponsesTurn>>,
     rewritten_body: Option<Vec<u8>>,
     /// A plugin request transform replaced the body.
     transformed: bool,
@@ -421,7 +421,7 @@ pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
     transforms: RequestTransforms,
-    response_store: Option<Arc<skippy_inference_api::responses::ResponseStore>>,
+    response_store: Option<Arc<mesh_openresponses::ResponseStore>>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     let response_peer = stream.peer_addr().ok().map(|address| address.ip());
     let result = read_http_request_with_limits_with_context(
@@ -469,7 +469,7 @@ async fn read_http_request_with_limits_with_context<S>(
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
     transforms: RequestTransforms,
-    response_store: Option<Arc<skippy_inference_api::responses::ResponseStore>>,
+    response_store: Option<Arc<mesh_openresponses::ResponseStore>>,
     response_peer: Option<std::net::IpAddr>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
 where
@@ -505,15 +505,13 @@ where
     let requires_json_transform =
         request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some())
             || (transformer.is_some() && plugin_transform::is_transformable_path(&parsed.path));
-    let forwarded = skippy_inference_api::responses::FORWARDING_HEADERS
-        .iter()
-        .any(|name| {
-            header_values_from_raw(&raw[..header_end], name).is_ok_and(|values| !values.is_empty())
-        });
+    let forwarded = mesh_openresponses::FORWARDING_HEADERS.iter().any(|name| {
+        header_values_from_raw(&raw[..header_end], name).is_ok_and(|values| !values.is_empty())
+    });
     let continuation = (transforms == RequestTransforms::Apply).then(|| {
-        skippy_inference_api::responses::ResponseContinuation::new(
+        mesh_openresponses::ResponseContinuation::new(
             response_store,
-            skippy_inference_api::responses::caller_scope_for_http_peer(response_peer, forwarded),
+            mesh_openresponses::caller_scope_for_http_peer(response_peer, forwarded),
         )
     });
     let rewrite = rewrite_request_body_for_forwarding(
@@ -806,7 +804,7 @@ async fn rewrite_request_body_for_forwarding(
     plugin_manager: Option<&plugin::PluginManager>,
     transformer: Transformer<'_>,
     requires_json_transform: bool,
-    response_continuation: Option<skippy_inference_api::responses::ResponseContinuation>,
+    response_continuation: Option<mesh_openresponses::ResponseContinuation>,
 ) -> Result<RequestRewriteOutcome> {
     let mut outcome = RequestRewriteOutcome {
         body_json: None,
@@ -831,16 +829,14 @@ async fn rewrite_request_body_for_forwarding(
 
     {
         let continuation = response_continuation
-            .unwrap_or_else(skippy_inference_api::responses::ResponseContinuation::disabled);
+            .unwrap_or_else(mesh_openresponses::ResponseContinuation::disabled);
         outcome.responses_turn = match path.split('?').next() {
-            Some("/v1/responses") => Some(Arc::new(
-                skippy_inference_api::responses::ResponsesTurn::prepare(body_json, continuation)?,
-            )),
+            Some("/v1/responses") => Some(Arc::new(mesh_openresponses::ResponsesTurn::prepare(
+                body_json,
+                continuation,
+            )?)),
             Some("/v1/responses/compact") => Some(Arc::new(
-                skippy_inference_api::responses::ResponsesTurn::prepare_compact(
-                    body_json,
-                    continuation,
-                )?,
+                mesh_openresponses::ResponsesTurn::prepare_compact(body_json, continuation)?,
             )),
             _ => None,
         };
@@ -1440,7 +1436,7 @@ async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> R
 }
 
 fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_present: bool) -> bool {
-    skippy_inference_api::request_body_requires_json_normalization(path, body)
+    mesh_openresponses::request_body_requires_json_normalization(path, body)
         || (plugin_manager_present
             && path.split('?').next().unwrap_or(path) == "/v1/chat/completions"
             && std::str::from_utf8(body).ok().is_some_and(|body_text| {

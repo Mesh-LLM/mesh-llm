@@ -21,7 +21,7 @@ use super::stream::obfuscation::ObfuscationPolicy;
 use super::terminal::{chat_completion_output, malformed_tool_call};
 use super::tools::{ToolOutputViolation, ToolPolicy};
 use super::{continuation::ResponseContinuation, store::StoredResponse};
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 #[derive(Debug, Clone)]
 enum TurnKind {
@@ -157,7 +157,7 @@ impl ResponsesTurn {
             .map(ToString::to_string);
         Ok(Self {
             id: new_response_id(),
-            created_at: crate::responses::now_unix_secs_i64(),
+            created_at: crate::now_unix_secs_i64(),
             model,
             envelope,
             instructions,
@@ -581,7 +581,7 @@ fn is_conversation_item(item: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::responses::store::{CallerScope, ResponseStore, ResponseStoreLimits};
+    use crate::store::{CallerScope, ResponseStore, ResponseStoreLimits};
 
     fn store() -> Arc<ResponseStore> {
         Arc::new(ResponseStore::new(ResponseStoreLimits::default()))
@@ -683,8 +683,7 @@ mod tests {
             "messages":{"type":"function_call_output","call_id":"call_weather","output":"sunny"}
         });
         let child_turn = ResponsesTurn::prepare(&mut child_body, local(&store)).unwrap();
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut child_body)
-            .unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut child_body).unwrap();
         assert_eq!(child_body["messages"][2]["role"], "tool");
         assert_eq!(child_body["messages"][2]["tool_call_id"], "call_weather");
         let child = child_turn.finish_chat_completion(&chat("done"));
@@ -739,7 +738,7 @@ mod tests {
         let mut body = json!({"model": "m", "input": null, "tools": null});
         let turn = ResponsesTurn::prepare(&mut body, ResponseContinuation::disabled()).unwrap();
         assert!(turn.input.is_empty());
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
         assert!(body["messages"].as_array().is_none_or(Vec::is_empty));
         assert!(body.get("tools").is_none_or(Value::is_null));
     }
@@ -993,7 +992,7 @@ mod tests {
         });
         let turn = ResponsesTurn::prepare(&mut body, local(&store)).unwrap();
         let id = turn.id().to_string();
-        crate::responses::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+        crate::normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
         assert_eq!(body["tool_choice"], "auto");
         assert_eq!(body["tools"].as_array().unwrap().len(), 2);
         assert_eq!(

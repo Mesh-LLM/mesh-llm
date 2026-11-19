@@ -196,7 +196,7 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
 async fn read_loopback_responses_request(
     body: serde_json::Value,
     extra_headers: &str,
-    store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
+    store: std::sync::Arc<mesh_openresponses::ResponseStore>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     read_loopback_request("/v1/responses", body, extra_headers, store).await
 }
@@ -205,7 +205,7 @@ async fn read_loopback_request(
     path: &str,
     body: serde_json::Value,
     extra_headers: &str,
-    store: std::sync::Arc<skippy_inference_api::responses::ResponseStore>,
+    store: std::sync::Arc<mesh_openresponses::ResponseStore>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -237,8 +237,8 @@ async fn read_loopback_request(
 
 #[tokio::test]
 async fn loopback_compaction_restores_into_a_new_responses_request() {
-    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::new(
-        skippy_inference_api::responses::ResponseStoreLimits::default(),
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::new(
+        mesh_openresponses::ResponseStoreLimits::default(),
     ));
     let compact_request = serde_json::json!({
         "model": "qwen",
@@ -317,7 +317,7 @@ async fn compact_expansion_over_body_limit_is_rejected_without_plugins() {
             node_limit: None,
         },
         true,
-        Some(skippy_inference_api::responses::ResponseContinuation::disabled()),
+        Some(mesh_openresponses::ResponseContinuation::disabled()),
     )
     .await
     {
@@ -329,7 +329,7 @@ async fn compact_expansion_over_body_limit_is_rejected_without_plugins() {
 
 #[tokio::test]
 async fn responses_continuation_is_restored_at_ingress_before_worker_routing() {
-    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
     let first = read_loopback_responses_request(
         serde_json::json!({
             "model": "m", "input": "use the weather tool",
@@ -422,7 +422,7 @@ async fn mesh_http_and_sse_reject_orphan_outputs_before_forwarding() {
                 node_limit: None,
             },
             true,
-            Some(skippy_inference_api::responses::ResponseContinuation::disabled()),
+            Some(mesh_openresponses::ResponseContinuation::disabled()),
         )
         .await
         {
@@ -442,7 +442,7 @@ async fn mesh_http_and_sse_reject_orphan_outputs_before_forwarding() {
 
 #[tokio::test]
 async fn mesh_ingress_keeps_full_tools_but_owns_allowed_output_policy() {
-    let store = std::sync::Arc::new(skippy_inference_api::responses::ResponseStore::default());
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
     let body = serde_json::to_vec(&serde_json::json!({
         "model":"m", "input":"use safe",
         "tools":[
@@ -464,9 +464,9 @@ async fn mesh_ingress_keeps_full_tools_but_owns_allowed_output_policy() {
             node_limit: None,
         },
         true,
-        Some(skippy_inference_api::responses::ResponseContinuation::new(
+        Some(mesh_openresponses::ResponseContinuation::new(
             Some(store.clone()),
-            Some(skippy_inference_api::responses::CallerScope::LocalHost),
+            Some(mesh_openresponses::CallerScope::LocalHost),
         )),
     )
     .await
@@ -494,10 +494,7 @@ async fn mesh_ingress_keeps_full_tools_but_owns_allowed_output_policy() {
     assert_eq!(response["error"]["code"], "tool_choice_violation");
     assert!(
         store
-            .get(
-                &skippy_inference_api::responses::CallerScope::LocalHost,
-                &id
-            )
+            .get(&mesh_openresponses::CallerScope::LocalHost, &id)
             .is_err()
     );
 }

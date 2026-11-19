@@ -287,7 +287,7 @@ mod tests {
         let body = forwarded_body(&request);
         assert!(body.get("max_tool_calls").is_none());
         let response = request.responses_turn.as_ref().unwrap().response(
-            skippy_inference_api::responses::ResponseStatus::InProgress,
+            mesh_openresponses::ResponseStatus::InProgress,
             &[],
             None,
             None,
@@ -382,8 +382,8 @@ mod tests {
     #[tokio::test]
     async fn responses_websocket_turn_reasserts_marker_and_wire_length() {
         let manager = stamping_manager().await;
-        let session = skippy_inference_api::responses::ResponsesSession::new(
-            skippy_inference_api::responses::ResponsesSessionConfig::default(),
+        let session = mesh_openresponses::ResponsesSession::new(
+            mesh_openresponses::ResponsesSessionConfig::default(),
             None,
             None,
         );
@@ -418,8 +418,8 @@ mod tests {
     #[tokio::test]
     async fn responses_websocket_turn_strips_reintroduced_max_tool_calls() {
         let manager = stamping_manager().await;
-        let session = skippy_inference_api::responses::ResponsesSession::new(
-            skippy_inference_api::responses::ResponsesSessionConfig::default(),
+        let session = mesh_openresponses::ResponsesSession::new(
+            mesh_openresponses::ResponsesSessionConfig::default(),
             None,
             None,
         );
@@ -445,7 +445,7 @@ mod tests {
         let body = forwarded_body(&request);
         assert!(body.get("max_tool_calls").is_none());
         let response = request.responses_turn.as_ref().unwrap().response(
-            skippy_inference_api::responses::ResponseStatus::InProgress,
+            mesh_openresponses::ResponseStatus::InProgress,
             &[],
             None,
             None,

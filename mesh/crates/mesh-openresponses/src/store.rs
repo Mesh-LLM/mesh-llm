@@ -16,7 +16,7 @@ use std::{
 
 use serde_json::{Map, Value};
 
-use crate::errors::InferenceError;
+use skippy_inference_api::errors::InferenceError;
 
 /// The identity whose responses a lookup may see. It comes from the
 /// transport, never from request headers or body fields.
@@ -198,7 +198,7 @@ impl StoredResponse {
 pub fn previous_response_not_found(id: &str) -> InferenceError {
     InferenceError::from_kind(
         axum::http::StatusCode::NOT_FOUND,
-        crate::errors::InferenceErrorKind::NotFound,
+        skippy_inference_api::errors::InferenceErrorKind::NotFound,
         format!("previous response '{id}' was not found"),
     )
     .with_code("previous_response_not_found")

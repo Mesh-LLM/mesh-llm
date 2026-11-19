@@ -366,9 +366,9 @@ mod tests {
             "tools":[{"type":"function","name":"same"}]
         });
         let turn = std::sync::Arc::new(
-            skippy_inference_api::responses::ResponsesTurn::prepare(
+            mesh_openresponses::ResponsesTurn::prepare(
                 &mut request,
-                skippy_inference_api::responses::ResponseContinuation::disabled(),
+                mesh_openresponses::ResponseContinuation::disabled(),
             )
             .unwrap(),
         );

@@ -82,17 +82,14 @@ pub use lifecycle::{
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use rerank::{RerankDocument, RerankRequest, RerankResponse, RerankResult};
 pub use responses::{
-    NormalizationOutcome, PreparedResponsesTurn, ResponseAdapterMode, ResponsesRequest,
-    ResponsesSession, ResponsesSessionConfig, ResponsesSessionExecutor, ResponsesTurnEventStream,
-    StreamUsage, WebSocketErrorEvent, chat_usage_to_responses_usage,
-    normalize_openai_compat_request, parse_chat_stream_chunk,
+    NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,
+    chat_usage_to_responses_usage, normalize_openai_compat_request, parse_chat_stream_chunk,
     request_body_requires_json_normalization, responses_stream_completed_event,
     responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
     responses_stream_content_part_done_event, responses_stream_created_event,
     responses_stream_created_event_with_sequence, responses_stream_delta_event,
     responses_stream_delta_event_with_logprobs,
-    responses_stream_delta_event_with_logprobs_and_sequence,
-    responses_stream_events_for_chat_completion, responses_stream_events_for_response,
+    responses_stream_delta_event_with_logprobs_and_sequence, responses_stream_events_for_response,
     responses_stream_output_item_added_event, responses_stream_output_item_done_event,
     responses_stream_reasoning_delta_event_with_sequence, responses_stream_text_done_event,
     responses_stream_text_done_event_with_sequence, stream_usage_to_responses_usage,

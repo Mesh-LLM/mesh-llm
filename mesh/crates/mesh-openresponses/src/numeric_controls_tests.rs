@@ -140,6 +140,7 @@ fn canonical_output_limit_wins_by_presence_including_null() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)]
 fn numeric_controls_inherit_and_children_override_or_clear_them() {
     let store = Arc::new(ResponseStore::default());
     let mut parent = json!({

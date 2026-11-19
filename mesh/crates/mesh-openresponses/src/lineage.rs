@@ -56,7 +56,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::responses::{
+    use crate::{
         ResponseContinuation, ResponsesSession, ResponsesSessionConfig, ResponsesTurn,
         store::{CallerScope, ResponseStore},
     };

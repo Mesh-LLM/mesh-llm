@@ -25,13 +25,11 @@ use crate::{
     network::{affinity, openai::client_stream::ClientStream},
     runtime::IngressType,
 };
-use skippy_inference_api::{
-    InferenceError, InferenceErrorKind,
-    responses::{
-        FORWARDING_HEADERS, ResponsesSession, ResponsesSessionConfig, WebSocketErrorEvent,
-        caller_scope_for_http_peer,
-    },
+use mesh_openresponses::{
+    FORWARDING_HEADERS, ResponsesSession, ResponsesSessionConfig, WebSocketErrorEvent,
+    caller_scope_for_http_peer,
 };
+use skippy_inference_api::{InferenceError, InferenceErrorKind};
 
 const CONTROL_QUEUE: usize = 4;
 const CAPTURE_BYTES: usize = 64 * 1024;
@@ -337,7 +335,7 @@ struct TurnExecution {
 }
 
 impl TurnExecution {
-    async fn run(self, prepared: skippy_inference_api::responses::PreparedResponsesTurn) {
+    async fn run(self, prepared: mesh_openresponses::PreparedResponsesTurn) {
         let previous_response_id = prepared.previous_response_id().map(ToString::to_string);
         let plugin_manager = self.node.plugin_manager().await;
         let request = match crate::network::openai::request_parse::buffer_prepared_responses_turn(
