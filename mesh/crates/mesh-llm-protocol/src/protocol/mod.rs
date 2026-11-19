@@ -67,6 +67,7 @@ pub enum ControlFrameError {
     MissingControlOwnerId,
     InvalidConfigHashLength { got: usize },
     InvalidSubprotocol,
+    InvalidPeerEvidence,
     InvalidPublicKeyLength { got: usize },
     MissingSignature,
     InvalidSignatureLength { got: usize },
@@ -92,6 +93,7 @@ pub enum ControlFrameError {
 impl std::fmt::Display for ControlFrameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPeerEvidence => write!(f, "invalid peer evidence bounds"),
             ControlFrameError::OversizeFrame { size } => write!(
                 f,
                 "control frame too large: {} bytes (max {})",
@@ -768,6 +770,13 @@ pub fn validate_peer_announcement(
 pub fn validate_node_record(
     record: &crate::proto::node::NodeRecord,
 ) -> Result<(), ControlFrameError> {
+    if record.peer_evidence.len() > 8
+        || record.peer_evidence.iter().any(|(namespace, bytes)| {
+            namespace.is_empty() || namespace.len() > 64 || bytes.len() > 1024
+        })
+    {
+        return Err(ControlFrameError::InvalidPeerEvidence);
+    }
     validate_role_and_subprotocols(record.role, record.http_port, &record.subprotocols)
 }
 
@@ -985,6 +994,9 @@ pub fn owner_control_rejection_envelope(
     };
     owner_control_error_envelope(code, request_id, err.to_string())
 }
+
+#[cfg(test)]
+mod peer_evidence_tests;
 
 #[cfg(test)]
 mod tests {
