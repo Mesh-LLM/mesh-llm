@@ -694,6 +694,7 @@ fn quantize_layer_package(args: QuantizeLayerPackageArgs) -> Result<()> {
         "missing skippy-package-builder binary {}; install it next to skippy-quantize or on PATH, build it with `cargo build --release --locked -p skippy-package-builder`, or pass --skippy-model-package-bin",
         args.skippy_model_package_bin.display()
     );
+    tool_paths::ensure_starts(&args.skippy_model_package_bin)?;
     if args.package_dir.exists() && !args.resume_package {
         ensure!(
             args.replace_package,
@@ -1375,3 +1376,7 @@ fn print_dry_run_complete(json: bool, kind: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "layer_package_tests.rs"]
+mod layer_package_tests;
