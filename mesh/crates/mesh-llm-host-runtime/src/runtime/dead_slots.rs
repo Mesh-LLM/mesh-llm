@@ -120,10 +120,22 @@ fn holds_only_instance_files(dir: &Path) -> bool {
             };
             match entry.file_name().to_str() {
                 Some("lock" | "owner.json" | "owner.json.tmp") => kind.is_file(),
-                Some("logs") => kind.is_dir(),
+                Some("logs") => kind.is_dir() && holds_only_files(&entry.path()),
                 _ => false,
             }
         })
+    })
+}
+
+/// Whether every entry of `dir` is a regular file. An instance writes only
+/// files in `logs/`, and the freshness check reads no deeper, so a slot whose
+/// `logs/` holds a directory is not one to remove.
+fn holds_only_files(dir: &Path) -> bool {
+    let Ok(mut entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.all(|entry| {
+        entry.is_ok_and(|entry| fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.is_file()))
     })
 }
 
@@ -539,6 +551,26 @@ mod tests {
             0
         );
         assert!(dir.join("logs").is_file());
+
+        // Nor is a directory inside `logs`, whose files the freshness check
+        // would not read.
+        fs::remove_file(dir.join("logs")).unwrap();
+        fs::create_dir_all(dir.join("logs").join("archive")).unwrap();
+        fs::write(
+            dir.join("logs").join("archive").join("session.log"),
+            "recent",
+        )
+        .unwrap();
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(
+            dir.join("logs")
+                .join("archive")
+                .join("session.log")
+                .exists()
+        );
     }
 
     #[test]
