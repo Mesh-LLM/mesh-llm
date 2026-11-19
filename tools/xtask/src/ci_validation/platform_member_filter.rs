@@ -62,6 +62,7 @@ fn check_source(source: &str) -> DynResult<()> {
     }
 
     windows_filters_run_under_bash(steps)?;
+    windows_filters_strip_carriage_returns(steps)?;
     consume_filtered(steps, MACOS_TEST_STEP, &MACOS_TEST_ENVS, &filtered_ids)?;
     consume_filtered(steps, WINDOWS_TEST_STEP, &WINDOWS_TEST_ENVS, &filtered_ids)?;
     Ok(())
@@ -84,6 +85,39 @@ fn windows_filters_run_under_bash(steps: &[Node]) -> DynResult<()> {
             return Err(format!(
                 "{PLATFORM_SLICE}: step '{name}' runs a Bash filter on a Windows row and \
                  must declare shell: bash; the Windows default shell is pwsh"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// The Windows runner's `jq.exe` ends every line with CRLF. `mapfile` keeps
+/// the CR on each requested name while the runner's `grep` drops it from the
+/// member file, so without stripping it no name matches and every owner is
+/// skipped with a warning while the row still passes.
+fn windows_filters_strip_carriage_returns(steps: &[Node]) -> DynResult<()> {
+    for step in steps {
+        let name = step.get("name").and_then(Node::text).unwrap_or_default();
+        let windows_row = step
+            .get("if")
+            .and_then(Node::text)
+            .is_some_and(|condition| condition.contains("'windows'"));
+        if !name.contains(FILTER_NAME_MARKER) || !windows_row {
+            continue;
+        }
+        let run = step.get("run").and_then(Node::text).unwrap_or_default();
+        let unstripped: Vec<&str> = run
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#') && line.contains("jq -r"))
+            .filter(|line| !line.contains("tr -d '\\r'"))
+            .collect();
+        if !unstripped.is_empty() {
+            return Err(format!(
+                "{PLATFORM_SLICE}: step '{name}' reads jq output on a Windows row without \
+                 `tr -d '\\r'`; jq.exe writes CRLF, so every owner would be skipped: {}",
+                unstripped.join(" | ")
             )
             .into());
         }
@@ -185,5 +219,22 @@ mod tests {
             check_source(&without_shell).is_err(),
             "a Windows filter step left on the pwsh default must fail the contract"
         );
+    }
+
+    #[test]
+    fn windows_filter_reading_jq_output_with_its_cr_is_rejected() {
+        let root = repo_root().expect("resolve the repository root");
+        let source =
+            fs::read_to_string(root.join(PLATFORM_SLICE)).expect("read the platform slice");
+        let stripped = "mapfile -t requested < <(jq -r '.[]' <<<\"$input\" | tr -d '\\r')";
+        assert!(source.contains(stripped), "fixture marker must exist");
+        let with_cr = source.replace(
+            stripped,
+            "mapfile -t requested < <(jq -r '.[]' <<<\"$input\")",
+        );
+        let error = check_source(&with_cr)
+            .expect_err("a Windows filter keeping jq's CR must fail the contract")
+            .to_string();
+        assert!(error.contains("tr -d"), "{error}");
     }
 }
