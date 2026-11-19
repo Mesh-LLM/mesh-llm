@@ -46,7 +46,8 @@ git commits, evidence by jy artifacts.
 ```
 
 Model references resolve to repo/rev/file/sha entries that live in
-`skippy/evals/kv-validation/models.json` plus the manifest's per-run overrides.
+`skippy/evals/kv-validation/models.json` plus the manifest's per-run overrides in smoke mode. Comparison overrides must match the catalog,
+and only the six model/tokenizer pin fields may be overridden.
 Short manifest aliases map to canonical catalog keys through
 `skippy/evals/agentx/fleet-models.json`, which is an alias map only and carries
 no pins of its own; the canonical key is what reaches the strict comparison
@@ -67,7 +68,8 @@ admission.
    submitting, and the worker builds everything from that commit. Every run spec is generated
    before the first submission, and each accepted job ID is written to the run-root's
    `fleet.json` ledger atomically as it arrives; rerunning the same manifest resumes only the
-   runs the ledger is still missing, and a different manifest under the same campaign name is
+   runs the ledger is still missing. Concurrent submissions are refused; changed worker bytes,
+   resolved pins, or manifests under the same campaign name are
    rejected. Never distribute binaries through external object
    storage: source pins + jy artifacts only. The historical CDN path-keyed negative-cache
    (404s pinned for hours per URL path) is exactly why.
@@ -86,9 +88,13 @@ admission.
 
 ## Reading results
 
-- Smoke reports per-turn `tok/s` and `cached%` plus a `steady_tok_s` summary per engine. Skippy
-  `cached%` should track llama's on every model; a gap with matching cache means decode-bound, a
-  gap with low cache means retention is still failing.
+- Smoke reports per-conversation prompt tokens and cached percentage. Every post-warm-up
+  turn must retain at least half of that conversation's previous prompt. This is a retention
+  check, not a throughput benchmark; optional profile/sweep output is diagnostic only.
+  Blocks must contain at least 240 characters. The usage threshold is heuristic,
+  not token-level proof for arbitrary templates/tokenizers; inspect the evidence.
+- Smoke requires a product source pin containing the typed probe. Older historical
+  pins may resolve successfully yet remain unsupported for this smoke workflow.
 - Comparison campaigns interleave arms (`llama, skippy, skippy, llama, llama, skippy`) at
   c1/c2/c4 with 69 requests and 18,713 verified output tokens per cell. Judge skippy by
   `output_tok_s`, `cache_read_tokens.p50`, and `ttft.p50` per cell.

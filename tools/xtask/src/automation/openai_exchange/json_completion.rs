@@ -67,3 +67,35 @@ pub(in crate::automation) fn decode_body(
     decoder.consume(bytes, elapsed)?;
     decoder.finish(elapsed)
 }
+
+/// Return bounded JSON when a conversation driver needs the actual assistant reply.
+pub(in crate::automation) async fn request_value(
+    base: &str,
+    body: &Value,
+) -> super::TransportResult<Value> {
+    super::post(
+        format!("{}/chat/completions", base.trim_end_matches('/')).parse()?,
+        body,
+        std::time::Instant::now(),
+        true,
+        JsonValueDecoder(JsonDecoder { bytes: Vec::new() }),
+    )
+    .await
+}
+
+struct JsonValueDecoder(JsonDecoder);
+impl Decoder for JsonValueDecoder {
+    type Evidence = Value;
+    fn accepts(&self, status: hyper::StatusCode) -> bool {
+        status == hyper::StatusCode::OK
+    }
+    fn consume(&mut self, bytes: &[u8], elapsed: Duration) -> Result<(), String> {
+        self.0.consume(bytes, elapsed)
+    }
+    fn terminal(&self) -> bool {
+        false
+    }
+    fn finish(self, _: Duration) -> Result<Value, String> {
+        serde_json::from_slice(&self.0.bytes).map_err(|error| error.to_string())
+    }
+}

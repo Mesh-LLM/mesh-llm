@@ -6,15 +6,16 @@
 //! cache cannot yet have, then grows the real chat history with the server's
 //! own assistant replies. A scored turn demonstrates retention only when its
 //! `cached_tokens` cover a defined fraction of that conversation's previous
-//! prompt, so a shared system prefix or a single cached template token cannot
-//! pass. Missing usage, HTTP errors, and retention misses fail the probe.
+//! prompt. This is a usage-based heuristic, not a token-level proof of which
+//! conversation was retained. Missing usage, HTTP errors, and retention misses fail the probe.
 //!
 //! This is the typed owner of the retired `prefix-reuse-probe.py` script.
 use crate::command::DynResult;
 use serde_json::{Value, json};
+#[cfg(test)]
 use std::io::{BufReader, Read, Write};
+#[cfg(test)]
 use std::net::TcpStream;
-use std::sync::mpsc;
 use std::time::Duration;
 
 pub(super) const PREFIX_REUSE_PROBE_USAGE: &str = "automation agentx prefix-reuse-probe --port PORT [--conversations N] [--turns T] \
@@ -22,14 +23,14 @@ pub(super) const PREFIX_REUSE_PROBE_USAGE: &str = "automation agentx prefix-reus
 
 /// A scored turn demonstrates conversation-specific retention when its cached
 /// tokens cover at least this fraction of the conversation's previous prompt.
-/// The shared system prefix contributes only a handful of tokens, so
-/// common-prefix reuse cannot cross a threshold measured against a whole
-/// previous prompt.
+/// A minimum prompt block keeps the short shared system message from dominating
+/// normal model prompts; unusual chat templates still need evidence inspection.
 const CONVERSATION_RETENTION_FRACTION: f64 = 0.5;
 
 /// A probe needs one warm-up turn plus at least one scored turn to say
 /// anything about retention.
 const MIN_TURNS: u32 = 2;
+const MIN_BLOCK_CHARS: usize = 240;
 
 const HTTP_TIMEOUT_SECS: u64 = 600;
 
@@ -135,8 +136,11 @@ fn parse_config(args: &[String]) -> DynResult<ProbeConfig> {
         )
         .into());
     }
-    if block_chars == 0 {
-        return Err("--block-chars must be positive".into());
+    if block_chars < MIN_BLOCK_CHARS {
+        return Err(format!("--block-chars must be at least {MIN_BLOCK_CHARS} so the shared template does not dominate").into());
+    }
+    if max_tokens == 0 || port == 0 {
+        return Err("--max-tokens and --port must be positive".into());
     }
     Ok(ProbeConfig {
         port,
@@ -187,48 +191,22 @@ fn chat_body(
 }
 
 fn post_chat(port: u16, body: &Value) -> Result<Value, String> {
-    let payload = serde_json::to_vec(body).map_err(|error| error.to_string())?;
-    let mut stream =
-        TcpStream::connect(("127.0.0.1", port)).map_err(|error| format!("connect: {error}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(HTTP_TIMEOUT_SECS)))
-        .map_err(|error| format!("set read timeout: {error}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(HTTP_TIMEOUT_SECS)))
-        .map_err(|error| format!("set write timeout: {error}"))?;
-    let request = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        payload.len()
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|error| format!("write: {error}"))?;
-    stream
-        .write_all(&payload)
-        .map_err(|error| format!("write: {error}"))?;
-    let mut response = Vec::new();
-    BufReader::new(stream)
-        .read_to_end(&mut response)
-        .map_err(|error| format!("read: {error}"))?;
-    let text = String::from_utf8_lossy(&response);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| format!("malformed HTTP response: {}", first_line(&text)))?;
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| format!("malformed HTTP status: {}", first_line(&text)))?;
-    if status != 200 {
-        return Err(format!("HTTP {status}: {}", first_line(body)));
-    }
-    serde_json::from_str(body).map_err(|error| format!("non-JSON completion body: {error}"))
-}
-
-fn first_line(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default();
-    line.chars().take(160).collect()
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(HTTP_TIMEOUT_SECS),
+            crate::automation::openai_exchange::json_completion::request_value(
+                &format!("http://127.0.0.1:{port}/v1"),
+                body,
+            ),
+        )
+        .await
+        .map_err(|_| "completion deadline exceeded".to_string())?
+        .map_err(|error| error.to_string())
+    })
 }
 
 fn extract_usage(response: &Value) -> Result<(u64, u64, u64), String> {
@@ -238,7 +216,8 @@ fn extract_usage(response: &Value) -> Result<(u64, u64, u64), String> {
     let prompt_tokens = usage
         .get("prompt_tokens")
         .and_then(Value::as_u64)
-        .ok_or_else(|| "usage.prompt_tokens missing".to_string())?;
+        .filter(|tokens| *tokens > 0)
+        .ok_or_else(|| "usage.prompt_tokens missing or zero".to_string())?;
     let completion_tokens = usage
         .get("completion_tokens")
         .and_then(Value::as_u64)
@@ -247,7 +226,10 @@ fn extract_usage(response: &Value) -> Result<(u64, u64, u64), String> {
         .get("prompt_tokens_details")
         .and_then(|details| details.get("cached_tokens"))
         .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .ok_or_else(|| "usage.cached_tokens missing or invalid".to_string())?;
+    if cached_tokens > prompt_tokens {
+        return Err("cached usage exceeds prompt usage".into());
+    }
     Ok((prompt_tokens, cached_tokens, completion_tokens))
 }
 
@@ -259,6 +241,7 @@ fn assistant_reply(response: &Value) -> Result<String, String> {
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
         .and_then(Value::as_str)
+        .filter(|reply| !reply.trim().is_empty())
         .map(str::to_string)
         .ok_or_else(|| "assistant reply missing from completion response".to_string())
 }
@@ -267,7 +250,7 @@ fn assistant_reply(response: &Value) -> Result<String, String> {
 /// to cover the retention fraction of that conversation's previous prompt.
 fn score_turn(record: &TurnRecord, previous_prompt_tokens: Option<u64>) -> Option<String> {
     let previous = previous_prompt_tokens?;
-    let required = (previous as f64 * CONVERSATION_RETENTION_FRACTION).ceil() as u64;
+    let required = previous.div_ceil(2);
     (record.cached_tokens < required).then(|| {
         format!(
             "conversation {} turn {}: cached {} tokens covers less than {:.0}% of the previous prompt ({previous} tokens)",
@@ -279,9 +262,7 @@ fn score_turn(record: &TurnRecord, previous_prompt_tokens: Option<u64>) -> Optio
     })
 }
 
-/// Every conversation must retain conversation-specific reuse on at least half
-/// of its scored turns, and any conversation that never retains after warm-up
-/// is the collapse signature this probe exists to catch.
+/// Every post-warm-up request must retain its conversation-specific prefix.
 fn retention_failures(records: &[TurnRecord]) -> Vec<String> {
     let mut conversations = std::collections::BTreeMap::<usize, Vec<&TurnRecord>>::new();
     for record in records {
@@ -293,105 +274,99 @@ fn retention_failures(records: &[TurnRecord]) -> Vec<String> {
     let mut failures = Vec::new();
     for (conversation, turns) in conversations {
         let mut previous_prompt = None;
-        let mut scored = 0usize;
-        let mut retained = 0usize;
         for record in turns {
             if record.failure.is_none() && record.turn >= 2 {
-                scored += 1;
-                match score_turn(record, previous_prompt) {
-                    Some(_) => {}
-                    None => retained += 1,
+                if let Some(failure) = score_turn(record, previous_prompt) {
+                    failures.push(failure);
+                } else if previous_prompt.is_none() {
+                    failures.push(format!(
+                        "conversation {conversation}: missing warm-up usage"
+                    ));
                 }
             }
             if record.failure.is_none() {
                 previous_prompt = Some(record.prompt_tokens);
             }
         }
-        if scored > 0 && retained == 0 {
-            failures.push(format!(
-                "conversation {conversation}: no conversation-specific reuse after warm-up"
-            ));
-        } else if retained * 2 < scored {
-            failures.push(format!(
-                "conversation {conversation}: conversation-specific reuse on {retained} of {scored} scored turns"
-            ));
-        }
     }
     failures
 }
 
 fn run_probe(config: &ProbeConfig) -> ProbeReport {
-    let (tx, rx) = mpsc::channel::<Vec<TurnRecord>>();
-    let mut handles = Vec::new();
-    for conversation in 0..config.conversations {
-        let tx = tx.clone();
-        let config = ProbeConfig {
-            port: config.port,
-            conversations: config.conversations,
-            turns: config.turns,
-            block_chars: config.block_chars,
-            max_tokens: config.max_tokens,
-            stagger_secs: config.stagger_secs,
-        };
-        handles.push(std::thread::spawn(move || {
-            if config.stagger_secs > 0 {
-                std::thread::sleep(Duration::from_secs(
-                    config.stagger_secs * conversation as u64,
-                ));
-            }
-            let mut history: Vec<(String, String)> = Vec::new();
-            let mut records = Vec::new();
-            for turn in 1..=config.turns {
-                let body = chat_body(
-                    &history,
+    let mut histories = vec![Vec::new(); config.conversations];
+    let mut records = Vec::new();
+    // Scope each round: all conversations complete a turn before any resumes.
+    // A panicked worker fails its record instead of stranding peers at a barrier.
+    for turn in 1..=config.turns {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = histories
+                .iter_mut()
+                .enumerate()
+                .map(|(conversation, history)| {
+                    (
+                        conversation,
+                        scope.spawn(move || request_turn(config, history, conversation, turn)),
+                    )
+                })
+                .collect();
+            for (conversation, handle) in handles {
+                records.push(handle.join().unwrap_or_else(|_| TurnRecord {
                     conversation,
                     turn,
-                    config.block_chars,
-                    config.max_tokens,
-                );
-                let failure = post_chat(config.port, &body).and_then(|response| {
-                    let (prompt_tokens, cached_tokens, _completion) = extract_usage(&response)?;
-                    let reply = assistant_reply(&response)?;
-                    history.push((user_content(conversation, turn, config.block_chars), reply));
-                    Ok((prompt_tokens, cached_tokens))
-                });
-                records.push(match failure {
-                    Ok((prompt_tokens, cached_tokens)) => TurnRecord {
-                        conversation,
-                        turn,
-                        prompt_tokens,
-                        cached_tokens,
-                        failure: None,
-                    },
-                    Err(error) => TurnRecord {
-                        conversation,
-                        turn,
-                        prompt_tokens: 0,
-                        cached_tokens: 0,
-                        failure: Some(format!("conversation {conversation} turn {turn}: {error}")),
-                    },
-                });
-                if records
-                    .last()
-                    .is_some_and(|record| record.failure.is_some())
-                {
-                    break;
-                }
+                    prompt_tokens: 0,
+                    cached_tokens: 0,
+                    failure: Some(format!(
+                        "conversation {conversation} turn {turn}: worker panicked"
+                    )),
+                }));
             }
-            let _ = tx.send(records);
-        }));
-    }
-    drop(tx);
-    let mut records = Vec::new();
-    for conversation_records in rx {
-        records.extend(conversation_records);
-    }
-    for handle in handles {
-        let _ = handle.join();
+        });
     }
     let mut failures = retention_failures(&records);
     failures.extend(records.iter().filter_map(|record| record.failure.clone()));
     ProbeReport { records, failures }
+}
+
+fn request_turn(
+    config: &ProbeConfig,
+    history: &mut Vec<(String, String)>,
+    conversation: usize,
+    turn: u32,
+) -> TurnRecord {
+    if turn == 1 && config.stagger_secs > 0 {
+        std::thread::sleep(Duration::from_secs(
+            config.stagger_secs * conversation as u64,
+        ));
+    }
+    let body = chat_body(
+        history,
+        conversation,
+        turn,
+        config.block_chars,
+        config.max_tokens,
+    );
+    let result = post_chat(config.port, &body).and_then(|response| {
+        let (prompt, cached, _) = extract_usage(&response)?;
+        let reply = assistant_reply(&response)?;
+        history.push((user_content(conversation, turn, config.block_chars), reply));
+        Ok((prompt, cached))
+    });
+    match result {
+        Ok((prompt_tokens, cached_tokens)) => TurnRecord {
+            conversation,
+            turn,
+            prompt_tokens,
+            cached_tokens,
+            failure: None,
+        },
+        Err(error) => TurnRecord {
+            conversation,
+            turn,
+            prompt_tokens: 0,
+            cached_tokens: 0,
+            failure: Some(format!("conversation {conversation} turn {turn}: {error}")),
+        },
+    }
 }
 
 fn print_report(report: &ProbeReport) {
@@ -399,8 +374,8 @@ fn print_report(report: &ProbeReport) {
         match record.failure.as_deref() {
             Some(failure) => println!("  ERROR {failure}"),
             None => {
-                let percent = (record.cached_tokens * 100)
-                    .checked_div(record.prompt_tokens)
+                let percent = (u128::from(record.cached_tokens) * 100)
+                    .checked_div(u128::from(record.prompt_tokens))
                     .unwrap_or(0);
                 println!(
                     "  RESULT conversation {} turn {}: prompt {} cached {percent}% completion-source turn",
@@ -558,12 +533,10 @@ mod tests {
 
     fn write_json(stream: &mut TcpStream, payload: &Value) -> std::io::Result<()> {
         let body = serde_json::to_vec(payload).unwrap();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(response.as_bytes())?;
-        stream.write_all(&body)
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
+        write!(stream, "{:x}\r\n", body.len())?;
+        stream.write_all(&body)?;
+        stream.write_all(b"\r\n0\r\n\r\n")
     }
 
     fn probe_config(port: u16) -> ProbeConfig {
@@ -606,10 +579,10 @@ mod tests {
             report
                 .failures
                 .iter()
-                .filter(|failure| failure.contains("no conversation-specific reuse after warm-up"))
+                .filter(|failure| failure.contains("cached 0 tokens"))
                 .count(),
-            3,
-            "every conversation must be named as collapsed"
+            6,
+            "every post-warm-up miss must fail"
         );
     }
 
@@ -676,11 +649,10 @@ mod tests {
             cached_tokens: cached,
             failure: None,
         };
-        let mut records = vec![record(0), record(200), record(199)];
-        assert!(
-            retention_failures(&records).is_empty(),
-            "200 cached covers half of the 400-token previous prompt; 199 does not"
-        );
+        let mut warmup = record(0);
+        warmup.turn = 1;
+        let mut records = vec![warmup, record(200), record(199)];
+        assert_eq!(retention_failures(&records).len(), 1);
         records[2].turn = 1;
         assert!(
             retention_failures(&records).is_empty(),
@@ -694,5 +666,41 @@ mod tests {
                 .all(|failure| !failure.contains("cached")),
             "failed transports are reported as transport failures, not retention misses"
         );
+    }
+    #[test]
+    fn invalid_usage_and_empty_assistant_are_rejected() {
+        let response = |prompt: Value, cached: Value| {
+            json!({
+                "usage": {"prompt_tokens": prompt, "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": cached}}
+            })
+        };
+        for (prompt, cached) in [
+            (json!(0), json!(0)),
+            (json!(10), json!(11)),
+            (json!(10), json!(-1)),
+            (json!(10), Value::Null),
+            (json!(10), json!(1.5)),
+        ] {
+            assert!(extract_usage(&response(prompt, cached)).is_err());
+        }
+        for content in [json!(""), json!(" \n"), Value::Null] {
+            assert!(
+                assistant_reply(&json!({"choices": [{"message": {"content": content}}]})).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_blocks_and_zero_generation_are_not_valid_probes() {
+        for (flag, value) in [
+            ("--block-chars", "1"),
+            ("--block-chars", "239"),
+            ("--max-tokens", "0"),
+        ] {
+            assert!(
+                parse_config(&["--port".into(), "1".into(), flag.into(), value.into()]).is_err()
+            );
+        }
     }
 }

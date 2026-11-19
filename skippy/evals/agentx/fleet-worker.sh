@@ -109,50 +109,13 @@ if [ ! -f "$MODEL" ] || ! printf '%s  %s\n' "$MODEL_SHA" "$MODEL" | shasum -a256
 fi
 
 if [ "$MODE" = "smoke" ]; then
-  # ---- smoke: llama vs skippy multi-turn probe ----
-  cat > "$W/smoke.py" <<'PYEOF'
-import concurrent.futures, json, sys, time, urllib.request, urllib.error
-PORT, NCONV, TURNS, BLOCK, MAXTOK = (int(a) for a in sys.argv[1:6])
-def convo(i, turn):
-    filler = f"Session {i} stable context block. " * 220
-    history = "\n".join(f"User: {filler[:BLOCK*k]} Question {i}-{k}: name a color." for k in range(1, turn+1))
-    return [{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":history+f" Q{i}-{turn}: describe a sunset in one paragraph."}]
-def ask(pair):
-    i, turn = pair
-    time.sleep(i)  # stagger concurrent conversation starts by 1s each
-    body = json.dumps({"model":"m","messages":convo(i,turn),"max_tokens":MAXTOK,"temperature":0,"stream":False}).encode()
-    t0=time.time(); err=None; pt=ct=comp=0
-    # A freshly started server can refuse part of its first concurrent accept
-    # burst while its listener finishes warming up; retry briefly instead of
-    # failing the whole conversation.
-    for attempt in range(6):
-        try:
-            r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions",data=body,headers={"Content-Type":"application/json"}),timeout=2400)
-            out=json.load(r); u=out.get("usage",{}); d=u.get("prompt_tokens_details",{}) or {}
-            pt, ct, comp = u.get("prompt_tokens",0), d.get("cached_tokens",0), u.get("completion_tokens",0)
-            err=None; break
-        except urllib.error.HTTPError as e: err=f"HTTP {e.code}: {e.read()[:120]}"; break
-        except Exception as e:
-            err=f"{type(e).__name__}: {e}"
-            if attempt < 5: time.sleep(5)
-    return (i, turn, pt, ct, comp, time.time()-t0, err)
-turns=[]
-for turn in range(1, TURNS+1):
-    t0=time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NCONV) as ex:
-        results = list(ex.map(ask, [(i,turn) for i in range(NCONV)]))
-    wall=time.time()-t0
-    errs=[r for r in results if r[6]]
-    if errs:
-        for r in errs[:2]: print(f"  turn {turn} conv {r[0]}: ERROR {r[6]}", flush=True)
-        continue
-    toks=sum(r[4] for r in results); cached=sum(r[3] for r in results); prompts=sum(r[2] for r in results)
-    print(f"  RESULT turn {turn}: {toks/wall:6.1f} tok/s | cached {100*cached/max(prompts,1):3.0f}% | wall {wall:5.1f}s", flush=True)
-    turns.append(toks/wall)
-if turns:
-    steady=turns[1:] or turns
-    print(f"  SUMMARY steady_tok_s={sum(steady)/len(steady):.1f}", flush=True)
-PYEOF
+  # ---- smoke: llama vs skippy multi-turn retention probe ----
+  # Acceptance is the typed probe (cargo xtool automation agentx
+  # prefix-reuse-probe): each conversation sends a warm-up turn, grows the
+  # real history with the server's assistant replies, and must keep
+  # conversation-specific cached prefixes after warm-up. Missing usage, HTTP
+  # errors, and retention misses fail with a nonzero exit; this phase is
+  # REQUIRED and its status decides the job.
   PORT=65100
   run_engine () {
     NAME="$1"; RT="$2"; shift 2
@@ -179,17 +142,43 @@ PYEOF
       return 1
     fi
     echo "-- $NAME:"
-    python3 "$W/smoke.py" "$PORT" "$PROBE_CONVERSATIONS" "$PROBE_TURNS" "$PROBE_BLOCK_CHARS" "$PROBE_MAX_TOKENS" || true
+    PROBE_RC=0
+    ( cd "$W/repo" && cargo xtool automation agentx prefix-reuse-probe \
+        --port "$PORT" \
+        --conversations "$PROBE_CONVERSATIONS" \
+        --turns "$PROBE_TURNS" \
+        --block-chars "$PROBE_BLOCK_CHARS" \
+        --max-tokens "$PROBE_MAX_TOKENS" ) || PROBE_RC=$?
     kill $PID 2>/dev/null || true
     for w in $(seq 1 12); do kill -0 $PID 2>/dev/null || break; sleep 5; done
     kill -9 $PID 2>/dev/null || true
     sleep 5
+    if [ "$PROBE_RC" -ne 0 ]; then
+      echo "-- $NAME: SMOKE_FAILED rc=$PROBE_RC; serve log kept at serve-$NAME.log"
+      cp "$W/serve-$NAME.log" "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
+      return "$PROBE_RC"
+    fi
+    echo "-- $NAME: RETENTION_OK"
+    return 0
   }
   echo "===== MODEL $MODEL_KEY ($BACKEND) ====="
   NGL=99; [ "$BACKEND" = "metal" ] && NGL=-1
   CTX=$((131072*PROBE_CONVERSATIONS))
-  run_engine llama 120 "$W/repo/.deps/agentx-llama-build/bin/llama-server" --model "$MODEL" --alias m --host 127.0.0.1 --port $((PORT+1)) --parallel "$PROBE_CONVERSATIONS" --batch-size 2048 --ubatch-size 512 --n-gpu-layers 99 --cache-type-k f16 --cache-type-v f16 --flash-attn on --jinja --chat-template-kwargs '{"enable_thinking":false}' --ctx-size "$CTX" --cache-ram 8192 --no-kv-unified --threads "$THREADS" --threads-batch "$THREADS"
-  run_engine skippy 180 "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$((PORT+1))" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers "$NGL" --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR"
+  SMOKE_STATUS=0
+  if ! run_engine llama 120 "$W/repo/.deps/agentx-llama-build/bin/llama-server" --model "$MODEL" --alias m --host 127.0.0.1 --port $((PORT+1)) --parallel "$PROBE_CONVERSATIONS" --batch-size 2048 --ubatch-size 512 --n-gpu-layers 99 --cache-type-k f16 --cache-type-v f16 --flash-attn on --jinja --chat-template-kwargs '{"enable_thinking":false}' --ctx-size "$CTX" --cache-ram 8192 --no-kv-unified --threads "$THREADS" --threads-batch "$THREADS"; then
+    SMOKE_STATUS=1
+  fi
+  if ! run_engine skippy 180 "$W/repo/target/release/skippy" --output jsonl serve --model-path "$MODEL" --model-id m --bind-addr "127.0.0.1:$((PORT+1))" --startup-timeout-secs 900 --batch-size 2048 --microbatch-size 512 --generation-queue-capacity 256 --generation-admission-timeout-secs 1500 --n-gpu-layers "$NGL" --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention enabled --speculative-strategy disabled --prefix-cache on --prefix-cache-ram 8GiB --kv-cache-disk off --threads "$THREADS" --threads-batch "$THREADS" --ctx-size 131072 --runtime-bundle "$RUNTIME_DIR"; then
+    SMOKE_STATUS=1
+  fi
+  # The required smoke decides the job. On failure, preserve logs, skip the
+  # optional diagnostics, and exit nonzero so a green job always means the
+  # concurrent sessions actually worked.
+  if [ "$SMOKE_STATUS" -ne 0 ]; then
+    cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
+    echo SMOKE_FAILED
+    exit 1
+  fi
   # ---- decode profile: streaming pass with per-token timestamps ----
   cat > "$W/profile.py" <<'PYEOF'
 import json, sys, time, urllib.request
@@ -307,6 +296,7 @@ NSYSPY
     python3 - "$PORT" "$CHUNK" <<'SWEEPPY'
 import json, sys, time, urllib.request
 PORT, CHUNK = int(sys.argv[1]), sys.argv[2]
+# Diagnostic only: repeated cache-enabled prompts mix cold and warm TTFT.
 filler = "Session sweep stable context block. " * 220
 msgs = [{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":filler + " Write one paragraph about mountains."}]
 body = json.dumps({"model":"m","messages":msgs,"max_tokens":64,"temperature":0,"stream":True}).encode()
@@ -334,7 +324,7 @@ SWEEPPY
     sleep 5
   done
   cp "$W"/serve-*.log "$JIANYANG_ARTIFACT_DIR/" 2>/dev/null || true
-  echo SMOKE_DONE
+  echo SMOKE_OK
   exit 0
 fi
 

@@ -61,7 +61,19 @@ fn positive_hex40(value: &str, field: &str) -> DynResult<()> {
     Err(format!("{field} requires a full40-hex commit").into())
 }
 
+fn validate_path_key(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+}
+
 fn validate(manifest: &FleetManifest) -> DynResult<()> {
+    if !validate_path_key(&manifest.campaign) {
+        return Err("campaign must be a nonempty filename component".into());
+    }
     positive_hex40(&manifest.product_source_commit, "product_source_commit")?;
     if !matches!(manifest.mode.as_str(), "smoke" | "comparison") {
         return Err("mode must be smoke or comparison".into());
@@ -72,7 +84,14 @@ fn validate(manifest: &FleetManifest) -> DynResult<()> {
     if manifest.mode == "comparison" && manifest.corpus.is_none() {
         return Err("comparison mode requires corpus pins".into());
     }
+    let mut identities = std::collections::BTreeSet::new();
     for run in &manifest.runs {
+        if !validate_path_key(&run.model) {
+            return Err("model must be a nonempty filename component".into());
+        }
+        if !identities.insert((&run.model, &run.backend)) {
+            return Err(format!("duplicate fleet run {} {}", run.model, run.backend).into());
+        }
         if !matches!(run.backend.as_str(), "cuda" | "metal") {
             return Err(format!("run {} backend must be cuda or metal", run.model).into());
         }
@@ -115,7 +134,7 @@ fn git_output(cwd: Option<&Path>, args: &[&str]) -> DynResult<std::process::Outp
 fn commit_exists(repo_url: &str, commit: &str) -> DynResult<bool> {
     let temp = tempfile::tempdir()?;
     let workdir = temp.path();
-    checked_git(workdir, &["init", "--quiet"])?;
+    checked_git(workdir, &["init", "--bare", "--quiet"])?;
     let exact = git_output(
         Some(workdir),
         &["fetch", "--quiet", "--no-tags", repo_url, commit],
@@ -332,14 +351,34 @@ fn submit_with(
     )?;
     validate(&manifest)?;
     use sha2::{Digest, Sha256};
-    let manifest_sha = hex(&Sha256::digest(serde_json::to_vec(&manifest)?.as_slice()));
     let script = worker_script(root)?;
     let worker_sha = hex(&Sha256::digest(script.as_bytes()));
     let worker_b64 = {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(script.as_bytes())
     };
+    // Prevalidate every run before the first submission.
+    let mut planned = Vec::new();
+    for run in &manifest.runs {
+        let (model_key, pins) = resolve_pins(root, run, manifest.mode == "comparison")?;
+        let spec = run_spec(&manifest, run, &worker_b64, &worker_sha, &model_key, &pins)?;
+        planned.push((run, spec));
+    }
+    let manifest_sha = hex(&Sha256::digest(serde_json::to_vec(&(
+        &manifest,
+        planned.iter().map(|(_, spec)| spec).collect::<Vec<_>>(),
+    ))?));
     let run_root = root.join("target/agentx-fleet").join(&manifest.campaign);
+    std::fs::create_dir_all(&run_root)?;
+    // Keep this inode in place so independent submitters share one lock.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(run_root.join("submission.lock"))?;
+    lock.try_lock()
+        .map_err(|_| "fleet campaign submission is busy")?;
     let ledger_path = run_root.join("fleet.json");
     // Reject or resume an existing campaign before any expensive pre-flight
     // or submission: a re-used campaign name with different inputs must not
@@ -362,7 +401,8 @@ fn submit_with(
             }
             ledger["runs"].as_array().cloned().unwrap_or_default()
         }
-        Err(_) => Vec::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
     };
     if !preflight(&manifest.repo_url, &manifest.product_source_commit)? {
         return Err(format!(
@@ -371,13 +411,6 @@ fn submit_with(
             manifest.repo_url
         )
         .into());
-    }
-    // Prevalidate every run before the first submission.
-    let mut planned = Vec::new();
-    for run in &manifest.runs {
-        let (model_key, pins) = resolve_pins(root, run)?;
-        let spec = run_spec(&manifest, run, &worker_b64, &worker_sha, &model_key, &pins)?;
-        planned.push((run, spec));
     }
     std::fs::create_dir_all(&run_root)?;
     let mut newly_submitted = 0usize;
@@ -462,7 +495,11 @@ fn status(run_root: &Path) -> DynResult<()> {
 /// `skippy/evals/kv-validation/models.json` catalog, which is the same source
 /// the comparison admission resolves against. A second pin catalog here would
 /// drift from the admitted one, so none is kept.
-fn resolve_pins(root: &Path, run: &FleetRun) -> DynResult<(String, BTreeMap<String, String>)> {
+fn resolve_pins(
+    root: &Path,
+    run: &FleetRun,
+    comparison: bool,
+) -> DynResult<(String, BTreeMap<String, String>)> {
     let alias_path = root.join("skippy/evals/agentx/fleet-models.json");
     let aliases: BTreeMap<String, String> = serde_json::from_slice(&std::fs::read(&alias_path)?)
         .map_err(|e| format!("{}: {e}", alias_path.display()))?;
@@ -498,6 +535,16 @@ fn resolve_pins(root: &Path, run: &FleetRun) -> DynResult<(String, BTreeMap<Stri
         ("TOK_REV".to_string(), model.tokenizer_revision.clone()),
     ]);
     for (key, value) in &run.model_pin {
+        let canonical = pins
+            .get(key)
+            .ok_or_else(|| format!("run {}: unknown model pin {key}", run.model))?;
+        if comparison && value != canonical {
+            return Err(format!(
+                "run {}: comparison pin {key} differs from the authoritative catalog",
+                run.model
+            )
+            .into());
+        }
         pins.insert(key.clone(), value.clone());
     }
     Ok((model_key, pins))
@@ -508,483 +555,4 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn manifest() -> FleetManifest {
-        serde_json::from_value(json!({
-            "campaign": "test-20260101",
-            "product_source_commit": "e821ec38b1479cc2dd41da40e1b46e90b4a29850",
-            "mode": "smoke",
-            "runs": [{"model": "qwen3-4b", "backend": "cuda"}]
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn fleet_manifest_rejects_bad_commit_and_modes() {
-        let mut bad = manifest();
-        bad.product_source_commit = "short".into();
-        assert!(validate(&bad).is_err());
-        let mut mode = manifest();
-        mode.mode = "quick".into();
-        assert!(validate(&mode).is_err());
-    }
-
-    #[test]
-    fn fleet_specs_target_hardware_never_node_names() {
-        let m = manifest();
-        let pins = BTreeMap::from([
-            (
-                "MODEL_REPO".to_string(),
-                "unsloth/Qwen3-4B-Instruct-2507-GGUF".to_string(),
-            ),
-            (
-                "MODEL_REV".to_string(),
-                "a06e946bb6b655725eafa393f4a9745d460374c9".to_string(),
-            ),
-            (
-                "MODEL_FILE".to_string(),
-                "Qwen3-4B-Instruct-2507-Q4_K_M.gguf".to_string(),
-            ),
-            ("MODEL_SHA".to_string(), "f".repeat(64)),
-            (
-                "TOK_REPO".to_string(),
-                "Qwen/Qwen3-4B-Instruct-2507".to_string(),
-            ),
-            (
-                "TOK_REV".to_string(),
-                "cdbee75f17c01a7cc42f958dc650907174af0554".to_string(),
-            ),
-        ]);
-        let spec = run_spec(
-            &m,
-            &m.runs[0],
-            "dzByaw==",
-            &"c".repeat(64),
-            "qwen3-4b-q4-k-m",
-            &pins,
-        )
-        .unwrap();
-        assert_eq!(spec["target"]["os"], "linux");
-        assert!(
-            spec["target"].get("nodes").is_none(),
-            "hardware targeting only"
-        );
-        assert_eq!(spec["runtime"]["env"]["MODE"], "smoke");
-        assert_eq!(
-            spec["runtime"]["env"]["REPO_URL"],
-            "https://github.com/Mesh-LLM/mesh-llm"
-        );
-        assert_eq!(spec["runtime"]["env"]["PROBE_TURNS"], "4");
-    }
-
-    #[test]
-    fn comparison_requires_corpus_pins() {
-        let mut m = manifest();
-        m.mode = "comparison".into();
-        assert!(
-            validate(&m).is_err(),
-            "comparison without corpus pins must fail"
-        );
-    }
-
-    #[test]
-    fn smoke_manifest_accepts_without_corpus() {
-        assert!(validate(&manifest()).is_ok());
-    }
-
-    /// Writes a self-contained root with an alias map and an authoritative
-    /// catalog whose hybrid tokenizer pin is independent of the GGUF revision.
-    fn catalog_root(temp: &tempfile::TempDir) -> std::path::PathBuf {
-        let agentx = temp.path().join("skippy/evals/agentx");
-        let kv = temp.path().join("skippy/evals/kv-validation");
-        std::fs::create_dir_all(&agentx).unwrap();
-        std::fs::create_dir_all(&kv).unwrap();
-        std::fs::write(
-            agentx.join("fleet-models.json"),
-            r#"{"qwen3.5-4b": "qwen3.5-4b-q4-k-m"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            kv.join("models.json"),
-            r#"[
-  {
-    "key": "qwen3.5-4b-q4-k-m",
-    "family": "hybrid-dense",
-    "repo": "unsloth/Qwen3.5-4B-GGUF",
-    "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
-    "tokenizer": "Qwen/Qwen3.5-4B",
-    "files": [
-      {
-        "name": "Qwen3.5-4B-Q4_K_M.gguf",
-        "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
-      }
-    ],
-    "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
-  }
-]"#,
-        )
-        .unwrap();
-        temp.path().to_path_buf()
-    }
-
-    /// A two-commit local repository whose branch tip is the second commit,
-    /// so the first commit is a reachable non-tip ancestor.
-    fn ancestor_fixture() -> (tempfile::TempDir, String, String) {
-        let temp = tempfile::tempdir().unwrap();
-        let repo = temp.path();
-        checked_git(repo, &["init", "--quiet", "-b", "main"]).unwrap();
-        let commit = |message: &str| {
-            let output = git_output(
-                Some(repo),
-                &[
-                    "-c",
-                    "user.name=fixture",
-                    "-c",
-                    "user.email=fixture@example.invalid",
-                    "commit",
-                    "--allow-empty",
-                    "--quiet",
-                    "-m",
-                    message,
-                ],
-            )
-            .unwrap();
-            assert!(output.status.success(), "fixture commit failed");
-        };
-        let tip = |repo: &Path| -> String {
-            let output = git_output(Some(repo), &["rev-parse", "HEAD"]).unwrap();
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        };
-        commit("base");
-        let base = tip(repo);
-        commit("tip");
-        let tip = tip(repo);
-        (temp, base, tip)
-    }
-
-    #[test]
-    fn commit_preflight_accepts_a_non_tip_ancestor_pin() {
-        let (temp, base, tip) = ancestor_fixture();
-        assert!(commit_exists(temp.path().to_str().unwrap(), &base).unwrap());
-        assert!(commit_exists(temp.path().to_str().unwrap(), &tip).unwrap());
-    }
-
-    #[test]
-    fn commit_preflight_uses_the_exact_object_fetch_when_allowed() {
-        let (temp, base, tip) = ancestor_fixture();
-        checked_git(
-            temp.path(),
-            &["config", "uploadpack.allowAnySHA1InWant", "true"],
-        )
-        .unwrap();
-        assert!(commit_exists(temp.path().to_str().unwrap(), &base).unwrap());
-        assert!(commit_exists(temp.path().to_str().unwrap(), &tip).unwrap());
-    }
-
-    #[test]
-    fn commit_preflight_rejects_an_unreachable_object() {
-        let (temp, _base, _tip) = ancestor_fixture();
-        let missing = "0".repeat(39) + "1";
-        assert!(!commit_exists(temp.path().to_str().unwrap(), &missing).unwrap());
-    }
-
-    #[test]
-    fn commit_preflight_reports_fetch_infrastructure_failures() {
-        let error = commit_exists(
-            "/nonexistent-repository-path-for-fleet-preflight-test",
-            &"a".repeat(40),
-        )
-        .unwrap_err();
-        assert!(format!("{error}").contains("pre-flight fetch"), "{error}");
-    }
-
-    #[test]
-    fn fleet_alias_resolves_to_the_admitted_catalog_key_and_pins() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = catalog_root(&temp);
-        let run = FleetRun {
-            model: "qwen3.5-4b".into(),
-            backend: "cuda".into(),
-            probe: BTreeMap::new(),
-            model_pin: BTreeMap::new(),
-        };
-        let (model_key, pins) = resolve_pins(&root, &run).unwrap();
-        assert_eq!(model_key, "qwen3.5-4b-q4-k-m");
-        assert_eq!(pins["MODEL_REPO"], "unsloth/Qwen3.5-4B-GGUF");
-        assert_eq!(
-            pins["MODEL_REV"],
-            "e87f176479d0855a907a41277aca2f8ee7a09523"
-        );
-        assert_eq!(pins["MODEL_FILE"], "Qwen3.5-4B-Q4_K_M.gguf");
-        assert_eq!(
-            pins["MODEL_SHA"],
-            "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
-        );
-        // The tokenizer pin is the catalog's own tokenizer revision, not the
-        // GGUF revision the alias catalog used to reuse.
-        assert_eq!(pins["TOK_REPO"], "Qwen/Qwen3.5-4B");
-        assert_eq!(pins["TOK_REV"], "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a");
-        assert_ne!(pins["TOK_REV"], pins["MODEL_REV"]);
-        // The generated key must pass the existing strict comparison
-        // admission that the pinned campaign resolves with.
-        crate::automation::agentx::inputs::select_model(&root, &model_key).unwrap();
-    }
-
-    #[test]
-    fn unknown_fleet_model_names_the_authoritative_catalog() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = catalog_root(&temp);
-        let run = FleetRun {
-            model: "qwen3-4b".into(),
-            backend: "cuda".into(),
-            probe: BTreeMap::new(),
-            model_pin: BTreeMap::new(),
-        };
-        let error = format!("{}", resolve_pins(&root, &run).unwrap_err());
-        assert!(error.contains("authoritative catalog"), "{error}");
-    }
-
-    #[test]
-    fn every_checked_in_fleet_alias_admits_through_the_comparison_catalog() {
-        // The fleet aliases must resolve to canonical keys the strict
-        // comparison admission accepts, with the catalog's own tokenizer pin.
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let alias_path = root.join("skippy/evals/agentx/fleet-models.json");
-        let aliases: BTreeMap<String, String> =
-            serde_json::from_slice(&std::fs::read(&alias_path).unwrap()).unwrap();
-        assert!(!aliases.is_empty(), "the alias map must not be empty");
-        for (alias, model_key) in aliases {
-            let run = FleetRun {
-                model: alias.clone(),
-                backend: "cuda".into(),
-                probe: BTreeMap::new(),
-                model_pin: BTreeMap::new(),
-            };
-            let (resolved_key, pins) =
-                resolve_pins(&root, &run).unwrap_or_else(|error| panic!("alias {alias}: {error}"));
-            assert_eq!(resolved_key, model_key, "alias map and resolution agree");
-            crate::automation::agentx::inputs::select_model(&root, &resolved_key)
-                .unwrap_or_else(|error| panic!("generated model key {resolved_key}: {error}"));
-            assert!(
-                pins.contains_key("TOK_REV"),
-                "the catalog pins the tokenizer revision"
-            );
-        }
-    }
-
-    /// A self-contained submission root: worker script plus a two-model
-    /// authoritative catalog with aliases.
-    fn submission_root() -> (tempfile::TempDir, std::path::PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().to_path_buf();
-        let agentx = root.join("skippy/evals/agentx");
-        let kv = root.join("skippy/evals/kv-validation");
-        std::fs::create_dir_all(&agentx).unwrap();
-        std::fs::create_dir_all(&kv).unwrap();
-        std::fs::write(
-            agentx.join("fleet-worker.sh"),
-            "#!/usr/bin/env bash\necho fixture worker\n",
-        )
-        .unwrap();
-        std::fs::write(
-            agentx.join("fleet-models.json"),
-            r#"{"qwen3-4b": "qwen3-4b-q4-k-m", "qwen3.5-4b": "qwen3.5-4b-q4-k-m"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            kv.join("models.json"),
-            r#"[
-  {"key": "qwen3-4b-q4-k-m", "family": "dense", "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
-   "revision": "a06e946bb6b655725eafa393f4a9745d460374c9", "tokenizer": "Qwen/Qwen3-4B-Instruct-2507",
-   "files": [{"name": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"}],
-   "tokenizer_revision": "cdbee75f17c01a7cc42f958dc650907174af0554"},
-  {"key": "qwen3.5-4b-q4-k-m", "family": "hybrid-dense", "repo": "unsloth/Qwen3.5-4B-GGUF",
-   "revision": "e87f176479d0855a907a41277aca2f8ee7a09523", "tokenizer": "Qwen/Qwen3.5-4B",
-   "files": [{"name": "Qwen3.5-4B-Q4_K_M.gguf", "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"}],
-   "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"}
-]"#,
-        )
-        .unwrap();
-        (temp, root)
-    }
-
-    fn two_run_manifest() -> FleetManifest {
-        serde_json::from_value(json!({
-            "campaign": "test-20260101",
-            "product_source_commit": "e821ec38b1479cc2dd41da40e1b46e90b4a29850",
-            "mode": "smoke",
-            "runs": [
-                {"model": "qwen3-4b", "backend": "cuda"},
-                {"model": "qwen3.5-4b", "backend": "cuda"}
-            ]
-        }))
-        .unwrap()
-    }
-
-    fn write_manifest(manifest: &FleetManifest) -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), serde_json::to_vec_pretty(manifest).unwrap()).unwrap();
-        let path = file.path().to_path_buf();
-        (file, path)
-    }
-
-    fn ledger_path(root: &Path, manifest: &FleetManifest) -> std::path::PathBuf {
-        root.join("target/agentx-fleet")
-            .join(&manifest.campaign)
-            .join("fleet.json")
-    }
-
-    fn ledger_runs(root: &Path, manifest: &FleetManifest) -> Vec<Value> {
-        let ledger: Value =
-            serde_json::from_slice(&std::fs::read(ledger_path(root, manifest)).unwrap()).unwrap();
-        ledger["runs"].as_array().cloned().unwrap()
-    }
-
-    #[test]
-    fn prevalidation_fails_before_any_submission() {
-        let (_temp, root) = submission_root();
-        let mut bad = two_run_manifest();
-        bad.runs.push(
-            serde_json::from_value(json!({"model": "unknown-model", "backend": "cuda"})).unwrap(),
-        );
-        let (_file, manifest_path) = write_manifest(&bad);
-        let calls = std::cell::Cell::new(0usize);
-        let submit = |_spec: &Path| -> DynResult<String> {
-            calls.set(calls.get() + 1);
-            Ok("job-should-never-happen".into())
-        };
-        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
-        let error = submit_with(&root, &manifest_path, &submit, &preflight).unwrap_err();
-        assert_eq!(
-            calls.get(),
-            0,
-            "no job may launch when a later run prevalidation fails"
-        );
-        assert!(
-            format!("{error}").contains("unknown-model")
-                || format!("{error}").contains("authoritative catalog"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn partial_failure_keeps_the_accepted_job_ids_in_the_ledger() {
-        let (_temp, root) = submission_root();
-        let manifest = two_run_manifest();
-        let (_file, manifest_path) = write_manifest(&manifest);
-        let submit = |spec: &Path| -> DynResult<String> {
-            if spec.to_string_lossy().contains("spec-qwen3-4b-cuda.json") {
-                Ok("job-first-1".into())
-            } else {
-                Err("jy submit rejected: quota exhausted".into())
-            }
-        };
-        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
-        let error = submit_with(&root, &manifest_path, &submit, &preflight).unwrap_err();
-        assert!(format!("{error}").contains("quota exhausted"), "{error}");
-        let runs = ledger_runs(&root, &manifest);
-        assert_eq!(
-            runs.len(),
-            1,
-            "the accepted job must already be in the ledger"
-        );
-        assert_eq!(runs[0]["job"], "job-first-1");
-        assert_eq!(runs[0]["model"], "qwen3-4b");
-    }
-
-    #[test]
-    fn ledger_is_persisted_after_each_acceptance() {
-        let (_temp, root) = submission_root();
-        let manifest = two_run_manifest();
-        let (_file, manifest_path) = write_manifest(&manifest);
-        let seen_mid_flight = std::cell::RefCell::new(None);
-        let submit = |spec: &Path| -> DynResult<String> {
-            if spec.to_string_lossy().contains("spec-qwen3.5-4b-cuda.json") {
-                let runs = ledger_runs(&root, &manifest);
-                *seen_mid_flight.borrow_mut() = Some(runs.len());
-            }
-            Ok("job-accepted".into())
-        };
-        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
-        submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
-        assert_eq!(
-            seen_mid_flight.borrow().as_ref(),
-            Some(&1usize),
-            "the first accepted ID must be on disk before the second submission starts"
-        );
-        assert_eq!(ledger_runs(&root, &manifest).len(), 2);
-    }
-
-    #[test]
-    fn rerunning_the_same_manifest_resumes_without_duplicating_jobs() {
-        let (_temp, root) = submission_root();
-        let manifest = two_run_manifest();
-        let (_file, manifest_path) = write_manifest(&manifest);
-        let calls = std::cell::Cell::new(0usize);
-        {
-            let calls = &calls;
-            let submit = |_spec: &Path| -> DynResult<String> {
-                let n = calls.get() + 1;
-                calls.set(n);
-                Ok(format!("job-{n}"))
-            };
-            let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
-            submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
-        }
-        assert_eq!(calls.get(), 2);
-        {
-            let submit = |_spec: &Path| -> DynResult<String> {
-                calls.set(calls.get() + 1);
-                Ok("job-duplicate".into())
-            };
-            let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
-            submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
-        }
-        assert_eq!(calls.get(), 2, "the resume must not resubmit recorded runs");
-        assert_eq!(ledger_runs(&root, &manifest).len(), 2);
-    }
-
-    #[test]
-    fn reused_campaign_with_a_different_manifest_is_rejected() {
-        let (_temp, root) = submission_root();
-        let manifest = two_run_manifest();
-        let (_file, manifest_path) = write_manifest(&manifest);
-        let calls = std::cell::Cell::new(0usize);
-        let submit = |_spec: &Path| -> DynResult<String> {
-            calls.set(calls.get() + 1);
-            Ok("job-1".into())
-        };
-        let preflight = |_repo: &str, _commit: &str| -> DynResult<bool> { Ok(true) };
-        submit_with(&root, &manifest_path, &submit, &preflight).unwrap();
-        assert_eq!(calls.get(), 2);
-        let mut divergent = two_run_manifest();
-        divergent.mode = "comparison".into();
-        divergent.corpus = Some(FleetCorpus {
-            repo: "semianalysisai/cc-traces-weka-062126-256k".into(),
-            rev: "8fecd2fc56694469f758f0afbbb6335ad3043740".into(),
-            sha256: "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef".into(),
-        });
-        let (_file2, divergent_path) = write_manifest(&divergent);
-        let error = submit_with(&root, &divergent_path, &submit, &preflight).unwrap_err();
-        assert_eq!(calls.get(), 2, "a divergent manifest must not launch jobs");
-        assert!(format!("{error}").contains("different manifest"), "{error}");
-        assert_eq!(
-            ledger_runs(&root, &manifest).len(),
-            2,
-            "the old ledger survives"
-        );
-    }
-
-    #[test]
-    fn jy_submit_requires_a_successful_status_and_a_job_id() {
-        // jy_submit shells out to jy, which this environment does not have;
-        // verify the failure contract through the command-missing path.
-        let error = format!(
-            "{}",
-            jy_submit(Path::new("/nonexistent-spec.json")).unwrap_err()
-        );
-        assert!(error.contains("jy submit"), "{error}");
-    }
-}
+mod tests;

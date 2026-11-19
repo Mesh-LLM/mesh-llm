@@ -1287,13 +1287,6 @@ mod tests {
             Ok(())
         }
     }
-    struct SilenceSink;
-    impl skippy_events::diagnostics::DiagnosticSink for SilenceSink {
-        fn emit(&self, _: skippy_events::diagnostics::ServingDiagnostic) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     /// Builds payload bytes whose every block is content-distinct within and
     /// across payloads, so the blob store cannot dedupe a scenario below its
     /// real physical size.
@@ -1468,7 +1461,23 @@ mod tests {
         // observable predicate compares retained physical bytes with the
         // configured nonzero hard limit after eviction, rate-limited to one
         // warning per process.
-        exact_state_retention::reset_over_limit_warning_for_tests();
+        // The rate limit and diagnostic sink are process-global; other cache
+        // tests must not consume this warning or have their sink replaced.
+        if std::env::var_os("SKIPPY_RETENTION_WARNING_FIXTURE").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "kv_integration::config::tests::four_oversized_snapshots_emit_the_over_limit_warning_once_per_process", "--test-threads=1"])
+                .env("SKIPPY_RETENTION_WARNING_FIXTURE", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
         let sink = std::sync::Arc::new(WarningSink {
             warnings: Mutex::new(Vec::new()),
         });
@@ -1514,7 +1523,6 @@ mod tests {
             .iter()
             .filter(|message| message.contains("hard byte limit"))
             .count();
-        skippy_events::diagnostics::set_diagnostic_sink(std::sync::Arc::new(SilenceSink));
         assert_eq!(
             warnings, 1,
             "the over-limit condition must warn exactly once per process"

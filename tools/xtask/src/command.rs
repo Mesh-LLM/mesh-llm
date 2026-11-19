@@ -222,4 +222,3 @@ pub(crate) fn display_relative(repo_root: &Path, path: &Path) -> String {
 pub(crate) fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
-

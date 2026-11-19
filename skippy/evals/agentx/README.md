@@ -205,9 +205,16 @@ interleaved multi-turn conversations against one OpenAI-compatible server.
 Every conversation sends turn 1 as a warm-up, then grows the real chat history
 with the server's own assistant replies and reports `cached_tokens` per
 request. A scored turn passes only when its cached tokens cover at least half
-of that conversation's previous prompt, so a shared system prefix or one
-cached template token cannot pass. Missing usage, HTTP errors, and retention
-misses exit nonzero.
+of that conversation's previous prompt. Blocks smaller than 240 characters
+are rejected to keep the shared template from dominating ordinary prompts.
+This usage-based threshold is a heuristic, not token-level proof of conversation
+identity; inspect evidence for unusual chat templates/tokenizers. Missing usage,
+empty assistant replies, HTTP errors, and retention misses exit nonzero.
+
+Fleet smoke pins must include this typed probe in the product source checkout.
+Older historical pins without it are unsupported for smoke (there is no silent
+fallback to the old probe); historical source resolution alone does not imply
+smoke compatibility.
 
 ```
 # serve with the knobs under test, then:

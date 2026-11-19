@@ -160,8 +160,3 @@ pub(super) fn warn_when_floor_prevents_hard_limit_compliance(
         },
     );
 }
-
-#[cfg(test)]
-pub(super) fn reset_over_limit_warning_for_tests() {
-    OVER_LIMIT_WARNING_EMITTED.store(false, Ordering::SeqCst);
-}
