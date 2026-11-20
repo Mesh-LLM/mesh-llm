@@ -55,8 +55,8 @@ jobs:
             "Windows: the packaged host is not run against a model, only version-checked."
             "Host import policy: only the Linux glibc floor is checked; the per-platform allowed-imports report is gone."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
+            "GPU machines: it is not shown that the host picks a downloaded GPU runtime over the CPU runtime bundled in its archive."
             "Updating from 0.80.0: a CUDA, ROCm or Vulkan install looks for its own archive, which this release does not publish; no safe transition is established."
-            "Swift, Kotlin and Node SDK artifacts are not built or published."
           )
           for item in "${missing[@]}"; do
             if [[ "$CANARY" == "true" ]]; then echo "::warning::Not release-ready: $item"; else echo "::error::Not release-ready: $item"; fi
@@ -360,9 +360,158 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The three SDKs are separate jobs: each one builds only its own library,
+  # and none of them waits for, or holds up, a host archive.
+  swift_sdk:
+    name: Swift SDK
+    needs: metadata
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          package-manager-cache: false
+      - run: scripts/release-version.sh "$RELEASE_TAG"
+      # Builds the console and every Apple target, zips the XCFramework,
+      # verifies it, and writes its URL and checksum into Package.swift.
+      - run: scripts/prepare-swift-package-release.sh "$RELEASE_TAG"
+      - name: Check that all four Apple targets are in the artifact
+        run: scripts/verify-swift-release-artifact.sh dist/MeshLLMFFI.xcframework.zip full
+      - name: Stage what the release publishes and what the tag commit carries
+        run: |
+          set -euo pipefail
+          mkdir -p sdk-swift/assets sdk-swift/source
+          cp dist/MeshLLMFFI.xcframework.zip sdk-swift/assets/
+          cp Package.swift sdk-swift/source/Package.swift
+          cp mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift sdk-swift/source/mesh_ffi.swift
+          cp -R mesh/crates/mesh-llm-ui/dist sdk-swift/source/console-dist
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: sdk-swift
+          path: sdk-swift
+          if-no-files-found: error
+
+  kotlin_sdk:
+    name: Kotlin SDK native library (${{ matrix.target }})
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, target: aarch64-apple-darwin, backend: metal }
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, backend: cpu }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, backend: cpu }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      TARGET: ${{ matrix.target }}
+      BACKEND: ${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Build, package and verify the native library
+        run: |
+          set -euo pipefail
+          scripts/package-native-sdk.sh --build --backend "$BACKEND" --target "$TARGET" --profile release --out dist/native-sdk
+          archives=(dist/native-sdk/*.tar.gz)
+          [[ ${#archives[@]} -eq 1 ]] || { echo "expected one native SDK archive, found ${#archives[@]}" >&2; exit 1; }
+          scripts/verify-native-sdk-package.sh "${archives[0]}"
+          mkdir unpacked && tar -xzf "${archives[0]}" -C unpacked
+          [[ "$(jq -r .sdk_version unpacked/*/manifest.json)" == "${RELEASE_TAG#v}" ]] ||
+            { echo "the native library is not at ${RELEASE_TAG#v}" >&2; exit 1; }
+          mkdir sdk-kotlin
+          cp "${archives[0]}" "${archives[0]}.sha256" sdk-kotlin/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: sdk-kotlin-${{ matrix.target }}
+          path: sdk-kotlin
+          if-no-files-found: error
+
+  node_sdk:
+    name: Node SDK addon (${{ matrix.target }})
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, target: darwin-arm64 }
+          - { runner: ubuntu-24.04, target: linux-x64 }
+          - { runner: ubuntu-24.04-arm, target: linux-arm64 }
+          - { runner: windows-2022, target: win32-x64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      NODE_SDK_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          package-manager-cache: false
+      - run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Test, build and stage the addon
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          sha256() { node -e "const fs=require('fs'),c=require('crypto'); console.log(c.createHash('sha256').update(fs.readFileSync(process.argv[1])).digest('hex'))" "$1"; }
+          [[ "$(node -p "require('./mesh/sdk/node/package.json').version")" == "$version" ]] ||
+            { echo "the Node SDK package is not at $version" >&2; exit 1; }
+          npm test --prefix mesh/sdk/node
+          npm run build:native --prefix mesh/sdk/node
+          addon="mesh/sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          test -s "$addon"
+
+          # Install the packed SDK as a consumer would and ask the addon its version.
+          smoke="$(mktemp -d)"
+          mkdir -p "$smoke/tarball" "$smoke/consumer"
+          (cd mesh/sdk/node && npm pack --pack-destination "$smoke/tarball")
+          tarball="$(find "$smoke/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          (cd "$smoke/consumer" && npm init --yes >/dev/null && npm install "$tarball")
+          (cd "$smoke/consumer" && node -e "
+            const actual = require('@mesh-llm/sdk').currentMeshVersion()
+            if (actual !== process.argv[1]) throw new Error('addon reports ' + actual + ', expected ' + process.argv[1])
+          " "$version")
+
+          mkdir -p "stage/$NODE_SDK_TARGET" sdk-node
+          cp "$addon" "stage/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          printf '{\n  "schema": "mesh-llm-node-sdk-addon-v1",\n  "version": "%s",\n  "target": "%s",\n  "file": "mesh_llm_nodejs.node",\n  "sha256": "%s"\n}\n' \
+            "$version" "$NODE_SDK_TARGET" "$(sha256 "$addon")" > "stage/$NODE_SDK_TARGET/manifest.json"
+          archive="mesh-llm-node-sdk-addon-$version-$NODE_SDK_TARGET.tar.gz"
+          tar -C stage -czf "sdk-node/$archive" "$NODE_SDK_TARGET"
+          printf '%s  %s\n' "$(sha256 "sdk-node/$archive")" "$archive" > "sdk-node/$archive.sha256"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: sdk-node-${{ matrix.target }}
+          path: sdk-node
+          if-no-files-found: error
+
   publish:
     name: Publish the GitHub release
-    needs: [release_readiness, metadata, runtime_download_gate, build]
+    needs: [release_readiness, metadata, runtime_download_gate, build, swift_sdk, kotlin_sdk, node_sdk]
     if: ${{ !inputs.canary }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -397,6 +546,38 @@ jobs:
             test -s "$file.sha256" || { echo "$file has no checksum" >&2; exit 1; }
             sha256sum -c "$file.sha256"
           done
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdk-swift
+          path: sdk-swift
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: sdk-artifacts
+          pattern: sdk-{kotlin,node}-*
+          merge-multiple: true
+      - name: Verify the SDK artifacts
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test -s sdk-swift/assets/MeshLLMFFI.xcframework.zip
+          scripts/verify-swift-package-manifest.sh "$RELEASE_TAG" sdk-swift/assets/MeshLLMFFI.xcframework.zip sdk-swift/source/Package.swift
+          cd sdk-artifacts
+          for target in darwin-arm64 linux-x64 linux-arm64 win32-x64; do
+            test -s "mesh-llm-node-sdk-addon-$version-$target.tar.gz"
+          done
+          for id in darwin-aarch64-metal linux-x86_64-cpu linux-aarch64-cpu; do
+            test -s "meshllm-native-$id.tar.gz"
+          done
+          for file in *; do
+            [[ "$file" == *.sha256 ]] && continue
+            test -s "$file.sha256" || { echo "$file has no checksum" >&2; exit 1; }
+            sha256sum -c "$file.sha256"
+          done
+          cp ./* ../release-artifacts/
+          cp ../sdk-swift/assets/MeshLLMFFI.xcframework.zip ../release-artifacts/
+      # Swift Package Manager and the SDK packages read these files from the
+      # tagged source, so the tag is one commit past main: main plus the
+      # Package.swift for this XCFramework, its binding, and the console assets.
       - name: Push the release tag
         id: tag
         env:
@@ -408,6 +589,13 @@ jobs:
             echo "Release tag already exists and cannot be reused: $RELEASE_TAG" >&2
             exit 1
           fi
+          cp sdk-swift/source/Package.swift Package.swift
+          cp sdk-swift/source/mesh_ffi.swift mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
+          scripts/package-sdk-console-assets.sh --sdk all --skip-build --dist sdk-swift/source/console-dist
+          git add Package.swift mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
+          git add --force mesh/sdk/node/console mesh/sdk/swift/Sources/MeshLLM/Resources/Console mesh/sdk/kotlin/src/main/resources/mesh-llm/console
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "$RELEASE_TAG: prepare release source"
           git tag "$RELEASE_TAG"
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$RELEASE_TAG"
           echo "commit=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" >> "$GITHUB_OUTPUT"
