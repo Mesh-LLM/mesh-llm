@@ -1,4 +1,4 @@
-From 5d84a67de94d53a20831950c3189ccbee0e1dc0c Mon Sep 17 00:00:00 2001
+From 45535949e6a2493bf66107ac3e1d8ae2e7043e69 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -6,7 +6,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
 Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cdc64c836b@buzz.gdk.so>
 ---
  src/CMakeLists.txt                            |    9 +
- src/skippy/tests/async_state.cpp              |  208 ++
+ src/skippy/tests/async_state.cpp              |  210 +++
  .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
  src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
@@ -45,7 +45,7 @@ Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cd
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 40 files changed, 10489 insertions(+), 30 deletions(-)
+ 40 files changed, 10491 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/async_state.cpp
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
@@ -102,10 +102,10 @@ index 2bc7d6f6e..dc8465589 100644
      target_include_directories(skippy-noalloc-graph-planning PRIVATE .)
 diff --git a/src/skippy/tests/async_state.cpp b/src/skippy/tests/async_state.cpp
 new file mode 100644
-index 000000000..d74c28c8d
+index 000000000..0a0709d6a
 --- /dev/null
 +++ b/src/skippy/tests/async_state.cpp
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,210 @@
 +#include "../runtime_support.h"
 +#include "../runtime_types.h"
 +#include "../selected_logits.h"
@@ -273,8 +273,10 @@ index 000000000..d74c28c8d
 +    first->ctx->sched_reserve();
 +    CHECK(first->ctx->get_sched_reserve_count() > reserved);
 +    decode_attached_samplers(first, second, 1);
++    const uint64_t reserved_before_detach = first->ctx->get_sched_reserve_count();
 +    CHECK(llama_set_sampler(first->ctx, first->seq_id, nullptr));
 +    first->ctx->sched_reserve();
++    CHECK(first->ctx->get_sched_reserve_count() == reserved_before_detach);
 +    llama_sampler_free(replacement);
 +    llama_sampler_free(shape_chain);
 +}
@@ -11165,5 +11167,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

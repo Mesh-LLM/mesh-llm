@@ -273,8 +273,7 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
-/// Entry backstop on the record queue. The binding limit is
-/// [`EXACT_STATE_RECORD_QUEUE_BYTES`]; this only caps bookkeeping.
+/// Baseline serving recorder queue capacity and fixed durable spill queue capacity.
 pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 8;
 
 /// Payload bytes the record queue may hold. A record that does not fit is

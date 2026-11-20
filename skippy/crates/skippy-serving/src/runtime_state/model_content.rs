@@ -6,7 +6,10 @@ use std::{
     fs::{File, Metadata},
     io::{BufReader, Read},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Instant, SystemTime},
 };
 
@@ -83,7 +86,7 @@ impl VerifiedModelContent {
     pub(crate) fn verify_during_load<T>(
         config: &StageConfig,
         load: impl FnOnce() -> Result<T>,
-    ) -> Result<(T, Option<Self>)> {
+    ) -> Result<(T, Option<Arc<Self>>)> {
         #[cfg(unix)]
         let (model, content) = match Self::observe_files(config).ok().flatten() {
             // Recent stamps cannot prove the bytes the loader reads, so hash
@@ -102,7 +105,10 @@ impl VerifiedModelContent {
             let content = Self::observe(config).ok().flatten();
             (load()?, content)
         };
-        Ok((model, content.filter(|proof| proof.still_matches(config))))
+        Ok((
+            model,
+            content.and_then(|proof| Arc::new(proof).revalidate(config)),
+        ))
     }
 
     #[cfg(any(not(unix), test))]
@@ -123,6 +129,7 @@ impl VerifiedModelContent {
         capture_files(files).map(Some)
     }
 
+    #[cfg(test)]
     fn from_files(files: Vec<(String, PathBuf)>) -> Result<Self> {
         Self::from_observed(capture_files(files)?, &AtomicBool::new(false))
     }
@@ -186,33 +193,18 @@ impl VerifiedModelContent {
         })
     }
 
-    /// Reject a proof if model input selection or bytes changed while opening.
-    pub(crate) fn still_matches(&self, config: &StageConfig) -> bool {
-        let Ok(files) = source_files(config) else {
-            return false;
-        };
-        let unchanged = files.len() == self.files.len()
-            && files.iter().zip(&self.files).all(
-                |((name, path), (expected_name, expected_path, stamp))| {
-                    name == expected_name
-                        && path == expected_path
-                        && std::fs::metadata(path).is_ok_and(|metadata| {
-                            metadata.is_file() && FileStamp::read(&metadata) == *stamp
-                        })
-                },
-            );
-        if !unchanged {
-            return false;
+    /// Reuse strong file stamps or refresh the proof by hashing the same inputs.
+    pub(crate) fn revalidate(self: Arc<Self>, config: &StageConfig) -> Option<Arc<Self>> {
+        let files = capture_files(source_files(config).ok()?).ok()?;
+        if files != self.files {
+            return None;
         }
         if cfg!(unix) && !self.racy {
-            return true;
+            return Some(self);
         }
-        {
-            // Off Unix, and for stamps inside the racy window, size and
-            // timestamps are not a strong file identity. Recheck actual content after model open and at
-            // backend construction rather than trusting preserved timestamps.
-            Self::from_files(files).is_ok_and(|current| current.digest == self.digest)
-        }
+        // Recent or missing timestamps and non-Unix stamps require a digest check.
+        let refreshed = Self::from_observed(files, &AtomicBool::new(false)).ok()?;
+        (refreshed.digest == self.digest).then(|| Arc::new(refreshed))
     }
 
     pub(crate) fn bind(&self, identity: &str) -> String {
@@ -485,8 +477,9 @@ mod tests {
             source_model_sha256: Some("ab".repeat(32)),
             ..StageConfig::default()
         };
-        let first = VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap();
-        assert!(first.still_matches(&config));
+        let first =
+            Arc::new(VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap());
+        assert!(first.clone().revalidate(&config).is_some());
         let modified = model.metadata().unwrap().modified().unwrap();
         std::fs::write(&model, b"other weights").unwrap();
         File::options()
@@ -495,7 +488,7 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
-        assert!(!first.still_matches(&config));
+        assert!(first.clone().revalidate(&config).is_none());
         let second = VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap();
         assert_ne!(first.bind("same namespace"), second.bind("same namespace"));
         config.model_path = Some(
@@ -504,7 +497,24 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
         );
-        assert!(!second.still_matches(&config));
+        assert!(Arc::new(second).revalidate(&config).is_none());
+    }
+
+    #[test]
+    fn revalidation_keeps_the_refreshed_proof_when_it_rehashes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("model.gguf");
+        std::fs::write(&path, b"weights").unwrap();
+        let config = StageConfig {
+            model_path: Some(path.to_string_lossy().into_owned()),
+            ..StageConfig::default()
+        };
+        let mut proof = VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap();
+        proof.racy = true;
+        let proof = Arc::new(proof);
+        let refreshed = proof.clone().revalidate(&config).unwrap();
+        assert!(!Arc::ptr_eq(&refreshed, &proof));
+        assert_eq!(refreshed.digest, proof.digest);
     }
 
     #[test]

@@ -22,7 +22,7 @@ impl KvStageIntegration {
         // Verification stays outside the runtime lock. Unix can reuse the
         // load-time digest through a strong file fingerprint; other platforms
         // recheck bytes when equivalent identity/change-time evidence is absent.
-        let content = content.filter(|proof| proof.still_matches(config));
+        let content = content.and_then(|proof| proof.revalidate(config));
         Self::from_loaded_model_with_l3(config, kind, memory, content, || Ok(manager), observer)
     }
 

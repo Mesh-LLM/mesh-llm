@@ -1,7 +1,7 @@
-From 53c13a8bef39b480fb887be77cbed4602cadb63f Mon Sep 17 00:00:00 2001
+From 316ea6dea9b1b29b384fa6b7382dae0c20db8bb8 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Thu, 5 Nov 2026 01:00:00 +1100
-Subject: [PATCH 20/32] skippy: sample a batch's requests concurrently
+Subject: [PATCH] skippy: sample a batch's requests concurrently
 
 An iteration's sampled requests waited for one another: after the batch's
 outputs were recorded, each request ran its sampler chain in turn on the
@@ -48,7 +48,7 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  create mode 100644 src/skippy/tests/concurrent_sampling.cpp
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 6e4e9023b..7eee0656e 100644
+index 0e0970876..7da1090f3 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -82,6 +82,7 @@ add_library(llama
@@ -59,7 +59,7 @@ index 6e4e9023b..7eee0656e 100644
              skippy/sampling_config.cpp
              skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
-@@ -493,6 +494,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -502,6 +503,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      endfunction()
      add_skippy_sampling_history_state_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
  
@@ -78,10 +78,10 @@ index 6e4e9023b..7eee0656e 100644
          NAME skippy_generate_qwen3_fixture
          COMMAND skippy-model-fixture-generator
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b3ec732f9..d9068d348 100644
+index 545f4eb5b..8b751f7e4 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1011,8 +1011,26 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+@@ -1015,8 +1015,26 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
              __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
  }
  
@@ -109,7 +109,7 @@ index b3ec732f9..d9068d348 100644
          return;
      }
  
-@@ -2860,6 +2878,9 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
+@@ -3031,6 +3049,9 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
  }
  
  void llama_context::output_reorder() {
@@ -120,7 +120,7 @@ index b3ec732f9..d9068d348 100644
      const uint64_t n_embd     = model.hparams.n_embd;
      const uint64_t n_embd_out = model.hparams.n_embd_out();
 diff --git a/src/llama-context.h b/src/llama-context.h
-index f8884668f..919813ac8 100644
+index d699a1088..020f55b78 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -66,6 +66,36 @@ struct llama_memory_buffer {
@@ -171,10 +171,10 @@ index f8884668f..919813ac8 100644
      const llama_cparams & get_cparams() const;
      const skippy_graph_build_inputs & get_graph_build_inputs() const;
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 2622c5878..54fd815ef 100644
+index 0e4431fe6..6364da9f8 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -1674,7 +1674,7 @@ struct llm_graph_context {
+@@ -1689,7 +1689,7 @@ struct llm_graph_context {
                  int32_t   state_size,
                  int32_t   n_seqs,
              skippy_state_kind kind, int il,
@@ -307,7 +307,7 @@ index 000000000..0c253ca71
 +// same time, one thread each; the rest sample first, on this thread.
 +std::vector<llama_token> skippy_sample_requests(const std::vector<skippy_sample_request> & requests);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index a31540652..83c290ee2 100644
+index 2d34652b9..46b0d1a27 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -1,5 +1,6 @@
@@ -317,7 +317,7 @@ index a31540652..83c290ee2 100644
  #include "skippy/errors.h"
  #include "skippy/graph_build_inputs.h"
  #include "skippy/runtime_support.h"
-@@ -467,7 +468,10 @@ enum skippy_status skippy_iteration_batch_sampled(
+@@ -466,7 +467,10 @@ enum skippy_status skippy_iteration_batch_sampled(
  
      // exports, readouts and sampling, request by request
      skippy_trace::scope outputs_trace("skippy.batch_outputs", "requests", static_cast<int64_t>(request_count));
@@ -326,10 +326,10 @@ index a31540652..83c290ee2 100644
 +    // once every request's outputs are recorded
 +    std::vector<skippy_sample_request> samples;
 +    std::vector<size_t> sample_request_indexes;
-     for (size_t request_index = 0; request_index < request_count; ++request_index) {
-         const auto & request = requests[request_index];
-         status = skippy_copy_batched_exports(
-@@ -495,16 +499,19 @@ enum skippy_status skippy_iteration_batch_sampled(
+     // Synchronize only when this iteration consumes GPU results: a sampled
+     // last token, a causal readout, or a batched activation export. Prefill
+     // chunks without any of those return with the context still pending, so
+@@ -511,16 +515,19 @@ enum skippy_status skippy_iteration_batch_sampled(
          if (request.sample_last && request_logits) {
              // Logits are indexed by the original batch row; llama.cpp handles
              // sparse output-row translation internally.
@@ -617,5 +617,5 @@ index 000000000..0e19dbce5
 +    return 0;
 +}
 -- 
-2.43.0
+2.56.0
 

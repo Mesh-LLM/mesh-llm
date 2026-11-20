@@ -83,20 +83,17 @@ pub(crate) enum SessionEndCapture {
     Deferred,
 }
 
-/// Total in-flight exact-state payloads per stage — exporting, queued in the
-/// recorder channel, or held by the recorder worker. Sized as channel
-/// capacity (1) plus one worker-held record.
+/// Minimum in-flight exact-state payload slots per stage, including exports,
+/// queued records, and the record held by the worker.
 pub const EXACT_STATE_ADMISSION_TOTAL: usize = 2;
 /// Slots reserved for [`CaptureAdmission::Continuation`]: BestEffort captures
 /// can never occupy more than `TOTAL - RESERVED` slots, so a continuation
 /// boundary always finds a slot unless the whole budget is exhausted.
 pub const EXACT_STATE_ADMISSION_RESERVED: usize = 1;
 
-/// Per-stage total admission slots. The single-stream floor is the legacy
-/// constant (channel capacity plus one worker-held record); a stage serving
-/// `lane_count` concurrent lanes admits one in-flight payload per lane plus
-/// the recorder's own headroom, because a capture declined under admission
-/// loses that session's exchange permanently — the next turn re-prefills it.
+/// Per-stage admission slots, with one in-flight payload per lane plus one
+/// slot reserved for continuations. The recorder channel can hold the entire
+/// admitted set even when the worker holds no record.
 /// Concurrent multi-turn sessions measured on the fleet starved at the floor:
 /// whichever session completed first held the only best-effort slot and every
 /// other lane's record was declined for the whole wave.

@@ -1,4 +1,4 @@
-From 48b4b40f4ae12d1afc0a62bcc99fcfc7727da4b3 Mon Sep 17 00:00:00 2001
+From bdf3bfa0cce61bfb5fbd467c1f2c3788fbf11422 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -38,7 +38,7 @@ Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cd
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  335 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  499 ++++++++++
+ src/skippy/execution-batch.cpp          |  515 ++++++++++
  src/skippy/execution-single.cpp         |  642 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
@@ -84,7 +84,7 @@ Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cd
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
  tests/test-batch-alloc.cpp              |   21 +
- 79 files changed, 16502 insertions(+), 407 deletions(-)
+ 79 files changed, 16518 insertions(+), 407 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -4068,10 +4068,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..2b9593e0c
+index 000000000..31a65905b
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,515 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -4486,9 +4486,25 @@ index 000000000..2b9593e0c
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    skippy_mark_context_work_pending(first->stage_model);
-+    skippy_synchronize_context_if_pending(first->stage_model);
 +
 +    size_t sampled_index = 0;
++    // Synchronize only when this iteration consumes GPU results: a sampled
++    // last token or a batched activation export. Prefill
++    // chunks without any of those return with the context still pending, so
++    // the scheduler prepares and the backend encodes the next chunk while
++    // the GPU still executes this one; command-queue order sequences the
++    // chunks' KV writes and reads. The Rust sizing protocol always passes a
++    // non-null descriptor array, so gate on the sessions that actually emit
++    // activation frames rather than on the array pointer.
++    const bool consumes_gpu_results = std::any_of(
++            requests, requests + request_count,
++            [](const skippy_iteration_request & request) {
++                return request.sample_last ||
++                        skippy_emits_activation_frame(request.session);
++            });
++    if (consumes_gpu_results) {
++        skippy_synchronize_context_if_pending(first->stage_model);
++    }
 +    for (size_t request_index = 0; request_index < request_count; ++request_index) {
 +        const auto & request = requests[request_index];
 +        status = skippy_copy_batched_exports(
@@ -17966,5 +17982,5 @@ index c41e91d61..eee60d81d 100644
          llama_token  token[3]    = { 5, 6, 7 };
          llama_pos    pos[3]      = { 3, 4, 5 };
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
