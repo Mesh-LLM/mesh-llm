@@ -88,6 +88,12 @@ echo 2.16 >"$stub/linux-glibc-floor.txt"
 refuses_when "the glibc floor" 0 0
 : >"$stub/linux-glibc-floor.txt"
 refuses_when "reading the floor file" 0 0
+printf '2.39\n2.17\n' >"$stub/linux-glibc-floor.txt"
+refuses_when "a floor file with two versions" 0 0
+printf '2.39 2.17\n' >"$stub/linux-glibc-floor.txt"
+refuses_when "a floor line with two versions" 0 0
+printf '# why\n\n  2.39  \n' >"$stub/linux-glibc-floor.txt"
+refuses_when nothing 0 0
 
 ((fail == 0)) && echo "check-host-imports-test: ok"
 exit "$fail"

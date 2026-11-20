@@ -27,7 +27,8 @@ An entry is removed in the same change that closes it.
 - **Host import check.** `scripts/check-host-imports.sh` refuses a host that
   links CUDA, ROCm, Vulkan, Metal, ggml or llama, or that needs a newer glibc
   than the Linux floor, and writes `host-imports.json` into the archive with
-  the SHA-256 of the signed host. Its macOS branch has run on a real host. The
+  the SHA-256 of the signed host. A report exists only for a host that passed,
+  so its `rejected_imports` is always empty. Its macOS branch has run on a real host. The
   Linux branch has run only against stubbed tools. Nothing has run on Windows,
   including the call from `package-release.ps1`.
 - **Docker images and npm.** The handoff to `Mesh-LLM/mesh-packaging` is off.

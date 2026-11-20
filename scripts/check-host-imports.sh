@@ -60,9 +60,12 @@ sha256_of() {
 # above the floor.
 glibc_needed() {
     local floor raw needed newest
-    floor="$(grep -v '^#' "$(dirname "$0")/linux-glibc-floor.txt")" || fail "could not read linux-glibc-floor.txt"
-    floor="${floor//[[:space:]]/}"
-    [[ "$floor" =~ ^[0-9]+(\.[0-9]+)*$ ]] || fail "linux-glibc-floor.txt does not hold one version"
+    # Exactly one version line, apart from comments and blank lines.
+    floor="$(grep -Ev '^[[:blank:]]*(#|$)' "$(dirname "$0")/linux-glibc-floor.txt")" ||
+        fail "could not read linux-glibc-floor.txt"
+    [[ "$floor" =~ ^[[:blank:]]*([0-9]+(\.[0-9]+)*)[[:blank:]]*$ ]] ||
+        fail "linux-glibc-floor.txt does not hold exactly one version"
+    floor="${BASH_REMATCH[1]}"
     raw="$(objdump -T "$1")" || fail "objdump -T failed on $1"
     needed="$(grep -o 'GLIBC_[0-9][0-9.]*' <<<"$raw" | sed 's/GLIBC_//' | sort -V | tail -n 1)" ||
         fail "found no glibc symbol version in $1"
