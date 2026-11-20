@@ -109,8 +109,11 @@ from `release.yml` after that release.
 - Repository secrets `MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE` and
   `MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE` (below).
 - Repository secret `MESH_LLM_POSTHOG_KEY` (optional, below).
-- A published Skippy release matching `SKIPPY_RELEASE` in
-  `mesh/crates/mesh-llm-system/src/native_runtime_install.rs`.
+- A published Skippy release whose version is the pinned Skippy's
+  (`skippy-native-runtime` in `Cargo.lock`). That version is the runtime
+  release: hosts download its runtime and never reuse one cached by an earlier
+  Skippy. A host upgraded without network access needs that runtime supplied
+  first (`MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`).
 - `gh` authenticated with permission to dispatch workflows on `main`.
 
 ## Release Attestation Signing Keys

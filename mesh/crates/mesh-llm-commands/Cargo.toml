@@ -63,4 +63,5 @@ skippy-runtime-install = { workspace = true, features = ["test-support"] }
 clap.workspace = true
 rand = "0.10"
 serial_test = "4"
+sha2.workspace = true
 tempfile = "3"

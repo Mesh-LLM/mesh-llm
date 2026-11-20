@@ -8,15 +8,13 @@ use std::path::{Path, PathBuf};
 
 pub const CURRENT_MESH_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
 
-/// Runtime release required by this build, independent of the Mesh product version.
+/// Runtime release required by this build: the version of the pinned Skippy,
+/// independent of the Mesh product version. Skippy publishes the native
+/// runtimes under that release; Mesh only downloads them. It is also the
+/// cache directory, so a runtime cached by an earlier Skippy is never reused.
 pub fn current_runtime_release() -> &'static str {
     skippy_native_runtime::runtime_release_version()
 }
-
-/// Skippy release this build is pinned to. Skippy publishes the native
-/// runtimes; Mesh only downloads them. Must match the Skippy revision in
-/// `Cargo.lock` (checked by a test below).
-pub const SKIPPY_RELEASE: &str = "0.80.0";
 
 /// Where Skippy publishes its releases.
 pub const SKIPPY_RELEASES_URL: &str = "https://github.com/Mesh-LLM/skippy/releases";
@@ -154,15 +152,11 @@ pub fn discover_local_native_runtimes_for_release(
     )
 }
 
-/// Runtime download location supplied to the runtime installer: the pinned
-/// Skippy release, whatever the Mesh version or build.
+/// Runtime download location supplied to the runtime installer: Skippy's
+/// releases, where runtime release `X` is published under tag `vX`.
 pub fn mesh_native_runtime_catalog() -> NativeRuntimeCatalog {
     NativeRuntimeCatalog {
-        release_tags: [(
-            current_runtime_release().to_string(),
-            format!("v{SKIPPY_RELEASE}"),
-        )]
-        .into(),
+        release_tags: Default::default(),
         releases_url: SKIPPY_RELEASES_URL.to_string(),
         rolling_release: None,
     }
@@ -229,12 +223,13 @@ mod tests {
         assert_eq!(
             default_manifest_url(),
             format!(
-                "https://github.com/Mesh-LLM/skippy/releases/download/v{SKIPPY_RELEASE}/native-runtimes.json"
+                "https://github.com/Mesh-LLM/skippy/releases/download/v{}/native-runtimes.json",
+                current_runtime_release()
             )
         );
         assert_eq!(
             default_manifest_url(),
-            default_release_manifest_url(SKIPPY_RELEASE)
+            default_release_manifest_url(current_runtime_release())
         );
     }
 
@@ -247,12 +242,15 @@ mod tests {
     }
 
     #[test]
-    fn pinned_skippy_release_matches_the_lockfile() {
+    fn runtime_release_is_the_pinned_skippy_version() {
         let lock = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../Cargo.lock"));
-        let entry = format!("name = \"skippy-native-runtime\"\nversion = \"{SKIPPY_RELEASE}\"\n");
+        let entry = format!(
+            "name = \"skippy-native-runtime\"\nversion = \"{}\"\n",
+            current_runtime_release()
+        );
         assert!(
             lock.replace("\r\n", "\n").contains(&entry),
-            "SKIPPY_RELEASE must equal the Skippy version in Cargo.lock"
+            "the runtime release must equal the Skippy version in Cargo.lock"
         );
     }
 

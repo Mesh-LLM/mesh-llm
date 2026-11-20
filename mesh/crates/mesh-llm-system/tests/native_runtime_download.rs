@@ -308,7 +308,7 @@ fn a_runtime_built_for_another_platform_is_refused() {
 
 // The archive's checksum is right, so only a comparison of the selected
 // catalog entry with the manifest inside the archive can catch these.
-// Skippy 0558e33 installs all five: its installer hands the extracted
+// The pinned Skippy installs all five: its installer hands the extracted
 // directory to the cache without the selected entry. Remove the `ignore`
 // when the pinned Skippy compares them.
 #[test]
