@@ -255,3 +255,24 @@ mod output_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// clap validates its argument graph (name uniqueness, relations,
+    /// groups, action and value-parser agreement) only under debug
+    /// assertions, and only when debug_assert is invoked; a
+    /// misconfiguration otherwise surfaces as silently ignored flags or
+    /// impossible requirements, not an error.
+    #[test]
+    fn cli_definition_is_internally_consistent() {
+        if !cfg!(debug_assertions) {
+            panic!(
+                "clap\x27s debug_assert checks are compiled out; this test needs a debug-assertions profile"
+            );
+        }
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+}

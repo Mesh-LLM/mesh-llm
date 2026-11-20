@@ -486,6 +486,35 @@ impl From<PlanSplitArgs> for skippy_commands::split::PlanSplitCommand {
 mod tests {
     use super::*;
 
+    /// clap validates its argument graph (name uniqueness, relations,
+    /// groups, action and value-parser agreement) only under debug
+    /// assertions, and only when debug_assert is invoked; a
+    /// misconfiguration otherwise surfaces as silently ignored flags or
+    /// impossible requirements, not an error.
+    #[test]
+    fn cli_definition_is_internally_consistent() {
+        if !cfg!(debug_assertions) {
+            panic!(
+                "clap\x27s debug_assert checks are compiled out; this test needs a debug-assertions profile"
+            );
+        }
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    /// The real `skippy serve` parse surface is not the derived tree but
+    /// the decorated one: serve_settings rewrites SetTrue flags and appends
+    /// the OPTIONS catalog, so its graph needs its own consistency check.
+    #[test]
+    fn serve_settings_definition_is_internally_consistent() {
+        if !cfg!(debug_assertions) {
+            panic!(
+                "clap's debug_assert checks are compiled out; this test needs a debug-assertions profile"
+            );
+        }
+        crate::serve_settings::command().debug_assert();
+    }
+
     #[test]
     fn model_package_and_cache_commands_are_standalone() {
         let cli = Cli::try_parse_from([
