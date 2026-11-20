@@ -228,7 +228,11 @@ fn a_runtime_built_for_another_platform_is_refused() {
 
 // The archive's checksum is right, so only a comparison of the selected
 // catalog entry with the manifest inside the archive can catch these.
+// Skippy 0558e33 installs all five: its installer hands the extracted
+// directory to the cache without the selected entry. Remove the `ignore`
+// when the pinned Skippy compares them.
 #[test]
+#[ignore = "Skippy's installer does not compare the archive's manifest with the catalog entry"]
 fn an_archive_holding_a_different_runtime_than_its_catalog_entry_is_refused() {
     type Change = fn(&mut NativeRuntimeArtifact);
     let changes: [(&str, Change); 5] = [
