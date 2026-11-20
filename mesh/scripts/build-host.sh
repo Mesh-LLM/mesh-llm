@@ -121,11 +121,13 @@ fi
 stamp_build_version
 
 host_features="web-ui,dynamic-native-runtime"
-cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
+# A local Skippy override (scripts/skippy-source.sh) changes the lockfile.
+locked=(--locked)
+[[ -f "$REPO_ROOT/.cargo/skippy-local.toml" ]] && locked=()
+cargo_args=(build ${locked[@]+"${locked[@]}"} -p mesh-llm --bin mesh-llm --no-default-features \
     --features "$host_features")
 if [[ "$BUILD_PROFILE" == "release" ]]; then
-    cargo_args=(build --release --locked -p mesh-llm --bin mesh-llm --no-default-features \
-        --features "$host_features")
+    cargo_args+=(--release)
 fi
 (cd "$REPO_ROOT" && cargo "${cargo_args[@]}")
 

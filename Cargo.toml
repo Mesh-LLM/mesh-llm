@@ -63,32 +63,34 @@ mesh-llm-analytics = { path = "mesh/crates/mesh-llm-analytics", version = "0.80.
 mesh-llm-build-info = { path = "mesh/crates/mesh-llm-build-info", version = "0.80.0" }
 mesh-llm-release-footer = { path = "mesh/crates/mesh-llm-release-footer", version = "0.80.0" }
 mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.80.0" }
-# Skippy is an external project. `.deps/skippy` is a checkout of it; see scripts/skippy-source.sh.
-hf_hub = { package = "skippy-hf-hub", path = ".deps/skippy/crates/skippy-hf-hub", version = "0.80.0", default-features = false }
-skippy-api = { path = ".deps/skippy/crates/skippy-api", version = "0.80.0" }
-skippy-cache = { path = ".deps/skippy/crates/skippy-cache", version = "0.80.0" }
-skippy-commands = { path = ".deps/skippy/crates/skippy-commands", version = "0.80.0" }
-skippy-config = { path = ".deps/skippy/crates/skippy-config", version = "0.80.0" }
-skippy-coordinator = { path = ".deps/skippy/crates/skippy-coordinator", version = "0.80.0" }
-skippy-events = { path = ".deps/skippy/crates/skippy-events", version = "0.80.0" }
-skippy-ffi = { path = ".deps/skippy/crates/skippy-ffi", version = "0.80.0", default-features = false }
-skippy-gpu-bench = { path = ".deps/skippy/crates/skippy-gpu-bench", version = "0.80.0" }
-skippy-guardrails = { path = ".deps/skippy/crates/skippy-guardrails", version = "0.80.0" }
-skippy-hardware-profile = { path = ".deps/skippy/crates/skippy-hardware-profile", version = "0.80.0" }
-skippy-inference-api = { path = ".deps/skippy/crates/skippy-inference-api", version = "0.80.0" }
-skippy-model = { path = ".deps/skippy/crates/skippy-model", version = "0.80.0" }
-skippy-model-artifact = { path = ".deps/skippy/crates/skippy-model-artifact", version = "0.80.0" }
-skippy-model-hf = { path = ".deps/skippy/crates/skippy-model-hf", version = "0.80.0" }
-skippy-model-ref = { path = ".deps/skippy/crates/skippy-model-ref", version = "0.80.0" }
-skippy-model-resolver = { path = ".deps/skippy/crates/skippy-model-resolver", version = "0.80.0" }
-skippy-native-runtime = { path = ".deps/skippy/crates/skippy-native-runtime", version = "0.80.0" }
-skippy-package-format = { path = ".deps/skippy/crates/skippy-package-format", version = "0.80.0" }
-skippy-protocol = { path = ".deps/skippy/crates/skippy-protocol", version = "0.80.0" }
-skippy-runtime = { path = ".deps/skippy/crates/skippy-runtime", version = "0.80.0" }
-skippy-runtime-install = { path = ".deps/skippy/crates/skippy-runtime-install", version = "0.80.0" }
-skippy-serving = { path = ".deps/skippy/crates/skippy-serving", version = "0.80.0" }
-skippy-tokenizer = { path = ".deps/skippy/crates/skippy-tokenizer", version = "0.80.0" }
-skippy-topology = { path = ".deps/skippy/crates/skippy-topology", version = "0.80.0" }
+# Skippy is an external project, pinned to one revision here and in Cargo.lock.
+# To build against a local Skippy checkout or another branch: scripts/skippy-source.sh.
+# TEMPORARY URL: the repository moves to https://github.com/Mesh-LLM/skippy.
+hf_hub = { package = "skippy-hf-hub", git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0", default-features = false }
+skippy-api = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-cache = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-commands = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-config = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-coordinator = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-events = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-ffi = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0", default-features = false }
+skippy-gpu-bench = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-guardrails = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-hardware-profile = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-inference-api = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-model = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-model-artifact = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-model-hf = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-model-ref = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-model-resolver = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-native-runtime = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-package-format = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-protocol = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-runtime = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-runtime-install = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-serving = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-tokenizer = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
+skippy-topology = { git = "ssh://git@github.com/general-inference/skippy.git", rev = "0558e3349c744f3421d514549af2c19d4a118b07", version = "0.80.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

@@ -79,3 +79,4 @@ microkit-work/
 /.lsmcp/
 compile_commands.json
 skippy/skippy_api/.cache/
+.cargo/skippy-local.toml
