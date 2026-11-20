@@ -26,7 +26,8 @@ evidence-and-gates reference and use its formal report template as directed.
 Load the additional skills routed by `$release-validation` when their scope
 applies. These include remote process supervision, platform deployment,
 private-mesh setup, agent/tool-call checks, CI inspection, and subsystem-specific
-Skippy, plugin, configuration, telemetry, or benchmark validation.
+plugin, configuration, telemetry, or benchmark validation. Skippy has no skills
+here; for a change inside Skippy itself, use the Skippy repository.
 
 The release inventory tool (`cargo xtool release inventory`,
 `just release-inventory`) was removed with `tools/xtask` and has no
