@@ -1,7 +1,7 @@
 use crate::native_timing::native_call;
 use std::ptr;
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use skippy_cache::cachegen::archive::{
     CacheGenArchive, ComponentLayout, PageLayout, RecordKind, ValidatedArchive, ValueType,
     decode_page, encode_page, validate_archive,
@@ -11,8 +11,76 @@ use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc};
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
 use crate::{
-    GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, KV_PAGE_FLAG_V_TRANSPOSED,
+    CheckpointShape, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
+    KV_PAGE_FLAG_V_TRANSPOSED,
 };
+
+/// One stage checkpoint, built to the stage's [`CheckpointShape`]: a hybrid
+/// checkpoint cannot be built without both its KV page and its recurrent state.
+#[derive(Debug, Clone, Copy)]
+pub enum CheckpointParts<'a> {
+    Attention {
+        desc: &'a RuntimeKvPageDesc,
+        page: &'a [u8],
+    },
+    Recurrent {
+        state: &'a [u8],
+    },
+    AttentionAndRecurrent {
+        desc: &'a RuntimeKvPageDesc,
+        page: &'a [u8],
+        state: &'a [u8],
+    },
+}
+
+impl<'a> CheckpointParts<'a> {
+    /// Fit exported components to a shape. A part the shape needs and the
+    /// export lacks, or one it does not need, is an error, not a quieter restore.
+    pub fn fit(
+        shape: CheckpointShape,
+        page: Option<(&'a RuntimeKvPageDesc, &'a [u8])>,
+        state: &'a [u8],
+    ) -> Result<Self> {
+        Ok(match (shape, page, state.is_empty()) {
+            (CheckpointShape::Attention, Some((desc, page)), true) => {
+                Self::Attention { desc, page }
+            }
+            (CheckpointShape::Recurrent, None, false) => Self::Recurrent { state },
+            (CheckpointShape::AttentionAndRecurrent, Some((desc, page)), false) => {
+                Self::AttentionAndRecurrent { desc, page, state }
+            }
+            (shape, page, no_state) => bail!(
+                "a {shape:?} checkpoint cannot be built from {} and {}",
+                if page.is_some() {
+                    "a KV page"
+                } else {
+                    "no KV page"
+                },
+                if no_state {
+                    "no recurrent state"
+                } else {
+                    "recurrent state"
+                },
+            ),
+        })
+    }
+
+    fn page(&self) -> Option<(&'a RuntimeKvPageDesc, &'a [u8])> {
+        match *self {
+            Self::Attention { desc, page } | Self::AttentionAndRecurrent { desc, page, .. } => {
+                Some((desc, page))
+            }
+            Self::Recurrent { .. } => None,
+        }
+    }
+
+    fn state(&self) -> &'a [u8] {
+        match *self {
+            Self::Recurrent { state } | Self::AttentionAndRecurrent { state, .. } => state,
+            Self::Attention { .. } => &[],
+        }
+    }
+}
 
 /// Encode one complete runtime KV page into the portable CacheGen archive
 /// consumed directly by the native device import ABI.
@@ -582,6 +650,58 @@ impl StageSession {
         Ok(())
     }
 
+    /// Import a whole checkpoint into this fresh session. The native side
+    /// checks the parts against the stage again, imports the page, the
+    /// recurrent state, the position and the token history in that order, and
+    /// leaves the session empty if any of them fails.
+    pub fn import_checkpoint(
+        &mut self,
+        parts: &CheckpointParts<'_>,
+        token_count: u64,
+        tokens: &[i32],
+    ) -> Result<()> {
+        ensure!(
+            tokens.is_empty() || tokens.len() as u64 == token_count,
+            "checkpoint token history has {} tokens for position {token_count}",
+            tokens.len()
+        );
+        let page = parts.page();
+        if let Some((desc, payload)) = page {
+            desc.validate_payload(payload.len())?;
+        }
+        let raw_desc = page.map(|(desc, _)| desc.as_raw());
+        let state = parts.state();
+        let view = skippy_ffi::CheckpointView {
+            page: raw_desc.as_ref().map_or(ptr::null(), ptr::from_ref),
+            page_payload: page.map_or(ptr::null(), |(_, payload)| payload.as_ptr().cast()),
+            page_payload_bytes: page.map_or(0, |(_, payload)| payload.len()),
+            recurrent: if state.is_empty() {
+                ptr::null()
+            } else {
+                state.as_ptr().cast()
+            },
+            recurrent_bytes: state.len(),
+            token_count,
+            tokens: if tokens.is_empty() {
+                ptr::null()
+            } else {
+                tokens.as_ptr()
+            },
+        };
+        let mut error = ptr::null_mut();
+        // SAFETY: every pointer in the view borrows from `parts`, `raw_desc`
+        // or `tokens`, all of which outlive the call; native code copies them.
+        let status = unsafe { native_call!(skippy_import_checkpoint(self.raw, &view, &mut error)) };
+        if let Err(error) = ensure_ok(status, error) {
+            self.token_count = 0;
+            return Err(error);
+        }
+        self.token_count = token_count;
+        // Imported target state has no matching draft features.
+        self.dflash_after_replace();
+        Ok(())
+    }
+
     pub fn import_recurrent_state_for_token_count(
         &mut self,
         input: &[u8],
@@ -604,7 +724,41 @@ fn validate_imported_full_state_position(expected: u64, actual: u64) -> Result<(
 mod tests {
     use skippy_cache::cachegen::archive::{Record, RecordKind, ValidatedArchive};
 
-    use super::{cachegen_records, validate_imported_full_state_position};
+    use super::{CheckpointParts, cachegen_records, validate_imported_full_state_position};
+    use crate::{CheckpointShape, RuntimeKvPageDesc};
+
+    #[test]
+    fn a_checkpoint_is_built_only_from_exactly_its_shapes_parts() {
+        let desc = RuntimeKvPageDesc {
+            version: 1,
+            layer_start: 0,
+            layer_end: 1,
+            token_start: 0,
+            token_count: 1,
+            layer_count: 1,
+            k_type: crate::GGML_TYPE_F16,
+            v_type: crate::GGML_TYPE_F16,
+            k_row_bytes: 1,
+            v_row_bytes: 1,
+            v_element_bytes: 1,
+            k_idx_row_bytes: 0,
+            payload_bytes: 1,
+            flags: 0,
+            codec: 0,
+            component_count: 0,
+            components: Box::new([Default::default(); 2]),
+        };
+        let page = Some((&desc, &[1_u8][..]));
+        let state = [2_u8];
+        let hybrid = CheckpointShape::AttentionAndRecurrent;
+        assert!(CheckpointParts::fit(hybrid, page, &state).is_ok());
+        assert!(CheckpointParts::fit(hybrid, None, &state).is_err());
+        assert!(CheckpointParts::fit(hybrid, page, &[]).is_err());
+        assert!(CheckpointParts::fit(CheckpointShape::Recurrent, None, &state).is_ok());
+        assert!(CheckpointParts::fit(CheckpointShape::Recurrent, page, &state).is_err());
+        assert!(CheckpointParts::fit(CheckpointShape::Attention, page, &[]).is_ok());
+        assert!(CheckpointParts::fit(CheckpointShape::Attention, page, &state).is_err());
+    }
 
     #[test]
     fn maps_validated_cachegen_records_to_the_native_abi() {

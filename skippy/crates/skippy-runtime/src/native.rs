@@ -222,6 +222,14 @@ impl StageModel {
         raw.try_into()
     }
 
+    /// The parts an exact checkpoint of this stage carries, or `None` when
+    /// only full state checkpoints it, and for the dummy model.
+    pub fn checkpoint_shape(&self) -> Option<crate::CheckpointShape> {
+        self.has_native_model()
+            .then(|| unsafe { skippy_ffi::skippy_model_checkpoint_parts(self.inner.raw) })
+            .and_then(crate::CheckpointShape::from_native_parts)
+    }
+
     /// A loaded causal graph can read next-token scores without sampling.
     /// This is independent of whether this worker owns the terminal head.
     pub fn supports_causal_readout(&self) -> bool {

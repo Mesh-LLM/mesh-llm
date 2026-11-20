@@ -66,7 +66,7 @@ pub use gguf_writer::{
     ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,
     write_gguf_metadata_from_parts,
 };
-pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
+pub use kv_pages::{CheckpointParts, decode_cachegen_kv_page, encode_cachegen_kv_page};
 pub use laya::{LayaMemory, LayaModel, LayaModelInfo};
 pub use logging::{
     LLAMA_LOG_LEVEL_DEBUG, MeasuredNativeBuffers, NativeLogEvent, NativeLogParserMode,
@@ -122,9 +122,9 @@ pub use skippy_ffi::{ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, MA
 pub use types::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,
     ActivationPartDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
-    ChatTemplateMessage, ChatTemplateOptions, DEFAULT_PENALTY_LAST_N, DecodeFrameBatchOutput,
-    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample,
-    LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
+    ChatTemplateMessage, ChatTemplateOptions, CheckpointShape, DEFAULT_PENALTY_LAST_N,
+    DecodeFrameBatchOutput, DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput,
+    IterationSample, LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
     MediaPrefillChunkFrame, MediaPrefillFrame, MemoryCacheCapabilities, ModelStateKind,
     ReasoningBudget, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenLogprobs,
     TokenSignal, XtcSamplingConfig, penalty_window,
