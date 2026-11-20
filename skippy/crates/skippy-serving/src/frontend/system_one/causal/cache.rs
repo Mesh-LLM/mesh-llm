@@ -78,6 +78,7 @@ impl DecisionSequence<'_> {
             tokens,
             self.ids.request_id,
             self.ids.session_id,
+            self.ids.request_class(),
         )?;
         write_stage_message_conditioned(&mut lane.stream, &message, *downstream_wire_condition)
             .map_err(openai_io_error)?;
@@ -93,9 +94,10 @@ impl DecisionSequence<'_> {
         if !restored {
             // Reset every stage, including recurrent state that cannot safely
             // be truncated after a partial chain restore.
-            let stop = skippy_protocol::binary::StageWireMessage::stop_with_identity(
+            let stop = crate::frontend::wire_messages::stop_message(
                 self.ids.request_id,
                 self.ids.session_id,
+                self.ids.request_class(),
             );
             write_stage_message_conditioned(&mut lane.stream, &stop, *downstream_wire_condition)
                 .map_err(openai_io_error)?;

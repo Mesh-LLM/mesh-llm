@@ -1,3 +1,4 @@
+//! Exact-state record admission end to end, on a modelless runtime.
 use super::*;
 use crate::kv_integration::exact_state::{CaptureAdmission, ExactStateAdmissionCredit};
 use crate::kv_integration::{ExactStateExtra, ExactStateRecordAdmission};
@@ -74,6 +75,7 @@ fn record(
         payload: ExactStatePayload::full_state(vec![1, 2, 3]),
         extra: ExactStateExtra::default(),
         namespace: NAMESPACE.to_string(),
+        retention_priority: 0,
         token_ids,
         l3_fill_claim: None,
         write_through_l3: true,

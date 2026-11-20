@@ -30,6 +30,9 @@ mod missing_model;
 mod private_scope_tests;
 mod realtime_relay;
 mod rejection_telemetry;
+#[cfg(test)]
+#[path = "ingress/request_tier_tests.rs"]
+mod request_tier_tests;
 use buffered_exchange::handle_buffered_api_request;
 pub(super) use exchange_events::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use exchange_events::{
@@ -774,6 +777,43 @@ fn mesh_headers_force_remote(
 /// an effective and a terminal OpenAI exchange event to the plugin bus so any
 /// observing plugin can track the full lifecycle of each exchange, including
 /// cases where the backend returns an error or the connection is dropped.
+/// Proxy `request` to the plugin endpoint serving `model_name`. The plugin's
+/// own inference for the request runs no higher than its tier, until the
+/// plugin has answered it.
+async fn route_to_plugin_endpoint(
+    ctx: &IngressRouteContext<'_>,
+    plugin_manager: &crate::plugin::PluginManager,
+    endpoint: &crate::plugin::InferenceEndpointRoute,
+    tcp_stream: &mut ClientStream,
+    request: &proxy::BufferedHttpRequest,
+    model_name: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    let tiered_call = plugin_manager.begin_tiered_invocation(
+        &endpoint.plugin_name,
+        crate::mesh::request_tier::current_request_tier(),
+    );
+    let outcome = proxy::route_http_endpoint_request(
+        ctx.node,
+        Some(model_name),
+        proxy::RouteSelectionMetadata {
+            provider: Some(&endpoint.plugin_name),
+            engine: Some(&endpoint.endpoint_id),
+        },
+        tcp_stream,
+        &endpoint.address,
+        request,
+        route_observer,
+    )
+    .await;
+    if let Some(call) = tiered_call
+        && outcome.response_written()
+    {
+        call.finish();
+    }
+    outcome
+}
+
 async fn try_route_plugin_model(
     ctx: &IngressRouteContext<'_>,
     mut tcp_stream: ClientStream,
@@ -812,16 +852,13 @@ async fn try_route_plugin_model(
         Ok(Some(endpoint)) => {
             let exchange_id =
                 mint_and_publish_effective_raw_proxy(plugin_manager, model_name).await;
-            let outcome = proxy::route_http_endpoint_request(
-                ctx.node,
-                Some(model_name),
-                proxy::RouteSelectionMetadata {
-                    provider: Some(&endpoint.plugin_name),
-                    engine: Some(&endpoint.endpoint_id),
-                },
+            let outcome = route_to_plugin_endpoint(
+                ctx,
+                plugin_manager,
+                &endpoint,
                 &mut tcp_stream,
-                &endpoint.address,
                 request,
+                model_name,
                 route_observer,
             )
             .await;
@@ -1603,6 +1640,9 @@ async fn handle_api_proxy_connection_inner(
         Some(scope) => node.targets_in_private_scope(scope, &targets).await,
         None => targets,
     };
+    let tier = node
+        .ingress_request_tier(&request.raw, ingress_type, requested_by)
+        .await;
     // Boxed: the dispatch future is large, and the scope wrapper would
     // otherwise move it across another stack frame.
     let dispatch = Box::pin(async move {
@@ -1637,7 +1677,7 @@ async fn handle_api_proxy_connection_inner(
         )
         .await;
     });
-    mesh::with_private_scope(scope, dispatch).await;
+    mesh::with_private_scope(scope, mesh::request_tier::with_request_tier(tier, dispatch)).await;
 }
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's

@@ -154,7 +154,7 @@ impl StageOpenAiBackend {
                 deadline: cache_operation_deadline,
                 cancellation: request.cancellation,
                 prompt_tokens: Arc::clone(&prefill_tokens),
-                priority: 0,
+                priority: request.ids.request_tier().priority(),
                 scheduling: cache_scheduling,
                 refresh_affinity: refresh_cache_affinity,
             },

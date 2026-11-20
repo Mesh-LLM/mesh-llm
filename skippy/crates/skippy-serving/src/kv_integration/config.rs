@@ -743,6 +743,7 @@ fn store_exact_radix_record_with_codec(
         payload,
         extra,
         namespace,
+        retention_priority,
         token_ids,
         l3_fill_claim: _,
         write_through_l3,
@@ -773,7 +774,8 @@ fn store_exact_radix_record_with_codec(
                 payload.clone(),
                 extra.clone(),
                 write_through_l3,
-            ),
+            )
+            .with_retention_priority(retention_priority),
         );
         match insert_result {
             Err(error) => Err(error),
@@ -782,10 +784,9 @@ fn store_exact_radix_record_with_codec(
                     released.push(replaced.payload);
                 }
                 while radix.stats().recurrent_entries > max_entries {
-                    let Some(evicted) = radix
-                        .evict_lru_superseded_recurrent()
-                        .or_else(|| radix.evict_lru_recurrent())
-                    else {
+                    let Some(evicted) = radix.evict_lru_superseded_recurrent().or_else(|| {
+                        radix.evict_recurrent_by_retention(RadixExactEntry::retention_priority)
+                    }) else {
                         break;
                     };
                     released.push(evicted.value.payload);
@@ -968,6 +969,7 @@ mod tests {
     mod cache_admission;
     mod durable_spill;
     mod exact_state_retention;
+    mod reserved_admission;
     mod runtime_admission;
 
     fn limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
@@ -1018,6 +1020,7 @@ mod tests {
             payload: skippy_cache::ExactStatePayload::full_state(bytes.to_vec()),
             extra: super::super::ExactStateExtra::default(),
             namespace: "model".to_string(),
+            retention_priority: 0,
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
             write_through_l3: true,
@@ -1070,6 +1073,7 @@ mod tests {
                 kv_desc: Some(desc),
             },
             namespace: "model".to_string(),
+            retention_priority: 0,
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
             write_through_l3: true,
@@ -1632,6 +1636,3 @@ mod tests {
         config
     }
 }
-
-#[cfg(test)]
-mod reserved_admission_harness;

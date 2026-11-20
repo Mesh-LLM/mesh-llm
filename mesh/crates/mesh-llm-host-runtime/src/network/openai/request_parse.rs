@@ -482,17 +482,25 @@ where
     let requires_json_transform =
         request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some())
             || (transformer.is_some() && plugin_transform::is_transformable_path(&parsed.path));
-    let rewrite = rewrite_request_body_for_forwarding(
-        &parsed.path,
-        &body,
-        plugin_manager,
-        Transformer {
-            plugins: transformer,
-            private_hint: parsed.private_base
-                || super::routing_scope::head_requests_private_scope(&raw),
-            node_limit: super::routing_scope::head_node_limit(&raw),
-        },
-        requires_json_transform,
+    // Transforms run before the request's tier is scoped (only a client of
+    // this node gets them, whose tier is the one its head claims), so scope
+    // them to it here.
+    let tier = crate::mesh::request_tier::current_request_tier()
+        .min(crate::mesh::request_tier::claimed_request_tier(&raw));
+    let rewrite = crate::mesh::request_tier::with_request_tier(
+        tier,
+        rewrite_request_body_for_forwarding(
+            &parsed.path,
+            &body,
+            plugin_manager,
+            Transformer {
+                plugins: transformer,
+                private_hint: parsed.private_base
+                    || super::routing_scope::head_requests_private_scope(&raw),
+                node_limit: super::routing_scope::head_node_limit(&raw),
+            },
+            requires_json_transform,
+        ),
     )
     .await
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
@@ -860,6 +868,13 @@ fn finalize_forwarded_request(
             continue;
         }
         if name.eq_ignore_ascii_case(RAW_LIFECYCLE_OWNER_HEADER) {
+            continue;
+        }
+        // Only this node names a request's class to its own Skippy server
+        // (`mesh::request_tier`); a client's or peer's naming is dropped.
+        if name.eq_ignore_ascii_case(skippy_inference_api::REQUEST_TIER_HEADER)
+            || name.eq_ignore_ascii_case(skippy_inference_api::CACHE_PARTITION_HEADER)
+        {
             continue;
         }
         if strip_expect && name.eq_ignore_ascii_case("expect") {

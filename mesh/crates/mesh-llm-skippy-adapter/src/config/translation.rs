@@ -367,6 +367,7 @@ impl ResolvedSkippyConfig {
             ),
             generation_admission_timeout_secs:
                 skippy_serving::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
+            local_kv_reserve_percent: self.throughput.local_kv_reserve_percent,
             prefill_chunk_size: self.skippy.prefill_chunk_size,
             prefill_chunk_policy: resolve_prefill_chunk_policy(&self.skippy.prefill_chunking),
             prefill_chunk_schedule: self.skippy.prefill_chunk_schedule.clone(),

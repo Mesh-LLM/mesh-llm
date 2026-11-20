@@ -339,6 +339,7 @@ impl KvStageIntegration {
                         payload,
                         extra: ExactStateExtra { kv_desc },
                         namespace: identity.namespace.clone(),
+                        retention_priority: identity.retention_priority(),
                         token_ids: identity.token_ids[..token_count as usize].to_vec(),
                         l3_fill_claim: None,
                         write_through_l3: false,

@@ -121,7 +121,11 @@ fn evict_exact_entries_over(
                     }
                     RetentionFloor::SingleSnapshot => radix.stats().recurrent_entries > 1,
                 };
-                above_floor.then(|| radix.evict_lru_recurrent()).flatten()
+                above_floor
+                    .then(|| {
+                        radix.evict_recurrent_by_retention(RadixExactEntry::retention_priority)
+                    })
+                    .flatten()
             })
         };
         let Some(evicted) = evicted else {

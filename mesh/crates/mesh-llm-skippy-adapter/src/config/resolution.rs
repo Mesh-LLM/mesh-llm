@@ -674,6 +674,12 @@ fn resolve_throughput_config(context: &ResolverContext<'_>) -> ResolvedThroughpu
         threads,
         threads_batch,
         tuning_profile: throughput.effective_profile,
+        local_kv_reserve_percent: context
+            .request
+            .mesh_config
+            .request_tiers
+            .local_kv_reserve_percent
+            .min(100),
     }
 }
 

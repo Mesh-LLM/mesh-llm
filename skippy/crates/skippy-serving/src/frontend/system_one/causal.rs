@@ -69,6 +69,7 @@ impl StageOpenAiBackend {
     pub(in crate::frontend) async fn serve_system_one(
         &self,
         request: SystemOneRequest,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> InferenceResult<SystemOneResponse> {
         super::validate_request_fields(&request, &self.model_id)?;
         let decision = super::decision_request(&request)?;
@@ -102,7 +103,7 @@ impl StageOpenAiBackend {
         };
         validate_context(&plan, self.ctx_size)?;
         let guard = CancelOnDrop(CancellationToken::new());
-        let preparation = self.warm_decision_prefixes(&plan, &guard.0).await?;
+        let preparation = self.warm_decision_prefixes(&plan, &guard.0, class).await?;
         let jobs = decision_jobs(&plan);
         let mut executor = self.clone();
         if !preparation.reuse_cache {
@@ -110,7 +111,7 @@ impl StageOpenAiBackend {
             // This affects only this request, not the shared backend or other users.
             executor.kv = None;
         }
-        let results = executor.run_readout_jobs(jobs, &guard.0).await?;
+        let results = executor.run_readout_jobs(jobs, &guard.0, class).await?;
         decision_response(request, &plan, results, preparation.usage)
     }
 
@@ -119,10 +120,11 @@ impl StageOpenAiBackend {
         &self,
         jobs: Vec<ReadoutJob>,
         cancellation: &CancellationToken,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> InferenceResult<Vec<(ReadoutJob, ReadoutResult)>> {
         let width = self.generation_limit.current_limit().clamp(1, 64);
         let mut running = stream::iter(jobs.into_iter().map(|job| async move {
-            let result = self.run_readout_job(job.clone(), cancellation).await;
+            let result = self.run_readout_job(job.clone(), cancellation, class).await;
             (job, result)
         }))
         .buffer_unordered(width);
@@ -145,6 +147,7 @@ impl StageOpenAiBackend {
         &self,
         job: ReadoutJob,
         cancellation: &CancellationToken,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> Result<ReadoutResult, ReadoutFailure> {
         job.validate()?;
         let ids = InferenceGenerationIds::new_with_trust(
@@ -152,7 +155,8 @@ impl StageOpenAiBackend {
             None,
             false,
             None,
-        );
+        )
+        .with_request_class(class);
         let continuation = job.candidates.iter().map(Vec::len).max().unwrap_or(0);
         let work =
             GenerationAdmissionWork::new(job.prompt.len() + continuation.saturating_sub(1), 0);

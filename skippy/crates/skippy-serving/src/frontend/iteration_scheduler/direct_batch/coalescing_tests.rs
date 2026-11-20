@@ -77,6 +77,7 @@ fn planned_work_reaches_runtime_admission_without_coalescing_an_empty_direct_que
     let (reply, events) = std_mpsc::channel();
     worker.submit(ScheduledRequest {
         id: "planned".into(),
+        priority: 0,
         prompt_tokens: vec![1, 2],
         max_tokens: 1,
         sampling: None,

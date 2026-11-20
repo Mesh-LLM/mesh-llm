@@ -34,6 +34,8 @@ impl From<ChatCompletionRequest> for GenerationRequest {
             prompt_cache_retention: value.prompt_cache_retention,
             stream_options: value.stream_options,
             extra: value.extra,
+            // The body never names its class; the backend sets it from context.
+            request_class: Default::default(),
         }
     }
 }

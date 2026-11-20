@@ -354,7 +354,47 @@ impl<R, E> UnifiedRadixCache<R, E> {
     }
 
     pub fn evict_lru_recurrent(&mut self) -> Option<RadixEviction<E>> {
-        let victim = self.lru_victim(ComponentKind::KvRecurrent)?;
+        self.evict_recurrent_by_retention(|_| 0)
+    }
+
+    /// The retention of the entry [`Self::evict_recurrent_by_retention`]
+    /// would evict next, if any is evictable.
+    pub fn recurrent_victim_retention(&self, retention: impl Fn(&E) -> u64) -> Option<u64> {
+        self.ranked_victim(&|node| {
+            node.components
+                .recurrent
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| {
+                    (
+                        retention(&entry.value),
+                        entry.last_used,
+                        entry.logical_bytes,
+                    )
+                })
+        })
+        .map(|victim| victim.retention)
+    }
+
+    /// Evict the unreferenced recurrent entry with the lowest `retention`,
+    /// least recently used first among equals.
+    pub fn evict_recurrent_by_retention(
+        &mut self,
+        retention: impl Fn(&E) -> u64,
+    ) -> Option<RadixEviction<E>> {
+        let victim = self.ranked_victim(&|node| {
+            node.components
+                .recurrent
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| {
+                    (
+                        retention(&entry.value),
+                        entry.last_used,
+                        entry.logical_bytes,
+                    )
+                })
+        })?;
         let value = self.remove_recurrent(&victim.namespace, &victim.tokens)?;
         self.recurrent_evictions = self.recurrent_evictions.saturating_add(1);
         Some(RadixEviction {
@@ -420,9 +460,29 @@ impl<R, E> UnifiedRadixCache<R, E> {
     }
 
     fn lru_victim(&self, component: ComponentKind) -> Option<Victim> {
+        self.ranked_victim(&|node| match component {
+            ComponentKind::ResidentKv => node
+                .components
+                .resident
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| (0, entry.last_used, entry.logical_bytes)),
+            ComponentKind::KvRecurrent => node
+                .components
+                .recurrent
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| (0, entry.last_used, entry.logical_bytes)),
+        })
+    }
+
+    /// The evictable node with the lowest `(retention, last_used)`, where
+    /// `candidate` yields `(retention, last_used, logical_bytes)` for nodes
+    /// holding an evictable entry.
+    fn ranked_victim(&self, candidate: &VictimCandidate<'_, R, E>) -> Option<Victim> {
         let mut victim = None;
         for (namespace, root) in &self.roots {
-            collect_lru_victim(namespace, root, component, &mut Vec::new(), &mut victim);
+            collect_lru_victim(namespace, root, candidate, &mut Vec::new(), &mut victim);
         }
         victim
     }
@@ -665,6 +725,7 @@ struct Victim {
     tokens: Vec<i32>,
     logical_bytes: u64,
     last_used: u64,
+    retention: u64,
 }
 
 fn validate_tokens(tokens: &[i32]) -> Result<()> {
@@ -861,35 +922,24 @@ fn find_recurrent_path<R, E>(
     None
 }
 
+type VictimCandidate<'a, R, E> = dyn Fn(&RadixNode<R, E>) -> Option<(u64, u64, u64)> + 'a;
+
 fn collect_lru_victim<R, E>(
     namespace: &str,
     node: &RadixNode<R, E>,
-    component: ComponentKind,
+    candidate: &VictimCandidate<'_, R, E>,
     path: &mut Vec<i32>,
     victim: &mut Option<Victim>,
 ) {
     let original_len = path.len();
     path.extend_from_slice(&node.edge);
-    let candidate = match component {
-        ComponentKind::ResidentKv => node
-            .components
-            .resident
-            .as_ref()
-            .filter(|entry| entry.active_refs == 0)
-            .map(|entry| (entry.last_used, entry.logical_bytes)),
-        ComponentKind::KvRecurrent => node
-            .components
-            .recurrent
-            .as_ref()
-            .filter(|entry| entry.active_refs == 0)
-            .map(|entry| (entry.last_used, entry.logical_bytes)),
-    };
-    if let Some((last_used, logical_bytes)) = candidate {
+    if let Some((retention, last_used, logical_bytes)) = candidate(node) {
         let replace = victim
             .as_ref()
             .map(|current| {
-                (last_used, namespace, path.as_slice())
+                (retention, last_used, namespace, path.as_slice())
                     < (
+                        current.retention,
                         current.last_used,
                         current.namespace.as_str(),
                         current.tokens.as_slice(),
@@ -902,11 +952,12 @@ fn collect_lru_victim<R, E>(
                 tokens: path.clone(),
                 logical_bytes,
                 last_used,
+                retention,
             });
         }
     }
     for child in node.children.values() {
-        collect_lru_victim(namespace, child, component, path, victim);
+        collect_lru_victim(namespace, child, candidate, path, victim);
     }
     path.truncate(original_len);
 }
@@ -956,6 +1007,7 @@ fn collect_lru_superseded_recurrent<R, E>(
                 tokens: path.clone(),
                 logical_bytes: entry.logical_bytes,
                 last_used: entry.last_used,
+                retention: 0,
             });
         }
     }

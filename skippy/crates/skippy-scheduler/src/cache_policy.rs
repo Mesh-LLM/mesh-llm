@@ -56,6 +56,42 @@ impl CacheAffinity {
     }
 }
 
+/// Times a candidate is passed over to gain one priority level. Priority is
+/// strict among fresh arrivals, but a lower-priority candidate climbs one level
+/// each time this many higher-priority candidates are selected ahead of it, so
+/// no level starves. Waiting behind its own or a lower level does not count:
+/// a busy lower level never catches up with a higher one by queueing alone.
+pub const PRIORITY_AGING_TURNS: u64 = 16;
+
+/// Counts selections by priority, so a waiting candidate's
+/// [`CacheAwareCandidate::passed_over`] can be read off at any time.
+#[derive(Debug, Default, Clone)]
+pub struct PriorityPassovers {
+    selected: std::collections::BTreeMap<u64, u64>,
+}
+
+impl PriorityPassovers {
+    /// Record that a candidate of `priority` was selected.
+    pub fn record_selection(&mut self, priority: u64) {
+        let count = self.selected.entry(priority).or_default();
+        *count = count.saturating_add(1);
+    }
+
+    /// The selections so far above `priority`. Keep it when a candidate of
+    /// `priority` starts waiting and pass it to [`Self::passed_over`] later.
+    pub fn mark(&self, priority: u64) -> u64 {
+        self.selected
+            .range(priority.saturating_add(1)..)
+            .map(|(_, count)| *count)
+            .fold(0, u64::saturating_add)
+    }
+
+    /// How many higher-priority candidates were selected since `mark`.
+    pub fn passed_over(&self, priority: u64, mark: u64) -> u64 {
+        self.mark(priority).saturating_sub(mark)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CacheAwareCandidate<'a> {
     pub index: usize,
@@ -64,6 +100,9 @@ pub struct CacheAwareCandidate<'a> {
     pub prompt_tokens: &'a [i32],
     pub enqueued_turn: u64,
     pub order: u64,
+    /// How many higher-priority candidates were selected while this one
+    /// waited (see [`PriorityPassovers`]); it ages the candidate's priority.
+    pub passed_over: u64,
 }
 
 /// Order cache candidates by priority, saved work plus aging, then waiting
@@ -101,6 +140,10 @@ pub fn order_cache_aware_candidates_with_anchor<'a>(
     anchor_prompt: Option<&[i32]>,
 ) -> Vec<usize> {
     let candidates = candidates.into_iter().collect::<Vec<_>>();
+    let levels = candidates
+        .iter()
+        .map(|candidate| candidate.priority)
+        .collect::<std::collections::BTreeSet<_>>();
     let mut dfs_ranks = vec![0usize; candidates.len()];
     if group_waiting_prefixes {
         let mut dfs_order = Vec::with_capacity(candidates.len());
@@ -124,9 +167,8 @@ pub fn order_cache_aware_candidates_with_anchor<'a>(
     ranked.sort_by(|(left, left_dfs_rank), (right, right_dfs_rank)| {
         let left_score = effective_score(left, current_turn, aging_cost_per_turn);
         let right_score = effective_score(right, current_turn, aging_cost_per_turn);
-        right
-            .priority
-            .cmp(&left.priority)
+        priority_rank(right, &levels)
+            .cmp(&priority_rank(left, &levels))
             .then_with(|| {
                 if group_waiting_prefixes {
                     grouping_score(right, current_turn, aging_cost_per_turn).cmp(&grouping_score(
@@ -152,6 +194,28 @@ pub fn order_cache_aware_candidates_with_anchor<'a>(
         .into_iter()
         .map(|(candidate, _)| candidate.index)
         .collect()
+}
+
+/// Priority plus one level per [`PRIORITY_AGING_TURNS`] times passed over.
+fn aged_priority(candidate: &CacheAwareCandidate<'_>) -> u64 {
+    candidate
+        .priority
+        .saturating_add(candidate.passed_over / PRIORITY_AGING_TURNS)
+}
+
+/// The highest priority among `levels` (the candidates' own priorities) that
+/// `candidate` has aged to. Age only lifts a candidate to a level another
+/// candidate holds, so candidates of one level keep the cache-aware order
+/// whatever their ages.
+fn priority_rank(
+    candidate: &CacheAwareCandidate<'_>,
+    levels: &std::collections::BTreeSet<u64>,
+) -> u64 {
+    levels
+        .range(..=aged_priority(candidate))
+        .next_back()
+        .copied()
+        .unwrap_or(candidate.priority)
 }
 
 fn grouping_score(
@@ -301,6 +365,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -309,6 +374,7 @@ mod tests {
                     prompt_tokens: &[4, 5, 6],
                     enqueued_turn: 0,
                     order: 1,
+                    passed_over: 0,
                 },
             ],
             0,
@@ -333,6 +399,7 @@ mod tests {
                     prompt_tokens,
                     enqueued_turn: 0,
                     order: index as u64,
+                    passed_over: 0,
                 }),
             0,
             10,
@@ -349,6 +416,7 @@ mod tests {
                 prompt_tokens: prompts[index],
                 enqueued_turn: 0,
                 order: index as u64,
+                passed_over: 0,
             }),
             1,
             10,
@@ -371,6 +439,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -379,6 +448,7 @@ mod tests {
                     prompt_tokens: &[4, 5, 6],
                     enqueued_turn: 11,
                     order: 1,
+                    passed_over: 0,
                 },
             ],
             11,
@@ -401,6 +471,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -409,6 +480,7 @@ mod tests {
                     prompt_tokens: &[4, 5, 6],
                     enqueued_turn: 0,
                     order: 1,
+                    passed_over: 0,
                 },
             ],
             0,
@@ -416,6 +488,82 @@ mod tests {
             true,
         );
         assert_eq!(selected, Some(0));
+    }
+
+    #[test]
+    fn waiting_lower_priority_climbs_one_level_per_aging_window() {
+        let affinity = CacheAffinity::default();
+        let candidates = |passed_over: u64| {
+            order_cache_aware_candidates(
+                [
+                    CacheAwareCandidate {
+                        index: 0,
+                        priority: 0,
+                        affinity: &affinity,
+                        prompt_tokens: &[1],
+                        enqueued_turn: 0,
+                        order: 0,
+                        passed_over,
+                    },
+                    CacheAwareCandidate {
+                        index: 1,
+                        priority: 2,
+                        affinity: &affinity,
+                        prompt_tokens: &[2],
+                        enqueued_turn: 100,
+                        order: 1,
+                        passed_over: 0,
+                    },
+                ],
+                100,
+                10,
+                false,
+            )
+        };
+        // A fresh higher-priority arrival passes a waiter two levels below it
+        // until that waiter has been passed over two full windows; then age
+        // decides.
+        assert_eq!(candidates(2 * PRIORITY_AGING_TURNS - 1), vec![1, 0]);
+        assert_eq!(candidates(2 * PRIORITY_AGING_TURNS), vec![0, 1]);
+    }
+
+    #[test]
+    fn age_never_reorders_candidates_of_one_priority() {
+        let affinity = CacheAffinity::default();
+        let candidate = |index, passed_over| CacheAwareCandidate {
+            index,
+            priority: 1,
+            affinity: &affinity,
+            prompt_tokens: &[1],
+            enqueued_turn: 0,
+            order: index as u64,
+            passed_over,
+        };
+        let levels = std::collections::BTreeSet::from([1]);
+        let long = 10 * PRIORITY_AGING_TURNS;
+        assert_eq!(priority_rank(&candidate(0, long), &levels), 1);
+        assert_eq!(priority_rank(&candidate(1, 0), &levels), 1);
+        let with_higher = std::collections::BTreeSet::from([1, 2, 4]);
+        assert_eq!(priority_rank(&candidate(0, long), &with_higher), 4);
+        assert_eq!(
+            priority_rank(&candidate(0, PRIORITY_AGING_TURNS), &with_higher),
+            2
+        );
+        assert_eq!(priority_rank(&candidate(1, 0), &with_higher), 1);
+    }
+
+    #[test]
+    fn only_higher_priority_selections_pass_a_candidate_over() {
+        let mut passovers = PriorityPassovers::default();
+        let mark = passovers.mark(1);
+        passovers.record_selection(0);
+        passovers.record_selection(1);
+        assert_eq!(passovers.passed_over(1, mark), 0);
+        passovers.record_selection(2);
+        passovers.record_selection(5);
+        assert_eq!(passovers.passed_over(1, mark), 2);
+        assert_eq!(passovers.passed_over(2, passovers.mark(2)), 0);
+        assert_eq!(passovers.mark(u64::MAX), 0);
     }
 
     #[test]
@@ -430,6 +578,7 @@ mod tests {
                     prompt_tokens: &[9, 9, 9],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -438,6 +587,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 1,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 2,
@@ -446,6 +596,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 4],
                     enqueued_turn: 0,
                     order: 2,
+                    passed_over: 0,
                 },
             ],
             0,
@@ -468,6 +619,7 @@ mod tests {
                     prompt_tokens: &[9, 9, 9],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -476,6 +628,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 1,
                     order: 1,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 2,
@@ -484,6 +637,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 4],
                     enqueued_turn: 2,
                     order: 2,
+                    passed_over: 0,
                 },
             ],
             3,
@@ -506,6 +660,7 @@ mod tests {
                     prompt_tokens: &[9, 9, 9],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -514,6 +669,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 9,
                     order: 1,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 2,
@@ -522,6 +678,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 4],
                     enqueued_turn: 10,
                     order: 2,
+                    passed_over: 0,
                 },
             ],
             10,
@@ -544,6 +701,7 @@ mod tests {
                     prompt_tokens: &[9, 9, 9],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -552,6 +710,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 1,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 2,
@@ -560,6 +719,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 4],
                     enqueued_turn: 0,
                     order: 2,
+                    passed_over: 0,
                 },
             ],
             0,
@@ -583,6 +743,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 3],
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -591,6 +752,7 @@ mod tests {
                     prompt_tokens: &[1, 2, 4],
                     enqueued_turn: 0,
                     order: 1,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 2,
@@ -599,6 +761,7 @@ mod tests {
                     prompt_tokens: &[9, 9, 9],
                     enqueued_turn: 0,
                     order: 2,
+                    passed_over: 0,
                 },
             ],
             0,
@@ -625,6 +788,7 @@ mod tests {
                     prompt_tokens: &left,
                     enqueued_turn: 0,
                     order: 0,
+                    passed_over: 0,
                 },
                 CacheAwareCandidate {
                     index: 1,
@@ -633,6 +797,7 @@ mod tests {
                     prompt_tokens: &right,
                     enqueued_turn: 0,
                     order: 1,
+                    passed_over: 0,
                 },
             ],
             0,

@@ -50,6 +50,7 @@ pub(in crate::frontend) fn modelless_stage_openai_args() -> EmbeddedOpenAiArgs {
         pipeline_decode_groups: None,
         adaptive_generation_min_concurrency: None,
         generation_queue_capacity: 8,
+        local_kv_reserve_percent: 0,
         generation_admission_timeout_secs: 1,
         prefill_chunk_size: 512,
         prefill_chunk_policy: "fixed".to_string(),

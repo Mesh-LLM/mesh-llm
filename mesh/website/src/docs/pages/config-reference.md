@@ -87,6 +87,8 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.require_signed_gossip` | boolean | `false`; require origin signatures for relayed node/cache records; changing this creates a new mesh and requires upgraded participants | node-level | process restart | wired | `--require-signed-gossip` |
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `private.nodes` | array of string | `[]` (private requests stay on this node); node ids of 64 hex characters. See [Private routing](/docs/pages/config-toml/#private-nodes) | node-level | applies dynamically | wired | `mesh-llm private add` / `remove` |
+| `request_tiers.owners` | object (string map) | `{}`; owner id (64 hex characters) to `local`, `trusted` or `mesh`, overriding the tier that owner's nodes are served at. See [Request tiers](/docs/pages/config-toml/#request-tiers) | node-level | applies dynamically | wired | none |
+| `request_tiers.local_kv_reserve_percent` | integer | `0` (no reserve); 0 to 100, the share of each model's KV token budget only `local` requests may use | node-level | model reload | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
