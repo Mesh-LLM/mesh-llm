@@ -56,7 +56,7 @@ jobs:
             "Host import policy: only the Linux glibc floor is checked; the per-platform allowed-imports report is gone."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
             "GPU machines: it is not shown that the host picks a downloaded GPU runtime over the CPU runtime bundled in its archive."
-            "Updating from 0.80.0: a CUDA, ROCm or Vulkan install looks for its own archive, which this release does not publish; no safe transition is established."
+            "Updating from 0.80.0 on a GPU machine: the compatibility archive names are published, but the tests that the old updater replaces the old runtime and manifest together are not in this branch yet."
           )
           for item in "${missing[@]}"; do
             if [[ "$CANARY" == "true" ]]; then echo "::warning::Not release-ready: $item"; else echo "::error::Not release-ready: $item"; fi
@@ -546,6 +546,33 @@ jobs:
             test -s "$file.sha256" || { echo "$file has no checksum" >&2; exit 1; }
             sha256sum -c "$file.sha256"
           done
+      # ONE TRANSITION RELEASE ONLY. A 0.80.0 install on a GPU machine asks
+      # for the archive name of its GPU flavor, and its updater predates the
+      # plain-host fallback. Each name 0.80.0 published is therefore offered
+      # again as a byte-for-byte copy of the plain host archive. It is the same
+      # product: its manifest still says CPU, and the host downloads the GPU
+      # runtime from Skippy when it is online. Nothing GPU-specific is built.
+      - name: Offer the host archive under the 0.80.0 GPU archive names
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          alias_of() { # alias_of <host archive> <legacy name>...
+            local host="$1" name; shift
+            for name in "$@"; do
+              test ! -e "$name"
+              cp "$host" "$name"
+              printf '%s  %s\n' "$(sha256sum "$name" | cut -d' ' -f1)" "$name" > "$name.sha256"
+              cmp "$host" "$name"
+              [[ "$(cut -d' ' -f1 "$name.sha256")" == "$(cut -d' ' -f1 "$host.sha256")" ]] ||
+                { echo "$name is not the archive checked as $host" >&2; exit 1; }
+            done
+          }
+          linux=mesh-llm-x86_64-unknown-linux-gnu
+          arm=mesh-llm-aarch64-unknown-linux-gnu
+          windows=mesh-llm-x86_64-pc-windows-msvc
+          alias_of "$linux.tar.gz" "$linux"-{cuda-12,cuda-13,rocm,vulkan}.tar.gz
+          alias_of "$arm.tar.gz" "$arm"-{cuda-12,cuda-13}.tar.gz
+          alias_of "$windows.zip" "$windows"-{cuda-12,cuda-13,rocm,vulkan}.zip
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sdk-swift
