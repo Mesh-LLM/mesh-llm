@@ -43,15 +43,15 @@ index 4e33847d9..9497734b7 100644
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 80710eb3b..93232a2b8 100644
+index 8753994b9..b407e5ec4 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 78
-+#define SKIPPY_ABI_VERSION_PATCH 81
+-#define SKIPPY_ABI_VERSION_PATCH 79
++#define SKIPPY_ABI_VERSION_PATCH 82
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))

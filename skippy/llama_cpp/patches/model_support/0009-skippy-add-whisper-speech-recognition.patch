@@ -216,19 +216,19 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 54c87b6f2..80710eb3b 100644
+index 393388881..8753994b9 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 76
-+#define SKIPPY_ABI_VERSION_PATCH 78
+-#define SKIPPY_ABI_VERSION_PATCH 77
++#define SKIPPY_ABI_VERSION_PATCH 79
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -110,6 +110,8 @@ enum skippy_feature {
+@@ -112,6 +112,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
  /** @brief Full-model Laya decision reads (`skippy/laya.h`). */
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)

@@ -48,6 +48,12 @@ pub const CACHEGEN_RECORD_Q4_0: u32 = bindings::skippy::skippy_cachegen_record_k
 
 pub type CacheGenRecordV1 = bindings::skippy::skippy_cachegen_record_v1;
 
+pub const CHECKPOINT_PART_KV_PAGE: u32 = bindings::skippy::skippy_checkpoint_part::KvPage as u32;
+pub const CHECKPOINT_PART_RECURRENT: u32 =
+    bindings::skippy::skippy_checkpoint_part::Recurrent as u32;
+
+pub type CheckpointView = bindings::skippy::skippy_checkpoint_view;
+
 pub type KvPageDesc = bindings::skippy::skippy_kv_page_desc;
 
 #[allow(clippy::derivable_impls)]

@@ -69,19 +69,19 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index d04825da4..54c87b6f2 100644
+index ce3b4e3c6..393388881 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 74
-+#define SKIPPY_ABI_VERSION_PATCH 76
+-#define SKIPPY_ABI_VERSION_PATCH 75
++#define SKIPPY_ABI_VERSION_PATCH 77
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -108,6 +108,8 @@ enum skippy_feature {
+@@ -110,6 +110,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
  
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)

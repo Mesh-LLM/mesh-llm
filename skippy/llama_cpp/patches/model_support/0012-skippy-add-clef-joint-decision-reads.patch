@@ -180,19 +180,19 @@ index 000000000..cf13822ed
 +
 +#endif // SKIPPY_CLEF_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 93232a2b8..8845ab5fd 100644
+index b407e5ec4..4b89884bb 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 81
-+#define SKIPPY_ABI_VERSION_PATCH 86
+-#define SKIPPY_ABI_VERSION_PATCH 82
++#define SKIPPY_ABI_VERSION_PATCH 87
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -112,6 +112,8 @@ enum skippy_feature {
+@@ -114,6 +114,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
  /** @brief Full-model speech recognition (`skippy/asr.h`). */
  #define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)

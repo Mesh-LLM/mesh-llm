@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 86;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 87;
 pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
@@ -1579,7 +1579,7 @@ unsafe extern "C" {
     ) -> skippy_status;
 }
 unsafe extern "C" {
-    #[doc = " @brief Exports only recurrent memory; attention pages are exported independently."]
+    #[doc = " @brief Exports the session's recurrent state alone, without its attention cells.\n It checkpoints a stage by itself only when skippy_model_checkpoint_parts\n names no KV page part; skippy_export_full_state exports the whole sequence."]
     pub fn skippy_export_recurrent_state(
         session: *mut skippy_session,
         output: *mut ::std::os::raw::c_void,
@@ -1600,11 +1600,46 @@ unsafe extern "C" {
     ) -> skippy_status;
 }
 unsafe extern "C" {
-    #[doc = " @brief Imports recurrent-only state into a session."]
+    #[doc = " @brief Imports recurrent state after the attention cells it continues from.\n When the stage holds attention layers, the session's attention cells must\n already end where the state does: import the KV page first. A state that\n ends elsewhere is refused, and the sequence is left empty."]
     pub fn skippy_import_recurrent_state(
         session: *mut skippy_session,
         input: *const ::std::os::raw::c_void,
         input_bytes: usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+#[repr(u32)]
+#[doc = " @brief The parts of a stage checkpoint."]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_checkpoint_part {
+    KvPage = 1,
+    Recurrent = 2,
+}
+unsafe extern "C" {
+    #[doc = " @brief Returns the skippy_checkpoint_part bits a checkpoint of this stage carries.\n The parts follow the stage's layers rather than its model family: a hybrid\n model's stage holding no attention layers is checkpointed by its recurrent\n state alone. Zero means only full state checkpoints the stage."]
+    pub fn skippy_model_checkpoint_parts(model: *const skippy_model) -> u32;
+}
+#[doc = " @brief One stage checkpoint, in the parts skippy_model_checkpoint_parts names."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_checkpoint_view {
+    #[doc = " The KV page, or null when the checkpoint has no KV page part."]
+    pub page: *const skippy_kv_page_desc,
+    pub page_payload: *const ::std::os::raw::c_void,
+    pub page_payload_bytes: usize,
+    #[doc = " skippy_export_recurrent_state's bytes, or none when the checkpoint has no recurrent part."]
+    pub recurrent: *const ::std::os::raw::c_void,
+    pub recurrent_bytes: usize,
+    #[doc = " The position the checkpoint resumes from."]
+    pub token_count: u64,
+    #[doc = " The token history, token_count long, or null to leave it empty."]
+    pub tokens: *const llama_token,
+}
+unsafe extern "C" {
+    #[doc = " @brief Imports a checkpoint into a fresh session whole, or leaves the session empty.\n The checkpoint must carry exactly the parts the stage needs, and its KV page\n must end at token_count. The page goes in first, then the recurrent state,\n the position and the token history; any failure empties the sequence again."]
+    pub fn skippy_import_checkpoint(
+        session: *mut skippy_session,
+        checkpoint: *const skippy_checkpoint_view,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
 }

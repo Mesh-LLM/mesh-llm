@@ -31,19 +31,19 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 3448095a1..d04825da4 100644
+index 8f0ef2169..ce3b4e3c6 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 73
-+#define SKIPPY_ABI_VERSION_PATCH 74
+-#define SKIPPY_ABI_VERSION_PATCH 74
++#define SKIPPY_ABI_VERSION_PATCH 75
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -105,6 +105,7 @@ enum skippy_feature {
+@@ -107,6 +107,7 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
  /** @brief Full-model embedding, reranking, and encoder-decoder execution. */
  #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)

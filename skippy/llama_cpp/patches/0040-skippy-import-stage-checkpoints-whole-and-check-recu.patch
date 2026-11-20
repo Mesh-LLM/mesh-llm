@@ -1,0 +1,334 @@
+From 3ab25bc06768c92ed261c5c0f61648b3d2804a28 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Fri, 20 Nov 2026 15:33:35 +1100
+Subject: [PATCH 40/40] skippy: import stage checkpoints whole, and check
+ recurrent imports
+
+skippy_export_recurrent_state carries a session's recurrent memory alone:
+since resident prefixes keep the attention cells as shared pool cells, the
+attention half of a hybrid checkpoint travels as the KV page instead. Nothing
+held importers to that. A hybrid session restored from the recurrent state
+alone had no attention cells; it failed much later, at a page export, with a
+message about missing token positions.
+
+llama.cpp's own partial states have the same gap: LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY
+saves the recurrent and sliding-window halves, and the server keeps the
+full-attention cells and the checkpoint's position range consistent by its own
+bookkeeping. Here the native side checks against the live session instead.
+
+- skippy_import_recurrent_state refuses a state that does not end where the
+  session's attention cells do, when the stage holds attention layers, and
+  leaves the sequence empty. A hybrid model's stage with no attention layers
+  keeps empty attention cells and is not checked.
+- skippy_model_checkpoint_parts reports what a checkpoint of the stage
+  carries: a KV page, recurrent state, or both. It follows the stage's layers,
+  so such a stage reports recurrent state alone.
+- skippy_import_checkpoint takes the parts together, refuses any part the
+  stage does not need and any it lacks, imports them in order with the
+  position and token history, and empties the sequence again on failure.
+
+The sampling-history snapshot restores through skippy_import_checkpoint. The
+GraniteHybrid state test also checks that the recurrent state alone, and the
+page alone, are refused and leave the session usable for the whole pair.
+---
+ include/skippy/common.h               |  2 +-
+ include/skippy/state.h                | 49 +++++++++++++-
+ src/skippy/resident_prefix.cpp        | 95 +++++++++++++++++++++++++++
+ src/skippy/tests/sampling_history.cpp | 52 +++++++++++----
+ 4 files changed, 181 insertions(+), 17 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 557ba5169..8f0ef2169 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 73
++#define SKIPPY_ABI_VERSION_PATCH 74
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index fc5dcd389..525ab0ae3 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -143,7 +143,10 @@ LLAMA_API enum skippy_status skippy_export_full_state(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
+-/** @brief Exports only recurrent memory; attention pages are exported independently. */
++/** @brief Exports the session's recurrent state alone, without its attention cells.
++ * It checkpoints a stage by itself only when skippy_model_checkpoint_parts
++ * names no KV page part; skippy_export_full_state exports the whole sequence.
++ */
+ LLAMA_API enum skippy_status skippy_export_recurrent_state(
+         struct skippy_session * session,
+         void * output,
+@@ -160,13 +163,55 @@ LLAMA_API enum skippy_status skippy_import_full_state(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
+-/** @brief Imports recurrent-only state into a session. */
++/** @brief Imports recurrent state after the attention cells it continues from.
++ * When the stage holds attention layers, the session's attention cells must
++ * already end where the state does: import the KV page first. A state that
++ * ends elsewhere is refused, and the sequence is left empty.
++ */
+ LLAMA_API enum skippy_status skippy_import_recurrent_state(
+         struct skippy_session * session,
+         const void * input,
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief The parts of a stage checkpoint. */
++enum skippy_checkpoint_part {
++    SKIPPY_CHECKPOINT_PART_KV_PAGE = 1 << 0,
++    SKIPPY_CHECKPOINT_PART_RECURRENT = 1 << 1,
++};
++
++/** @brief Returns the skippy_checkpoint_part bits a checkpoint of this stage carries.
++ * The parts follow the stage's layers rather than its model family: a hybrid
++ * model's stage holding no attention layers is checkpointed by its recurrent
++ * state alone. Zero means only full state checkpoints the stage.
++ */
++LLAMA_API uint32_t skippy_model_checkpoint_parts(const struct skippy_model * model);
++
++/** @brief One stage checkpoint, in the parts skippy_model_checkpoint_parts names. */
++struct skippy_checkpoint_view {
++    /** The KV page, or null when the checkpoint has no KV page part. */
++    const struct skippy_kv_page_desc * page;
++    const void * page_payload;
++    size_t page_payload_bytes;
++    /** skippy_export_recurrent_state's bytes, or none when the checkpoint has no recurrent part. */
++    const void * recurrent;
++    size_t recurrent_bytes;
++    /** The position the checkpoint resumes from. */
++    uint64_t token_count;
++    /** The token history, token_count long, or null to leave it empty. */
++    const llama_token * tokens;
++};
++
++/** @brief Imports a checkpoint into a fresh session whole, or leaves the session empty.
++ * The checkpoint must carry exactly the parts the stage needs, and its KV page
++ * must end at token_count. The page goes in first, then the recurrent state,
++ * the position and the token history; any failure empties the sequence again.
++ */
++LLAMA_API enum skippy_status skippy_import_checkpoint(
++        struct skippy_session * session,
++        const struct skippy_checkpoint_view * checkpoint,
++        struct skippy_error ** out_error);
++
+ /** @brief Trims the session's token history and associated state. */
+ LLAMA_API enum skippy_status skippy_trim_session(
+         struct skippy_session * session,
+diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
+index 317c96b46..89024cf7c 100644
+--- a/src/skippy/resident_prefix.cpp
++++ b/src/skippy/resident_prefix.cpp
+@@ -16,6 +16,7 @@
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
++#include <string>
+ 
+ namespace {
+ 
+@@ -31,6 +32,28 @@ llama_memory_t attention_memory(llama_memory_t memory) {
+     return skippy_memory_recurrent_adapter(memory) ? nullptr : memory;
+ }
+ 
++// A hybrid stage whose layer range holds no attention layers keeps attention
++// cells with no rows; its recurrent state checkpoints it alone.
++bool holds_attention_rows(llama_memory_t memory) {
++    auto * attention = attention_memory(memory);
++    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(attention)) {
++        return !iswa->get_base()->get_layer_ids().empty() || !iswa->get_swa()->get_layer_ids().empty();
++    }
++    if (auto * kv = dynamic_cast<llama_kv_cache *>(attention)) {
++        return !kv->get_layer_ids().empty();
++    }
++    return attention != nullptr;
++}
++
++const char * describe_parts(uint32_t parts) {
++    switch (parts) {
++        case SKIPPY_CHECKPOINT_PART_KV_PAGE | SKIPPY_CHECKPOINT_PART_RECURRENT: return "a KV page and recurrent state";
++        case SKIPPY_CHECKPOINT_PART_KV_PAGE: return "a KV page alone";
++        case SKIPPY_CHECKPOINT_PART_RECURRENT: return "recurrent state alone";
++        default: return "no parts";
++    }
++}
++
+ skippy_status validate_session(skippy_session * session, int32_t cache_seq_id,
+         skippy_error ** error) {
+     if (!session || !session->ctx || !session->stage_model || !session->ctx->get_memory()) {
+@@ -375,10 +398,82 @@ enum skippy_status skippy_import_recurrent_state(skippy_session * session, const
+         if (reader.n_bytes() != bytes) {
+             throw std::runtime_error("recurrent checkpoint has trailing data");
+         }
++        auto * memory = session->ctx->get_memory();
++        if (holds_attention_rows(memory)
++                && attention_memory(memory)->seq_pos_max(session->seq_id) != recurrent->seq_pos_max(session->seq_id)) {
++            memory->seq_rm(session->seq_id, -1, -1);
++            skippy_session_set_position(session, 0, nullptr);
++            skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "recurrent state does not end where the session's attention cells do; import its KV page first");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
+         return skippy_success(error);
+     } catch (const std::exception & exception) { return native_error(error, exception); }
+ }
+ 
++uint32_t skippy_model_checkpoint_parts(const skippy_model * model) {
++    if (!model || !model->ctx || !model->ctx->get_memory()
++            || !(skippy_model_memory_cache_capabilities(model) & SKIPPY_MEMORY_CACHE_KV_RECURRENT)) {
++        return 0;
++    }
++    auto * memory = model->ctx->get_memory();
++    return (holds_attention_rows(memory) ? SKIPPY_CHECKPOINT_PART_KV_PAGE : 0u)
++            | (skippy_memory_recurrent_adapter(memory) ? SKIPPY_CHECKPOINT_PART_RECURRENT : 0u);
++}
++
++enum skippy_status skippy_import_checkpoint(skippy_session * session,
++        const skippy_checkpoint_view * checkpoint, skippy_error ** error) {
++    if (!session || !session->ctx || !session->stage_model || !session->ctx->get_memory() || !checkpoint
++            || (checkpoint->page && !checkpoint->page_payload)
++            || (checkpoint->recurrent_bytes && !checkpoint->recurrent)) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and checkpoint are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const uint32_t needed = skippy_model_checkpoint_parts(session->stage_model);
++    if (!needed) {
++        skippy_set_error(error, SKIPPY_STATUS_UNSUPPORTED, "only full state checkpoints this stage");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    const uint32_t carried = (checkpoint->page ? SKIPPY_CHECKPOINT_PART_KV_PAGE : 0u)
++            | (checkpoint->recurrent_bytes ? SKIPPY_CHECKPOINT_PART_RECURRENT : 0u);
++    if (carried != needed) {
++        const std::string message = std::string("this stage is checkpointed by ") + describe_parts(needed)
++                + ", but the checkpoint carries " + describe_parts(carried);
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, message.c_str());
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (session->n_past != 0) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "a checkpoint is imported into a fresh session");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (checkpoint->token_count > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())
++            || (checkpoint->page
++                && checkpoint->page->token_start + checkpoint->page->token_count != checkpoint->token_count)) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "the checkpoint's KV page must end at its position");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const auto empty_again = [&](skippy_status status) {
++        session->ctx->get_memory()->seq_rm(session->seq_id, -1, -1);
++        skippy_session_set_position(session, 0, nullptr);
++        return status;
++    };
++    if (checkpoint->page) {
++        const auto status = skippy_import_kv_page(session, checkpoint->page, checkpoint->page_payload,
++                checkpoint->page_payload_bytes, error);
++        if (status != SKIPPY_STATUS_OK) { return empty_again(status); }
++    }
++    if (checkpoint->recurrent_bytes) {
++        const auto status = skippy_import_recurrent_state(session, checkpoint->recurrent,
++                checkpoint->recurrent_bytes, error);
++        if (status != SKIPPY_STATUS_OK) { return empty_again(status); }
++    }
++    auto status = skippy_session_set_position(session, static_cast<int32_t>(checkpoint->token_count), error);
++    if (status == SKIPPY_STATUS_OK && checkpoint->tokens) {
++        status = skippy_session_restore_token_history(session, checkpoint->tokens, checkpoint->token_count, error);
++    }
++    return status == SKIPPY_STATUS_OK ? status : empty_again(status);
++}
++
+ enum skippy_status skippy_session_export_resident_recurrent_state(skippy_session * session,
+         int32_t cache_seq_id, void * output, size_t capacity, size_t * bytes, skippy_error ** error) {
+     if (!bytes) {
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+index 16582f6b2..b63949ace 100644
+--- a/src/skippy/tests/sampling_history.cpp
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -230,23 +230,23 @@ struct snapshot {
+         }
+     }
+ 
++    skippy_checkpoint_view view(const std::vector<llama_token> & prefix) const {
++        return { &page, payload.data(), payload.size(), recurrent.empty() ? nullptr : recurrent.data(),
++                recurrent.size(), prefix.size(), prefix.data() };
++    }
++
+     void restore(skippy_session * session, const std::vector<llama_token> & prefix) const {
+         skippy_error * error = nullptr;
+-        auto status = full
+-            ? skippy_import_full_state(session, 0, layers, payload.data(), payload.size(), &error)
+-            : skippy_import_kv_page(session, &page, payload.data(), payload.size(), &error);
+-        ok(status, error);
+-        if (!recurrent.empty()) {
++        if (full) {
++            ok(skippy_import_full_state(session, 0, layers, payload.data(), payload.size(), &error), error);
++            error = nullptr;
++            ok(skippy_session_set_position(session, prefix.size(), &error), error);
+             error = nullptr;
+-            status = skippy_import_recurrent_state(session, recurrent.data(), recurrent.size(), &error);
+-            ok(status, error);
++            ok(skippy_session_restore_token_history(session, prefix.data(), prefix.size(), &error), error);
++        } else {
++            const auto checkpoint = view(prefix);
++            ok(skippy_import_checkpoint(session, &checkpoint, &error), error);
+         }
+-        error = nullptr;
+-        status = skippy_session_set_position(session, prefix.size(), &error);
+-        ok(status, error);
+-        error = nullptr;
+-        status = skippy_session_restore_token_history(session, prefix.data(), prefix.size(), &error);
+-        ok(status, error);
+         CHECK(session->token_history == prefix);
+     }
+ };
+@@ -612,8 +612,11 @@ std::vector<float> decode_logits(skippy_session * session, llama_token token) {
+ // no full-attention cells and decodes a different continuation from an
+ // uninterrupted prefill. Compare the attention page the restored session
+ // exposes with the source's page, and the next-token logits of a restored
+-// prefix with those of the same prefix prefilled from scratch.
++// prefix with those of the same prefix prefilled from scratch. Half the pair
++// is refused at the import, and leaves the session empty for the whole pair.
+ void state_round_trip(skippy_model * model) {
++    CHECK(skippy_model_checkpoint_parts(model)
++            == (SKIPPY_CHECKPOINT_PART_KV_PAGE | SKIPPY_CHECKPOINT_PART_RECURRENT));
+     const std::vector<llama_token> prefix(128, 1);
+     auto * source = create(model);
+     prefill(source, prefix);
+@@ -623,6 +626,27 @@ void state_round_trip(skippy_model * model) {
+     CHECK(!checkpoint.recurrent.empty());
+     release(source);
+ 
++    auto * half = create(model);
++    skippy_error * error = nullptr;
++    CHECK(skippy_import_recurrent_state(half, checkpoint.recurrent.data(), checkpoint.recurrent.size(), &error)
++            == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    auto recurrent_alone = checkpoint.view(prefix);
++    recurrent_alone.page = nullptr;
++    error = nullptr;
++    CHECK(skippy_import_checkpoint(half, &recurrent_alone, &error) == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    auto page_alone = checkpoint.view(prefix);
++    page_alone.recurrent = nullptr;
++    page_alone.recurrent_bytes = 0;
++    error = nullptr;
++    CHECK(skippy_import_checkpoint(half, &page_alone, &error) == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    CHECK(half->n_past == 0);
++    checkpoint.restore(half, prefix);
++    CHECK(export_page(half, prefix.size()) == source_page);
++    release(half);
++
+     auto * restored = create(model);
+     checkpoint.restore(restored, prefix);
+     const auto restored_page = export_page(restored, prefix.size());
+-- 
+2.43.0
+
