@@ -238,6 +238,7 @@ fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest(
         "skippy-renamed-multishard-planning",
         "skippy-stage-slice-plan",
         "skippy-verify-rollback",
+        "test-skippy-activation-validation",
         "test-skippy-kv-cells-contiguous",
         "test-skippy-kv-page-export",
         "test-skippy-kv-rows-aligned",

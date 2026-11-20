@@ -548,6 +548,7 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
   # Typed activation-frontier coverage lives in the graph-build-inputs and
   # stage-slice-plan probes above; the old activation-layout target is retired.
   BUILD_TARGETS+=(
+    test-skippy-activation-validation
     test-skippy-cachegen-import
     test-skippy-kv-cells-contiguous
     test-skippy-kv-page-export
