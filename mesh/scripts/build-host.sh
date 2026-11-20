@@ -107,6 +107,11 @@ report_analytics_key() {
     else
         echo "No built-in analytics key: this build reports nothing unless MESH_LLM_POSTHOG_KEY is set at runtime."
     fi
+    if [[ -n "${SKIPPY_POSTHOG_KEY:-}" ]]; then
+        echo "Built-in Skippy analytics key present: engine events go to Skippy's project when mesh-llm reporting is on."
+    else
+        echo "No built-in Skippy analytics key: engine events are not reported unless SKIPPY_POSTHOG_KEY is set at runtime."
+    fi
 }
 
 report_analytics_key

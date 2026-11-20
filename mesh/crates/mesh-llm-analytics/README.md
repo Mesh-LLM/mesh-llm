@@ -40,14 +40,16 @@ disables reporting regardless of all of them.
 | `install_id.rs` | The anonymous install identifier |
 | `version_state.rs` | The last version this install ran, so upgrades are reportable |
 | `properties.rs` | Base properties attached to every event, including `internal` |
-| `serving_hardware.rs` | The machine class copied onto each `inference_request` |
 | `client.rs` | PostHog batch payload construction and delivery |
 | `notice.rs` | The first-run disclosure |
 
-Serving events (`inference_request`, `inference_route`, `mesh_links`) are
-built in `mesh-llm-host-runtime`'s `inference_analytics`, with model
-identities from `inference_analytics::model_identity`, from figures the
-skippy frontend hands over through `skippy_serving::generation_stats`.
+Network events (`inference_route`, `mesh_links`) are built in
+`mesh-llm-host-runtime`'s `inference_analytics`.
+
+Engine events (`generation`, `model_load`, `host_profile`) are Skippy's and go
+to Skippy's own project through `skippy-analytics`, started in embedded mode
+under this crate's consent and install identifier. See
+`mesh-llm-commands`'s `usage_reporting`.
 
 ## Verifying what a build sends
 

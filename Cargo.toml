@@ -15,6 +15,7 @@ members = [
     "mesh/crates/mesh-llm-control-api",
     "mesh/crates/mesh-llm-log-store",
     "mesh/crates/mesh-llm-membership",
+    "skippy/crates/skippy-analytics",
     "skippy/crates/skippy-hardware-profile",
     "mesh/crates/mesh-llm-identity",
     "skippy/crates/skippy-native-runtime",

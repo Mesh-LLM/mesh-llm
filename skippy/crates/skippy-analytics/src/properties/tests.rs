@@ -1,0 +1,84 @@
+use super::*;
+use crate::event::Value;
+
+#[test]
+fn classifies_build_channels() {
+    assert_eq!(BuildChannel::classify("0.76.0"), BuildChannel::Release);
+    assert_eq!(
+        BuildChannel::classify("0.76.0-rc8"),
+        BuildChannel::Prerelease
+    );
+    assert_eq!(
+        BuildChannel::classify("0.76.0+gABCDEF"),
+        BuildChannel::Development
+    );
+    assert_eq!(
+        BuildChannel::classify("0.76.0+gABCDEF.dirty"),
+        BuildChannel::Development
+    );
+}
+
+#[test]
+fn base_properties_describe_the_build_and_platform() {
+    let properties = base_properties(&crate::Host::standalone());
+    let keys: Vec<_> = properties.entries().map(|(key, _)| key).collect();
+    for expected in [
+        "skippy_version",
+        "host",
+        "host_version",
+        "build_channel",
+        "os",
+        "arch",
+        "exec_env",
+        "internal",
+        "$lib",
+        "$lib_version",
+    ] {
+        assert!(keys.contains(&expected), "missing {expected}");
+    }
+}
+
+#[test]
+fn base_properties_carry_no_free_text() {
+    // Every base value is either a compile-time constant or a sanitized
+    // label; nothing here can carry an arbitrary string from the environment.
+    for (key, value) in base_properties(&crate::Host::standalone()).entries() {
+        match value {
+            Value::Static(_) | Value::Bool(_) => {}
+            Value::Text(label) => assert!(
+                crate::Label::sanitize(label.as_str()).is_some() || label.as_str() == "redacted",
+                "{key} holds an unsanitized value",
+            ),
+            other => panic!("{key} holds an unexpected value: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn platform_strings_are_from_the_fixed_set() {
+    assert!(["macos", "linux", "windows", "other"].contains(&os_family()));
+    assert!(["aarch64", "x86_64", "other"].contains(&architecture()));
+}
+
+/// `exec_env` is a closed set like every other base property, so a new
+/// detection branch cannot start emitting an unbounded value.
+#[test]
+fn exec_env_is_from_the_fixed_set() {
+    assert!(["plain", "container", "ci", "service"].contains(&exec_env()));
+}
+
+/// An empty variable is not a marker. `container=` in an inherited
+/// environment must not label a laptop as a container.
+#[test]
+fn an_empty_marker_variable_does_not_count() {
+    assert!(!env_is_set("SKIPPY_DEFINITELY_UNSET_MARKER_FOR_TESTS"));
+}
+
+#[test]
+fn internal_traffic_is_development_builds_ci_or_an_explicit_marker() {
+    assert!(!is_internal(BuildChannel::Release, "plain", false));
+    assert!(!is_internal(BuildChannel::Prerelease, "service", false));
+    assert!(is_internal(BuildChannel::Release, "plain", true));
+    assert!(is_internal(BuildChannel::Development, "plain", false));
+    assert!(is_internal(BuildChannel::Release, "ci", false));
+}

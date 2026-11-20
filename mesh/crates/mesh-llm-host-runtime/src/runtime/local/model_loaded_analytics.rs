@@ -188,6 +188,13 @@ pub(in crate::runtime) fn report_loaded_model_analytics(model: LoadedModel<'_>) 
         properties = properties.with("system_one_backend", backend);
     }
     mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
+    skippy_analytics::capture(
+        skippy_analytics::Event::ModelLoad,
+        identity
+            .to_skippy()
+            .apply(skippy_analytics::Properties::new())
+            .with("outcome", "loaded"),
+    );
 }
 
 /// Report `model_loaded` for a load with no file path, package, or draft to

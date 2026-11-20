@@ -58,7 +58,36 @@ pub fn init_for_cli(cli: &Cli) {
     {
         return;
     }
-    mesh_llm_analytics::init(crate::analytics::config_preference(cli.config.as_deref()));
+    let status =
+        mesh_llm_analytics::init(crate::analytics::config_preference(cli.config.as_deref()));
+    start_engine_reporting(&status);
+}
+
+/// Start Skippy's engine reporting under mesh-llm's consent.
+///
+/// Skippy reports engine events (`generation`, `model_load`,
+/// `host_profile`) to its own project. Inside mesh-llm it runs only when
+/// mesh-llm's own reporting resolved on, after mesh-llm's disclosure, and
+/// with mesh-llm's install identifier, so a machine is one identity across
+/// both projects and one opt-out stops both.
+fn start_engine_reporting(status: &mesh_llm_analytics::Status) {
+    let Some(install_id) = status
+        .install_id
+        .as_deref()
+        .filter(|_| status.disposition.is_enabled() && status.endpoint.is_some())
+    else {
+        return;
+    };
+    skippy_analytics::init_embedded(
+        skippy_analytics::Host {
+            name: "mesh-llm",
+            version: skippy_analytics::Label::sanitize_or_redact(
+                mesh_llm_build_info::BUILD_VERSION,
+            ),
+            internal: mesh_llm_analytics::is_internal_run(),
+        },
+        install_id,
+    );
 }
 
 /// Start reporting when the CLI failed to parse, so install and version
@@ -185,11 +214,18 @@ pub fn report_hardware_profile() -> tokio::task::JoinHandle<()> {
             Metric::GpuCount,
             Metric::IsSoc,
         ]);
-        let flavors = skippy_hardware_profile::host_runtime_profile().available_flavors;
-        mesh_llm_analytics::set_serving_hardware(serving_hardware(&survey, &flavors));
+        let profile = skippy_hardware_profile::host_runtime_profile();
+        let flavors = &profile.available_flavors;
         mesh_llm_analytics::capture(
             Event::HardwareProfile,
-            hardware_properties(&survey, &flavors),
+            hardware_properties(&survey, flavors),
+        );
+        // Skippy's engine events carry the machine class and report the
+        // machine to Skippy's own project, from the same probe.
+        skippy_analytics::set_serving_hardware(serving_hardware(&survey, flavors));
+        skippy_analytics::capture(
+            skippy_analytics::Event::HostProfile,
+            skippy_analytics::host_profile::properties(&profile, survey.system_ram_bytes),
         );
     })
 }
@@ -281,18 +317,21 @@ fn gpu_model(survey: &mesh_llm_system::hardware::HardwareSurvey) -> mesh_llm_ana
     }
 }
 
-/// The machine class `inference_request` carries: backend, GPU family, and
-/// VRAM, from the same survey `hardware_profile` reports.
+/// The machine class Skippy's `generation` events carry: backend, GPU
+/// family, and VRAM, from the same survey `hardware_profile` reports.
 fn serving_hardware(
     survey: &mesh_llm_system::hardware::HardwareSurvey,
     flavors: &std::collections::BTreeSet<skippy_native_runtime::NativeRuntimeBackendKind>,
-) -> mesh_llm_analytics::ServingHardware {
+) -> skippy_analytics::ServingHardware {
     let gpu_family = match gpu_model(survey) {
-        mesh_llm_analytics::Value::Text(label) => gpu_family(label.as_str())
-            .map_or_else(|| mesh_llm_analytics::Value::from("unreported"), Into::into),
-        other => other,
+        mesh_llm_analytics::Value::Text(label) => gpu_family(label.as_str()).map_or_else(
+            || skippy_analytics::Value::from("unreported"),
+            |family| skippy_analytics::Label::sanitize_or_redact(family.as_str()).into(),
+        ),
+        mesh_llm_analytics::Value::Static(text) => skippy_analytics::Value::from(text),
+        _ => skippy_analytics::Value::from("unreported"),
     };
-    mesh_llm_analytics::ServingHardware {
+    skippy_analytics::ServingHardware {
         backend: serving_backend(survey, flavors),
         gpu_family,
         vram_gb: accelerator_memory_gb(survey),
@@ -311,7 +350,7 @@ fn accelerator_memory_gb(survey: &mesh_llm_system::hardware::HardwareSurvey) -> 
 ///
 /// The loaded runtime names its devices (`CUDA0`, `MTL0`, `Vulkan0`,
 /// `ROCm0`). When the survey ran before a runtime loaded, the best backend
-/// this machine can run stands in. `inference_request` replaces this with the
+/// this machine can run stands in. `generation` replaces this with the
 /// loaded runtime's own devices once it is serving, so a configured selection
 /// such as Vulkan on a CUDA host is reported as what ran.
 fn serving_backend(
@@ -324,7 +363,7 @@ fn serving_backend(
         .gpus
         .iter()
         .filter_map(|gpu| gpu.backend_device.as_deref())
-        .find_map(mesh_llm_analytics::backend_of_device);
+        .find_map(skippy_analytics::backend_of_device);
     if let Some(backend) = device_backend {
         return backend;
     }
@@ -400,7 +439,7 @@ pub fn record_model_download(model_ref: &str, succeeded: bool) {
 
 /// Deliver anything still queued, within the crate's shutdown budget.
 pub async fn shutdown() {
-    mesh_llm_analytics::shutdown().await;
+    tokio::join!(mesh_llm_analytics::shutdown(), skippy_analytics::shutdown());
 }
 
 #[cfg(test)]
@@ -549,7 +588,7 @@ mod tests {
         assert_eq!(hardware.backend, "cuda");
         assert_eq!(
             hardware.gpu_family,
-            mesh_llm_analytics::Value::from(mesh_llm_analytics::Label::sanitize("gb10").unwrap())
+            skippy_analytics::Value::from(skippy_analytics::Label::sanitize("gb10").unwrap())
         );
         assert_eq!(hardware.vram_gb, Some(120));
     }
@@ -563,7 +602,7 @@ mod tests {
             "cpu"
         );
         let none = serving_hardware(&survey, &metal_only());
-        assert_eq!(none.gpu_family, mesh_llm_analytics::Value::from("none"));
+        assert_eq!(none.gpu_family, skippy_analytics::Value::from("none"));
         assert_eq!(none.vram_gb, None);
     }
 

@@ -1,0 +1,489 @@
+#![forbid(unsafe_code)]
+//! Anonymous, opt-out product analytics for Skippy.
+//!
+//! # What this is
+//!
+//! A narrow PostHog reporter for questions we cannot answer any other way:
+//! which platforms and hardware Skippy runs on, how fast real generations
+//! are, how speculation and the prompt cache pay off, and how models load.
+//!
+//! It runs in one of two modes:
+//!
+//! - **Standalone**, in the `skippy` binary: this crate resolves consent,
+//!   shows the first-run notice, and keeps its own install identifier.
+//! - **Embedded**, inside a host such as Mesh LLM: the host has already
+//!   resolved consent and disclosed under its own rules, and hands over its
+//!   install identifier. Every event carries `host` and `host_version`.
+//!
+//! # Design constraints
+//!
+//! - **Closed vocabulary.** [`Event`] and [`Properties`] admit no free-form
+//!   `String`. Text only enters through [`Label::sanitize`], whose grammar
+//!   rejects paths, prose, and anything over-long. A prompt cannot reach the
+//!   wire through this API even by mistake.
+//! - **No key, no reporting.** The project key is compiled in by the release
+//!   pipeline. Source and development builds have none and are inert.
+//! - **Never load-bearing.** Capture is non-blocking, delivery is best
+//!   effort, and no failure here changes a command's behavior or exit code.
+//! - **Anonymous by construction.** The identifier is a random UUID with no
+//!   derivation from the machine.
+
+mod build_info;
+mod client;
+mod consent;
+mod event;
+pub mod generation;
+pub mod host_profile;
+mod install_id;
+pub mod models;
+mod notice;
+mod preference;
+mod properties;
+mod serving_hardware;
+mod version_state;
+
+pub use build_info::BUILD_VERSION;
+pub use consent::{
+    ConfigPreference, ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS,
+    ENV_ANALYTICS_INTERNAL, ENV_DO_NOT_TRACK, ENV_POSTHOG_HOST, ENV_POSTHOG_KEY, ingestion_host,
+    project_key,
+};
+pub use event::{Event, Label, Properties, Value, bucket_count, bucket_duration_secs, gigabytes};
+pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
+pub use notice::{NOTICE, NOTICE_MARKER_FILE};
+pub use preference::{PREFERENCE_FILE, read_preference, write_preference};
+pub use properties::{BuildChannel, LIB_NAME, STANDALONE_HOST, base_properties, exec_env};
+pub use serving_hardware::{
+    ServingHardware, backend_of_device, serving_hardware, set_serving_hardware,
+};
+pub use version_state::{PendingVersion, VERSION_FILE, VersionTransition};
+
+use chrono::Utc;
+use client::Envelope;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
+/// Queue depth. Capture drops events rather than applying backpressure, so
+/// this only has to absorb a burst between flushes.
+const QUEUE_CAPACITY: usize = 256;
+
+/// Events per ingestion request.
+const BATCH_SIZE: usize = 20;
+
+/// How long the flusher waits for more events before sending a partial batch.
+const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Budget for delivering queued events at process exit.
+///
+/// A one-shot command exits in well under a second, so without a drain at
+/// exit almost nothing would ever be delivered. The budget is short on
+/// purpose: a slow or captive network must not hold the command open, and
+/// losing the event is the correct trade.
+const SHUTDOWN_BUDGET: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+/// The process-global reporter. `None` once consent resolves to disabled.
+static REPORTER: OnceLock<Option<Reporter>> = OnceLock::new();
+
+/// The program Skippy is running inside, fixed by whichever init runs first.
+static HOST: OnceLock<Host> = OnceLock::new();
+
+/// The program Skippy runs inside, attached to every event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Host {
+    /// `skippy-cli` standalone, or the embedding product, such as `mesh-llm`.
+    pub name: &'static str,
+    /// The host's own version.
+    pub version: Label,
+    /// Whether the host counts this run as its maintainers' own traffic.
+    pub internal: bool,
+}
+
+impl Host {
+    /// The standalone `skippy` binary.
+    #[must_use]
+    pub fn standalone() -> Self {
+        Self {
+            name: STANDALONE_HOST,
+            version: Label::sanitize_or_redact(BUILD_VERSION),
+            internal: false,
+        }
+    }
+}
+
+struct Reporter {
+    /// Held in an `Option` so [`shutdown`] can drop it. Dropping the last
+    /// sender is what tells the flush loop the process is going away.
+    sender: std::sync::Mutex<Option<mpsc::Sender<Envelope>>>,
+    worker: std::sync::Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Reporter {
+    fn sender(&self) -> Option<mpsc::Sender<Envelope>> {
+        self.sender.lock().ok().and_then(|slot| slot.clone())
+    }
+}
+
+/// How [`init`] resolved, for `skippy analytics status`.
+#[derive(Clone, Debug)]
+pub struct Status {
+    /// Why reporting is on or off.
+    pub disposition: Disposition,
+    /// The install identifier, when one could be read.
+    pub install_id: Option<String>,
+    /// Where events are sent, when reporting is on.
+    pub endpoint: Option<String>,
+    /// Where the install identifier lives.
+    pub install_id_path: Option<PathBuf>,
+}
+
+/// Initialize analytics for this process.
+///
+/// For the standalone binary. `config` is the recorded preference, from
+/// [`read_preference`]. Call once, early; later calls return the first
+/// result.
+///
+/// On a first run with reporting enabled, this prints the disclosure notice
+/// and captures [`Event::InstallFirstRun`].
+///
+/// Fail closed on the disclosure: if the notice cannot be delivered, this run
+/// reports nothing. On-by-default reporting is defensible only because the
+/// disclosure actually happens, so a notice that never reached stderr must not
+/// be recorded as shown.
+pub fn init(config: ConfigPreference) -> Status {
+    let _ = HOST.set(Host::standalone());
+    let inputs = ConsentInputs::from_env(config);
+    let disposition = inputs.resolve();
+    let dir = state_dir().ok();
+
+    // Nothing is written while reporting is off: no identifier, no marker.
+    // An opted-out machine should not accumulate analytics state at all.
+    if !disposition.is_enabled() {
+        let _ = REPORTER.set(None);
+        return Status {
+            disposition,
+            install_id: dir
+                .as_deref()
+                .and_then(load)
+                .map(|id| id.as_str().to_owned()),
+            endpoint: None,
+            install_id_path: dir.map(|dir| dir.join(INSTALL_ID_FILE)),
+        };
+    }
+
+    let Some(dir) = dir else {
+        // Without a readable state directory there is no stable identifier,
+        // and reporting every run as a new install would be worse than not
+        // reporting at all.
+        let _ = REPORTER.set(None);
+        return Status {
+            disposition,
+            install_id: None,
+            endpoint: None,
+            install_id_path: None,
+        };
+    };
+
+    // Disclose before anything is queued, and independently of whether the
+    // identifier already exists. The marker is what makes this once-only.
+    //
+    // Fail closed. Reporting is justified by the disclosure having actually
+    // happened, so a run that cannot deliver the notice reports nothing at all.
+    // `print_notice` records the marker only once the bytes are written, which
+    // means the next run retries rather than the disclosure being quietly
+    // spent and never shown.
+    if !notice::was_shown(&dir) && !notice::print_notice(&dir) {
+        tracing::debug!("analytics disabled: first-run disclosure not delivered");
+        let _ = REPORTER.set(None);
+        return Status {
+            disposition,
+            install_id: None,
+            endpoint: None,
+            install_id_path: Some(dir.join(INSTALL_ID_FILE)),
+        };
+    }
+
+    let Some(install) = load_or_create(&dir).ok() else {
+        let _ = REPORTER.set(None);
+        return Status {
+            disposition,
+            install_id: None,
+            endpoint: None,
+            install_id_path: Some(dir.join(INSTALL_ID_FILE)),
+        };
+    };
+
+    // Read now, written only once there is somewhere to report it. Every
+    // path between here and reporter registration can bail out -- no key, no
+    // runtime -- and advancing the record on the way past would mark the
+    // upgrade as seen while queuing nothing, so the next run would find
+    // `Unchanged` and the upgrade would be lost for good. Dropping this
+    // without committing leaves the record alone and releases the lock.
+    let version = version_state::begin(&dir, BUILD_VERSION);
+
+    let endpoint = client::batch_endpoint(&ingestion_host());
+    let status = Status {
+        disposition,
+        install_id: Some(install.as_str().to_owned()),
+        endpoint: Some(endpoint.clone()),
+        install_id_path: Some(dir.join(INSTALL_ID_FILE)),
+    };
+
+    let Some(api_key) = project_key() else {
+        // Unreachable: `resolve` already returned `DisabledNoKey`. Handled
+        // rather than unwrapped so a future refactor cannot turn this into a
+        // panic in the shipped binary.
+        let _ = REPORTER.set(None);
+        return Status {
+            endpoint: None,
+            ..status
+        };
+    };
+
+    // `tokio::spawn` panics outside a runtime. Every call site in this binary
+    // is under `block_on`, but this is a public API whose stated contract is
+    // that it is never load-bearing, so an embedder gets a clean disable
+    // rather than a panic.
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!("analytics disabled: no tokio runtime at init");
+        let _ = REPORTER.set(None);
+        return Status {
+            endpoint: None,
+            ..status
+        };
+    }
+
+    let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
+    let worker = tokio::spawn(flush_loop(
+        receiver,
+        api_key,
+        install.as_str().to_owned(),
+        endpoint,
+    ));
+    let _ = REPORTER.set(Some(Reporter {
+        sender: std::sync::Mutex::new(Some(sender)),
+        worker: std::sync::Mutex::new(Some(worker)),
+    }));
+
+    if install.is_first_run() {
+        // A brand new install has no meaningful version to have come from,
+        // and reporting both events for one run would double-count it.
+        version.commit();
+        capture(Event::InstallFirstRun, Properties::new());
+    } else {
+        report_version_transition(version);
+    }
+
+    status
+}
+
+/// Persist the transition and report it, in that order.
+///
+/// The commit is what licenses the event: it returns whether the record now
+/// actually names this build, and only then is the upgrade reported. A write
+/// that failed leaves the previous version in place, so the next run sees the
+/// same transition and can retry rather than this one reporting an upgrade it
+/// did not manage to record -- and then reporting it again every run after.
+fn report_version_transition(version: PendingVersion) {
+    let VersionTransition::Changed { from } = version.transition() else {
+        version.commit();
+        return;
+    };
+    let from = from.clone();
+    if version.commit() {
+        capture(
+            Event::InstallUpdated,
+            Properties::new().with("from_version", Label::sanitize_or_redact(&from)),
+        );
+    }
+}
+
+/// Initialize analytics inside a host that has already decided consent.
+///
+/// The host calls this only when its own consent resolved to reporting, after
+/// its own disclosure, and passes its install identifier so one machine is one
+/// identity across both products. No notice is shown, nothing is written to
+/// Skippy's state directory, and no install events are reported: those belong
+/// to the host. Returns whether a reporter started; without a project key or
+/// a tokio runtime it does not.
+///
+/// Call once; later calls, and calls after [`init`], do nothing and return
+/// `false`.
+pub fn init_embedded(host: Host, install_id: &str) -> bool {
+    if REPORTER.get().is_some() {
+        return false;
+    }
+    let Some(api_key) = project_key() else {
+        let _ = REPORTER.set(None);
+        return false;
+    };
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!("analytics disabled: no tokio runtime at init");
+        let _ = REPORTER.set(None);
+        return false;
+    }
+    if HOST.set(host).is_err() {
+        return false;
+    }
+    let endpoint = client::batch_endpoint(&ingestion_host());
+    let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
+    let worker = tokio::spawn(flush_loop(
+        receiver,
+        api_key,
+        install_id.to_owned(),
+        endpoint,
+    ));
+    REPORTER
+        .set(Some(Reporter {
+            sender: std::sync::Mutex::new(Some(sender)),
+            worker: std::sync::Mutex::new(Some(worker)),
+        }))
+        .is_ok()
+}
+
+/// Whether a reporter is running in this process.
+#[must_use]
+pub fn is_reporting() -> bool {
+    matches!(REPORTER.get(), Some(Some(_)))
+}
+
+/// Queue one event. Never blocks; drops the event if the queue is full.
+pub fn capture(event: Event, properties: Properties) {
+    let Some(Some(reporter)) = REPORTER.get() else {
+        return;
+    };
+    let Some(sender) = reporter.sender() else {
+        return;
+    };
+    let envelope = Envelope {
+        event,
+        properties,
+        captured_at: Utc::now(),
+    };
+    if sender.try_send(envelope).is_err() {
+        tracing::debug!(
+            event = event.name(),
+            "analytics event dropped: queue full or already shut down"
+        );
+    }
+}
+
+/// Deliver queued events, giving up after [`SHUTDOWN_BUDGET`].
+///
+/// Safe to call when analytics is disabled or was never initialized.
+pub async fn shutdown() {
+    let Some(Some(reporter)) = REPORTER.get() else {
+        return;
+    };
+    let mut worker = reporter.worker.lock().ok().and_then(|mut slot| slot.take());
+    let Some(worker) = worker.as_mut() else {
+        // Already shut down. A second call is a no-op rather than a second
+        // wait, so repeated shutdowns on an error path stay free.
+        return;
+    };
+
+    // Drop the reporter's sender. The flush loop ends once every sender is
+    // gone, sends what it has accumulated, and returns.
+    if let Ok(mut slot) = reporter.sender.lock() {
+        slot.take();
+    }
+
+    if tokio::time::timeout(SHUTDOWN_BUDGET, &mut *worker)
+        .await
+        .is_err()
+    {
+        // `timeout` cancels only its own wait. Dropping the handle would
+        // detach the flush task instead of ending it, so an embedder that
+        // keeps the runtime alive could still see a batch go out after
+        // `shutdown` returned. Abort it: the budget is the promise.
+        worker.abort();
+        tracing::debug!("analytics flush exceeded its shutdown budget; batch aborted");
+    }
+}
+
+/// Drain the queue, batching events and posting them.
+async fn flush_loop(
+    mut receiver: mpsc::Receiver<Envelope>,
+    api_key: String,
+    distinct_id: String,
+    endpoint: String,
+) {
+    let http = match reqwest::Client::builder()
+        .timeout(client::REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(http) => http,
+        Err(error) => {
+            tracing::debug!(%error, "analytics disabled: no HTTP client");
+            return;
+        }
+    };
+    let base = base_properties(HOST.get_or_init(Host::standalone));
+    let mut pending: Vec<Envelope> = Vec::new();
+
+    loop {
+        match tokio::time::timeout(FLUSH_INTERVAL, receiver.recv()).await {
+            Ok(Some(envelope)) => {
+                pending.push(envelope);
+                if pending.len() >= BATCH_SIZE {
+                    flush(
+                        &http,
+                        &endpoint,
+                        &api_key,
+                        &distinct_id,
+                        &base,
+                        &mut pending,
+                    )
+                    .await;
+                }
+            }
+            // The channel closed: the process is going away.
+            Ok(None) => break,
+            // Idle for a full interval: send whatever has accumulated.
+            Err(_) => {
+                flush(
+                    &http,
+                    &endpoint,
+                    &api_key,
+                    &distinct_id,
+                    &base,
+                    &mut pending,
+                )
+                .await
+            }
+        }
+    }
+
+    flush(
+        &http,
+        &endpoint,
+        &api_key,
+        &distinct_id,
+        &base,
+        &mut pending,
+    )
+    .await;
+}
+
+async fn flush(
+    http: &reqwest::Client,
+    endpoint: &str,
+    api_key: &str,
+    distinct_id: &str,
+    base: &Properties,
+    pending: &mut Vec<Envelope>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let body = client::batch_body(api_key, distinct_id, base, pending);
+    // Cleared regardless of the result: retrying analytics is not worth
+    // holding memory or delaying exit for.
+    pending.clear();
+    client::send_batch(http, endpoint, &body).await;
+}
+
+#[cfg(test)]
+#[path = "lib/tests.rs"]
+mod tests;
