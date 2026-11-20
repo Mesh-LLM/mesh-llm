@@ -184,13 +184,15 @@ update_known_mesh_versions() {
     printf '%s\n' "$after" >"$file"
 }
 
+# Bump the version requirement of Mesh's own path dependencies. Skippy (linked
+# under .deps/) versions independently and is left alone.
 update_versioned_path_dependency_versions() {
     local file="$1"
     local next="$2"
     local before
     local after
     before="$(cat "$file")"
-    after="$(perl -0777 -pe 's/(\{\s*(?=[^}]*\bpath\s*=)(?=[^}]*\bversion\s*=)[^}]*\bversion\s*=\s*")[^"]+(")/${1}'"$next"'$2/gs' "$file")"
+    after="$(perl -0777 -pe 's/(\{\s*(?=[^}]*\bpath\s*=\s*"(?!\.deps\/))(?=[^}]*\bversion\s*=)[^}]*\bversion\s*=\s*")[^"]+(")/${1}'"$next"'$2/gs' "$file")"
     if [[ "$before" == "$after" ]]; then
         return
     fi
