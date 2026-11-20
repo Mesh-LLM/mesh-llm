@@ -134,9 +134,9 @@ fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Val
         259200,
     )?;
     admission::artifact(&v["runner"], mounts, false)?;
-    let runner = Path::new(admission::text(&v["runner"], "path")?);
-    if runner.starts_with("/work")
-        || runner.starts_with("/models")
+    let runner = admission::text(&v["runner"], "path")?;
+    if admission::within(runner, "/work")
+        || admission::within(runner, "/models")
         || op["schema_version"] != 1
         || op["overall_seconds"].as_u64() != Some(plan.timeout_seconds)
         || !op["credential_file"].is_null()

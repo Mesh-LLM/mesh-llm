@@ -7,8 +7,21 @@ use std::{
     fs::{self, File, Metadata, OpenOptions},
     io::Read,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
+
+/// Receipts are written only for files whose last change is at least this old.
+///
+/// Linux kernels before 6.13 stamp ctime from the coarse (jiffy) clock, and
+/// some filesystems keep 1 s or 2 s timestamps, so a same-size edit that also
+/// restores mtime can land in the same tick as the change a receipt recorded
+/// and leave every stat field identical. Once the recorded change is older
+/// than the coarsest granularity, any later edit gets a later ctime. This is
+/// git's "racily clean" rule.
+const SETTLE_WINDOW: Duration = Duration::from_secs(2);
+
+/// Bumped when receipts written by older rules can no longer be trusted.
+const RECEIPT_SCHEMA: u8 = 2;
 
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +54,24 @@ impl FileState {
             changed: (metadata.ctime(), metadata.ctime_nsec()),
         })
     }
+
+    /// Whether a later edit is guaranteed to change this state's timestamps.
+    fn settled_at(&self, now: SystemTime) -> bool {
+        let old_enough =
+            |at: SystemTime| now.duration_since(at).is_ok_and(|age| age >= SETTLE_WINDOW);
+        #[cfg(unix)]
+        let changed = {
+            let (seconds, nanos) = self.changed;
+            u64::try_from(seconds)
+                .ok()
+                .zip(u32::try_from(nanos).ok())
+                .and_then(|(s, n)| SystemTime::UNIX_EPOCH.checked_add(Duration::new(s, n)))
+                .is_some_and(old_enough)
+        };
+        #[cfg(not(unix))]
+        let changed = true;
+        changed && old_enough(self.modified)
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -53,14 +84,25 @@ struct Receipt {
 }
 
 pub(super) fn verify(path: &Path, expected: &Digest, size: u64) -> DynResult<()> {
-    verify_with(path, expected, size, receipt_directory().as_deref(), hash)
+    verify_with(
+        path,
+        expected,
+        size,
+        receipt_directory().as_deref(),
+        SystemTime::now(),
+        hash,
+    )
 }
 
+/// `started` must be read before the payload is opened: a receipt is only
+/// written when the observed change predates it by [`SETTLE_WINDOW`], so every
+/// edit after the hash began carries a distinct ctime.
 fn verify_with(
     path: &Path,
     expected: &Digest,
     size: u64,
     directory: Option<&Path>,
+    started: SystemTime,
     hash: impl FnOnce(&mut File, u64) -> DynResult<Digest>,
 ) -> DynResult<()> {
     let mut options = OpenOptions::new();
@@ -85,7 +127,10 @@ fn verify_with(
         });
     let cached = receipt_path.as_ref().is_some_and(|receipt| {
         read_receipt(receipt).is_some_and(|r| {
-            r.schema == 1 && r.path == path && r.digest == *expected && r.state == before
+            r.schema == RECEIPT_SCHEMA
+                && r.path == path
+                && r.digest == *expected
+                && r.state == before
         })
     });
     if !cached && hash(&mut file, size)? != *expected {
@@ -100,12 +145,15 @@ fn verify_with(
     {
         return Err("model payload changed during integrity verification".into());
     }
-    if !cached && let Some(receipt_path) = receipt_path {
+    if !cached
+        && before.settled_at(started)
+        && let Some(receipt_path) = receipt_path
+    {
         // A receipt is only an accelerator. Read-only local state must not reject valid models.
         let _ = write_receipt(
             &receipt_path,
             &Receipt {
-                schema: 1,
+                schema: RECEIPT_SCHEMA,
                 path: path.into(),
                 digest: expected.clone(),
                 state: before,

@@ -4,6 +4,8 @@ title: Swift and Apple SDK
 
 # Swift and Apple SDK
 
+## Install
+
 Use the `MeshLLM` SwiftPM product in macOS, Mac Catalyst and iOS applications.
 Tagged packages resolve a prebuilt XCFramework. Add the package dependency:
 
@@ -43,6 +45,24 @@ do {
 
 Use `joinTokens: [token]` for a private mesh and `ownerKeyPath` for an existing
 Mesh LLM owner keystore. Client mode needs no serving runtime.
+
+## Read local runtime capacity
+
+For a started serving node and an exact local serving ID:
+
+```swift
+if let capacity = try await node.runtimeCapacity("exact-serving-id") {
+    print(capacity.executionLanes, capacity.contextTokensPerLane,
+          capacity.contextPoolTokens, capacity.capturedAtUnixMs)
+}
+```
+
+`LaneCapacity` fields are `UInt64`. Each call reads the latest published
+observation without HTTP. Busy lanes count toward capacity; this does not reserve
+resources. Unknown, unsupported, unavailable or incomplete capacity returns `nil`;
+stopped nodes throw. The timestamp is the oldest observation in Unix milliseconds;
+callers choose a freshness policy for long inference. The total pool is not a
+per-request context limit.
 
 ## Discover advertised models
 
@@ -145,12 +165,20 @@ catalog queries the primary mesh and does not merge separate memberships.
 
 ## Live transcription
 
+Embedded live transcription uses the node's locally loaded speech model through
+in-process typed channels, without a loopback HTTP or WebSocket connection.
+A remote-only speech model is rejected at startup; Rust callers that need mesh
+relaying can explicitly use `LiveTranscription::start(api_base_url, options)`.
+Load a speech model on this node before using the following example. Dropping
+either native session half, closing it, or stopping the node cancels the work.
+
 Supply signed 16-bit mono PCM samples recorded at 16 kHz. With turn detection
 disabled, call `commit()` to end the turn explicitly:
 
 ```swift
 let session = try await node.startLiveTranscription(LiveTranscriptionOptions(
-    model: "speech-model", sampleRate: 16000, turnDetection: nil))
+    model: "speech-model", sampleRate: 16000, turnDetection: nil,
+    stepMs: 400, tentative: true))
 do {
     try await session.sendAudio(pcm16Samples)
     try await session.commit()
@@ -168,6 +196,21 @@ do {
 `sendAudioF32` accepts floating point samples. Defaults use 16 kHz and server-side
 turn detection. `stop()` returns remaining final events; `close()` abandons the
 session. Stop the node when the application exits.
+
+`stepMs` accepts 200 to 5000 ms; `nil` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `itemId`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input.
 
 ## Full embedded-node configuration
 
@@ -192,3 +235,24 @@ apply to omitted fields and unknown keys are rejected. Full-config `mode`
 values are `client`, `serve_only` and `serve` (combined); its default is
 combined, matching Rust. The existing `Node(...)` convenience constructor keeps
 its client default and Swift argument names.
+
+## Structured inference failures
+
+`OpenAIRequestFailure.details` and `OpenAIStreamFailure.details` expose typed
+`InferenceErrorDetails` with `message`, `type`, `code` and `param`:
+
+```swift
+do {
+    _ = try await node.inference.chatCompletions(request)
+} catch let error as OpenAIRequestFailure {
+    if error.details?.code == "context_length_exceeded" {
+        // Compact the conversation before retrying.
+    } else {
+        throw error
+    }
+}
+```
+
+Inspect stream failures the same way. The original status and body remain
+available. `details` is `nil` for transport failures or an unstructured body;
+missing optional fields stay `nil`. Unknown codes are preserved.

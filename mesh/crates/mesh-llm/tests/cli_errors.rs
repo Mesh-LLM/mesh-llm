@@ -22,6 +22,44 @@ fn early_command_errors_are_visible_on_stderr() {
 }
 
 #[test]
+fn gpus_json_without_native_runtime_keeps_json_stdout_and_warns_on_stderr() {
+    // An empty HOME (plus XDG roots) has no installed native runtime and no
+    // bundle: `gpus` must keep working from the OS survey, `--json` stdout
+    // must stay machine-readable, and the fallback notice belongs on stderr.
+    let temp = TempDir::new().expect("tempdir should be created");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("isolated home should be created");
+    let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+        .args(["gpus", "--json"])
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("xdg-config"))
+        .env("XDG_CACHE_HOME", home.join("xdg-cache"))
+        .env("XDG_DATA_HOME", home.join("xdg-data"))
+        .env_remove("MESH_LLM_NO_RUNTIME_DOWNLOAD")
+        .env_remove("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR")
+        .output()
+        .expect("mesh-llm command should run");
+
+    assert!(
+        output.status.success(),
+        "gpus must exit 0 without a native runtime, got: {:?}",
+        output.status
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    serde_json::from_str::<serde_json::Value>(&stdout)
+        .expect("gpus --json stdout should parse as JSON");
+    if cfg!(feature = "dynamic-native-runtime") {
+        // Without the feature the loader is a no-op that never fails, so no
+        // notice is printed; the notice is specific to the dynamic build.
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+        assert!(
+            stderr.contains("Native runtime not loaded"),
+            "stderr should carry the OS-survey fallback notice, got: {stderr:?}"
+        );
+    }
+}
+
+#[test]
 fn hidden_gpu_benchmark_backend_errors_are_visible_on_stderr() {
     let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
         .args(["gpus", "run-benchmark", "--backend", "cuda"])

@@ -15,9 +15,16 @@ impl ResponseQualityFailure {
     }
 }
 
-pub(crate) fn failure_from_json_body(body: &[u8]) -> Option<ResponseQualityFailure> {
+/// `caller_completion_cap` is the output cap the request itself set
+/// (`max_tokens`, `max_completion_tokens`, `max_output_tokens`, `n_predict`).
+pub(crate) fn failure_from_json_body(
+    body: &[u8],
+    caller_completion_cap: Option<u32>,
+) -> Option<ResponseQualityFailure> {
     let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    if response_has_length_finish_reason(&json) {
+    if response_has_length_finish_reason(&json)
+        && !length_stop_reached_caller_cap(&json, caller_completion_cap)
+    {
         return Some(ResponseQualityFailure::LengthFinishReason);
     }
     if response_has_empty_assistant_output(&json) {
@@ -31,6 +38,36 @@ pub(crate) fn failure_from_json_body(body: &[u8]) -> Option<ResponseQualityFailu
 
 fn response_has_length_finish_reason(json: &serde_json::Value) -> bool {
     chat_choices_have_length_finish_reason(json) || responses_incomplete_for_length(json)
+}
+
+/// A `length` stop usually means the reply was cut short, but not when the
+/// host generated every token the caller allowed: that is the complete answer
+/// to the request, and another host would spend a second prefill to return
+/// the same stop. Without reported usage the stop stays retryable.
+fn length_stop_reached_caller_cap(
+    json: &serde_json::Value,
+    caller_completion_cap: Option<u32>,
+) -> bool {
+    let Some(cap) = caller_completion_cap else {
+        return false;
+    };
+    let Some(generated) = json
+        .get("usage")
+        .and_then(|usage| {
+            usage
+                .get("completion_tokens")
+                .or_else(|| usage.get("output_tokens"))
+        })
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return false;
+    };
+    // Usage counts every choice together; each one may use the whole cap.
+    let choices = json
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .map_or(1, |choices| choices.len().max(1)) as u64;
+    generated >= u64::from(cap).saturating_mul(choices)
 }
 
 fn chat_choices_have_length_finish_reason(json: &serde_json::Value) -> bool {
@@ -244,7 +281,7 @@ mod tests {
         let body =
             br#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}"#;
         assert_eq!(
-            failure_from_json_body(body),
+            failure_from_json_body(body, None),
             Some(ResponseQualityFailure::EmptyAssistantOutput)
         );
     }
@@ -252,14 +289,14 @@ mod tests {
     #[test]
     fn allows_tool_call_without_text() {
         let body = br#"{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#;
-        assert_eq!(failure_from_json_body(body), None);
+        assert_eq!(failure_from_json_body(body, None), None);
     }
 
     #[test]
     fn detects_length_finish_reason() {
         let body = br#"{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"length"}]}"#;
         assert_eq!(
-            failure_from_json_body(body),
+            failure_from_json_body(body, None),
             Some(ResponseQualityFailure::LengthFinishReason)
         );
     }
@@ -268,7 +305,7 @@ mod tests {
     fn detects_responses_incomplete_for_max_tokens() {
         let body = br#"{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"partial"}]}]}"#;
         assert_eq!(
-            failure_from_json_body(body),
+            failure_from_json_body(body, None),
             Some(ResponseQualityFailure::LengthFinishReason)
         );
     }
@@ -276,13 +313,13 @@ mod tests {
     #[test]
     fn allows_responses_incomplete_for_non_length_reason() {
         let body = br#"{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[{"type":"message","content":[{"type":"output_text","text":"blocked"}]}]}"#;
-        assert_eq!(failure_from_json_body(body), None);
+        assert_eq!(failure_from_json_body(body, None), None);
     }
 
     #[test]
     fn allows_length_reason_without_incomplete_status() {
         let body = br#"{"status":"completed","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"complete"}]}]}"#;
-        assert_eq!(failure_from_json_body(body), None);
+        assert_eq!(failure_from_json_body(body, None), None);
     }
 
     #[test]
@@ -297,7 +334,55 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            failure_from_json_body(body.as_bytes()),
+            failure_from_json_body(body.as_bytes(), None),
+            Some(ResponseQualityFailure::RepetitiveOutput)
+        );
+    }
+
+    #[test]
+    fn a_length_stop_at_the_callers_own_cap_is_a_complete_reply() {
+        let chat = br#"{"choices":[{"message":{"role":"assistant","content":"Paris"},"finish_reason":"length"}],"usage":{"prompt_tokens":25,"completion_tokens":1,"total_tokens":26}}"#;
+        assert_eq!(failure_from_json_body(chat, Some(1)), None);
+        let responses = br#"{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"partial"}]}],"usage":{"input_tokens":25,"output_tokens":16,"total_tokens":41}}"#;
+        assert_eq!(failure_from_json_body(responses, Some(16)), None);
+    }
+
+    #[test]
+    fn a_length_stop_short_of_the_callers_cap_is_still_retried() {
+        // Cut short by something other than the caller (the host's context):
+        // another host may finish it.
+        let short = br#"{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"length"}],"usage":{"prompt_tokens":4000,"completion_tokens":96,"total_tokens":4096}}"#;
+        assert_eq!(
+            failure_from_json_body(short, Some(512)),
+            Some(ResponseQualityFailure::LengthFinishReason)
+        );
+        // No usage reported: nothing proves the cap was reached.
+        let no_usage = br#"{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"length"}]}"#;
+        assert_eq!(
+            failure_from_json_body(no_usage, Some(1)),
+            Some(ResponseQualityFailure::LengthFinishReason)
+        );
+        // Two choices share one usage count: 10 tokens is one choice's worth.
+        let two_choices = br#"{"choices":[{"message":{"role":"assistant","content":"a"},"finish_reason":"length"},{"message":{"role":"assistant","content":"b"},"finish_reason":"stop"}],"usage":{"completion_tokens":10}}"#;
+        assert_eq!(
+            failure_from_json_body(two_choices, Some(10)),
+            Some(ResponseQualityFailure::LengthFinishReason)
+        );
+    }
+
+    #[test]
+    fn reaching_the_cap_does_not_excuse_a_repetition_loop() {
+        let repeated = "loop answer ".repeat(16);
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": repeated},
+                "finish_reason": "length"
+            }],
+            "usage": {"completion_tokens": 32}
+        })
+        .to_string();
+        assert_eq!(
+            failure_from_json_body(body.as_bytes(), Some(32)),
             Some(ResponseQualityFailure::RepetitiveOutput)
         );
     }

@@ -2,14 +2,24 @@ use super::*;
 #[path = "overlap.rs"]
 mod endpoint;
 
-fn armed(directory: &std::path::Path) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+// The primary may take its readiness budget plus coordinated.rs's 300 s
+// allowance before it answers and the headless writes overlap.armed.
+fn armed<T>(
+    directory: &std::path::Path,
+    readiness: std::time::Duration,
+    worker: &std::thread::ScopedJoinHandle<'_, T>,
+) {
+    let deadline = std::time::Instant::now() + readiness + std::time::Duration::from_secs(300 + 30);
     while !directory.join("overlap.armed").exists() {
         assert!(
-            std::time::Instant::now() < deadline,
-            "headless did not reach live-primary barrier"
+            !worker.is_finished(),
+            "worker finished before overlap.armed was written"
         );
-        std::thread::yield_now();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for overlap.armed at live-primary barrier"
+        );
+        std::thread::park_timeout(std::time::Duration::from_millis(10));
     }
 }
 
@@ -19,13 +29,15 @@ fn primary_remains_live_when_headless_waits_on_barrier_for_all_variants() {
         let directory = tempfile::tempdir().unwrap();
         let mut options = options(directory.path(), "overlap-success");
         options.variant = variant;
+        options.readiness = std::time::Duration::from_secs(120);
+        options.shutdown = std::time::Duration::from_secs(10);
         let cancel = Cancellation::default();
         std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
                 command::execute(directory.path(), &options, &cancel)
                     .map_err(|error| error.to_string())
             });
-            armed(directory.path());
+            armed(directory.path(), options.readiness, &worker);
             endpoint::query(directory.path()).unwrap();
             std::fs::write(directory.path().join("overlap.release"), b"release").unwrap();
             let receipt = worker.join().unwrap().unwrap();
@@ -56,7 +68,7 @@ fn cancellation_retains_both_reports_when_headless_waits_on_barrier() {
                     .collect::<Vec<_>>(),
             )
         });
-        armed(directory.path());
+        armed(directory.path(), options.readiness, &worker);
         endpoint::query(directory.path()).unwrap();
         cancel.cancel();
         let (reason, reports) = worker.join().unwrap();
@@ -79,7 +91,7 @@ fn primary_early_exit_rejects_when_headless_waits_on_barrier() {
                 output::reports(error.as_ref()).len(),
             )
         });
-        armed(directory.path());
+        armed(directory.path(), options.readiness, &worker);
         std::fs::write(directory.path().join("primary.exit"), b"exit").unwrap();
         let (reason, count) = worker.join().unwrap();
         assert_eq!(reason, Rejection::EarlyExit.to_string());

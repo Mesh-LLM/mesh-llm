@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::{
     OpenSpans, Telemetry, TelemetryLevel, now_unix_nanos,
     resource_metrics::SpanWindow,
-    sink::SpanStart,
+    sink::{SpanRecord, SpanStart},
     trace_context::{self, Entered, Frame, SpanContext},
 };
 
@@ -165,15 +165,15 @@ impl ActiveSpan {
             self.attributes.extend(window.close());
         }
         let elapsed = u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        telemetry.end_span(
-            open,
+        let mut record = SpanRecord::of_frame(
             &self.frame,
             self.name,
             std::mem::take(&mut self.attributes),
             self.start_unix_nanos,
             self.start_unix_nanos.saturating_add(elapsed),
-            std::mem::take(&mut self.links),
         );
+        record.links = std::mem::take(&mut self.links);
+        telemetry.end_span(open, &self.frame, record);
     }
 }
 

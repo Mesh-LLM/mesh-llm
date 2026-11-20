@@ -532,6 +532,56 @@ verify_window_pipeline_depth = 2
 }
 
 #[test]
+fn speculative_default_false_keeps_a_package_ngram_default_off() {
+    let model_file = temp_model_file();
+    let generation = ngram_cache_generation();
+    let resolve = |config: &str| {
+        let mesh_config = parse_config(config);
+        resolve_skippy_config(SkippyConfigResolveRequest {
+            mesh_config: &mesh_config,
+            model_id: "meshllm/GLM-4.7-Flash-MTP-GGUF",
+            model_path: model_file.path(),
+            model_bytes: 4 * 1024 * 1024 * 1024,
+            allocatable_memory_bytes: None,
+            request_defaults: None,
+            package_generation: Some(&generation),
+            compact_meta: None,
+        })
+        .expect("package generation should resolve")
+    };
+
+    // The package default is `ngram-cache`; `auto` takes it while automatic
+    // defaults are on.
+    let automatic = resolve(
+        "[defaults.speculative]
+",
+    );
+    assert!(automatic.speculative.decode.ngram.is_some());
+
+    // `spec_default = false` (what `--no-draft` sets) keeps it off.
+    let off = resolve(
+        "[defaults.speculative]
+spec_default = false
+",
+    );
+    assert!(off.speculative.decode.ngram.is_none());
+    assert!(!off.speculative.native_mtp_enabled);
+    let openai = off
+        .to_embedded_openai_args(4096, true)
+        .expect("disabled defaults should build OpenAI args");
+    assert!(openai.speculative.ngram.is_none());
+
+    // An explicitly named strategy still applies.
+    let explicit = resolve(
+        "[defaults.speculative]
+spec_default = false
+strategy = \"ngram-cache\"
+",
+    );
+    assert!(explicit.speculative.decode.ngram.is_some());
+}
+
+#[test]
 fn package_cache_strategy_uses_the_declared_verify_window() {
     let mesh_config = parse_config(
         r#"

@@ -122,7 +122,7 @@ describe('DeveloperPlaygroundPage', () => {
     expect(screen.getAllByText('Incident routing')).not.toHaveLength(0)
   })
 
-  it('displays model providers and architecture in the catalog', async () => {
+  it('displays model providers without architecture badges in the catalog', async () => {
     const user = userEvent.setup()
 
     renderDeveloperPlaygroundPage()
@@ -134,9 +134,9 @@ describe('DeveloperPlaygroundPage', () => {
     const moeRow = screen.getByRole('button', { name: /view qwen3\.6-35b-a3b-ud model/i })
 
     expect(within(selectedRow).getByText('Google')).toBeInTheDocument()
-    expect(within(selectedRow).getByText('Dense')).toBeInTheDocument()
+    expect(within(selectedRow).queryByText('Dense')).not.toBeInTheDocument()
     expect(within(moeRow).getByText('Alibaba')).toBeInTheDocument()
-    expect(within(moeRow).getByText('MoE')).toBeInTheDocument()
+    expect(within(moeRow).queryByText('MoE')).not.toBeInTheDocument()
     expect(within(selectedRow).queryByText('Text')).not.toBeInTheDocument()
     expect(within(selectedRow).queryByText('Vision')).not.toBeInTheDocument()
   })

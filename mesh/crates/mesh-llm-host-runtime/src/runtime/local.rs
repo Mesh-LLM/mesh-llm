@@ -33,7 +33,13 @@ use super::operational_logging::{
     LocalServingOperationalEvent, record_local_serving_operational_event,
 };
 
+mod model_loaded_analytics;
 mod native_runtime_events;
+
+pub(super) use model_loaded_analytics::{
+    LoadedModel, ModelLoadSource, report_loaded_model_analytics, report_model_loaded_analytics,
+    report_split_model_loaded_analytics,
+};
 
 pub(super) use super::local_package::{
     RuntimeModelSizing, SPLIT_DEFAULT_MIN_PARTICIPANTS, SplitParticipant,
@@ -129,7 +135,7 @@ impl LocalRuntimeModelHandle {
     ) -> Option<Arc<dyn skippy_inference_api::InferenceBackend>> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => Some(model.backend()),
-            LocalRuntimeBackendHandle::Dedicated { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { http, .. } => http.native_backend(),
         }
     }
 
@@ -373,6 +379,19 @@ fn pinned_skippy_device(
     }
 }
 
+/// The device a load selects, in the order the load applies them: a pinned
+/// GPU unless a device override was given, else the configured device.
+fn selected_device<'a>(
+    pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
+    configured: Option<&'a str>,
+) -> Option<&'a str> {
+    match pinned_gpu {
+        Some(gpu) if device_override.is_none() => Some(gpu.backend_device.as_str()),
+        _ => configured,
+    }
+}
+
 pub(super) fn pinned_stage_device(
     gpu: &crate::runtime::StartupPinnedGpuTarget,
 ) -> skippy_protocol::StageDevice {
@@ -487,136 +506,6 @@ pub(super) fn remove_runtime_local_target(
     target_tx.send_replace(targets);
     if target_was_removed {
         record_local_serving_operational_event(LocalServingOperationalEvent::TargetRemoved);
-    }
-}
-
-/// Where the model being reported came from.
-///
-/// This decides whether the name may be reported at all, so it is a type
-/// rather than a string: the privacy rule belongs to the source, not to a
-/// comparison at one call site.
-#[derive(Clone, Copy)]
-pub(super) enum ModelLoadSource {
-    /// A local file named on the command line with `--gguf`.
-    DirectGguf,
-    /// A catalog or repository model reference.
-    LayerPackage,
-    /// A whisper.cpp model file, by path or repository reference.
-    WhisperFile,
-    /// A Hugging Face layer package served as stage 0 of a split.
-    SplitLayerPackage,
-    /// Stage 0 of a split whose model came from anywhere but Hugging Face.
-    SplitLocalSource,
-}
-
-impl ModelLoadSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::DirectGguf => "direct_gguf",
-            Self::LayerPackage => "layer_package",
-            Self::WhisperFile => "whisper_file",
-            Self::SplitLayerPackage => "split_layer_package",
-            Self::SplitLocalSource => "split_local_source",
-        }
-    }
-
-    /// Whether the model name may go on the wire.
-    ///
-    /// `DirectGguf` names are derived from a path the user chose, so they are
-    /// never reported. The label grammar alone does not save us here: the name
-    /// handed to analytics is `resolved_model_name`, the file *stem*, and a
-    /// bare stem such as `private` passes the grammar cleanly. `acme-merger-
-    /// finetune.gguf` would go out verbatim. Redacting on the source is the
-    /// only place that holds, and it keeps the documented promise that a
-    /// filesystem path cannot reach the wire through this API even by mistake.
-    fn may_report_name(self) -> bool {
-        match self {
-            Self::DirectGguf => false,
-            Self::LayerPackage | Self::SplitLayerPackage => true,
-            // The name may come from a local path, so it is never reported.
-            Self::WhisperFile | Self::SplitLocalSource => false,
-        }
-    }
-}
-
-/// Report an anonymous `model_loaded` alongside the local `ModelLoaded`
-/// presentation event.
-///
-/// A catalog or repository identifier is reported as-is when it satisfies the
-/// analytics label grammar; anything else, and every direct `--gguf` name, is
-/// `redacted`. The count and the source still land either way, which is what
-/// the question "which models actually get run" is asking.
-pub(super) fn report_model_loaded_analytics(
-    model: &str,
-    source: ModelLoadSource,
-    metadata: Option<&models::gguf::GgufCompactMeta>,
-) {
-    let mut properties = mesh_llm_analytics::Properties::new()
-        .with(
-            "model",
-            model_loaded_label(
-                model,
-                source,
-                models::find_loaded_remote_catalog_model_exact(model).is_some(),
-            ),
-        )
-        .with("source", source.as_str());
-    if let Some(backend) = system_one_backend(metadata) {
-        properties = properties.with("system_one_backend", backend);
-    }
-    mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
-}
-
-/// Report `model_loaded` for stage 0 of a split.
-///
-/// The name is reportable only when the package is a Hugging Face reference.
-/// A split can also run from a local `--gguf`, whose name may be a file stem
-/// or an alias matching one.
-pub(super) fn report_split_model_loaded_analytics(model: &str, package_ref: &str) {
-    report_model_loaded_analytics(model, split_model_load_source(package_ref), None);
-}
-
-fn split_model_load_source(package_ref: &str) -> ModelLoadSource {
-    if package_ref.starts_with("hf://") {
-        ModelLoadSource::SplitLayerPackage
-    } else {
-        ModelLoadSource::SplitLocalSource
-    }
-}
-
-/// Which System One (OpenJEV) backend a loaded model is, if any.
-///
-/// Read from the GGUF architecture, never from the model name, so it stays a
-/// closed vocabulary even for a direct `--gguf` load whose name is redacted.
-fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Option<&'static str> {
-    match metadata?.architecture.as_str() {
-        super::local_laya::LAYA_ARCHITECTURE => Some("laya"),
-        "diffusion-gemma" => Some("openjev"),
-        _ => None,
-    }
-}
-
-/// The `model` value `report_model_loaded_analytics` puts on the wire.
-///
-/// A name goes out only when its source may report one *and* it is an exact
-/// catalog entry. The serving name of a package load can be a configured
-/// alias (`server.alias`, `--model`), which is operator configuration, not a
-/// catalog name, and may name an unreleased finetune.
-///
-/// Separate from the capture so the privacy decision is testable without a
-/// reporter or a loaded catalog: the capture itself is a fire-and-forget into
-/// a global queue.
-fn model_loaded_label(
-    model: &str,
-    source: ModelLoadSource,
-    catalog_name: bool,
-) -> mesh_llm_analytics::Label {
-    if source.may_report_name() && catalog_name {
-        // Lets `inference_request` and `inference_route` name it too.
-        crate::inference_analytics::allow_model_name(model);
-        mesh_llm_analytics::Label::sanitize_or_redact(model)
-    } else {
-        mesh_llm_analytics::Label::redacted()
     }
 }
 
@@ -1302,7 +1191,19 @@ async fn start_local_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
+    report_loaded_model_analytics(LoadedModel {
+        served_name: &model_name,
+        source: ModelLoadSource::DirectGguf,
+        metadata: compact_meta,
+        path: Some(spec.model_path),
+        package_ref: None,
+        dflash: resolved.speculative.default_dflash.as_ref(),
+        device: selected_device(
+            spec.pinned_gpu,
+            spec.device_override.as_deref(),
+            resolved.hardware.device.as_deref(),
+        ),
+    });
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1565,7 +1466,19 @@ async fn start_local_package_v2_model(
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     }
     let workload_class = handle.workload_class()?;
-    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
+    report_loaded_model_analytics(LoadedModel {
+        served_name: &model_ref,
+        source: ModelLoadSource::LayerPackage,
+        metadata: compact_meta,
+        path: None,
+        package_ref: Some(&package.package_ref),
+        dflash: None,
+        device: selected_device(
+            spec.pinned_gpu,
+            spec.device_override.as_deref(),
+            resolved.hardware.device.as_deref(),
+        ),
+    });
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1651,107 +1564,14 @@ mod descriptor_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
-        model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
-        split_model_load_source, system_one_backend, unix_nanos_to_unix_ms,
+        LocalRuntimeModelStartSpec, RuntimeResourcePlanningProfile, openai_guardrail_policy_handle,
+        unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
     use crate::mesh;
     use crate::plugin;
     use crate::runtime::survey;
     use skippy_protocol::FlashAttentionType;
-
-    #[test]
-    fn direct_gguf_never_reports_the_file_name() {
-        // The label grammar does not save us here: `resolved_model_name`
-        // hands over the file *stem*, and a bare stem passes the grammar
-        // cleanly, so `--gguf /home/you/acme-merger-finetune.gguf` would go
-        // out verbatim. `analytics.md` promises a path cannot reach the wire;
-        // this is the only place that holds.
-        let path = std::path::Path::new("/home/you/acme-merger-finetune.gguf");
-        let name = resolved_model_name(path);
-        assert_eq!(name, "acme-merger-finetune", "stem is what gets reported");
-        assert_eq!(
-            mesh_llm_analytics::Label::sanitize_or_redact(&name).as_str(),
-            "acme-merger-finetune",
-            "and the grammar accepts it, which is exactly the hole"
-        );
-        assert_eq!(
-            model_loaded_label(&name, ModelLoadSource::DirectGguf, true).as_str(),
-            "redacted"
-        );
-    }
-
-    #[test]
-    fn model_loaded_names_the_system_one_backend_from_the_architecture() {
-        let meta = |architecture: &str| crate::models::gguf::GgufCompactMeta {
-            architecture: architecture.to_string(),
-            ..Default::default()
-        };
-        assert_eq!(system_one_backend(Some(&meta("laya"))), Some("laya"));
-        assert_eq!(
-            system_one_backend(Some(&meta("diffusion-gemma"))),
-            Some("openjev")
-        );
-        assert_eq!(system_one_backend(Some(&meta("qwen3"))), None);
-        assert_eq!(system_one_backend(None), None);
-    }
-
-    #[test]
-    fn a_split_from_a_local_file_never_reports_its_name() {
-        // `--gguf ./acme-merger-finetune.gguf --model acme-merger-finetune`
-        // splits under the alias, which is the file stem again.
-        let source = split_model_load_source;
-        assert_eq!(
-            model_loaded_label(
-                "acme-merger-finetune",
-                source("/home/you/acme-merger-finetune.gguf"),
-                true,
-            )
-            .as_str(),
-            "redacted"
-        );
-        assert_eq!(
-            model_loaded_label(
-                "Qwen3-8B-Q4_K_M",
-                source("hf://unsloth/Qwen3-8B-GGUF"),
-                true
-            )
-            .as_str(),
-            "Qwen3-8B-Q4_K_M"
-        );
-    }
-
-    #[test]
-    fn a_configured_alias_is_never_reported() {
-        // `server.alias = "acme-codename"` on a Hugging Face package: the
-        // serving name is operator configuration, so it redacts on both the
-        // split and whole-model package paths.
-        for source in [
-            ModelLoadSource::LayerPackage,
-            split_model_load_source("hf://unsloth/Qwen3-8B-GGUF"),
-        ] {
-            assert_eq!(
-                model_loaded_label("acme-codename", source, false).as_str(),
-                "redacted"
-            );
-        }
-    }
-
-    #[test]
-    fn layer_package_still_reports_a_catalog_name() {
-        // Redacting the direct-file case must not cost us the answer to
-        // "which models actually get run" for catalog models.
-        assert_eq!(
-            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage, true).as_str(),
-            "qwen3-8b"
-        );
-        // A catalog ref that fails the grammar still redacts, as before.
-        assert_eq!(
-            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage, true).as_str(),
-            "redacted"
-        );
-    }
 
     #[test]
     fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {

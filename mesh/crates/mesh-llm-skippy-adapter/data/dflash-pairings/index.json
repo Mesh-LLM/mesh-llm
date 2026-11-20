@@ -139,6 +139,41 @@
       },
       "max_draft_tokens": 7,
       "backends": "not-metal"
+    },
+    {
+      "target": {
+        "architecture": "laguna",
+        "layer_count": 48,
+        "embedding_length": 3072,
+        "expert_count": 256
+      },
+      "draft": {
+        "repo": "poolside/Laguna-S-2.1-GGUF",
+        "revision": "19036076775e9ba6758595f78af99cb976ef8ff0",
+        "file": "laguna-s-2.1-DFlash-BF16.gguf",
+        "sha256": "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4",
+        "bytes": 2233764224
+      },
+      "max_draft_tokens": 15,
+      "backends": "not-metal"
+    },
+    {
+      "target": {
+        "architecture": "deepseek4",
+        "layer_count": 43,
+        "embedding_length": 4096,
+        "expert_count": 256,
+        "family": "DeepSeek-V4-Flash-0731"
+      },
+      "draft": {
+        "repo": "unsloth/DeepSeek-V4-Flash-0731-GGUF",
+        "revision": "fbbb5b93fb787c21338159b0af3318bb3f4d9768",
+        "file": "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf",
+        "sha256": "2c7ac54b0b64a99df1f139a9f1371a00198265e1d6a614b77597d20a655a4249",
+        "bytes": 10896057440
+      },
+      "max_draft_tokens": 5,
+      "backends": "not-metal"
     }
   ]
 }

@@ -54,7 +54,7 @@ skippy-cli-build:
 
 [windows]
 skippy-cli-build:
-    @cargo build --locked -p skippy-cli --bin skippy --features dynamic-native-runtime
+    @cargo build --locked --timings -p skippy-cli --bin skippy --features dynamic-native-runtime
 
 [unix]
 skippy-cli-release-build:
@@ -62,7 +62,7 @@ skippy-cli-release-build:
 
 [windows]
 skippy-cli-release-build:
-    @cargo build --release --locked -p skippy-cli --bin skippy --features dynamic-native-runtime
+    @cargo build --release --locked --timings -p skippy-cli --bin skippy --features dynamic-native-runtime
 
 # Build the complete Skippy release product for the current platform.
 [unix]
@@ -418,14 +418,14 @@ skippy-api-rs-lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Verify, stage the API sources, and commit. Message must be a Conventional Commit.
+# Verify, stage the API sources, and commit with the supplied message.
 [unix]
 [positional-arguments]
 skippy-api-checkpoint message="" embed_model="" reranker_model="" causal_model="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${1:-}" ]]; then
-      printf '%s\n' 'usage: just skippy-api-checkpoint "<conventional commit subject>" [embed.gguf] [reranker.gguf] [causal.gguf]' >&2
+      printf '%s\n' 'usage: just skippy-api-checkpoint "<commit subject>" [embed.gguf] [reranker.gguf] [causal.gguf]' >&2
       exit 1
     fi
     subject="$1"

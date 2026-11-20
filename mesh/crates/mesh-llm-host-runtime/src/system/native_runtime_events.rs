@@ -1584,7 +1584,13 @@ mod tests {
 
         let engine = RuntimeEventEngine::new();
         install_runtime_event_engine(engine.clone());
-        super::replay_deferred_resolution(&engine);
+        // #3141: name which half failed if the replayed facts go missing.
+        assert_eq!(
+            super::replay_deferred_resolution(&engine),
+            super::deferred::DeferredReplay::Replayed,
+            "shutting_down={}",
+            engine.is_shutting_down()
+        );
         engine.drain();
 
         assert_eq!(engine.occupied_count(), 0);

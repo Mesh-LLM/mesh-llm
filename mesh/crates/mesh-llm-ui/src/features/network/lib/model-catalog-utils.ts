@@ -1,6 +1,6 @@
 import type { ModelSummary } from '@/features/app-tabs/types'
 
-export type ModelFilterKey = 'provider' | 'license' | 'variant' | 'status' | 'family' | 'architecture' | 'capabilities'
+export type ModelFilterKey = 'provider' | 'license' | 'variant' | 'status' | 'family' | 'capabilities'
 export type ModelFilterState = Partial<Record<ModelFilterKey, string[]>>
 export type FilterOption = { value: string; count: number }
 type ModelProviderRule = { label: string; prefixes: string[] }
@@ -66,7 +66,6 @@ export const modelFilterColumns = [
   { key: 'variant', label: 'Variant' },
   { key: 'status', label: 'Status' },
   { key: 'family', label: 'Family' },
-  { key: 'architecture', label: 'Architecture' },
   { key: 'capabilities', label: 'Capabilities' }
 ] satisfies Array<{ key: ModelFilterKey; label: string }>
 
@@ -231,7 +230,6 @@ export function modelFilterValue(model: ModelSummary, key: ModelFilterKey): stri
   if (key === 'variant') return modelVariantLabel(model)
   if (key === 'status') return model.status.charAt(0).toUpperCase() + model.status.slice(1)
   if (key === 'family') return modelFamilyLabel(model)
-  if (key === 'architecture') return model.moe ? 'MoE' : 'Dense'
   return modelCapabilityLabels(model)[0] ?? 'Text'
 }
 

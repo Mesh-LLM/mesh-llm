@@ -49,6 +49,21 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 - `bind` — address and port for the owner-control endpoint. The inference API remains on `9337` unless changed by the runtime surface.
 - `advertise_addr` — address and port announced to peers. Auto-detected when unset; set it explicitly for NAT or Docker setups, with the same port as `bind`.
 
+## Private nodes
+
+The other nodes this node's private requests (`@private`, `@incognito`,
+`x-mesh-scope: private` or `/private/v1`) may go to, by node id. See [Private routing](/docs/pages/private-routing/).
+
+```toml
+[private]
+nodes = ["8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"]
+```
+
+- `nodes` — node ids, 64 hex characters each, as `mesh-llm auth status` prints them. Empty or absent keeps private requests on this node.
+- `mesh-llm private add <name or id>`, `list` and `remove` edit this list; `add` resolves a connected node's label or hostname to its id.
+- A running node rereads the list when the file changes, without a restart.
+- `mesh-llm private` takes the config file's lock, so its edits never collide with a running node saving a console change. A text editor does not: the node refuses to save over an edit it sees, but an edit landing in the instant before its save can be lost. While a node is running, prefer `mesh-llm private`.
+
 ## Payments
 
 Paid inference is not part of the node and has no `config.toml` section. Payment
@@ -154,6 +169,28 @@ targets. Demand upgrades use the minimum request count and maximum request age
 above when deciding whether a higher-quality target is warranted. See
 [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for the complete behavior,
 security, and status model.
+
+### Peer model downloads
+
+A peer that coordinates a split model can ask this node to run one stage of
+it. By default the node downloads what the stage needs, from Hugging Face or
+from the coordinating peer, even for a model this node never configured. To
+stop peers from filling this node's disk or bandwidth, turn that off:
+
+```toml
+[runtime]
+peer_model_downloads = false   # same as `mesh-llm serve --no-peer-model-downloads`
+```
+
+The node still serves its configured and local models, and its own loads still
+download as usual. A peer's stage request is accepted only when the model
+files are already on local disk. Otherwise the node refuses it, and the error
+names the setting. For a layer package, the node reports nothing to a peer's
+inventory query until the package metadata is in the local cache.
+
+The node also advertises the setting in gossip. A coordinator leaves it out of
+a split, with the reason `peer_model_downloads_refused`, when the node would
+have to fetch files. Older nodes ignore the advertisement.
 
 ## Deep Dives
 

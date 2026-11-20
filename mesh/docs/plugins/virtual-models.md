@@ -145,6 +145,7 @@ concrete model id, an OpenAI-compatible JSON body, and an optional timeout:
 ```rust
 HostInferenceRequest {
     model_id: String,
+    single_model_only: bool,
     target_node_id: Option<String>,
     request: serde_json::Value,
     timeout_ms: Option<u64>,
@@ -184,6 +185,7 @@ async fn handle_mesh_agent(
     let response = context
         .infer(HostInferenceRequest {
             model_id: candidate.model_id.clone(),
+            single_model_only: false,
             target_node_id: candidate.target_node_id.clone(),
             request: invocation.request,
             timeout_ms: Some(60_000),
@@ -201,17 +203,40 @@ async fn handle_mesh_agent(
 }
 ```
 
-The built-in implementation in `crates/mesh-llm-moa-plugin/src/lib.rs` is the
-complete conformance example.
-The host marks a candidate `deprioritized` when its peer advertises reduced
-inference readiness. The built-in plugin ranks ready placements first and
-retains eligible standbys for a direct answer if the first pinned placement
-fails with a retryable transport or availability error. Operator-blocked peers
-are omitted from the candidate snapshot.
+The built-in Mixture-of-Agents plugin in `crates/mesh-llm-moa-plugin/src/lib.rs`
+is the complete conformance example. It is compiled into `mesh-llm` but
+**not registered by default**: core advertises `mesh` as an automatic
+single-model directive independently of any plugin. Operators opt in with
 
-V1 host inference accepts only concrete model ids. It rejects built-in aliases
-and all virtual model ids, including the caller, so a plugin cannot recurse.
-Virtual-to-virtual composition can be added later with an explicit hop budget.
+```toml
+[[plugin]]
+name = "mesh-moa"
+```
+
+in `~/.mesh-llm/config.toml` (or the file passed with `--config`; only `enabled` may be set on this entry, as for `blobstore`);
+the committee then overrides non-streaming text chat to `mesh`, while
+streaming and media keep core routing. With a single eligible model, or when
+every eligible model is under 10B parameters or of unknown size, the plugin
+answers from one model and sets no `x-moa-*` headers. Operator-blocked peers are omitted
+from candidate snapshots.
+
+Host inference accepts concrete model ids by default. `single_model_only`
+defaults to `false` when omitted, preserving existing plugin JSON requests.
+Set it to `true` to allow `model_id: "mesh"` (or the deprecated `"auto"`
+alias): the host resolves that directive through core single-model routing,
+without re-entering an installed virtual-model override. Normal eligibility,
+placement affinity, admission, health, and pre-response failover still apply.
+All other registered virtual model ids, including the caller, remain rejected;
+this flag does not enable virtual-to-virtual composition.
+
+The bypass is host-internal: the RPC bridge registers a random, one-use request
+identity for its loopback call and revokes it when the call ends. An ordinary
+HTTP caller cannot disable overrides by adding `single_model_only` to its JSON
+or inventing an `x-request-id`. No mesh wire fields are changed. Older hosts
+ignore the additive JSON field and continue rejecting nested directives, so a
+plugin requiring this feature must use a host version that implements it.
+Rust plugin source using a `HostInferenceRequest` literal must initialize the
+new field when updating the SDK.
 
 ## Routing And Affinity Hooks
 
@@ -295,32 +320,9 @@ admission, role, hardware, serving-model truth, or the host's core
 cache-affinity evidence. Direct-peer-only propagation should be the default;
 transitive propagation requires an explicitly reviewed schema and bound.
 
-## MoA Migration
+## Optional MoA plugin
 
-Move the existing `model: "mesh"` MoA implementation behind this interface as
-the first in-process conformance plugin. MoA exercises parallel nested
-inference, candidate snapshots, partial failure, cancellation, streaming
-fan-in, and aggregate usage before later plugins add session and tool semantics.
-
-Migrate without changing the public model id:
-
-1. add the registry and buffered nested-inference path;
-2. register an in-process `mesh-moa` plugin through the existing in-process
-   plugin loader;
-3. adapt the current orchestrator behind its virtual-model handler and run
-   response/error parity tests;
-4. switch `model: "mesh"` dispatch to the registry;
-5. remove the special ingress intercept only after streaming, cancellation,
-   and usage accounting have parity.
-
-The host advertises `mesh` from healthy plugin registration. The MoA plugin
-does not directly mutate gossip. Its nested calls choose concrete models, then
-host or plugin-ranked affinity chooses an eligible placement for each model.
-
-## Delivery Order
-
-1. Add manifest types, builders, validation, and registry projection.
-2. Add buffered host-to-plugin invocation and plugin-to-host inference.
-3. Add bounded affinity-rank and namespaced gossip-extension contracts.
-4. Move the built-in MoA path behind the contract as a conformance test.
-5. Add negotiated streaming, cancellation, and aggregate usage.
+The Mixture-of-Agents plugin ships inside the `mesh-llm` binary and is off by
+default; the `[[plugin]] name = "mesh-moa"` entry above turns it on. A healthy
+plugin registration can override the core `mesh` directive only for eligible
+non-streaming text chat requests.

@@ -39,6 +39,38 @@ fn windows_build_paths_compiler_and_cache_cannot_run_before_setup() {
     job_paths(&job("  - uses: actions/checkout@finite-pin\n  - uses: ./.github/actions/setup-windows-short-paths\n  - run: cargo build\n"), None).unwrap();
 }
 #[test]
+fn windows_build_paths_sccache_must_pin_the_argfile_safe_release() {
+    let setup = "  - uses: ./.github/actions/setup-windows-short-paths\n";
+    for install in [
+        "  - uses: mozilla-actions/sccache-action@finite-pin\n",
+        "  - uses: mozilla-actions/sccache-action@finite-pin\n    with:\n      version: v0.19.0\n",
+    ] {
+        let error = job_paths(&job(&format!("{setup}{install}")), None).unwrap_err();
+        assert!(
+            error.to_string().contains("argfile-safe release"),
+            "{install}: {error}"
+        );
+    }
+    let pinned =
+        "  - uses: mozilla-actions/sccache-action@finite-pin\n    with:\n      version: v0.16.0\n";
+    job_paths(&job(&format!("{setup}{pinned}")), None).unwrap();
+}
+#[test]
+fn windows_build_paths_composite_action_sccache_must_pin_the_argfile_safe_release() {
+    let Some(Node::Seq(steps)) = job(
+        "  - uses: mozilla-actions/sccache-action@finite-pin\n    if: runner.os == 'Windows'\n",
+    )
+    .get("steps")
+    .cloned() else {
+        panic!("fixture steps");
+    };
+    let error = sccache_pinned(&steps).unwrap_err();
+    assert!(
+        error.to_string().contains("argfile-safe release"),
+        "{error}"
+    );
+}
+#[test]
 fn windows_build_paths_multi_platform_job_uses_windows_condition() {
     let steps = format!(
         "  - uses: ./.github/actions/setup-windows-short-paths\n    if: {WINDOWS_MATRIX}\n  - run: cargo check\n"

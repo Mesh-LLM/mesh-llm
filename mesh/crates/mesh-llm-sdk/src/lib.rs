@@ -4,6 +4,9 @@
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
+pub use mesh_llm_embedded_runtime::capacity;
+
+#[cfg(feature = "serving")]
 pub mod documents;
 
 #[cfg(feature = "serving")]
@@ -56,8 +59,8 @@ pub mod live_transcription;
 #[cfg(feature = "serving")]
 pub mod inference {
     pub use mesh_llm_embedded_runtime::native::{
-        ChatCompletionRequest, ChatCompletionStream, ChatMessage, MessageContent, Model,
-        ModelTarget, ReasoningEffort,
+        ChatCompletionRequest, ChatCompletionStream, ChatMessage, InferenceError,
+        InferenceErrorKind, MessageContent, Model, ModelTarget, ReasoningEffort,
     };
 }
 

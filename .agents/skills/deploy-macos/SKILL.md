@@ -36,7 +36,7 @@ pre-download with `hf`/`huggingface-cli`, do NOT scp GGUFs around. (Only
 ## Install path A: official release (most cases)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 The binary lands at `~/.local/bin/mesh-llm` (may not be on a non-interactive
@@ -47,7 +47,7 @@ automatically.
 To install as a per-user background service (launchd agent) in the same step:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash -s -- --service
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --service
 ```
 
 Service files: `~/Library/LaunchAgents/com.mesh-llm.mesh-llm.plist`, shared env

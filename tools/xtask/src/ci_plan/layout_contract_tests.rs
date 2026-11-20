@@ -3,6 +3,57 @@ use crate::command::DynResult;
 use serde_json::Value;
 
 #[test]
+fn windows_linker_owners_require_native_checks_and_hosted_policy_execution() -> DynResult<()> {
+    let root = crate::repo_consistency::repo_root()?;
+    for (path, hosted) in [
+        ("scripts/cargo-linker.cmd", true),
+        ("tools/xtask/src/native_policy/windows_linker.rs", true),
+        ("mesh/scripts/build-windows.ps1", true),
+        (
+            "tools/xtask/src/native_policy/windows_linker_tests.rs",
+            false,
+        ),
+        (
+            "tools/xtask/src/ci_validation/windows_linker_native.rs",
+            false,
+        ),
+    ] {
+        let input = serde_json::json!({
+            "profile": "pr-ready",
+            "event_name": "pull_request",
+            "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "changed_files": [path],
+            "affected_crates": ["xtask"],
+            "workspace_packages": [{"name": "xtask", "path": "tools/xtask"}],
+        });
+        let plan = super::build_for_validation(&root, &serde_json::to_vec(&input)?)?;
+        let domains = plan["domains"].as_array().ok_or("plan domains")?;
+        assert!(
+            domains.contains(&serde_json::json!("platform-windows")),
+            "{path}"
+        );
+        assert_eq!(
+            domains.contains(&serde_json::json!("ci-control")),
+            hosted,
+            "{path}"
+        );
+        assert_eq!(
+            plan["signals"]["runner_contract_required"], hosted,
+            "{path}"
+        );
+        let checks = plan["matrices"]["platform_checks"]
+            .as_array()
+            .ok_or("platform checks")?;
+        assert!(
+            checks.iter().any(|row| row["id"] == "windows-unit"),
+            "{path}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn relocated_paths_and_crates_preserve_semantic_domains() -> DynResult<()> {
     let root = crate::repo_consistency::repo_root()?;
     let bytes = std::fs::read(root.join("ci/ownership.yml"))?;

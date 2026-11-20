@@ -37,7 +37,7 @@ This foundation runs:
 
 Long c4 state comparisons, HTTP-server L3 restart, pressure, default-budget qualification and
 standard-vanilla performance comparisons remain separate work in
-[todo.md](../../../todo.md). A green foundation is not throughput parity or full
+[PLAN.md](PLAN.md). A green foundation is not throughput parity or full
 KV certification. There is no automatic GPU CI trigger or new serving option.
 
 ## Prepare once, run many

@@ -147,6 +147,7 @@ impl Node {
         >,
         requester: EndpointId,
         request: crate::inference::skippy::StageControlRequest,
+        source_fetch: crate::inference::skippy::StageSourceFetch,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
         // Load can take minutes on large stages; use the same
         // per-request budget the remote sender uses instead of the short
@@ -158,6 +159,7 @@ impl Node {
                 tx.send(crate::inference::skippy::StageControlCommand::Execute {
                     request,
                     requester,
+                    source_fetch,
                     resp: resp_tx,
                 })
                 .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
@@ -247,8 +249,9 @@ impl Node {
         // this gate, so a validated claim cannot become stale mid-resolution.
         let control_tx_guard = self.stage_control_tx.lock().await;
         let control_tx = control_tx_guard.clone();
+        let source_fetch = self.peer_stage_source_fetch;
         let response = match self
-            .resolve_stage_control_request(control_tx.as_ref(), &mut request)
+            .resolve_stage_control_request(control_tx.as_ref(), &mut request, source_fetch)
             .await
         {
             Ok(()) => {
@@ -261,6 +264,7 @@ impl Node {
                     control_tx,
                     remote,
                     request.clone(),
+                    source_fetch,
                 )
                 .await
                 {
@@ -400,6 +404,7 @@ impl Node {
             &tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,
         >,
         request: &mut crate::inference::skippy::StageControlRequest,
+        source_fetch: crate::inference::skippy::StageSourceFetch,
     ) -> anyhow::Result<()> {
         if let crate::inference::skippy::StageControlRequest::LoadLocal(load) = request {
             // Enforce the command-level policy before any resolver is allowed
@@ -414,7 +419,7 @@ impl Node {
                 let control_tx =
                     control_tx.context("stage control is unavailable before load authorization")?;
                 Self::authorize_stage_load(control_tx, load).await?;
-                self.resolve_stage_load_request(load).await?;
+                self.resolve_stage_load_request(load, source_fetch).await?;
             }
             // The stop's stage-to-stage transport bridge is aborted only
             // after the stage-control loop accepts the stop for the
@@ -454,8 +459,11 @@ impl Node {
     async fn resolve_stage_load_request(
         &self,
         load: &mut crate::inference::skippy::StageLoadRequest,
+        source_fetch: crate::inference::skippy::StageSourceFetch,
     ) -> anyhow::Result<()> {
-        if let Err(error) = self.prefetch_stage_package_from_coordinator(load).await {
+        if source_fetch.allows_fetch()
+            && let Err(error) = self.prefetch_stage_package_from_coordinator(load).await
+        {
             tracing::debug!(
                 topology_id = %load.topology_id,
                 run_id = %load.run_id,
@@ -486,15 +494,13 @@ impl Node {
             .into_iter()
             .filter(|candidate| !candidate.is_empty())
             {
-                if let Ok(path) =
-                    crate::models::resolve_model_spec(std::path::Path::new(candidate)).await
-                    && path.exists()
-                {
+                if let Some(path) = source_fetch.resolve_model_candidate(candidate).await {
                     load.model_path = Some(path.to_string_lossy().to_string());
                     break;
                 }
             }
         }
+        source_fetch.ensure_local_source(load)?;
         let topology_id = load.topology_id.clone();
         let run_id = load.run_id.clone();
         if let Some(upstream) = load.upstream.as_mut() {

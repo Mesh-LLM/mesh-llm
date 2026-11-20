@@ -19,18 +19,18 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  create mode 100644 tests/test-flash-attn-rows-perf.cpp
 
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 638e84e37..bcb407ae8 100644
+index ce3fe92ac..4e77e3302 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -392,6 +392,8 @@ endif()
+@@ -407,6 +407,8 @@ endif()
  llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
  
  llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 +# per-call cost of ordinary vs row-list decode attention; a tool, not a test
 +llama_build(test-flash-attn-rows-perf.cpp LINK ggml)
  
- llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
- llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
+ if (BUILD_SHARED_LIBS)
+     llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp LABEL behavior)
 diff --git a/tests/test-flash-attn-rows-perf.cpp b/tests/test-flash-attn-rows-perf.cpp
 new file mode 100644
 index 000000000..dbffc27e4

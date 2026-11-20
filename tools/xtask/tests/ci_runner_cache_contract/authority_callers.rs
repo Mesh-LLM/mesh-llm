@@ -172,7 +172,7 @@ fn every_audited_reusable_call_receives_its_native_identity_including_nested_sdk
             }
         }
     }
-    assert_eq!(edges.len(), 28);
+    assert_eq!(edges.len(), 34);
     for library in LIBRARIES {
         let document = read(library);
         let inputs = member(

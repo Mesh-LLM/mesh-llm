@@ -62,19 +62,29 @@ impl Failure {
     }
 }
 pub(super) enum AttemptDecision {
-    Green(Candidate),
+    Green {
+        candidate: Candidate,
+        retry_recovered: bool,
+    },
     Repairable(Resume),
     Failed(Failure),
 }
 impl AttemptDecision {
     pub(super) fn outputs(self) -> BTreeMap<&'static str, String> {
         match self {
-            Self::Green(candidate) => {
+            Self::Green {
+                candidate,
+                retry_recovered,
+            } => {
                 let mut result = candidate.outputs();
                 result.extend([
                     ("state", "green".into()),
                     ("green", "true".into()),
                     ("repairable", "false".into()),
+                    (
+                        "retry_recovered",
+                        if retry_recovered { "true" } else { "false" }.into(),
+                    ),
                 ]);
                 result
             }
@@ -131,7 +141,10 @@ pub(super) fn identity_failure() -> AttemptDecision {
 pub(super) enum FinalDecision {
     Noop,
     Certified,
-    Publish(Candidate),
+    Publish {
+        candidate: Candidate,
+        retry_recovered: bool,
+    },
 }
 impl FinalDecision {
     pub(super) fn outputs(self) -> BTreeMap<&'static str, String> {
@@ -140,9 +153,19 @@ impl FinalDecision {
             Self::Certified => {
                 BTreeMap::from([("state", "green".into()), ("publish", "false".into())])
             }
-            Self::Publish(candidate) => {
+            Self::Publish {
+                candidate,
+                retry_recovered,
+            } => {
                 let mut result = candidate.outputs();
-                result.extend([("state", "green".into()), ("publish", "true".into())]);
+                result.extend([
+                    ("state", "green".into()),
+                    ("publish", "true".into()),
+                    (
+                        "retry_recovered",
+                        if retry_recovered { "true" } else { "false" }.into(),
+                    ),
+                ]);
                 result
             }
         }

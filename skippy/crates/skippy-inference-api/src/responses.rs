@@ -1,3 +1,4 @@
+mod content_items;
 mod conversation;
 mod tools;
 
@@ -9,6 +10,7 @@ use crate::{
     common::{THINKING_BOOLEAN_ALIASES, Usage, normalize_reasoning_compat_fields},
     errors::InferenceError,
 };
+use content_items::translate_responses_content_item;
 use conversation::{is_responses_tool_item, translate_responses_conversation_items};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,111 +128,6 @@ fn map_response_role(role: &str) -> String {
     match role {
         "developer" => "system".to_string(),
         other => other.to_string(),
-    }
-}
-
-fn object_or_url_container(
-    value: Option<&Value>,
-    fallback_url: Option<&str>,
-) -> Option<Map<String, Value>> {
-    match value {
-        Some(Value::Object(map)) => Some(map.clone()),
-        Some(Value::String(url)) => Some(Map::from_iter([(
-            "url".to_string(),
-            Value::String(url.clone()),
-        )])),
-        _ => fallback_url
-            .map(|url| Map::from_iter([("url".to_string(), Value::String(url.to_string()))])),
-    }
-}
-
-fn translate_responses_content_item(item: &Value) -> Result<Value, InferenceError> {
-    let Some(object) = item.as_object() else {
-        return Ok(serde_json::json!({
-            "type": "text",
-            "text": item.as_str().unwrap_or_default(),
-        }));
-    };
-    let item_type = object.get("type").and_then(Value::as_str).unwrap_or("text");
-
-    match item_type {
-        "input_text" | "output_text" | "text" => {
-            let text = object
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            Ok(serde_json::json!({"type": "text", "text": text}))
-        }
-        "input_image" | "image_url" | "image" => {
-            let container = object_or_url_container(
-                object.get("image_url").or_else(|| object.get("image")),
-                object.get("url").and_then(Value::as_str),
-            )
-            .ok_or_else(|| {
-                InferenceError::invalid_request(
-                    "responses input_image block is missing image_url/url",
-                )
-            })?;
-            Ok(serde_json::json!({"type": "image_url", "image_url": container}))
-        }
-        "input_audio" | "audio" | "audio_url" => {
-            let mut container = object_or_url_container(
-                object
-                    .get("input_audio")
-                    .or_else(|| object.get("audio_url")),
-                object.get("url").and_then(Value::as_str),
-            )
-            .unwrap_or_default();
-            for key in [
-                "data",
-                "format",
-                "mime_type",
-                "mesh_token",
-                "blob_token",
-                "token",
-            ] {
-                if let Some(value) = object.get(key) {
-                    container
-                        .entry(key.to_string())
-                        .or_insert_with(|| value.clone());
-                }
-            }
-            if container.is_empty() {
-                return Err(InferenceError::invalid_request(
-                    "responses input_audio block is missing input_audio/audio_url/url",
-                ));
-            }
-            Ok(serde_json::json!({"type": "input_audio", "input_audio": container}))
-        }
-        "input_file" | "file" => {
-            let mut container = object_or_url_container(
-                object.get("input_file").or_else(|| object.get("file")),
-                object.get("url").and_then(Value::as_str),
-            )
-            .ok_or_else(|| {
-                InferenceError::invalid_request(
-                    "responses input_file block is missing input_file/file/url",
-                )
-            })?;
-            for key in [
-                "mime_type",
-                "file_name",
-                "filename",
-                "mesh_token",
-                "blob_token",
-                "token",
-            ] {
-                if let Some(value) = object.get(key) {
-                    container
-                        .entry(key.to_string())
-                        .or_insert_with(|| value.clone());
-                }
-            }
-            Ok(serde_json::json!({"type": "input_file", "input_file": container}))
-        }
-        other => Err(InferenceError::unsupported(format!(
-            "unsupported /v1/responses content block type '{other}'"
-        ))),
     }
 }
 

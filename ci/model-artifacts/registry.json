@@ -25,9 +25,7 @@
     "radix-cache",
     "skippy-system-one-smoke",
     "skippy-cpp-api",
-    "performance-coverage",
-    "performance-core",
-    "performance-parity"
+    "performance-coverage"
   ],
   "family_policy": {
     "profiles": {
@@ -5569,25 +5567,6 @@
         ]
       },
       "notes": "Performance coverage: XLM-RoBERTa reranker; same pin as bge-reranker-q4-cpp-api."
-    }
-  ],
-  "derived_suites": [
-    {
-      "suite": "performance-core",
-      "from": "skippy/evals/kv-validation/models.json",
-      "selectors": [
-        "Q4_K_M"
-      ],
-      "id_prefix": "perf"
-    },
-    {
-      "suite": "performance-parity",
-      "from": "skippy/evals/kv-validation/models.json",
-      "selectors": [
-        "Q8_0",
-        "BF16"
-      ],
-      "id_prefix": "perf"
     }
   ]
 }

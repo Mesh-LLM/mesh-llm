@@ -20,6 +20,20 @@ fn owner_control_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigS
     setting
 }
 
+/// Read again whenever the config file changes, so an edit takes effect
+/// without a restart.
+fn private_nodes_setting() -> ConfigSettingSchema {
+    let mut setting = basic_setting(
+        "private.nodes",
+        ConfigValueSchema::Array {
+            items: Box::new(ConfigValueSchema::String),
+        },
+    );
+    setting.apply_mode = ConfigApplyMode::DynamicApply;
+    setting.restart_scope = ConfigRestartScope::None;
+    setting
+}
+
 fn telemetry_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
@@ -384,6 +398,8 @@ fn tensor_split_schema() -> ConfigValueSchema {
 /// This list should be updated during the release process.
 fn known_mesh_llm_versions() -> &'static [&'static str] {
     &[
+        "0.80.0",
+        "0.79.0",
         "0.78.0",
         "0.77.0",
         "0.76.1",

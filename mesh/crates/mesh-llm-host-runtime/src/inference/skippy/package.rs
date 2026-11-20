@@ -302,6 +302,17 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
     if is_package_v2_ref(&local_ref) {
         return identity_from_package_v2_metadata(package_ref, &local_ref);
     }
+    // The lookup above is cache-first: a complete snapshot of an older
+    // schema-v1 package satisfies it even when the hub's revision now points
+    // at a package-v2 commit. Ask the hub once before failing; the download
+    // also moves the cached ref, so later stage loads resolve the same commit.
+    if package_ref.starts_with("hf://") {
+        let upstream_ref =
+            super::materialization::resolve_hf_package_upstream_to_local(package_ref)?;
+        if is_package_v2_ref(&upstream_ref) {
+            return identity_from_package_v2_metadata(package_ref, &upstream_ref);
+        }
+    }
     anyhow::bail!(
         "layer-package schema v1 is offline-only; split serving requires a package-v2 manifest"
     )

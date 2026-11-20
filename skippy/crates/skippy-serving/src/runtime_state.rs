@@ -28,6 +28,7 @@ pub(crate) mod model_content;
 pub mod panic_recovery;
 mod resident_prefix;
 mod restore_transaction;
+mod session_end_exports;
 mod state_transfer;
 
 #[cfg(test)]
@@ -88,11 +89,22 @@ pub struct RuntimeState {
     /// Split DFlash drafts a final stage owes stage 0 after an early verdict,
     /// by session.
     dflash_deferred_drafts: BTreeMap<String, DeferredDFlashDraft>,
+    /// Prefix-cache KV exports each session completes when it ends; see
+    /// `session_end_exports`.
+    session_end_kv_exports: BTreeMap<String, Vec<session_end_exports::SessionEndKvExport>>,
+    /// Normally ended sessions kept until their exports run.
+    parked_session_ends: Vec<session_end_exports::ParkedSessionEnd>,
+    /// Set while parked sessions' exports run, so their own runtime calls do
+    /// not start completing the rest.
+    completing_parked_session_ends: bool,
     #[cfg(test)]
     modelless_for_test: bool,
     /// Lets modelless tests exercise a split DFlash final stage.
     #[cfg(test)]
     pub(crate) dflash_drafts_for_test: bool,
+    /// Lets modelless tests stand in for a stage with a sliding-window cache.
+    #[cfg(test)]
+    pub(crate) sliding_window_kv_for_test: bool,
 }
 
 /// What a split DFlash final stage needs to draft the block after a verify
@@ -282,11 +294,15 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
             dflash_deferred_drafts: BTreeMap::new(),
+            session_end_kv_exports: BTreeMap::new(),
+            parked_session_ends: Vec::new(),
+            completing_parked_session_ends: false,
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
             modelless_for_test: true,
             dflash_drafts_for_test: false,
+            sliding_window_kv_for_test: false,
         }
     }
 
@@ -340,6 +356,7 @@ impl RuntimeState {
 
 impl Drop for RuntimeState {
     fn drop(&mut self) {
+        self.abandon_all_session_end_kv_exports();
         self.sessions.clear();
         self.idle_sessions.clear();
     }
@@ -455,6 +472,9 @@ fn runtime_from_loaded_model(
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
         dflash_deferred_drafts: BTreeMap::new(),
+        session_end_kv_exports: BTreeMap::new(),
+        parked_session_ends: Vec::new(),
+        completing_parked_session_ends: false,
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
@@ -462,6 +482,8 @@ fn runtime_from_loaded_model(
         modelless_for_test: false,
         #[cfg(test)]
         dflash_drafts_for_test: false,
+        #[cfg(test)]
+        sliding_window_kv_for_test: false,
     })))
 }
 
@@ -744,6 +766,7 @@ mod tests {
                 busy_nanos: 2_000_000,
                 operations: 1,
                 decode_tokens: 3,
+                verify_tokens: 0,
             }
         );
     }

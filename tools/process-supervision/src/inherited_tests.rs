@@ -1,12 +1,18 @@
 use super::*;
 use crate::Value;
+use crate::test_sleep::sleep_executable;
 use std::{collections::BTreeMap, fs, process::Command};
 
 fn spec(script: &str, cwd: &std::path::Path) -> ProcessSpec {
     ProcessSpec {
         executable: "/bin/sh".into(),
         cwd: cwd.into(),
-        arguments: vec![Value::Public("-c".into()), Value::Public(script.into())],
+        arguments: vec![
+            Value::Public("-c".into()),
+            Value::Public(script.into()),
+            Value::Public("sh".into()),
+            Value::Public(sleep_executable().into()),
+        ],
         environment: BTreeMap::new(),
     }
 }
@@ -28,7 +34,7 @@ fn inherited_streams_are_visible_before_completion() {
         let directory = std::path::PathBuf::from(path);
         let mut budget = limits();
         budget.execution = Duration::from_secs(8);
-        let result = supervise_inherited(&spec("echo early-out; echo early-err >&2; while [ ! -f release ]; do /bin/sleep 0.02; done; exit 7", &directory), &budget, &Cancellation::default()).unwrap();
+        let result = supervise_inherited(&spec("echo early-out; echo early-err >&2; while [ ! -f release ]; do \"$1\" 0.02; done; exit 7", &directory), &budget, &Cancellation::default()).unwrap();
         assert!(result.cleanup.complete);
         assert_eq!(result.outcome, Outcome::Exited);
         assert_eq!(result.status.unwrap().code(), Some(7));
@@ -73,10 +79,10 @@ fn inherited_streams_are_visible_before_completion() {
 #[test]
 fn deadline_cancellation_and_normal_exit_clean_only_owned_tree() {
     let directory = tempfile::tempdir().unwrap();
-    let mut sentinel = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let mut sentinel = Command::new(sleep_executable()).arg("30").spawn().unwrap();
     let result = supervise_inherited(
         &spec(
-            "trap '' TERM; printf ready > term-ready; /bin/sleep 30 & wait",
+            "trap '' TERM; printf ready > term-ready; \"$1\" 30 & wait",
             directory.path(),
         ),
         &limits(),
@@ -101,7 +107,7 @@ fn deadline_cancellation_and_normal_exit_clean_only_owned_tree() {
         trigger.cancel();
     });
     let result = supervise_inherited(
-        &spec("trap '' TERM; /bin/sleep 30 & wait", directory.path()),
+        &spec("trap '' TERM; \"$1\" 30 & wait", directory.path()),
         &limits(),
         &token,
     )
@@ -110,7 +116,7 @@ fn deadline_cancellation_and_normal_exit_clean_only_owned_tree() {
     assert!(result.cleanup.complete);
     assert_eq!(result.outcome, Outcome::Cancelled);
     let result = supervise_inherited(
-        &spec("/bin/sleep 30 & exit 7", directory.path()),
+        &spec("\"$1\" 30 & exit 7", directory.path()),
         &limits(),
         &Cancellation::default(),
     )
@@ -154,12 +160,14 @@ fn completed_leader_at_expired_deadline_preserves_actual_exit_and_ignores_zombie
 #[test]
 fn cancellation_after_spawn_keeps_cleanup_ownership_and_stops_descendant_writes() {
     let directory = tempfile::tempdir().unwrap();
-    let mut sentinel = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let mut sentinel = Command::new(sleep_executable()).arg("30").spawn().unwrap();
     let mut command = Command::new("/bin/sh");
     command.current_dir(directory.path()).args([
         "-c",
-        "trap '' TERM; i=0; while :; do printf '%s' \"$i\" > writes; i=$((i+1)); /bin/sleep 0.01; done",
+        "trap '' TERM; i=0; while :; do printf '%s' \"$i\" > writes; i=$((i+1)); \"$1\" 0.01; done",
+        "sh",
     ]);
+    command.arg(sleep_executable());
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())

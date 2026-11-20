@@ -420,23 +420,31 @@ fn stage_status_proto_carries_the_compute_meter() {
     status.compute_busy_nanos = 7_000_000;
     status.compute_operations = 41;
     status.compute_decode_tokens = 32;
+    status.compute_verify_tokens = 12;
     let mut proto = stage_status_to_proto(status);
     let decoded = stage_status_from_proto(proto.clone()).unwrap();
     assert_eq!(
         (
             decoded.compute_busy_nanos,
             decoded.compute_operations,
-            decoded.compute_decode_tokens
+            decoded.compute_decode_tokens,
+            decoded.compute_verify_tokens
         ),
-        (7_000_000, 41, 32)
+        (7_000_000, 41, 32, 12)
     );
 
-    // A stage that predates the decode count reports none, and its busy time still arrives.
+    // A stage that predates the decode and verify counts reports none, and its busy time
+    // still arrives.
     proto.compute_decode_tokens = 0;
+    proto.compute_verify_tokens = 0;
     let decoded = stage_status_from_proto(proto).unwrap();
     assert_eq!(
-        (decoded.compute_busy_nanos, decoded.compute_decode_tokens),
-        (7_000_000, 0)
+        (
+            decoded.compute_busy_nanos,
+            decoded.compute_decode_tokens,
+            decoded.compute_verify_tokens
+        ),
+        (7_000_000, 0, 0)
     );
 }
 

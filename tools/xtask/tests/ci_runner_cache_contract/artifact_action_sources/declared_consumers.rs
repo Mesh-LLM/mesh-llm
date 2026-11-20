@@ -120,37 +120,29 @@ fn windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs()
         text(env, "CACHE_INPUT_HASH").unwrap(),
         &[
             "restore-windows-abi-cache/action.yml",
-            "save-and-verify-actions-cache/action.yml",
-            "resolve-native-toolchain-epoch/action.yml",
-            "prepare-native-runtime-input/action.yml",
-            "setup-windows-rocm-sdk/action.yml",
-            "scripts/build-llama.sh",
-            "skippy/scripts/build-llama.sh",
-            "scripts/prepare-llama.sh",
-            "skippy/scripts/prepare-llama.sh",
-            "scripts/package-native-runtime.sh",
-            "skippy/scripts/package-native-runtime.sh",
-            "skippy/llama_cpp/upstream.txt",
-            "skippy/llama_cpp/patches/**",
+            "save-and-verify-actions-cache/**",
+            "resolve-native-toolchain-epoch/**",
+            "prepare-native-runtime-input/**",
+            "setup-windows-rocm-sdk/**",
+            "scripts/**",
+            "skippy/scripts/**",
+            "skippy/llama_cpp/**",
+            "tools/xtask/src/native_policy/**",
+            "tools/xtask/src/prepared_input/**",
             ".github/cache-version.txt",
         ],
     );
     required_tokens(
         text(identity, "run").unwrap(),
         &[
-            "$backend -notin @(\"cpu\", \"cuda\", \"rocm\", \"vulkan\")",
-            "$toolchainEpoch -ne $buildStampEpoch",
-            "MESH_LLM_LLAMA_TOOLCHAIN_EPOCH",
+            "$env:MESH_LLM_AUTOMATION_BIN ci-ops windows-cache-identity",
+            "if ($LASTEXITCODE -ne 0)",
+            "prepared automation is required for Windows ABI cache identity",
             "build_dir must resolve inside GITHUB_WORKSPACE",
             "build_dir must remain outside the replaceable llama.cpp",
             "$resolvedBuildDir -eq $llamaWorktree",
             "$resolvedBuildDir.StartsWith(",
-            "$backend -in @(\"cuda\", \"rocm\") -and -not $architectureSet",
-            "cuda-$version-Jimver-v0.2.36",
-            "vulkan-$version-jakoch-v1.5.2",
-            "rocm-$version",
-            "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash",
-            "^[0-9a-f]{64}$",
+            "cache-key=$($identity.key)",
         ],
     );
     let restore = step_id(action_steps(&action), "restore");
@@ -188,8 +180,8 @@ fn windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs()
 #[test]
 fn windows_native_cache_callers_declare_fail_closed_defaults_and_exact_opt_in() {
     for (action, expected) in [
-        ("restore-windows-abi-cache", [1, 2, 2]),
-        ("setup-windows-rocm-sdk", [1, 1, 1]),
+        ("restore-windows-abi-cache", [1, 2, 2, 1]),
+        ("setup-windows-rocm-sdk", [1, 1, 0, 1]),
     ] {
         let document = doc(&format!(".github/actions/{action}/action.yml"));
         let flag = document
@@ -204,20 +196,31 @@ fn windows_native_cache_callers_declare_fail_closed_defaults_and_exact_opt_in() 
             "ci-windows-runtime-slice.yml",
             "release.yml",
             "windows-warm-caches.yml",
+            "windows-abi-measurement.yml",
         ];
-        assert_eq!(calls.len(), names.len());
+        assert_eq!(
+            calls.len(),
+            expected.iter().filter(|count| **count != 0).count()
+        );
         for (name, count) in names.into_iter().zip(expected) {
+            if count == 0 {
+                assert!(!calls.contains_key(name), "{name} {action}");
+                continue;
+            }
             let observed = calls.get(name).unwrap();
             assert_eq!(observed.len(), count, "{name} {action}");
             for call in observed {
-                assert_eq!(
-                    input(call, "allow-native-github-cache"),
-                    Some(if name == "ci-windows-runtime-slice.yml" {
+                let expected = match (name, action) {
+                    ("ci-windows-runtime-slice.yml", _) => {
                         "${{ needs.runner_policy.outputs.allow_native_github_cache }}"
-                    } else {
-                        "true"
-                    })
-                );
+                    }
+                    ("windows-abi-measurement.yml", "restore-windows-abi-cache") => {
+                        "${{ inputs.condition == 'exact-warm' && 'true' || 'false' }}"
+                    }
+                    ("windows-abi-measurement.yml", _) => "false",
+                    _ => "true",
+                };
+                assert_eq!(input(call, "allow-native-github-cache"), Some(expected));
             }
         }
     }

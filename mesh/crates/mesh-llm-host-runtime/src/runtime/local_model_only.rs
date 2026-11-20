@@ -408,6 +408,7 @@ async fn run_loaded_local_model(
     super::node_lifecycle_events::emit_node_draining();
     emit_shutdown(Some(reason)).await;
     model.shutdown().await;
+    skippy_serving::telemetry::finish_process_telemetry();
     super::node_lifecycle_events::emit_node_stopped();
     // Task 3: finalize AFTER node_stopped, same ordering rationale as
     // `control_loop.rs::shutdown_run_auto_runtime` -- the driver's own
@@ -492,9 +493,17 @@ mod tests {
     /// so this test exercises real inference without a network fetch or a
     /// checked-in fixture. Mirrors the existing `SKIPPY_MM_MODEL`-gated
     /// smoke tests' skip-when-unavailable convention when no cache exists.
+    /// Files of a layered package (a snapshot with `model-package.json`) are
+    /// left out: its `shared/metadata.gguf` is the smallest GGUF in the cache
+    /// but holds no weights, so it cannot be loaded on its own.
     fn smallest_cached_gguf() -> Option<PathBuf> {
         scan_hf_cache_fast(&huggingface_hub_cache_dir())
             .into_iter()
+            .filter(|path| {
+                !path
+                    .ancestors()
+                    .any(|dir| dir.join("model-package.json").is_file())
+            })
             .filter_map(|path| {
                 std::fs::metadata(&path)
                     .ok()

@@ -11,6 +11,14 @@ BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
 TARGET_TRIPLE="${MESH_NATIVE_SDK_TARGET:-}"
 PROFILE="${MESH_NATIVE_SDK_PROFILE:-release}"
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$REPO_ROOT/.deps/llama.cpp}"
+automation=(cargo xtool)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+    if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+        echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+        exit 1
+    fi
+    automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 usage() {
     cat >&2 <<'EOF'
@@ -36,6 +44,8 @@ Environment:
   MESH_NATIVE_SDK_TARGET
   MESH_NATIVE_SDK_PROFILE
   MESH_LLM_LLAMA_PIN_SHA
+  MESH_LLM_AUTOMATION_BIN  Absolute restored automation executable used instead
+                           of compiling xtask.
 EOF
 }
 
@@ -216,7 +226,7 @@ sha256_file() {
 }
 
 workspace_version() {
-    cargo xtool native package-source-version workspace "$REPO_ROOT/Cargo.toml"
+    "${automation[@]}" native package-source-version workspace "$REPO_ROOT/Cargo.toml"
 }
 
 if [[ -z "$TARGET_TRIPLE" ]]; then
@@ -322,7 +332,7 @@ fi
 
 sdk_version="$(workspace_version)"
 
-cargo xtool prepared-input native-sdk-manifest-write \
+"${automation[@]}" prepared-input native-sdk-manifest-write \
     "$stage_dir/manifest.json" "$artifact_id" "$sdk_version" "$TARGET_TRIPLE" \
     "$platform" "$runtime_os" "$runtime_arch" "$BACKEND" "$flavor" "$PROFILE" \
     "lib/$lib_name" "lib/$uniffi_lib_name" "$upstream_sha" "$patched_sha" "$patch_digest"

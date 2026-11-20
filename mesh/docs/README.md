@@ -13,7 +13,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | Pin an API request to a provider, inspect prices, or exclude peers | [PROVIDER_SELECTION.md](PROVIDER_SELECTION.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
-| Language-specific SDK examples | [Rust](mesh/sdk/rust.md), [Node.js](mesh/sdk/node.md), [Swift](mesh/sdk/swift.md), [Kotlin/Android](mesh/sdk/kotlin.md) |
+| Language-specific SDK examples | [Rust](sdk/rust.md), [Node.js](sdk/node.md), [Python](sdk/python.md), [Swift](sdk/swift.md), [Kotlin/Android](sdk/kotlin.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) |
 | Embedding, rerank, encoder-decoder, OCR, and audio models | [NON_CHAT_MODELS.md](../../skippy/docs/NON_CHAT_MODELS.md) |
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](../../skippy/docs/LAYER_PACKAGE_REPOS.md) |
@@ -39,6 +39,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | [skippy/LLAMA_PARITY.md](../../skippy/docs/LLAMA_PARITY.md) | Remaining llama.cpp parity queue |
 | [specs/layer-package-repos.md](../../skippy/docs/specs/layer-package-repos.md) | Manifest schema and package artifact rules |
 | [specs/mesh-setup-installer.md](specs/mesh-setup-installer.md) | Bootstrap installer and `mesh-llm setup` ownership boundary |
+| [specs/private-routing.md](specs/private-routing.md) | `@private`/`@incognito` requests that stay on your own nodes, and how to list them |
 | [SKIPPY.md](../../skippy/docs/SKIPPY.md) | Skippy integration readiness and parity notes |
 
 Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serving workflows.

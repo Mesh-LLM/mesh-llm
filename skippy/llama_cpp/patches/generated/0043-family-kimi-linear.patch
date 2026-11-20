@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
-index d1105bed9c6030b2dd267c29743364d7f6c03732..4c1e80167d2d88afe9340fd208c1708b6758c439 100644
+index ad454067ea71b2447df44840299eb6ec8edb15fc..83bd88b77a9aa3bdbf1bcb5382579aeec02efeb4 100644
 --- a/src/models/kimi-linear.cpp
 +++ b/src/models/kimi-linear.cpp
 @@ -277,6 +277,8 @@ llama_model_kimi_linear::graph::graph(const llm_graph_params & params) :
@@ -21,7 +21,7 @@ index d1105bed9c6030b2dd267c29743364d7f6c03732..4c1e80167d2d88afe9340fd208c1708b
          const auto & layer = model.layers[il];
          ggml_tensor * inpSA = inpL;
  
-@@ -546,6 +548,7 @@ llama_model_kimi_linear::graph::graph(const llm_graph_params & params) :
+@@ -545,6 +547,7 @@ llama_model_kimi_linear::graph::graph(const llm_graph_params & params) :
  
          // input for next layer
          inpL = cur;

@@ -582,10 +582,12 @@ pub(super) async fn stage0_runtime_options(
     {
         let stage0_load = stage0_load.clone();
         Some(
-            tokio::task::spawn_blocking(move || skippy::resolve_stage_load_package(&stage0_load))
-                .await
-                .context("join resolve package-v2 stage 0 task")??
-                .context("package-v2 stage 0 did not resolve to a local package")?,
+            tokio::task::spawn_blocking(move || {
+                skippy::resolve_stage_load_package(&stage0_load, skippy::StageSourceFetch::Allowed)
+            })
+            .await
+            .context("join resolve package-v2 stage 0 task")??
+            .context("package-v2 stage 0 did not resolve to a local package")?,
         )
     } else {
         None

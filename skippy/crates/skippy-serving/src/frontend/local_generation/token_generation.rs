@@ -46,6 +46,7 @@ use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sampl
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
 mod exact_state_recording;
+use crate::kv_integration::ExactStateKvExport;
 // Test-only: lets iteration_scheduler tests exercise the real outstanding-
 // capture accounting through the real channel/command types.
 #[cfg(test)]
@@ -307,6 +308,19 @@ pub(in crate::frontend) fn post_decode_checkpoint_tokens(
     checkpoint
         .extend_from_slice(&generated_token_ids[..generated_token_ids.len().saturating_sub(1)]);
     Some(checkpoint)
+}
+
+/// Adds the samples a resumed scheduler decode produced after a Stop. They
+/// were never delivered, but the worker decoded each one, and the session
+/// consumed every one except the newest, so both the decode count and the
+/// post-decode checkpoint must include them.
+pub(in crate::frontend) fn include_undelivered_samples(
+    decoded_tokens: &mut usize,
+    generated_token_ids: &mut Vec<i32>,
+    samples: &[i32],
+) {
+    *decoded_tokens = decoded_tokens.saturating_add(samples.len());
+    generated_token_ids.extend_from_slice(samples);
 }
 
 pub(in crate::frontend) fn linear_proposal_allowed(
@@ -967,6 +981,11 @@ impl StageOpenAiBackend {
                 },
             )?;
             cache_stats.predicted_ms = stats.predicted_ms;
+            include_undelivered_samples(
+                &mut state.decoded_tokens,
+                &mut state.generated_token_ids,
+                &stats.undelivered_tokens,
+            );
             drop(decoding);
             let model_generation_elapsed =
                 self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;

@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 
 mod construction;
 mod demand;
+mod local_request_metrics;
 mod membership;
 mod ownership;
 mod routing_telemetry;
@@ -17,6 +18,9 @@ pub(crate) use membership::{
     membership_token_endpoint,
 };
 
+pub(crate) use local_request_metrics::LocalRequestMetricsSampler;
+pub use local_request_metrics::LocalRequestMetricsSnapshot;
+pub(crate) use routing_telemetry::InferenceAttemptReport;
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
@@ -87,6 +91,7 @@ pub struct Node {
     pub(crate) state: Arc<Mutex<MembershipState>>,
     pub(crate) gossip_verification: Arc<super::signed_records::VerificationGate>,
     pub(crate) gossip_encoder: Arc<crate::protocol::GossipFrameEncoder>,
+    pub(crate) gossip_reply_limiter: Arc<super::gossip::reply_limit::GossipReplyLimiter>,
     pub(crate) plugin_message_history: Arc<Mutex<super::plugin_mesh::PluginMessageHistory>>,
     /// Relay-disabled same-identity endpoints that own recovered direct connections.
     /// See [`super::direct_rescue`] for the ownership and shutdown rules.
@@ -120,6 +125,9 @@ pub struct Node {
     /// An attachment to a host-owned full-model backend, never a GPU participant.
     pub(crate) full_model_only: bool,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
+    /// Ticks whenever `mesh_id` is stored, so the runtime can keep the saved
+    /// rejoin preference on the current ID.
+    pub(crate) mesh_id_changed: Arc<tokio::sync::watch::Sender<()>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
     pub(crate) bootstrap_token: Arc<Mutex<Option<crate::SignedBootstrapToken>>>,
@@ -194,6 +202,8 @@ pub struct Node {
     pub(crate) control_listener: Arc<Mutex<Option<ControlListenerLifecycle>>>,
     pub(crate) trust_store: Arc<Mutex<TrustStore>>,
     pub(crate) trust_policy: TrustPolicy,
+    /// Nodes besides this one that may serve its private requests.
+    pub(crate) private_nodes: super::private_nodes::PrivateNodes,
     pub enumerate_host: bool,
     pub gpu_name: Option<String>,
     pub hostname: Option<String>,
@@ -232,6 +242,8 @@ pub struct Node {
     pub(crate) drain_timeout_secs: u64,
     /// Upper bound for private owner-requested graceful drain timeouts.
     pub(crate) drain_timeout_max_secs: u64,
+    /// Whether a peer's stage request may fetch model files this node lacks.
+    pub(crate) peer_stage_source_fetch: crate::inference::skippy::StageSourceFetch,
     pub(crate) runtime_intents: Arc<std::sync::Mutex<Vec<crate::runtime::DesiredRuntimeIntent>>>,
     pub(crate) runtime_instance_lifecycles: Arc<
         std::sync::Mutex<
@@ -255,23 +267,6 @@ pub struct Node {
     pub(crate) is_membership: bool,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LocalRequestMetricsSnapshot {
-    pub accepted_request_counts: Vec<u64>,
-    pub latency_samples_ms: Vec<u64>,
-}
-
-#[derive(Default)]
-pub(crate) struct LocalRequestMetricsSampler {
-    pub(crate) inner: std::sync::Mutex<LocalRequestMetricsWindow>,
-}
-
-#[derive(Default)]
-pub(crate) struct LocalRequestMetricsWindow {
-    pub(crate) accepted_by_second: VecDeque<(u64, u64)>,
-    pub(crate) completed_latencies_ms: VecDeque<(u64, u64)>,
-}
-
 pub(crate) struct PeerDownReport {
     pub(crate) conn_opt: Option<Connection>,
     pub(crate) peer_addr: Option<EndpointAddr>,
@@ -292,86 +287,6 @@ pub(crate) fn peer_down_endpoint_id(frame: &crate::proto::node::PeerDown) -> Opt
         Err(_) => {
             tracing::warn!("PeerDown: peer_id is not a valid public key — rejecting");
             None
-        }
-    }
-}
-
-impl LocalRequestMetricsSampler {
-    pub(crate) fn record_request_accepted(&self) {
-        let now_sec = now_secs();
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("pretty request metrics mutex poisoned");
-        guard.prune(now_sec);
-        if let Some((second, count)) = guard.accepted_by_second.back_mut()
-            && *second == now_sec
-        {
-            *count += 1;
-            return;
-        }
-        guard.accepted_by_second.push_back((now_sec, 1));
-    }
-
-    pub(crate) fn record_request_completed(&self, started_at: std::time::Instant) {
-        let now_sec = now_secs();
-        let latency_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("pretty request metrics mutex poisoned");
-        guard.prune(now_sec);
-        guard
-            .completed_latencies_ms
-            .push_back((now_sec, latency_ms));
-    }
-
-    pub(crate) fn snapshot(&self) -> LocalRequestMetricsSnapshot {
-        let now_sec = now_secs();
-        let window_start = now_sec.saturating_sub(PRETTY_LOCAL_REQUEST_WINDOW_SECS - 1);
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("pretty request metrics mutex poisoned");
-        guard.prune(now_sec);
-
-        let accepted_by_second = guard
-            .accepted_by_second
-            .iter()
-            .copied()
-            .collect::<HashMap<_, _>>();
-        let accepted_request_counts = (window_start..=now_sec)
-            .map(|second| accepted_by_second.get(&second).copied().unwrap_or(0))
-            .collect();
-        let latency_samples_ms = guard
-            .completed_latencies_ms
-            .iter()
-            .filter_map(|(second, latency_ms)| (*second >= window_start).then_some(*latency_ms))
-            .collect();
-
-        LocalRequestMetricsSnapshot {
-            accepted_request_counts,
-            latency_samples_ms,
-        }
-    }
-}
-
-impl LocalRequestMetricsWindow {
-    pub(crate) fn prune(&mut self, now_sec: u64) {
-        let oldest_kept_second = now_sec.saturating_sub(PRETTY_LOCAL_REQUEST_WINDOW_SECS - 1);
-        while let Some((second, _)) = self.accepted_by_second.front() {
-            if *second < oldest_kept_second {
-                self.accepted_by_second.pop_front();
-            } else {
-                break;
-            }
-        }
-        while let Some((second, _)) = self.completed_latencies_ms.front() {
-            if *second < oldest_kept_second {
-                self.completed_latencies_ms.pop_front();
-            } else {
-                break;
-            }
         }
     }
 }
@@ -850,10 +765,12 @@ impl Node {
             identity_state_dir: None,
             full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
+            mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
+            gossip_reply_limiter: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -902,6 +819,7 @@ impl Node {
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
+            private_nodes: Default::default(),
             enumerate_host: false,
             gpu_name: None,
             hostname: None,
@@ -925,6 +843,7 @@ impl Node {
             public_mesh: false,
             drain_timeout_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS,
             drain_timeout_max_secs: mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
+            peer_stage_source_fetch: Default::default(),
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
@@ -1668,6 +1587,12 @@ impl Node {
         self.mesh_id.lock().await.clone()
     }
 
+    /// Notified each time the node stores a mesh ID: when it first takes
+    /// one and when it later converges on a lower one.
+    pub(crate) fn subscribe_mesh_id_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.mesh_id_changed.subscribe()
+    }
+
     pub async fn first_joined_mesh_ts(&self) -> Option<u64> {
         *self.first_joined_mesh_ts.lock().await
     }
@@ -1682,8 +1607,15 @@ impl Node {
         }
     }
 
-    /// Set the mesh identity. If None was set, adopts the given ID (from gossip).
-    /// If already set, ignores (originator's ID wins).
+    /// Adopt a mesh ID announced by a direct peer.
+    ///
+    /// With no ID yet, the node takes the announced one. A node in an
+    /// unrestricted public mesh then moves to any lower ID it hears, so a mesh
+    /// whose nodes each started with their own ID settles on one ID.
+    /// Requirement-aware meshes keep their policy-derived ID, and private
+    /// meshes keep first-heard adoption: an SDK membership in one keeps a fixed
+    /// ID and refuses peers that announce another, so moving would cut a worker
+    /// off from it.
     pub async fn set_mesh_id(&self, id: String) {
         if let Some(state) = self.requirement_mesh_state.lock().await.clone()
             && state.mesh_id != id
@@ -1695,10 +1627,8 @@ impl Node {
             );
             return;
         }
-        let mut current = self.mesh_id.lock().await;
-        if current.is_none() {
-            *current = Some(id);
-            drop(current);
+        if self.adopt_announced_mesh_id(id).await {
+            self.mesh_id_changed.send_replace(());
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
                 None,
@@ -1706,6 +1636,24 @@ impl Node {
             )
             .await;
         }
+    }
+
+    /// Store `id` when the node has none, or when it is a lower ID of an
+    /// unrestricted public mesh. Returns whether the stored ID changed.
+    async fn adopt_announced_mesh_id(&self, id: String) -> bool {
+        let converges = self.public_mesh
+            && !self.is_membership
+            && self.local_mesh_requirements.is_unrestricted();
+        let mut current = self.mesh_id.lock().await;
+        match current.as_deref() {
+            None => {}
+            Some(ours) if converges && id.as_str() < ours => {
+                tracing::info!("mesh ID converged from {ours} to {id}");
+            }
+            Some(_) => return false,
+        }
+        *current = Some(id);
+        true
     }
 
     /// Set mesh ID unconditionally (for originator).
@@ -1717,6 +1665,7 @@ impl Node {
             );
         }
         *self.mesh_id.lock().await = Some(id);
+        self.mesh_id_changed.send_replace(());
         self.emit_plugin_mesh_event(
             crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
             None,

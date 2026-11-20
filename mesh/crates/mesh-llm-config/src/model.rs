@@ -1,5 +1,6 @@
 mod built_in_schema;
 mod multimodal;
+mod private;
 mod profile;
 mod runtime;
 mod schema_types;
@@ -12,6 +13,7 @@ pub use built_in_schema::{
 };
 pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
+pub use private::{PrivateConfig, is_node_id};
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
@@ -41,6 +43,9 @@ pub struct MeshConfig {
     pub mesh_requirements: MeshRequirementsConfig,
     #[serde(default)]
     pub owner_control: OwnerControlConfig,
+    /// `[private]`: the other nodes this node's private requests may reach.
+    #[serde(default, skip_serializing_if = "PrivateConfig::is_empty")]
+    pub private: PrivateConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
@@ -136,6 +141,11 @@ pub struct RuntimeConfig {
     pub reconcile_model_targets: bool,
     #[serde(default)]
     pub reconcile_model_target_demand_upgrades: bool,
+    /// Whether a peer's split-stage request may make this node fetch model
+    /// files it does not already have. Unset means yes; off, peers may only
+    /// use model files already on local disk. Local loads are unaffected.
+    #[serde(default)]
+    pub peer_model_downloads: Option<bool>,
     #[serde(default)]
     pub native_runtime: NativeRuntimeConfig,
     /// Node-wide resident and durable KV-cache policy.
@@ -145,6 +155,12 @@ pub struct RuntimeConfig {
     pub model_target_demand_upgrade_min_requests: u64,
     #[serde(default = "default_model_target_demand_upgrade_max_age_secs")]
     pub model_target_demand_upgrade_max_age_secs: u64,
+}
+
+impl RuntimeConfig {
+    pub fn peer_model_downloads_enabled(&self) -> bool {
+        self.peer_model_downloads != Some(false)
+    }
 }
 
 impl Default for RuntimeConfig {
@@ -162,6 +178,7 @@ impl Default for RuntimeConfig {
             activity: runtime::RuntimeActivityConfig::default(),
             reconcile_model_targets: false,
             reconcile_model_target_demand_upgrades: false,
+            peer_model_downloads: None,
             native_runtime: NativeRuntimeConfig::default(),
             kv_cache: RuntimeKvCacheConfig::default(),
             model_target_demand_upgrade_min_requests:
@@ -1212,6 +1229,8 @@ struct RawMeshConfig {
     #[serde(default)]
     owner_control: OwnerControlConfig,
     #[serde(default)]
+    private: PrivateConfig,
+    #[serde(default)]
     telemetry: TelemetryConfig,
     #[serde(default)]
     analytics: AnalyticsConfig,
@@ -1339,6 +1358,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             gpu: raw.gpu,
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
+            private: raw.private,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
             updates: raw.updates,

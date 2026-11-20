@@ -40,7 +40,6 @@ fn installed_metadata_with_web_ui(
         downloaded_asset_name: "demo.tar.gz".into(),
         install_path,
         enabled: true,
-        default_managed: false,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: None,
