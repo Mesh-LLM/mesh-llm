@@ -2,6 +2,7 @@ mod cache_hints;
 mod concurrency;
 mod draft_runner;
 mod execution;
+mod http_request_span;
 mod incremental_text;
 mod live_request_defaults;
 mod parsing;

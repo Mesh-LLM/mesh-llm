@@ -60,6 +60,30 @@ fn mesh_config_with_models(models: &[String]) -> MeshConfig {
 
 #[test]
 fn gpu_tune_local_resolver_handles_paths_cache_refs_configured_misses_and_duplicates() {
+    let cache = tempdir().unwrap();
+    let child = "gpus::tune_resolver::tests::local_resolver_private_cache_child";
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", child, "--ignored", "--nocapture"])
+        .current_dir(cache.path())
+        .env("HF_HUB_CACHE", cache.path())
+        .env("MESH_TUNE_RESOLVER_TEST_CACHE", cache.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{child} failed:\n{stdout}{stderr}");
+    assert!(
+        stdout.contains("test result: ok. 1 passed"),
+        "{child} did not run:\n{stdout}{stderr}"
+    );
+}
+
+#[test]
+#[ignore = "executed by the resolver test in a child with a private cache"]
+fn local_resolver_private_cache_child() {
+    let cache = std::env::var_os("MESH_TUNE_RESOLVER_TEST_CACHE")
+        .expect("run this fixture through the parent resolver test");
+    assert_eq!(huggingface_hub_cache_dir(), PathBuf::from(cache));
     let temp = tempdir().unwrap();
     let local_path = write_local_gguf_file(&temp, "sample.gguf");
     let (_cache_guard, repo_id, cached_path) =

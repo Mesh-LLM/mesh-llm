@@ -65,6 +65,8 @@ PROMPT_CTX_SIZE="${PROMPT_CTX_SIZE:-$CTX_SIZE}"
 STATE_PREFIX_TOKENS="${STATE_PREFIX_TOKENS:-128}"
 PROMPT_PREFILL_CHUNK_SIZE="${PROMPT_PREFILL_CHUNK_SIZE:-128}"
 PROMPT_MAX_NEW_TOKENS="${PROMPT_MAX_NEW_TOKENS:-8}"
+# Requests the cache reuse smoke sends at once; the stage serves four lanes.
+PROMPT_WAVE="${PROMPT_WAVE:-4}"
 SMOKE_COMMAND_TIMEOUT_SECS="${SMOKE_COMMAND_TIMEOUT_SECS:-900}"
 DENSE_CHAIN_STARTUP_TIMEOUT_SECS="${DENSE_CHAIN_STARTUP_TIMEOUT_SECS:-180}"
 SMOKE_FLASH_ATTN="${SMOKE_FLASH_ATTN:-disabled}"
@@ -701,6 +703,7 @@ if ! LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --model "$DENSE_MODEL_ID" \
     --prompt-file "$PROMPT_IN" \
     --max-tokens "$PROMPT_MAX_NEW_TOKENS" \
+    --wave "$PROMPT_WAVE" \
     >"$PROMPT_OUT" 2>&1; then
   echo "staged cache reuse smoke failed; output follows" >&2
   sed -n '1,260p' "$PROMPT_OUT" >&2 || true

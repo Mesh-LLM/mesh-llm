@@ -57,6 +57,8 @@ impl FamilyPolicy {
             min_tokens,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: derive_shared_prefix_record_limit(bounded_entries),
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         })
     }
 }

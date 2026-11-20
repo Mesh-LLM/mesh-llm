@@ -1,6 +1,7 @@
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageKvCacheCodec};
 
-pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str = "stage-abi-0.1.52/native-kv-page-v3";
+pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str =
+    "stage-abi-0.1.76/native-kv-page-v3/recurrent-component-v1";
 pub const NATIVE_KV_DTYPE: &str = "ggml-native-kv";
 const NATIVE_KV_LAYER_CONTIGUOUS_LAYOUT: i32 = 4;
 
@@ -690,6 +691,13 @@ mod identity_completeness_tests {
             kv_offload: None,
             kv_unified: None,
             swa_full: None,
+            kv_pool_tokens: None,
+            kv_lazy_clear: None,
+            kv_release_pages: None,
+            kv_row_attention: None,
+            sample_threads: None,
+            prefill_coalesce_max_ms: None,
+            batch: Default::default(),
             cache_idle_slots: None,
             resident_tensor_names: Vec::new(),
             selected_device: None,
@@ -1055,6 +1063,13 @@ mod identity_stability_tests {
             kv_offload: None,
             kv_unified: None,
             swa_full: None,
+            kv_pool_tokens: None,
+            kv_lazy_clear: None,
+            kv_release_pages: None,
+            kv_row_attention: None,
+            sample_threads: None,
+            prefill_coalesce_max_ms: None,
+            batch: Default::default(),
             cache_idle_slots: None,
             resident_tensor_names: Vec::new(),
             selected_device: None,
@@ -1097,6 +1112,8 @@ mod identity_stability_tests {
                 min_tokens: 64,
                 shared_prefix_stride_tokens: 128,
                 shared_prefix_record_limit: 2,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ..native.clone()
         };

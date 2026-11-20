@@ -46,6 +46,7 @@ impl InferenceBackend for StageOpenAiBackend {
             &context,
         );
         let request_timer = PhaseTimer::start();
+        let _request = self.enter_openai_summary_task(&request_timer);
         self.chat_completion_with_prepared_hooks_for_exchange(
             request,
             None,
@@ -60,6 +61,7 @@ impl InferenceBackend for StageOpenAiBackend {
                 let template_options = chat_template_options(&request, &request_defaults)?;
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let template_timer = PhaseTimer::start();
+                let templating = self.enter_openai_phase_task(&template_timer);
                 let prompt = self
                     .prepare_chat_prompt_offloaded(
                         &request,
@@ -67,6 +69,7 @@ impl InferenceBackend for StageOpenAiBackend {
                         context.clone(),
                     )
                     .await?;
+                drop(templating);
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
                     "llama_stage.openai_operation".to_string(),
@@ -216,9 +219,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let emit_reasoning = template_exposes_reasoning(&template_options);
                 let template_timer = PhaseTimer::start();
+                let templating = self.enter_openai_phase_task(&template_timer);
                 let prompt = self
                     .prepare_chat_prompt_offloaded(&request, template_options, context.clone())
                     .await?;
+                drop(templating);
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
                     "llama_stage.openai_operation".to_string(),
@@ -302,6 +307,7 @@ impl InferenceBackend for StageOpenAiBackend {
             &context,
         );
         let request_timer = PhaseTimer::start();
+        let _request = self.enter_openai_summary_task(&request_timer);
         self.ensure_model(&request.model)?;
         let (request_defaults, defaults_diagnostics) =
             resolve_completion_request_defaults(&request, &self.request_defaults.snapshot());

@@ -1,6 +1,16 @@
-use super::{DirectIteration, MAX_NATIVE_ITERATION_TOKENS};
+#[cfg(test)]
+use super::DIRECT_ITERATION_COALESCE_WINDOW;
+#[cfg(test)]
+use super::DirectIteration;
+use super::MAX_NATIVE_ITERATION_TOKENS;
+#[cfg(test)]
+use super::batch_policy::{BatchPlatform, BatchTuning, default_policy, take_batch};
 use skippy_inference_api::{InferenceError, InferenceResult};
-use std::collections::{BTreeSet, VecDeque};
+#[cfg(test)]
+use skippy_protocol::BatchConfig;
+#[cfg(test)]
+use std::collections::VecDeque;
+use std::time::Duration;
 
 pub(super) fn should_serve_direct(
     has_direct: bool,
@@ -19,10 +29,46 @@ pub(super) fn direct_coalesce_target(
     queued_direct_iterations: usize,
     max_direct_batch_size: usize,
 ) -> usize {
+    // Active sessions may belong to the planned scheduler. There is no
+    // direct batch to coalesce until its first request is actually queued;
+    // waiting here would delay every planned decode by the coalesce window.
+    if queued_direct_iterations == 0 {
+        return 0;
+    }
     active_runtime_sessions
         .max(queued_direct_iterations)
         .min(max_direct_batch_size)
 }
+
+/// How long a prefill may wait for company, per prompt token, unless the
+/// stage's batch settings say otherwise.
+pub(super) const PREFILL_COALESCE_PER_TOKEN: Duration = Duration::from_micros(15);
+/// The longest a prefill waits unless the stage configures another ceiling.
+pub(super) const PREFILL_COALESCE_WINDOW_MAX: Duration = Duration::from_millis(8);
+
+/// The ceiling on the prefill coalesce window: the stage's
+/// `prefill_coalesce_max_ms`, else the scheduler's own.
+#[cfg(test)]
+pub(super) fn prefill_coalesce_max(configured_ms: Option<u32>) -> Duration {
+    BatchTuning::resolve(BatchPlatform::Other, &BatchConfig::default(), configured_ms)
+        .prefill_window_max
+}
+
+/// The default tuning's coalesce window for a batch that holds a prefill of
+/// `tokens`, under the ceiling `max`.
+#[cfg(test)]
+pub(super) fn prefill_coalesce_window(tokens: usize, max: Duration) -> Duration {
+    BatchTuning {
+        prefill_window_max: max,
+        ..BatchTuning::resolve(BatchPlatform::Other, &BatchConfig::default(), None)
+    }
+    .prefill_window(tokens)
+}
+
+#[cfg(test)]
+mod coalescing_tests;
+#[cfg(test)]
+mod selection_tests;
 
 /// Environment switch: split each coalesced decode wave into this many
 /// pipeline groups, so a pipelined split keeps more than one batch in flight
@@ -82,48 +128,21 @@ pub(super) const fn effective_scheduler_lane_count(
     }
 }
 
+/// A batch chosen by the default policy.
+#[cfg(test)]
 pub(super) fn take_direct_iteration_batch(
     queue: &mut VecDeque<DirectIteration>,
     max_batch_size: usize,
-    mut token_budget: usize,
+    token_budget: usize,
 ) -> Vec<DirectIteration> {
-    let mut batch = Vec::new();
-    // Sessions that already have a request in this wave or deferred from it.
-    // A later request from such a session must wait so it cannot overtake
-    // the earlier one.
-    let mut claimed_sessions = BTreeSet::new();
-    let mut deferred = VecDeque::new();
-    let queued = queue.len();
-    for _ in 0..queued {
-        if batch.len() >= max_batch_size {
-            break;
-        }
-        let Some(request) = queue.pop_front() else {
-            break;
-        };
-        if claimed_sessions.contains(&request.session_id) {
-            deferred.push_back(request);
-            continue;
-        }
-        // Keep scanning past a chunk that does not fit so smaller decode rows
-        // queued behind a large prefill chunk still join this wave. The
-        // deferred chunk keeps its place ahead of later arrivals, and the
-        // queue head always fits a fresh budget, so it cannot starve.
-        if request.token_ids.len() > token_budget {
-            claimed_sessions.insert(request.session_id.clone());
-            deferred.push_back(request);
-            continue;
-        }
-        token_budget = token_budget.saturating_sub(request.token_ids.len());
-        claimed_sessions.insert(request.session_id.clone());
-        batch.push(request);
-        if token_budget == 0 {
-            break;
-        }
-    }
-    deferred.append(queue);
-    *queue = deferred;
-    batch
+    take_batch(
+        queue,
+        default_policy().as_ref(),
+        0,
+        max_batch_size,
+        token_budget,
+    )
+    .0
 }
 
 pub(super) fn validate_direct_iteration(
@@ -148,6 +167,47 @@ pub(super) fn validate_direct_iteration(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod prefill_coalesce_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_prompt_waits_the_most_and_a_short_one_the_decode_window() {
+        let max = prefill_coalesce_max(None);
+        assert_eq!(max, PREFILL_COALESCE_WINDOW_MAX);
+        assert_eq!(
+            prefill_coalesce_window(512, max),
+            Duration::from_micros(7_680)
+        );
+        assert_eq!(prefill_coalesce_window(4096, max), max);
+        assert_eq!(
+            prefill_coalesce_window(9, max),
+            DIRECT_ITERATION_COALESCE_WINDOW
+        );
+        assert_eq!(prefill_coalesce_window(200, max), Duration::from_millis(3));
+    }
+
+    /// The stage's ceiling bounds every window, the decode floor included:
+    /// zero means a prefill never waits for company.
+    #[test]
+    fn a_configured_ceiling_bounds_every_window() {
+        let max = prefill_coalesce_max(Some(3));
+        assert_eq!(prefill_coalesce_window(4096, max), Duration::from_millis(3));
+        assert_eq!(
+            prefill_coalesce_window(9, max),
+            DIRECT_ITERATION_COALESCE_WINDOW
+        );
+        let never = prefill_coalesce_max(Some(0));
+        assert_eq!(prefill_coalesce_window(4096, never), Duration::ZERO);
+        assert_eq!(prefill_coalesce_window(9, never), Duration::ZERO);
+        let long = prefill_coalesce_max(Some(50));
+        assert_eq!(
+            prefill_coalesce_window(4096, long),
+            Duration::from_micros(61_440).min(long)
+        );
+    }
 }
 
 #[cfg(test)]

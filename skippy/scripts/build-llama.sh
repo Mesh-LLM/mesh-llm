@@ -528,14 +528,17 @@ if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
 fi
 if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
   BUILD_TARGETS+=(
+    skippy-backend-sample-capacity
     skippy-graph-build-inputs
     skippy-hardware-application-probe
     skippy-model-fixture-generator
     skippy-model-loader-accounting
     skippy-runtime-events-test
     skippy-sampling-history
+    skippy-concurrent-sampling
     skippy-selected-logits
     skippy-noalloc-graph-planning
+    skippy-recurrent-retention
     skippy-renamed-multishard-planning
     skippy-stage-slice-plan
     skippy-verify-rollback
@@ -548,14 +551,20 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
     test-skippy-cachegen-import
     test-skippy-kv-cells-contiguous
     test-skippy-kv-page-export
+    test-skippy-kv-rows-aligned
+    test-skippy-kv-place-together
+    test-skippy-kv-release-compact
+    test-skippy-task-pool
     test-skippy-model-loader-accounting
     test-skippy-recurrent-state-roundtrip
     test-skippy-rerank-template
     test-skippy-sampling-suppress
+    test-skippy-tracing
     test-skippy-verify-checkpoint-retirement
   )
   if [[ "$LLAMA_BACKEND" == "metal" ]]; then
-    BUILD_TARGETS+=(test-skippy-cachegen-metal)
+    # test-backend-ops runs as the ctest skippy_backend_ops_kv_rows
+    BUILD_TARGETS+=(test-skippy-cachegen-metal test-skippy-tracing-metal test-backend-ops)
   fi
 fi
 

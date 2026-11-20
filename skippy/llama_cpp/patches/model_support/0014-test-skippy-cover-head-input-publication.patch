@@ -16,20 +16,20 @@ case runs in native-rollback mode.
  3 files changed, 134 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 3b52d472e..014788628 100644
+index 5d29fb944..3a58c962d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -515,6 +515,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -521,6 +521,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
      # lfm2's fixture slides its attention window, so it checkpoints every window.
      add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
      add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
 +    # DeepSeek-V4 rewinds its derived compressor state through its own seq_rm,
 +    # within the snapshots of the last decode.
 +    add_skippy_verify_rollback_test(deepseek4 deepseek4-moe.gguf native-rollback)
-     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
-     target_include_directories(skippy-sampling-history PRIVATE .)
-     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
-@@ -785,6 +788,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_executable(skippy-backend-sample-capacity skippy/tests/backend_sample_capacity.cpp)
+     target_include_directories(skippy-backend-sample-capacity PRIVATE .)
+     target_compile_features(skippy-backend-sample-capacity PRIVATE cxx_std_17)
+@@ -833,6 +836,19 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_recurrent_rollback PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
  

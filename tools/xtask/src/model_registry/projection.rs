@@ -25,6 +25,16 @@ const SUITES: [&str; 12] = [
     "competitive-benchmark",
     "radix-cache",
 ];
+/// Suites projected only once the registry declares them. Historical
+/// registries used by retained contract fixtures predate each; a registry
+/// admitting one must populate it, and older registries retain exactly
+/// their established output set.
+const DECLARED_SUITES: [&str; 4] = [
+    "skippy-cpp-api",
+    "performance-core",
+    "performance-coverage",
+    "performance-parity",
+];
 const SUITE_DEFAULT_ARTIFACTS: [(&str, &str); 3] = [
     ("product-smoke", "smollm2-q8-inference"),
     ("scripted-binary-smoke", "smollm2-q8-inference"),
@@ -139,18 +149,15 @@ pub(super) fn outputs(registry: &Entries, registry_sha256: &str) -> ModelResult<
         path: FAMILY_MANIFEST.to_owned(),
         text: render(registry, &rows)?,
     }];
-    // Historical registries used by retained contract fixtures predate the
-    // standalone facade. A registry admitting this suite must populate it;
-    // older registries retain exactly their established output set.
-    let cpp_api_suite = get(registry, "suites")
+    let declared = get(registry, "suites")
         .and_then(Json::as_array)
-        .is_some_and(|suites| {
-            suites
-                .iter()
-                .any(|suite| suite.as_str() == Some("skippy-cpp-api"))
-        })
-        .then_some("skippy-cpp-api");
-    for suite in SUITES.into_iter().chain(cpp_api_suite) {
+        .unwrap_or_default();
+    let declared_suites = DECLARED_SUITES.into_iter().filter(|suite| {
+        declared
+            .iter()
+            .any(|candidate| candidate.as_str() == Some(suite))
+    });
+    for suite in SUITES.into_iter().chain(declared_suites) {
         let members = rows
             .iter()
             .filter(|row| in_suite(row, suite))

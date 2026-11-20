@@ -5,7 +5,7 @@ use skippy_model_package::jobs::{HardwareFlavor, plan_cpu_job_from_hardware};
 use std::{
     path::Path,
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 fn fixture() -> Value {
     let plan = plan_cpu_job_from_hardware(
@@ -38,7 +38,7 @@ fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 fn invoke(root: &Path, args: &[&str]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_model-package-generic-jobs"))
+    let child = Command::new(env!("CARGO_BIN_EXE_model-package-generic-jobs"))
         .args(args)
         .current_dir(root)
         .env_clear()
@@ -46,19 +46,7 @@ fn invoke(root: &Path, args: &[&str]) -> std::process::Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(10);
-    while child.try_wait().unwrap().is_none() {
-        if Instant::now() >= until {
-            child.kill().unwrap();
-            let output = child.wait_with_output().unwrap();
-            panic!(
-                "finite facade timed out: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    child.wait_with_output().unwrap()
+    super::child_capture::finish(child, Duration::from_secs(10), "finite facade")
 }
 #[test]
 fn actual_generic_jobs_facade_prepares_original_72h_without_network_or_token() {

@@ -170,7 +170,12 @@ replacement passes.
 Retained external Python dependencies have bounded owners: llama.cpp's upstream
 Jinja and FP8 conversion tests using the trusted controller's
 `ci/llama-canary/jinja/uv.lock`, the optional llama-benchy wrapper with an
-immutable default source commit, and the separate Python research project.
+immutable default source commit, the separate Python research project, and the
+pinned external AgentX client environment under `skippy/evals/agentx/`. AgentX
+setup uses an installed Python 3.12 interpreter without interpreter downloads;
+prepared campaign workers remain offline. Its exact dependency inputs,
+upstream wheel identity, and setup invocation belong to the typed policy below.
+See [the November 6 AgentX maintainer decision](references/maintainer-decisions.md).
 These interfaces do not authorize new repository Python implementations. The
 canary Jinja environment belongs to its run's state directory and must use a
 preinstalled interpreter; dependency restoration must not download an

@@ -467,7 +467,7 @@ tuning_profile = "throughput"
     assert_eq!(resolved.model_fit.cache_type_v, "f16");
     assert_eq!(resolved.model_fit.kv_offload, "auto");
     assert_eq!(resolved.throughput.tuning_profile, "throughput");
-    assert_eq!(resolved.model_fit.batch, 1024);
+    assert_eq!(resolved.model_fit.batch, 2048);
     assert_eq!(resolved.model_fit.ubatch, 1024);
     assert_eq!(resolved.throughput.parallel, 2);
     assert_eq!(resolved.throughput.continuous_batching, "true");
@@ -1092,7 +1092,7 @@ parallel = 11
     .unwrap();
 
     assert_eq!(resolved.throughput.tuning_profile, "throughput");
-    assert_eq!(resolved.model_fit.batch, 1024);
+    assert_eq!(resolved.model_fit.batch, 2048);
     assert_eq!(resolved.model_fit.ubatch, 999);
     assert_eq!(resolved.throughput.parallel, 11);
     assert_eq!(resolved.throughput.continuous_batching, "true");
