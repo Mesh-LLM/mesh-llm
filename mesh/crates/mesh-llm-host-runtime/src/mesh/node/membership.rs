@@ -376,6 +376,8 @@ impl Node {
             unmatched_model_requirements: Default::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            #[cfg(test)]
+            test_apply_config_deadline: Arc::default(),
             native_model_lifecycle: self.native_model_lifecycle.clone(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),

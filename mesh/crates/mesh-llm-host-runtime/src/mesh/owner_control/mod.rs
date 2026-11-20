@@ -1008,6 +1008,14 @@ impl Node {
         };
         let execution_shape = command.execution_shape();
         let deadline = command.deadline();
+        // Config semantics tests must not race the production command watchdog.
+        #[cfg(test)]
+        let deadline = match (&command, self.test_apply_config_deadline.get()) {
+            (OwnedNodeCommand::ApplyConfig { .. }, Some(duration)) => {
+                commands::OwnedNodeCommandDeadline::Unary(*duration)
+            }
+            _ => deadline,
+        };
         let command_request_id = command.request_id();
         let is_model_lifecycle = command.is_model_lifecycle();
         if let Some(result) = self
