@@ -41,6 +41,7 @@ pub mod model_identity;
 pub mod peer_health;
 #[cfg(feature = "host-io")]
 pub mod peer_state;
+pub mod redial_backoff;
 pub mod release_attestation;
 pub mod requirements;
 pub mod selected_path;
