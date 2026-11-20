@@ -101,18 +101,6 @@ pub struct ServingOptions {
     #[arg(long, hide = true)]
     pub mmproj: Option<PathBuf>,
 
-    /// Quantize SafeTensors weights while loading.
-    #[arg(
-        long = "quant",
-        visible_alias = "checkpoint-quantization",
-        long_help = "Quantize SafeTensors weights while loading. The default is preserve.\n\nValid recipes: preserve, F32, F16, BF16, Q1_0, Q2_0, Q4_0, Q4_1, Q5_0, Q5_1, IQ2_XXS, IQ2_XS, IQ2_S, IQ2_M, IQ1_S, IQ1_M, TQ1_0, TQ2_0, Q2_K, Q2_K_S, IQ3_XS, IQ3_XXS, IQ3_S, IQ3_M, Q3_K_S, Q3_K_M, Q3_K_L, IQ4_NL, IQ4_XS, Q4_K_S, Q4_K_M, Q5_K_S, Q5_K_M, Q6_K, Q8_0, MXFP4_MOE. Some low-bit recipes require --checkpoint-imatrix."
-    )]
-    pub checkpoint_quantization: Option<String>,
-
-    /// Importance matrix for load-time checkpoint quantization.
-    #[arg(long, hide = true)]
-    pub checkpoint_imatrix: Option<PathBuf>,
-
     /// API port (default: 9337).
     #[arg(long, default_value = "9337")]
     pub port: u16,

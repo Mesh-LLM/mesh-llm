@@ -25,8 +25,7 @@ pub struct NormalizedRuntimeArgs {
 /// parser automatically — a hand-maintained list fell behind and newer flags'
 /// values were mistaken for the subcommand position. Every spelling clap
 /// accepts has to be here, so aliases are chained in: `get_long()` returns
-/// only the primary name, and a primary-only derivation once dropped
-/// `--checkpoint-quantization`, a visible alias of `--quant`. Options with
+/// only the primary name. Options with
 /// `require_equals` are excluded: they never consume a separate token, so the
 /// scanner must not skip what follows them (`--discover status` has to find
 /// the `status` subcommand).
@@ -173,8 +172,6 @@ pub fn legacy_runtime_surface_warning(
     if !cli.serving.model.is_empty()
         || !cli.serving.gguf.is_empty()
         || cli.serving.mmproj.is_some()
-        || cli.serving.checkpoint_quantization.is_some()
-        || cli.serving.checkpoint_imatrix.is_some()
         || cli.joining.auto
         || !cli.joining.join.is_empty()
         || !cli.joining.join_file.is_empty()
@@ -346,31 +343,6 @@ mod tests {
         }
     }
 
-    /// Pinned regression: `--checkpoint-quantization` is a visible alias of
-    /// `--quant`, and clap's `get_long()` exposes only the primary spelling,
-    /// so a reflection that ignores aliases silently dropped it and
-    /// `mesh-llm --checkpoint-quantization Q4_K_M serve` failed to parse.
-    /// Hard-coded so declaration-shape drift in the derivation cannot hide
-    /// the gap again.
-    #[test]
-    fn normalize_runtime_surface_args_skips_value_taking_alias_spellings() {
-        const ALIAS: &str = "--checkpoint-quantization";
-
-        assert!(
-            value_taking_option_names()
-                .iter()
-                .any(|option| option == ALIAS),
-            "{ALIAS} missing from the derived option names"
-        );
-
-        let args = normalize_runtime_surface_args(["mesh-llm", ALIAS, "Q4_K_M", "serve", "--auto"]);
-        assert_eq!(
-            args.explicit_surface,
-            Some(RuntimeSurface::Serve),
-            "{ALIAS} value was mistaken for the pseudo-subcommand position"
-        );
-    }
-
     #[test]
     fn normalize_runtime_surface_args_rewrites_serve_invocation() {
         let normalized = normalize_runtime_surface_args([
@@ -481,33 +453,6 @@ mod tests {
                 ]
             );
         }
-    }
-
-    #[test]
-    fn normalize_runtime_surface_args_skips_quant_value_before_serve() {
-        let normalized = normalize_runtime_surface_args([
-            "mesh-llm",
-            "--quant",
-            "Q4_K_M",
-            "serve",
-            "--model",
-            "Qwen/Qwen2.5-Coder-7B-Instruct",
-        ]);
-
-        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
-        assert_eq!(
-            normalized.normalized,
-            vec![
-                "mesh-llm",
-                "--quant",
-                "Q4_K_M",
-                "--model",
-                "Qwen/Qwen2.5-Coder-7B-Instruct",
-            ]
-            .into_iter()
-            .map(OsString::from)
-            .collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -1190,19 +1135,9 @@ mod analytics_classification_tests {
         // The value of a global option is not a subcommand name. Treating it
         // as one made `mesh-llm --config /tmp/config analytics --typo` report
         // a `cli_command` event for the family that promises not to report.
-        // The alias entry pins the same guarantee for non-primary spellings:
-        // `--checkpoint-quantization` is a visible alias of `--quant`, which
-        // a primary-only reflection dropped.
         for raw in [
             &["mesh-llm", "--config", "/tmp/config", "analytics", "--typo"][..],
             &["mesh-llm", "--config=/tmp/config", "analytics", "status"][..],
-            &[
-                "mesh-llm",
-                "--checkpoint-quantization",
-                "Q4_K_M",
-                "analytics",
-                "--typo",
-            ][..],
             &[
                 "mesh-llm",
                 "--log-format",

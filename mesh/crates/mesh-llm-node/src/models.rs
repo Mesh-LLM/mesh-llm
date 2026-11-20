@@ -595,7 +595,6 @@ fn kind_for_file(file: &str) -> ModelKind {
 fn kind_for_artifact_format(format: ModelFormat) -> ModelKind {
     match format {
         ModelFormat::Gguf => ModelKind::Gguf,
-        ModelFormat::Safetensors => ModelKind::Safetensors,
     }
 }
 

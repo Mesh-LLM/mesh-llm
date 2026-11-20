@@ -874,19 +874,6 @@ mod tests {
     }
 
     #[test]
-    fn single_stage_config_canonicalizes_checkpoint_quantization_aliases() {
-        let mut options =
-            SkippyModelLoadOptions::for_direct_gguf("Qwen3-8B-Q4_K_M", "/models/qwen.gguf")
-                .with_layer_end(36)
-                .with_package_identity(fake_package_identity(36));
-        options.checkpoint_quantization = Some("Q4_K".to_string());
-
-        let config = single_stage_config(&options).unwrap();
-
-        assert_eq!(config.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
-    }
-
-    #[test]
     fn single_stage_config_preserves_projector_path() {
         let options = SkippyModelLoadOptions::for_direct_gguf("Qwen2.5-VL", "/models/qwen-vl.gguf")
             .with_layer_end(36)

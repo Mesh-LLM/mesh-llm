@@ -454,14 +454,6 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         global_hardware.and_then(|hardware| hardware.check_tensors),
     )
     .unwrap_or(defaults.check_tensors);
-    let checkpoint_quantization = pick_owned(
-        model_hardware.and_then(|hardware| hardware.checkpoint_quantization.clone()),
-        global_hardware.and_then(|hardware| hardware.checkpoint_quantization.clone()),
-    );
-    let checkpoint_imatrix = pick_owned(
-        model_hardware.and_then(|hardware| hardware.checkpoint_imatrix.clone()),
-        global_hardware.and_then(|hardware| hardware.checkpoint_imatrix.clone()),
-    );
     let direct_io = pick_owned(
         model_hardware.and_then(|hardware| hardware.direct_io),
         global_hardware.and_then(|hardware| hardware.direct_io),
@@ -522,8 +514,6 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         op_offload,
         no_host_buffer,
         check_tensors,
-        checkpoint_quantization,
-        checkpoint_imatrix,
         direct_io,
         main_gpu,
         split_mode,

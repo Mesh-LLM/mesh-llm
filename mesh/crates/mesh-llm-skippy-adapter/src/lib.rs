@@ -1,6 +1,5 @@
 //! Translate Mesh configuration and policy into Skippy preparation inputs.
 //! Inference, model lifecycle and serving remain owned by Skippy.
-mod checkpoint;
 pub mod config;
 pub mod hash_cache;
 mod load_options;
@@ -22,11 +21,7 @@ pub fn synthetic_direct_gguf_package(
     model_id: &str,
     model_path: &std::path::Path,
 ) -> anyhow::Result<SkippyPackageIdentity> {
-    skippy_api::source::synthetic_direct_gguf_package(
-        model_id,
-        model_path,
-        hash_cache::open_default().as_ref(),
-    )
+    skippy_api::source::synthetic_direct_gguf_package(model_id, model_path)
 }
 
 pub use skippy_api::serving::readiness;

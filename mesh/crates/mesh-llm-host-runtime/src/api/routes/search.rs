@@ -108,9 +108,8 @@ fn parse_request(path: &str) -> Result<SearchRequest, String> {
 fn parse_artifact(value: &str) -> Result<SearchArtifactFilter, String> {
     match value {
         "gguf" => Ok(SearchArtifactFilter::Gguf),
-        "mlx" => Ok(SearchArtifactFilter::Mlx),
         _ => Err(format!(
-            "Invalid 'artifact' value '{value}'. Expected 'gguf' or 'mlx'"
+            "Invalid 'artifact' value '{value}'. Expected 'gguf'"
         )),
     }
 }
@@ -160,7 +159,6 @@ fn catalog_model_matches_artifact(
             .ends_with("model.safetensors.index.json");
     match artifact {
         SearchArtifactFilter::Gguf => !is_mlx,
-        SearchArtifactFilter::Mlx => is_mlx,
     }
 }
 
@@ -180,11 +178,11 @@ mod tests {
     #[test]
     fn parse_request_accepts_canonical_sort_names_and_caps_limit() {
         let request = parse_request(
-            "/api/search?q=qwen&artifact=mlx&catalog=true&limit=999&sort=parameters-desc",
+            "/api/search?q=qwen&artifact=gguf&catalog=true&limit=999&sort=parameters-desc",
         )
         .unwrap();
         assert_eq!(request.query, "qwen");
-        assert_eq!(request.artifact, SearchArtifactFilter::Mlx);
+        assert_eq!(request.artifact, SearchArtifactFilter::Gguf);
         assert!(request.catalog_only);
         assert_eq!(request.limit, MAX_LIMIT);
         assert_eq!(request.sort, SearchSort::ParametersDesc);
@@ -193,10 +191,7 @@ mod tests {
     #[test]
     fn parse_request_rejects_invalid_values() {
         let err = parse_request("/api/search?q=qwen&artifact=onnx").unwrap_err();
-        assert_eq!(
-            err,
-            "Invalid 'artifact' value 'onnx'. Expected 'gguf' or 'mlx'"
-        );
+        assert_eq!(err, "Invalid 'artifact' value 'onnx'. Expected 'gguf'");
 
         let err = parse_request("/api/search?q=qwen&limit=0").unwrap_err();
         assert_eq!(

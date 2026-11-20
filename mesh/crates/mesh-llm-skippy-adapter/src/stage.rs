@@ -1,7 +1,5 @@
 //! Mesh stage preparation and load diagnostics.
-use crate::{
-    SkippyDeviceDescriptor, SkippyModelLoadOptions, checkpoint, synthetic_direct_gguf_package,
-};
+use crate::{SkippyDeviceDescriptor, SkippyModelLoadOptions, synthetic_direct_gguf_package};
 use anyhow::Result;
 use skippy_protocol::{StageConfig, StageDevice};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,8 +41,6 @@ pub fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<StageConf
         kv_unified: options.kv_unified,
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
-        checkpoint_quantization: options.checkpoint_quantization.clone(),
-        checkpoint_imatrix: options.checkpoint_imatrix.clone(),
         native_mtp_enabled: options.native_mtp_enabled,
         kv_cache: options.kv_cache.clone(),
     };
@@ -58,16 +54,6 @@ pub fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<StageConf
         package_identity.into(),
         format!("mesh-skippy-{}", now_unix_nanos()),
     )?;
-    checkpoint::emit_load_notice(
-        &options.model_path,
-        config
-            .checkpoint_quantization
-            .as_deref()
-            .unwrap_or("preserve")
-            .parse()
-            .map_err(anyhow::Error::msg)?,
-        config.checkpoint_imatrix.is_some(),
-    );
     Ok(config)
 }
 

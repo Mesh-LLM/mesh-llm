@@ -558,10 +558,10 @@ pub struct HardwareConfig {
     pub control_vectors: Vec<String>,
     #[serde(default)]
     pub check_tensors: Option<bool>,
-    /// Tensor type policy applied while opening a SafeTensors checkpoint.
+    /// Rejected by validation: Skippy serves GGUF only.
     #[serde(default)]
     pub checkpoint_quantization: Option<String>,
-    /// Importance matrix used by low-bit SafeTensors checkpoint quantization.
+    /// Rejected by validation: Skippy serves GGUF only.
     #[serde(default)]
     pub checkpoint_imatrix: Option<String>,
     #[serde(default)]

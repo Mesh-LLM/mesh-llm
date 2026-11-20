@@ -457,11 +457,11 @@ async fn direct_mmproj_url_materializes_only_the_projector_file() {
 #[test]
 fn split_stem_resolves_to_first_part() {
     let siblings = vec![
-        "zai-org.GLM-5.1.Q2_K-00002-of-00018.gguf".to_string(),
-        "zai-org.GLM-5.1.Q2_K-00001-of-00018.gguf".to_string(),
+        "zai-org.GLM-5.1.Q2_K-00002-of-00002.gguf".to_string(),
+        "zai-org.GLM-5.1.Q2_K-00001-of-00002.gguf".to_string(),
     ];
     let resolved = resolve_hf_file_from_siblings("zai-org.GLM-5.1.Q2_K", &siblings).unwrap();
-    assert_eq!(resolved, "zai-org.GLM-5.1.Q2_K-00001-of-00018.gguf");
+    assert_eq!(resolved, "zai-org.GLM-5.1.Q2_K-00001-of-00002.gguf");
 }
 
 #[test]
@@ -475,39 +475,7 @@ fn stem_without_split_resolves_to_gguf() {
 }
 
 #[test]
-fn mlx_stem_resolves_to_model_safetensors() {
-    let siblings = vec![
-        "model.safetensors.index.json".to_string(),
-        "model.safetensors".to_string(),
-    ];
-    let resolved = resolve_hf_file_from_siblings("model", &siblings).unwrap();
-    assert_eq!(resolved, "model.safetensors");
-}
-
-#[test]
-fn mlx_stem_resolves_to_first_split_shard() {
-    let siblings = vec![
-        "model-00002-of-00048.safetensors".to_string(),
-        "model-00001-of-00048.safetensors".to_string(),
-        "model.safetensors.index.json".to_string(),
-    ];
-    let resolved = resolve_hf_file_from_siblings("model", &siblings).unwrap();
-    assert_eq!(resolved, "model-00001-of-00048.safetensors");
-}
-
-#[test]
-fn repo_only_resolution_prefers_mlx_model_safetensors() {
-    let siblings = vec![
-        "Qwen3-8B-Q4_K_M.gguf".to_string(),
-        "model.safetensors".to_string(),
-        "model.safetensors.index.json".to_string(),
-    ];
-    let resolved = resolve_hf_file_from_siblings("", &siblings).unwrap();
-    assert_eq!(resolved, "model.safetensors");
-}
-
-#[test]
-fn repo_only_resolution_falls_back_to_gguf_when_no_mlx_weights() {
+fn repo_only_resolution_selects_a_gguf() {
     let siblings = vec![
         "Qwen3-8B-Q8_0.gguf".to_string(),
         "Qwen3-8B-Q4_K_M.gguf".to_string(),
@@ -753,14 +721,6 @@ fn gemma_repo_default_prefers_q4_over_bf16_at_local_fit_budget() {
         available,
     );
     assert_eq!(ordering, Ordering::Less);
-}
-
-#[test]
-fn repo_name_can_signal_gguf_intent() {
-    assert!(repo_prefers_gguf_only("unsloth/gemma-4-31B-it-GGUF"));
-    assert!(!repo_prefers_gguf_only(
-        "mlx-community/Llama-3.2-3B-Instruct-4bit"
-    ));
 }
 
 #[test]
@@ -1088,22 +1048,6 @@ async fn show_model_variants_accepts_selected_quant_ref() {
         variants
             .iter()
             .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL" })
-    );
-}
-
-#[test]
-fn format_huggingface_display_ref_prefers_repo_form_for_mlx() {
-    assert_eq!(
-        format_huggingface_display_ref("mlx-community/SmolLM-135M-8bit", None, "model.safetensors"),
-        "mlx-community/SmolLM-135M-8bit"
-    );
-    assert_eq!(
-        format_huggingface_display_ref(
-            "avlp12/GLM-5.1-Alis-MLX-Dynamic-2.7bpw",
-            None,
-            "model-00001-of-00010.safetensors"
-        ),
-        "avlp12/GLM-5.1-Alis-MLX-Dynamic-2.7bpw"
     );
 }
 

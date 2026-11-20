@@ -87,6 +87,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, mpsc};
 
 pub use self::config::ExternalPluginSpec;
+#[cfg(test)]
+pub(crate) use self::config::HardwareConfig;
 pub use self::config::{
     ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
     MeshRequirementsConfig, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor,
@@ -95,7 +97,7 @@ pub use self::config::{
     TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path, config_to_toml,
     in_process_builtin_spec, load_config, parse_config_toml, resolve_plugins, validate_config_file,
 };
-pub(crate) use self::config::{HardwareConfig, ModelConfigDefaults, SkippyConfig};
+pub(crate) use self::config::{ModelConfigDefaults, SkippyConfig};
 #[cfg(test)]
 pub(crate) use self::config::{ModelFitConfig, RequestDefaultsConfig, ThroughputConfig};
 pub(crate) use self::config::{

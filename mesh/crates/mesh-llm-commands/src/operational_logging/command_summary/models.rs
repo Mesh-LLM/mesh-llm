@@ -85,7 +85,6 @@ pub(super) fn format_models(
         ModelsCommand::Search {
             query,
             gguf,
-            mlx,
             catalog,
             limit,
             sort,
@@ -94,7 +93,6 @@ pub(super) fn format_models(
             assembly.command.push_str(" models search");
             assembly.redact("query", !query.is_empty());
             assembly.flag("gguf", *gguf);
-            assembly.flag("mlx", *mlx);
             assembly.flag("catalog", *catalog);
             assembly.redact("--limit", *limit != 20);
             assembly.redact(

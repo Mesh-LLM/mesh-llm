@@ -111,7 +111,7 @@ pub fn canonicalize_interest_model_ref(input: &str) -> Result<String> {
     }
 
     bail!(
-        "Expected an exact model ref. Use a catalog id or a Hugging Face ref like org/repo, org/repo@rev:QUANT, org/repo/file.gguf, org/repo/file-stem for split GGUFs, org/repo/model.safetensors, or org/repo/model-00001-of-00048.safetensors."
+        "Expected an exact model ref. Use a catalog id or a Hugging Face ref like org/repo, org/repo@rev:QUANT, org/repo/file.gguf, or org/repo/file-stem for split GGUFs."
     )
 }
 
@@ -573,7 +573,7 @@ fn parse_exact_model_ref(input: &str) -> Result<ExactModelRef> {
         return Ok(ExactModelRef::Catalog(Box::new(model)));
     }
     bail!(
-        "Expected an exact model ref. Use a catalog id or a Hugging Face ref like org/repo, org/repo@rev:QUANT, org/repo/file.gguf, org/repo/file-stem for split GGUFs, org/repo/model.safetensors, or org/repo/model-00001-of-00048.safetensors."
+        "Expected an exact model ref. Use a catalog id or a Hugging Face ref like org/repo, org/repo@rev:QUANT, org/repo/file.gguf, or org/repo/file-stem for split GGUFs."
     )
 }
 
@@ -653,19 +653,8 @@ async fn canonicalize_model_ref_input(input: &str) -> Result<String> {
     Ok(input.to_string())
 }
 
-fn is_split_mlx_first_shard(file: &str) -> bool {
-    skippy_model_resolver::is_split_mlx_first_shard(file)
-}
-
-fn select_default_hf_file_from_siblings(siblings: &[String]) -> Option<String> {
-    resolve_hf_file_from_siblings("", siblings)
-}
-
 fn resolve_hf_file_from_siblings(requested: &str, siblings: &[String]) -> Option<String> {
-    if requested.ends_with(".gguf")
-        || requested.ends_with(".safetensors")
-        || requested.ends_with(".safetensors.index.json")
-    {
+    if requested.ends_with(".gguf") {
         return Some(requested.to_string());
     }
 
@@ -930,10 +919,6 @@ fn pick_gguf_for_budget(
     scored.first().map(|(file, _)| file.clone())
 }
 
-fn repo_prefers_gguf_only(repo: &str) -> bool {
-    skippy_model_artifact::selection::repo_prefers_gguf_only(repo)
-}
-
 #[cfg(test)]
 type RepoSiblingEntriesOverrideFn =
     Arc<dyn Fn(&str, &str) -> Option<Vec<(String, Option<u64>)>> + Send + Sync>;
@@ -1008,10 +993,13 @@ pub(crate) async fn resolve_huggingface_file_from_sibling_entries(
     file: &str,
     sibling_entries: &[(String, Option<u64>)],
 ) -> Result<String> {
-    if file.ends_with(".gguf")
-        || file.ends_with(".safetensors")
-        || file.ends_with(".safetensors.index.json")
-    {
+    if skippy_model_ref::is_safetensors_model_ref(file) {
+        bail!(
+            "{repo}/{file}: {}",
+            skippy_model_ref::SAFETENSORS_SERVING_GUIDANCE
+        );
+    }
+    if file.ends_with(".gguf") {
         return Ok(file.to_string());
     }
     if is_whisper_model_file_name(file) {
@@ -1025,34 +1013,16 @@ pub(crate) async fn resolve_huggingface_file_from_sibling_entries(
 
     let revision = revision.unwrap_or("main");
     let siblings: Vec<String> = sibling_entries.iter().map(|(f, _)| f.clone()).collect();
-    let has_mlx_weights = siblings
-        .iter()
-        .any(|entry| entry == "model.safetensors" || is_split_mlx_first_shard(entry));
 
     if file.is_empty() {
-        let gguf_only = repo_prefers_gguf_only(repo);
-        if gguf_only {
-            if let Some(resolved) =
-                select_default_hf_file_fit_aware(repo, Some(revision), sibling_entries).await
-            {
-                return Ok(resolved);
-            }
-            bail!("No GGUF model files found in {repo}@{revision}.");
-        }
-
-        if let Some(resolved) = select_default_hf_file_from_siblings(&siblings) {
-            return Ok(resolved);
-        }
-
         if let Some(resolved) =
             select_default_hf_file_fit_aware(repo, Some(revision), sibling_entries).await
         {
             return Ok(resolved);
         }
-    }
-    if file == "model" && has_mlx_weights {
         bail!(
-            "MLX shorthand '/model' is not supported. Use '{repo}' or a full file ref like '{repo}/model.safetensors'."
+            "No GGUF model files found in {repo}@{revision}. {}",
+            skippy_model_ref::SAFETENSORS_SERVING_GUIDANCE
         );
     }
 
@@ -1061,7 +1031,7 @@ pub(crate) async fn resolve_huggingface_file_from_sibling_entries(
     }
 
     bail!(
-        "No model file matching stem '{file}' in {repo}@{revision}. Use a full ref like org/repo/file.gguf or org/repo/model.safetensors."
+        "No model file matching stem '{file}' in {repo}@{revision}. Use a full ref like org/repo/file.gguf."
     )
 }
 

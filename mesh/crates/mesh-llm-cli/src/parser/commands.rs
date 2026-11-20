@@ -1100,46 +1100,6 @@ mod tests {
     }
 
     #[test]
-    fn serve_parses_checkpoint_quantization_overrides() {
-        let normalized = crate::parser::normalize_runtime_surface_args([
-            "mesh-llm",
-            "serve",
-            "--model",
-            "Qwen/Qwen2.5-Coder-7B-Instruct",
-            "--quant",
-            "IQ2_XS",
-            "--checkpoint-imatrix",
-            "/tmp/qwen.imatrix",
-        ]);
-        let cli = Cli::try_parse_from(normalized.normalized).expect("clap parse");
-
-        assert_eq!(
-            cli.serving.checkpoint_quantization.as_deref(),
-            Some("IQ2_XS")
-        );
-        assert_eq!(
-            cli.serving.checkpoint_imatrix,
-            Some(PathBuf::from("/tmp/qwen.imatrix"))
-        );
-    }
-
-    #[test]
-    fn serve_accepts_explicit_checkpoint_quantization_alias() {
-        let normalized = crate::parser::normalize_runtime_surface_args([
-            "mesh-llm",
-            "serve",
-            "--checkpoint-quantization",
-            "Q4_K_M",
-        ]);
-        let cli = Cli::try_parse_from(normalized.normalized).expect("clap parse");
-
-        assert_eq!(
-            cli.serving.checkpoint_quantization.as_deref(),
-            Some("Q4_K_M")
-        );
-    }
-
-    #[test]
     fn serve_parses_standalone_suffix_strategy() {
         let normalized = crate::parser::normalize_runtime_surface_args([
             "mesh-llm",
