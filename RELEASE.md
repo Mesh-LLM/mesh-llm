@@ -32,8 +32,9 @@ An entry is removed in the same change that closes it.
   the wait for its receipt are not restored either.
 - **GPU machines.** It is not yet shown by a test that the host prefers a
   downloaded GPU runtime over the CPU runtime bundled in its archive.
-- **Updating from 0.80.0 on a GPU machine.** See
-  [Compatibility archive names](#compatibility-archive-names).
+- **Updating from 0.80.0 on Windows.** The updater swaps in the new runtime
+  and manifest with a PowerShell script that no test runs. The Unix path is
+  covered. See [Compatibility archive names](#compatibility-archive-names).
 
 Two more things stop a release before it publishes:
 

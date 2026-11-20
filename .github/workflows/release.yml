@@ -56,7 +56,7 @@ jobs:
             "Host import policy: only the Linux glibc floor is checked; the per-platform allowed-imports report is gone."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
             "GPU machines: it is not shown that the host picks a downloaded GPU runtime over the CPU runtime bundled in its archive."
-            "Updating from 0.80.0 on a GPU machine: the compatibility archive names are published, but the tests that the old updater replaces the old runtime and manifest together are not in this branch yet."
+            "Updating from 0.80.0 on Windows: the step that swaps in the new runtime and manifest is a PowerShell script that no test runs. The Unix path is covered."
           )
           for item in "${missing[@]}"; do
             if [[ "$CANARY" == "true" ]]; then echo "::warning::Not release-ready: $item"; else echo "::error::Not release-ready: $item"; fi
