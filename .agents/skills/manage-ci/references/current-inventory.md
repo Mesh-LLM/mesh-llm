@@ -57,12 +57,19 @@ workflow has not run on GitHub in its present form.
 
 ## Other workflows
 
-- `website-pages.yml`: `build` on `ubuntu-24.04`, then `deploy` with
-  `pages: write` and `id-token: write` in the `Public Website` environment.
+- `website-pages.yml`: the workflow has `contents: read` and `packages: read`.
+  `build` runs on `ubuntu-24.04` inside the container
+  `ghcr.io/mesh-llm/mesh-llm-cuda-runner`, pinned by digest; a manual run
+  builds only from `refs/heads/main`. `deploy` then runs with `pages: write`
+  and `id-token: write` in the `Public Website` environment. Its checkout does
+  not set `persist-credentials: false`.
 - `fly-deploy-console.yml`: one job on `ubuntu-24.04` in the `fly-console`
-  environment.
+  environment. Its checkout does not set `persist-credentials: false`.
 - `pr_auto_assign.yml`: one job with `issues: write` and `pull-requests: write`.
 - `stale-prs.yml`: one job with `issues: write` and `pull-requests: write`.
+
+Every other checkout sets `persist-credentials: false`, including the two
+`release.yml` jobs that push; they push with an explicit token URL.
 
 ## Local action
 

@@ -34,12 +34,15 @@ skill and the inventory in the same change.
 
 - Each job calls a `just` recipe or a script under `scripts/`. Put logic there,
   where it runs locally, not in workflow YAML.
-- A script that CI depends on has a test under `scripts/tests/`, and `just lint`
-  runs it.
+- A new script that CI depends on, or one you change, gets a test under
+  `scripts/tests/` that `just lint` runs. Most existing scripts have none:
+  only `check-host-imports.sh`, `ci-resolve-skippy.sh`, `ci-skippy-runtime.sh`,
+  `wait-packaging-receipt.sh` and the installer asset selection are tested.
 - Do not add Skippy builds, GPU runtimes, llama.cpp patches or Skippy tests.
 - Pin every action to a full commit SHA, with the version in a comment.
 - Give a workflow `contents: read` and raise a permission only on the job that
-  needs it. Check out with `persist-credentials: false` unless the job pushes.
+  needs it. Check out with `persist-credentials: false`. Two existing checkouts
+  do not: `website-pages.yml` and `fly-deploy-console.yml`. Do not copy them.
 - All jobs run on GitHub-hosted runners. Adding a self-hosted runner, a new
   secret, a new variable or a new deployment environment is a maintainer
   decision; ask first and record it in the inventory.
