@@ -57,7 +57,11 @@ pub(crate) fn control_stream_semaphore() -> Arc<tokio::sync::Semaphore> {
 }
 
 pub(crate) enum ClosedConnectionRecovery {
-    Reconnect(EndpointAddr),
+    /// Redial the peer once `ticket`'s wait is over, if no newer close has
+    /// taken the redial since.
+    Reconnect {
+        ticket: mesh_llm_membership::redial_backoff::RedialTicket,
+    },
     RemovePeer,
     AlreadyReplaced,
 }
@@ -712,6 +716,9 @@ impl Node {
             ));
         }
         let replaced = state.connections.insert(remote, conn.clone());
+        state
+            .redial_backoff
+            .connected(remote, std::time::Instant::now());
         drop(state);
         if let Some(replaced) = replaced
             && replaced.stable_id() != conn.stable_id()
@@ -764,9 +771,11 @@ impl Node {
         self.release_direct_rescue_endpoint(remote, closing_stable_id)
             .await;
         match recovery {
-            ClosedConnectionRecovery::Reconnect(addr) => {
-                self.reconnect_closed_connection_or_remove(remote, addr)
-                    .await;
+            ClosedConnectionRecovery::Reconnect { ticket } => {
+                if let Some((owner, addr)) = self.claim_redial_after_wait(remote, ticket).await {
+                    self.reconnect_closed_connection_or_remove(remote, addr, owner)
+                        .await;
+                }
             }
             ClosedConnectionRecovery::RemovePeer => {
                 self.remove_peer(remote, MeshPeerRemovalReason::ClosedConnectionNoAddress)
@@ -776,21 +785,67 @@ impl Node {
         }
     }
 
+    /// Redial a peer whose connection closed, holding the pending handshake
+    /// `owner` claimed for it.
     pub(crate) async fn reconnect_closed_connection_or_remove(
         &self,
         remote: EndpointId,
         addr: EndpointAddr,
+        owner: PendingConnectionAttemptOwner,
     ) {
         tracing::info!("Attempting reconnect to {}...", remote.fmt_short());
         match self.reconnect_closed_peer(remote, addr).await {
             Some(new_conn) => {
-                self.complete_recovered_connection(remote, new_conn).await;
+                self.complete_recovered_connection_owned(remote, new_conn, owner)
+                    .await;
             }
             _ => {
+                self.finish_pending_connection(
+                    owner,
+                    PendingConnectionOutcome::Failed("reconnect failed".to_string()),
+                )
+                .await;
                 tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
                 self.remove_peer(remote, MeshPeerRemovalReason::ReconnectFailed)
                     .await;
             }
+        }
+    }
+
+    /// Wait out the backoff for a peer whose connections keep closing (#3081),
+    /// then claim the redial: the pending handshake for the peer, taken under
+    /// the same lock that checks the redial is still this recovery's to make.
+    /// Returns the handshake and the peer's address as known now, which a
+    /// gossip during the wait may have changed. `None` when the redial is not
+    /// this recovery's: a later close of a replacement connection started a
+    /// newer recovery, which owns the redial; the peer reconnected or left
+    /// the mesh meanwhile, including a departure recorded before its peer
+    /// record is removed; or an on-demand handshake is already dialing it.
+    pub(crate) async fn claim_redial_after_wait(
+        &self,
+        remote: EndpointId,
+        ticket: mesh_llm_membership::redial_backoff::RedialTicket,
+    ) -> Option<(PendingConnectionAttemptOwner, EndpointAddr)> {
+        if !ticket.delay.is_zero() {
+            tracing::info!(
+                delay_ms = ticket.delay.as_millis() as u64,
+                "Connection to {} keeps closing; waiting before the redial",
+                remote.fmt_short()
+            );
+            tokio::time::sleep(ticket.delay).await;
+        }
+        let mut state = self.state.lock().await;
+        let ours = state.redial_backoff.may_redial(remote, ticket)
+            && !state.connections.contains_key(&remote)
+            && !state.departed_peers.contains_key(&remote);
+        state.redial_backoff.finish_redial(remote, ticket);
+        let addr = state.peers.get(&remote).map(|peer| peer.addr.clone());
+        let (true, Some(addr)) = (ours, addr) else {
+            return None;
+        };
+        match state.reserve_pending_connection(remote) {
+            PendingConnectionReservation::Owner(owner) => Some((owner, addr)),
+            PendingConnectionReservation::Waiter(_) => None,
         }
     }
 
@@ -811,9 +866,18 @@ impl Node {
             return ClosedConnectionRecovery::AlreadyReplaced;
         }
         state.connections.remove(&remote);
-        match state.peers.get(&remote).map(|peer| peer.addr.clone()) {
-            Some(addr) => ClosedConnectionRecovery::Reconnect(addr),
-            None => ClosedConnectionRecovery::RemovePeer,
+        if !state.peers.contains_key(&remote) {
+            return ClosedConnectionRecovery::RemovePeer;
+        }
+        // The ticket comes with the removal, under the same lock, so the
+        // recovery for the latest close always holds the latest ticket,
+        // however long an earlier dispatcher takes to clean up.
+        ClosedConnectionRecovery::Reconnect {
+            ticket: state.redial_backoff.delay_before_redial(
+                remote,
+                std::time::Instant::now(),
+                rand::random::<f64>(),
+            ),
         }
     }
 
@@ -836,6 +900,11 @@ impl Node {
         }
     }
 
+    /// Reserve the pending handshake, then complete a recovered connection.
+    /// The closed-connection recovery claims the handshake before it dials
+    /// and completes through `complete_recovered_connection_owned`; this
+    /// entry point remains for the admission tests.
+    #[cfg(test)]
     pub(crate) async fn complete_recovered_connection(
         &self,
         remote: EndpointId,
@@ -849,6 +918,16 @@ impl Node {
                 return;
             }
         };
+        self.complete_recovered_connection_owned(remote, new_conn, owner)
+            .await;
+    }
+
+    async fn complete_recovered_connection_owned(
+        &self,
+        remote: EndpointId,
+        new_conn: Connection,
+        owner: PendingConnectionAttemptOwner,
+    ) {
         if self
             .recovered_connection_gossip_ok(remote, new_conn.clone())
             .await
@@ -856,6 +935,9 @@ impl Node {
             {
                 let mut state = self.state.lock().await;
                 state.connections.insert(remote, new_conn.clone());
+                state
+                    .redial_backoff
+                    .connected(remote, std::time::Instant::now());
             }
             let node = self.clone();
             tokio::spawn(async move {
@@ -875,6 +957,7 @@ impl Node {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn complete_recovered_connection_waiter(
         &self,
         waiter: PendingConnectionWaiter,
@@ -1464,6 +1547,9 @@ impl Node {
             state.dead_peers.remove(&peer_id);
             state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
+            state
+                .redial_backoff
+                .connected(peer_id, std::time::Instant::now());
         }
 
         let node_for_dispatch = self.clone();

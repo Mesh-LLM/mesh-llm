@@ -5,14 +5,14 @@ use super::formatters::{
     huggingface_cache_dir, huggingface_repo_url, installed_model_kind, model_kind_code, sort_label,
     variant_selector_label,
 };
-use crate::models::details::{
-    ModelDetails, remote_catalog_model_draft_ref, remote_catalog_model_ref,
-};
-use crate::models::search::{SearchArtifactFilter, SearchHit, SearchSort};
 use crate::models::storage::{
     DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel, remote_catalog,
 };
 use anyhow::Result;
+use skippy_model_hf::details::{
+    ModelDetails, remote_catalog_model_draft_ref, remote_catalog_model_ref,
+};
+use skippy_model_hf::search::{SearchArtifactFilter, SearchHit, SearchSort};
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 use std::time::Duration;

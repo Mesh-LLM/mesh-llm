@@ -351,6 +351,35 @@ fn checkpoint_files(root: &Path) -> Result<Vec<(String, PathBuf)>> {
 mod tests {
     use super::*;
 
+    /// These tests rewrite a file in place with same-length bytes, so on Unix
+    /// only ctime can reveal the change. Filesystems stamp ctime from a coarse
+    /// clock; wait until that clock has moved past `path`'s ctime so the
+    /// rewrite cannot land in the same tick as the observed stamp.
+    fn wait_for_ctime_to_advance_past(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let ctime = |metadata: Metadata| (metadata.ctime(), metadata.ctime_nsec());
+            let observed = ctime(std::fs::metadata(path).unwrap());
+            let probe = path.with_extension("ctime-probe");
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                std::fs::write(&probe, b"").unwrap();
+                if ctime(std::fs::metadata(&probe).unwrap()) > observed {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "filesystem ctime did not advance"
+                );
+                std::thread::yield_now();
+            }
+            std::fs::remove_file(probe).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
+
     #[cfg(unix)]
     #[test]
     fn failed_model_open_cancels_verification_before_joining() {
@@ -459,6 +488,7 @@ mod tests {
         let (_, unchanged) = VerifiedModelContent::verify_during_load(&config, || Ok(())).unwrap();
         assert!(unchanged.is_some());
         let (model, proof) = VerifiedModelContent::verify_during_load(&config, || {
+            wait_for_ctime_to_advance_past(&path);
             std::fs::write(&path, b"new weights")?;
             Ok("loaded")
         })
@@ -481,6 +511,7 @@ mod tests {
             Arc::new(VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap());
         assert!(first.clone().revalidate(&config).is_some());
         let modified = model.metadata().unwrap().modified().unwrap();
+        wait_for_ctime_to_advance_past(&model);
         std::fs::write(&model, b"other weights").unwrap();
         File::options()
             .write(true)

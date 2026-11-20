@@ -156,6 +156,11 @@ pub(super) async fn start_owner_control_test_server(
 ) -> Result<(Node, SecretKey, std::path::PathBuf)> {
     let (node, secret_key) =
         Node::new_for_tests_with_secret(super::NodeRole::Host { http_port: 9337 }).await?;
+    // Config semantics tests must not race the 5 s production ApplyConfig
+    // watchdog on loaded runners; none of them asserts that watchdog.
+    node.test_apply_config_deadline
+        .set(std::time::Duration::from_secs(120))
+        .unwrap();
     let config_path = config_dir.join("config.toml");
     *node.config_state.lock().await =
         crate::runtime::config_state::ConfigState::load(&config_path).unwrap_or_default();

@@ -911,6 +911,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "opens localhost mesh runtime sockets"]
+    #[serial_test::serial(runtime_event_engine_state)]
     async fn embedded_client_start_stop_exposes_local_status() {
         let api_port = free_local_port();
         let console_port = free_local_port();
@@ -945,6 +946,7 @@ mod tests {
     /// advertised `invite_token` belongs to that foreign instance.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
+    #[serial_test::serial(runtime_event_engine_state)]
     async fn embedded_startup_rejects_foreign_console_on_requested_port() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -996,6 +998,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
+    #[serial_test::serial(runtime_event_engine_state)]
     async fn embedded_startup_fails_when_api_port_is_occupied() {
         let keystore_dir = tempfile::tempdir().expect("isolated owner keystore");
         let api_stub = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1034,6 +1037,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
+    #[serial_test::serial(runtime_event_engine_state)]
     #[ignore = "opens localhost mesh runtime sockets"]
     async fn embedded_startup_reports_ready_from_in_process_worker() {
         let api_port = free_local_port();
@@ -1099,6 +1103,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
+    #[serial_test::serial(runtime_event_engine_state)]
     async fn embedded_startup_timeout_does_not_wait_out_the_relay_connection() {
         // Without relays the node skips its relay and net report waits; the
         // stop time there is this machine's baseline.
@@ -1128,6 +1133,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
+    #[serial_test::serial(runtime_event_engine_state)]
     async fn embedded_startup_times_out_and_cleans_up_worker() {
         let keystore_dir = tempfile::tempdir().expect("isolated owner keystore");
         let api_port = free_local_port();

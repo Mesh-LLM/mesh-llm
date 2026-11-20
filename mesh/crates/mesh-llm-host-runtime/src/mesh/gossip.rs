@@ -809,6 +809,9 @@ impl Node {
             state.dead_peers.remove(&peer_id);
             state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
+            state
+                .redial_backoff
+                .connected(peer_id, std::time::Instant::now());
         }
         let node_for_dispatch = self.clone();
         let conn_for_dispatch = conn.clone();

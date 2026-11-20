@@ -234,6 +234,8 @@ pub struct Node {
     pub(crate) unmatched_model_requirements:
         Arc<tokio::sync::Mutex<std::collections::HashSet<(String, String)>>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    #[cfg(test)]
+    pub(crate) test_apply_config_deadline: Arc<std::sync::OnceLock<std::time::Duration>>,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -847,6 +849,7 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            test_apply_config_deadline: Arc::default(),
             native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),

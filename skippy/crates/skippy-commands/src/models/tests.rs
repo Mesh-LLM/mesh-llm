@@ -1,5 +1,6 @@
 use super::*;
 use serial_test::serial;
+use skippy_model_hf::capabilities::ModelCapabilities;
 use std::{
     io::{self, Write},
     sync::{Arc, LazyLock, Mutex},
@@ -93,10 +94,7 @@ async fn human_cleanup_matches_mesh_tables_and_uses_skippy_hints() {
 #[tokio::test]
 #[serial]
 async fn installed_model_tables_and_json_keep_the_same_fields() {
-    use super::{
-        capabilities::ModelCapabilities,
-        formatters::{InstalledRow, models_formatter},
-    };
+    use super::formatters::{InstalledRow, models_formatter};
     let root = tempfile::tempdir().unwrap();
     let mut row = InstalledRow {
         name: "Demo Q4_K_M".into(),

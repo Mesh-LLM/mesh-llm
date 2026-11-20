@@ -40,13 +40,6 @@ pub(super) fn plan_model_cleanup(age: Option<Duration>) -> Result<ModelCleanupPl
 pub(super) fn execute_model_cleanup(age: Option<Duration>) -> Result<ModelCleanupResult> {
     skippy_model_hf::store::usage::execute_model_cleanup_in(&super::output::cache_root(), age)
 }
-pub(super) fn format_size_bytes(bytes: u64) -> String {
-    if bytes >= 1_000_000_000 {
-        format!("{:.1}GB", bytes as f64 / 1e9)
-    } else {
-        format!("{:.0}MB", bytes as f64 / 1e6)
-    }
-}
 pub(super) fn total_model_bytes(path: &Path) -> u64 {
     let Some(file) = path.file_name().and_then(|name| name.to_str()) else {
         return 0;

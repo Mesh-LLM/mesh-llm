@@ -503,13 +503,7 @@ fn hf_model_repo_has_file(repo: &str, revision: &str, file: &str) -> Result<bool
     })
 }
 
-/// A resolved model download reference from the remote catalog.
-pub struct RemoteModelRef {
-    pub name: String,
-    pub repo: String,
-    pub revision: Option<String>,
-    pub file: String,
-}
+pub use skippy_model_resolver::startup::RemoteModelRef;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteCatalogAsset {

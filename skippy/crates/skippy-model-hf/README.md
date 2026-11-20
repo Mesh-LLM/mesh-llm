@@ -13,6 +13,13 @@ The pure identity and selection crates stay registry-agnostic. This crate owns
 the Hugging Face edge: endpoint, token, cache layout, repo metadata, downloads,
 remote `meshllm/catalog` refresh and caching, and cache path identity recovery.
 
+`search` owns catalog and Hub discovery, bounded repository inspection, and
+shared response fields with an explicit fit budget. Its synchronous observer
+reports progress and inspection warnings; callers own rendering and command
+hints. `details` and `capabilities` inspect remote model metadata. `startup`
+preserves package passthrough, existing path, bare-name catalog, installed cache,
+then canonicalization and download selection, using resolver-owned source values.
+
 ```mermaid
 flowchart TB
     C["caller<br/>mesh resolver<br/>skippy-package-builder<br/>runtime package loader"] --> H["HfModelRepository"]

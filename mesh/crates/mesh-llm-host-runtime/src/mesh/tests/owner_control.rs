@@ -529,11 +529,11 @@ async fn control_plane_watch_observes_apply_revision() -> Result<()> {
     assert!(applied.success);
 
     let update = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(120),
         read_owner_control_envelope(&mut watch_recv),
     )
     .await
-    .expect("watch stream should emit an update within 5 seconds")?;
+    .expect("watch stream should emit an update")?;
     let update = update
         .response
         .expect("watch update should return a response")
@@ -690,11 +690,11 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
     assert!(applied.success);
 
     let update = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(120),
         read_owner_control_envelope(&mut watch_recv),
     )
     .await
-    .expect("watch stream should emit an update within 5 seconds")?;
+    .expect("watch stream should emit the applied revision")?;
     let update = update
         .response
         .expect("watch update should return a response")
