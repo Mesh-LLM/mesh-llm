@@ -1,10 +1,3 @@
-# Build the local product, then exercise the embedded console against a real
-# isolated mesh-llm process. The harness owns and verifies its cleanup.
-[unix]
-qa-logging-console-e2e:
-    @just build
-    @scripts/qa-logging-console-e2e.sh --current-binary ./target/debug/mesh-llm
-
 [unix]
 bootstrap-build-tools:
     @scripts/bootstrap-build-tools
@@ -51,19 +44,14 @@ build:
 build-dev:
     @scripts/build-host.sh --profile dev
 
-# Windows overrides:
-#   just build backend=cpu
-#   just build backend=cuda cuda_arch='120;86'
-#   just build backend=rocm rocm_arch='gfx942;gfx90a'
-# just build backend=vulkan
 [windows]
-build backend="" cuda_arch="" rocm_arch="":
-    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -CudaArch "{{ cuda_arch }}" -RocmArch "{{ rocm_arch }}" -DynamicHost
+build:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
-# Fast local iteration build: dynamic host + adjacent native runtime + UI.
+# Fast local iteration build.
 [windows]
-build-dev backend="" cuda_arch="" rocm_arch="":
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MESH_LLM_BUILD_PROFILE='dev'; & './scripts/build-windows.ps1' -Backend '{{ backend }}' -CudaArch '{{ cuda_arch }}' -RocmArch '{{ rocm_arch }}' -DynamicHost"
+build-dev:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile dev
 
 # Build the installable host-private OpenAI lifecycle observer exemplar.
 build-openai-exchange-exemplar message_format="human":

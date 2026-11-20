@@ -23,7 +23,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$REPO_ROOT/scripts/lib/automation.sh"
 ARTIFACT_ZIP="$1"
 EXPECTED_MODE="${2:-}"
 
@@ -60,9 +59,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 
 EXTRACT_DIR="$TMP_ROOT/extract"
 mkdir -p "$EXTRACT_DIR"
-mesh_automation artifact extract-zip \
-  "$ARTIFACT_ZIP" \
-  "$EXTRACT_DIR"
+unzip -q "$ARTIFACT_ZIP" -d "$EXTRACT_DIR"
 
 XCFRAMEWORK_COUNT="$(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1 -name '*.xcframework' -type d | wc -l | tr -d ' ')"
 if [[ "$XCFRAMEWORK_COUNT" != "1" ]]; then
@@ -81,12 +78,15 @@ plutil -lint "$XCFRAMEWORK_PATH/Info.plist" >/dev/null
   "$REPO_ROOT/mesh/sdk/swift/PrivacyInfo.xcprivacy" \
   "$XCFRAMEWORK_PATH"
 
-xcframework_args=("$XCFRAMEWORK_PATH")
-if [[ -n "$EXPECTED_MODE" ]]; then
-  xcframework_args+=("$EXPECTED_MODE")
-fi
-mesh_automation release swift-xcframework \
-  "${xcframework_args[@]}"
+# Every slice listed in Info.plist must exist and be a valid Mach-O library.
+SLICES="$(plutil -extract AvailableLibraries json -o - "$XCFRAMEWORK_PATH/Info.plist" | jq -r '.[] | "\(.LibraryIdentifier)/\(.LibraryPath)"')"
+[[ -n "$SLICES" ]] || { echo "XCFramework lists no libraries" >&2; exit 1; }
+while IFS= read -r rel; do
+  library="$XCFRAMEWORK_PATH/$rel"
+  [[ -e "$library" ]] || { echo "missing XCFramework slice: $rel" >&2; exit 1; }
+  [[ -d "$library" ]] && library="$library/$(basename "${library%.framework}")"
+  lipo -info "$library" >/dev/null
+done <<<"$SLICES"
 
 CONSUMER_DIR="$TMP_ROOT/consumer"
 mkdir -p "$CONSUMER_DIR/Sources" "$CONSUMER_DIR/Sources/Consumer"

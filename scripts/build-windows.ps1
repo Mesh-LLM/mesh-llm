@@ -1,11 +1,5 @@
 param(
-    [string]$Backend = "",
-    [string]$CudaArch = "",
-    [string]$RocmArch = "",
-    [string]$BuildProfile = "",
-    [switch]$DynamicHost,
-    [switch]$HostOnly,
-    [switch]$SkippyOnly
+    [string]$BuildProfile = ""
 )
 
 # Stable workspace entrypoint; implementation belongs to Mesh.

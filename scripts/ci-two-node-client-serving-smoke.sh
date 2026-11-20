@@ -8,10 +8,7 @@
 # client -> host mesh routing and tunneling.
 
 set -euo pipefail
-automation=(cargo xtool)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
-    automation=("$MESH_LLM_AUTOMATION_BIN")
-fi
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
 BIN_DIR="${2:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
@@ -119,16 +116,16 @@ for i in $(seq 1 "$MAX_WAIT"); do
 
     STATUS_JSON="$(curl -sf "http://127.0.0.1:${HOST_CONSOLE_PORT}/api/status" 2>/dev/null || true)"
     READY="$(
-        printf '%s' "$STATUS_JSON" | "${automation[@]}" automation smoke-observation ready 2>/dev/null || echo "False"
+        printf '%s' "$STATUS_JSON" | jq -r 'if .llama_ready then "True" else "False" end' 2>/dev/null || echo "False"
     )"
     TOKEN="$(
-        printf '%s' "$STATUS_JSON" | "${automation[@]}" automation smoke-observation token 2>/dev/null || echo ""
+        printf '%s' "$STATUS_JSON" | jq -r '.token // ""' 2>/dev/null || echo ""
     )"
 
     if [[ "$READY" == "True" && -n "$TOKEN" ]]; then
         MODELS_JSON="$(curl -sf "http://127.0.0.1:${HOST_API_PORT}/v1/models")"
         HOST_MODEL_ID="$(
-            printf '%s' "$MODELS_JSON" | "${automation[@]}" automation smoke-observation first-model
+            printf '%s' "$MODELS_JSON" | jq -r '.data[0].id // ""'
         )"
         if [[ -n "$HOST_MODEL_ID" ]]; then
             echo "Host ready after ${i}s with model: $HOST_MODEL_ID"
@@ -163,7 +160,7 @@ for i in $(seq 1 "$MAX_WAIT"); do
     fi
 
     CLIENT_MODELS_JSON="$(curl -sf "http://127.0.0.1:${CLIENT_API_PORT}/v1/models" 2>/dev/null || true)"
-    if printf '%s' "$CLIENT_MODELS_JSON" | "${automation[@]}" automation smoke-observation has-model "$HOST_MODEL_ID" 2>/dev/null; then
+    if printf '%s' "$CLIENT_MODELS_JSON" | jq -e --arg id "$HOST_MODEL_ID" 'any(.data[]; .id == $id)' >/dev/null 2>&1; then
         CLIENT_STABLE_COUNT=$((CLIENT_STABLE_COUNT + 1))
         if [[ "$CLIENT_STABLE_COUNT" -ge "$CLIENT_STABLE_PROBES" ]]; then
             echo "Client routed /v1/models stably after ${i}s"
@@ -186,7 +183,7 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mesh-two-node-client-serving.XXXXXX")"
 CHAT_RESPONSE="${WORK_DIR}/chat-response.json"
 STREAM_RESPONSE="${WORK_DIR}/chat-stream.txt"
 
-"${automation[@]}" automation smoke-observation chat-payload "$HOST_MODEL_ID" "${WORK_DIR}/chat-payload.json"
+jq -cn --arg model "$HOST_MODEL_ID" '{model: $model, messages: [{role: "system", content: "You are a terse CI smoke probe."}, {role: "user", content: "Reply with one short sentence."}], stream: false, max_tokens: 16, temperature: 0}' >"${WORK_DIR}/chat-payload.json"
 
 curl -fsS --max-time 120 \
     "http://127.0.0.1:${CLIENT_API_PORT}/v1/chat/completions" \
@@ -194,9 +191,11 @@ curl -fsS --max-time 120 \
     -d @"${WORK_DIR}/chat-payload.json" \
     -o "$CHAT_RESPONSE"
 
-"${automation[@]}" automation smoke-observation chat <"$CHAT_RESPONSE"
+jq -e '.object == "chat.completion" and (.id // "") != "" and (.choices | length) > 0' "$CHAT_RESPONSE" >/dev/null ||
+    { echo "invalid chat response" >&2; exit 1; }
+echo "Client-routed non-stream chat response validated"
 
-"${automation[@]}" automation smoke-observation stream-payload "$HOST_MODEL_ID" "${WORK_DIR}/stream-payload.json"
+jq -cn --arg model "$HOST_MODEL_ID" '{model: $model, messages: [{role: "user", content: "Say ok."}], stream: true, max_tokens: 8, temperature: 0}' >"${WORK_DIR}/stream-payload.json"
 
 curl -fsS --max-time 120 \
     "http://127.0.0.1:${CLIENT_API_PORT}/v1/chat/completions" \
@@ -204,6 +203,13 @@ curl -fsS --max-time 120 \
     -d @"${WORK_DIR}/stream-payload.json" \
     -o "$STREAM_RESPONSE"
 
-"${automation[@]}" automation smoke-observation stream <"$STREAM_RESPONSE"
+grep -q '^data: \[DONE\]' "$STREAM_RESPONSE" ||
+    { echo "stream completion marker missing" >&2; exit 1; }
+STREAM_IDS="$(sed -n 's/^data: //p' "$STREAM_RESPONSE" | grep -v '^\[DONE\]$' | jq -r '.id // ""' | sort -u)"
+if [[ -z "$STREAM_IDS" || "$(printf '%s\n' "$STREAM_IDS" | wc -l)" -ne 1 ]]; then
+    echo "stream chunks missing or unstable stream identity" >&2
+    exit 1
+fi
+echo "Client-routed streaming chat response validated"
 
 echo "Two-node client/serving smoke passed"

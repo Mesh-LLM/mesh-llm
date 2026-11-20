@@ -7,7 +7,6 @@ if [[ "$#" -ne 5 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$REPO_ROOT/scripts/lib/automation.sh"
 download_dir="$1"
 extract_dir="$2"
 expected_target="$3"
@@ -63,7 +62,7 @@ if [[ "${#extract_entries[@]}" -ne 0 ]]; then
 fi
 
 "$REPO_ROOT/scripts/verify-native-sdk-package.sh" "${archives[0]}" >&2
-mesh_automation artifact extract-tar "${archives[0]}" "$extract_dir"
+tar -xzf "${archives[0]}" -C "$extract_dir"
 
 artifact_entries=("$extract_dir"/*)
 if [[ "${#artifact_entries[@]}" -ne 1 ||
@@ -75,10 +74,8 @@ fi
 artifact_dir="${artifact_entries[0]}"
 "$REPO_ROOT/scripts/verify-native-sdk-package.sh" "$artifact_dir" >&2
 
-mesh_automation prepared-input native-sdk-identity \
-    "$artifact_dir/manifest.json" \
-    "$expected_target" \
-    "$expected_backend" \
-    "$expected_profile"
+jq -e --arg t "$expected_target" --arg b "$expected_backend" --arg p "$expected_profile" \
+    '.target_triple == $t and .backend == $b and .cargo_profile == $p' "$artifact_dir/manifest.json" >/dev/null ||
+    { echo "native SDK identity does not match $expected_target/$expected_backend/$expected_profile" >&2; exit 1; }
 
 printf '%s\n' "$artifact_dir"

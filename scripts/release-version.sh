@@ -27,32 +27,17 @@ require_file() {
     fi
 }
 
-# Resolve a versioned sidecar in either supported product source layout. The
-# reviewed extraction relocates the product trees under mesh/ and skippy/, so
-# the release lane must bump the same file that CI and the planner resolve.
-# Legacy wins only when no relocated copy exists; two copies are ambiguous and
-# fail before any version is written.
+# Product files live under mesh/; accept a path given relative to mesh/ too.
 resolve_product_path() {
     local logical="$1"
-    local candidate
-    local -a present=()
-
-    for candidate in "$logical" "mesh/$logical" "skippy/$logical"; do
-        if [[ -e "$REPO_ROOT/$candidate" ]]; then
-            present+=("$candidate")
-        fi
-    done
-
-    if [[ "${#present[@]}" -eq 0 ]]; then
-        echo "missing required file: $logical under the repository root, mesh/ or skippy/" >&2
+    if [[ -e "$REPO_ROOT/$logical" ]]; then
+        printf '%s\n' "$logical"
+    elif [[ -e "$REPO_ROOT/mesh/$logical" ]]; then
+        printf 'mesh/%s\n' "$logical"
+    else
+        echo "missing required file: $logical" >&2
         exit 1
     fi
-    if [[ "${#present[@]}" -gt 1 ]]; then
-        echo "ambiguous source layout for $logical: ${present[*]}" >&2
-        exit 1
-    fi
-
-    printf '%s\n' "${present[0]}"
 }
 
 update_manifest_version() {
@@ -255,13 +240,11 @@ done < <(
     git ls-files \
         'crates/*/Cargo.toml' \
         'mesh/crates/*/Cargo.toml' \
-        'skippy/crates/*/Cargo.toml' \
-        'tools/*/Cargo.toml' \
         | sort -u
 )
 
 if [[ "${#manifests[@]}" -eq 0 ]]; then
-    echo "no Cargo.toml manifests found under product crate directories or tools/" >&2
+    echo "no Cargo.toml manifests found under crates/ or mesh/crates/" >&2
     exit 1
 fi
 
@@ -292,7 +275,6 @@ update_gradle_project_version "$kotlin_build_file" "$version"
 versioned_files+=("$kotlin_build_file")
 
 literal_version_files=(
-    "skippy/crates/skippy-native-runtime/README.md"
     "mesh/crates/mesh-llm-sdk/README.md"
     "mesh/crates/mesh-llm-ui/package.json"
     "mesh/crates/mesh-llm-ui/package-lock.json"
@@ -305,7 +287,6 @@ literal_version_files=(
     "mesh/sdk/swift/README.md"
     "mesh/sdk/swift/scripts/generate-swift-bindings.sh"
     "mesh/website/src/docs/pages/CLI.md"
-    "skippy/docs/design/NATIVE_RUNTIMES.md"
     "mesh/sdk/kotlin/README.md"
     "mesh/sdk/kotlin/example/example-jvm/build.gradle.kts"
     "mesh/crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
