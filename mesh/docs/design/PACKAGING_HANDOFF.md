@@ -29,7 +29,7 @@ The dispatch (`repository_dispatch`, type `mesh-llm-release`) carries:
 |---|---|
 | `repository`, `ref`, `version` | The MeshLLM repository, release tag and version. |
 | `expected_mesh_sha` | The commit the tag points at. |
-| `expected_mesh_assets_sha256` | SHA-256 of the release asset `release-assets.sha256`: one `<sha256>  <name>` line per published asset, sorted by name. |
+| `expected_mesh_assets_sha256` | SHA-256 of the bytes of the release asset `release-assets.sha256`, defined below. |
 | `skippy.repository`, `skippy.release` | The Skippy release this MeshLLM was built against. |
 | `skippy.expected_catalog_sha256` | SHA-256 of that release's `native-runtimes.json`. |
 | `correlation_id` | `mesh-<run id>-<attempt>`, which becomes the packaging run's title. |
@@ -39,14 +39,37 @@ The dispatch (`repository_dispatch`, type `mesh-llm-release`) carries:
 catalog", and giving the same name a new meaning would let an old consumer
 accept a digest of the wrong file.
 
-MeshLLM does not publish `release-assets.sha256` yet. It has to before the
-dispatch is turned on.
+### The asset inventory
+
+`release-assets.sha256` is the inventory of the assets MeshLLM itself produced
+for the release, written once, just before the dispatch. It is not a listing
+of whatever the release holds later.
+
+- **Contents.** One line per MeshLLM-produced asset: the lowercase SHA-256 of
+  the asset, two spaces, the asset name, then a line feed. No other lines, no
+  carriage returns, no trailing blank line. UTF-8, though every name is ASCII.
+- **Not listed.** The inventory itself, and any checksum or signature of it.
+  Listing them would make the definition circular.
+- **Order.** Lines are sorted by asset name, compared byte by byte.
+- **Names.** Each name matches `^[A-Za-z0-9][A-Za-z0-9._+-]*$`, so it has no
+  path separator and no leading dot. A name may appear once. A consumer
+  rejects an inventory that breaks any of these rules instead of repairing it.
+- **Fixed at handoff.** MeshLLM never rewrites it. Assets that mesh-packaging
+  or anyone else uploads to the release afterwards are not in it and do not
+  change it. A consumer checks the assets it uses against their lines, and
+  ignores release assets that have no line.
+
+The digest of this file is bound together with the tag commit and the Skippy
+catalog digest. None of the three stands in for another.
+
+MeshLLM does not write or publish this file yet. It has to before the dispatch
+is turned on.
 
 ## What mesh-packaging must check
 
 - The tag resolves to `expected_mesh_sha`.
-- `release-assets.sha256` has the expected digest, and every MeshLLM asset it
-  downloads matches its line.
+- `release-assets.sha256` has the expected digest and follows the rules above,
+  and every MeshLLM asset it downloads has a line and matches it.
 - The Skippy catalog it downloads has the expected digest, and every runtime
   it packages matches its catalog entry.
 - Each host archive holds `host-imports.json` whose `binary_sha256` is the
