@@ -50,6 +50,9 @@ tracing = "0.1"
 tracy-client = { version = "0.18", optional = true, default-features = false, features = ["enable", "fibers", "ondemand", "only-localhost"] }
 uuid = { version = "1", features = ["v4"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 skippy-runtime = { path = "../skippy-runtime", version = "0.80.0", features = ["test-support"] }
 tempfile = "3"

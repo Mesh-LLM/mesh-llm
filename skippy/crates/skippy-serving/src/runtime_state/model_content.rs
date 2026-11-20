@@ -25,13 +25,21 @@ struct FileStamp {
     created: Option<SystemTime>,
     #[cfg(unix)]
     identity: (u64, u64, i64, i64),
+    /// Volume serial number, 128-bit file ID and `ChangeTime`.
+    #[cfg(windows)]
+    identity: (u64, u128, i64),
 }
 
 impl FileStamp {
-    fn read(metadata: &Metadata) -> Self {
+    /// Reads the stamp of an open file. Windows only exposes a file's identity
+    /// and change time through a handle, hence the file and not just its
+    /// metadata.
+    fn read(file: &File, metadata: &Metadata) -> std::io::Result<Self> {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
-        Self {
+        #[cfg(not(windows))]
+        let _ = file;
+        Ok(Self {
             bytes: metadata.len(),
             modified: metadata.modified().ok(),
             created: metadata.created().ok(),
@@ -42,26 +50,81 @@ impl FileStamp {
                 metadata.ctime(),
                 metadata.ctime_nsec(),
             ),
-        }
+            #[cfg(windows)]
+            identity: windows_file_identity(file)?,
+        })
+    }
+
+    fn of_path(path: &Path) -> std::io::Result<(Metadata, Self)> {
+        let file = File::open(path)?;
+        let metadata = file.metadata()?;
+        let stamp = Self::read(&file, &metadata)?;
+        Ok((metadata, stamp))
     }
 }
 
+/// std exposes no device, inode or change time on Windows, so read them from
+/// the open handle: the volume serial number and 128-bit file ID (`FileIdInfo`,
+/// which also covers ReFS) identify the file, and `ChangeTime` advances on any
+/// content or metadata change, which is what lets a same-size rewrite with a
+/// restored last-write time be told apart. Unlike Unix ctime, a process with
+/// write-attributes access can set `ChangeTime`; like the rest of this proof
+/// it gates reuse of a verified hash and is not a defence against a local
+/// writer. `skippy-api`'s source registry reads the same identity.
+#[cfg(windows)]
+fn windows_file_identity(file: &File) -> std::io::Result<(u64, u128, i64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_BASIC_INFO, FILE_ID_INFO, FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let handle = file.as_raw_handle();
+    let mut id = FILE_ID_INFO::default();
+    let mut basic = FILE_BASIC_INFO::default();
+    // SAFETY: `handle` belongs to `file`, which outlives both calls, and each
+    // buffer is the structure its information class documents, passed with
+    // that structure's exact size.
+    let queried = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            (&raw mut id).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        ) != 0
+            && GetFileInformationByHandleEx(
+                handle,
+                FileBasicInfo,
+                (&raw mut basic).cast(),
+                size_of::<FILE_BASIC_INFO>() as u32,
+            ) != 0
+    };
+    if !queried {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        id.VolumeSerialNumber,
+        u128::from_le_bytes(id.FileId.Identifier),
+        basic.ChangeTime,
+    ))
+}
+
 impl VerifiedModelContent {
-    /// Unix captures strong file stamps before native open, then hashes on a
-    /// scoped worker while the caller loads the model. Other platforms retain
-    /// the sequential read so weak timestamps cannot authorize a raced load.
+    /// Unix and Windows capture strong file stamps before native open, then
+    /// hash on a scoped worker while the caller loads the model. Other
+    /// platforms retain the sequential read so weak timestamps cannot
+    /// authorize a raced load.
     pub(crate) fn verify_during_load<T>(
         config: &StageConfig,
         load: impl FnOnce() -> Result<T>,
     ) -> Result<(T, Option<Self>)> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let (model, content) = match Self::observe_files(config).ok().flatten() {
             Some(files) => {
                 verify_alongside_load(load, |cancelled| Self::from_observed(files, cancelled))?
             }
             None => (load()?, None),
         };
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let (model, content) = {
             let content = Self::observe(config).ok().flatten();
             (load()?, content)
@@ -69,7 +132,7 @@ impl VerifiedModelContent {
         Ok((model, content.filter(|proof| proof.still_matches(config))))
     }
 
-    #[cfg(any(not(unix), test))]
+    #[cfg(any(not(any(unix, windows)), test))]
     pub(crate) fn observe(config: &StageConfig) -> Result<Option<Self>> {
         Self::observe_files(config)?
             .map(|files| Self::from_observed(files, &AtomicBool::new(false)))
@@ -87,7 +150,7 @@ impl VerifiedModelContent {
         capture_files(files).map(Some)
     }
 
-    #[cfg(any(not(unix), test))]
+    #[cfg(any(not(any(unix, windows)), test))]
     fn from_files(files: Vec<(String, PathBuf)>) -> Result<Self> {
         Self::from_observed(capture_files(files)?, &AtomicBool::new(false))
     }
@@ -112,7 +175,7 @@ impl VerifiedModelContent {
                 "model content proof requires regular files"
             );
             ensure!(
-                FileStamp::read(&before) == stamp,
+                FileStamp::read(&file, &before)? == stamp,
                 "model content changed before verification"
             );
             digest.update((name.len() as u64).to_le_bytes());
@@ -125,8 +188,9 @@ impl VerifiedModelContent {
                 &mut buffer,
                 cancelled,
             )?);
+            let after = reader.get_ref().metadata()?;
             ensure!(
-                FileStamp::read(&reader.get_ref().metadata()?) == stamp,
+                FileStamp::read(reader.get_ref(), &after)? == stamp,
                 "model content changed during verification"
             );
             observed.push((name, path, stamp));
@@ -159,19 +223,19 @@ impl VerifiedModelContent {
                 |((name, path), (expected_name, expected_path, stamp))| {
                     name == expected_name
                         && path == expected_path
-                        && std::fs::metadata(path).is_ok_and(|metadata| {
-                            metadata.is_file() && FileStamp::read(&metadata) == *stamp
+                        && FileStamp::of_path(path).is_ok_and(|(metadata, current)| {
+                            metadata.is_file() && current == *stamp
                         })
                 },
             );
         if !unchanged {
             return false;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             true
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             // Size and last-write timestamps are not a strong file identity on
             // these platforms. Recheck actual content after model open and at
@@ -215,17 +279,17 @@ fn capture_files(files: Vec<(String, PathBuf)>) -> Result<ObservedFiles> {
     files
         .into_iter()
         .map(|(name, path)| {
-            let metadata = path.metadata()?;
+            let (metadata, stamp) = FileStamp::of_path(&path)?;
             ensure!(
                 metadata.is_file(),
                 "model content proof requires regular files"
             );
-            Ok((name, path, FileStamp::read(&metadata)))
+            Ok((name, path, stamp))
         })
         .collect()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn verify_alongside_load<T>(
     load: impl FnOnce() -> Result<T>,
     verify: impl FnOnce(&AtomicBool) -> Result<VerifiedModelContent> + Send,
@@ -325,9 +389,10 @@ mod tests {
     use super::*;
 
     /// These tests rewrite a file in place with same-length bytes, so on Unix
-    /// only ctime can reveal the change. Filesystems stamp ctime from a coarse
-    /// clock; wait until that clock has moved past `path`'s ctime so the
-    /// rewrite cannot land in the same tick as the observed stamp.
+    /// only ctime, and on Windows only `ChangeTime`, can reveal the change.
+    /// Filesystems stamp both from a coarse clock; wait until that clock has
+    /// moved past `path`'s stamp so the rewrite cannot land in the same tick as
+    /// the observed one.
     fn wait_for_ctime_to_advance_past(path: &Path) {
         #[cfg(unix)]
         {
@@ -349,11 +414,66 @@ mod tests {
             }
             std::fs::remove_file(probe).unwrap();
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let change_time = |path: &Path| FileStamp::of_path(path).unwrap().1.identity.2;
+            let observed = change_time(path);
+            let probe = path.with_extension("ctime-probe");
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                std::fs::write(&probe, b"").unwrap();
+                if change_time(&probe) > observed {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "filesystem ChangeTime did not advance"
+                );
+                std::thread::yield_now();
+            }
+            std::fs::remove_file(probe).unwrap();
+        }
+        #[cfg(not(any(unix, windows)))]
         let _ = path;
     }
 
-    #[cfg(unix)]
+    /// The strong stamp is what lets Unix and Windows skip rehashing: a
+    /// same-size rewrite that puts the last-write time back must still be
+    /// caught (#3158).
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn same_size_rewrite_with_restored_mtime_invalidates_the_proof() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("model.gguf");
+        std::fs::write(&path, b"old weights").unwrap();
+        let config = StageConfig {
+            model_path: Some(path.to_string_lossy().into_owned()),
+            kv_cache: Some(
+                serde_json::from_value(serde_json::json!({"mode":"lookup-record"})).unwrap(),
+            ),
+            ..StageConfig::default()
+        };
+        let proof = VerifiedModelContent::observe(&config).unwrap().unwrap();
+        assert!(proof.still_matches(&config));
+
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        wait_for_ctime_to_advance_past(&path);
+        std::fs::write(&path, b"new weights").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+
+        assert!(!proof.still_matches(&config));
+    }
+
+    #[cfg(any(unix, windows))]
     #[test]
     fn failed_model_open_cancels_verification_before_joining() {
         use std::{sync::mpsc, time::Duration};
@@ -408,7 +528,7 @@ mod tests {
         assert!(error.to_string().contains("verification cancelled"));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn verification_failure_does_not_fail_a_successful_model_open() {
         let (model, proof) =
@@ -418,7 +538,7 @@ mod tests {
         assert!(proof.is_none());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn model_open_and_content_verification_progress_concurrently() {
         use std::{sync::mpsc, time::Duration};
