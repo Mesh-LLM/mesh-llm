@@ -38,83 +38,56 @@ sudo apt-get update
 sudo apt-get install -y mold lld
 ```
 
-**Linux NVIDIA**: x86_64 with an NVIDIA GPU. Requires the CUDA toolkit (`nvcc` in your `PATH`). On Arch Linux, CUDA is typically at `/opt/cuda`; on Ubuntu/Debian it's at `/usr/local/cuda`. Auto-detection finds the right SM architecture for your GPU.
+GPU toolchains (CUDA, ROCm, Vulkan) are not needed to build MeshLLM. The
+inference runtime is built and released by
+[Skippy](https://github.com/general-inference/skippy); MeshLLM only loads it.
 
-**Linux AMD**: ROCm/HIP is supported when ROCm is installed. Typical installs expose `hipcc`, `hipconfig`, and `rocm-smi` under `/opt/rocm/bin`.
-
-**Linux Vulkan**: Vulkan is supported when the Vulkan development files and `glslc` are installed. On Ubuntu/Debian, install `libvulkan-dev glslc`. On Arch Linux, install `vulkan-headers shaderc`.
-
-**Windows**: native runtime builds support `cuda`, `hip`/`rocm`, `vulkan`, or
-`cpu`. Metal is not supported on Windows. Install the Rust lld tools with
+**Windows**: install the Rust lld tools with
 `rustup component add llvm-tools-preview`, or install LLVM with `winget install
 LLVM.LLVM`.
 
 ## Build from source
 
-Build both debug products in order: patched llama.cpp and the standalone
-Skippy CLI with a locally packaged runtime, then the backend-neutral MeshLLM
-host and console:
+Build the MeshLLM host and console:
 
 ```bash
 just
 ```
 
-This produces `target/debug/skippy`, `target/debug/native-runtimes/`, and
-`target/debug/mesh-llm`. Pass `--runtime-bundle target/debug/native-runtimes`
-when running Skippy; MeshLLM discovers the adjacent runtime itself.
-Use `just skippy` when working only on the complete standalone Skippy product,
-or `just mesh` to rebuild only MeshLLM. `just build` runs the same sequence
-as bare `just`; `just skippy-cli-build` builds only Skippy's CLI.
+This produces `target/debug/mesh-llm`. `just build` is the same thing, and
+`just build-dev` is a faster build for local iteration.
 
-Release and packaging use the same host/runtime boundary. The only lower-level
-static compilation primitive is runtime packaging; it never builds a host.
-For explicit local stages, build the backend runtime you are changing first:
+The build does not produce an inference runtime. MeshLLM builds against the
+Skippy revision pinned in `Cargo.toml` and loads a packaged Skippy runtime at
+run time: one it downloads, or one you built from a Skippy checkout with
+Skippy's `scripts/package-native-runtime.sh`.
 
-```bash
-just release-runtime-build cpu
-just release-runtime-build metal
-just release-runtime-build cuda
-just release-runtime-build rocm
-just release-runtime-build vulkan
-```
-
-Backend toolchains must be available for the corresponding runtime build. For
-NVIDIA on Linux, put `nvcc` on `PATH`; runtime packaging detects the selected
-CUDA major and architecture from the toolchain/environment.
+For work that spans both repositories, point the build at a local Skippy
+checkout, and go back to the pin when done:
 
 ```bash
-PATH=/opt/cuda/bin:$PATH just release-runtime-build cuda
-# or
-PATH=/usr/local/cuda/bin:$PATH just release-runtime-build cuda
+scripts/skippy-source.sh ../skippy     # build against that checkout
+scripts/skippy-source.sh               # show what the build uses
+scripts/skippy-source.sh --pinned      # back to the pinned revision
 ```
 
-Then build the standalone Skippy CLI, followed by the neutral MeshLLM host
-and console once. The same host can be composed with any compatible backend
-runtime:
+Do not commit the `Cargo.lock` that a local override produces.
+
+Run real inference through the host you built, on a runtime directory and a
+GGUF model you supply. The script uses a throwaway home and cache:
 
 ```bash
-just skippy-cli-release-build
-just release-host-build
+just smoke <dir-of-packaged-skippy-runtimes> <model.gguf>
 ```
 
-Exercise the exact release discovery boundary with an isolated cache:
+Build the release host and package it with a runtime:
 
 ```bash
-runtime_cache="$(mktemp -d)"
-MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
-MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$runtime_cache" \
-  ./target/release/mesh-llm runtime list
+just release-build
+MESH_LLM_NATIVE_RUNTIME_DIR=<unpacked-skippy-runtime> just release-bundle v0.X.0 dist
 ```
 
-The resolver validates version, Skippy ABI, OS, architecture, and backend. It
-does not search the current working directory or copy a matching bundled
-runtime into the user cache.
-
-Create a portable product bundle after building both layers:
-
-```bash
-just release-bundle v0.X.0 dist
-```
+[RELEASE.md](RELEASE.md) covers signing and the release workflow.
 
 ## UI development workflow
 
@@ -167,36 +140,12 @@ just ui-dev http://127.0.0.1:3131 5174
 ```bash
 just stop             # stop mesh/rpc/llama processes
 just test             # quick test against :9337
-just check-release    # release-target/docs/workflow parity check
-just compat-smoke ~/.cache/huggingface/hub/<model>.gguf   # optional 2-node + 1-client Python/Node/LiteLLM smoke
+just lint             # format, Clippy, and shell checks
+just test-rust        # Rust tests for the whole workspace
+just test-ui          # console lint, type check, unit tests, and build
+just test-all         # everything a pull request must pass, except the smoke
 just --list           # list all recipes
 ```
-
-On macOS and Linux, local Cargo artifacts are bounded independently from the sccache
-compiler-object cache, which here keeps sccache's own 10 GiB local default. That default is
-a developer-machine limit only -- CI does not use it, and pins a 2 GiB trusted seed instead
-(`SCCACHE_CACHE_SIZE=2G`, see `.github/actions/restore-sccache-seed`). Inspect and prune the
-local Cargo artifacts with:
-
-```bash
-just cache-status
-just cache-prune-dry-run max_size=80GiB max_age=14
-just cache-prune max_size=80GiB max_age=14
-```
-
-Pruning evicts the oldest incremental sessions first, then uses
-`cargo clean -p` for old or size-dominant workspace packages. It is scoped to
-this worktree's `target/` and reports before/after bytes. On macOS and Linux,
-`just build` and `just build-dev` hold a shared lock for their full build while
-cache status and dry-run pruning take the same lock in shared mode. Executed
-pruning requires the corresponding exclusive lock before measuring or deleting
-artifacts. Direct Cargo and lower-level build commands do not share that lock,
-so pruning also refuses to run when it detects an active Cargo or Rust compiler
-process as a best-effort safeguard. Cargo configurations that separate
-`build.build-dir` from `target-dir` are rejected because the cache manager does
-not report, lock, or clean a second artifact tree.
-
-On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 
 ### Line endings on native Windows
 
@@ -270,68 +219,21 @@ classification details.
 
 ## CI / GitHub Actions
 
-For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the
-[optimization spec](.omo/specs/pr-ci-optimization.md), and the canonical
-[`manage-ci` skill](.agents/skills/manage-ci/SKILL.md) before editing CI.
-`.github/AGENTS.md` enforces that sequence.
+Pull requests run [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-The current five-way PR/main topology, manual controller, planner profiles,
-and runner/provider/cache policy are documented in [`ci/ci.md`](ci/ci.md),
-especially [Planner and profiles](ci/ci.md#planner-and-profiles) and [Provider
-and cache policy](ci/ci.md#provider-and-cache-policy). The normative rules for
-editing workflows and CI scripts live in the [`manage-ci` skill](.agents/skills/manage-ci/SKILL.md).
+| Job | Local command |
+|---|---|
+| Lint | `just lint` |
+| Test, per platform | `just test-rust --locked` |
+| Console | `just test-ui` |
+| Inference smoke (CPU) | `just smoke <runtime-dir> <model.gguf>` |
 
-When a pull request changes workflow YAML, local actions, planner contracts,
-runner selection, or other CI plumbing, apply the `ci:canary` label to request
-the optional non-required diagnostic. It builds the pull-request merge commit
-through one real hosted Linux amd64 CPU chain (UI artifact, release host,
-native runtime including its runtime-event gate, and product composition).
-The PR head SHA is retained as separate identity evidence. The canary does not
-cover the five required lane orchestrators, macOS, Windows, GPU, SDK, smoke,
-or release paths. The canary lane and runner-policy actions come from protected
-`main`; the merge commit is used only as the product source. Remove the label to
-cancel an active run.
+`just test-all` runs the first three. The smoke job builds Skippy's CPU runtime
+from the pinned Skippy commit, builds MeshLLM, and requires a real completion.
+It does not cover GPU runtimes, macOS, or Windows.
 
-Linux CI uses prebuilt public and self-hosted images from
-[`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
-CPU, Vulkan, versioned CUDA, and versioned ROCm images share a core environment,
-warm dependencies from MeshLLM's checked-in manifests, and allow container
-runtimes to reuse cached layers where the runner host or K3s node retains them
-instead of reinstalling host packages in every job.
-
-If CI is missing a dependency, update the appropriate MeshLLM manifest and
-lockfile or the runner image's YAML profile/installer, then publish the image
-and pin its OCI digest. Do not add a one-off `apt-get`, `pip`, global `npm`,
-`cargo install`, downloaded binary, or similar setup step to an individual
-workflow. Existing workflow-local setup is migration debt, not a pattern for
-new jobs.
-
-### Local validation and extensions
-
-Run the narrow checks that match the change, plus the full contract suite for
-workflow changes:
-
-```bash
-just ci-validate
-```
-
-The canonical complete local gate is `just test-all`; it includes repository
-consistency, Rust formatting, Clippy, Rust tests, UI/docs builds, and E2E smoke.
-Use `just ci-shellcheck <changed-script>...` for changed shell scripts and
-`just check-release` when release-target consistency is in scope. These are the
-complete CI-definition and worktree checks; narrow checks do not replace
-`just test-all` when full repository validation is required.
-
-Planner fixtures and the CI repository-consistency recipes are included in
-`just ci-validate`. Use `just ci-crate-lists`, `just check-release`, or
-`just publish-crates` when iterating on the corresponding narrower contract.
-
-To add coverage, extend one typed reusable slice or local action, update the
-ownership/dependency/row catalog and planner fixtures, preserve immutable
-producer-to-consumer reachability, and add the slice to its lane's stable
-summary. Keep the controller's bounded projection and aggregate check contract
-in sync. Never copy a PR job into an entrypoint or accept a raw runner label.
-Validate the GitHub fallback before any provider rollout.
+Run `just lint` after changing a shell script or a workflow; it includes
+ShellCheck and the script tests under `scripts/tests/`.
 
 ## GPU benchmark execution
 

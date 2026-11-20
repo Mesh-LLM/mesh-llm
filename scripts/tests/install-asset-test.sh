@@ -25,6 +25,8 @@ expect() { # expect <uname -s> <uname -m> <want-asset-or-FAIL>
     local got
     # `$0` must not be install.sh, or sourcing it would run the installer.
     # `env -i` drops every inherited installer, service and token setting.
+    # The child shell, not this one, expands its positional argument.
+    # shellcheck disable=SC2016
     got="$(env -i PATH="$work:$PATH" HOME="$work/home" XDG_CACHE_HOME="$work/home/cache" \
         MESH_LLM_TEST_UNAME_S="$1" MESH_LLM_TEST_UNAME_M="$2" \
         MESH_LLM_INSTALL_DIR="$work/bin" MESH_LLM_INSTALL_URL_BASE="file://$work/none" \
