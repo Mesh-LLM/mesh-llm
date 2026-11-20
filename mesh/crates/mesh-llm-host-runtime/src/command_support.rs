@@ -7,8 +7,8 @@
 pub mod discovery {
     pub mod nostr {
         pub use crate::network::nostr::{
-            DiscoveredMesh, MeshFilter, MeshListing, RelayHealth, discover, discover_with_health,
-            rotate_keys, score_mesh,
+            DiscoveredMesh, MeshFilter, MeshListing, RankedMesh, RelayHealth, discover,
+            discover_with_health, rank_meshes, rotate_keys, score_mesh,
         };
     }
 

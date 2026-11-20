@@ -11,7 +11,7 @@ mod keys;
 mod model_packs;
 mod publish;
 
-pub use auto::{AutoDecision, is_auto_eligible, score_mesh, smart_auto};
+pub use auto::{AutoDecision, RankedMesh, is_auto_eligible, rank_meshes, score_mesh, smart_auto};
 pub use contracts::{DEFAULT_RELAYS, DiscoveredMesh, MeshListing};
 pub use discovery::{MeshFilter, RelayHealth, discover, discover_with_health};
 pub use keys::{load_or_create_keys, rotate_keys};

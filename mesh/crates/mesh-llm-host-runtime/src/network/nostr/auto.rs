@@ -78,6 +78,69 @@ pub fn score_mesh(mesh: &DiscoveredMesh, _now_secs: u64, last_mesh_id: Option<&s
     score
 }
 
+/// One mesh as seen on the relays: every listing that carries its mesh ID.
+#[derive(Debug, Clone)]
+pub struct RankedMesh {
+    /// The best listing score in the mesh.
+    pub score: i64,
+    /// Its listings, best bootstrap first: publishers that serve, then newest.
+    pub listings: Vec<DiscoveredMesh>,
+}
+
+/// Group listings by mesh ID and rank the meshes, best first.
+///
+/// Nodes of a public mesh converge on its lowest mesh ID, so when two meshes
+/// score the same the lower ID wins: a joiner then starts on the ID the mesh
+/// is settling on instead of a straggler's. Listings without a mesh ID cannot
+/// be grouped and each stand alone.
+pub fn rank_meshes(listings: &[&DiscoveredMesh], last_mesh_id: Option<&str>) -> Vec<RankedMesh> {
+    let mut by_id: std::collections::BTreeMap<String, Vec<DiscoveredMesh>> =
+        std::collections::BTreeMap::new();
+    let mut ungrouped = Vec::new();
+    for listing in listings {
+        match listing.listing.mesh_id.as_deref() {
+            Some(id) => by_id
+                .entry(id.to_string())
+                .or_default()
+                .push((*listing).clone()),
+            None => ungrouped.push(vec![(*listing).clone()]),
+        }
+    }
+    let mut ranked: Vec<(Option<String>, RankedMesh)> = by_id
+        .into_iter()
+        .map(|(id, group)| (Some(id), group))
+        .chain(ungrouped.into_iter().map(|group| (None, group)))
+        .map(|(id, mut group)| {
+            group.sort_by_key(|m| {
+                (
+                    std::cmp::Reverse(m.listing.publisher_serves == Some(true)),
+                    std::cmp::Reverse(m.published_at),
+                )
+            });
+            let score = group
+                .iter()
+                .map(|m| score_mesh(m, 0, last_mesh_id))
+                .max()
+                .unwrap_or(i64::MIN);
+            (
+                id,
+                RankedMesh {
+                    score,
+                    listings: group,
+                },
+            )
+        })
+        .collect();
+    // `None` sorts before `Some`, so ungrouped listings go after any mesh ID.
+    ranked.sort_by(|(a_id, a), (b_id, b)| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a_id.is_none().cmp(&b_id.is_none()))
+            .then_with(|| a_id.cmp(b_id))
+    });
+    ranked.into_iter().map(|(_, mesh)| mesh).collect()
+}
+
 /// Decision from smart auto-join.
 #[derive(Debug)]
 pub enum AutoDecision {
@@ -100,11 +163,6 @@ pub fn smart_auto(
     my_vram_gb: f64,
     target_name: Option<&str>,
 ) -> AutoDecision {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
     let last_mesh_id = crate::mesh::load_last_mesh_id();
 
     // If target name is set, only consider meshes with that exact name.
@@ -126,21 +184,17 @@ pub fn smart_auto(
         meshes.iter().filter(|m| is_auto_eligible(m)).collect()
     };
 
-    // Score and rank
-    let mut scored: Vec<(&DiscoveredMesh, i64)> = candidates
-        .iter()
-        .map(|m| (*m, score_mesh(m, now, last_mesh_id.as_deref())))
-        .collect();
-    scored.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-
-    // Collect viable candidates.
+    // Score and rank whole meshes, not individual listings: several nodes of
+    // one mesh publish their own listing, and those should neither crowd the
+    // candidate list nor scatter joiners across stale mesh IDs.
     // If the user specified --mesh-name, take all candidates (they already
     // filtered by name above — the user explicitly asked for this mesh).
     // Otherwise, require positive score to filter out stale meshes.
-    let viable: Vec<(String, DiscoveredMesh)> = scored
-        .iter()
-        .filter(|(_, score)| target_name.is_some() || *score > 0)
-        .map(|(m, _)| (m.listing.invite_token.clone(), (*m).clone()))
+    let viable: Vec<(String, DiscoveredMesh)> = rank_meshes(&candidates, last_mesh_id.as_deref())
+        .into_iter()
+        .filter(|mesh| target_name.is_some() || mesh.score > 0)
+        .flat_map(|mesh| mesh.listings)
+        .map(|m| (m.listing.invite_token.clone(), m))
         .collect();
 
     if !viable.is_empty() {
@@ -399,6 +453,60 @@ mod scoring_tests {
             0,
         );
         assert!(score_mesh(&two, 1500, None) > score_mesh(&one, 1500, None));
+    }
+
+    fn publisher(
+        mesh_id: &str,
+        npub: &str,
+        serves: Option<bool>,
+        published_at: u64,
+    ) -> DiscoveredMesh {
+        let mut mesh = make_mesh(None, Some(mesh_id), &["m1"], 12, 342_000_000_000, 8, 0);
+        mesh.listing.invite_token = format!("invite-{npub}");
+        mesh.listing.publisher_serves = serves;
+        mesh.publisher_npub = npub.to_string();
+        mesh.published_at = published_at;
+        mesh
+    }
+
+    #[test]
+    fn rank_meshes_lists_one_mesh_once_and_prefers_the_lower_id_on_a_tie() {
+        // One public mesh, published by three of its nodes under two IDs
+        // because one publisher has not converged yet.
+        let listings = [
+            publisher("7554", "a", None, 1000),
+            publisher("0007", "b", None, 1000),
+            publisher("0007", "c", None, 1000),
+        ];
+        let refs: Vec<&DiscoveredMesh> = listings.iter().collect();
+        let ranked = rank_meshes(&refs, None);
+        let ids: Vec<_> = ranked
+            .iter()
+            .map(|m| {
+                (
+                    m.listings[0].listing.mesh_id.as_deref().unwrap(),
+                    m.listings.len(),
+                )
+            })
+            .collect();
+        assert_eq!(ids, [("0007", 2), ("7554", 1)]);
+    }
+
+    #[test]
+    fn rank_meshes_puts_serving_then_newest_publishers_first() {
+        let listings = [
+            publisher("0007", "old", None, 1000),
+            publisher("0007", "new", None, 1100),
+            publisher("0007", "serves", Some(true), 900),
+        ];
+        let refs: Vec<&DiscoveredMesh> = listings.iter().collect();
+        let ranked = rank_meshes(&refs, None);
+        let order: Vec<_> = ranked[0]
+            .listings
+            .iter()
+            .map(|m| m.publisher_npub.as_str())
+            .collect();
+        assert_eq!(order, ["serves", "new", "old"]);
     }
 }
 
