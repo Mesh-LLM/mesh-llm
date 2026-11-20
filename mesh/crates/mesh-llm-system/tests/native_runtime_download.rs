@@ -105,6 +105,8 @@ fn archive(work: &Path, artifact: &NativeRuntimeArtifact) -> Vec<u8> {
 
 struct Release {
     artifact: NativeRuntimeArtifact,
+    /// Runtime actually inside the archive; `None` is the catalog's own.
+    packaged: Option<NativeRuntimeArtifact>,
     /// Checksum the catalog claims for the archive; `None` is the real one.
     claimed_archive_sha256: Option<String>,
     /// Checksum published beside the catalog; `None` is the real one.
@@ -115,6 +117,7 @@ impl Release {
     fn of(artifact: NativeRuntimeArtifact) -> Self {
         Self {
             artifact,
+            packaged: None,
             claimed_archive_sha256: None,
             published_catalog_sha256: None,
         }
@@ -127,7 +130,10 @@ fn install(release: Release) -> anyhow::Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
 
-    let archive = archive(work.path(), &release.artifact);
+    let archive = archive(
+        work.path(),
+        release.packaged.as_ref().unwrap_or(&release.artifact),
+    );
     let mut entry = release.artifact;
     entry.url = Some(format!("{base}/runtime.tar.gz"));
     entry.sha256 = Some(
@@ -163,7 +169,13 @@ fn install(release: Release) -> anyhow::Result<String> {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(install_native_runtime(options))?;
+        .block_on(install_native_runtime(options));
+    if outcome.is_err() {
+        let cache = work.path().join("cache");
+        let published = std::fs::read_dir(&cache).map_or(0, |entries| entries.count());
+        assert_eq!(published, 0, "a refused runtime was left in the cache");
+    }
+    let outcome = outcome?;
     assert!(outcome.runtime.path.starts_with(work.path().join("cache")));
     assert_eq!(
         std::fs::read(outcome.runtime.path.join("lib/runtime.bin")).unwrap(),
@@ -212,4 +224,40 @@ fn a_runtime_built_for_another_platform_is_refused() {
     artifact.platform.os = "plan9".to_string();
     artifact.platform.target = Some("riscv64-unknown-plan9".to_string());
     assert!(refusal(Release::of(artifact)).contains("no compatible native runtime found"));
+}
+
+// The archive's checksum is right, so only a comparison of the selected
+// catalog entry with the manifest inside the archive can catch these.
+#[test]
+fn an_archive_holding_a_different_runtime_than_its_catalog_entry_is_refused() {
+    type Change = fn(&mut NativeRuntimeArtifact);
+    let changes: [(&str, Change); 5] = [
+        ("id", |runtime| runtime.id = "another-runtime".to_string()),
+        ("release", |runtime| {
+            runtime.release_version = Some("0.0.1".to_string())
+        }),
+        ("skippy abi", |runtime| {
+            runtime.skippy_abi = "0.0.0".to_string()
+        }),
+        ("platform", |runtime| {
+            runtime.platform.os = "plan9".to_string()
+        }),
+        ("backend", |runtime| {
+            runtime.backend = NativeRuntimeBackend::metal()
+        }),
+    ];
+    let mut installed = Vec::new();
+    for (field, change) in changes {
+        let mut release = Release::of(compatible_artifact());
+        let mut packaged = compatible_artifact();
+        change(&mut packaged);
+        release.packaged = Some(packaged);
+        if install(release).is_ok() {
+            installed.push(field);
+        }
+    }
+    assert!(
+        installed.is_empty(),
+        "installed an archive whose manifest differs from the catalog entry in: {installed:?}"
+    );
 }
