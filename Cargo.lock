@@ -4799,6 +4799,7 @@ dependencies = [
  "skippy-commands",
  "skippy-config",
  "skippy-coordinator",
+ "skippy-ffi",
  "skippy-hardware-profile",
  "skippy-hf-hub",
  "skippy-model-artifact",

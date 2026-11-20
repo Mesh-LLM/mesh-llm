@@ -58,15 +58,30 @@ And one of these events:
 |---|---|---|
 | `install_first_run` | none | How many installs there are |
 | `install_updated` | `from_version` (the version previously recorded, or `redacted`), `trigger` (`self_update` when mesh-llm's own updater restarted the process, otherwise `external`) | Whether people actually upgrade, how fast a release spreads, and whether anyone is stranded on an old one. Sent once when a run sees a different version than the last run recorded |
-| `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …) | Which commands are used, and which fail |
+| `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …), and `failure` when the outcome is `failed` (see [Failure kinds](#failure-kinds)) | Which commands are used, which fail, and why |
 | `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested`, `auto_update`, `post_update_restart` — all booleans | How nodes are started. `auto_update` is whether the node manages its own upgrades; `post_update_restart` marks the second half of a self-update, since updating restarts the process and would otherwise count as a second node start |
-| `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded` | Whether nodes stay up |
+| `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded`, and `failure` when `succeeded` is false (see [Failure kinds](#failure-kinds)) | Whether nodes stay up, and what stops the ones that fail |
 | `model_loaded` | `model` (catalog name, or `redacted`; see [Model names](#model-names)), `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` (see [Model names](#model-names)), `source` (`direct_gguf`, `layer_package`, `whisper_file`, `split_layer_package` for stage 0 of a split from a Hugging Face package, `split_local_source` for stage 0 of a split from anything else, which is always `redacted`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
 | `inference_request` | see below | How fast real requests are served: prefill, decode, context length, prompt cache, speculative decoding, and lanes |
 | `inference_route` | see below | Where requests go (this node, a peer, an endpoint), whether they succeed, and the link to the peer |
 | `mesh_links` | see below | How this node's peers are connected and how far away they are |
+
+### Failure kinds
+
+`failure` takes one value from a fixed list. It is read from the types of the
+errors that caused the failure, never from their text, so no path, port
+number, model name or message is sent:
+
+| Value | Meaning |
+|---|---|
+| `port_in_use` | A port mesh-llm binds is already held, typically by another node |
+| `permission_denied` | The operating system refused access to a file, port or directory |
+| `runtime_unavailable` | No compatible native runtime could be found, or it would not load |
+| `model_download` | Downloading a model from Hugging Face failed |
+| `config_invalid` | The config file is not valid TOML for the config schema |
+| `other` | Anything else, including config values that parse but fail validation |
 
 `hardware_profile` is sent once per `serve` process, after the native runtime
 has loaded, so it describes the devices and memory the node uses. It carries:
