@@ -16,7 +16,14 @@ type ObservedFiles = Vec<(String, PathBuf, FileStamp)>;
 pub(crate) struct VerifiedModelContent {
     digest: String,
     files: ObservedFiles,
+    /// A stamp written within the timestamp-granularity window can hide a
+    /// same-length rewrite, so such proofs are rechecked by content.
+    racy: bool,
 }
+
+/// Coarse filesystem clocks (e.g. ext4 ctime ticks) can leave a rewrite in the
+/// same tick with an identical stamp; treat recent stamps as untrusted.
+const RACY_STAMP_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone, PartialEq, Eq)]
 struct FileStamp {
@@ -44,6 +51,29 @@ impl FileStamp {
             ),
         }
     }
+
+    fn is_racy(&self, now: SystemTime) -> bool {
+        #[cfg(unix)]
+        let changed = u64::try_from(self.identity.2).ok().map(|secs| {
+            SystemTime::UNIX_EPOCH
+                + std::time::Duration::new(secs, self.identity.3.clamp(0, 999_999_999) as u32)
+        });
+        #[cfg(not(unix))]
+        let changed = None;
+        [self.modified, self.created, changed]
+            .into_iter()
+            .any(|time| match time {
+                Some(time) => now
+                    .duration_since(time)
+                    .map_or(true, |age| age < RACY_STAMP_WINDOW),
+                None => true,
+            })
+    }
+}
+
+fn any_racy(files: &ObservedFiles) -> bool {
+    let now = SystemTime::now();
+    files.iter().any(|(_, _, stamp)| stamp.is_racy(now))
 }
 
 impl VerifiedModelContent {
@@ -56,6 +86,12 @@ impl VerifiedModelContent {
     ) -> Result<(T, Option<Self>)> {
         #[cfg(unix)]
         let (model, content) = match Self::observe_files(config).ok().flatten() {
+            // Recent stamps cannot prove the bytes the loader reads, so hash
+            // before load and recheck content afterwards instead.
+            Some(files) if any_racy(&files) => {
+                let content = Self::from_observed(files, &AtomicBool::new(false)).ok();
+                (load()?, content)
+            }
             Some(files) => {
                 verify_alongside_load(load, |cancelled| Self::from_observed(files, cancelled))?
             }
@@ -87,13 +123,13 @@ impl VerifiedModelContent {
         capture_files(files).map(Some)
     }
 
-    #[cfg(any(not(unix), test))]
     fn from_files(files: Vec<(String, PathBuf)>) -> Result<Self> {
         Self::from_observed(capture_files(files)?, &AtomicBool::new(false))
     }
 
     fn from_observed(files: ObservedFiles, cancelled: &AtomicBool) -> Result<Self> {
         let started = Instant::now();
+        let racy = any_racy(&files);
         let mut verified_bytes = 0_u64;
         let mut digest = Sha256::new();
         digest.update(b"skippy-loaded-model-content-v1\0");
@@ -146,6 +182,7 @@ impl VerifiedModelContent {
         Ok(Self {
             digest,
             files: observed,
+            racy,
         })
     }
 
@@ -167,14 +204,12 @@ impl VerifiedModelContent {
         if !unchanged {
             return false;
         }
-        #[cfg(unix)]
-        {
-            true
+        if cfg!(unix) && !self.racy {
+            return true;
         }
-        #[cfg(not(unix))]
         {
-            // Size and last-write timestamps are not a strong file identity on
-            // these platforms. Recheck actual content after model open and at
+            // Off Unix, and for stamps inside the racy window, size and
+            // timestamps are not a strong file identity. Recheck actual content after model open and at
             // backend construction rather than trusting preserved timestamps.
             Self::from_files(files).is_ok_and(|current| current.digest == self.digest)
         }
@@ -408,6 +443,7 @@ mod tests {
                 Ok(VerifiedModelContent {
                     digest: "proof".into(),
                     files: Vec::new(),
+                    racy: false,
                 })
             },
         )
