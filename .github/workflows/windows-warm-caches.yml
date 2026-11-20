@@ -1,75 +1,10 @@
 name: Warm Windows ABI CI caches
+# ABI publication belongs to Main Windows. This entry verifies existing entries
+# and prunes old generations, daily and on manual dispatch.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'third_party/llama.cpp/upstream.txt'
-      - 'third_party/llama.cpp/patches/**'
-      - 'skippy/llama_cpp/upstream.txt'
-      - 'skippy/llama_cpp/patches/**'
-      - 'scripts/build-llama.sh'
-      - 'mesh/scripts/build-llama.sh'
-      - 'skippy/scripts/build-llama.sh'
-      - 'scripts/prepare-llama.sh'
-      - 'mesh/scripts/prepare-llama.sh'
-      - 'skippy/scripts/prepare-llama.sh'
-      - 'scripts/package-native-runtime.sh'
-      - 'mesh/scripts/package-native-runtime.sh'
-      - 'skippy/scripts/package-native-runtime.sh'
-      - 'scripts/verify-native-runtime-package.sh'
-      - 'mesh/scripts/verify-native-runtime-package.sh'
-      - 'skippy/scripts/verify-native-runtime-package.sh'
-      - 'scripts/verify-checksum-sidecar.py'
-      - 'mesh/scripts/verify-checksum-sidecar.py'
-      - 'skippy/scripts/verify-checksum-sidecar.py'
-      - 'scripts/safe-extract-tar.py'
-      - 'mesh/scripts/safe-extract-tar.py'
-      - 'skippy/scripts/safe-extract-tar.py'
-      - 'scripts/windows-native-runtime-deps.py'
-      - 'mesh/scripts/windows-native-runtime-deps.py'
-      - 'skippy/scripts/windows-native-runtime-deps.py'
-      - '.github/cache-version.txt'
-      - '.github/actions/prepare-native-runtime-input/action.yml'
-      - '.github/actions/resolve-native-toolchain-epoch/action.yml'
-      - '.github/actions/setup-windows-rocm-sdk/action.yml'
-      - '.github/actions/restore-windows-abi-cache/action.yml'
-      - '.github/actions/save-and-verify-actions-cache/action.yml'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/pr_windows.yml'
-      - '.github/workflows/windows-warm-caches.yml'
-      # Every other input of the Windows ABI cache key (ci-ops cache-inputs): a
-      # change the warmer does not watch moves the key on main with nothing warmed.
-      - '.cargo/**'
-      - '.github/actions/prepare-native-runtime-input/**'
-      - '.github/actions/resolve-native-toolchain-epoch/**'
-      - '.github/actions/save-and-verify-actions-cache/**'
-      - '.github/actions/setup-windows-rocm-sdk/**'
-      - '.github/workflows/ci-windows-runtime-slice.yml'
-      - '.github/workflows/release.yml'
-      - 'Cargo.lock'
-      - 'Cargo.toml'
-      - 'ci/python-research-source.json'
-      - 'mesh/crates/mesh-llm-release-footer/Cargo.toml'
-      - 'mesh/crates/mesh-llm-release-footer/src/**'
-      - 'scripts/**'
-      - 'skippy/crates/skippy-gpu-bench/native/**'
-      - 'skippy/evals/kv-validation/models.json'
-      - 'skippy/llama_cpp/**'
-      - 'skippy/scripts/**'
-      - 'tools/authority-automation/Cargo.toml'
-      - 'tools/authority-automation/src/**'
-      - 'tools/ci-controller/Cargo.toml'
-      - 'tools/ci-controller/src/**'
-      - 'tools/process-supervision/Cargo.toml'
-      - 'tools/process-supervision/src/**'
-      - 'tools/runner-cleanup/Cargo.toml'
-      - 'tools/runner-cleanup/src/**'
-      - 'tools/trajectory-reader/Cargo.toml'
-      - 'tools/trajectory-reader/src/**'
-      - 'tools/xtask/Cargo.toml'
-      - 'tools/xtask/build.rs'
-      - 'tools/xtask/src/**'
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       retention:
@@ -77,7 +12,7 @@ on:
         required: false
         default: ''
       workload:
-        description: 'Cache workload to warm'
+        description: 'Existing cache workload to verify'
         required: true
         type: choice
         default: all
@@ -108,7 +43,7 @@ env:
 
 jobs:
   warm_windows_cpu:
-    name: Warm Windows CPU ABI cache
+    name: Verify Windows CPU ABI cache
     outputs:
       toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
       input_hash: ${{ steps.llama_cache.outputs.input-hash }}
@@ -142,18 +77,6 @@ jobs:
           build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
           allow-native-github-cache: "true"
-      - name: Initialize MSVC for CPU runtime
-        if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-        with:
-          arch: x64
-      - name: Build and verify canonical Windows CPU runtime input
-        if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: ./.github/actions/prepare-native-runtime-input
-        with:
-          backend: cpu
-          target: x86_64-pc-windows-msvc
-          output_dir: cache-runtime-input/cpu
       - name: Verify Windows CPU ABI cache
         shell: pwsh
         run: |
@@ -186,17 +109,9 @@ jobs:
             }
             Write-Host $library.FullName
           }
-      - name: Save and verify Windows CPU ABI cache
-        if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: ./.github/actions/save-and-verify-actions-cache
-        with:
-          path: ${{ steps.llama_cache.outputs.cache-path }}
-          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
-          cache-ref: ${{ github.ref }}
-          cache-label: Windows CPU ABI
 
   warm_windows_gpu:
-    name: Warm Windows ${{ matrix.name }} ABI cache
+    name: Verify Windows ${{ matrix.name }} ABI cache
     if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || inputs.workload == 'all') }}
     runs-on: windows-2022
     env:
@@ -243,74 +158,6 @@ jobs:
           vulkan_toolchain_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
           rocm_toolchain_version: ${{ env.ROCM_HIP_SDK_FILENAME }}
           allow-native-github-cache: "true"
-      - name: Install CUDA toolkit
-        if: ${{ matrix.backend == 'cuda' && steps.llama_cache.outputs.cache-hit != 'true' }}
-        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
-        with:
-          cuda: ${{ env.WINDOWS_CUDA_VERSION }}
-          method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
-          use-github-cache: true
-          use-local-cache: true
-          log-file-suffix: windows-cuda
-      - name: Verify CUDA toolkit
-        if: ${{ matrix.backend == 'cuda' && steps.llama_cache.outputs.cache-hit != 'true' }}
-        shell: pwsh
-        run: |
-          if (-not $env:CUDA_PATH -or -not (Test-Path $env:CUDA_PATH)) {
-            throw "CUDA_PATH was not configured by Jimver/cuda-toolkit."
-          }
-          & nvcc --version
-          foreach ($library in @("cuda.lib", "cudart.lib", "cublas.lib", "cublasLt.lib")) {
-            $path = Join-Path $env:CUDA_PATH "lib\x64\$library"
-            if (-not (Test-Path $path)) {
-              throw "Expected CUDA import library was not found: $path"
-            }
-          }
-      - name: Install Vulkan SDK
-        if: ${{ matrix.backend == 'vulkan' && steps.llama_cache.outputs.cache-hit != 'true' }}
-        uses: jakoch/install-vulkan-sdk-action@3c53c378c9bfbb2ea122a1cc164a837d4004c871 # v1.5.2
-        with:
-          vulkan_version: ${{ env.WINDOWS_VULKAN_SDK_VERSION }}
-          cache: true
-          stripdown: true
-      - name: Verify Vulkan SDK
-        if: ${{ matrix.backend == 'vulkan' && steps.llama_cache.outputs.cache-hit != 'true' }}
-        shell: pwsh
-        run: |
-          if (-not $env:VULKAN_SDK -or -not (Test-Path $env:VULKAN_SDK)) {
-            throw "VULKAN_SDK was not configured by jakoch/install-vulkan-sdk-action."
-          }
-          $glslc = Join-Path $env:VULKAN_SDK "Bin\glslc.exe"
-          if (-not (Test-Path $glslc)) {
-            throw "glslc.exe was not found at $glslc"
-          }
-          & $glslc --version
-          $vulkanLib = Join-Path $env:VULKAN_SDK "Lib\vulkan-1.lib"
-          if (-not (Test-Path $vulkanLib)) {
-            throw "Expected Vulkan import library was not found: $vulkanLib"
-          }
-      - name: Install ROCm HIP SDK
-        if: ${{ matrix.backend == 'rocm' && steps.llama_cache.outputs.cache-hit != 'true' }}
-        uses: ./.github/actions/setup-windows-rocm-sdk
-        with:
-          rocm-hip-sdk-filename: ${{ env.ROCM_HIP_SDK_FILENAME }}
-          allow-native-github-cache: "true"
-      - name: Initialize MSVC for native runtime
-        if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-        with:
-          arch: x64
-      - name: Build and verify canonical Windows GPU runtime input
-        if: steps.llama_cache.outputs.cache-hit != 'true'
-        env:
-          LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.backend == 'cuda' && matrix.build_args || '' }}
-          LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.backend == 'rocm' && matrix.build_args || '' }}
-        uses: ./.github/actions/prepare-native-runtime-input
-        with:
-          backend: ${{ matrix.backend }}
-          target: x86_64-pc-windows-msvc
-          output_dir: cache-runtime-input/${{ matrix.backend }}
       - name: Verify Windows GPU ABI cache
         shell: pwsh
         env:
@@ -345,21 +192,14 @@ jobs:
             }
             Write-Host $library.FullName
           }
-      - name: Save and verify Windows GPU ABI cache
-        if: steps.llama_cache.outputs.cache-hit != 'true'
-        uses: ./.github/actions/save-and-verify-actions-cache
-        with:
-          path: ${{ steps.llama_cache.outputs.cache-path }}
-          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
-          cache-ref: ${{ github.ref }}
-          cache-label: Windows ${{ matrix.name }} ABI
 
   prune_windows_abi_caches:
     name: Prune old Windows ABI caches
     needs:
       - warm_windows_cpu
       - warm_windows_gpu
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.warm_windows_cpu.result == 'success' && (needs.warm_windows_gpu.result == 'success' || needs.warm_windows_gpu.result == 'skipped') }}
+    # Retention needs only the current identity; a missing or unverifiable entry must not stop it.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.warm_windows_cpu.outputs.toolchain_epoch != '' && needs.warm_windows_cpu.outputs.input_hash != '' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

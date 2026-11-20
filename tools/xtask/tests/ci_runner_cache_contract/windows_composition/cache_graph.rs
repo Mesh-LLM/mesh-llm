@@ -101,7 +101,7 @@ fn windows_abi_cache_key_binds_every_compatibility_dimension_and_exact_restore()
     }
 }
 #[test]
-fn windows_cache_warmup_keeps_focused_cpu_dispatch_and_verified_shared_producers() {
+fn windows_cache_maintenance_keeps_focused_cpu_dispatch_and_verified_restores() {
     let document = doc(".github/workflows/windows-warm-caches.yml");
     let workload = document
         .get("on")
@@ -143,8 +143,6 @@ fn windows_cache_warmup_keeps_focused_cpu_dispatch_and_verified_shared_producers
         for action in [
             "resolve-native-toolchain-epoch",
             "restore-windows-abi-cache",
-            "prepare-native-runtime-input",
-            "save-and-verify-actions-cache",
         ] {
             assert!(
                 steps.iter().any(|s| s.get("uses").and_then(Node::text)
