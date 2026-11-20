@@ -3,8 +3,8 @@ pub use skippy_model_artifact::capabilities::{
     merge_sibling_signals,
 };
 
+use crate::remote_catalog;
 use serde_json::Value;
-use skippy_model_hf::remote_catalog;
 use std::path::Path;
 
 pub fn infer_remote_catalog_capabilities(
@@ -90,7 +90,7 @@ fn read_local_metadata_jsons(path: &Path) -> Vec<Value> {
 }
 
 pub async fn fetch_remote_hf_metadata_jsons(repo: &str, revision: Option<&str>) -> Vec<Value> {
-    let Some(api) = skippy_model_hf::build_hf_async_api().ok() else {
+    let Some(api) = crate::build_hf_async_api().ok() else {
         return Vec::new();
     };
     let revision = revision.unwrap_or("main").to_string();
