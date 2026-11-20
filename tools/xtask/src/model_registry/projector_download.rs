@@ -65,6 +65,19 @@ pub(super) fn acquire_pinned(
     )
 }
 
+/// A small trusted-host document, such as a Hugging Face API reply.
+pub(super) fn fetch_trusted(
+    input: &str,
+    deadline: std::time::Instant,
+    cancellation: &crate::process::Cancellation,
+    maximum: u64,
+) -> DynResult<Vec<u8>> {
+    if cancellation.is_cancelled() {
+        return Err("fetch cancelled before discovery".into());
+    }
+    transfer::fetch_until(input, cancellation, deadline, maximum)
+}
+
 pub(super) fn validate_origin(input: &str) -> DynResult<()> {
     url_policy::trusted(input).map(|_| ())
 }

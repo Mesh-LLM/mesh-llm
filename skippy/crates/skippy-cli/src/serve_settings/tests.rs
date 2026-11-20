@@ -849,11 +849,17 @@ fn invalid_controls_fail_before_loading_models() {
             .unwrap_err();
         assert!(error.to_string().contains(message), "{error}");
     }
+}
+
+#[test]
+fn checkpoint_ram_budget_does_not_require_disk() {
     let Command::Serve(args) = parse_test(&[
         "skippy",
         "serve",
         "--model",
         "missing.gguf",
+        "--prefix-cache",
+        "on",
         "--prefix-cache-ram",
         "1GiB",
     ])
@@ -864,13 +870,27 @@ fn invalid_controls_fail_before_loading_models() {
     };
     let mut stage: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
     args.public.settings.apply_stage(&mut stage).unwrap();
+    args.public
+        .settings
+        .validate_cache_dependencies(&stage)
+        .unwrap();
+    assert_eq!(
+        stage.kv_cache.as_ref().unwrap().l2_max_bytes,
+        1024 * 1024 * 1024
+    );
+    let tuning = args
+        .public
+        .settings
+        .tuning(args.public.openai_guardrails)
+        .unwrap();
+    let report = args.public.settings.report(&stage, None, &tuning);
+    assert_eq!(report["constraints"]["ram_cache_requires_disk"], false);
+    stage.kv_cache.as_mut().unwrap().mode = skippy_protocol::StageKvCacheMode::Disabled;
     assert!(
         args.public
             .settings
-            .validate_cache_dependencies(&stage, false)
-            .unwrap_err()
-            .to_string()
-            .contains("requires")
+            .validate_cache_dependencies(&stage)
+            .is_err()
     );
 }
 
@@ -988,6 +1008,39 @@ fn modes_and_budget_dependencies_produce_actionable_errors() {
         stage.kv_cache.unwrap().exact_max_bytes,
         Some(2 * 1024 * 1024 * 1024)
     );
+}
+
+#[test]
+fn batch_settings_reach_the_stage_config() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--batch-policy",
+        "arrival_order",
+        "--batch-decode-window-us",
+        "500",
+        "--batch-prefill-window-per-token-us",
+        "40",
+        "--sample-threads",
+        "6",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let mut stage: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
+    assert!(stage.batch.is_default());
+    args.public.settings.apply_stage(&mut stage).unwrap();
+    assert_eq!(
+        stage.batch.policy,
+        Some(skippy_protocol::BatchPolicyKind::ArrivalOrder)
+    );
+    assert_eq!(stage.batch.decode_window_us, Some(500));
+    assert_eq!(stage.batch.prefill_window_per_token_us, Some(40));
+    assert_eq!(stage.sample_threads, Some(6));
 }
 
 #[test]

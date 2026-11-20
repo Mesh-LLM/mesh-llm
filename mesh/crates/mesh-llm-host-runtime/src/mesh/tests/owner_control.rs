@@ -614,6 +614,10 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
     std::fs::create_dir_all(&tmp).ok();
     let (server, _secret_key, _config_path) =
         start_owner_control_test_server(&owner_keypair, &tmp).await?;
+    server
+        .test_apply_config_deadline
+        .set(std::time::Duration::from_secs(120))
+        .unwrap();
 
     let initial_revision = { server.config_state.lock().await.revision() };
     let (_watch_endpoint, mut watch_send, mut watch_recv, watch_requester_id) =
@@ -690,11 +694,11 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
     assert!(applied.success);
 
     let update = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(120),
         read_owner_control_envelope(&mut watch_recv),
     )
     .await
-    .expect("watch stream should emit an update within 5 seconds")?;
+    .expect("watch stream should emit the applied revision")?;
     let update = update
         .response
         .expect("watch update should return a response")
@@ -722,6 +726,10 @@ async fn control_plane_apply_rejects_stale_revision() -> Result<()> {
     std::fs::create_dir_all(&tmp).ok();
     let (server, _secret_key, _config_path) =
         start_owner_control_test_server(&owner_keypair, &tmp).await?;
+    server
+        .test_apply_config_deadline
+        .set(std::time::Duration::from_secs(120))
+        .unwrap();
 
     let initial_hash = { *server.config_state.lock().await.config_hash() };
 

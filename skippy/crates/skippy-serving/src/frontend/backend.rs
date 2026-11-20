@@ -1,9 +1,11 @@
 mod completion_exchange;
 mod exchange_hooks;
 mod inference;
+mod phase_spans;
 mod prepared_exchange;
 #[cfg(test)]
 mod prepared_exchange_tests;
+mod runtime_admission;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::admission::GenerationTokenReservation;
@@ -35,7 +37,6 @@ use crate::frontend::generation::completion_response_from_generated_text;
 use crate::frontend::generation::ensure_requested_model;
 use crate::frontend::generation::generation_event_to_completion_chunk;
 use crate::frontend::generation::generation_event_to_inference_event;
-use crate::frontend::generation::generation_predicted_wait_error;
 use crate::frontend::generation::generation_queue_timeout_error;
 use crate::frontend::generation::generation_response_from_generated_text;
 use crate::frontend::generation::template_exposes_reasoning;
@@ -563,6 +564,7 @@ impl GenerationAdmissionController {
         )?;
         match claim {
             GenerationAdmissionClaim::Acquired(resources) => Ok(GenerationAdmissionPermit {
+                _runtime_lane: None,
                 _lane: self.generation_limit.wrap_permit(resources.lane),
                 token_budget: resources.token_budget,
                 _active_work: self.generation_service_estimator.start_active(work),
@@ -578,12 +580,7 @@ impl GenerationAdmissionController {
                 self.generation_service_estimator
                     .set_concurrency(self.generation_limit.current_limit());
                 let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
-                let queued_work = self
-                    .generation_service_estimator
-                    .reserve_queued(work, admission_timeout)
-                    .map_err(|predicted_wait_ms| {
-                        generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
-                    })?;
+                let queued_work = self.generation_service_estimator.reserve_queued(work);
                 let resources = lease
                     .acquire(
                         self.generation_limit.semaphore(),
@@ -593,6 +590,7 @@ impl GenerationAdmissionController {
                     )
                     .await?;
                 Ok(GenerationAdmissionPermit {
+                    _runtime_lane: None,
                     _lane: self.generation_limit.wrap_permit(resources.lane),
                     token_budget: resources.token_budget,
                     _active_work: queued_work.promote(),
@@ -609,6 +607,7 @@ impl GenerationAdmissionController {
 }
 
 pub(in crate::frontend) struct GenerationAdmissionPermit {
+    _runtime_lane: Option<crate::runtime_state::lane_admission::RuntimeLanePermit>,
     token_budget: GenerationTokenReservation,
     _lane: GenerationConcurrencyPermit,
     _active_work: GenerationActiveWorkReservation,
@@ -900,6 +899,7 @@ impl StageOpenAiBackend {
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
     ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+        let admission_started = Instant::now();
         let result = GenerationAdmissionController::for_backend(self)
             .acquire_scheduled_work(
                 ids,
@@ -909,6 +909,19 @@ impl StageOpenAiBackend {
                 scheduling,
             )
             .await;
+        let result = match result {
+            Ok((mut permit, session)) => match self
+                .acquire_runtime_lane(admission_started, cancellation)
+                .await
+            {
+                Ok(runtime_lane) => {
+                    permit._runtime_lane = Some(runtime_lane);
+                    Ok((permit, session))
+                }
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
         if let Err(error) = &result {
             let mut attrs = self.openai_attrs(ids);
             attrs.insert(
@@ -1019,34 +1032,6 @@ impl StageOpenAiBackend {
             format!("{prefix}.tracked_token_counts"),
             json!(stats.tracked_token_counts),
         );
-    }
-
-    pub(super) fn emit_openai_phase(
-        &self,
-        name: &str,
-        timer: PhaseTimer,
-        mut attrs: BTreeMap<String, Value>,
-    ) -> f64 {
-        let elapsed_ms = timer.elapsed_ms();
-        attrs.insert("llama_stage.elapsed_ms".to_string(), json!(elapsed_ms));
-        let end = now_unix_nanos() as u64;
-        self.telemetry
-            .emit_debug_span(name, attrs, timer.start_unix_nanos, end);
-        elapsed_ms
-    }
-
-    pub(super) fn emit_openai_summary(
-        &self,
-        name: &str,
-        timer: PhaseTimer,
-        mut attrs: BTreeMap<String, Value>,
-    ) -> f64 {
-        let elapsed_ms = timer.elapsed_ms();
-        attrs.insert("llama_stage.elapsed_ms".to_string(), json!(elapsed_ms));
-        let end = now_unix_nanos() as u64;
-        self.telemetry
-            .emit_span(name, attrs, timer.start_unix_nanos, end);
-        elapsed_ms
     }
 
     pub(super) fn ensure_model(&self, requested: &str) -> InferenceResult<()> {
@@ -1238,7 +1223,7 @@ impl StageOpenAiBackend {
             } else {
                 None
             };
-        task::spawn_blocking(move || {
+        task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             let _session_permit = session_permit;
             let _permit = permit;
             let result = backend.generate_text(
@@ -1310,7 +1295,7 @@ impl StageOpenAiBackend {
                     let _ = sender.send_terminal(Err(error));
                 }
             }
-        });
+        }));
         Ok(Box::pin(stream::unfold(rx, |mut rx| async {
             rx.recv().await.map(|item| (item, rx))
         })))

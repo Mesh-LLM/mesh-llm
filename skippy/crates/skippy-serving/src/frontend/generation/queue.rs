@@ -472,28 +472,22 @@ impl GenerationServiceEstimator {
     pub(in crate::frontend) fn reserve_queued(
         self: &Arc<Self>,
         work: GenerationAdmissionWork,
-        admission_timeout: Duration,
-    ) -> Result<GenerationQueuedWorkReservation, f64> {
+    ) -> GenerationQueuedWorkReservation {
         let Ok(mut state) = self.state.lock() else {
-            return Ok(GenerationQueuedWorkReservation {
+            return GenerationQueuedWorkReservation {
                 estimator: self.clone(),
                 work,
                 queued: false,
-            });
+            };
         };
-        if !admission_timeout.is_zero()
-            && let Some(wait_ms) =
-                predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
-            && wait_ms > admission_timeout.as_secs_f64() * 1_000.0
-        {
-            return Err(wait_ms);
-        }
+        // Predictions include interference and unfinished requests' original
+        // work, so they are advisory. The queue owns capacity and deadlines.
         state.queued = add_work(state.queued, work);
-        Ok(GenerationQueuedWorkReservation {
+        GenerationQueuedWorkReservation {
             estimator: self.clone(),
             work,
             queued: true,
-        })
+        }
     }
 
     pub(in crate::frontend) fn start_active(
@@ -908,46 +902,24 @@ pub(in crate::frontend) fn generation_queue_timeout_error(timeout: Duration) -> 
     .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
 }
 
-pub(in crate::frontend) fn generation_predicted_wait_error(
-    predicted_wait_ms: f64,
-    timeout: Duration,
-) -> InferenceError {
-    InferenceError::from_kind(
-        StatusCode::TOO_MANY_REQUESTS,
-        InferenceErrorKind::RateLimit,
-        format!(
-            "predicted generation wait {:.3} seconds exceeds the {:.3}-second admission timeout",
-            predicted_wait_ms / 1_000.0,
-            timeout.as_secs_f64(),
-        ),
-    )
-    .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
-}
-
 #[cfg(test)]
 mod service_estimator_tests {
     use super::*;
 
     #[test]
-    fn warm_estimator_rejects_work_beyond_the_wait_slo() {
+    fn high_prediction_does_not_refuse_work_accounting() {
         let estimator = Arc::new(GenerationServiceEstimator::new(1));
         let work = GenerationAdmissionWork::new(100, 100);
         estimator.observe_completed(work, 100.0, 100.0);
         let active = estimator.start_active(work);
 
         assert_eq!(estimator.predicted_wait_ms(), Some(200.0));
-        assert!(
-            estimator
-                .reserve_queued(work, Duration::from_millis(199))
-                .is_err()
-        );
-        assert!(
-            estimator
-                .reserve_queued(work, Duration::from_millis(200))
-                .is_ok()
-        );
-
+        let queued = estimator.reserve_queued(work);
+        assert_eq!(estimator.predicted_wait_ms(), Some(400.0));
+        drop(queued);
+        assert_eq!(estimator.predicted_wait_ms(), Some(200.0));
         drop(active);
+        assert_eq!(estimator.predicted_wait_ms(), Some(0.0));
     }
 
     #[test]
@@ -955,9 +927,7 @@ mod service_estimator_tests {
         let estimator = Arc::new(GenerationServiceEstimator::new(2));
         let work = GenerationAdmissionWork::new(80, 20);
         estimator.observe_completed(work, 80.0, 20.0);
-        let queued = estimator
-            .reserve_queued(work, Duration::from_secs(1))
-            .expect("cold queue reservation");
+        let queued = estimator.reserve_queued(work);
         assert_eq!(estimator.predicted_wait_ms(), Some(50.0));
 
         let active = queued.promote();

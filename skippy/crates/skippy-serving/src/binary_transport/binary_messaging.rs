@@ -31,10 +31,7 @@ use super::{
 use crate::{
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
-    runtime_state::{
-        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_memory_cache_capabilities,
-        loaded_model_state_kind,
-    },
+    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides},
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -430,6 +427,7 @@ fn run_binary_stage(
 ) -> Result<Option<EmbeddedFrontendTask>> {
     options.tuning.validate()?;
     let mtp_source = options.resolved_mtp_source();
+    let recurrent_rollback_tokens = options.recurrent_rollback_tokens();
     let BinaryStageOptions {
         tuning,
         config,
@@ -489,10 +487,7 @@ fn run_binary_stage(
         mtp_source,
         n_threads: tuning.n_threads,
         n_threads_batch: tuning.n_threads_batch,
-        recurrent_rollback_tokens: split_dflash.as_ref().map_or(
-            0,
-            crate::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
-        ),
+        recurrent_rollback_tokens,
     };
     let runtime = match load_runtime_with_overrides(&config, &overrides, None) {
         // A native runtime that predates borrowed tensors refuses them; the
@@ -584,10 +579,9 @@ fn run_binary_stage(
         telemetry.clone(),
     )
     .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
-    let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+    let kv = KvStageIntegration::from_runtime_with_l3_manager(
         &config,
-        loaded_model_state_kind(Some(&runtime)),
-        loaded_memory_cache_capabilities(Some(&runtime)),
+        &runtime,
         l3_manager.clone(),
         None,
     )?
@@ -603,7 +597,12 @@ fn run_binary_stage(
     }
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
-    let session_ownership = Arc::new(ConnectionSessionOwnership::default());
+    // Connections may outnumber native lanes. Reserve each logical session
+    // globally before its first runtime operation, without holding the runtime
+    // lock while another connection finishes and releases its lane.
+    let session_ownership = Arc::new(ConnectionSessionOwnership::with_runtime_lanes(
+        lock_runtime(&runtime).lane_admission(),
+    ));
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;

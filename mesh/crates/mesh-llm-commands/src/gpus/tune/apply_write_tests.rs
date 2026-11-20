@@ -269,7 +269,7 @@ fn gpu_tune_replace_existing_writes_nested_recommendations_over_legacy_manual_fi
     assert_eq!(model_fit.cache_type_k.as_deref(), Some("q8_0"));
     assert_eq!(model_fit.cache_type_v.as_deref(), Some("q8_0"));
     assert_eq!(model_fit.ctx_size, Some(65_536));
-    assert_eq!(model_fit.batch, Some(512));
+    assert_eq!(model_fit.batch, Some(2048));
     assert_eq!(model_fit.ubatch, Some(512));
 }
 

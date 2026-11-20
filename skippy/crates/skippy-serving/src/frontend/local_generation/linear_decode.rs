@@ -296,6 +296,7 @@ mod tests {
 
     use super::*;
     use crate::frontend::admission::GenerationTokenBudget;
+    use crate::frontend::generation::LoadedModel;
     use crate::frontend::generation::{
         GenerationConcurrencyController, InferenceBackendMode, InferenceCacheHints,
         InferenceGenerationIds,
@@ -420,8 +421,11 @@ mod tests {
             telemetry.clone(),
         )
         .unwrap();
+        let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
+            model: LoadedModel::from_runtime(&runtime),
+            runtime_lane_admission,
             workload: Default::default(),
             config: stage_config.clone(),
             telemetry,
@@ -465,6 +469,7 @@ mod tests {
         let request = LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 5,
             sampling: &sampling,
             chat_sampling_metadata: None,

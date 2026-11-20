@@ -9,6 +9,7 @@ use skippy_cache::{L2Hit, L2Origin, L2Stats, L2Tier, l2_cache_key};
 use skippy_runtime::RuntimeKvPageDesc;
 
 use crate::runtime_state::RuntimeState;
+use crate::telemetry::log_events::KvTier;
 
 use super::{
     ExactStateExtra, ExactStateRecordAdmission, ExactStateRestore, KvStageIntegration,
@@ -48,6 +49,10 @@ impl StageL2 {
             state_identity,
             promotions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(super) fn tier(&self) -> &Arc<L2Tier> {
+        &self.tier
     }
 
     pub(crate) fn get(
@@ -190,8 +195,10 @@ impl KvStageIntegration {
             return Ok(None);
         };
         let Some((key, hit)) = l2.get(identity, location) else {
+            super::tier_metrics::record_lookup(KvTier::L2, None);
             return Ok(None);
         };
+        super::tier_metrics::record_lookup(KvTier::L2, Some(hit.token_count));
         let token_count = hit.token_count;
         if token_count == 0 || token_count != location.token_count {
             l2.remove(&key);

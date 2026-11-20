@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ptr::{self, NonNull};
 
 use anyhow::{Context, Result, bail};
@@ -30,7 +31,9 @@ impl Cache {
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_ngram_cache_create(ngram_min, ngram_max, &mut raw, &mut error)
+            native_call!(skippy_ngram_cache_create(
+                ngram_min, ngram_max, &mut raw, &mut error
+            ))
         };
         super::ensure_ok(status, error)?;
         let raw = NonNull::new(raw).context("llama.cpp created a null N-gram cache")?;
@@ -62,7 +65,7 @@ impl Cache {
         let mut output_token_count = 0_usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_ngram_cache_draft(
+            native_call!(skippy_ngram_cache_draft(
                 self.raw.as_ptr(),
                 continuation_prefix.as_ptr(),
                 continuation_prefix.len(),
@@ -71,7 +74,7 @@ impl Cache {
                 output_tokens.len(),
                 &mut output_token_count,
                 &mut error,
-            )
+            ))
         };
         super::ensure_ok(status, error)?;
         if output_token_count > output_tokens.len() {
@@ -85,19 +88,19 @@ impl Cache {
         let mut error = ptr::null_mut();
         let status = unsafe {
             if reset {
-                skippy_ffi::skippy_ngram_cache_reset(
+                native_call!(skippy_ngram_cache_reset(
                     self.raw.as_ptr(),
                     tokens.as_ptr(),
                     tokens.len(),
                     &mut error,
-                )
+                ))
             } else {
-                skippy_ffi::skippy_ngram_cache_append(
+                native_call!(skippy_ngram_cache_append(
                     self.raw.as_ptr(),
                     tokens.as_ptr(),
                     tokens.len(),
                     &mut error,
-                )
+                ))
             }
         };
         super::ensure_ok(status, error)

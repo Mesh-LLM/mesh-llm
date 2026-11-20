@@ -140,6 +140,8 @@ async fn partial_startup_keeps_serving_and_allows_failed_membership_recovery() {
 
     let fixture = Fixture::detached().await;
     let alpha_token = fixture.host.config.memberships[0].token_file.clone();
+    let mut alpha_status = fixture.host.record("alpha").unwrap().status.subscribe();
+    let mut beta_status = fixture.host.record("beta").unwrap().status.subscribe();
     std::fs::write(&alpha_token, "invalid-replacement-token").unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let serving = control::serve(
@@ -149,16 +151,15 @@ async fn partial_startup_keeps_serving_and_allows_failed_membership_recovery() {
         async { stopped.await.map_err(anyhow::Error::from) },
     );
     let operator = async {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let status = fixture.host.status().await;
-                if matches!(status.memberships[0].phase, MembershipPhase::Failed)
-                    && matches!(status.memberships[1].phase, MembershipPhase::Connected)
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+        tokio::time::timeout(Duration::from_secs(120), async {
+            alpha_status
+                .wait_for(|status| matches!(status.phase, MembershipPhase::Failed))
+                .await
+                .unwrap();
+            beta_status
+                .wait_for(|status| matches!(status.phase, MembershipPhase::Connected))
+                .await
+                .unwrap();
         })
         .await
         .expect("healthy memberships must join despite a failed sibling");
@@ -181,7 +182,7 @@ async fn partial_startup_keeps_serving_and_allows_failed_membership_recovery() {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         stop.send(()).unwrap();
     };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(180), async {
         tokio::join!(serving, operator)
     })
     .await

@@ -1,6 +1,7 @@
 //! Stage configuration, topology, and activation contracts.
 
 use serde::{Deserialize, Deserializer, Serialize, de};
+use std::num::NonZeroU32;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageIdentity {
     pub run_id: String,
@@ -324,6 +325,48 @@ impl StageActivationCodecPolicy {
     }
 }
 
+/// The algorithm that forms the scheduler's batches: how long a batch waits
+/// for more requests, and which queued requests it takes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchPolicyKind {
+    /// Requests join a batch in the order they arrived, up to the lane count
+    /// and the token budget.
+    #[default]
+    ArrivalOrder,
+}
+
+impl BatchPolicyKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ArrivalOrder => "arrival_order",
+        }
+    }
+}
+
+/// Batch-forming settings. A value left unset is the one the policy chooses
+/// for the backend the stage runs on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchConfig {
+    #[serde(default)]
+    pub policy: Option<BatchPolicyKind>,
+    /// How long a batch of generated tokens waits for the other active
+    /// requests to join it, in microseconds.
+    #[serde(default)]
+    pub decode_window_us: Option<u32>,
+    /// How long a prompt waits for others to join its prefill wave, per
+    /// prompt token, in microseconds. `prefill_coalesce_max_ms` caps the total.
+    #[serde(default)]
+    pub prefill_window_per_token_us: Option<u32>,
+}
+
+impl BatchConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageConfig {
@@ -432,8 +475,39 @@ pub struct StageConfig {
     pub kv_unified: Option<bool>,
     #[serde(default)]
     pub swa_full: Option<bool>,
+    /// Cells in the unified KV pool, which the lanes share; at least
+    /// `ctx_size`. None reserves `ctx_size` for every lane, so each can reach
+    /// its window whatever the others hold.
+    #[serde(default)]
+    pub kv_pool_tokens: Option<NonZeroU32>,
+    /// Zero KV cells as the pool's high-water mark advances rather than all at
+    /// load. None and true are lazy wherever the cache supports it.
+    #[serde(default)]
+    pub kv_lazy_clear: Option<bool>,
+    /// Hand the pages of free KV cells back to the system. None and true
+    /// release wherever the pool's memory is host-visible.
+    #[serde(default)]
+    pub kv_release_pages: Option<bool>,
+    /// Read a unified pool through per-owner row lists. None and true use
+    /// them wherever the backend supports it; false keeps ordinary attention
+    /// over the whole pool.
+    #[serde(default)]
+    pub kv_row_attention: Option<bool>,
+    /// Threads that sample the requests of one decode wave. None and zero
+    /// use the scheduler thread plus as many pooled helpers as the wave and
+    /// the hardware allow; one samples every request on the scheduler
+    /// thread; any other value caps the scheduler thread plus helpers.
+    #[serde(default)]
+    pub sample_threads: Option<u32>,
     #[serde(default)]
     pub cache_idle_slots: Option<u32>,
+    /// The longest a prompt waits for others to join its prefill wave, in
+    /// milliseconds. None is the scheduler's own ceiling; zero never waits.
+    #[serde(default)]
+    pub prefill_coalesce_max_ms: Option<u32>,
+    /// How the scheduler forms its batches.
+    #[serde(default, skip_serializing_if = "BatchConfig::is_default")]
+    pub batch: BatchConfig,
     /// Exact native tensor names resolved locally from admitted package-v2
     /// tensor IDs. Empty is valid only for an unsplit full-model load.
     #[serde(
@@ -545,8 +619,10 @@ pub struct StageKvCacheConfig {
     pub max_entries: usize,
     #[serde(default)]
     pub max_bytes: u64,
-    /// Hard byte budget for the opt-in host-RAM L2 exact-state tier.
-    /// Zero keeps L2 disabled.
+    /// Host-RAM byte budget. Native resident caching uses this for retained
+    /// checkpoint and token metadata, independently of disk; zero selects its
+    /// bounded default. Serialized runtimes use an opt-in L2 mirror, where zero
+    /// disables that mirror.
     #[serde(default)]
     pub l2_max_bytes: u64,
     /// Exact-state retention ceiling; None derives eight times max_bytes.
@@ -561,6 +637,50 @@ pub struct StageKvCacheConfig {
     pub shared_prefix_stride_tokens: u64,
     #[serde(default = "default_kv_cache_shared_record_limit")]
     pub shared_prefix_record_limit: u64,
+    /// How a prompt enters the runtime once its prefix has been looked up.
+    #[serde(default)]
+    pub prefill_admission: StagePrefillAdmission,
+    /// What finished requests may keep resident in the KV pool for reuse.
+    #[serde(default)]
+    pub retention: StageKvRetention,
+}
+
+/// How many KV pool cells finished requests may keep resident, beyond what
+/// active sessions hold, so a later prompt can reuse them. Retention fills
+/// whatever it is allowed, and the pool's resident memory follows it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageKvRetention {
+    /// At most this many cells; zero keeps nothing once a request ends.
+    Tokens(u64),
+    /// Whatever the pool has room for.
+    Unbounded,
+}
+
+impl StageKvRetention {
+    /// A few dozen typical prompts, or four 4k-token contexts.
+    pub const DEFAULT_TOKENS: u64 = 16_384;
+}
+
+impl Default for StageKvRetention {
+    fn default() -> Self {
+        Self::Tokens(Self::DEFAULT_TOKENS)
+    }
+}
+
+/// Prompt admission policy. Prefix lookup and restore always run as one cache
+/// operation under the runtime lock; the policy decides who prefills the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StagePrefillAdmission {
+    /// The cache operation prefills the whole prompt itself: one prompt at a
+    /// time, and every other request's decode waits for it.
+    Serialized,
+    /// The cache operation restores the prefix only; the suffix is prefilled
+    /// as iteration batches that coalesce with other requests' prompt chunks
+    /// and decode rows.
+    #[default]
+    Cooperative,
 }
 
 fn default_kv_cache_mode() -> StageKvCacheMode {

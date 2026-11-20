@@ -1,3 +1,4 @@
+use super::http_request_span::openai_http_telemetry;
 use super::request_defaults::EmbeddedOpenAiRequestDefaults;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
@@ -10,8 +11,8 @@ use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::InferenceBackendMode;
+use crate::frontend::generation::LoadedModel;
 use crate::frontend::generation::PersistentStageLanePool;
-use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::attach_dflash_draft;
 use crate::frontend::generation::attach_native_mtp_draft_model;
@@ -27,10 +28,10 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
+use crate::runtime_state::loaded_model_state_kind;
 use crate::telemetry::Telemetry;
+use crate::telemetry::active_span::{ActiveSpan, SpanLevel};
 use crate::telemetry::lifecycle_attrs;
-use crate::telemetry::now_unix_nanos;
 use crate::thinking_probe::ThinkingProbeInputs;
 use crate::thinking_probe::emit_probe_status;
 use crate::thinking_probe::native_renderer_identity;
@@ -41,12 +42,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use axum::Router;
-use axum::body::Body;
-use axum::extract::State;
-use axum::http::Request;
 use axum::middleware;
-use axum::middleware::Next;
-use axum::response::Response;
 use serde_json::Value;
 use serde_json::json;
 use skippy_inference_api::InferenceBackend;
@@ -243,6 +239,13 @@ fn embedded_openai_backend_with_state_kind(
     iteration_scheduler: Option<IterationScheduler>,
     state_kind: Option<skippy_runtime::ModelStateKind>,
 ) -> Result<EmbeddedOpenAiBackend> {
+    // Startup work (prewarm, cache wiring, scheduler start) nests here.
+    let setup = ActiveSpan::start(
+        Some(&args.telemetry),
+        "stage.openai_server_setup",
+        SpanLevel::Summary,
+    );
+    let _setup = setup.enter();
     if args.prefill_chunk_size == 0 {
         bail!("--prefill-chunk-size must be greater than zero");
     }
@@ -390,6 +393,7 @@ fn embedded_openai_backend_with_state_kind(
     );
     args.telemetry
         .emit("stage.openai_server_start", server_start_attrs);
+    args.telemetry.record_resources("server_start");
     #[cfg(test)]
     if !modelless {
         prewarm_generation_sessions(
@@ -410,10 +414,9 @@ fn embedded_openai_backend_with_state_kind(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+    let kv = KvStageIntegration::from_runtime_with_l3_manager(
         &args.config,
-        loaded_model_state_kind(Some(&args.runtime)),
-        loaded_memory_cache_capabilities(Some(&args.runtime)),
+        &args.runtime,
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
@@ -428,6 +431,13 @@ fn embedded_openai_backend_with_state_kind(
         args.telemetry.emit("stage.kv_payload_selected", attrs);
     }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
+    let (generation_token_budget, runtime_lane_admission) = {
+        let mut runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
+        (
+            GenerationTokenBudget::shared_for_runtime(&mut runtime, ctx_size),
+            runtime.lane_admission(),
+        )
+    };
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
         None => IterationScheduler::new(
@@ -439,8 +449,11 @@ fn embedded_openai_backend_with_state_kind(
             args.telemetry.clone(),
         )?,
     };
+    let model = LoadedModel::from_runtime(&args.runtime);
     let stage_backend = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
+        model,
+        runtime_lane_admission,
         workload: Default::default(),
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
@@ -495,7 +508,7 @@ fn embedded_openai_backend_with_state_kind(
             args.generation_concurrency,
         )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
+        generation_token_budget,
         hook_policy: args.hook_policy,
         generation_receipt: args.generation_receipt,
         generation_lifecycle: args.generation_lifecycle,
@@ -627,34 +640,6 @@ pub(in crate::frontend) fn instrumented_openai_router(
             telemetry,
             openai_http_telemetry,
         ))
-}
-
-pub(in crate::frontend) async fn openai_http_telemetry(
-    State(telemetry): State<Telemetry>,
-    request: Request<Body>,
-    next: Next,
-) -> Response {
-    let timer = PhaseTimer::start();
-    let method = request.method().to_string();
-    let path = request.uri().path().to_string();
-    let response = next.run(request).await;
-    let status = response.status().as_u16();
-    let mut attrs = BTreeMap::from([
-        ("llama_stage.http_method".to_string(), json!(method)),
-        ("llama_stage.http_path".to_string(), json!(path)),
-        ("llama_stage.http_status".to_string(), json!(status)),
-    ]);
-    attrs.insert(
-        "llama_stage.elapsed_ms".to_string(),
-        json!(timer.elapsed_ms()),
-    );
-    telemetry.emit_span(
-        "stage.openai_http_request",
-        attrs,
-        timer.start_unix_nanos,
-        now_unix_nanos() as u64,
-    );
-    response
 }
 
 /// Readiness cannot be printed for a socket whose bind failed. A writer error
