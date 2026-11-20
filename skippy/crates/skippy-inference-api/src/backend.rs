@@ -75,6 +75,7 @@ pub struct InferenceRequestContext {
     trusted_agent_session: bool,
     execution_scope: Option<crate::InferenceExecutionScope>,
     execution_lease: Option<Arc<dyn crate::InferenceExecutionLease>>,
+    request_class: crate::InferenceRequestClass,
 }
 
 impl InferenceRequestContext {
@@ -133,6 +134,18 @@ impl InferenceRequestContext {
         self.execution_scope
     }
 
+    /// Set the tier and cache partition a trusted front end assigned to this
+    /// request. Without it a request is `local` and unpartitioned.
+    pub fn with_request_class(mut self, class: crate::InferenceRequestClass) -> Self {
+        self.request_class = class;
+        self
+    }
+
+    /// Return the request's tier and cache partition.
+    pub fn request_class(&self) -> crate::InferenceRequestClass {
+        self.request_class
+    }
+
     /// Return the frontend request identifier when the caller supplied one.
     pub fn request_id(&self) -> Option<RequestId> {
         self.request_id
@@ -172,6 +185,7 @@ impl Default for InferenceRequestContext {
             trusted_agent_session: false,
             execution_scope: None,
             execution_lease: None,
+            request_class: crate::InferenceRequestClass::default(),
         }
     }
 }
@@ -238,6 +252,16 @@ pub trait InferenceBackend: Send + Sync + 'static {
         Err(InferenceError::unsupported(
             "/v1/systemone is not supported by this backend",
         ))
+    }
+
+    /// Serve System One with the request's tier and isolation. The default
+    /// ignores the context for backends without tiered caches.
+    async fn system_one_with_context(
+        &self,
+        request: SystemOneRequest,
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<SystemOneResponse> {
+        self.system_one(request).await
     }
 
     /// Embed text or token batches. The default rejects unsupported backends.

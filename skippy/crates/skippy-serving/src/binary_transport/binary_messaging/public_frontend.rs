@@ -64,6 +64,7 @@ pub(super) fn start(launch: PublicFrontendLaunch) -> Result<Option<EmbeddedFront
                     adaptive_generation_min_concurrency: openai_options
                         .adaptive_generation_min_concurrency,
                     generation_queue_capacity: openai_options.generation_queue_capacity,
+                    local_kv_reserve_percent: 0,
                     generation_admission_timeout_secs: openai_options
                         .generation_admission_timeout_secs,
                     prefill_chunk_size: openai_options.prefill_chunk_size,

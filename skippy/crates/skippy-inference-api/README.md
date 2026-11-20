@@ -183,6 +183,22 @@ perform exact string matching on requests. Resolution to a concrete Hugging Face
 revision, GGUF file, split-shard distribution, local runtime, or staged binary
 chain remains backend-owned.
 
+## Request Tiers
+
+Every request carries an `InferenceRequestClass`: a tier (`local`, `trusted`
+or `mesh`, highest first) and whether it is private. A client of a standalone
+Skippy server can lower its own request with the `x-skippy-request-tier`
+header and put it in the private cache partition with
+`x-skippy-cache-partition` (any value counts as private); a request without
+them is `local` and not private. The router puts the class on the
+`InferenceRequestContext`; an embedding host that calls a backend directly
+sets it there itself. A backend reads the class from the context and stamps it on the
+`GenerationRequest` (`request_class`) for its hooks; request bodies never set
+it. `InferenceRequestClass::cache_namespace` turns the class into the cache
+namespace prefix (`tier:<partition>:`) that keeps each tier's, and each side
+of the private line's, cached prefixes apart; a `local`, non-private request
+keeps the plain namespace.
+
 ## Backend Responsibility Matrix
 
 | Area | Frontend responsibility | Backend responsibility | Status |

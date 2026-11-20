@@ -10,6 +10,7 @@ pub(super) async fn chat_completions(
 ) -> Result<Response, InferenceError> {
     let Json(request) = json_payload(payload)?;
     let mut request = GenerationRequest::from(request);
+    let class = crate::InferenceRequestClass::from_headers(&headers);
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
     request.set_agent_session(header_session);
@@ -17,7 +18,8 @@ pub(super) async fn chat_completions(
     if request.stream {
         let include_usage = request.include_usage();
         let model = request.model.clone();
-        let backend_context = request_context(context.request_id, trusted_agent_session, true);
+        let backend_context =
+            request_context(context.request_id, class, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
@@ -72,7 +74,8 @@ pub(super) async fn chat_completions(
         }
         Ok(response)
     } else {
-        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let backend_context =
+            request_context(context.request_id, class, trusted_agent_session, false);
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
@@ -120,6 +123,7 @@ pub(super) async fn responses(
     let request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
         InferenceError::invalid_request(format!("invalid Responses request: {error}"))
     })?;
+    let class = crate::InferenceRequestClass::from_headers(&headers);
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
     let mut request = GenerationRequest::from(request);
@@ -131,9 +135,9 @@ pub(super) async fn responses(
     request.validate()?;
     match normalization.response_adapter {
         ResponseAdapterMode::OpenAiResponsesStream => {
-            stream_responses(&state, &context, request, trusted_agent_session).await
+            stream_responses(&state, &context, request, class, trusted_agent_session).await
         }
-        _ => non_streaming_responses(&state, &context, request, trusted_agent_session).await,
+        _ => non_streaming_responses(&state, &context, request, class, trusted_agent_session).await,
     }
 }
 
@@ -141,10 +145,11 @@ async fn stream_responses(
     state: &FrontendState,
     context: &InferenceLifecycleContext,
     request: GenerationRequest,
+    class: crate::InferenceRequestClass,
     trusted_agent_session: bool,
 ) -> Result<Response, InferenceError> {
     let include_usage = request.include_usage();
-    let backend_context = request_context(context.request_id, trusted_agent_session, true);
+    let backend_context = request_context(context.request_id, class, trusted_agent_session, true);
     let cancellation = backend_context.cancellation_token();
     let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
     let stream = call_backend_with_context(
@@ -195,9 +200,10 @@ async fn non_streaming_responses(
     state: &FrontendState,
     context: &InferenceLifecycleContext,
     request: GenerationRequest,
+    class: crate::InferenceRequestClass,
     trusted_agent_session: bool,
 ) -> Result<Response, InferenceError> {
-    let backend_context = request_context(context.request_id, trusted_agent_session, false);
+    let backend_context = request_context(context.request_id, class, trusted_agent_session, false);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         context,

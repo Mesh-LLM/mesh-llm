@@ -31,6 +31,8 @@ pub struct InferenceOptions {
     pub pipeline_decode_groups: Option<usize>,
     pub adaptive_generation_min_concurrency: Option<usize>,
     pub generation_queue_capacity: usize,
+    /// Percent of the KV token budget only `local`-tier requests may reserve.
+    pub local_kv_reserve_percent: u8,
     pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
@@ -88,6 +90,7 @@ impl InferenceOptions {
             generation_queue_capacity: skippy_serving::frontend::default_generation_queue_capacity(
                 generation_concurrency,
             ),
+            local_kv_reserve_percent: 0,
             generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
             prefill_chunk_size: BUILTIN_PREFILL_CHUNK_SIZE,
             prefill_chunk_policy: skippy_config::local_serving::PREFILL_CHUNK_POLICY.to_string(),
@@ -148,6 +151,7 @@ impl InferenceOptions {
             pipeline_decode_groups: self.pipeline_decode_groups,
             adaptive_generation_min_concurrency: self.adaptive_generation_min_concurrency,
             generation_queue_capacity: self.generation_queue_capacity,
+            local_kv_reserve_percent: self.local_kv_reserve_percent,
             generation_admission_timeout_secs: self.generation_admission_timeout_secs,
             prefill_chunk_size: self.prefill_chunk_size,
             prefill_chunk_policy: self.prefill_chunk_policy,

@@ -464,7 +464,7 @@ async fn inflated_prediction_waits_for_capacity_and_preserves_queue_bounds() {
     let timeout = Duration::from_secs(1);
     let predicted = controller
         .generation_service_estimator
-        .predicted_wait_ms()
+        .predicted_wait_ms(skippy_inference_api::InferenceRequestTier::Local)
         .unwrap();
     assert!(predicted > timeout.as_secs_f64() * 1_000.0);
     let ids = trusted_ids("agent-2");
@@ -499,7 +499,9 @@ async fn inflated_prediction_waits_for_capacity_and_preserves_queue_bounds() {
     assert_eq!(controller.generation_limit.available_permits(), 1);
     assert_eq!(controller.generation_token_budget.active_tokens(), 0);
     assert_eq!(
-        controller.generation_service_estimator.predicted_wait_ms(),
+        controller
+            .generation_service_estimator
+            .predicted_wait_ms(skippy_inference_api::InferenceRequestTier::Local),
         Some(0.0)
     );
     assert!(
@@ -546,7 +548,9 @@ async fn advisory_prediction_does_not_bypass_an_expired_admission_deadline() {
     assert_eq!(controller.generation_limit.available_permits(), 1);
     assert_eq!(controller.generation_token_budget.active_tokens(), 0);
     assert_eq!(
-        controller.generation_service_estimator.predicted_wait_ms(),
+        controller
+            .generation_service_estimator
+            .predicted_wait_ms(skippy_inference_api::InferenceRequestTier::Local),
         Some(0.0)
     );
 }

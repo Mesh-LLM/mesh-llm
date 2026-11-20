@@ -707,6 +707,7 @@ mod identity_completeness_tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            max_request_tier: None,
         }
     }
 
@@ -1079,6 +1080,7 @@ mod identity_stability_tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            max_request_tier: None,
         }
     }
 

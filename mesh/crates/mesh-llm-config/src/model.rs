@@ -2,6 +2,7 @@ mod built_in_schema;
 mod multimodal;
 mod private;
 mod profile;
+mod request_tiers;
 mod runtime;
 mod schema_types;
 mod updates;
@@ -14,6 +15,7 @@ pub use built_in_schema::{
 pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
 pub use private::{PrivateConfig, is_node_id};
+pub use request_tiers::{RequestTierName, RequestTiersConfig};
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
@@ -46,6 +48,9 @@ pub struct MeshConfig {
     /// `[private]`: the other nodes this node's private requests may reach.
     #[serde(default, skip_serializing_if = "PrivateConfig::is_empty")]
     pub private: PrivateConfig,
+    /// `[request_tiers]`: whose requests this node serves first.
+    #[serde(default, skip_serializing_if = "RequestTiersConfig::is_empty")]
+    pub request_tiers: RequestTiersConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
@@ -1231,6 +1236,8 @@ struct RawMeshConfig {
     #[serde(default)]
     private: PrivateConfig,
     #[serde(default)]
+    request_tiers: RequestTiersConfig,
+    #[serde(default)]
     telemetry: TelemetryConfig,
     #[serde(default)]
     analytics: AnalyticsConfig,
@@ -1359,6 +1366,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
             private: raw.private,
+            request_tiers: raw.request_tiers,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
             updates: raw.updates,

@@ -62,6 +62,7 @@ pub(crate) async fn messages(
     >,
 ) -> Result<Response, AnthropicRejection> {
     let Json(request) = json_payload(payload)?;
+    let class = crate::InferenceRequestClass::from_headers(&headers);
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
     let mut generation_request = messages_request_to_generation(request)?;
@@ -69,9 +70,23 @@ pub(crate) async fn messages(
     generation_request.validate()?;
 
     if generation_request.stream {
-        streaming_messages(&state, context, generation_request, trusted_agent_session).await
+        streaming_messages(
+            &state,
+            context,
+            generation_request,
+            class,
+            trusted_agent_session,
+        )
+        .await
     } else {
-        non_streaming_messages(&state, context, generation_request, trusted_agent_session).await
+        non_streaming_messages(
+            &state,
+            context,
+            generation_request,
+            class,
+            trusted_agent_session,
+        )
+        .await
     }
 }
 
@@ -79,9 +94,10 @@ async fn non_streaming_messages(
     state: &FrontendState,
     context: InferenceLifecycleContext,
     request: crate::generation::GenerationRequest,
+    class: crate::InferenceRequestClass,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
-    let backend_context = request_context(context.request_id, trusted_agent_session, false);
+    let backend_context = request_context(context.request_id, class, trusted_agent_session, false);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
@@ -113,11 +129,12 @@ async fn streaming_messages(
     state: &FrontendState,
     context: InferenceLifecycleContext,
     request: crate::generation::GenerationRequest,
+    class: crate::InferenceRequestClass,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
     let model = request.model.clone();
     let request_id: RequestId = context.request_id;
-    let backend_context = request_context(request_id, trusted_agent_session, true);
+    let backend_context = request_context(request_id, class, trusted_agent_session, true);
     let cancellation = backend_context.cancellation_token();
     let stream = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
@@ -251,8 +268,9 @@ pub(crate) async fn messages_count_tokens(
     >,
 ) -> Result<Json<Value>, AnthropicRejection> {
     let Json(request) = json_payload(payload)?;
+    let class = crate::InferenceRequestClass::from_headers(&headers);
     let session = agent_session_from_header(&state.config, &headers)?;
-    let backend_context = request_context(context.request_id, session.is_some(), false);
+    let backend_context = request_context(context.request_id, class, session.is_some(), false);
     let mut chat = messages_request_to_generation(request.into_messages())?;
     chat.set_agent_session(session);
     chat.validate()?;

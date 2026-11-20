@@ -55,6 +55,7 @@ impl StageOpenAiBackend {
             &prefill_tokens[..restored_tokens],
             request.ids.request_id,
             request.ids.session_id,
+            request.ids.request_class(),
         )?;
         write_stage_message_conditioned(
             &mut *downstream,

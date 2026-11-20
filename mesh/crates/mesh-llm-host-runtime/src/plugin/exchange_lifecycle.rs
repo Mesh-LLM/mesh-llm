@@ -221,11 +221,12 @@ impl PluginManager {
                 ..Default::default()
             };
         };
-        {
+        let tier = {
             let state = state.lock().unwrap();
             event["exchange_id"] = json!(state.exchange_id);
             event["endpoint"] = json!(state.endpoint);
-        }
+            state.tier
+        };
         event["observation_id"] = json!(observation_id);
         if let Some(id) = event["backend_exchange_id"].as_str() {
             let mut emission = state.lock().unwrap();
@@ -247,7 +248,10 @@ impl PluginManager {
         let mut result = self
             .exchange_permissions_preflight(event["endpoint"].as_str().unwrap_or_default())
             .await;
-        result.merge(self.exchange_phase(event.clone()).await);
+        result.merge(
+            crate::mesh::request_tier::with_request_tier(tier, self.exchange_phase(event.clone()))
+                .await,
+        );
         let mut state = state.lock().unwrap();
         let skipped = more_candidates && result.is_candidate_deny();
         // A hook that failed to observe the skipped attempt still leaves the
@@ -484,11 +488,22 @@ async fn invoke_phase(
     // moment it can see the request: the body stream is sent first.
     let private_call = crate::mesh::current_private_scope()
         .map(|scope| manager.begin_private_invocation(name, Some(scope)));
-    if let Some(encoded) = event["body_hex"].as_str() {
-        let bytes = hex::decode(encoded).map_err(|_| HookFailure::Internal)?;
-        if bytes.len() as u64 > grant.max_body_bytes {
-            return Err(HookFailure::EvidenceUnavailable);
-        }
+    let body = event["body_hex"]
+        .as_str()
+        .map(|encoded| hex::decode(encoded).map_err(|_| HookFailure::Internal))
+        .transpose()?;
+    if body
+        .as_ref()
+        .is_some_and(|bytes| bytes.len() as u64 > grant.max_body_bytes)
+    {
+        return Err(HookFailure::EvidenceUnavailable);
+    }
+    // It also runs no higher than the request's tier, from just before the
+    // body is sent to the hook's reply: a hook past its deadline may still
+    // be working.
+    let tiered_call =
+        manager.begin_tiered_invocation(name, crate::mesh::request_tier::current_request_tier());
+    if let Some(bytes) = body {
         let kind = if phase == "request_received" {
             "openai_exchange_original"
         } else {
@@ -543,6 +558,9 @@ async fn invoke_phase(
         }
     };
     let reply = reply.map_err(|_| HookFailure::Internal)?;
+    if let Some(call) = tiered_call {
+        call.finish();
+    }
     if reply.is_error || reply.output_json.len() > 32 * 1024 {
         return Err(HookFailure::Internal);
     }
@@ -644,6 +662,9 @@ struct EmissionState {
     selected: Option<Value>,
     evidence_unavailable: bool,
     internal_hook_failure: bool,
+    /// The exchange's request tier: a phase reached from the backend runs on
+    /// the backend's task, not the request's.
+    tier: skippy_inference_api::InferenceRequestTier,
 }
 
 #[derive(Default)]
@@ -682,6 +703,8 @@ pub(crate) struct ExchangeSession {
     response_delivery: BTreeMap<String, bool>,
     /// A private exchange's private scope, restored for its terminal callback.
     scope: Option<crate::mesh::PrivateScope>,
+    /// The exchange's request tier, restored for its terminal callback.
+    tier: skippy_inference_api::InferenceRequestTier,
     /// For a private exchange, keeps every observing plugin's own inference
     /// private from admission to its terminal callback: between callbacks it
     /// still holds request and response content.
@@ -716,6 +739,7 @@ impl ExchangeSession {
                 .unwrap_or(1),
         );
         let deadline = Instant::now() + budget;
+        let tier = crate::mesh::request_tier::current_request_tier();
         let scope = crate::mesh::current_private_scope();
         let private_observers = match &scope {
             Some(scope) => manager
@@ -755,6 +779,7 @@ impl ExchangeSession {
             denied: result.denied,
             evidence_unavailable: result.evidence_unavailable,
             internal_hook_failure: result.internal_hook_failure,
+            tier,
             ..Default::default()
         }));
         manager
@@ -783,6 +808,7 @@ impl ExchangeSession {
                 finished: false,
                 response_delivery: BTreeMap::new(),
                 scope,
+                tier,
                 private_observers,
             },
             result,
@@ -824,6 +850,7 @@ impl ExchangeSession {
             finished: true,
             response_delivery: BTreeMap::new(),
             scope: self.scope.clone(),
+            tier: self.tier,
             private_observers: std::mem::take(&mut self.private_observers),
         }
     }
@@ -831,10 +858,13 @@ impl ExchangeSession {
     /// its observers' private binding.
     async fn run_terminal(mut self, outcome: String) {
         let scope = self.scope.clone();
-        crate::mesh::with_private_scope(scope, async {
-            let terminal = self.final_terminal_event(&outcome).await;
-            self.manager.exchange_phase(terminal).await;
-        })
+        crate::mesh::with_private_scope(
+            scope,
+            crate::mesh::request_tier::with_request_tier(self.tier, async {
+                let terminal = self.final_terminal_event(&outcome).await;
+                self.manager.exchange_phase(terminal).await;
+            }),
+        )
         .await;
         for observer in std::mem::take(&mut self.private_observers) {
             observer.finish();

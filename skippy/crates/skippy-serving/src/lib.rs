@@ -40,6 +40,7 @@ mod legacy_scheduler_absence_tests {
 pub mod serving_hooks;
 pub mod settings;
 pub mod split_dflash;
+mod stage_request_class;
 pub mod telemetry;
 pub mod thinking_probe;
 pub mod tokenizer;

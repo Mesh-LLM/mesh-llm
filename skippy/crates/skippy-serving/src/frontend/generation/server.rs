@@ -98,6 +98,8 @@ pub struct EmbeddedOpenAiArgs {
     pub pipeline_decode_groups: Option<usize>,
     pub adaptive_generation_min_concurrency: Option<usize>,
     pub generation_queue_capacity: usize,
+    /// Percent of the KV token budget only `local`-tier requests may reserve.
+    pub local_kv_reserve_percent: u8,
     pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
@@ -434,7 +436,11 @@ fn embedded_openai_backend_with_state_kind(
     let (generation_token_budget, runtime_lane_admission) = {
         let mut runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
         (
-            GenerationTokenBudget::shared_for_runtime(&mut runtime, ctx_size),
+            GenerationTokenBudget::shared_for_runtime(
+                &mut runtime,
+                ctx_size,
+                args.local_kv_reserve_percent,
+            ),
             runtime.lane_admission(),
         )
     };

@@ -52,6 +52,17 @@ enqueue-time score and is emitted as stale-fallback telemetry. New arrivals may
 re-rank the remaining queue. This request radix is scheduling-only and never
 changes unified-cache recency.
 
+Explicit priority is the request tier when serving (`local` above `trusted`
+above `mesh`). Each time `PRIORITY_AGING_TURNS` higher-priority candidates
+are selected ahead of a waiting candidate, it ranks one level higher, but
+only up to a level another candidate holds, so the order stays total and
+age never reorders candidates of one priority. Callers count those
+selections with `PriorityPassovers` and pass each candidate's
+`passed_over`. For
+eviction, `EvictableCacheEntry::retention_priority` ranks ahead of recompute
+value: serving sets it from the tier that stored the entry, so the lowest
+tier is evicted first.
+
 ## License
 
 Licensed under Apache-2.0.

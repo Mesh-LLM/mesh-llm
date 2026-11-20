@@ -112,13 +112,23 @@ impl PluginManager {
         // request's own node limit when it is itself a nested call.
         let private_call =
             || private.then(|| self.begin_private_invocation(plugin_name, node_limit.clone()));
+        // They also run no higher than the request's tier.
+        let tiered_call = || {
+            self.begin_tiered_invocation(
+                plugin_name,
+                crate::mesh::request_tier::current_request_tier(),
+            )
+        };
         if self.is_test_bridge_enabled(plugin_name) {
-            let call = private_call();
+            let (call, tiered) = (private_call(), tiered_call());
             let output = self
                 .mcp_request(plugin_name, "request_transform/invoke", input)
                 .await;
             if let Some(call) = call {
                 call.finish();
+            }
+            if let Some(tiered) = tiered {
+                tiered.finish();
             }
             return output;
         }
@@ -128,22 +138,26 @@ impl PluginManager {
         // The plugin is done once it replies, whatever the reply says; the
         // call runs to that reply even if the client leaves.
         let (manager, name) = (self.clone(), plugin_name.to_string());
-        let response = super::private_invocations::run_to_reply(private_call(), async move {
-            let plugin = manager
-                .inner
-                .plugins
-                .get(&name)
-                .with_context(|| format!("Unknown plugin '{name}'"))?;
-            plugin
-                .invoke_service(
-                    proto::ServiceKind::RequestTransform,
-                    SERVICE_NAME,
-                    &input_json,
-                    Some(TRANSFORM_TIMEOUT),
-                )
-                .await
-        })
-        .await?;
+        let tiered = tiered_call();
+        let call = Box::pin(super::private_invocations::run_to_reply(
+            private_call(),
+            async move {
+                let plugin = manager
+                    .inner
+                    .plugins
+                    .get(&name)
+                    .with_context(|| format!("Unknown plugin '{name}'"))?;
+                plugin
+                    .invoke_service(
+                        proto::ServiceKind::RequestTransform,
+                        SERVICE_NAME,
+                        &input_json,
+                        Some(TRANSFORM_TIMEOUT),
+                    )
+                    .await
+            },
+        ));
+        let response = super::tiered_invocations::run_to_reply(tiered, call).await?;
         if response.is_error {
             bail!(
                 "request transform plugin '{plugin_name}' failed: {}",
