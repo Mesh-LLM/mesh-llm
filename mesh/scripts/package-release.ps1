@@ -383,6 +383,10 @@ try {
     Copy-Item $meshBinary -Destination $bundleBinary -Force
     Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
     Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
+    # After stamping, so the report names the host that ships.
+    & bash (Join-Path $scriptDir "check-host-imports.sh").Replace("\", "/") $bundleBinary.Replace("\", "/") --report (Join-Path $bundleDir "host-imports.json").Replace("\", "/") | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "check-host-imports.sh failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path (Join-Path $bundleDir "host-imports.json"))) { throw "check-host-imports.sh wrote no host-imports.json" }
 
     $runtimeRoot = Join-Path $bundleDir "native-runtimes"
     $bundledRuntime = Join-Path $runtimeRoot (Split-Path -Leaf ([System.IO.Path]::GetFullPath($nativeRuntimeDir).TrimEnd("\")))

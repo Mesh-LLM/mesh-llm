@@ -390,6 +390,8 @@ main() {
     fi
     stamp_bundle_binary "$bundle_binary"
     verify_mesh_binary_version "$bundle_binary" "$version"
+    # After stamping, so the report names the host that ships.
+    "$SCRIPT_DIR/check-host-imports.sh" "$bundle_binary" --report "$bundle_dir/host-imports.json" >/dev/null
 
     [[ -f "$NATIVE_RUNTIME_DIR/manifest.json" ]] ||
         { echo "MESH_LLM_NATIVE_RUNTIME_DIR must name a native runtime directory with manifest.json (got '${NATIVE_RUNTIME_DIR}')" >&2; exit 1; }

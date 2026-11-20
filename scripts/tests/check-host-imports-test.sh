@@ -41,5 +41,23 @@ out="$(printf 'libc.so.6\n' | PATH="$stub:$PATH" "$check" --names 2>&1)" &&
 [[ "$out" == *"grep failed with status 2"* ]] ||
     { echo "FAIL: a failing grep was not reported: $out" >&2; fail=1; }
 
+# A passing host gets a report that names its SHA-256. The copy has its own
+# floor file so the test does not depend on this machine's glibc.
+cp "$check" "$stub/check-host-imports.sh"
+echo 999 >"$stub/linux-glibc-floor.txt"
+cp "$(command -v bash)" "$stub/host"
+sha="$( (sha256sum "$stub/host" 2>/dev/null || shasum -a 256 "$stub/host") | awk '{print $1}')"
+"$stub/check-host-imports.sh" "$stub/host" --report "$stub/report.json" >/dev/null ||
+    { echo "FAIL: this machine's bash was refused" >&2; fail=1; }
+for want in '"binary": "host"' "\"binary_sha256\": \"$sha\"" '"policy": "mesh-llm-dynamic-host-v2"' \
+    '"rejected_imports": []' '"imports": [' '"glibc_floor": ' '"format": "'; do
+    grep -qF -- "$want" "$stub/report.json" || { echo "FAIL: the report lacks $want" >&2; fail=1; }
+done
+# A failed check removes the report that was there and writes none.
+PATH="$stub:$PATH" "$stub/check-host-imports.sh" "$stub/host" --report "$stub/report.json" >/dev/null 2>&1 &&
+    { echo "FAIL: a failing grep was accepted for a host" >&2; fail=1; }
+[[ -z "$(find "$stub" -name 'report.json*')" ]] ||
+    { echo "FAIL: a failed check left a report behind" >&2; fail=1; }
+
 ((fail == 0)) && echo "check-host-imports-test: ok"
 exit "$fail"

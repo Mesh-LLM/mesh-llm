@@ -25,12 +25,10 @@ An entry is removed in the same change that closes it.
 - **Windows inference.** The packaged Windows host is version-checked but not
   run against a model.
 - **Host import check.** `scripts/check-host-imports.sh` refuses a host that
-  links CUDA, ROCm, Vulkan, Metal, ggml or llama. Only its macOS branch has
-  run; the Linux and Windows branches have not. It restores the
-  refusal only: the old `host-imports.json` audit record, which tied the
-  import list to the host's SHA-256, is no longer written into the archive.
-  `Mesh-LLM/mesh-packaging` still requires that file in every archive it
-  repackages.
+  links CUDA, ROCm, Vulkan, Metal, ggml or llama, or that needs a newer glibc
+  than the Linux floor, and writes `host-imports.json` into the archive with
+  the SHA-256 of the signed host. Only its macOS branch has run. The Linux and
+  Windows branches, and the call from `package-release.ps1`, have not.
 - **Docker images and npm.** The handoff to `Mesh-LLM/mesh-packaging` is off.
   That repository reads `native-runtimes.json` and the GPU archives from the
   MeshLLM release, which no longer has them. Its identity-bound dispatch and
@@ -68,8 +66,9 @@ just release v0.81.0 --canary   # rehearsal: builds, packages and smokes; pushes
    MeshLLM's own installer, builds the host with `just release-build`, signs
    and packages it with `just release-bundle`, then unpacks the archive it will
    publish and checks the signature, the signed commit and target, that the
-   host links no inference backend, the Linux glibc floor, and (except on
-   Windows) a real inference request.
+   host links no inference backend and stays within the Linux glibc floor,
+   that `host-imports.json` in the archive describes that exact host, and
+   (except on Windows) a real inference request.
 3. **Builds the SDKs**, each in its own job: the Swift XCFramework and
    `Package.swift`, the Kotlin native library for three targets, and the Node
    addon for four.

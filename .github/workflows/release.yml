@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           missing=(
             "Windows: the packaged host is not run against a model, only version-checked."
-            "Host import check: its Linux and Windows branches have never run; only the macOS one has."
+            "Host import check and report: the Linux and Windows branches, and the call from package-release.ps1, have never run; only macOS has."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
             "NVIDIA and AMD machines: no run on real hardware shows the host downloading and loading a GPU runtime. Tests cover only the choice."
             "Updating from 0.80.0 on Windows: the step that swaps in the new runtime and manifest is a PowerShell script that no test runs. The Unix path is covered."
@@ -320,22 +320,15 @@ jobs:
               { echo "signed claims do not match this build: $summary" >&2; exit 1; }
           fi
 
-      - name: Check the packaged host links no inference backend
-        env:
-          HOST: ${{ steps.bundle.outputs.host }}
-        run: scripts/check-host-imports.sh "$HOST"
-
-      - name: Check the Linux glibc floor
-        if: runner.os == 'Linux'
+      - name: Check the packaged host's imports, glibc floor and import report
         env:
           HOST: ${{ steps.bundle.outputs.host }}
         run: |
           set -euo pipefail
-          floor="$(grep -v '^#' scripts/linux-glibc-floor.txt | tr -d '[:space:]')"
-          needed="$(objdump -T "$HOST" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1)"
-          echo "host needs glibc $needed; the declared floor is $floor"
-          [[ "$(printf '%s\n%s\n' "$needed" "$floor" | sort -V | tail -n 1)" == "$floor" ]] ||
-            { echo "host needs a newer glibc than scripts/linux-glibc-floor.txt allows" >&2; exit 1; }
+          # Check the unpacked host again, then require the report in the
+          # archive to be the report of this exact host, SHA-256 included.
+          scripts/check-host-imports.sh "$HOST" --report "$RUNNER_TEMP/host-imports.json"
+          diff "$RUNNER_TEMP/host-imports.json" "$(dirname "$HOST")/host-imports.json"
 
       - name: Restore the test model
         if: runner.os != 'Windows'
