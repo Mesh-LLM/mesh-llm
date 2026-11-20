@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/release.sh <version|vversion> [--skip-gpu-bundles] [--canary]
+usage: scripts/release.sh <version|vversion> [--canary]
 
 Runs a synchronous release from main:
   1. verifies gh and the local git state
@@ -132,8 +132,7 @@ confirm_release() {
     local tag="$1"
     local version="$2"
     local current_version="$3"
-    local skip_gpu_bundles="$4"
-    local canary="$5"
+    local canary="$4"
     local answer
 
     cat <<EOF
@@ -146,7 +145,6 @@ This will:
   - publish $tag with GitHub-generated release notes after all release checks pass
 
 Options:
-  - skip GPU bundles: $skip_gpu_bundles
   - canary: $canary
 
 Continue? y/N
@@ -163,14 +161,12 @@ EOF
 
 dispatch_release_workflow() {
     local tag="$1"
-    local skip_gpu_bundles="$2"
-    local canary="$3"
+    local canary="$2"
 
     echo "Dispatching Release workflow for $tag..." >&2
     gh workflow run release.yml \
         --ref main \
         --raw-field "version=$tag" \
-        --raw-field "skip_gpu_bundles=$skip_gpu_bundles" \
         --raw-field "canary=$canary"
 }
 
@@ -236,14 +232,10 @@ main() {
     local raw_version="$1"
     shift
 
-    local skip_gpu_bundles="false"
     local canary="false"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --skip-gpu-bundles)
-                skip_gpu_bundles="true"
-                ;;
             --canary)
                 canary="true"
                 ;;
@@ -278,7 +270,7 @@ main() {
     ensure_target_version_not_older "$current_version" "$version"
     ensure_github_release_preflight "$tag"
 
-    confirm_release "$tag" "$version" "$current_version" "$skip_gpu_bundles" "$canary"
+    confirm_release "$tag" "$version" "$current_version" "$canary"
 
     local dispatch_sha
     local dispatch_started_at
@@ -286,7 +278,7 @@ main() {
     local run_id
     dispatch_sha="$(git rev-parse origin/main)"
     dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    run_url="$(dispatch_release_workflow "$tag" "$skip_gpu_bundles" "$canary")"
+    run_url="$(dispatch_release_workflow "$tag" "$canary")"
     run_id="$(workflow_run_id_from_url "$run_url")"
     if [[ -z "$run_id" ]]; then
         run_id="$(find_dispatched_release_run_id "$dispatch_sha" "$dispatch_started_at")"
