@@ -125,10 +125,19 @@ pub fn repo_root() -> PathBuf {
         .expect("repo root")
 }
 
+/// Skippy is an external project: its sources and crates are named in the
+/// inventory as producers, but only Mesh-owned ones can be checked here.
+pub fn is_external_source_path(path: &str) -> bool {
+    path.starts_with("skippy/")
+}
+
+pub fn is_external_package(package: &str) -> bool {
+    package.starts_with("skippy-")
+}
+
 pub fn crate_package_names() -> BTreeSet<String> {
-    ["mesh/crates", "skippy/crates"]
-        .into_iter()
-        .flat_map(|directory| fs::read_dir(repo_root().join(directory)).expect("crates directory"))
+    fs::read_dir(repo_root().join("mesh/crates"))
+        .expect("crates directory")
         .filter_map(Result::ok)
         .map(|entry| entry.path().join("Cargo.toml"))
         .filter(|path| path.is_file())

@@ -3,7 +3,10 @@ use std::fs;
 
 use sha2::{Digest, Sha256};
 
-use crate::support::{crate_package_names, crate_root, load_inventory, repo_root};
+use crate::support::{
+    crate_package_names, crate_root, is_external_package, is_external_source_path, load_inventory,
+    repo_root,
+};
 
 #[test]
 fn carrier_reason_callback_and_terminal_contracts_are_complete() {
@@ -119,7 +122,7 @@ fn source_paths_packages_privacy_and_delivery_are_valid() {
             family
                 .source_paths
                 .iter()
-                .all(|path| root.join(path).is_file()),
+                .all(|path| is_external_source_path(path) || root.join(path).is_file()),
             "invalid source path in {}",
             family.section
         );
@@ -127,7 +130,7 @@ fn source_paths_packages_privacy_and_delivery_are_valid() {
             family
                 .owning_crates
                 .iter()
-                .all(|package| package_names.contains(package)),
+                .all(|package| is_external_package(package) || package_names.contains(package)),
             "invalid Cargo package in {}",
             family.section
         );
