@@ -171,6 +171,9 @@ pub fn candidate_cost_input(
     }
 }
 
+/// Minimum evidence required before cache locality may change routing.
+pub const DEFAULT_MIN_SAVED_TOKENS: u32 = 256;
+
 /// Whether this request shares enough with any cached prefix for a hit to be
 /// credited at all. A shorter or unknown shared prefix cannot earn the minimum
 /// credit, so neither a cache lease nor cache evidence applies to it.

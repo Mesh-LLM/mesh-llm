@@ -3,8 +3,9 @@
 //! Host and client runtimes intentionally keep their policy-specific wrappers
 //! in their existing `network::affinity` modules.  This module owns only the
 //! deterministic fallback ordering that both consumers share. Cache-aware
-//! target selection consumes explicit evidence from [`crate::cache_aware`]; it
-//! never learns a target merely because a request succeeded.
+//! target selection consumes explicit evidence through
+//! [`crate::request_cost`]; it never learns a target merely because a request
+//! succeeded.
 
 use crate::{InferenceTarget, ModelTargets};
 use iroh::EndpointId;

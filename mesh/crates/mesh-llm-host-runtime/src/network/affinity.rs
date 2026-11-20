@@ -13,7 +13,7 @@ const MIN_PROMPT_SIZE_SAMPLE_TOKENS: u64 = 64;
 const PROMPT_SIZE_MAX_MODELS: usize = 1_024;
 
 /// Smallest credited prefix that lets a cache hit override normal routing.
-const MIN_SAVED_TOKENS: u32 = mesh_llm_routing::cache_aware::DEFAULT_MIN_SAVED_TOKENS;
+const MIN_SAVED_TOKENS: u32 = request_cost::DEFAULT_MIN_SAVED_TOKENS;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
