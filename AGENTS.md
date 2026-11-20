@@ -2,9 +2,9 @@
 
 ## Repository and instruction scope
 
-This is one Cargo workspace with two products: standalone Skippy in `skippy/` and MeshLLM in `mesh/`. Mesh depends on Skippy; Skippy must not depend on Mesh crates or plugin hosts. Product-specific guidance is in `skippy/AGENTS.md` and `mesh/AGENTS.md`. Read both when changing their integration.
+This repository is MeshLLM. Its product tree is `mesh/`, and product guidance is in `mesh/AGENTS.md`. Skippy, the inference runtime, lives in its own repository and is built, tested and released there. MeshLLM depends on Skippy's crates at the Git revision pinned in the root `Cargo.toml` and `Cargo.lock`, and loads a packaged Skippy runtime at run time. Do not add Skippy source, llama.cpp patches, GPU runtime builds or Skippy tests here.
 
-Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, CI, and cross-workspace tooling are shared infrastructure. There is no `shared/` product tree. Product scripts and their tests live under the owning product; root script forwarders preserve CI entrypoints. Build outputs and native working caches remain at root `target/` and `.deps/`. The generated website output is root `docs/`; do not hand-edit it.
+Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, `scripts/` and `.github/` are shared infrastructure. There is no `shared/` product tree. Some root scripts forward to `mesh/scripts/`. Build outputs remain at root `target/`, and CI checks Skippy out under `.deps/skippy`. The generated website output is root `docs/`; do not hand-edit it.
 
 ## Shared docs
 
@@ -12,24 +12,24 @@ Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, CI, and cross-workspace too
 |---|---|
 | `README.md` | Quickstart and documentation hub |
 | `CONTRIBUTING.md` | Build from source and development workflow |
-| `RELEASE.md` | Shared release process |
+| `RELEASE.md` | Release process and the checks a release still lacks |
 | `ROADMAP.md` | Future directions |
-| `skippy/AGENTS.md` | Skippy build, native ABI, serving, and crate guidance |
+| `.github/AGENTS.md` | What the CI workflows run |
 | `mesh/AGENTS.md` | MeshLLM host, protocol, UI, deployment, and crate guidance |
 
 The canonical repo-local skills live under `.agents/skills/`; the selectable release-validation specialist is defined in `.agents/agents/release-validation.md`.
 
-Generate and check the public Skippy native API documentation through `cargo xtool automation native-generator contracts api-doc` and `cargo xtool automation native-generator contracts api-doc --check`; follow `skippy/AGENTS.md` for the owning native preparation and documentation paths.
-
 ## Building
 
-Always use `just`. Never build manually. Bare `just` (or `just build`) builds Skippy first, then MeshLLM. Use `just skippy` or `just mesh` for one product; `just release-build` builds both release products in the same order. The products share a workspace version and release tag but have distinct deliverables.
+Always use `just`. Never build manually. Bare `just` (or `just build`) builds the MeshLLM host and its console. `just release-build` builds the release host. Neither builds an inference runtime.
 
-`cargo check` and `cargo build` do not count as complete product builds: they skip native ABI preparation and the console, and `cargo check` produces no binary. Choose the owning product's `AGENTS.md` for product-specific build and packaging commands. See `CONTRIBUTING.md` for the full workflow.
+`cargo check` and `cargo build` do not count as complete product builds: they skip the console, and `cargo check` produces no binary. See `mesh/AGENTS.md` for packaging commands and `CONTRIBUTING.md` for the full workflow.
+
+To build against a local Skippy checkout instead of the pinned revision, run `scripts/skippy-source.sh <checkout>`; `scripts/skippy-source.sh --pinned` goes back. The override is `.cargo/skippy-local.toml`, which is not committed. Do not commit the `Cargo.lock` it produces.
 
 ### Distribution builds
 
-Packagers build MeshLLM and Skippy from source in a clean environment and install them as system packages. Keep that possible:
+Packagers build MeshLLM from source in a clean environment and install them as system packages. Keep that possible:
 
 - No build step downloads when its input is already provided (a pinned source checkout, vendored crates and node modules). Packagers can supply their own tools instead of bundled binaries: a tool the build needs is taken from the environment when it is set, as `PROTOC` is; the bundled fallback stays for builds that don't set one.
 - The code compiles with the newer compilers distributions ship, not only with CI's: include what you use.
@@ -91,9 +91,9 @@ When to add a new workspace crate.
 
 Product crate documentation.
 
-- Every crate under `mesh/crates/` or `skippy/crates/` needs a non-empty `description` in its `Cargo.toml` and a `README.md` at the crate root.
+- Every crate under `mesh/crates/` needs a non-empty `description` in its `Cargo.toml` and a `README.md` at the crate root.
 - The README should identify the crate's purpose, what it owns and does not own, and its primary consumers. Add build or usage instructions when the crate exposes a binary or a workflow that contributors run directly. Keep small crates' READMEs concise; do not add boilerplate sections merely for symmetry.
-- Use working relative links for local files and neighboring crates. The Quality contract test checks README presence, manifest descriptions, and local Markdown link destinations; it does not substitute for reviewing whether the explanation is accurate.
+- Use working relative links for local files and neighboring crates. No check in this repository enforces this any more, so review it by hand.
 
 ## Code Quality Rules for New Code
 
@@ -115,16 +115,11 @@ Product crate documentation.
 Run Cargo commands serially. Do not run multiple Cargo commands in parallel: this workspace frequently hits package-cache and artifact-directory lock conflicts.
 
 - For a touched workspace crate, run focused `cargo check -p <crate>` and `cargo test -p <crate> --lib` during iteration.
-- Before a PR, run the full `cargo test -p <crate>` for every crate CI will test: usually the crates you changed plus their workspace dependents. Root build files and llama pin/patch changes escalate to the whole workspace (the command below prints that). Changes with no crate path (workflows, CI config, just recipes) leave the command's list empty — validate them per the minimum-validation table below instead, and run `just test-all` when the change alters which tests or build options CI invokes or changes the `test-all` recipe itself.
-- `cargo xtool repository affected-crates <paths from your diff against the PR base>` prints CI's list in its `affected` field (a bare invocation prints an empty list), and `just test-all` is the broad fallback, though it runs skippy-runtime and skippy-serving lib-only there.
-- `--lib` skips the integration-test binaries and the doc tests, and CI runs both for the crates it executes (`ci-rust-tests-slice.yml`), so a `--lib`-only run can be green while CI is red.
-- `cargo clippy --all-targets` type-checks test code but never executes it, so a green Clippy run
-  is not a test run either. Before pushing, run the full tests for every crate CI will test,
-  including workspace dependents (`just ci-automation-contracts` for `xtask`; on non-Windows hosts
-  that recipe skips the Windows-only tests CI runs, so run affected platform-specific tests on
-  Windows when available), and treat a failure caught locally as cheap, a failure caught by pushed
-  CI as expensive.
-- Exceptions: `xtask` runs its suites through `just ci-automation-contracts`; `skippy-ffi` is skipped by that slice and no CI job runs its own tests, so run `cargo test -p skippy-ffi --lib` yourself if you touched it; and CI additionally runs one feature-gated `claude-code-integration` real-client test for `mesh-llm-host-runtime` inline.
+- Before a PR, run the full `cargo test -p <crate>` for the crates you changed and the workspace crates that depend on them. CI runs `just test-rust --locked`, which is `cargo test --workspace`, on Linux, macOS and Windows.
+- `just test-all` runs what a pull request must pass except the inference smoke: `just lint`, `just test-rust` and `just test-ui`. Use it for a broad change, and when you change a `just` recipe or a script that CI calls.
+- `--lib` skips the integration-test binaries and the doc tests, and CI runs both, so a `--lib`-only run can be green while CI is red.
+- `cargo clippy --all-targets` type-checks test code but never executes it, so a green Clippy run is not a test run either. Treat a failure caught locally as cheap and a failure caught by pushed CI as expensive.
+- CI's inference smoke (`just smoke <runtime-dir> <model.gguf>`, Unix only) needs a packaged Skippy CPU runtime and a GGUF model. `scripts/ci-skippy-runtime.sh` builds that runtime from a Skippy checkout.
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
 - When CI fails on a PR, first confirm the failing run belongs to the current head commit and
@@ -133,21 +128,11 @@ Run Cargo commands serially. Do not run multiple Cargo commands in parallel: thi
   Then read the failing job's log directly rather than polling the check rollup, which lags and
   keeps stale results from superseded runs.
 
-For new repository automation, follow the Rust ownership rule in
-`.agents/skills/manage-ci/SKILL.md` and spec section 7.5: do not write new
-Python tooling, including temporary, inline, or skill-local helpers. Reuse or
-extend typed `tools/xtask` commands and call them from thin Just recipes;
-`cargo xtool repo-consistency ci-crate-lists` is an existing command from the
-repository root. Do not move generic policy into shell, PowerShell, or
-JavaScript. Existing Python validation and workflow entrypoints below remain
-transitional until Rust or component-owned tests cover their shape and intent.
-Do not commit Python emulation or differential tests that invoke Python; delete
-each legacy implementation with its last caller switch and validate in normal
-CI. Preserve real consumed outputs and failure semantics.
+Repository automation is plain `just` recipes and scripts under `scripts/`, with their tests under `scripts/tests/`. The `tools/xtask` crate and its `cargo xtool` and `cargo xtask` commands were removed with the in-tree Skippy build; do not call them or bring them back. Put logic in a script that can run locally, not in workflow YAML, and wire a new script test into `just lint`.
 
 ### Tests in clean build environments
 
-Distribution packagers run the test suite while building MeshLLM and Skippy, in a clean environment that has only the declared build dependencies, often on busy or slow machines. Every test that runs by default must pass there; a test that really needs the network or particular hardware is opt-in, behind a feature gate (as `claude-live-model-integration` is) or `#[ignore]`d with the reason.
+Distribution packagers run the test suite while building MeshLLM, in a clean environment that has only the declared build dependencies, often on busy or slow machines. Every test that runs by default must pass there; a test that really needs the network or particular hardware is opt-in, behind a feature gate (as `claude-live-model-integration` is) or `#[ignore]`d with the reason.
 
 - No network: no DNS, no outgoing connections, no CA bundle. Serve fixtures locally, as the lifecycle tests do with a local `HF_ENDPOINT`.
 - Only declared tools: no fixed paths such as `/usr/bin/true` or `/bin/bash`, and no system tools a minimal environment lacks (`ps`, `sysctl`). Use the standard library, or find a tool on `PATH`.
@@ -168,9 +153,9 @@ Use a clear, user-focused commit subject and PR title. Conventional Commit prefi
 Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
 
 - Rust change — format changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings`. Follow the owning product's additional validation rules.
-- Python SDK change — use the in-tree component under `mesh/sdk/python`. Its component command is `"$SDK_PYTHON" -I -B mesh/sdk/python/tests/test_client.py`; mock FFI coverage is separate from the four locked ecosystem clients and their preserved required compatibility or embedding-workload cadence. Binding generation uses this repository's Mesh source, the existing UniFFI 0.32.0 generator and an already built native library; staging has no consumer compiler fallback. External Python research changes still use their owning source pin and locked dependencies. Reader constructor fixtures use native `just agentic-trajectory-reader-contracts`. Generic repository policy and CI planning use `just ci-validate`, including `ci-automation-contracts` and the native `ci-legacy-contracts`; do not restore the retired generic Python unittest gate.
+- Python SDK change — use the in-tree component under `mesh/sdk/python`. Its component command is `"$SDK_PYTHON" -I -B mesh/sdk/python/tests/test_client.py`. Binding generation uses this repository's Mesh source, the existing UniFFI 0.32.0 generator and an already built native library. No CI job in this repository runs the Python SDK checks today, so run them yourself.
 - UI-only change — follow `mesh/AGENTS.md` and run `just build`.
-- CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
+- CI workflow or CI script change — run `actionlint` and `just lint` (ShellCheck and the script tests), plus any additional checks required by the CI section below.
 - Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface, plus tests that consume the changed surface when such tests exist.
 - Mixed change — run the union of the checks required for each changed surface.
 
@@ -183,25 +168,17 @@ Do not rerun otherwise unchanged validation solely because a commit is about to 
 - If you must invoke `rustfmt` directly on a standalone file, pass the edition resolved from that manifest lookup, for example `--edition 2024` for the current workspace default; otherwise use `cargo fmt` through the owning package.
 - Before committing Rust changes, ensure the formatting check passes with `cargo fmt --all --check`.
 - After Rust changes, run `cargo check` and `cargo clippy --all-targets -- -D warnings` for each touched crate (`-p <crate>`). Follow the owning product's additional validation rules.
-- If a change is reachable from the shipped MeshLLM binary, also run `cargo check -p mesh-llm` and `cargo clippy -p mesh-llm --all-targets -- -D warnings`, including when the changed code is owned by Skippy.
+- If a change is reachable from the shipped MeshLLM binary, also run `cargo check -p mesh-llm` and `cargo clippy -p mesh-llm --all-targets -- -D warnings`.
 - Treat Clippy as a required local gate, not a CI-only cleanup step. `cargo check`, `just build`, and formatter success do not catch lints such as `clippy::collapsible-if`; run the warning-denying Clippy command before opening or updating a PR.
-- If you touched tests, public APIs, routing, inference, gossip, plugin protocol, skippy ABI, or CLI behavior, run the relevant tests before committing.
+- If you touched tests, public APIs, routing, inference, gossip, plugin protocol, or CLI behavior, run the relevant tests before committing.
 - Do not report a build or test step as complete until the command has actually exited with code `0`.
 - Run Rust validation serially. Do not run multiple `cargo` commands at the same time.
 
 ### CI changes
 
-Before inspecting, running, defining, editing, reviewing, or documenting CI,
-read `.agents/skills/manage-ci/SKILL.md` completely. The `manage-ci` skill is
-the canonical source for workflow, dependency, runner/worker, image, cache,
-artifact, variable, secret, permission, release, deployment, operational, and
-validation rules. Start every `.github/`, CI-script, or runner-integration edit
-there.
+Before editing CI, read `.github/AGENTS.md` and `.agents/skills/manage-ci/SKILL.md`. Both are short. The workflow list is in `.agents/skills/manage-ci/references/current-inventory.md`; update it in the same change as a workflow.
 
-Keep `.agents/skills/manage-ci/references/current-inventory.md` synchronized
-with the checked-in CI contract and `ci/ci.md` synchronized with topology. When
-a CI rule changes, update the skill first rather than adding duplicate guidance
-to this file or `.github/AGENTS.md`.
+The rules for the CI that built Skippy in this repository are kept only as history under `.agents/skills/manage-ci/references/`. Do not follow them.
 
 ### Commit standard
 

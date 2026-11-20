@@ -2,6 +2,10 @@
 
 ## 2026-11-06: retain the external AgentX client
 
+> **Historical for this repository.** `skippy/evals/agentx/` and
+> `ci/python-tooling-policy.json` left with the in-tree Skippy build. The
+> decision is kept as a record; nothing here implements it now.
+
 James directed: “we must make allowances for agentx.” This answered the proposal
 to admit PR #2746's existing pinned upstream client and locked environment,
 with setup using an installed Python 3.12 interpreter.
