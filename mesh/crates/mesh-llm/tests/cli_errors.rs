@@ -146,3 +146,39 @@ fn benchmark_tune_remote_only_target_reports_local_only_rejection() {
         "stderr should explain the no-download local-only contract, got: {stderr:?}"
     );
 }
+
+/// Both runtime bundle variables reach discovery: a directory named by either
+/// one must exist.
+#[test]
+fn mesh_and_skippy_bundle_variables_are_both_read() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("isolated home should be created");
+    for (set, unset) in [
+        (
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+            "SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR",
+        ),
+        (
+            "SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR",
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+        ),
+    ] {
+        let missing = temp.path().join(format!("missing-{set}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+            .args(["runtime", "list", "--installed", "--json"])
+            .env("HOME", &home)
+            .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", home.join("cache"))
+            .env("SKIPPY_NATIVE_RUNTIME_CACHE_DIR", "")
+            .env(set, &missing)
+            .env(unset, "")
+            .output()
+            .expect("mesh-llm command should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{set}: {stderr}");
+        assert!(
+            stderr.contains("native runtime bundle directory does not exist"),
+            "{set} should be read by discovery, got: {stderr}"
+        );
+    }
+}

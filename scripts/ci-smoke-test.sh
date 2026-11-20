@@ -31,11 +31,15 @@ missing_runtime_error="no compatible MeshLLM native runtime"
 
 work="$(mktemp -d)"
 pid=""
-stop() { # stop and reap the server, leaving its exit status in $status
-    status=0
+stop() { # stop and reap the server: TERM, then KILL after 10 seconds
     [[ -n "$pid" ]] || return 0
     kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || status=$?
+    for _ in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.5
+    done
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
     pid=""
 }
 cleanup() {

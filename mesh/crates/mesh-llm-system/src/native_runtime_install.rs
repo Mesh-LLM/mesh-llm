@@ -24,8 +24,16 @@ pub const SKIPPY_RELEASES_URL: &str = "https://github.com/Mesh-LLM/skippy/releas
 /// Mesh names for the runtime locations. Skippy reads its own
 /// `SKIPPY_NATIVE_RUNTIME_*` names; every function in this module that takes
 /// a location also honours these, by passing them to Skippy as explicit
-/// inputs. An argument beats a Mesh variable; a Mesh variable beats the
-/// Skippy one. Empty values count as unset.
+/// inputs. Empty values count as unset.
+///
+/// Cache directory and manifest URL are single values: an argument beats the
+/// Mesh variable, which beats the Skippy one.
+///
+/// Bundle directories are a search list: arguments, then the Mesh variable,
+/// then the Skippy variable, then the directories beside the executable.
+/// Earlier entries win when two hold the same runtime. Every listed directory
+/// must exist, whichever name supplied it, because Skippy's discovery always
+/// reads its own variable.
 pub const MESH_NATIVE_RUNTIME_BUNDLE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR";
 pub const MESH_NATIVE_RUNTIME_CACHE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR";
 pub const MESH_NATIVE_RUNTIME_MANIFEST_URL_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL";
