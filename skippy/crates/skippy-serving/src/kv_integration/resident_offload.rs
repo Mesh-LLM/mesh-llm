@@ -50,14 +50,14 @@ impl KvStageIntegration {
         if !self.records_resident_prefixes() {
             return kind != skippy_cache::ExactStatePayloadKind::RecurrentOnly;
         }
-        self.loaded_memory_cache.is_some_and(|caps| {
-            if caps.resident_attention {
-                kind == skippy_cache::ExactStatePayloadKind::KvRecurrent
-            } else {
-                caps.resident_checkpoint
-                    && kind == skippy_cache::ExactStatePayloadKind::RecurrentOnly
-            }
-        })
+        self.resident_checkpoint_shape()
+            .is_some_and(|shape| shape.payload_kind() == kind)
+    }
+
+    /// The parts a resident prefix of this stage is checkpointed by.
+    fn resident_checkpoint_shape(&self) -> Option<skippy_runtime::CheckpointShape> {
+        self.loaded_memory_cache
+            .and_then(skippy_runtime::CheckpointShape::of_resident)
     }
 
     pub(super) fn native_components_are_complete(
@@ -66,11 +66,8 @@ impl KvStageIntegration {
         recurrent_bytes: u64,
         has_descriptor: bool,
     ) -> bool {
-        self.loaded_memory_cache.is_none_or(|caps| {
-            !caps.resident
-                || ((!caps.resident_attention || (kv_bytes > 0 && has_descriptor))
-                    && (!caps.resident_checkpoint || recurrent_bytes > 0))
-        })
+        self.resident_checkpoint_shape()
+            .is_none_or(|shape| shape.is_covered_by(kv_bytes, recurrent_bytes, has_descriptor))
     }
 
     pub(super) fn release_native_prefix(
