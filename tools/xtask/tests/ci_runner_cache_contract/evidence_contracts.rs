@@ -440,7 +440,7 @@ fn trusted_caller_exceptions_preserve_explicit_native_cache_decisions() {
 }
 
 #[test]
-fn current_seed_recipe_compiles_host_and_isolated_automation_clippy_dependencies() {
+fn current_seed_recipe_compiles_host_automation_and_standalone_skippy_dependencies() {
     let source = fs::read_to_string(root().join("just/ci.just")).unwrap();
     let body = source.split_once("\nci-sccache-seed-build:\n").unwrap().1;
     let commands: Vec<_> = body
@@ -455,6 +455,7 @@ fn current_seed_recipe_compiles_host_and_isolated_automation_clippy_dependencies
             "cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime",
             "CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run",
             "cargo clippy --locked -p xtask --all-targets -- -D warnings",
+            "just skippy-cli-release-build",
         ]
     );
     let host = fs::read_to_string(root().join("mesh/scripts/build-host.sh")).unwrap();

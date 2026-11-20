@@ -1338,7 +1338,11 @@ Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
 `just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
 the isolated `mesh-llm-cli` test graph, and the isolated default-feature `xtask`
-Clippy graph with all targets. Every profile disables debug information in the
+Clippy graph with all targets, then appends `just skippy-cli-release-build` for
+the standalone Skippy default-feature release graph with `dynamic-native-runtime`.
+Three paired runs at `83a16398df` measured a median 204.3 s standalone saving
+with about 291 MB more seed data, below the unchanged 2 GiB cap. Every profile
+disables debug information in the
 warmer and its consumers. The shared key also
 hashes the root and workspace package Cargo manifests and the warmer workflow
 so feature and profile changes invalidate the seed. Depot selections cannot
