@@ -18,6 +18,11 @@ on each node that buys or serves paid inference.
 
 **Lexe** provisions a mainnet wallet when Mesh starts with a fresh profile.
 
+For an existing Lexe wallet, follow the
+[existing-wallet guidance](https://github.com/Mesh-LLM/lexe-wallet-plugin#state-and-safety)
+before upgrading. Legacy `wallet-lexe` profiles require migration. Preserve your
+wallet state and recovery seed.
+
 ```sh
 mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/lexe-wallet-plugin
 ```
