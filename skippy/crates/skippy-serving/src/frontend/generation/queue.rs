@@ -811,6 +811,16 @@ pub(in crate::frontend) fn prewarm_generation_sessions(
     let timer = PhaseTimer::start();
     let mut runtime = lock_runtime(runtime);
     let generation_graph_warmed = runtime.warmup_generation_graph()?;
+    // The one-token warmup above does not reserve the graphs real traffic
+    // uses: the first full prefill ubatch and the first concurrent decode
+    // wave each grow the reservation mid-request. Warm the serving shapes
+    // now so no request pays the graph growth.
+    let warmup_prefill_tokens = config
+        .n_ubatch
+        .or(config.n_batch)
+        .unwrap_or(512)
+        .min(config.ctx_size.saturating_sub(64)) as usize;
+    runtime.warmup_serving_shapes(warmup_prefill_tokens)?;
     let sessions = runtime.prewarm_idle_sessions(generation_concurrency)?;
     let mut attrs = lifecycle_attrs(config);
     attrs.insert(

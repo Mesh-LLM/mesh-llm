@@ -1,0 +1,63 @@
+From f42a1b0b76dd941b65d5e68224721ac0aff22e8a Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Tue, 17 Nov 2026 18:35:00 +1100
+Subject: [PATCH] perf(llama): stop re-reserving the sched on sampler detach
+
+Detaching a sampler only shrinks the graph and does not require a fresh
+reservation. Attaching or replacing a chain can grow the graph, so retain
+reservation on attachment and preserve any outstanding shape-change reserve.
+
+Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cdc64c836b@buzz.gdk.so>
+---
+ src/llama-context.cpp | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 5ed43df0e..64840c0cc 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1712,7 +1712,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+             warned = true;
+         }
+         if (sampling.samplers.count(seq_id) > 0) {
+-            sched_need_reserve = true;
++            // Detaching only shrinks what the reservation must cover; a
++            // detach must not force the next request to re-reserve.
+         }
+         sampling.samplers.erase(seq_id);
+         return false;
+@@ -1731,6 +1732,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+ 
+         sampling.samplers[seq_id] = sampler;
+ 
++        // Each attached chain can grow the graph, including a replacement.
++        // Preserve any reservation already required by a shape change.
+         sched_need_reserve = true;
+ 
+         return true;
+@@ -1739,10 +1742,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+     if (sampler && !can_offload) {
+         LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler), seq_id);
+ 
+-        if (sampling.samplers.count(seq_id) > 0) {
+-            sched_need_reserve = true;
+-        }
+-
++        // Detaching only shrinks what the reservation must cover; a detach
++        // must not force the next request to re-reserve.
+         sampling.samplers.erase(seq_id);
+ 
+         return false;
+@@ -1750,7 +1751,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+ 
+     sampling.samplers.erase(seq_id);
+ 
+-    sched_need_reserve = true;
++    // Detaching only shrinks what the reservation must cover; a detach must
++    // not force the next request to re-reserve.
+ 
+     return true;
+ }
+-- 
+2.54.0 (Apple Git-157)
+
