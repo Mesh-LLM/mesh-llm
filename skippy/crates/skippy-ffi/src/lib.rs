@@ -223,6 +223,9 @@ pub use dynamic::{
 };
 
 #[cfg(feature = "dynamic-runtime")]
+pub use dynamic::load_native_runtime_libraries_with_cpu_backend_dir;
+
+#[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{
     skippy_clear_runtime_event_reporter_fn, skippy_set_gpu_command_timing_callback_fn,
     skippy_set_native_span_callback_fn, skippy_set_runtime_event_reporter_fn,

@@ -40,6 +40,7 @@ mod dynamic {
         pub(crate) root: PathBuf,
         pub(crate) selected_library_path: PathBuf,
         pub(crate) libraries: Vec<PathBuf>,
+        pub(crate) cpu_backend_dir: Option<PathBuf>,
         pub(crate) source: NativeRuntimePlanSource,
     }
 
@@ -180,15 +181,20 @@ mod dynamic {
             resolution.unavailable(mesh_llm_runtime_event_contracts::ReasonCode::MissingArtifact);
             return Ok(None);
         };
-        unsafe { skippy_runtime::load_native_runtime_libraries(&plan.libraries) }
-            .map_err(anyhow::Error::from)
-            .with_context(|| {
-                format!(
-                    "load local native runtime {} from {} for embedded serving",
-                    plan.native_runtime_id,
-                    plan.root.display()
-                )
-            })?;
+        unsafe {
+            skippy_runtime::load_native_runtime_libraries_with_cpu_backend_dir(
+                &plan.libraries,
+                plan.cpu_backend_dir.as_deref(),
+            )
+        }
+        .map_err(anyhow::Error::from)
+        .with_context(|| {
+            format!(
+                "load local native runtime {} from {} for embedded serving",
+                plan.native_runtime_id,
+                plan.root.display()
+            )
+        })?;
         resolution.library_loaded();
         install_runtime_scoped_event_reporter();
         resolution.initialized();
@@ -218,9 +224,14 @@ mod dynamic {
             default_install_options,
             default_install_executor,
             startup_selection,
-            |libraries| {
-                let result = unsafe { skippy_runtime::load_native_runtime_libraries(libraries) }
-                    .map_err(anyhow::Error::from);
+            |libraries, cpu_backend_dir| {
+                let result = unsafe {
+                    skippy_runtime::load_native_runtime_libraries_with_cpu_backend_dir(
+                        libraries,
+                        cpu_backend_dir,
+                    )
+                }
+                .map_err(anyhow::Error::from);
                 if result.is_ok() {
                     install_runtime_scoped_event_reporter();
                 }
@@ -349,7 +360,7 @@ mod dynamic {
         InstallOptionsFn: Fn() -> NativeRuntimeInstallOptions,
         InstallExecutorFn: Fn(NativeRuntimeInstallOptions) -> InstallFuture,
         InstallFuture: Future<Output = Result<NativeRuntimeInstallOutcome>>,
-        LoadLibrariesFn: Fn(&[PathBuf]) -> Result<()>,
+        LoadLibrariesFn: Fn(&[PathBuf], Option<&Path>) -> Result<()>,
     {
         if native_runtime_loaded() {
             return Ok(None);
@@ -365,7 +376,7 @@ mod dynamic {
         else {
             return Ok(None);
         };
-        load_libraries(&plan.libraries).with_context(|| {
+        load_libraries(&plan.libraries, plan.cpu_backend_dir.as_deref()).with_context(|| {
             format!(
                 "load native runtime {} from {}",
                 plan.native_runtime_id,
@@ -725,6 +736,7 @@ mod dynamic {
             root: load_plan.root,
             selected_library_path,
             libraries: load_plan.libraries,
+            cpu_backend_dir: load_plan.cpu_backend_dir,
             source,
         })
     }
@@ -824,6 +836,24 @@ mod dynamic {
                 },
             };
             manifest.write_to_dir(dir).unwrap();
+        }
+
+        fn add_cpu_backend_variants(dir: &Path) -> PathBuf {
+            use sha2::{Digest, Sha256};
+
+            let backend_dir = dir.join("lib");
+            let mut manifest = NativeRuntimeManifest::read_from_dir(dir).unwrap();
+            for name in ["libggml-cpu-sandybridge.so", "libggml-cpu-haswell.so"] {
+                let relative = Path::new("lib").join(name);
+                let path = dir.join(&relative);
+                fs::write(&path, name.as_bytes()).unwrap();
+                manifest.runtime.files.insert(
+                    relative.to_string_lossy().into_owned(),
+                    hex::encode(Sha256::digest(fs::read(path).unwrap())),
+                );
+            }
+            manifest.write_to_dir(dir).unwrap();
+            backend_dir
         }
 
         fn test_library_rel_path() -> PathBuf {
@@ -1443,7 +1473,7 @@ mod dynamic {
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
-                    move |_libraries| {
+                    move |_libraries, _cpu_backend_dir| {
                         *load_calls.lock().unwrap() += 1;
                         Ok(())
                     }
@@ -1513,7 +1543,7 @@ mod dynamic {
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
-                    move |_libraries| {
+                    move |_libraries, _cpu_backend_dir| {
                         *load_calls.lock().unwrap() += 1;
                         Ok(())
                     }
@@ -1566,6 +1596,7 @@ mod dynamic {
                 native_runtime_id: runtime_id.to_string(),
                 root: runtime_dir.clone(),
                 libraries: vec![runtime_dir.join(test_library_rel_path())],
+                cpu_backend_dir: None,
             };
 
             let plan = startup_load_plan_from_installed(
@@ -1667,9 +1698,10 @@ mod dynamic {
             let release_version = "0.68.0";
             let runtime_dir = cache.runtime_dir(release_version, runtime_id);
             write_runtime(&runtime_dir, release_version, runtime_id);
+            let expected_cpu_backend_dir = add_cpu_backend_variants(&runtime_dir);
 
             let install_calls = Arc::new(Mutex::new(0_usize));
-            let load_calls = Arc::new(Mutex::new(Vec::<Vec<PathBuf>>::new()));
+            let load_calls = Arc::new(Mutex::new(Vec::<(Vec<PathBuf>, Option<PathBuf>)>::new()));
 
             let runtime = try_load_installed_native_runtime_with(
                 || false,
@@ -1693,8 +1725,11 @@ mod dynamic {
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
-                    move |libraries| {
-                        load_calls.lock().unwrap().push(libraries.to_vec());
+                    move |libraries, cpu_backend_dir| {
+                        load_calls
+                            .lock()
+                            .unwrap()
+                            .push((libraries.to_vec(), cpu_backend_dir.map(Path::to_path_buf)));
                         Ok(())
                     }
                 },
@@ -1709,7 +1744,10 @@ mod dynamic {
                 runtime.libraries,
                 vec![runtime_dir.join(test_library_rel_path())]
             );
-            assert_eq!(load_calls.lock().unwrap().as_slice(), &[runtime.libraries]);
+            assert_eq!(
+                load_calls.lock().unwrap().as_slice(),
+                &[(runtime.libraries, Some(expected_cpu_backend_dir))]
+            );
         }
 
         #[tokio::test]
@@ -1759,7 +1797,7 @@ mod dynamic {
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
-                    move |libraries| {
+                    move |libraries, _cpu_backend_dir| {
                         load_calls.lock().unwrap().push(libraries.to_vec());
                         Ok(())
                     }
@@ -1838,7 +1876,7 @@ mod dynamic {
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
-                    move |libraries| {
+                    move |libraries, _cpu_backend_dir| {
                         load_calls.lock().unwrap().push(libraries.to_vec());
                         Ok(())
                     }
@@ -1899,7 +1937,7 @@ mod dynamic {
                 ),
                 {
                     let load_calls = Arc::clone(&load_calls);
-                    move |_| {
+                    move |_, _cpu_backend_dir| {
                         *load_calls.lock().unwrap() += 1;
                         Ok(())
                     }
@@ -2075,7 +2113,7 @@ mod dynamic {
                     }
                 },
                 startup_selection,
-                |libraries| {
+                |libraries, _cpu_backend_dir| {
                     let _ = libraries;
                     Ok(())
                 },
