@@ -45,7 +45,9 @@ fn reran_without_runtime_overrides(test: &str) -> bool {
         return false;
     }
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-    child.args(["--exact", test, "--nocapture"]);
+    // `--exact` keeps the child to the calling test. `--include-ignored` lets
+    // it run when the caller is an ignored test that was asked for.
+    child.args(["--exact", test, "--include-ignored", "--nocapture"]);
     for name in RUNTIME_OVERRIDES {
         child.env_remove(name);
     }
