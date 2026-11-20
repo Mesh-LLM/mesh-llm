@@ -17,7 +17,7 @@ workspace = true
 dynamic-native-runtime = ["skippy-commands/dynamic-native-runtime"]
 
 [dependencies]
-skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.80.0" }
+skippy-commands = { workspace = true }
 anyhow.workspace = true
 clap.workspace = true
 mesh-llm-build-info.workspace = true

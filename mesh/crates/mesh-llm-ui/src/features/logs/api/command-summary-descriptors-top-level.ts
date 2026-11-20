@@ -38,7 +38,7 @@ export const TOP_LEVEL_DESCRIPTORS: readonly SummaryDescriptor[] = [
     '--model-id',
     '--flavor',
     '--timeout',
-    '--mesh-llm-ref',
+    '--skippy-ref',
     '--status',
     '--logs',
     '--cancel'

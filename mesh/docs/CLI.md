@@ -388,7 +388,7 @@ Switches:
 - `--model-id <MODEL_ID>`: OpenAI-facing package model id.
 - `--flavor <FLAVOR>`: package flavor, default `auto`.
 - `--timeout <DURATION>`: HF Jobs timeout, default `1h` unless size estimates raise it.
-- `--mesh-llm-ref <REF>`: mesh-llm git ref used inside the job, default `main`.
+- `--skippy-ref <REF>`: Skippy git ref used inside the job, default `main`. `--mesh-llm-ref` is accepted as the old name on `model-prepare`.
 - `--dry-run`: print the resolved plan, selected hardware, timeout, and maximum cost without side effects.
 - `--confirm`: submit the job.
 - `--follow`: wait for submitted job progress.

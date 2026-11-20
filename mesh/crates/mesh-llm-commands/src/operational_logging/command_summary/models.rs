@@ -14,7 +14,7 @@ pub(super) fn format_models(
             generation_defaults,
             flavor,
             timeout,
-            mesh_llm_ref,
+            skippy_ref,
             experimental,
             dry_run,
             confirm,
@@ -34,7 +34,7 @@ pub(super) fn format_models(
             assembly.redact("--generation-defaults", generation_defaults.is_some());
             assembly.redact("--flavor", flavor != "auto");
             assembly.redact("--timeout", timeout != "1h");
-            assembly.redact("--mesh-llm-ref", mesh_llm_ref != "main");
+            assembly.redact("--skippy-ref", skippy_ref != "main");
             assembly.flag("experimental", *experimental);
             assembly.flag("dry-run", *dry_run);
             assembly.flag("confirm", *confirm);
@@ -158,7 +158,7 @@ pub(super) fn format_model_prepare(
     assembly.redact("--model-id", options.model_id.is_some());
     assembly.redact("--flavor", options.flavor != "auto");
     assembly.redact("--timeout", options.timeout != "1h");
-    assembly.redact("--mesh-llm-ref", options.mesh_llm_ref != "main");
+    assembly.redact("--skippy-ref", options.skippy_ref != "main");
     assembly.flag("dry-run", options.dry_run);
     assembly.flag("confirm", options.confirm);
     assembly.flag("follow", options.follow);

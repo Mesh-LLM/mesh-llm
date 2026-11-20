@@ -9,22 +9,17 @@ members = [
     "mesh/crates/mesh-llm-wallet",
     "mesh/crates/mesh-llm-events",
     "mesh/crates/mesh-llm-build-info",
-    "skippy/crates/skippy-gpu-bench",
     "mesh/crates/mesh-llm-host-runtime",
     "mesh/crates/mesh-llm-skippy-adapter",
     "mesh/crates/mesh-llm-control-api",
     "mesh/crates/mesh-llm-log-store",
     "mesh/crates/mesh-llm-membership",
-    "skippy/crates/skippy-hardware-profile",
     "mesh/crates/mesh-llm-identity",
-    "skippy/crates/skippy-native-runtime",
     "mesh/crates/mesh-llm-protocol",
     "mesh/crates/mesh-llm-release-footer",
     "mesh/crates/mesh-llm-routing",
-    "skippy/crates/skippy-runtime-install",
     "mesh/crates/mesh-llm-runtime-event-contracts",
     "mesh/crates/mesh-llm-sdk",
-    "skippy/crates/skippy-guardrails",
     "mesh/crates/mesh-llm-system",
     "mesh/crates/mesh-llm-tui",
     "mesh/crates/mesh-llm-types",
@@ -44,43 +39,8 @@ members = [
     "mesh/crates/mesh-llm-ffi",
     "mesh/crates/mesh-llm-nodejs",
     "mesh/crates/mesh-llm-test-harness",
-    "skippy/crates/skippy-model-ref",
-    "skippy/crates/skippy-model-artifact",
-    "skippy/crates/skippy-model-hf",
-    "skippy/crates/skippy-hf-hub",
-    "skippy/crates/skippy-model-resolver",
-    "skippy/crates/skippy-events",
-    "skippy/crates/skippy-tokenizer",
-    "skippy/crates/skippy-protocol",
-    "skippy/crates/skippy-coordinator",
-    "skippy/crates/skippy-topology",
-    "skippy/crates/skippy-cache",
-    "skippy/crates/skippy-metrics",
-    "skippy/crates/skippy-inference-api",
-    "skippy/crates/skippy-ffi",
-    "skippy/crates/skippy-runtime",
-    "skippy/crates/skippy-scheduler",
-    "skippy/crates/skippy-serving",
-    "skippy/crates/skippy-cli",
-    "skippy/crates/skippy-commands",
-    "skippy/crates/skippy-config",
-    "skippy/crates/skippy-api",
-    "skippy/crates/metrics-server",
-    "skippy/crates/skippy-package-builder",
-    "skippy/crates/skippy-package-format",
-    "skippy/crates/skippy-model",
-    "skippy/crates/skippy-quantize",
-    "skippy/crates/skippy-model-package",
-    "skippy/crates/skippy-correctness",
-    "skippy/crates/llama-spec-bench",
     "mesh/crates/mesh-mixture-of-agents",
     "mesh/crates/mesh-llm-moa-plugin",
-    "tools/xtask",
-    "tools/authority-automation",
-    "tools/ci-controller",
-    "tools/process-supervision",
-    "tools/runner-cleanup",
-    "tools/trajectory-reader",
 ]
 default-members = [
     "mesh/crates/mesh-llm",
@@ -103,6 +63,32 @@ mesh-llm-analytics = { path = "mesh/crates/mesh-llm-analytics", version = "0.80.
 mesh-llm-build-info = { path = "mesh/crates/mesh-llm-build-info", version = "0.80.0" }
 mesh-llm-release-footer = { path = "mesh/crates/mesh-llm-release-footer", version = "0.80.0" }
 mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.80.0" }
+# Skippy is an external project. `.deps/skippy` is a checkout of it; see scripts/skippy-source.sh.
+hf_hub = { package = "skippy-hf-hub", path = ".deps/skippy/crates/skippy-hf-hub", version = "0.80.0", default-features = false }
+skippy-api = { path = ".deps/skippy/crates/skippy-api", version = "0.80.0" }
+skippy-cache = { path = ".deps/skippy/crates/skippy-cache", version = "0.80.0" }
+skippy-commands = { path = ".deps/skippy/crates/skippy-commands", version = "0.80.0" }
+skippy-config = { path = ".deps/skippy/crates/skippy-config", version = "0.80.0" }
+skippy-coordinator = { path = ".deps/skippy/crates/skippy-coordinator", version = "0.80.0" }
+skippy-events = { path = ".deps/skippy/crates/skippy-events", version = "0.80.0" }
+skippy-ffi = { path = ".deps/skippy/crates/skippy-ffi", version = "0.80.0", default-features = false }
+skippy-gpu-bench = { path = ".deps/skippy/crates/skippy-gpu-bench", version = "0.80.0" }
+skippy-guardrails = { path = ".deps/skippy/crates/skippy-guardrails", version = "0.80.0" }
+skippy-hardware-profile = { path = ".deps/skippy/crates/skippy-hardware-profile", version = "0.80.0" }
+skippy-inference-api = { path = ".deps/skippy/crates/skippy-inference-api", version = "0.80.0" }
+skippy-model = { path = ".deps/skippy/crates/skippy-model", version = "0.80.0" }
+skippy-model-artifact = { path = ".deps/skippy/crates/skippy-model-artifact", version = "0.80.0" }
+skippy-model-hf = { path = ".deps/skippy/crates/skippy-model-hf", version = "0.80.0" }
+skippy-model-ref = { path = ".deps/skippy/crates/skippy-model-ref", version = "0.80.0" }
+skippy-model-resolver = { path = ".deps/skippy/crates/skippy-model-resolver", version = "0.80.0" }
+skippy-native-runtime = { path = ".deps/skippy/crates/skippy-native-runtime", version = "0.80.0" }
+skippy-package-format = { path = ".deps/skippy/crates/skippy-package-format", version = "0.80.0" }
+skippy-protocol = { path = ".deps/skippy/crates/skippy-protocol", version = "0.80.0" }
+skippy-runtime = { path = ".deps/skippy/crates/skippy-runtime", version = "0.80.0" }
+skippy-runtime-install = { path = ".deps/skippy/crates/skippy-runtime-install", version = "0.80.0" }
+skippy-serving = { path = ".deps/skippy/crates/skippy-serving", version = "0.80.0" }
+skippy-tokenizer = { path = ".deps/skippy/crates/skippy-tokenizer", version = "0.80.0" }
+skippy-topology = { path = ".deps/skippy/crates/skippy-topology", version = "0.80.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

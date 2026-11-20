@@ -36,9 +36,9 @@ pub struct ModelPrepareArgs {
     #[arg(long, default_value = "1h")]
     pub timeout: String,
 
-    /// Branch or tag of mesh-llm to build in the job [default: main].
-    #[arg(long, default_value = "main")]
-    pub mesh_llm_ref: String,
+    /// Branch or tag of Skippy to build in the job [default: main].
+    #[arg(long, alias = "mesh-llm-ref", default_value = "main")]
+    pub skippy_ref: String,
 
     /// Explicitly keep this as a dry run. This is the default unless --confirm is set.
     #[arg(long)]

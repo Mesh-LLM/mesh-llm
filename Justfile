@@ -1,7 +1,5 @@
 # Distributed LLM Inference — build & run tasks
 
-llama_dir := env("MESH_LLM_LLAMA_DIR", ".deps/llama.cpp")
-llama_build_root := env("MESH_LLM_LLAMA_BUILD_ROOT", ".deps/llama-build")
 mesh_dir := "mesh/crates/mesh-llm"
 ui_dir := "mesh/crates/mesh-llm-ui"
 # CI resolves this explicitly for dual-layout compatibility. A standalone
@@ -18,14 +16,12 @@ model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 macos_deployment_target := env("MACOSX_DEPLOYMENT_TARGET", "")
 export MACOSX_DEPLOYMENT_TARGET := if macos_deployment_target == "" { trim(read(justfile_directory() / "scripts/lib/macos-deployment-target.txt")) } else { macos_deployment_target }
 
-# Bare `just` builds both products in order: Skippy, then MeshLLM.
+# Bare `just` builds the MeshLLM host and console.
 default: build
 
 import 'just/build.just'
 
 import 'just/release-build.just'
-
-import 'just/skippy.just'
 
 import 'just/mesh.just'
 
