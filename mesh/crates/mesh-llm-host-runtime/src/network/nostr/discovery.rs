@@ -200,43 +200,32 @@ pub(crate) fn merge_relay_fetch_results(
     )
 }
 
-/// A reusable read-only Nostr client for discovery.
-/// Create once, pass to repeated `discover()` calls to avoid opening
-/// new websocket connections and generating throwaway keys every time.
+/// The relays a discovery round asks.
+///
+/// Each round opens its own short-lived connection per relay rather than
+/// reusing a long-lived nostr-sdk client: the SDK's notification streams drop
+/// lagged messages and end a disconnected subscription exactly as they end a
+/// completed one, and absence inference needs to tell those apart. Kept as a
+/// type so the publish watchdog can hold its relay set across rounds.
 pub struct DiscoveryClient {
-    client: Client,
+    relays: Vec<String>,
 }
 
 impl DiscoveryClient {
     pub async fn new(relays: &[String]) -> Result<Self> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::new();
-        let mut added = 0;
-        for relay in relays {
-            match client.add_relay(relay).await {
-                Ok(_) => added += 1,
-                Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
-            }
+        if relays.is_empty() {
+            anyhow::bail!("Could not connect to any Nostr relay (tried 0)");
         }
-        if added == 0 {
-            anyhow::bail!(
-                "Could not connect to any Nostr relay (tried {})",
-                relays.len()
-            );
-        }
-        client.connect().await;
-        wait_for_relay_connections(&client, CONNECT_WAIT_CAP).await;
-        Ok(Self { client })
+        Ok(Self {
+            relays: relays.to_vec(),
+        })
     }
 }
 
 /// Discover meshes from Nostr relays.
 ///
-/// If `cached_client` is provided, reuses its connections.  Otherwise
-/// creates (and drops) a one-shot client — fine for the initial
-/// `--auto` join but wasteful in tight loops. Discards relay health;
-/// callers that need to distinguish "no meshes" from "no relay
-/// answered" use [`discover_with_health`].
+/// Discards relay health; callers that need to distinguish "no meshes" from
+/// "no relay answered" use [`discover_with_health`].
 pub async fn discover(
     relays: &[String],
     filter: &MeshFilter,
@@ -246,175 +235,59 @@ pub async fn discover(
     Ok(meshes)
 }
 
-/// Fold one client notification into the round map.
-///
-/// Events are collected from the raw `RelayMessage::Event` stream, not
-/// the `ClientNotification::Event` variant: that variant is
-/// deduplicated against the client's event database, so a listing
-/// re-delivered on a later round of the same cached client (the
-/// watchdog's) would be suppressed while its EOSE still counts —
-/// manufacturing a "relay answered with nothing" round and, downstream,
-/// a takeover for a listing that is present. The raw message is
-/// delivered for every receipt and carries the fully validated event
-/// (limits, filter match, expiry, signature).
-fn apply_discovery_notification(
-    rounds: &mut std::collections::HashMap<nostr_sdk::prelude::RelayUrl, RelayRound>,
-    subscription_id: &SubscriptionId,
-    notification: ClientNotification,
-) {
-    let ClientNotification::Message { relay_url, message } = notification else {
-        return;
-    };
-    match *message {
-        RelayMessage::Event {
-            subscription_id: id,
-            event,
-        } if *id == *subscription_id => {
-            let event = event.into_owned();
-            // The SDK's relay verification cache keys on the CLAIMED
-            // event id (shared.rs `verify_and_cache` returns Ok on a
-            // cache hit without checking the signature), so a relay can
-            // replay a cached id over altered content and pass. Verify
-            // here: hash and signature must match the content actually
-            // received.
-            match event.verify() {
-                Ok(()) => {
-                    if let Some(round) = rounds.get_mut(&relay_url) {
-                        round.events.insert(event);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Nostr relay {relay_url} sent an invalid event: {e}");
-                }
-            }
-        }
-        RelayMessage::EndOfStoredEvents(id) if *id == *subscription_id => {
-            if let Some(round) = rounds.get_mut(&relay_url) {
-                round.eose = true;
-            }
-        }
-        // A relay that closes the subscription (rejected, auth-required,
-        // rate-limited) will never send EOSE for it: mark it terminal so
-        // the round does not wait out the deadline on its behalf.
-        RelayMessage::Closed {
-            subscription_id: id,
-            ..
-        } if *id == *subscription_id => {
-            if let Some(round) = rounds.get_mut(&relay_url) {
-                round.closed = true;
-            }
-        }
-        _ => {}
-    }
-}
+/// One deadline for a whole round: connecting, the query and its answer.
+const DISCOVERY_ROUND_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Most events kept from one relay. Listings are one replaceable event per
+/// publisher, so a relay sending more is misbehaving; its round stops there
+/// and does not count as completed.
+const MAX_EVENTS_PER_RELAY: usize = 500;
 
 /// Discover meshes and report how many relays answered.
 ///
-/// The fetch fans out per relay (one request each, 5 s timeout) so a
-/// relay that errors or stays silent is visible instead of folded into
-/// an all-or-nothing result; events are merged and deduplicated across
-/// relays before the usual per-publisher dedupe. An all-relays failure
-/// still returns `Ok` with empty results — plus `relays_answered == 0`
-/// — rather than a hard error, matching `discover`'s contract.
+/// Every relay is queried concurrently over its own websocket under one
+/// deadline. A relay counts as answered when it completed the query (EOSE)
+/// or delivered events; everything else — refused, failed handshake,
+/// dropped, closed the subscription, hung — is silent. An all-silent round
+/// still returns `Ok` with empty results and `relays_answered == 0`.
 pub async fn discover_with_health(
     relays: &[String],
     filter: &MeshFilter,
     cached_client: Option<&DiscoveryClient>,
 ) -> Result<(Vec<DiscoveredMesh>, RelayHealth)> {
-    // Build a temporary client only when no cached one is supplied.
-    let _tmp;
-    let client: &Client = if let Some(cc) = cached_client {
-        &cc.client
-    } else {
-        _tmp = build_discovery_client(relays).await?;
-        &_tmp
-    };
+    let relays = cached_client.map_or(relays, |client| client.relays.as_slice());
+    discover_round(relays, filter, DISCOVERY_ROUND_DEADLINE).await
+}
 
-    // With a cached client the pool is the one it was built with; health
-    // describes that pool, which is what the watchdog's long-lived
-    // client re-checks against.
-    let relay_urls: Vec<nostr_sdk::prelude::RelayUrl> =
-        client.relays().await.keys().cloned().collect();
-
-    // Drive one subscription across every relay and route the
-    // notification stream per relay. This replaces per-relay
-    // `fetch_events` futures, which have two blind spots this round
-    // cannot afford: their collected events are dropped if the future
-    // is cancelled at the deadline (a delivered listing would vanish),
-    // and their `Ok(empty)` cannot distinguish a completed empty query
-    // (EOSE) from a stream that ended because the relay disconnected
-    // mid-fetch. The notification stream exposes both signals
-    // per relay: `EndOfStoredEvents` is completion evidence a
-    // connection snapshot can never fake, and events accumulate
-    // outside any cancellable future.
-    let subscription_id = SubscriptionId::generate();
-    // Subscribe to the notification channel BEFORE sending the REQ:
-    // anything received before the channel exists is not delivered to
-    // it (nostr-sdk documents this ordering requirement).
-    let mut notifications = client.notifications();
-    let nostr_filter = Filter::new()
-        .kind(Kind::Custom(MESH_SERVICE_KIND))
-        .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
-        .limit(100);
-    let targets: Vec<(nostr_sdk::prelude::RelayUrl, Vec<Filter>)> = relay_urls
-        .iter()
-        .cloned()
-        .map(|url| (url, vec![nostr_filter.clone()]))
-        .collect();
-    let _output = client
-        .subscribe(ReqTarget::manual(targets))
-        .with_id(subscription_id.clone())
-        .await?;
-
-    let mut rounds: std::collections::HashMap<nostr_sdk::prelude::RelayUrl, RelayRound> =
-        relay_urls
-            .iter()
-            .cloned()
-            .map(|url| (url, RelayRound::default()))
-            .collect();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let pending: usize = rounds.values().filter(|r| !r.terminal()).count();
-        if pending == 0 {
-            break;
-        }
-        let next = tokio::time::timeout_at(deadline, notifications.next()).await;
-        let notification = match next {
-            Ok(Some(notification)) => notification,
-            // Deadline: relays that neither completed nor delivered
-            // anything classify as silent; their partial events (if any)
-            // are already accumulated and are kept.
-            Ok(None) | Err(_) => break,
-        };
-        apply_discovery_notification(&mut rounds, &subscription_id, notification);
+async fn discover_round(
+    relays: &[String],
+    filter: &MeshFilter,
+    deadline: Duration,
+) -> Result<(Vec<DiscoveredMesh>, RelayHealth)> {
+    if relays.is_empty() {
+        anyhow::bail!("Could not connect to any Nostr relay (tried 0)");
     }
-    // Always drop the subscription, including on the cached client the
-    // watchdog reuses — a leaked REQ would keep streaming events into
-    // later rounds' notification channels.
-    let _ = client.unsubscribe(&subscription_id).await;
-
-    let outcomes = relay_urls
-        .iter()
-        .filter_map(|url| rounds.remove(url))
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let deadline = tokio::time::Instant::now() + deadline;
+    let rounds = futures_util::future::join_all(
+        relays
+            .iter()
+            .map(|relay| query_relay_until(relay, deadline)),
+    )
+    .await;
+    let outcomes = rounds
+        .into_iter()
         .map(classify_relay_round_outcome)
         .collect();
-    let (events, health) = merge_relay_fetch_results(relay_urls.len(), outcomes);
+    let (events, health) = merge_relay_fetch_results(relays.len(), outcomes);
 
     let now = Timestamp::now().as_secs();
-
-    // Dedupe by publisher (keep latest per pubkey, using replaceable event semantics)
     let latest = latest_events_by_pubkey(&events);
-
-    let mut meshes = Vec::new();
-    for event in latest.values() {
-        let Some(discovered) = parse_discovered_mesh(event, now) else {
-            continue;
-        };
-
-        if filter.matches(&discovered) {
-            meshes.push(discovered);
-        }
-    }
+    let mut meshes: Vec<DiscoveredMesh> = latest
+        .values()
+        .filter_map(|event| parse_discovered_mesh(event, now))
+        .filter(|mesh| filter.matches(mesh))
+        .collect();
 
     // Sort by node count (bigger meshes first), then VRAM
     meshes.sort_by(|a, b| {
@@ -427,71 +300,86 @@ pub async fn discover_with_health(
     Ok((meshes, health))
 }
 
-/// How long a fresh discovery client waits for its relay connections
-/// before the first round: long enough for a websocket handshake against
-/// a healthy relay (observed well under a second), short enough that a
-/// dead relay set does not stall the command.
-const CONNECT_WAIT_CAP: Duration = Duration::from_secs(2);
-
-/// Wait, capped, until every relay's first connection attempt has
-/// settled.
-///
-/// nostr-sdk 0.45.x `connect()` only spawns connection tasks; it does
-/// not wait for the handshakes. Sampling `relay.status()` immediately
-/// afterwards therefore reports every relay of a freshly built client —
-/// including healthy ones that answer moments later — as not connected,
-/// which would classify a genuine empty EOSE as silence. Waiting here
-/// makes the one-shot path's connection sample meaningful.
-///
-/// "Settled" means Connected or a status a first attempt ends in
-/// (disconnected through banned, sleeping, shutdown): the wait exits as
-/// soon as no relay is still initializing or connecting, so a pool with
-/// one dead relay costs the handshake time of the healthy ones plus the
-/// dead one's failed attempt, not the full cap. A relay that would
-/// auto-reconnect later still samples as not connected, which can only
-/// undercount `relays_answered` — never inflate it.
-async fn wait_for_relay_connections(client: &Client, cap: Duration) {
-    use nostr_sdk::relay::RelayStatus;
-
-    let deadline = tokio::time::Instant::now() + cap;
-    loop {
-        let first_attempts_settled = client.relays().await.values().all(|relay| {
-            matches!(
-                relay.status(),
-                RelayStatus::Connected
-                    | RelayStatus::Disconnected
-                    | RelayStatus::Terminated
-                    | RelayStatus::Banned
-                    | RelayStatus::Sleeping
-                    | RelayStatus::Shutdown
-            )
-        });
-        if first_attempts_settled || tokio::time::Instant::now() >= deadline {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+/// Ask one relay for mesh listings and record what it did before `deadline`.
+async fn query_relay_until(relay: &str, deadline: tokio::time::Instant) -> RelayRound {
+    let mut round = RelayRound::default();
+    match tokio::time::timeout_at(deadline, query_relay(relay, &mut round)).await {
+        Ok(Err(error)) => tracing::debug!("Nostr relay {relay}: {error:#}"),
+        Ok(Ok(())) => {}
+        Err(_) => tracing::debug!("Nostr relay {relay}: no answer before the round deadline"),
     }
+    round
 }
 
-async fn build_discovery_client(relays: &[String]) -> Result<Client> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = Client::new();
-    let mut added = 0;
-    for relay in relays {
-        match client.add_relay(relay).await {
-            Ok(_) => added += 1,
-            Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+/// Events stay in `round` as they arrive, so a relay cut off by the deadline
+/// keeps what it already delivered.
+async fn query_relay(relay: &str, round: &mut RelayRound) -> Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(relay).await?;
+    let subscription_id = SubscriptionId::generate();
+    let request = ClientMessage::req(subscription_id.clone(), mesh_listing_filter());
+    socket.send(Message::text(request.as_json())).await?;
+    while !round.terminal() {
+        let Some(message) = socket.next().await else {
+            anyhow::bail!("closed the connection before EOSE");
+        };
+        match message? {
+            Message::Text(text) => apply_relay_message(round, &subscription_id, &text),
+            Message::Close(_) => anyhow::bail!("closed the connection before EOSE"),
+            _ => {}
         }
     }
-    if added == 0 {
-        anyhow::bail!(
-            "Could not connect to any Nostr relay (tried {})",
-            relays.len()
-        );
+    let close = ClientMessage::close(subscription_id);
+    let _ = socket.send(Message::text(close.as_json())).await;
+    let _ = socket.close(None).await;
+    Ok(())
+}
+
+fn mesh_listing_filter() -> Filter {
+    Filter::new()
+        .kind(Kind::Custom(MESH_SERVICE_KIND))
+        .custom_tag(SingleLetterTag::LOWERCASE_K, "mesh-llm".to_string())
+        .limit(100)
+}
+
+/// Fold one relay message into the round.
+///
+/// Every event is verified here: id hash and signature must match the content
+/// actually received, and it must be a mesh listing. Collection stops at EOSE,
+/// at the subscription's CLOSED, and at [`MAX_EVENTS_PER_RELAY`].
+fn apply_relay_message(round: &mut RelayRound, subscription_id: &SubscriptionId, text: &str) {
+    let Ok(message) = RelayMessage::from_json(text) else {
+        return;
+    };
+    match message {
+        RelayMessage::Event {
+            subscription_id: id,
+            event,
+        } if *id == *subscription_id => {
+            let event = event.into_owned();
+            if event.kind != Kind::Custom(MESH_SERVICE_KIND) {
+                return;
+            }
+            if let Err(error) = event.verify() {
+                tracing::warn!("Nostr relay sent an invalid event: {error}");
+                return;
+            }
+            round.events.insert(event);
+            if round.events.len() >= MAX_EVENTS_PER_RELAY {
+                round.closed = true;
+            }
+        }
+        RelayMessage::EndOfStoredEvents(id) if *id == *subscription_id => round.eose = true,
+        // A relay that closes the subscription (rejected, auth-required,
+        // rate-limited) will never send EOSE for it.
+        RelayMessage::Closed {
+            subscription_id: id,
+            ..
+        } if *id == *subscription_id => round.closed = true,
+        _ => {}
     }
-    client.connect().await;
-    wait_for_relay_connections(&client, CONNECT_WAIT_CAP).await;
-    Ok(client)
 }
 
 fn latest_events_by_pubkey<'a>(
@@ -624,119 +512,50 @@ mod relay_health_tests {
         assert_eq!(health.queries_completed, 2);
     }
 
-    /// Regression (review round 2): on a later round of the same cached
-    /// client, a re-delivered listing arrives ONLY as a raw
-    /// `RelayMessage::Event` — the `ClientNotification::Event` variant
-    /// is deduplicated against the client's event database and never
-    /// fires again. A round shaped exactly like that (raw event + EOSE,
-    /// no deduped variant) must still find the listing; this test fails
-    /// if collection ever reverts to the deduped arm.
-    #[test]
-    fn a_repeat_delivery_arrives_only_on_the_raw_message_stream() {
-        use std::borrow::Cow;
-        use std::collections::HashMap;
-
-        let id = SubscriptionId::generate();
-        let relay_url: nostr_sdk::prelude::RelayUrl = "wss://relay.example".parse().unwrap();
-        let event = EventBuilder::new(Kind::Custom(1), "x")
-            .finalize(&Keys::generate())
-            .expect("sign");
-
-        let mut rounds = HashMap::new();
-        rounds.insert(relay_url.clone(), RelayRound::default());
-
-        apply_discovery_notification(
-            &mut rounds,
-            &id,
-            ClientNotification::Message {
-                relay_url: relay_url.clone(),
-                message: Box::new(RelayMessage::Event {
-                    subscription_id: Cow::Owned(id.clone()),
-                    event: Cow::Owned(event),
-                }),
-            },
-        );
-        apply_discovery_notification(
-            &mut rounds,
-            &id,
-            ClientNotification::Message {
-                relay_url: relay_url.clone(),
-                message: Box::new(RelayMessage::EndOfStoredEvents(Cow::Owned(id.clone()))),
-            },
-        );
-
-        let round = rounds.remove(&relay_url).expect("round to exist");
-        let classified = classify_relay_round_outcome(round);
-        match classified {
-            RelayFetchResult::Answered { events, .. } => {
-                assert_eq!(events.len(), 1, "the raw re-delivery must be collected")
-            }
-            other => panic!("expected Answered, got {other:?}"),
-        }
+    fn event_message(id: &SubscriptionId, event: &Event) -> String {
+        RelayMessage::event(id.clone(), event.clone()).as_json()
     }
 
-    /// Regression (review round 3): the SDK's relay verification cache
-    /// keys on the CLAIMED event id, so a relay can replay a cached id
-    /// over altered content and pass `verify_and_cache`. The collector
-    /// verifies every raw event itself: hash and signature must match
-    /// the content actually received. The forged event goes to a fresh
-    /// round of its own — sharing a round with the legitimate event
-    /// would collide in the `BTreeSet` (same created_at second, same
-    /// claimed id ⇒ `Ord::Equal`) and mask a missing verification.
+    /// A relay can replay a valid event's id over altered content. The
+    /// collector verifies every event itself, so the forged one is dropped.
     #[test]
-    fn an_event_reusing_a_cached_id_with_altered_content_is_rejected() {
-        use std::borrow::Cow;
-        use std::collections::HashMap;
-
-        fn round_with(
-            id: &SubscriptionId,
-            relay_url: &nostr_sdk::prelude::RelayUrl,
-            event: Event,
-        ) -> RelayRound {
-            let mut rounds = HashMap::new();
-            rounds.insert(relay_url.clone(), RelayRound::default());
-            apply_discovery_notification(
-                &mut rounds,
-                id,
-                ClientNotification::Message {
-                    relay_url: relay_url.clone(),
-                    message: Box::new(RelayMessage::Event {
-                        subscription_id: Cow::Owned(id.clone()),
-                        event: Cow::Owned(event),
-                    }),
-                },
-            );
-            rounds.remove(relay_url).expect("round to exist")
-        }
-
+    fn an_event_reusing_a_valid_id_with_altered_content_is_rejected() {
         let id = SubscriptionId::generate();
-        let relay_url: nostr_sdk::prelude::RelayUrl = "wss://relay.example".parse().unwrap();
-
-        let valid = EventBuilder::new(Kind::Custom(1), "legitimate")
+        let valid = EventBuilder::new(Kind::Custom(MESH_SERVICE_KIND), "legitimate")
             .finalize(&Keys::generate())
             .expect("sign");
-
-        // Same claimed id, altered content: an id-for-content mismatch
-        // `verify()` must catch regardless of any cache.
-        let other = EventBuilder::new(Kind::Custom(1), "forged")
+        let other = EventBuilder::new(Kind::Custom(MESH_SERVICE_KIND), "forged")
             .finalize(&Keys::generate())
             .expect("sign");
         let mut value = serde_json::to_value(&other).expect("serialize");
         value["id"] = serde_json::to_value(valid.id).expect("id json");
         let forged: Event = serde_json::from_value(value).expect("deserialize");
 
-        // The legitimate event is collected.
-        let accepted = round_with(&id, &relay_url, valid);
+        let mut accepted = RelayRound::default();
+        apply_relay_message(&mut accepted, &id, &event_message(&id, &valid));
         assert_eq!(accepted.events.len(), 1);
 
-        // The forged replay, alone in its own round, is dropped by
-        // verification — with no legitimate twin to collide with, a
-        // missing `verify()` would let it through.
-        let rejected = round_with(&id, &relay_url, forged);
-        assert!(
-            rejected.events.is_empty(),
-            "forged event reusing a cached id must be rejected"
-        );
+        let mut rejected = RelayRound::default();
+        apply_relay_message(&mut rejected, &id, &event_message(&id, &forged));
+        assert!(rejected.events.is_empty());
+    }
+
+    #[test]
+    fn events_for_another_subscription_or_kind_are_ignored() {
+        let id = SubscriptionId::generate();
+        let note = EventBuilder::new(Kind::TextNote, "x")
+            .finalize(&Keys::generate())
+            .expect("sign");
+        let listing = EventBuilder::new(Kind::Custom(MESH_SERVICE_KIND), "x")
+            .finalize(&Keys::generate())
+            .expect("sign");
+        let mut round = RelayRound::default();
+        apply_relay_message(&mut round, &id, &event_message(&id, &note));
+        let other = SubscriptionId::generate();
+        apply_relay_message(&mut round, &id, &event_message(&other, &listing));
+        apply_relay_message(&mut round, &id, &RelayMessage::eose(other).as_json());
+        assert!(round.events.is_empty());
+        assert!(!round.terminal());
     }
 
     #[test]
@@ -1014,7 +833,7 @@ mod integration_tests {
     use super::*;
     use base64::Engine;
 
-    fn fake_invite_token() -> String {
+    pub(super) fn fake_invite_token() -> String {
         // Build a syntactically valid invite token by encoding a minimal
         // EndpointAddr JSON. We use Node::invite_token indirectly by just
         // crafting the JSON that decode_invite_token expects.
@@ -1128,5 +947,192 @@ mod integration_tests {
         // Cleanup
         pub_a.unpublish().await.ok();
         pub_b.unpublish().await.ok();
+    }
+}
+
+/// Full discovery rounds against scripted local relays.
+#[cfg(test)]
+mod round_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// What a scripted relay does after it receives the REQ.
+    enum Script {
+        /// Send these events, then EOSE, then these live events.
+        Answer {
+            stored: Vec<Event>,
+            live: Vec<Event>,
+        },
+        /// Send these events, then drop the connection before EOSE.
+        DropAfter(Vec<Event>),
+        /// Close the subscription without EOSE.
+        Closed,
+        /// Accept the REQ and never answer.
+        Hang,
+    }
+
+    async fn scripted_relay(script: Script) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let id = loop {
+                let Some(Ok(Message::Text(text))) = socket.next().await else {
+                    return;
+                };
+                if let Ok(ClientMessage::Req {
+                    subscription_id, ..
+                }) = ClientMessage::from_json(text.as_str())
+                {
+                    break subscription_id.into_owned();
+                }
+            };
+            let send = |message: RelayMessage| Message::text(message.as_json());
+            match script {
+                Script::Answer { stored, live } => {
+                    for event in stored {
+                        let _ = socket
+                            .send(send(RelayMessage::event(id.clone(), event)))
+                            .await;
+                    }
+                    let _ = socket.send(send(RelayMessage::eose(id.clone()))).await;
+                    for event in live {
+                        let _ = socket
+                            .send(send(RelayMessage::event(id.clone(), event)))
+                            .await;
+                    }
+                }
+                Script::DropAfter(events) => {
+                    for event in events {
+                        let _ = socket
+                            .send(send(RelayMessage::event(id.clone(), event)))
+                            .await;
+                    }
+                    return;
+                }
+                Script::Closed => {
+                    let closed = RelayMessage::closed(id, "error: rate-limited");
+                    let _ = socket.send(send(closed)).await;
+                }
+                Script::Hang => {}
+            }
+            // Keep the connection open until the client goes away.
+            while socket.next().await.is_some() {}
+        });
+        format!("ws://{addr}")
+    }
+
+    fn listing(name: &str) -> Event {
+        let listing = MeshListing {
+            invite_token: super::integration_tests::fake_invite_token(),
+            serving: vec![],
+            wanted: vec![],
+            on_disk: vec![],
+            total_vram_bytes: 0,
+            node_count: 1,
+            client_count: 0,
+            max_clients: 0,
+            name: Some(name.to_string()),
+            region: None,
+            mesh_id: Some(format!("id-{name}")),
+            publisher_serves: None,
+        };
+        EventBuilder::new(
+            Kind::Custom(MESH_SERVICE_KIND),
+            serde_json::to_string(&listing).unwrap(),
+        )
+        .tag(Tag::parse(["k", "mesh-llm"]).unwrap())
+        .finalize(&Keys::generate())
+        .unwrap()
+    }
+
+    /// A port nothing listens on: the connection is refused at once.
+    async fn refused_relay() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("ws://{addr}")
+    }
+
+    const DEADLINE: Duration = Duration::from_secs(2);
+
+    #[tokio::test]
+    async fn completed_queries_count_and_refused_relays_are_silent() {
+        let relays = vec![
+            scripted_relay(Script::Answer {
+                stored: vec![listing("a")],
+                live: vec![],
+            })
+            .await,
+            scripted_relay(Script::Answer {
+                stored: vec![],
+                live: vec![],
+            })
+            .await,
+            refused_relay().await,
+        ];
+        let (meshes, health) = discover_round(&relays, &MeshFilter::default(), DEADLINE)
+            .await
+            .unwrap();
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(
+            health,
+            RelayHealth {
+                relays_queried: 3,
+                relays_answered: 2,
+                queries_completed: 2,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_drops_before_eose_keeps_its_events_but_completes_nothing() {
+        let relays = vec![scripted_relay(Script::DropAfter(vec![listing("other")])).await];
+        let filter = MeshFilter {
+            name: Some("target".to_string()),
+            ..MeshFilter::default()
+        };
+        let (meshes, health) = discover_round(&relays, &filter, DEADLINE).await.unwrap();
+        // The listing it sent is not the target, and it never finished: an
+        // empty result here is an incomplete search, not absence.
+        assert!(meshes.is_empty());
+        assert!(health.any_relay_answered());
+        assert!(!health.any_query_completed());
+    }
+
+    #[tokio::test]
+    async fn closed_and_hung_relays_are_silent_and_the_round_ends_on_time() {
+        let relays = vec![
+            scripted_relay(Script::Closed).await,
+            scripted_relay(Script::Hang).await,
+        ];
+        let started = tokio::time::Instant::now();
+        let (_, health) = discover_round(&relays, &MeshFilter::default(), DEADLINE)
+            .await
+            .unwrap();
+        assert!(started.elapsed() < DEADLINE + Duration::from_secs(1));
+        assert!(!health.any_relay_answered());
+    }
+
+    #[tokio::test]
+    async fn events_sent_after_eose_are_not_collected() {
+        let relays = vec![
+            scripted_relay(Script::Answer {
+                stored: vec![listing("stored")],
+                live: vec![listing("live")],
+            })
+            .await,
+        ];
+        let (meshes, health) = discover_round(&relays, &MeshFilter::default(), DEADLINE)
+            .await
+            .unwrap();
+        let names: Vec<_> = meshes
+            .iter()
+            .filter_map(|m| m.listing.name.as_deref())
+            .collect();
+        assert_eq!(names, ["stored"]);
+        assert_eq!(health.queries_completed, 1);
     }
 }

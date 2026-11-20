@@ -329,8 +329,9 @@ mesh-llm discover --auto
 
 `discover --auto` prints the best invite token, which is useful for scripts.
 When some Nostr relays stay silent, `discover` prints an `N of M Nostr
-relay(s) answered` line; when no relay answers at all it exits nonzero, so
-scripts can tell an unreachable discovery plane from an empty one.
+relay(s) answered` line. It exits nonzero when no relay answers, or when
+nothing matched and no relay finished its query, so scripts can tell an
+unreachable or incomplete search from an empty one.
 When using `--mesh-discovery-mode mdns`, discovery is LAN-scoped: mDNS TXT
 records advertise bounded capacity/model summaries and a token fingerprint.
 When the management API is reachable from LAN peers, for example with

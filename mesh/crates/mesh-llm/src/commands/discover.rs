@@ -73,6 +73,15 @@ async fn run_nostr_discover(
         );
     }
 
+    if meshes.is_empty() && !health.any_query_completed() {
+        // Relays spoke but none finished, so what they left out says nothing.
+        anyhow::bail!(
+            "Nostr search incomplete: no relay finished its query ({} of {} answered); try again",
+            health.relays_answered,
+            health.relays_queried
+        );
+    }
+
     let mut err = mesh_llm_events::console_err();
     if meshes.is_empty() {
         writeln!(err, "No meshes found.")?;
