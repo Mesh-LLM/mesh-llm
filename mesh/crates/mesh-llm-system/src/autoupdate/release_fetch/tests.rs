@@ -810,3 +810,59 @@ fn test_a_gpu_flavored_install_prefers_its_own_archive_while_one_exists() {
         Some("mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz".to_string())
     );
 }
+
+/// Stands in for the updated host: records each command line it is given and
+/// fails `runtime install` when told to. Returns the commands it saw.
+#[cfg(unix)]
+fn commands_run_after_update(release: &ReleaseInfo, install_succeeds: bool) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("after-update");
+    let log = dir.join("commands.log");
+    let host = dir.join(mesh_binary_name());
+    let exit = if install_succeeds { 0 } else { 1 };
+    std::fs::write(
+        &host,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$2\" = install ] && exit {exit}\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(install_native_runtime_after_update(&dir, release, &dir));
+
+    let commands = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    std::fs::remove_dir_all(&dir).unwrap();
+    commands
+}
+
+/// A release without its own runtime catalog makes no request: the updated
+/// host installs its recommended runtime from the Skippy release it was built
+/// for, then prunes. Unix only; the Windows updater keeps the bundled runtime.
+#[cfg(unix)]
+#[test]
+fn test_an_update_without_a_runtime_catalog_asks_the_new_host_to_install_its_runtime() {
+    assert_eq!(
+        commands_run_after_update(&host_only_release(), true),
+        ["runtime install", "runtime prune --active-only"]
+    );
+}
+
+/// Pruning after a failed install would delete the runtime still in use.
+#[cfg(unix)]
+#[test]
+fn test_an_update_does_not_prune_runtimes_when_the_install_fails() {
+    assert_eq!(
+        commands_run_after_update(&host_only_release(), false),
+        ["runtime install"]
+    );
+}

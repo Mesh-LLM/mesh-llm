@@ -24,9 +24,10 @@ failures=0
 expect() { # expect <uname -s> <uname -m> <want-asset-or-FAIL>
     local got
     # `$0` must not be install.sh, or sourcing it would run the installer.
-    # The install directory and release URL are pointed nowhere in case it does.
-    got="$(PATH="$work:$PATH" MESH_LLM_TEST_UNAME_S="$1" MESH_LLM_TEST_UNAME_M="$2" \
-        HOME="$work/home" MESH_LLM_INSTALL_DIR="$work/bin" MESH_LLM_INSTALL_URL_BASE="file://$work/none" \
+    # `env -i` drops every inherited installer, service and token setting.
+    got="$(env -i PATH="$work:$PATH" HOME="$work/home" XDG_CACHE_HOME="$work/home/cache" \
+        MESH_LLM_TEST_UNAME_S="$1" MESH_LLM_TEST_UNAME_M="$2" \
+        MESH_LLM_INSTALL_DIR="$work/bin" MESH_LLM_INSTALL_URL_BASE="file://$work/none" \
         bash -c 'source "$1" && asset_name' asset-test "$install" 2>/dev/null)" || got=FAIL
     if [[ "$got" != "$3" ]]; then
         echo "FAIL: $1/$2 asked for '$got', want '$3'" >&2
