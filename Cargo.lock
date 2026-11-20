@@ -4363,6 +4363,7 @@ dependencies = [
  "skippy-runtime",
  "skippy-runtime-install",
  "tempfile",
+ "tokio",
  "tracing",
  "windows-sys 0.61.2",
  "zip",

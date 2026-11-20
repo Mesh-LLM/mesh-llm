@@ -48,3 +48,4 @@ windows-sys = { version = "0.61", features = [
 serial_test = "4"
 skippy-runtime = { workspace = true, features = ["test-support"] }
 tempfile = "3"
+tokio = { version = "1", features = ["rt"] }
