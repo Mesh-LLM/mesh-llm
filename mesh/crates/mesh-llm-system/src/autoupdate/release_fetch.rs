@@ -1275,3 +1275,8 @@ pub(super) fn exec_current_binary(_exe: &Path, _env_key: &str, _env_value: &str)
 
 #[cfg(test)]
 mod tests;
+
+// Replacement runs through `replace_bundle_files`, which is Unix-only; the
+// Windows updater applies the same staged list through a PowerShell handoff.
+#[cfg(all(test, not(windows)))]
+mod bridge_tests;
