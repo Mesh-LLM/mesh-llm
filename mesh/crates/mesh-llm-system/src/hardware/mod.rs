@@ -574,6 +574,7 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
         metrics,
         skippy_devices::gpu_facts(),
         survey_system_ram,
+        survey_available_ram,
     )
 }
 
@@ -594,6 +595,60 @@ fn survey_system_ram() -> u64 {
     }
 }
 
+/// System RAM the OS could hand out right now, which bounds an integrated
+/// GPU outside Metal: its device memory is that same RAM. Read on Linux and
+/// Windows; `None` elsewhere, and on a failed read, leaves the budget as the
+/// device reported it.
+#[cfg(any(feature = "skippy-devices", test))]
+// Its only caller is the feature-gated `skippy_devices` probe.
+#[cfg_attr(all(test, not(feature = "skippy-devices")), allow(dead_code))]
+fn survey_available_ram() -> Option<u64> {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        read_available_ram_bytes()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+#[cfg(all(target_os = "linux", any(feature = "skippy-devices", test)))]
+fn read_available_ram_bytes() -> Option<u64> {
+    parse_meminfo_available(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+/// `MemAvailable` from `/proc/meminfo`, in bytes: the kernel's estimate of
+/// what new allocations can get without swapping, page cache included.
+#[cfg(any(all(target_os = "linux", feature = "skippy-devices"), test))]
+fn parse_meminfo_available(meminfo: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let kb = line
+            .strip_prefix("MemAvailable:")?
+            .split_whitespace()
+            .next()?
+            .parse::<u64>()
+            .ok()?;
+        kb.checked_mul(1024)
+    })
+}
+
+#[cfg(all(target_os = "windows", any(feature = "skippy-devices", test)))]
+fn read_available_ram_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    // SAFETY: MEMORYSTATUSEX only holds integers, so all zeroes is a valid
+    // value.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).ok()?;
+    // SAFETY: `status` is writable and `dwLength` gives its size, as the API
+    // requires.
+    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
+        return None;
+    }
+    Some(status.ullAvailPhys)
+}
+
 /// Applies a GPU probe outcome to the survey. The real probe (skippy device
 /// enumeration, /proc/meminfo, the Windows CIM query) stays in the callers so
 /// this decision can be exercised with injected values on every platform.
@@ -603,13 +658,16 @@ fn survey_system_ram() -> u64 {
 /// otherwise, so probes that skip VramBytes never pay for it. A
 /// unified-memory survey records the reading but never credits it. Platform
 /// gating lives in the production RAM source (`survey_system_ram`), which
-/// keeps this seam platform-pure.
+/// keeps this seam platform-pure. The available RAM closure runs only for a
+/// unified-memory survey outside Metal that requests VramBytes: it caps the
+/// budget there (see the comment at its use).
 #[cfg(any(feature = "skippy-devices", test))]
 fn apply_gpu_probe_outcome_to_survey<E>(
     survey: &mut HardwareSurvey,
     metrics: &[Metric],
     probe: Result<Vec<GpuFacts>, E>,
     system_ram: impl FnOnce() -> u64,
+    available_ram: impl FnOnce() -> Option<u64>,
 ) -> bool {
     let gpus = match probe {
         Ok(gpus) => gpus,
@@ -631,12 +689,7 @@ fn apply_gpu_probe_outcome_to_survey<E>(
         // runtime reported, not from the target OS: a macOS host running
         // MoltenVK/Vulkan stamps non-MTL device names and must not be
         // labelled MetalDefaultDevice.
-        let is_metal = gpus.iter().any(|gpu| {
-            gpu.backend_device
-                .as_deref()
-                .map(|d| d.starts_with("MTL"))
-                .unwrap_or(false)
-        });
+        let is_metal = gpus.iter().any(is_metal_device);
         let name = summarize_gpu_name(&names);
         let source = if is_metal {
             GpuNameSource::MetalDefaultDevice
@@ -671,7 +724,19 @@ fn apply_gpu_probe_outcome_to_survey<E>(
         }
         if unified_memory {
             let reserved: u64 = survey.gpu_reserved.iter().flatten().copied().sum();
-            survey.vram_bytes = vram.saturating_sub(reserved);
+            let mut budget = vram.saturating_sub(reserved);
+            // Outside Metal, an integrated GPU reports everything it may map
+            // as its memory (every Vulkan heap on an AMD APU), yet that is
+            // system RAM the OS and other processes already use: planning
+            // against it overcommits the machine before the KV cache is even
+            // allocated. What the OS can still hand out bounds the budget.
+            // Metal's working set is already such a bound.
+            if !memory_bearing_gpus(&gpus).any(is_metal_device)
+                && let Some(available) = available_ram()
+            {
+                budget = budget.min(available);
+            }
+            survey.vram_bytes = budget;
         } else {
             let ram_offload = system_ram.saturating_sub(vram);
             survey.vram_bytes = vram + (ram_offload as f64 * 0.90) as u64;
@@ -682,6 +747,16 @@ fn apply_gpu_probe_outcome_to_survey<E>(
     }
 
     true
+}
+
+/// Whether the runtime reached this GPU through Metal, judged from the
+/// backend device name rather than the target OS: MoltenVK on macOS stamps
+/// non-MTL names.
+#[cfg(any(feature = "skippy-devices", test))]
+fn is_metal_device(gpu: &GpuFacts) -> bool {
+    gpu.backend_device
+        .as_deref()
+        .is_some_and(|device| device.starts_with("MTL"))
 }
 
 /// Read the Tegra/Jetson model name from `model_path` and record it (with its

@@ -853,6 +853,7 @@ fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
         &[Metric::VramBytes],
         Err::<Vec<GpuFacts>, ()>(()),
         || 16_000_000_000,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
@@ -865,6 +866,7 @@ fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
         &[Metric::GpuName],
         Err::<Vec<GpuFacts>, ()>(()),
         || 16_000_000_000,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
@@ -879,6 +881,7 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(Vec::new()),
         || 16_000_000_000,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
@@ -892,6 +895,7 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
         &[Metric::GpuName],
         Ok::<Vec<GpuFacts>, ()>(Vec::new()),
         || 16_000_000_000,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
@@ -911,6 +915,7 @@ fn test_healthy_gpu_probe_credits_ram_offload_from_injected_source() {
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
         || 32_000_000_000,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 30_000_000_000);
@@ -930,6 +935,7 @@ fn test_healthy_gpu_probe_with_zero_ram_source_advertises_bare_vram() {
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
         || 0,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
@@ -946,6 +952,7 @@ fn test_healthy_gpu_probe_ram_below_vram_saturates_to_bare_vram() {
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
         || 8_000_000_000,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
@@ -963,6 +970,7 @@ fn test_healthy_soc_probe_records_system_ram_without_crediting_it() {
         &[Metric::IsSoc, Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
         || 32_000_000_000,
+        || None,
     );
     assert!(handled);
     assert!(survey.is_soc);
@@ -983,6 +991,7 @@ fn test_healthy_soc_probe_without_is_soc_metric_still_skips_ram_offload() {
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
         || 32_000_000_000,
+        || None,
     );
     assert!(handled);
     assert!(!survey.is_soc);
@@ -998,6 +1007,7 @@ fn test_healthy_gpu_probe_without_vram_metric_does_not_probe_system_ram() {
         &[Metric::GpuName],
         Ok::<Vec<GpuFacts>, ()>(vec![synthetic_gpu(0, None)]),
         || panic!("system RAM must not be probed when VramBytes is not requested"),
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
@@ -1016,6 +1026,7 @@ fn test_skippy_probe_gpu_name_unchanged_and_source_tagged() {
         &[Metric::GpuName],
         Ok::<Vec<GpuFacts>, ()>(vec![synthetic_gpu(0, None)]),
         || 0,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.gpu_name.as_deref(), Some("GPU 0"));
@@ -1042,6 +1053,7 @@ fn test_skippy_probe_metal_backend_device_tagged_metal_default_device() {
         &[Metric::GpuName],
         Ok::<Vec<GpuFacts>, ()>(vec![metal_gpu]),
         || 0,
+        || None,
     );
     assert!(handled);
     assert_eq!(survey.gpu_name.as_deref(), Some("Apple M4 Max"));
@@ -1639,6 +1651,7 @@ fn test_igpu_beside_discrete_gpu_keeps_its_fact_but_not_its_memory() {
         &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
         Ok::<Vec<GpuFacts>, ()>(gpus),
         || 34_000_000_000,
+        || None,
     );
 
     assert!(!survey.is_soc);
@@ -1671,8 +1684,107 @@ fn test_igpu_alone_still_counts_as_unified_memory() {
         &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
         Ok::<Vec<GpuFacts>, ()>(gpus),
         || 34_000_000_000,
+        || None,
     );
 
     assert!(survey.is_soc);
     assert_eq!(survey.vram_bytes, 17_012_097_024);
+}
+
+/// The shape measured on a Radeon 780M laptop with the Vulkan runtime: ggml
+/// reports both Vulkan heaps (8.5 GB) as the iGPU's memory while only
+/// 2.6 GB of RAM was free. Planning against 8.5 GB put Qwen3-8B on the GPU
+/// and its KV cache allocation then failed.
+#[test]
+fn test_igpu_budget_is_capped_by_available_ram() {
+    let gpus = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("Vulkan0".to_string()),
+        vram_bytes: 8_500_000_000,
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 16_400_000_000,
+        || Some(2_600_000_000),
+    );
+
+    assert!(survey.is_soc);
+    assert_eq!(survey.vram_bytes, 2_600_000_000);
+    assert_eq!(survey.gpu_vram, vec![8_500_000_000]);
+    assert_eq!(crate::capacity::mesh_capacity_bytes(&survey), 2_600_000_000);
+    // `mesh-llm gpus` shows what the cap withholds as the platform reserve.
+    let memory = crate::capacity::advertised_memory(&survey, None, 0, false);
+    assert_eq!(memory.platform_reserve_bytes, 5_900_000_000);
+}
+
+#[test]
+fn test_igpu_budget_keeps_the_device_figure_when_more_ram_is_free() {
+    let gpus = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("Vulkan0".to_string()),
+        vram_bytes: 8_500_000_000,
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 64_000_000_000,
+        || Some(40_000_000_000),
+    );
+
+    assert_eq!(survey.vram_bytes, 8_500_000_000);
+}
+
+#[test]
+fn test_available_ram_is_not_read_for_metal_or_discrete_gpus() {
+    let metal = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("MTL0".to_string()),
+        vram_bytes: 128_000_000_000,
+        reserved_bytes: Some(32_000_000_000),
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc],
+        Ok::<Vec<GpuFacts>, ()>(metal),
+        || 128_000_000_000,
+        || panic!("Metal's working set already bounds the budget"),
+    );
+    assert_eq!(survey.vram_bytes, 96_000_000_000);
+
+    let discrete = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("CUDA0".to_string()),
+        vram_bytes: 24_000_000_000,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc],
+        Ok::<Vec<GpuFacts>, ()>(discrete),
+        || 24_000_000_000,
+        || panic!("a discrete GPU has its own memory"),
+    );
+    assert_eq!(survey.vram_bytes, 24_000_000_000);
+}
+
+#[test]
+fn test_parse_meminfo_available_reads_mem_available_in_bytes() {
+    let meminfo = "MemTotal:       16384000 kB\n\
+                   MemFree:         1024000 kB\n\
+                   MemAvailable:    2539062 kB\n";
+    assert_eq!(parse_meminfo_available(meminfo), Some(2_539_062 * 1024));
+    assert_eq!(parse_meminfo_available("MemTotal: 16384000 kB\n"), None);
 }
