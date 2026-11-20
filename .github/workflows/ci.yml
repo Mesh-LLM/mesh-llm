@@ -1,23 +1,162 @@
-name: Main CI migration compatibility
+name: CI
 
-# Routine main validation is owned by the five main_<lane>.yml workflows. This
-# reusable-only shim preserves the legacy filename during the migration; it has
-# no event trigger and cannot dispatch or compose a main graph.
 on:
-  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skippy_ref:
+        description: Skippy branch, tag, commit or pull/<number> to build and smoke against. Empty uses the pinned revision.
+        required: false
+        type: string
 
-permissions: {}
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
-  CARGO_PROFILE_RELEASE_DEBUG: "0"
-  CARGO_PROFILE_BENCH_DEBUG: "0"
+  CARGO_TERM_COLOR: always
 
 jobs:
-  compatibility:
-    name: Split main entrypoints active
+  lint:
+    name: Lint
     runs-on: ubuntu-24.04
-    permissions: {}
+    timeout-minutes: 30
     steps:
-      - run: echo "Main validation is owned by the five main_<lane>.yml workflows."
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: just lint
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: just test-rust --locked
+
+  ui:
+    name: Console
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+      - run: just test-ui
+
+  # Real inference through MeshLLM on Skippy's CPU runtime.
+  #
+  # By default this uses the Skippy revision pinned in Cargo.toml. To test a
+  # MeshLLM pull request against a Skippy branch or pull request, add a line
+  # to the pull request description:
+  #
+  #     Skippy-Ref: pull/123
+  #
+  # MeshLLM is then built against that Skippy source too. Either way the
+  # runtime is built from the same commit MeshLLM is compiled against.
+  smoke:
+    name: Inference smoke (CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
+      MODEL_SHA256: c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Resolve the Skippy commit
+        id: skippy
+        env:
+          INPUT_REF: ${{ inputs.skippy_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ref="$INPUT_REF"
+          if [[ -z "$ref" ]]; then
+            ref="$(sed -n 's/^Skippy-Ref:[[:space:]]*\([^[:space:]]*\).*/\1/p' <<<"$PR_BODY" | head -1)"
+          fi
+          scripts/ci-resolve-skippy.sh "$ref" | tee -a "$GITHUB_OUTPUT"
+          echo "override=${ref:+true}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: ${{ steps.skippy.outputs.repository }}
+          ref: ${{ steps.skippy.outputs.sha }}
+          path: .deps/skippy
+          persist-credentials: false
+
+      - name: Restore the CPU runtime built from this Skippy commit
+        id: runtime
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: skippy-runtime
+          key: skippy-cpu-runtime-${{ runner.os }}-${{ runner.arch }}-${{ steps.skippy.outputs.sha }}
+
+      - name: Build the CPU runtime
+        if: steps.runtime.outputs.cache-hit != 'true'
+        working-directory: .deps/skippy
+        run: scripts/package-native-runtime.sh --build --backend cpu --no-model-package-tool --out "$GITHUB_WORKSPACE/skippy-runtime"
+
+      - name: Build MeshLLM against the named Skippy source
+        if: steps.skippy.outputs.override == 'true'
+        run: scripts/skippy-source.sh .deps/skippy
+
+      - name: Restore the test model
+        id: model
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: smoke-model.gguf
+          key: smoke-model-${{ env.MODEL_SHA256 }}
+
+      - name: Download the test model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: curl -fL --retry 3 --max-time 600 -o smoke-model.gguf "$MODEL_URL"
+
+      - run: echo "$MODEL_SHA256  smoke-model.gguf" | sha256sum -c -
+
+      - name: Build MeshLLM
+        env:
+          MESH_LLM_SKIP_UI: "1"
+        run: just build
+
+      - name: Run inference
+        run: just smoke skippy-runtime smoke-model.gguf
+
+      - name: Record what was tested
+        if: always()
+        env:
+          SKIPPY_REPOSITORY: ${{ steps.skippy.outputs.repository }}
+          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
+        run: |
+          {
+            echo "Skippy source: $SKIPPY_REPOSITORY@$SKIPPY_SHA"
+            echo "Checked out:   $(git -C .deps/skippy rev-parse HEAD)"
+            for manifest in skippy-runtime/*/manifest.json; do
+              echo "Runtime:       $(jq -r '.runtime.id' "$manifest") manifest sha256 $(sha256sum "$manifest" | cut -d ' ' -f 1)"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

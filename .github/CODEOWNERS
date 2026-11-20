@@ -3,8 +3,6 @@
 
 # Shared workspace infrastructure and CI.
 /.github/ @i386 @ndizazzo
-/ci/ @i386 @ndizazzo
-/tools/ @ndizazzo @i386
 
 # Products.
 /mesh/ @michaelneale @ndizazzo
@@ -41,4 +39,3 @@
 /mesh/deploy/windows/ @Virgile-pct @michaelneale @ndizazzo
 /mesh/scripts/*.ps1 @Virgile-pct @michaelneale @ndizazzo
 /scripts/*.ps1 @Virgile-pct @i386 @ndizazzo @michaelneale
-/tools/xtask/src/**/windows* @Virgile-pct @ndizazzo @i386

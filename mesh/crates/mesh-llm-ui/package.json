@@ -18,7 +18,6 @@
     "format:check": "prettier . --check",
     "test": "vitest run",
     "test:e2e": "node scripts/run-playwright.mjs",
-    "test:e2e:real-logs": "../../scripts/qa-logging-console-e2e.sh --current-binary ../../target/debug/mesh-llm",
     "validate": "pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build"
   },
   "dependencies": {
