@@ -5,7 +5,8 @@
 lint:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
-    shellcheck scripts/*.sh mesh/scripts/*.sh
+    shellcheck scripts/*.sh scripts/tests/*.sh mesh/scripts/*.sh
+    scripts/tests/ci-resolve-skippy-test.sh
 
 # Rust tests for the whole workspace.
 test-rust *ARGS:

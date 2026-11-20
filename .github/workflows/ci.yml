@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+    # `edited` so that changing Skippy-Ref in the description starts a run.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   workflow_dispatch:
@@ -75,8 +77,11 @@ jobs:
   #
   #     Skippy-Ref: pull/123
   #
-  # MeshLLM is then built against that Skippy source too. Either way the
-  # runtime is built from the same commit MeshLLM is compiled against.
+  # This job then builds MeshLLM against that Skippy source too. Lint and the
+  # Rust tests still use the pinned revision. Either way the runtime comes
+  # from the same commit this job compiles MeshLLM against. A branch or pull
+  # request is resolved once per run: after a new Skippy push, re-run this
+  # workflow, or name a full commit SHA.
   smoke:
     name: Inference smoke (CPU)
     runs-on: ubuntu-24.04
@@ -103,6 +108,15 @@ jobs:
           scripts/ci-resolve-skippy.sh "$ref" | tee -a "$GITHUB_OUTPUT"
           echo "override=${ref:+true}" >> "$GITHUB_OUTPUT"
 
+      # Runner image, compiler and build recipe, so a change to any of them
+      # is a different runtime.
+      - name: Name the runtime build
+        id: identity
+        env:
+          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
+          RECIPE: ${{ hashFiles('scripts/ci-skippy-runtime.sh', '.github/actions/setup/action.yml') }}
+        run: echo "key=skippy-cpu-runtime-$ImageOS-$ImageVersion-$(uname -m)-$(cc -dumpfullversion)-$RECIPE-$SKIPPY_SHA" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ steps.skippy.outputs.repository }}
@@ -110,17 +124,20 @@ jobs:
           path: .deps/skippy
           persist-credentials: false
 
-      - name: Restore the CPU runtime built from this Skippy commit
-        id: runtime
+      # A named Skippy ref is always built fresh, so its build never writes
+      # to the cache that pinned runs read.
+      - name: Restore the CPU runtime built from the pinned Skippy commit
+        if: steps.skippy.outputs.override != 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: skippy-runtime
-          key: skippy-cpu-runtime-${{ runner.os }}-${{ runner.arch }}-${{ steps.skippy.outputs.sha }}
+          key: ${{ steps.identity.outputs.key }}
 
-      - name: Build the CPU runtime
-        if: steps.runtime.outputs.cache-hit != 'true'
-        working-directory: .deps/skippy
-        run: scripts/package-native-runtime.sh --build --backend cpu --no-model-package-tool --out "$GITHUB_WORKSPACE/skippy-runtime"
+      - name: Build or verify the CPU runtime
+        env:
+          CI_BUILD_IDENTITY: ${{ steps.identity.outputs.key }}
+          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
+        run: scripts/ci-skippy-runtime.sh .deps/skippy "$SKIPPY_SHA" skippy-runtime
 
       - name: Build MeshLLM against the named Skippy source
         if: steps.skippy.outputs.override == 'true'
