@@ -7,8 +7,8 @@ guidance. This repository keeps only what MeshLLM owns: the host, its
 deployment, the mesh, agents, plugins, CI and releases.
 
 `tools/xtask` (`cargo xtool`, `cargo xtask`) was removed from this repository.
-`hf-layer-package-jobs`, `kv-tool-loop-stability` and `release-notes` still
-name it; check that a command or path exists before following one.
+`release-notes` still names it; check that a command or path exists before
+following one.
 
 Skills under `.agents/skills/` are the canonical repo-local skills and are
 auto-picked-up by agents working in this repo. Each is a focused how-to, but

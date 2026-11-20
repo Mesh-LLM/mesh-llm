@@ -49,8 +49,9 @@ Read each applicable skill completely before acting:
 - `.agents/skills/connect-agents/SKILL.md` for agent/tool-call validation;
 - `.agents/skills/manage-ci/SKILL.md` before inspecting CI, release workflows,
   runners, artifacts, or live workflow results;
-- the relevant Skippy, plugin, telemetry, configuration, or benchmark skill
-  when the delta touches that subsystem.
+- the relevant plugin, telemetry, configuration, or benchmark skill when the
+  delta touches that subsystem. Skippy has no skills here: for a change inside
+  Skippy itself, use the Skippy repository and its guidance.
 
 ## Workflow
 
