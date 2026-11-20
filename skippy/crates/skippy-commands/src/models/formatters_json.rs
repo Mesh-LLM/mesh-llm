@@ -4,17 +4,15 @@ use super::formatters::{
     fit_code_for_size_label, format_installed_size, huggingface_cache_dir,
     installed_model_kind_code, local_capacity_json, model_kind_code, print_json,
 };
-use crate::models::details::{
-    ModelDetails, remote_catalog_model_draft_ref, remote_catalog_model_ref,
-};
-use crate::models::search::{
-    SearchArtifactFilter, SearchHit, SearchSort, search_catalog_json_payload,
-    search_huggingface_json_payload,
-};
+use crate::models::search::{search_catalog_json_payload, search_huggingface_json_payload};
 use crate::models::storage::remote_catalog;
 use crate::models::storage::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
 use anyhow::Result;
 use serde_json::{Value, json};
+use skippy_model_hf::details::{
+    ModelDetails, remote_catalog_model_draft_ref, remote_catalog_model_ref,
+};
+use skippy_model_hf::search::{SearchArtifactFilter, SearchHit, SearchSort};
 use std::path::Path;
 
 fn show_payload(details: &ModelDetails, variants: Option<&[ModelDetails]>) -> Value {
@@ -269,8 +267,8 @@ impl ModelsFormatter for JsonFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::capabilities::ModelCapabilities;
     use crate::models::formatters::DownloadRenderInput;
+    use skippy_model_hf::capabilities::ModelCapabilities;
     use std::path::Path;
 
     #[test]

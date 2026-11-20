@@ -4,14 +4,9 @@ use crate::models::acquisition::{
     download_model_ref_with_progress_details_direct,
 };
 use crate::models::cli::ModelSearchSort;
-use crate::models::details::{
-    ShowVariantsProgress, find_remote_catalog_model_exact, remote_catalog_model_ref,
-    show_exact_model, show_model_variants_with_progress,
-};
+use crate::models::details::{show_exact_model, show_model_variants_with_progress};
 use crate::models::output::{DeterminateProgressLine, clear_stderr_line, start_spinner};
-use crate::models::search::{
-    SearchArtifactFilter, SearchProgress, SearchSort, search_catalog_models, search_huggingface,
-};
+use crate::models::search::search_huggingface;
 use crate::models::stage_cache::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
     download_package_v2_to_local, is_layer_package_ref,
@@ -22,6 +17,12 @@ use crate::models::storage::{
 };
 use anyhow::{Result, anyhow, bail};
 use serde_json::json;
+use skippy_model_hf::details::{
+    ShowVariantsProgress, find_remote_catalog_model_exact, remote_catalog_model_ref,
+};
+use skippy_model_hf::search::{
+    SearchArtifactFilter, SearchProgress, SearchSort, search_catalog_models,
+};
 
 use std::io::Write;
 use std::time::Duration;
@@ -77,6 +78,7 @@ pub async fn run_model_search(
     };
     let mut repo_spinner = None;
     let repo_progress = DeterminateProgressLine::new("🔎");
+    let json_progress = formatter.is_json();
     let results = search_huggingface(
         &query,
         limit,
@@ -85,7 +87,7 @@ pub async fn run_model_search(
         |progress| match progress {
             SearchProgress::SearchingHub => {}
             SearchProgress::InspectingRepos { completed, total } => {
-                if formatter.is_json() {
+                if json_progress {
                     return;
                 }
                 if let Some(mut spinner) = search_spinner.take() {

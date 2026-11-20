@@ -1,11 +1,14 @@
 pub mod blocking;
 mod cache_paths;
+pub mod capabilities;
 mod checkpoint;
+pub mod details;
 pub mod inventory;
 pub mod local_cache;
 pub mod package_cache;
 pub mod remote_catalog;
 pub mod search;
+pub mod startup;
 pub mod store;
 mod tls;
 

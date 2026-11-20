@@ -1,11 +1,11 @@
-use crate::models::capabilities;
-use crate::models::capabilities::ModelCapabilities;
-use crate::models::details::ModelDetails;
-use crate::models::search::{SearchArtifactFilter, SearchHit, SearchSort};
 use crate::models::storage::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
 use crate::models::storage::{huggingface_hub_cache_dir, remote_catalog};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use skippy_model_hf::capabilities;
+use skippy_model_hf::capabilities::ModelCapabilities;
+use skippy_model_hf::details::ModelDetails;
+use skippy_model_hf::search::{SearchArtifactFilter, SearchHit, SearchSort};
 
 use serde_json::{Value, json};
 use std::io::Write;

@@ -11,6 +11,9 @@ runtime consumers. It knows
 artifact-selection policy and file metadata formats, but it does not know how
 any particular registry downloads files.
 
+The `sizes` module parses catalog size labels and formats decimal GB/MB labels
+used by model discovery responses.
+
 ## Architecture Role
 
 Repository adapters implement `ModelRepository`. This crate asks the adapter for

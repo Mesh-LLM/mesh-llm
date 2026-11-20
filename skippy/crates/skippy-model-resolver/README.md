@@ -16,3 +16,8 @@ package manifest, or load a model. Those are separate responsibilities of
 Mesh's host runtime and standalone Skippy commands are consumers. Callers provide a catalog (an
 in-memory catalog or an `entries/` checkout through `HfCatalogProvider`) and
 the local search directories; network refresh remains the caller's job.
+
+The `startup` module owns startup source values and the pure explicit-source
+and missing-source policy. This is separate from `ModelResolver` ranking:
+startup checks the catalog before the installed cache for bare names. The
+ordered asynchronous lookup lives in `skippy-model-hf::startup`.
