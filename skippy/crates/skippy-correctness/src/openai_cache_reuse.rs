@@ -1,7 +1,7 @@
 use std::{fs, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, ClientBuilder};
 use serde_json::{Value, json};
 
 use crate::cli::OpenAiCacheReuseArgs;
@@ -13,11 +13,17 @@ struct Completion {
 }
 
 pub fn run(args: OpenAiCacheReuseArgs) -> Result<()> {
+    run_with(args, Client::builder())
+}
+
+/// The check, with a client built from `client`. The tests' plain-HTTP peer
+/// passes one that trusts no roots, so they don't need a CA bundle.
+fn run_with(args: OpenAiCacheReuseArgs, client: ClientBuilder) -> Result<()> {
     ensure!(args.max_tokens > 0, "--max-tokens must be positive");
     let prompt = fs::read_to_string(&args.prompt_file)
         .with_context(|| format!("read prompt file {}", args.prompt_file.display()))?;
     ensure!(!prompt.trim().is_empty(), "prompt file is empty");
-    let client = Client::builder()
+    let client = client
         .timeout(Duration::from_secs(args.request_timeout_secs.max(1)))
         .build()
         .context("build OpenAI cache check client")?;
