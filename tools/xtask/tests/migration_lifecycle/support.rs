@@ -1,6 +1,7 @@
 use crate::protocol::{Audit, Behavior, Destination, Plan, Record};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 pub struct Case {
     pub root: tempfile::TempDir,
@@ -124,6 +125,45 @@ pub fn assert_absent(pid: u32) {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::ESRCH)
     );
+}
+
+/// Waits until `path` holds a PID and returns it, or `None` at `until`.
+/// A writer creates the file before it writes the PID, so a reader that waits
+/// only for the file can find it empty.
+pub fn wait_for_pid(path: &Path, until: Instant) -> Option<i32> {
+    wait_for_pid_from(|| std::fs::read_to_string(path).ok(), until)
+}
+
+fn wait_for_pid_from(mut read: impl FnMut() -> Option<String>, until: Instant) -> Option<i32> {
+    loop {
+        let pid = read().and_then(|text| text.trim().parse::<i32>().ok());
+        if pid.is_some() || Instant::now() >= until {
+            return pid;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn wait_for_pid_waits_for_the_pid_not_only_the_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("owner.pid");
+    // The state a shell redirection leaves between creating the file and writing to it.
+    std::fs::write(&path, b"").unwrap();
+    assert_eq!(wait_for_pid(&path, Instant::now()), None);
+
+    // An empty read first, then the PID: the helper has to read again.
+    let mut contents = [String::new(), "4242\n".to_owned()].into_iter();
+    let mut reads = 0;
+    let pid = wait_for_pid_from(
+        || {
+            reads += 1;
+            contents.next()
+        },
+        Instant::now() + Duration::from_secs(30),
+    );
+    assert_eq!(pid, Some(4242));
+    assert_eq!(reads, 2);
 }
 
 pub struct Sentinel(pub std::process::Child);

@@ -253,12 +253,7 @@ fn mtp_scheduler_held_ready_interruption_is_causal_and_cleans_owned_server() {
     let marker = f.build.join("ready-probed");
     let observer = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let server = std::fs::read_to_string(marker)
-            .ok()
-            .and_then(|s| s.parse::<i32>().ok());
+        let server = crate::support::wait_for_pid(&marker, deadline);
         observer_cancel.cancel();
         server
     });
