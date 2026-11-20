@@ -66,6 +66,43 @@ fn configure_claude_launch_command(command: &mut Command, args: [&str; 6]) {
     // while initializing its kqueue-registered stdin (EINVAL on macOS).
 }
 
+/// Exit code a launcher propagates: `None` when the agent ran to success,
+/// the agent's own code when it exited nonzero (128 + signal, per shell
+/// convention, when a signal killed it), and 1 when the binary never
+/// started — the caller already printed its install guidance.
+fn launcher_exit_code(status: &std::io::Result<std::process::ExitStatus>) -> Option<i32> {
+    match status {
+        Ok(status) if status.success() => None,
+        Ok(status) => Some(child_exit_code(status)),
+        Err(_) => Some(1),
+    }
+}
+
+fn child_exit_code(status: &std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    1
+}
+
+/// Translate the agent's exit status into the launcher's result: success
+/// stays success, and anything else becomes a `ReportedExit` — the caller
+/// already printed the status line or the install guidance, so only the
+/// code remains to deliver.
+fn launcher_result(status: &std::io::Result<std::process::ExitStatus>) -> Result<()> {
+    match launcher_exit_code(status) {
+        Some(code) => Err(anyhow::Error::new(mesh_llm_events::ReportedExit(code))),
+        None => Ok(()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenCodeLaunchSpec {
     provider_id: &'static str,
@@ -646,6 +683,9 @@ pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> R
     if goose_app.exists() {
         writeln!(err, "🪿 Launching Goose.app...")?;
         let _ = err.flush();
+        // `open` detaches the app, so its exit status is unobservable and
+        // no code is propagated; blocking on a GUI app (`open -W`) would
+        // pin the terminal for the whole session.
         std::process::Command::new("open")
             .arg("-a")
             .arg(goose_app)
@@ -668,7 +708,7 @@ pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> R
             .env("GOOSE_MODEL", &chosen);
         configure_interactive_stdio(&mut command);
         let status = command.status();
-        match status {
+        match &status {
             Ok(s) if s.success() => {}
             Ok(s) => writeln!(err, "goose exited with {s}")?,
             Err(_) => {
@@ -688,6 +728,7 @@ pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> R
             let _ = c.kill();
             let _ = c.wait();
         }
+        return launcher_result(&status);
     }
     Ok(())
 }
@@ -752,7 +793,7 @@ pub async fn run_claude(model: Option<String>, port: u16, console_port: u16) -> 
         ],
     );
     let status = command.status();
-    match status {
+    match &status {
         Ok(s) if s.success() => {}
         Ok(s) => writeln!(err, "claude exited with {s}")?,
         Err(_) => {
@@ -772,7 +813,7 @@ pub async fn run_claude(model: Option<String>, port: u16, console_port: u16) -> 
         let _ = c.kill();
         let _ = c.wait();
     }
-    Ok(())
+    launcher_result(&status)
 }
 
 fn resolve_pi_models_path() -> std::path::PathBuf {
@@ -1001,7 +1042,7 @@ fn run_pi_with_mesh(
     command.args(["--model", &model_arg]);
     configure_interactive_stdio(&mut command);
     let status = command.status();
-    match status {
+    match &status {
         Ok(s) if s.success() => {}
         Ok(s) => writeln!(err, "pi exited with {s}")?,
         Err(_) => {
@@ -1011,7 +1052,7 @@ fn run_pi_with_mesh(
         }
     }
 
-    Ok(())
+    launcher_result(&status)
 }
 
 pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Result<()> {
@@ -1056,7 +1097,7 @@ pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Res
                 let mut command = Command::new("opencode");
                 configure_opencode_launch_command(&mut command, &spec);
                 let status = command.status();
-                match status {
+                match &status {
                     Ok(s) if s.success() => {}
                     Ok(s) => writeln!(err, "opencode exited with {s}")?,
                     Err(_) => {
@@ -1066,7 +1107,9 @@ pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Res
                         }
                     }
                 }
-                Ok(())
+                // Returned through `result` so the mesh child cleanup below
+                // still runs.
+                launcher_result(&status)
             }
             Err(error) => Err(error),
         }

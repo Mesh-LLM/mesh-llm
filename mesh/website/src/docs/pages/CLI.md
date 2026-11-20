@@ -779,7 +779,7 @@ Switches:
 - `--ctx-size <TOKENS>`: context per lane for this load. Default: the model's `[[models]]` row, else planned for this node.
 - `--parallel <LANES>`: concurrent lanes for this load. The native runtime allocates context × lanes KV cells. Default: the model's row, else `[gpu] parallel`, else planned.
 
-The command waits up to 30 seconds. If the node is still loading (for example while it downloads the model), it says so and the load continues on the node; check with `mesh-llm status`. `Can't connect` means nothing is listening on the port.
+The command waits up to 30 seconds. If the node is still loading (for example while it downloads the model), it says so and the load continues on the node; check with `mesh-llm status`. `Can't connect` means nothing is listening on the port. A load the node rejects prints its failure banner and exits nonzero.
 
 The command targets the local runtime. Use `status`,
 `GET /api/runtime/intents`, and `/v1/models` to observe completion.
@@ -791,6 +791,8 @@ Use this to unload a model from a running local runtime.
 Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
+
+An unload the node rejects prints its failure banner and exits nonzero.
 
 The command targets the local runtime. Remote same-owner control uses
 `runtime unload-model`.
@@ -922,6 +924,8 @@ Switches:
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--port <PORT>`: mesh-llm API port (default `9337`).
 
+The exit code follows goose: its own when it exits nonzero (128 + signal when killed), or 1 when the binary is missing. On macOS with Goose.app installed, mesh-llm launches the app detached and cannot observe its exit.
+
 ### `claude`
 
 Use this to launch Claude Code already wired to mesh-llm’s OpenAI-compatible endpoint.
@@ -930,6 +934,8 @@ Switches:
 
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--port <PORT>`: mesh-llm API port (default `9337`).
+
+The exit code follows claude: its own when it exits nonzero (128 + signal when killed), or 1 when the binary is missing.
 
 ### `opencode`
 
@@ -943,6 +949,8 @@ Switches:
 - `--host <HOST|HOST:PORT|URL>`: OpenCode target host or URL (default `127.0.0.1:9337`). Bare host forms assume `http`, default inference port `9337`, and default management port `3131`.
 - `--write`: write a merged `~/.config/opencode/opencode.json` that preserves unrelated root keys and sibling providers. If only `opencode.jsonc` exists, mesh-llm errors and tells you to rename or migrate it to `opencode.json` first.
 
+The exit code follows opencode: its own when it exits nonzero (128 + signal when killed), or 1 when the binary is missing. With `--write`, only the config write's own success decides the exit.
+
 ### `pi`
 
 Use this to launch Pi already wired to mesh-llm's OpenAI-compatible endpoint.
@@ -951,6 +959,8 @@ Switches:
 
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--host <HOST|HOST:PORT|URL>`: Pi target host or URL (default `127.0.0.1:9337`). Bare host forms assume `http`, default inference port `9337`, and default management port `3131`.
+
+The exit code follows pi: its own when it exits nonzero (128 + signal when killed), or 1 when the binary is missing. With `--write`, only the config write's own success decides the exit.
 
 ### `stop`
 
@@ -1012,7 +1022,7 @@ Subcommands:
 - `auth status`: show identity/keystore status.
 - `auth sign-node`: sign the current node identity with the owner key.
 - `auth renew-node`: renew the local node ownership certificate.
-- `auth verify-node`: verify a node ownership certificate and trust policy.
+- `auth verify-node`: verify a node ownership certificate and trust policy. Exits nonzero when the certificate does not verify; the summary it prints explains why.
 - `auth rotate-node`: rotate the local node identity key and optionally revoke
   the previous certificate.
 - `auth revoke-owner`: revoke an owner in the local trust store.
