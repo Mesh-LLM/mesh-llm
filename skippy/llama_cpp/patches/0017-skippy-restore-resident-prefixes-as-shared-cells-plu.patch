@@ -26,7 +26,9 @@ The memory cache capabilities report SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION
 and SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT again, recurrent and hybrid
 memories advertise resident prefixes, and a non-unified context advertises
 none. A model opens with a unified pool even with one lane, so cache-owned
-sequence ids share it.
+sequence ids share it. A graph phase that writes attention or recurrent state
+now leaves all of these bits in place, and test-skippy-kv-page-export expects
+that.
 
 skippy-sampling-history regains its resident mode, the long GPU checkpoint
 proof and the host-writer regression, merged with the verify-window and
@@ -63,7 +65,8 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  src/skippy/tests/resident_checkpoint_gpu.cpp  | 287 ++++++++++++
  .../tests/resident_checkpoint_writer.cpp      | 126 +++++
  src/skippy/tests/sampling_history.cpp         | 437 +++++++++++++++--
- 15 files changed, 1337 insertions(+), 526 deletions(-)
+ tests/test-skippy-kv-page-export.cpp          |  17 +-
+ 16 files changed, 1346 insertions(+), 534 deletions(-)
  create mode 100644 src/skippy/resident_prefix.cpp
  create mode 100644 src/skippy/tests/resident_checkpoint_gpu.cpp
  create mode 100644 src/skippy/tests/resident_checkpoint_writer.cpp
@@ -2304,6 +2307,48 @@ index 0c81c9d47..16582f6b2 100644
 +    }
      return 0;
  }
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 30c88b490..cbe80ebba 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -38,12 +38,12 @@ static bool graph_cache_capabilities_cover_complete_state() {
+         });
+         return skippy_graph_cache_capabilities(result);
+     };
+-    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
+-            SKIPPY_MEMORY_CACHE_FULL_STATE;
+-    if (capabilities(skippy_state_kind::kv_key) != dense ||
+-            capabilities(skippy_state_kind::kv_value) != dense ||
+-            capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
+-            capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++    const uint32_t unrestricted = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION |
++            SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE;
++    if (capabilities(skippy_state_kind::kv_key) != unrestricted ||
++            capabilities(skippy_state_kind::kv_value) != unrestricted ||
++            capabilities(skippy_state_kind::recurrent_conv) != unrestricted ||
++            capabilities(skippy_state_kind::recurrent_ssm) != unrestricted ||
+             capabilities(skippy_state_kind::derived_persistent) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
+         return false;
+     }
+@@ -66,7 +66,7 @@ static bool graph_cache_capabilities_cover_complete_state() {
+         {skippy_block_boundary_kind::entry, 0, input},
+         {skippy_block_boundary_kind::exit, 0, stateless_output},
+     };
+-    if (skippy_graph_cache_capabilities(result) != dense) { return false; }
++    if (skippy_graph_cache_capabilities(result) != unrestricted) { return false; }
+ 
+     // Context-owned cross-attention state is missing even from full memory
+     // snapshots. Each input owner declares that fact without a family lookup.
+@@ -118,7 +118,8 @@ int main() {
+             {});
+ 
+     if (skippy_memory_cache_capabilities(&kv) !=
+-            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++                    SKIPPY_MEMORY_CACHE_FULL_STATE) ||
+             skippy_model_memory_cache_capabilities(nullptr) != 0) {
+         return 1;
+     }
 -- 
 2.43.0
 
