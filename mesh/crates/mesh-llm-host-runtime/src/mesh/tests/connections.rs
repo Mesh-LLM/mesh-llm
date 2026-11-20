@@ -501,6 +501,7 @@ async fn make_configured_test_node(
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+        test_apply_config_deadline: Arc::default(),
         native_model_lifecycle: Arc::default(),
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),
