@@ -136,13 +136,13 @@ fn windows_runtime_producer_cannot_drop_its_callers_cache_policy() {
         ),
         (
             "ci-windows-runtime-slice.yml",
-            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
-            "          allow_native_github_cache: \"true\"\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact shared Windows ABI build from trusted main",
+            "          allow_native_github_cache: \"true\"\n      - name: Save exact shared Windows ABI build from trusted main",
         ),
         (
             "ci-windows-runtime-slice.yml",
-            "          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
-            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact shared Windows ABI build from trusted main",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact shared Windows ABI build from trusted main",
         ),
     ] {
         assert!(

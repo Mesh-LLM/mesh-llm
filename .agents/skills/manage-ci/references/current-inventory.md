@@ -151,6 +151,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
 | `windows-abi-measurement.yml` (`Diagnostic · Windows ABI cache measurement`) | dispatch only | Nonpublishing cold versus exact-warm sample of one Windows runtime row; read-only token, no secrets, hosted `windows-2022`, evidence artifact only |
+| `windows-warm-caches.yml` | daily schedule, dispatch | Verify existing exact Windows ABI entries and run bounded retention; Main Windows runtime jobs own builds and publication |
 | `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
@@ -1062,11 +1063,15 @@ and `ImageVersion` separately from Rust's toolchain cache key. Conservative
 production source trees include embedded resources; uncompiled integration
 tests and READMEs no longer invalidate hosted executables. The packaged runtime
 inventory includes `skippy-package-builder` and its local dependency closure.
-The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
-`windows_warmer_paths` workflow guard requires `windows-warm-caches.yml` push
-paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
-exclusions), so a key input cannot change on `main` without waking its only
-producer.
+The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory. Main Windows
+runtime jobs save shared ABI misses with the exact pinned cache save after package verification,
+only on trusted main pushes with native cache permission. Every main run can
+repair a failed save or populate its actual hosted image cohort. The manual
+`windows-warm-caches.yml` runs daily and on dispatch. It restores and verifies
+existing entries and runs bounded maintenance once the current CPU identity
+resolves, even if an entry is missing; it has no push trigger, native build or
+ABI save.
+The `windows_abi_publication` guard pins that ownership and publication order.
 
 `linux-cache-measurement.yml` measures those three Linux identities without
 publishing. Inputs are closed choices (`cohort` cpu-runtime/hosted-xtask/
@@ -1122,7 +1127,7 @@ compiler, SDK, toolkit, automation and Depot cache authority is literal
 for 14 days. The workflow is outside `CACHE_INPUT_HASH`, so changing it does
 not move the measured key. Its `ci-ops` receipt code is inside it
 (`tools/xtask/src/**`), so merging a receipt change moves all four keys:
-exact-warm samples wait for the warmer run on that merge commit. Primary time
+exact-warm samples wait for the main runtime jobs on that merge commit. Primary time
 is lookup plus preparation only; toolkit installs between them are excluded.
 Each backend, condition and sample has its own concurrency group, so samples
 dispatched back to back do not cancel one another.
@@ -1139,11 +1144,12 @@ manifest replacement. Portable `l4_producers` contracts cover the consumed JSON,
 file identity, environment precedence, and unchanged platform/backend paths.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
-publish and verify an exact-key ABI cache miss under the current ref. These
+publish and verify an exact-key ABI cache miss under the current ref, except
+main-ref CPU and Vulkan keys owned by Main Windows runtime jobs. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
 the scoped runtime cache token. Failed/cancelled packaging never saves a
 partial ABI build. Publication verification is idempotent: an exact key/ref,
-non-empty entry counts even when a concurrent writer (the main cache warmer)
+non-empty entry counts even when a concurrent main runtime publisher
 published the immutable key first, and the lookup-only restore still fails
 closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. `actions/cache/restore` reports a cache-service rate limit (HTTP 429) as a miss, so when that probe misses, the final lookup runs after one 60-second cooldown instead of failing in the same throttle window. Hosted placement, architecture matrices, and PR cache policy
 are unchanged. Windows release jobs enable GitHub-backed compiler caching during

@@ -573,6 +573,16 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- Main Windows runtime jobs own shared Windows ABI publication after successful
+  package verification, on trusted main pushes only. Every subsequent main
+  miss retries publication, so recovery does not depend on another recipe edit.
+  The Windows warmer runs daily and on manual dispatch. It only restores,
+  verifies and maintains existing entries; it never builds or publishes ABI
+  trees and has no push trigger. Retention needs only the current CPU identity,
+  so a missing or unverifiable entry does not stop pruning.
+  Release jobs publish their distinct GPU families, but leave shared main-ref
+  CPU and Vulkan keys to Main Windows.
+  Preserve exact keys, restored-byte verification and isolated PR cache policy.
 - Disable Rust debug information in every CI workflow with workflow- or job-level
   `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
   `CARGO_PROFILE_RELEASE_DEBUG=0`, and `CARGO_PROFILE_BENCH_DEBUG=0`.
@@ -712,13 +722,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
   publisher. The workflow is a registered retention consumer that adds no
   family. It is deliberately outside `CACHE_INPUT_HASH`, so editing it cannot
   move the key it measures, but its `ci-ops` receipt code is in that key, so
-  exact-warm samples wait for the warmer run on the merge commit. Primary time
+  exact-warm samples wait until the Main Windows runtime jobs on the merge
+  commit have published the new key. Primary time
   is lookup plus preparation, excluding uncached toolkit installs. Restores may
   update cache access metadata. Receipts are evidence artifacts only.
 - A workflow that is the only `main` producer of a key must wake on every input
-  of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
-  `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract
-  gate refuses an uncovered input and any `!` exclusion in those paths.
+  of that key. Main Windows runtime jobs, the only Windows ABI producer, run on
+  every main push without path filters, so every `CACHE_INPUT_HASH` input change
+  reaches them.
 - Linux CPU runtime package, hosted full xtask and hosted controller cache
   qualification uses only the manual `linux-cache-measurement.yml` diagnostic.
   It has only a `workflow_dispatch` trigger, hosted `ubuntu-24.04` jobs, a

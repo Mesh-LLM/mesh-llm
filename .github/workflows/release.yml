@@ -1755,7 +1755,7 @@ jobs:
           output_dir: dist/native-runtimes
           allow_native_github_cache: "true"
       - name: Save and verify Windows release ABI cache
-        if: steps.llama_cache.outputs.cache-hit != 'true'
+        if: github.ref != 'refs/heads/main' && steps.llama_cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/save-and-verify-actions-cache
         with:
           path: ${{ steps.llama_cache.outputs.cache-path }}
@@ -1926,7 +1926,7 @@ jobs:
           output_dir: dist/native-runtimes
           allow_native_github_cache: "true"
       - name: Save and verify Windows release ABI cache
-        if: steps.llama_cache.outputs.cache-hit != 'true'
+        if: (github.ref != 'refs/heads/main' || matrix.backend != 'vulkan') && steps.llama_cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/save-and-verify-actions-cache
         with:
           path: ${{ steps.llama_cache.outputs.cache-path }}

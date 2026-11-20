@@ -237,6 +237,7 @@ part of this workspace or its publish chain.
 | `ci.yml` | `workflow_call` only | Temporary inert compatibility for the former main ingress filename, pending the protected-main runner-contract update |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
+| `windows-warm-caches.yml` | daily schedule, `workflow_dispatch` | Verify existing Windows ABI entries and run bounded retention; Main Windows runtimes own publication |
 | `nightly-stability.yml` / `nightly-stability-run.yml` | manual dispatch / reusable; daily schedule paused pending setup qualification | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | manual dispatch; daily schedule paused | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
 | `agentic-replay-nightly.yml` | trusted-main dispatch; schedule paused for qualification | Coding-agent replay benchmark on the persistent macOS `micstudio` runner. The fixed `[self-hosted, X64, macOS, family-certify, agentic-replay]` selector is backed by a fail-closed `RUNNER_NAME=micstudio` check; scheduled and manual execution is restricted to trusted `main`. It resolves exact model and trajectory revisions from the pre-warmed Hugging Face cache, verifies their SHA-256 digests, cross-checks the trajectory pin against the canonical harness before download, derives replay shape from `ci/agentic-replay-nightly/matrix.json`, fails closed on history lookup errors, writes the summary even when the regression gate fails, confines the write-capable HF token to the publish step, uploads immutable evidence, and keeps persistent-runner repair credential-free: the repair loop emits a patch, body and status artifact for its run/attempt, while a separate canonical-main, failed-run GitHub-hosted job validates the artifact, applies the patch with hooks disabled, and uses `CANARY_REPAIR_TOKEN` only to publish a deterministic run/attempt branch and PR. |
@@ -1516,12 +1517,22 @@ well as the Rust toolchain, and include the common linker driver. Runtime
 version 2 keys include packaging policy and the packaged Rust tool's local
 dependency closure. Key lookup remains compilation-free; a miss follows the
 existing build path and a hit retains its existing verification.
-The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`, and
-`windows-warm-caches.yml` is the only job that saves it on `main`, so the
-contract gate also checks that the warmer's `push` paths cover every input of
-that key, by equality or a literal `<dir>/**`, and refuses `!` exclusions there:
-an input it does not watch would move the key on `main` with no warmed entry,
-and the next Windows runtime run of each PR would build cold.
+The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`. Main Windows
+runtime jobs own publication on trusted main pushes, after successful package
+verification and before artifact upload. Each miss saves the exact restore key
+with the pinned `actions/cache/save`, the same way the Linux CPU runtime
+publishes, so the PR-reused lane needs no Actions API permission. Consumers
+verify restored ABI bytes before use, and the next main run with a miss
+retries the save without waiting for another key-input edit. Jobs populate the actual
+hosted image cohort they use. PR-scoped publication remains isolated.
+`windows-warm-caches.yml` runs daily and on manual dispatch. It only restores
+and verifies existing ABI entries and runs bounded retention. It has no push
+trigger, ABI build or save, so it cannot duplicate the runtime producer.
+Retention runs once the current CPU identity resolves, so a missing entry does
+not stop pruning. Missing entries fail verification; rerun the failed Main
+Windows runtime job to repair them. The workflow guard
+pins these producer boundaries without adding a runtime dependency or changing
+the Windows matrix budget, product verification, or Skippy probe coverage.
 
 The manual `linux-cache-measurement.yml` diagnostic measures the Linux CPU
 runtime package, hosted xtask and hosted controller caches without publishing.
@@ -1563,7 +1574,7 @@ out-of-order phase timestamps refuse the sample; nothing relabels it cold. The j
 receipt for 14 days. It does not change the runtime slice, the warmer, release
 or retention. A restore may still update an entry's access time. Merging a
 change to its `ci-ops` receipt code moves all four keys, so exact-warm samples
-wait for the warmer run on that merge commit. Primary time excludes the
+wait for the main runtime jobs on that merge commit. Primary time excludes the
 uncached toolkit installs, and each sample has its own concurrency group.
 
 The Windows host slice uploads Cargo HTML timings from its existing standalone
@@ -1596,11 +1607,12 @@ remain reusable across runs within that compatibility cohort. Timing artifacts
 retain Cargo HTML and linker traces.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
-publish and verify an exact-key ABI cache miss under the current ref. These
+publish and verify an exact-key ABI cache miss under the current ref, except
+main-ref CPU and Vulkan keys owned by Main Windows runtime jobs. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
 the scoped runtime cache token. Failed/cancelled packaging never saves a
 partial ABI build. Publication verification is idempotent: an exact key/ref,
-non-empty entry counts even when a concurrent writer (the main cache warmer)
+non-empty entry counts even when a concurrent main runtime publisher
 published the immutable key first, and the lookup-only restore still fails
 closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. `actions/cache/restore` reports a cache-service rate limit (HTTP 429) as a miss, so when that probe misses, the final lookup runs after one 60-second cooldown instead of failing in the same throttle window. Hosted placement, architecture matrices, and PR cache policy
 are unchanged. Windows release jobs enable GitHub-backed compiler caching during
