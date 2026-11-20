@@ -5,7 +5,9 @@ use super::{
 use crate::kv_integration::scheduling::CacheSchedulingPolicy;
 use crate::runtime_state::RuntimeState;
 use skippy_inference_api::InferenceResult;
-use skippy_scheduler::{CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates};
+use skippy_scheduler::{
+    CacheAffinity, CacheAwareCandidate, PriorityPassovers, order_cache_aware_candidates,
+};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,6 +20,7 @@ pub(super) struct CacheAwareRuntimeOperation {
     priority: u64,
     enqueued_turn: u64,
     order: u64,
+    passover_mark: u64,
     scheduling: CacheSchedulingPolicy,
     refresh_affinity: Option<CacheAffinityRefresh>,
     affinity_initialized: bool,
@@ -44,6 +47,7 @@ pub(super) struct CacheRuntimeQueue {
     operations: Vec<CacheAwareRuntimeOperation>,
     order_dirty: bool,
     turn: u64,
+    passovers: PriorityPassovers,
     next_order: u64,
     aging_cost_per_turn: u64,
     group_waiting_prefixes: bool,
@@ -61,6 +65,7 @@ impl CacheRuntimeQueue {
             operations: Vec::new(),
             order_dirty: false,
             turn: 0,
+            passovers: PriorityPassovers::default(),
             next_order: 0,
             aging_cost_per_turn,
             group_waiting_prefixes,
@@ -154,6 +159,7 @@ impl CacheRuntimeQueue {
             priority,
             enqueued_turn: self.turn,
             order,
+            passover_mark: self.passovers.mark(priority),
             scheduling: state.scheduling,
             refresh_affinity: state.refresh_affinity,
             affinity_initialized: state.affinity_initialized,
@@ -178,6 +184,12 @@ impl CacheRuntimeQueue {
         self.refresh_affinities();
         self.reorder_if_dirty();
         let queued = self.operations.pop()?;
+        self.passovers.record_selection(queued.priority);
+        // Passing lower priorities over can age them past another level.
+        self.order_dirty |= self
+            .operations
+            .iter()
+            .any(|operation| operation.priority < queued.priority);
         let affinity = &queued.affinity;
         let telemetry = CacheRuntimeTelemetry {
             matched_tokens: affinity.matched_tokens(),
@@ -233,6 +245,9 @@ impl CacheRuntimeQueue {
                     prompt_tokens: queued.prompt_tokens.as_ref(),
                     enqueued_turn: queued.enqueued_turn,
                     order: queued.order,
+                    passed_over: self
+                        .passovers
+                        .passed_over(queued.priority, queued.passover_mark),
                 }),
             self.turn,
             self.aging_cost_per_turn,

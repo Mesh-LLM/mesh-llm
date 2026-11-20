@@ -20,6 +20,7 @@ pub(in crate::frontend) fn generation_ids(
         frontend_request_id,
     )
     .with_execution_scope(context.execution_scope())
+    .with_request_class(context.request_class())
 }
 
 /// Run blocking inference while owning its permit and full request context.

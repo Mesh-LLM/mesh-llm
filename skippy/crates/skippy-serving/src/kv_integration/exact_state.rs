@@ -424,6 +424,7 @@ impl KvStageIntegration {
                         payload,
                         extra,
                         namespace: identity.namespace.clone(),
+                        retention_priority: identity.retention_priority(),
                         token_ids: stored_tokens,
                         l3_fill_claim: None,
                         write_through_l3: true,
@@ -794,6 +795,18 @@ impl KvStageIntegration {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
+        // Without L3 there is nowhere for a crowded-out snapshot to spill.
+        if !already_recorded
+            && (!write_through_l3 || self.l3.is_none())
+            && exact_state_crowded_out(
+                &self.radix,
+                self.exact_max_entries,
+                identity.retention_priority(),
+            )
+        {
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
         let Some(reservation) = self.reserve_snapshot_host_memory(
             runtime,
             session_id,
@@ -851,6 +864,7 @@ impl KvStageIntegration {
             payload,
             extra,
             namespace: identity.namespace.clone(),
+            retention_priority: identity.retention_priority(),
             token_ids: identity.token_ids.clone(),
             l3_fill_claim: None,
             write_through_l3,
@@ -1180,6 +1194,7 @@ impl KvStageIntegration {
                     payload: fill.payload,
                     extra: ExactStateExtra { kv_desc },
                     namespace: identity.namespace.clone(),
+                    retention_priority: identity.retention_priority(),
                     token_ids: identity.token_ids[..token_count as usize].to_vec(),
                     l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
                     write_through_l3: false,
@@ -1255,6 +1270,25 @@ fn try_touch_exact_state(
     }
 }
 
+/// Whether a new entry kept at `retention` would be evicted again as soon as
+/// it is stored: the cache is full and every entry it could evict outranks
+/// it (a higher request tier's). Exporting it would only cost the copy.
+fn exact_state_crowded_out(
+    radix: &std::sync::Mutex<
+        skippy_cache::UnifiedRadixCache<super::RadixResidentEntry, super::RadixExactEntry>,
+    >,
+    max_entries: usize,
+    retention: u64,
+) -> bool {
+    let Ok(radix) = radix.try_lock() else {
+        return false;
+    };
+    radix.stats().recurrent_entries >= max_entries
+        && radix
+            .recurrent_victim_retention(super::RadixExactEntry::retention_priority)
+            .is_none_or(|victim| victim > retention)
+}
+
 fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         let message = cause.to_string();
@@ -1309,7 +1343,10 @@ mod tests {
 
     use skippy_cache::{L3Location, UnifiedRadixCache};
 
-    use super::{is_native_kv_unavailable, preflight_l3_kv_location, try_touch_exact_state};
+    use super::{
+        exact_state_crowded_out, is_native_kv_unavailable, preflight_l3_kv_location,
+        try_touch_exact_state,
+    };
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
@@ -1320,6 +1357,35 @@ mod tests {
     fn empty_kv_layer_range_is_an_unavailable_optional_kv_component() {
         let error = anyhow::anyhow!("RuntimeError: no KV cache layers selected by layer range");
         assert!(is_native_kv_unavailable(&error));
+    }
+
+    #[test]
+    fn a_snapshot_every_stored_entry_outranks_is_not_exported_into_a_full_cache() {
+        let cache = Mutex::new(TestRadix::new());
+        for (index, retention) in [(1, 2), (2, 2)] {
+            cache
+                .lock()
+                .unwrap()
+                .insert_recurrent(
+                    "namespace",
+                    &[index],
+                    32,
+                    crate::kv_integration::RadixExactEntry::new(
+                        format!("page-{index}"),
+                        crate::kv_integration::ExactStatePayload::full_state(vec![1]),
+                        crate::kv_integration::ExactStateExtra::default(),
+                        false,
+                    )
+                    .with_retention_priority(retention),
+                )
+                .unwrap();
+        }
+        // Full of entries kept at 2: a 0 would evict itself; a 2 evicts the
+        // older of its peers.
+        assert!(exact_state_crowded_out(&cache, 2, 0));
+        assert!(!exact_state_crowded_out(&cache, 2, 2));
+        // With room to spare, any snapshot is kept.
+        assert!(!exact_state_crowded_out(&cache, 3, 0));
     }
 
     #[test]

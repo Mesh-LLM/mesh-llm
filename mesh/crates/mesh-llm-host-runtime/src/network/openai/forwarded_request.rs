@@ -213,6 +213,8 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         // A client's scope headers never pass through as is; see below.
         super::routing_scope::MESH_SCOPE_HEADER,
         super::routing_scope::MESH_SCOPE_NODES_HEADER,
+        // Restamped below with the tier this node serves the request at.
+        crate::mesh::request_tier::REQUEST_TIER_HEADER,
     ];
     let omitted = INGRESS_CREDENTIAL_HEADERS
         .iter()
@@ -220,6 +222,12 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         .chain(OMITTED_ON_PEER_FORWARD.iter().copied());
     let mut forwarded =
         finalize_forwarded_request(raw, false, None, None, &omitted.collect::<Vec<_>>())?;
+    // Name the tier of this node's client, so the peer serves the request no
+    // higher. The peer keeps the lower of this and its own view of this node.
+    crate::mesh::request_tier::insert_request_tier_header(
+        &mut forwarded,
+        crate::mesh::request_tier::current_request_tier(),
+    );
     // A private request only reaches nodes in this node's private scope. Tell that node
     // it is private, so it serves it only from what stays in scope (not from
     // a split whose stages run on a stranger's node). The receiving node
@@ -254,7 +262,7 @@ mod tests {
         let forwarded = prepare_peer_forwarded_request(&raw).unwrap();
 
         let mut expected = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nX-Trace-Id: trace-123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "POST /v1/responses HTTP/1.1\r\nx-mesh-request-tier: local\r\nHost: localhost\r\nX-Trace-Id: trace-123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         )
         .into_bytes();
@@ -317,6 +325,27 @@ mod tests {
             "{text}"
         );
         assert!(text.ends_with("\r\n\r\n{}"), "{text}");
+    }
+
+    /// The peer is told the tier this node serves the request at, never the
+    /// tier the client named.
+    #[tokio::test]
+    async fn the_peer_is_told_this_nodes_tier_for_the_request() {
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nX-Mesh-Request-Tier: local\r\nContent-Length: 2\r\n\r\n{}";
+        let forwarded = crate::mesh::request_tier::with_request_tier(
+            skippy_inference_api::InferenceRequestTier::Trusted,
+            async { prepare_peer_forwarded_request(raw) },
+        )
+        .await
+        .unwrap();
+        let text = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
+        assert_eq!(text.matches("x-mesh-request-tier").count(), 1, "{text}");
+        assert!(
+            text.starts_with(
+                "post /v1/chat/completions http/1.1\r\nx-mesh-request-tier: trusted\r\n"
+            ),
+            "{text}"
+        );
     }
 
     /// Regression (CodeRabbit / erlich, PR #1671 round 2): routing headers

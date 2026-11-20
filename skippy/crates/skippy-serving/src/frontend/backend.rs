@@ -483,6 +483,7 @@ impl GenerationAdmissionController {
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
     ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+        let scheduling = scheduling.with_tier(ids.request_tier());
         let deadline = if admission_timeout.is_zero() {
             None
         } else {
@@ -551,13 +552,15 @@ impl GenerationAdmissionController {
         if cancellation.is_cancelled() {
             return Err(request_cancelled_error());
         }
+        let tier = scheduling.tier();
         let claim = self.generation_limit.admission_queue().claim_or_enqueue(
             self.generation_limit.semaphore(),
             self.generation_token_budget.clone(),
             GenerationTokenBudgetRequest::new(
                 usize::try_from(work.prompt_tokens).unwrap_or(usize::MAX),
                 u32::try_from(work.decode_tokens).unwrap_or(u32::MAX),
-            ),
+            )
+            .with_tier(tier),
             scheduling,
             self.generation_queue_depth.clone(),
             self.generation_queue_limit,
@@ -579,8 +582,8 @@ impl GenerationAdmissionController {
                 self.generation_limit.note_queued_demand();
                 self.generation_service_estimator
                     .set_concurrency(self.generation_limit.current_limit());
-                let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
-                let queued_work = self.generation_service_estimator.reserve_queued(work);
+                let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms(tier);
+                let queued_work = self.generation_service_estimator.reserve_queued(work, tier);
                 let resources = lease
                     .acquire(
                         self.generation_limit.semaphore(),
@@ -900,6 +903,7 @@ impl StageOpenAiBackend {
         scheduling: GenerationAdmissionScheduling,
     ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         let admission_started = Instant::now();
+        let tier = ids.request_tier();
         let result = GenerationAdmissionController::for_backend(self)
             .acquire_scheduled_work(
                 ids,
@@ -940,7 +944,9 @@ impl StageOpenAiBackend {
                 "llama_stage.generation_admission_error".to_string(),
                 json!(error.body().error.message),
             );
-            if let Some(predicted_wait_ms) = self.generation_service_estimator.predicted_wait_ms() {
+            if let Some(predicted_wait_ms) =
+                self.generation_service_estimator.predicted_wait_ms(tier)
+            {
                 attrs.insert(
                     "llama_stage.generation_predicted_wait_ms".to_string(),
                     json!(predicted_wait_ms),
@@ -1304,3 +1310,5 @@ impl StageOpenAiBackend {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tier_admission_tests;

@@ -38,7 +38,9 @@ pub(in crate::network::openai) async fn route_local_attempt(
         peer_capsule_id,
     } = logging;
     let marked;
-    let prefetched = match mesh::current_private_scope() {
+    let private_scope = mesh::current_private_scope();
+    let private = private_scope.is_some();
+    let prefetched = match private_scope {
         Some(scope) => {
             // Whichever route chose it: a private request runs on this node
             // only inside its scope.
@@ -52,6 +54,9 @@ pub(in crate::network::openai) async fn route_local_attempt(
         }
         None => prefetched,
     };
+    // Skippy orders, evicts and partitions its caches by the request's class.
+    let classified = mesh::request_tier::mark_class_for_local_server(prefetched, private);
+    let prefetched = classified.as_deref().unwrap_or(prefetched);
     let served_model = served_model_headers_for_mesh_peer(node, tcp_stream, model, port).await;
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
     else {

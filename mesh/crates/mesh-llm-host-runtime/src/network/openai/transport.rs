@@ -435,7 +435,7 @@ pub async fn handle_mesh_request(
     let mut tcp_stream = tcp_stream;
     let source_addr = tcp_stream.peer_addr().ok();
     let plugin_manager = node.plugin_manager().await;
-    let mut request = match read_http_request_with_plugin_manager_with_context(
+    let request = match read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
         plugin_manager.as_ref(),
         super::request_parse::RequestTransforms::Apply,
@@ -448,6 +448,31 @@ pub async fn handle_mesh_request(
             return;
         }
     };
+    // Every client of this port is local; one may lower its own request.
+    let tier = crate::mesh::request_tier::claimed_request_tier(&request.raw);
+    crate::mesh::request_tier::with_request_tier(
+        tier,
+        Box::pin(serve_mesh_request(
+            node,
+            tcp_stream,
+            request,
+            source_addr,
+            track_demand,
+            affinity,
+        )),
+    )
+    .await;
+}
+
+/// Serve a request read by [`handle_mesh_request`], at the tier in scope.
+async fn serve_mesh_request(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    mut request: BufferedHttpRequest,
+    source_addr: Option<std::net::SocketAddr>,
+    track_demand: bool,
+    affinity: AffinityRouter,
+) {
     let Some(tcp_stream) = refuse_private_at_bootstrap(&node, tcp_stream, &mut request).await
     else {
         return;

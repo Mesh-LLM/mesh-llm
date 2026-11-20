@@ -116,6 +116,10 @@ pub(crate) struct StageLoadRequest {
     pub(crate) load_mode: LoadMode,
     pub(crate) upstream: Option<StagePeerDescriptor>,
     pub(crate) downstream: Option<StagePeerDescriptor>,
+    /// Highest request tier the loaded stage serves. Never read from the
+    /// wire: the receiving host sets it from its own classification of the
+    /// node that sent the load. `None` (a local load) serves the stamped tier.
+    pub(crate) max_request_tier: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
