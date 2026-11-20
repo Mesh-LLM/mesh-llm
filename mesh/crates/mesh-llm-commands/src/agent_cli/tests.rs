@@ -3,10 +3,11 @@ use super::{
     OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
     build_opencode_launch_spec_with_limits, build_pi_provider_config,
     build_pi_provider_config_with_limits, cleanup_mesh_child, configure_claude_launch_command,
-    configure_opencode_launch_command, goose_config_dir_for, local_mcp_url, merge_goose_mcp_config,
-    mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
-    pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
-    write_opencode_config_for_test, write_pi_config_for_test, write_pi_config_to_path,
+    configure_opencode_launch_command, goose_config_dir_for, launcher_exit_code, local_mcp_url,
+    merge_goose_mcp_config, mesh_mcp_claude_config_json, normalize_opencode_host,
+    opencode_missing_binary_guidance, pi_missing_binary_guidance,
+    resolve_opencode_config_path_from_home, write_opencode_config_for_test,
+    write_pi_config_for_test, write_pi_config_to_path,
 };
 
 const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";
@@ -1113,4 +1114,27 @@ fn goose_config_dir_follows_where_goose_reads_its_config() {
         ),
         base.join("root").join("config")
     );
+}
+#[cfg(unix)]
+#[test]
+fn launcher_exit_code_maps_child_outcomes_to_script_exit_codes() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    // Success stays success: no error to report.
+    assert_eq!(launcher_exit_code(&Ok(ExitStatus::from_raw(0))), None);
+    // A nonzero exit propagates the agent's own code (waitpid: code << 8).
+    assert_eq!(
+        launcher_exit_code(&Ok(ExitStatus::from_raw(3 << 8))),
+        Some(3)
+    );
+    // A signal termination reports the shell convention 128 + signal
+    // (waitpid encodes a signal as the raw status).
+    assert_eq!(launcher_exit_code(&Ok(ExitStatus::from_raw(9))), Some(137));
+}
+
+#[test]
+fn launcher_exit_code_reports_a_spawn_failure_as_one() {
+    let not_found = std::io::Error::new(std::io::ErrorKind::NotFound, "agent not found");
+    assert_eq!(launcher_exit_code(&Err(not_found)), Some(1));
 }

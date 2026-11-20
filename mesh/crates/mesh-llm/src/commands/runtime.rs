@@ -479,6 +479,9 @@ async fn display_runtime_result(
             .and_then(|value| value["error"].as_str().map(str::to_owned))
             .unwrap_or_else(|| "unknown error".to_string());
         writeln!(err, "Reason: {reason}")?;
+        // The banner above is the operator-facing failure; the exit code is
+        // the remaining fact scripts need, not another rendered error.
+        return Err(anyhow::Error::new(mesh_llm_events::ReportedExit(1)));
     }
     Ok(())
 }
@@ -823,8 +826,8 @@ mod tests {
     use super::{
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
         build_lifecycle_request, control_bootstrap_lines, control_scan_refresh_lines,
-        display_backend_label, native_runtime_command_selection, native_runtime_config_selector,
-        owner_control_http, runtime_success_lines, yes_no,
+        display_backend_label, display_runtime_result, native_runtime_command_selection,
+        native_runtime_config_selector, owner_control_http, runtime_success_lines, yes_no,
     };
     use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
@@ -1078,5 +1081,41 @@ mod tests {
         let auth = seen.lock().expect("auth lock").clone();
         assert_eq!(auth, vec!["Bearer ax-secret".to_string()]);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_result_reports_a_nonzero_exit() {
+        use axum::{Router, routing::post};
+
+        let app = Router::new().route(
+            "/api/runtime/load",
+            post(|| async {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({ "error": "no such model" })),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/api/runtime/load"))
+            .send()
+            .await
+            .expect("load request");
+        let error = display_runtime_result(response, "bogus-model", "Loaded")
+            .await
+            .expect_err("a failed load must not report success");
+        // The banner was already printed; the error carries only the exit code.
+        assert_eq!(
+            error
+                .downcast_ref::<mesh_llm_events::ReportedExit>()
+                .map(|exit| exit.0),
+            Some(1)
+        );
     }
 }

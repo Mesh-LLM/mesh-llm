@@ -179,3 +179,43 @@ fn revoke_node_save_failure_leaves_blocking_file_unchanged() {
     assert_eq!(std::fs::read(&blocking_file).unwrap(), b"not a directory");
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+#[serial]
+fn verify_node_reports_a_nonzero_exit_when_the_node_id_does_not_match() {
+    let dir = temporary_auth_test_dir("verify-exit");
+    let owner = mesh_llm_identity::OwnerKeypair::generate();
+    let claimed_node_id = [7u8; 32];
+    let expires_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_millis() as u64
+        + 86_400_000;
+    let signed = mesh_llm_identity::sign_node_ownership(
+        &owner,
+        &claimed_node_id,
+        expires_at_unix_ms,
+        None,
+        None,
+    )
+    .expect("sign ownership");
+    let certificate_path = dir.join("node-ownership.json");
+    save_node_ownership(&certificate_path, &signed).expect("save ownership");
+    let trust_store_path = dir.join("trust-store.json");
+    save_trust_store(&trust_store_path, &TrustStore::default()).expect("save trust store");
+
+    let mismatched_node_id = hex::encode([9u8; 32]);
+    let error = run_verify_node(
+        Some(certificate_path),
+        Some(mismatched_node_id),
+        Some(trust_store_path),
+        None,
+    )
+    .expect_err("verifying against a different node id must not report success");
+    assert_eq!(
+        error
+            .downcast_ref::<mesh_llm_events::ReportedExit>()
+            .map(|exit| exit.0),
+        Some(1)
+    );
+}

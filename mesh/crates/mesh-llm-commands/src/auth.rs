@@ -667,6 +667,11 @@ pub(crate) fn run_verify_node(
         ownership.claim.expires_at_unix_ms
     )?;
 
+    if !summary.verified {
+        // The summary above already told the operator why; a verification
+        // command that did not verify must not exit 0.
+        return Err(anyhow::Error::new(mesh_llm_events::ReportedExit(1)));
+    }
     Ok(())
 }
 

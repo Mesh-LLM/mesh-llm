@@ -151,6 +151,25 @@ pub fn machine_out() -> ConsoleWriter {
     ConsoleWriter::stdout()
 }
 
+/// The command already wrote everything the user needs to the console, and
+/// the process should exit with the carried code — without the generic
+/// fatal-error renderer printing anything on top.
+///
+/// Commands that report failure through their own banner or summary (a
+/// load/unload result, a verification report, an agent launcher's exit
+/// status) return this so scripts see the nonzero exit, while the site's
+/// output stays the single source of the diagnostics.
+#[derive(Debug)]
+pub struct ReportedExit(pub i32);
+
+impl std::fmt::Display for ReportedExit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "command reported failure (exit {})", self.0)
+    }
+}
+
+impl std::error::Error for ReportedExit {}
+
 /// A one-time disclosure the product must make on stderr.
 ///
 /// Never suppressed. This is deliberately *not* [`console_err`]: the notice is

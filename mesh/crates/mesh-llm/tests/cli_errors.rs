@@ -146,3 +146,64 @@ fn benchmark_tune_remote_only_target_reports_local_only_rejection() {
         "stderr should explain the no-download local-only contract, got: {stderr:?}"
     );
 }
+
+#[test]
+fn load_rejected_by_the_node_exits_one_with_a_single_banner() {
+    // A stub node that rejects the load request: the command must exit
+    // nonzero, print its failure banner exactly once, and keep stdout
+    // machine-clean — the banner is the diagnostic, the exit code is the
+    // fact scripts chain on.
+    let temp = TempDir::new().expect("tempdir should be created");
+    let token_file = temp.path().join("owner-control-token");
+    mesh_llm_config::create_private_file_if_absent(&token_file, b"stub-token")
+        .expect("owner-only token file should be created");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("stub should bind loopback");
+    let port = listener.local_addr().expect("stub addr").port();
+    std::thread::spawn(move || {
+        // Serve a bounded number of requests, then let the listener drop.
+        for _ in 0..8 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut sink = [0u8; 1024];
+            // Drain the request head so the client can read the response.
+            let _ = std::io::Read::read(&mut stream, &mut sink);
+            let body = r#"{"error":"stub: model not found"}"#;
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+        }
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+        .args(["load", "stub-model", "--port", &port.to_string()])
+        .env("MESH_LLM_OWNER_CONTROL_TOKEN_FILE", &token_file)
+        .output()
+        .expect("mesh-llm command should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a rejected load must exit 1, got: {:?}",
+        output.status
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "stdout stays machine-clean, got: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert_eq!(
+        stderr.matches("Failed to load runtime model").count(),
+        1,
+        "the failure banner appears exactly once, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("stub: model not found"),
+        "the node's reason survives, got: {stderr:?}"
+    );
+}
