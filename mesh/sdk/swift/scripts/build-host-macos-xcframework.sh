@@ -3,14 +3,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 SWIFT_DIR="$REPO_ROOT/mesh/sdk/swift"
-automation=(just --justfile "$REPO_ROOT/Justfile" automation-run)
-if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
-  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
-    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
-    exit 1
-  fi
-  automation=("$MESH_LLM_AUTOMATION_BIN")
-fi
 FFI_DIR="$SWIFT_DIR/Generated/FFI"
 TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 XCFRAMEWORK_DIR="$SWIFT_DIR/Generated"
@@ -29,7 +21,6 @@ HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in
   arm64|aarch64)
     RUST_TARGET="aarch64-apple-darwin"
-    CMAKE_ARCH="arm64"
     ;;
   *)
     echo "Unsupported macOS host architecture: $HOST_ARCH; the Swift SDK requires Apple Silicon because Intel Macs cannot run MeshLLM inference." >&2
@@ -40,22 +31,11 @@ esac
 rustup target add "$RUST_TARGET" 2>/dev/null || true
 
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
-export LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:-metal}"
-export LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$REPO_ROOT/.deps/llama-build/build-stage-abi-$RUST_TARGET-metal}"
-
-echo "Preparing embedded llama.cpp ABI libraries..."
-"$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
-"$REPO_ROOT/scripts/build-llama.sh" \
-  -DCMAKE_OSX_SYSROOT=macosx \
-  -DCMAKE_OSX_ARCHITECTURES="$CMAKE_ARCH" \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
 
 RUSTUP_RUSTC="$(rustup which --toolchain "${RUSTUP_TOOLCHAIN:-stable}" rustc)"
 echo "Using rustc: $RUSTUP_RUSTC"
 echo "Building for $RUST_TARGET..."
 echo "macOS deployment target: $MACOSX_DEPLOYMENT_TARGET"
-echo "llama.cpp backend: $LLAMA_STAGE_BACKEND"
-echo "llama.cpp build dir: $LLAMA_STAGE_BUILD_DIR"
 RUSTC="$RUSTUP_RUSTC" \
   cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features embedded-runtime
 
@@ -64,7 +44,7 @@ LIB_PATH="$TARGET_DIR/$RUST_TARGET/release/libmeshllm_ffi.a"
 "$SWIFT_DIR/scripts/generate-swift-bindings.sh" "$LIB_PATH"
 
 echo "Syncing UniFFI API checksums into generated Swift bindings..."
-"${automation[@]}" prepared-input swift-api-checksum "$LIB_PATH" "$GENERATED_SWIFT"
+"$SWIFT_DIR/scripts/sync-swift-api-checksums.sh" "$LIB_PATH" "$GENERATED_SWIFT"
 
 FRAMEWORK_DIR="$TARGET_DIR/frameworks/macos-host/$FRAMEWORK_NAME.framework"
 rm -rf "$FRAMEWORK_DIR"
