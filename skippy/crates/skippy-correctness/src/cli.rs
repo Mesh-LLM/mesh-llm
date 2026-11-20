@@ -550,7 +550,8 @@ pub struct GlmDsaStage0TraceArgs {
 pub enum StatePayloadKind {
     ResidentKv,
     FullState,
-    RecurrentOnly,
+    /// The stage's exact checkpoint: a KV page where it holds attention
+    /// layers, and the recurrent state where it holds recurrent layers.
     KvRecurrent,
 }
 

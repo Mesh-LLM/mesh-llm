@@ -218,8 +218,12 @@ same activation/cache contracts without requiring a monolithic full GGUF.
 - `state-handoff` validates state export/import for a whole model or a
   stage range selected with `--state-layer-start`, `--state-layer-end`, and
   `--state-stage-index`. `--state-payload-kind` selects `full-state`,
-  `resident-kv`, `recurrent-only`, or `kv-recurrent` payloads. All ranges use
-  direct local runtime handoff; `full-state` remains the default payload.
+  `resident-kv`, or `kv-recurrent` payloads. All ranges use direct local
+  runtime handoff; `full-state` remains the default payload. `kv-recurrent`
+  carries the parts the stage itself is checkpointed by: a KV page where it
+  holds attention layers, and recurrent state where it holds recurrent layers,
+  so a hybrid model's middle stage with no attention layers carries recurrent
+  state alone.
   `--binary-control` is rejected because binary state export/import is
   unavailable. Omit it to run the supported local handoff.
   The report includes the handoff transport, payload kind, state payload size,
@@ -229,7 +233,7 @@ same activation/cache contracts without requiring a monolithic full GGUF.
   input to exactly that prefix plus one continuation token. Use
   `--cache-hit-repeats` to repeatedly attach the exported state and decode the
   same continuation, producing a recompute-vs-cache-hit speedup estimate. Use
-  `--allow-mismatch` only for diagnostic payloads such as recurrent-only.
+  `--allow-mismatch` only for diagnostic payloads.
 - `native-mtp-open-ai-ab` launches a real two-stage `skippy-serving
   serve-binary` split three times through the embedded OpenAI frontend. The
   baseline run sets `SKIPPY_NATIVE_MTP_ENABLED=0`, the n=1 run sets

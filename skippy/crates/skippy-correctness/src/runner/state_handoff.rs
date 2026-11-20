@@ -8,8 +8,8 @@ use skippy_protocol::binary::{
     recv_reply, state_flags, write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GgufStageRuntimePlan, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel,
-    StageSession,
+    ActivationFrame, CheckpointParts, CheckpointShape, GgufStageRuntimePlan, MtpSource,
+    RuntimeConfig, RuntimeKvPageDesc, StageModel, StageSession,
 };
 
 use crate::{
@@ -96,7 +96,6 @@ pub(in crate::runner) enum LocalStatePayload {
         token_count: u64,
     },
     FullState(Vec<u8>),
-    RecurrentOnly(Vec<u8>),
     KvRecurrent {
         kv_desc: Option<RuntimeKvPageDesc>,
         kv: Vec<u8>,
@@ -108,7 +107,7 @@ impl LocalStatePayload {
     fn byte_len(&self) -> usize {
         match self {
             Self::ResidentKv { .. } => 0,
-            Self::FullState(bytes) | Self::RecurrentOnly(bytes) => bytes.len(),
+            Self::FullState(bytes) => bytes.len(),
             Self::KvRecurrent { kv, recurrent, .. } => kv.len().saturating_add(recurrent.len()),
         }
     }
@@ -125,8 +124,7 @@ impl LocalStatePayload {
                     ..
                 },
             ) => a_count == b_count,
-            (Self::FullState(a), Self::FullState(b))
-            | (Self::RecurrentOnly(a), Self::RecurrentOnly(b)) => a == b,
+            (Self::FullState(a), Self::FullState(b)) => a == b,
             (
                 Self::KvRecurrent {
                     kv_desc: a_desc,
@@ -156,12 +154,6 @@ impl LocalStatePayload {
                 bytes,
                 None,
                 None,
-            ),
-            Self::RecurrentOnly(recurrent) => payload_digest_report(
-                state_payload_kind_name(StatePayloadKind::RecurrentOnly),
-                recurrent,
-                None,
-                Some(recurrent.as_slice()),
             ),
             Self::KvRecurrent { kv, recurrent, .. } => {
                 let mut hasher = Sha256::new();
@@ -796,7 +788,7 @@ fn run_local_state_handoff(
     let source_prefill_ms = elapsed_ms(source_prefill_started);
 
     let source_export_started = Instant::now();
-    let state_payload = export_local_state_payload(&mut source, args, prefix.len() as u64)
+    let state_payload = export_local_state_payload(&model, &mut source, args, prefix.len() as u64)
         .context("local state handoff source export failed")?;
     let source_export_ms = elapsed_ms(source_export_started);
 
@@ -850,7 +842,7 @@ fn run_local_state_handoff(
         {
             state_payload.clone()
         } else {
-            export_local_state_payload(&mut restore, args, prefix.len() as u64)
+            export_local_state_payload(&model, &mut restore, args, prefix.len() as u64)
                 .context("local state handoff restore export failed")?
         };
         let restore_export_ms = elapsed_ms(restore_export_started);
@@ -1311,11 +1303,12 @@ fn create_local_cache_hit_session(
     let mut session = model
         .create_session()
         .context("failed to create local state handoff cache-hit session")?;
-    import_local_state_payload(&mut session, args, payload, token_count, token_ids)?;
+    import_local_state_payload(model, &mut session, args, payload, token_count, token_ids)?;
     Ok(session)
 }
 
 fn export_local_state_payload(
+    model: &StageModel,
     session: &mut StageSession,
     args: &BinaryStateHandoffConfig,
     token_count: u64,
@@ -1333,18 +1326,24 @@ fn export_local_state_payload(
             session
                 .export_full_state(args.state_layer_start as i32, args.state_layer_end as i32)?,
         )),
-        StatePayloadKind::RecurrentOnly => Ok(LocalStatePayload::RecurrentOnly(
-            session.export_recurrent_state()?,
-        )),
         StatePayloadKind::KvRecurrent => {
-            let page = export_optional_kv_page(
-                session,
-                args.state_layer_start as i32,
-                args.state_layer_end as i32,
-                0,
-                token_count,
-            )?;
-            let recurrent = session.export_recurrent_state()?;
+            let shape = stage_checkpoint_shape(model)?;
+            let page = shape
+                .has_page()
+                .then(|| {
+                    session.export_kv_page(
+                        args.state_layer_start as i32,
+                        args.state_layer_end as i32,
+                        0,
+                        token_count,
+                    )
+                })
+                .transpose()?;
+            let recurrent = if shape.has_recurrent() {
+                session.export_recurrent_state()?
+            } else {
+                Vec::new()
+            };
             Ok(LocalStatePayload::KvRecurrent {
                 kv_desc: page.as_ref().map(|page| page.desc.clone()),
                 kv: page.map(|page| page.payload).unwrap_or_default(),
@@ -1376,7 +1375,14 @@ fn measure_resident_state_bytes(
     ))
 }
 
+fn stage_checkpoint_shape(model: &StageModel) -> Result<CheckpointShape> {
+    model
+        .checkpoint_shape()
+        .context("this stage has no exact checkpoint; use --state-payload-kind full-state")
+}
+
 fn import_local_state_payload(
+    model: &StageModel,
     session: &mut StageSession,
     args: &BinaryStateHandoffConfig,
     payload: &LocalStatePayload,
@@ -1402,51 +1408,26 @@ fn import_local_state_payload(
             bytes,
             token_count,
         ),
-        LocalStatePayload::RecurrentOnly(bytes) => {
-            session.import_recurrent_state_for_token_count(bytes, token_count)
-        }
         LocalStatePayload::KvRecurrent {
             kv_desc,
             kv,
             recurrent,
         } => {
-            if let Some(kv_desc) = kv_desc {
-                session.import_kv_page(kv_desc, kv)?;
-            } else if !kv.is_empty() {
-                bail!("KV-recurrent payload has KV bytes but no KV descriptor");
-            }
-            session.import_recurrent_state_for_token_count(recurrent, token_count)
+            let page = match kv_desc {
+                Some(kv_desc) => Some((kv_desc, kv.as_slice())),
+                None if kv.is_empty() => None,
+                None => bail!("KV-recurrent payload has KV bytes but no KV descriptor"),
+            };
+            let parts = CheckpointParts::fit(stage_checkpoint_shape(model)?, page, recurrent)?;
+            session.import_checkpoint(&parts, token_count, &[])
         }
     }
-}
-
-fn export_optional_kv_page(
-    session: &mut StageSession,
-    layer_start: i32,
-    layer_end: i32,
-    token_start: u64,
-    token_count: u64,
-) -> Result<Option<skippy_runtime::RuntimeKvPage>> {
-    match session.export_kv_page(layer_start, layer_end, token_start, token_count) {
-        Ok(page) => Ok(Some(page)),
-        Err(error) if is_native_kv_unavailable(&error) => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("runtime memory type is not supported for native KV pages")
-            || message.contains("runtime has no attention KV cache")
-    })
 }
 
 fn state_payload_kind_name(kind: StatePayloadKind) -> &'static str {
     match kind {
         StatePayloadKind::ResidentKv => "resident-kv",
         StatePayloadKind::FullState => "full-state",
-        StatePayloadKind::RecurrentOnly => "recurrent-only",
         StatePayloadKind::KvRecurrent => "kv-recurrent",
     }
 }
@@ -1876,12 +1857,7 @@ mod tests {
 
     #[test]
     fn binary_control_rejects_every_payload_before_model_or_server_access() {
-        for payload in [
-            "resident-kv",
-            "full-state",
-            "recurrent-only",
-            "kv-recurrent",
-        ] {
+        for payload in ["resident-kv", "full-state", "kv-recurrent"] {
             let cli = Cli::try_parse_from([
                 "skippy-correctness",
                 "state-handoff",

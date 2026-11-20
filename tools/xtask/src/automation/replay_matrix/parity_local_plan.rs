@@ -108,14 +108,8 @@ fn admit(input: &Input) -> DynResult<()> {
         return Err("invalid local parity roots/selection".into());
     }
     let p = &input.policy;
-    if ![
-        "resident-kv",
-        "kv-recurrent",
-        "full-state",
-        "kv-only",
-        "recurrent-only",
-    ]
-    .contains(&p.dense_state_payload_kind.as_str())
+    if !["resident-kv", "kv-recurrent", "full-state", "kv-only"]
+        .contains(&p.dense_state_payload_kind.as_str())
     {
         return Err("invalid dense cache default".into());
     }
@@ -127,14 +121,7 @@ fn admit(input: &Input) -> DynResult<()> {
         || p.cache_hit_repeats == Some(0)
         || p.startup_timeout_secs == Some(0)
         || p.state_payload_kind.as_ref().is_some_and(|s| {
-            ![
-                "resident-kv",
-                "kv-recurrent",
-                "full-state",
-                "kv-only",
-                "recurrent-only",
-            ]
-            .contains(&s.as_str())
+            !["resident-kv", "kv-recurrent", "full-state", "kv-only"].contains(&s.as_str())
         })
     {
         return Err("invalid certification policy".into());

@@ -1768,7 +1768,6 @@ fn payload_kind_name(kind: StatePayloadKind) -> &'static str {
     match kind {
         StatePayloadKind::ResidentKv => "resident-kv",
         StatePayloadKind::FullState => "full-state",
-        StatePayloadKind::RecurrentOnly => "recurrent-only",
         StatePayloadKind::KvRecurrent => "kv-recurrent",
     }
 }

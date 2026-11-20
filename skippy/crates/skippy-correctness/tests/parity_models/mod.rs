@@ -11,8 +11,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use skippy_model_ref::split_gguf_shard_info;
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, MtpSource,
-    RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel, StageSession,
+    ActivationFrame, CheckpointParts, CheckpointShape, GGML_TYPE_F16, IterationBatchPhase,
+    IterationBatchRequest, MtpSource, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel,
+    StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package_details},
     redirect_native_logs_to_file,
 };
@@ -1372,12 +1373,14 @@ fn run_stage_state_restore(
 
     let mut source = target.create_session()?;
     source.prefill_chunk_frame(&prefix, prefill_input.as_ref(), 0)?;
-    let payload = export_state_payload(&mut source, state_kind, stage_start, stage_end, 1)?;
+    let payload =
+        export_state_payload(&target, &mut source, state_kind, stage_start, stage_end, 1)?;
     let (source_predicted, source_frame) =
         source.decode_step_frame(continuation, decode_input.as_ref(), 0)?;
 
     let mut restored = target.create_session()?;
     import_state_payload(
+        &target,
         &mut restored,
         &payload,
         state_kind,
@@ -1466,6 +1469,7 @@ fn verify_suffix_prefill_after_restore(
 
     let mut restored = target.create_session()?;
     import_state_payload(
+        target,
         &mut restored,
         payload,
         state_kind,
@@ -1521,7 +1525,14 @@ fn activation_frames_match(source: &ActivationFrame, restored: &ActivationFrame)
         })
 }
 
+fn stage_checkpoint_shape(target: &StageModel) -> Result<CheckpointShape> {
+    target
+        .checkpoint_shape()
+        .context("KvRecurrent family stage has no exact checkpoint")
+}
+
 fn export_state_payload(
+    target: &StageModel,
     session: &mut StageSession,
     state_kind: StateKind,
     layer_start: u32,
@@ -1534,18 +1545,19 @@ fn export_state_payload(
             Ok(StatePayload::ResidentKv)
         }
         StateKind::KvRecurrent => {
-            let kv = match session.export_kv_page(
-                layer_start as i32,
-                layer_end as i32,
-                0,
-                token_count,
-            ) {
-                Ok(page) => Some(page),
-                Err(error) if native_kv_unavailable(&error) => None,
-                Err(error) => return Err(error),
+            let shape = stage_checkpoint_shape(target)?;
+            let kv = shape
+                .has_page()
+                .then(|| {
+                    session.export_kv_page(layer_start as i32, layer_end as i32, 0, token_count)
+                })
+                .transpose()?;
+            let recurrent = if shape.has_recurrent() {
+                session.export_recurrent_state()?
+            } else {
+                Vec::new()
             };
-            let recurrent = session.export_recurrent_state()?;
-            if recurrent.is_empty() {
+            if shape.has_recurrent() && recurrent.is_empty() {
                 bail!("KvRecurrent family exported empty recurrent state");
             }
             Ok(StatePayload::KvRecurrent { kv, recurrent })
@@ -1554,6 +1566,7 @@ fn export_state_payload(
 }
 
 fn import_state_payload(
+    target: &StageModel,
     session: &mut StageSession,
     payload: &StatePayload,
     state_kind: StateKind,
@@ -1567,10 +1580,10 @@ fn import_state_payload(
             session.restore_prefix(CACHE_SEQ_ID, token_ids)
         }
         (StateKind::KvRecurrent, StatePayload::KvRecurrent { kv, recurrent }) => {
-            if let Some(kv) = kv {
-                session.import_kv_page(&kv.desc, &kv.payload)?;
-            }
-            session.import_recurrent_state_for_token_count(recurrent, token_count)
+            let page = kv.as_ref().map(|kv| (&kv.desc, kv.payload.as_slice()));
+            stage_checkpoint_shape(target)
+                .and_then(|shape| CheckpointParts::fit(shape, page, recurrent))
+                .and_then(|parts| session.import_checkpoint(&parts, token_count, &[]))
         }
         _ => bail!("state payload kind mismatch"),
     }
@@ -1578,15 +1591,6 @@ fn import_state_payload(
         format!(
             "import state payload for layers {layer_start}..{layer_end} and {token_count} tokens"
         )
-    })
-}
-
-fn native_kv_unavailable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("runtime memory type is not supported for native KV pages")
-            || message.contains("runtime has no attention KV cache")
-            || message.contains("no KV cache layers selected by layer range")
     })
 }
 
