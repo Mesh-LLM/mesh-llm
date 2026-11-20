@@ -20,7 +20,7 @@ mod local_source;
 mod materialization;
 pub(crate) mod metal_pipeline_cache;
 mod model_capabilities;
-mod model_open_drain;
+mod model_open_observer;
 #[cfg(all(test, feature = "dynamic-native-runtime"))]
 mod native_unavailable_tests;
 mod package;
@@ -282,10 +282,12 @@ pub(crate) struct SkippyOpenAiGuardrailOptions {
     telemetry: survey::SurveyTelemetry,
 }
 
-/// Host consumer for native model-open events. Runs on a host drain thread,
-/// never on the native callback thread.
+/// Host consumer for native model-open events. Runs on Skippy's drain
+/// thread, never on the native callback thread.
 pub(crate) type NativeModelOpenEventReporter = Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>;
-pub(crate) use model_open_drain::{ModelOpenObservation, ModelOpenReturn, NativeModelOpenEvents};
+pub(crate) use model_open_observer::{
+    ModelOpenObservation, ModelOpenReturn, NativeModelOpenEvents,
+};
 
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(

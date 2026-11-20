@@ -332,14 +332,8 @@ impl SkippyModelHandle {
         openai_guardrails: Option<InferenceGuardrailsConfig>,
         model_open_events: Option<NativeModelOpenEvents>,
     ) -> Result<Self> {
-        model_open_drain::observe_model_open(
-            skippy_runtime::next_operation_id(),
-            model_open_events,
-            |queue| {
-                request.open_events = skippy_api::serving::ModelOpenEvents::Enabled(queue);
-                Self::finish_load(request, openai_guardrails)
-            },
-        )
+        request.open_events = model_open_observer::model_open_events(model_open_events);
+        Self::finish_load(request, openai_guardrails)
     }
 }
 

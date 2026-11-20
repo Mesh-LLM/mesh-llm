@@ -1,6 +1,7 @@
 //! Post-return reconciliation of one native model open.
 //!
-//! Runs on the loading thread after the final drain, before the caller
+//! Runs on Skippy's drain thread after the final drain. Skippy joins that
+//! thread before the load returns, so this is done before the caller
 //! settles the load terminal from the native return. It only reports:
 //! lost callbacks become engine health, and a terminal callback that
 //! disagrees with the return becomes an `InvariantProtocolViolation`

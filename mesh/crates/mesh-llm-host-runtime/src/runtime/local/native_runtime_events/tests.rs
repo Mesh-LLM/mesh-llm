@@ -569,3 +569,107 @@ fn native_model_open_progress_with_a_bound_ingress_submits_a_model_load_progress
 
     clear_runtime_event_engine();
 }
+
+/// The record Skippy's model-open observer hands over keeps its status,
+/// stage and session identities and numeric summaries all the way into the
+/// published fact.
+#[cfg(feature = "dynamic-native-runtime")]
+#[test]
+#[serial_test::serial(runtime_event_engine_state)]
+fn native_model_open_record_keeps_its_status_scope_and_numeric_summaries_in_the_fact() {
+    use crate::runtime::model_lifecycle::LoadOperation;
+    use crate::runtime_events::engine::RuntimeEventEngine;
+    use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
+    use mesh_llm_runtime_event_contracts::{
+        NativeEventKind, NativeFailureCode, NativeStatus, NumericValue, Severity,
+    };
+
+    clear_runtime_event_engine();
+    let engine = RuntimeEventEngine::new();
+    install_runtime_event_engine(engine.clone());
+    let op = LoadOperation::begin("org/model");
+    engine.drain();
+    let ingress = op.progress_ingress().expect("load reservation is live");
+    let kind = SkippyNativeRuntimeEventKind::ModelLoadMemoryAllocated;
+    let failure_code = skippy_runtime::RuntimeEventFailureCode::ModelError;
+
+    let mut reporter =
+        skippy_native_model_open_event_reporter("org/model".to_string(), Some(ingress));
+    reporter(SkippyNativeRuntimeEvent {
+        abi_version: 1,
+        struct_size: 144,
+        reserved0: 0,
+        reserved1: 0,
+        category: skippy_runtime::RuntimeEventCategory::ModelOpen,
+        kind,
+        sequence: 7,
+        emitter: skippy_runtime::RuntimeEventEmitterKind::OpenThread,
+        timestamp_mono_ns: 70,
+        model_id: 11,
+        stage_id: 23,
+        session_id: 29,
+        progress_current: 0,
+        progress_total: 0,
+        progress_unit: SkippyNativeRuntimeProgressUnit::Steps,
+        failure_code,
+        status: skippy_runtime::Status::ModelError,
+        detail_bytes: Vec::new(),
+        numeric_summary_0: Some(101),
+        numeric_summary_1: Some(102),
+        numeric_summary_2: Some(0),
+        numeric_summary_3: None,
+    });
+    engine.drain();
+
+    let frames = engine.replay().snapshot();
+    let frame = frames
+        .iter()
+        .find(|frame| frame.fact.kind_id() == "model_memory_allocation_summary")
+        .expect("memory allocation summary published");
+    let summaries = frame
+        .fact
+        .data()
+        .numeric_summaries
+        .as_slice()
+        .iter()
+        .map(|summary| (summary.key.as_str().to_string(), summary.value))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries,
+        vec![
+            (
+                "native_numeric_summary_0".to_string(),
+                NumericValue::Unsigned(101)
+            ),
+            (
+                "native_numeric_summary_1".to_string(),
+                NumericValue::Unsigned(102)
+            ),
+            (
+                "native_numeric_summary_2".to_string(),
+                NumericValue::Unsigned(0)
+            ),
+        ],
+        "an unsent summary is absent, a sent zero is kept"
+    );
+    let metadata = frame.fact.metadata().expect("native provenance retained");
+    assert_eq!(metadata.severity, Severity::Error);
+    let source = metadata.native_source.as_ref().expect("native source");
+    assert_eq!(
+        source.status,
+        NativeStatus::new(skippy_runtime::Status::ModelError as i32)
+    );
+    assert_eq!(source.kind, NativeEventKind::new(kind.raw()));
+    assert_eq!(
+        source.failure_code,
+        NativeFailureCode::new(failure_code.raw())
+    );
+    assert_eq!(source.stage_id, 23);
+    assert_eq!(source.session_id, 29);
+    assert_eq!(source.sequence, 7);
+    assert_eq!(source.numeric_summary_0, Some(101));
+    assert_eq!(source.numeric_summary_2, Some(0));
+    assert_eq!(source.numeric_summary_3, None);
+
+    clear_runtime_event_engine();
+}

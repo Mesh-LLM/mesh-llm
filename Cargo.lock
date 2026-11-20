@@ -7431,7 +7431,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 [[package]]
 name = "skippy-api"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "hex",
@@ -7463,7 +7463,7 @@ dependencies = [
 [[package]]
 name = "skippy-cache"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7478,7 +7478,7 @@ dependencies = [
 [[package]]
 name = "skippy-commands"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7513,7 +7513,7 @@ dependencies = [
 [[package]]
 name = "skippy-config"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "serde",
@@ -7524,7 +7524,7 @@ dependencies = [
 [[package]]
 name = "skippy-coordinator"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "skippy-model-artifact",
  "thiserror 2.0.21",
@@ -7533,7 +7533,7 @@ dependencies = [
 [[package]]
 name = "skippy-events"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde",
  "uuid",
@@ -7542,7 +7542,7 @@ dependencies = [
 [[package]]
 name = "skippy-ffi"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "bindgen",
  "libloading 0.9.0",
@@ -7551,7 +7551,7 @@ dependencies = [
 [[package]]
 name = "skippy-gpu-bench"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde",
  "serde_json",
@@ -7561,7 +7561,7 @@ dependencies = [
 [[package]]
 name = "skippy-guardrails"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde_json",
 ]
@@ -7569,7 +7569,7 @@ dependencies = [
 [[package]]
 name = "skippy-hardware-profile"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -7581,7 +7581,7 @@ dependencies = [
 [[package]]
 name = "skippy-hf-hub"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "base64 0.22.1",
  "bon",
@@ -7610,7 +7610,7 @@ dependencies = [
 [[package]]
 name = "skippy-inference-api"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "async-trait",
  "axum",
@@ -7631,12 +7631,12 @@ dependencies = [
 [[package]]
 name = "skippy-metrics"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 
 [[package]]
 name = "skippy-model"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "clap",
@@ -7652,7 +7652,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-artifact"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7664,7 +7664,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-hf"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7689,7 +7689,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-package"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7715,7 +7715,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-ref"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde",
 ]
@@ -7723,7 +7723,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-resolver"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "serde",
@@ -7735,7 +7735,7 @@ dependencies = [
 [[package]]
 name = "skippy-native-runtime"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "hex",
@@ -7747,7 +7747,7 @@ dependencies = [
 [[package]]
 name = "skippy-package-format"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde",
  "serde_json",
@@ -7757,7 +7757,7 @@ dependencies = [
 [[package]]
 name = "skippy-protocol"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "prost",
  "prost-build",
@@ -7769,7 +7769,7 @@ dependencies = [
 [[package]]
 name = "skippy-runtime"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "crossbeam-queue",
@@ -7789,7 +7789,7 @@ dependencies = [
 [[package]]
 name = "skippy-runtime-install"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "anyhow",
  "dirs",
@@ -7813,7 +7813,7 @@ dependencies = [
 [[package]]
 name = "skippy-scheduler"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "skippy-runtime",
  "thiserror 2.0.21",
@@ -7822,7 +7822,7 @@ dependencies = [
 [[package]]
 name = "skippy-serving"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "ahash",
  "anyhow",
@@ -7858,7 +7858,7 @@ dependencies = [
 [[package]]
 name = "skippy-tokenizer"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde",
 ]
@@ -7866,7 +7866,7 @@ dependencies = [
 [[package]]
 name = "skippy-topology"
 version = "0.80.0"
-source = "git+https://github.com/general-inference/skippy?rev=ab63401f11f7f3cd7fc13ccb30b64154529f7a4f#ab63401f11f7f3cd7fc13ccb30b64154529f7a4f"
+source = "git+https://github.com/general-inference/skippy?rev=df6cd2c2144200785f0d01c28da5b5938ecc485f#df6cd2c2144200785f0d01c28da5b5938ecc485f"
 dependencies = [
  "serde",
  "serde_json",
