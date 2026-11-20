@@ -93,7 +93,7 @@ Product crate documentation.
 
 - Every crate under `mesh/crates/` needs a non-empty `description` in its `Cargo.toml` and a `README.md` at the crate root.
 - The README should identify the crate's purpose, what it owns and does not own, and its primary consumers. Add build or usage instructions when the crate exposes a binary or a workflow that contributors run directly. Keep small crates' READMEs concise; do not add boilerplate sections merely for symmetry.
-- Use working relative links for local files and neighboring crates. No check in this repository enforces this any more, so review it by hand.
+- Use working relative links for local files and neighboring crates. Neither `ci.yml` nor `just lint` checks this today, so review it by hand.
 
 ## Code Quality Rules for New Code
 
@@ -153,7 +153,7 @@ Use a clear, user-focused commit subject and PR title. Conventional Commit prefi
 Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
 
 - Rust change — format changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings`. Follow the owning product's additional validation rules.
-- Python SDK change — use the in-tree component under `mesh/sdk/python`. Its component command is `"$SDK_PYTHON" -I -B mesh/sdk/python/tests/test_client.py`. Binding generation uses this repository's Mesh source, the existing UniFFI 0.32.0 generator and an already built native library. No CI job in this repository runs the Python SDK checks today, so run them yourself.
+- Python SDK change — use the in-tree component under `mesh/sdk/python`. Its component command is `"$SDK_PYTHON" -I -B mesh/sdk/python/tests/test_client.py`. Binding generation uses this repository's Mesh source, the existing UniFFI 0.32.0 generator and an already built native library. `ci.yml` does not run the Python SDK checks today, so run them yourself.
 - UI-only change — follow `mesh/AGENTS.md` and run `just build`.
 - CI workflow or CI script change — run `actionlint` and `just lint` (ShellCheck and the script tests), plus any additional checks required by the CI section below.
 - Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface, plus tests that consume the changed surface when such tests exist.

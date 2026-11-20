@@ -4,11 +4,11 @@ Skippy now lives in its own repository, and `tools/xtask` (`cargo xtool`,
 `cargo xtask`) was removed from this one. Several skills below still describe
 the in-tree Skippy build or call those commands; they have not been updated.
 Check that a command or path exists before following one. `manage-ci` is
-current.
+current, and `release-validation` marks the commands it lost.
 
 Skills under `.agents/skills/` are the canonical repo-local skills and are
-auto-picked-up by agents working in this repo. Each is a focused, current
-how-to; deeper reference lives in `docs/`.
+auto-picked-up by agents working in this repo. Each is a focused how-to, but
+not every one is current (see above); deeper reference lives in `mesh/docs/`.
 
 ## Operator Workflows
 

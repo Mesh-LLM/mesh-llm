@@ -209,6 +209,10 @@ You can switch models interactively with `Ctrl+M` inside Pi. Pi also supports
 
 ## Tool-call reliability probe
 
+> **Unavailable.** The `cargo xtool automation stability` commands were removed
+> from this repository with `tools/xtask`, and nothing replaces them. The text
+> below describes the probe as it was, for reference only. Do not try to run it.
+
 Use the lightweight QA probe before or after changes that affect agent routing,
 OpenAI chat-completions, tool-call translation, or MoA reducer behavior:
 
@@ -237,6 +241,10 @@ real agent CLI behavior; this probe isolates the API contract that those agents
 depend on.
 
 ## Nightly stability harness
+
+> **Unavailable.** The `cargo xtool automation stability` commands were removed
+> from this repository with `tools/xtask`, and nothing replaces them. The text
+> below describes the harness and its workflow, which is also gone as it was, for reference only. Do not try to run it.
 
 Use the repeatable stability harness when a branch needs broader live-mesh
 evidence without changing the mesh under test:

@@ -28,13 +28,11 @@ applies. These include remote process supervision, platform deployment,
 private-mesh setup, agent/tool-call checks, CI inspection, and subsystem-specific
 Skippy, plugin, configuration, telemetry, or benchmark validation.
 
-For new release inventory automation, follow the Rust ownership rule in
-`.agents/skills/manage-ci/SKILL.md`; use typed `tools/xtask` commands, not new
-Python helpers. From the repository root, the raw owner is
-`cargo xtool release inventory`; use `just release-inventory` on Unix.
-Windows currently uses the portable native command directly. Follow the skill
-for candidate/base provenance, output and uncertainty semantics. Raw inventory
-collection does not authorize product builds, remote hosts or publication.
+The release inventory tool (`cargo xtool release inventory`,
+`just release-inventory`) was removed with `tools/xtask` and has no
+replacement. Do not try to run it. Collect the inventory by hand as the skill
+describes and say in the report that it was collected by hand. Collecting the
+inventory does not authorize product builds, remote hosts or publication.
 
 ## Required Inputs And Authorization
 
@@ -83,9 +81,12 @@ Never infer authorization to use a lab, cloud, rented, or production host.
    resources, toolchains, ports, and existing MeshLLM processes.
 2. Transfer or check out the exact candidate source and verify its SHA on every
    approved host.
-3. Build canonical release products with `just`, using the host, native-runtime,
-   and product-bundle recipes required by the platform. Never substitute an ad
-   hoc Cargo build or downloaded runtime.
+3. Build the release host and bundle with `just` (`just release-host-build`,
+   `just release-bundle`). Never substitute an ad hoc Cargo build. MeshLLM no
+   longer builds a runtime: the bundle takes the packaged Skippy runtime named
+   by `MESH_LLM_NATIVE_RUNTIME_DIR`. Use the runtime from the Skippy release
+   the candidate pins and record its identity; if that runtime is not
+   available, report a blocker rather than substituting another.
 4. Record commands, exit statuses, durations, archive names and SHA-256,
    manifests, import-policy results, ABI/version metadata, and archive contents.
 5. Execute the extracted locally built packaged object, not only

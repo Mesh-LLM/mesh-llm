@@ -5,14 +5,10 @@ description: Use this skill when validating a MeshLLM release candidate or curre
 
 # Release Validation
 
-New release inventory and evidence automation follows `../manage-ci/SKILL.md`:
-no new Python tooling, including skill-local helpers. Use typed `tools/xtask`
-commands behind thin Just recipes. The raw inventory owner is
-`cargo xtool release inventory`. On Unix, use the positional Just façade
-`just release-inventory`; it preserves argument boundaries. On Windows, use
-the portable native command directly until a Windows Just façade is qualified.
-The inventory collects read-only evidence; it does not validate a product or
-classify release claims.
+The release inventory tool (`cargo xtool release inventory`,
+`just release-inventory`) was removed with `tools/xtask` and has no
+replacement. Do not try to run it. Step 5 of the inventory procedure below
+says what to do instead.
 
 Validate the candidate as a product, not merely as source code. Every claimed
 change must have a disposition and direct evidence. Do not publish a release,
@@ -77,15 +73,16 @@ Read each applicable skill completely before acting:
    tag-specific `<tag>: prepare release source`. Require the previous-release
    base to be an ancestor of the candidate base. Fail closed if `origin/main` is
    unavailable or any tag, subject, commit-count, or base ordering check fails.
-5. From the repository root, run `just release-inventory --head <candidate>
-   --output <evidence-directory>/release-inventory.json` on Unix, or
-   `cargo xtool release inventory --head <candidate> --output <path>` on Windows.
-   Optional `--repo <owner/name>` and `--release-tag <tag>` select the repository
-   and previous release; without `--output`, the command writes JSON to stdout.
-   Missing local tags or `origin/main` stop collection. Verify the configured
-   remote before any separately authorized fetch and then rerun. The inventory
-   records the requested candidate separately from the observed working-tree
-   HEAD and dirty snapshot. Its versioned dirty digest identifies observed
+5. The inventory command this step used is unavailable (see the top of this
+   skill). Collect the same read-only evidence by hand with `git` and `gh`:
+   the commits and merged pull requests between the previous release base and
+   the candidate base. Write it to
+   `<evidence-directory>/release-inventory.json` or a Markdown equivalent, and
+   state in the report that it was collected by hand and with which commands.
+   Missing local tags or `origin/main` still stop collection. Verify the
+   configured remote before any separately authorized fetch and then redo the
+   collection. Record the requested candidate separately from the observed
+   working-tree HEAD and whether the tree was dirty. Its versioned dirty digest identifies observed
    evidence, not a validated build. PR range uncertainty and capped query scope
    require reconciliation; the command does not classify changes or declare
    release readiness.
@@ -135,20 +132,23 @@ in for multiple materially different claims.
    free disk/RAM/VRAM, toolchain, ports, and existing MeshLLM processes.
 2. Transfer or check out the exact candidate source. Verify the candidate SHA
    on every host before building.
-3. Use `just`; never invoke ad hoc Cargo builds as release evidence. Build the
-   three-layer product with the applicable canonical recipes:
+3. Use `just`; never invoke ad hoc Cargo builds as release evidence:
 
    ```bash
    just release-host-build
-   just release-runtime-build <backend>
-   just release-bundle <candidate-version> <output-directory>
+   MESH_LLM_NATIVE_RUNTIME_DIR=<packaged Skippy runtime> \
+     just release-bundle <candidate-version> <output-directory>
    ```
 
-   Use the Windows/platform-specific recipes where the Justfile requires them.
+   MeshLLM no longer builds a runtime, so `just release-runtime-build` is gone.
+   The runtime is the packaged one from the Skippy release the candidate pins.
+   Record its release, id, ABI and manifest SHA-256. If it is not available,
+   report a blocker.
 4. Record commands, exit codes, duration, output archive names and SHA-256,
-   host-import policy results, product/runtime manifests, ABI/version metadata,
-   binary version, and archive contents. Run `just check-release` and any
-   applicable consistency checks.
+   the `host-imports.json` written by `scripts/check-host-imports.sh`,
+   product/runtime manifests, ABI/version metadata, binary version, and archive
+   contents. `just check-release` was removed and has no replacement; run
+   `just lint` and note that the old consistency check did not run.
 5. Execute the extracted packaged object. Do not validate only
    `target/release/mesh-llm`, and do not substitute an older downloaded runtime.
 
