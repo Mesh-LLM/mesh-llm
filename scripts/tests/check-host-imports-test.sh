@@ -31,5 +31,15 @@ printf 'libc.so.6\nlibcudart.so.12\n' | "$check" --names >/dev/null 2>&1 &&
 printf '' | "$check" --names >/dev/null 2>&1 &&
     { echo "FAIL: an empty import list was accepted" >&2; fail=1; }
 
+# A grep that fails must not read as "no backend library found".
+stub="$(mktemp -d)"
+trap 'rm -rf "$stub"' EXIT
+printf '#!/bin/sh\nexit 2\n' >"$stub/grep"
+chmod +x "$stub/grep"
+out="$(printf 'libc.so.6\n' | PATH="$stub:$PATH" "$check" --names 2>&1)" &&
+    { echo "FAIL: a failing grep was accepted" >&2; fail=1; }
+[[ "$out" == *"grep failed with status 2"* ]] ||
+    { echo "FAIL: a failing grep was not reported: $out" >&2; fail=1; }
+
 ((fail == 0)) && echo "check-host-imports-test: ok"
 exit "$fail"

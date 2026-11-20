@@ -37,8 +37,18 @@ fi
 [[ -n "$names" ]] || { echo "check-host-imports: found no imports in $1" >&2; exit 1; }
 
 echo "$names"
-if rejected="$(grep -Ei "$backend" <<<"$names")"; then
-    echo "check-host-imports: the host links a backend library:" >&2
-    echo "$rejected" >&2
-    exit 1
-fi
+# grep exits 1 for "no match". Anything else is a failed check, not a clean host.
+status=0
+rejected="$(grep -Ei "$backend" <<<"$names")" || status=$?
+case "$status" in
+    1) ;;
+    0)
+        echo "check-host-imports: the host links a backend library:" >&2
+        echo "$rejected" >&2
+        exit 1
+        ;;
+    *)
+        echo "check-host-imports: grep failed with status $status" >&2
+        exit 1
+        ;;
+esac

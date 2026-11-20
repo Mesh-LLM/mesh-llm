@@ -26,8 +26,11 @@ An entry is removed in the same change that closes it.
   run against a model.
 - **Host import check.** `scripts/check-host-imports.sh` refuses a host that
   links CUDA, ROCm, Vulkan, Metal, ggml or llama. Only its macOS branch has
-  run; the Linux and Windows branches have not. It writes no
-  `host-imports.json` report into the archive.
+  run; the Linux and Windows branches have not. It restores the
+  refusal only: the old `host-imports.json` audit record, which tied the
+  import list to the host's SHA-256, is no longer written into the archive.
+  `Mesh-LLM/mesh-packaging` still requires that file in every archive it
+  repackages.
 - **Docker images and npm.** The handoff to `Mesh-LLM/mesh-packaging` is off.
   That repository reads `native-runtimes.json` and the GPU archives from the
   MeshLLM release, which no longer has them. Its identity-bound dispatch and
