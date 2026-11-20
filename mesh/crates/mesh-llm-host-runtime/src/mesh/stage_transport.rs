@@ -799,16 +799,43 @@ impl Node {
         }
     }
 
+    /// Refreshes the stages that `peer_id` runs in one topology run and says
+    /// whether the peer answered for every one of them. A refresh that gets no
+    /// answer keeps the stage's last status, so this is how a caller learns
+    /// that the status it holds was not confirmed. Stages of other topologies,
+    /// such as another model's, are left out: their answers say nothing about
+    /// this run.
+    pub async fn confirm_peer_stage_runtime_statuses(
+        &self,
+        peer_id: EndpointId,
+        topology_id: &str,
+        run_id: &str,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let active_statuses = self.stage_topologies.lock().await.active_statuses();
+        let mut answered = true;
+        for status in active_statuses.into_iter().filter(|status| {
+            status.node_id == Some(peer_id)
+                && status.topology_id == topology_id
+                && status.run_id == run_id
+        }) {
+            answered &= self.refresh_stage_runtime_status(status, timeout).await;
+        }
+        answered
+    }
+
+    /// Returns false when the peer gave no answer (unreachable, refused or
+    /// timed out), which keeps the last status.
     async fn refresh_stage_runtime_status(
         &self,
         status: StageRuntimeStatus,
         timeout: std::time::Duration,
-    ) {
+    ) -> bool {
         let Some(peer_id) = status.node_id else {
-            return;
+            return true;
         };
         if peer_id == self.endpoint.id() {
-            return;
+            return true;
         }
         let filter = crate::inference::skippy::StageStatusFilter {
             topology_id: Some(status.topology_id.clone()),
@@ -832,14 +859,17 @@ impl Node {
             Ok(Ok(response)) => {
                 self.record_stage_status_refresh(&status, peer_id, response)
                     .await;
+                true
             }
             Ok(Err(error)) => {
                 self.record_transient_stage_status_refresh_failure(&status, peer_id, Some(&error))
                     .await;
+                false
             }
             Err(_) => {
                 self.record_transient_stage_status_refresh_failure(&status, peer_id, None)
                     .await;
+                false
             }
         }
     }

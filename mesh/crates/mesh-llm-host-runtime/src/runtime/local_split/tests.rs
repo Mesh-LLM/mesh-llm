@@ -1346,6 +1346,55 @@ fn split_missing_active_stage_nodes_ignores_unused_lost_nodes() {
 }
 
 #[test]
+fn split_rejoined_stage_nodes_are_the_unconfirmed_nodes_back_on_the_mesh() {
+    let active = SplitTopologyGeneration::new(
+        "topology-a".into(),
+        "run-a".into(),
+        1,
+        vec![participant(1), participant(2), participant(3)],
+        vec![stage(1, 0, 0, 10), stage(2, 1, 10, 20), stage(3, 2, 20, 30)],
+    );
+    assert_eq!(
+        split_rejoined_stage_nodes(
+            &active,
+            &[make_id(2), make_id(3)],
+            &[make_id(1), make_id(2)]
+        ),
+        vec![make_id(2)]
+    );
+    assert!(split_rejoined_stage_nodes(&active, &[], &[make_id(1), make_id(2)]).is_empty());
+}
+
+#[test]
+fn split_rejoined_stage_nodes_leave_out_a_node_the_split_replaced() {
+    // Node 2 dropped off and a re-plan moved its stage to node 4. When node 2
+    // reconnects it runs no stage of this split, so there is nothing to
+    // confirm.
+    let active = SplitTopologyGeneration::new(
+        "topology-a".into(),
+        "run-b".into(),
+        2,
+        vec![participant(1), participant(4)],
+        vec![stage(1, 0, 0, 20), stage(4, 1, 20, 40)],
+    );
+    assert!(
+        split_rejoined_stage_nodes(
+            &active,
+            &[make_id(2)],
+            &[make_id(1), make_id(2), make_id(4)]
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn split_add_stage_nodes_adds_each_node_once() {
+    let mut nodes = vec![make_id(1), make_id(2)];
+    split_add_stage_nodes(&mut nodes, &[make_id(2), make_id(3)]);
+    assert_eq!(nodes, vec![make_id(1), make_id(2), make_id(3)]);
+}
+
+#[test]
 fn split_unavailable_active_stage_nodes_includes_failed_stage_without_missing_peer() {
     let active = SplitTopologyGeneration::new(
         "topology-a".into(),

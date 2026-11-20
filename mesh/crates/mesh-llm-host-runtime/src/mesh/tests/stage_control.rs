@@ -948,6 +948,105 @@ fn active_stage_refresh_timeout_retains_cached_stage_status() {
     assert_eq!(status.error, None);
 }
 
+#[tokio::test]
+async fn confirming_a_stage_peer_that_gives_no_answer_reports_it() -> Result<()> {
+    // A node that restarted refuses a status query for a topology it no longer
+    // knows. The refresh keeps the cached Ready status, so the coordinator has
+    // to learn that this peer did not answer.
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x44; 32]).public());
+    node.stage_topologies
+        .lock()
+        .await
+        .record_status(test_stage_status(
+            peer_id,
+            "stage-1",
+            1,
+            "127.0.0.1:51234",
+            crate::inference::skippy::StageRuntimeState::Ready,
+        ));
+
+    assert!(
+        !node
+            .confirm_peer_stage_runtime_statuses(
+                peer_id,
+                "topology-a",
+                "run-a",
+                std::time::Duration::from_millis(500),
+            )
+            .await
+    );
+    let status = node
+        .stage_runtime_statuses()
+        .await
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        status.state,
+        crate::inference::skippy::StageRuntimeState::Ready
+    );
+
+    let idle_peer = EndpointId::from(SecretKey::from_bytes(&[0x45; 32]).public());
+    assert!(
+        node.confirm_peer_stage_runtime_statuses(
+            idle_peer,
+            "topology-a",
+            "run-a",
+            std::time::Duration::from_millis(500),
+        )
+        .await,
+        "a peer with no active stage has nothing to confirm"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn confirming_a_stage_peer_leaves_out_another_models_stages() -> Result<()> {
+    // The peer runs a stage of model B, whose status query it refuses. A
+    // split of model A whose run has no stage on that peer must not count the
+    // peer unavailable because of it.
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x46; 32]).public());
+    let mut other_model = test_stage_status(
+        peer_id,
+        "stage-1",
+        1,
+        "127.0.0.1:51235",
+        crate::inference::skippy::StageRuntimeState::Ready,
+    );
+    other_model.topology_id = "topology-b".to_string();
+    other_model.run_id = "run-b".to_string();
+    other_model.model_id = "model-b".to_string();
+    node.stage_topologies
+        .lock()
+        .await
+        .record_status(other_model);
+
+    assert!(
+        node.confirm_peer_stage_runtime_statuses(
+            peer_id,
+            "topology-a",
+            "run-a",
+            std::time::Duration::from_millis(500),
+        )
+        .await,
+        "another model's unanswered stage says nothing about this run"
+    );
+    assert!(
+        !node
+            .confirm_peer_stage_runtime_statuses(
+                peer_id,
+                "topology-b",
+                "run-b",
+                std::time::Duration::from_millis(500),
+            )
+            .await,
+        "the run that has the stage still learns the peer did not answer"
+    );
+    Ok(())
+}
+
 #[test]
 fn passive_streams_are_gated_when_trust_policy_enforces_ownership() {
     // With an enforcing trust policy, only gossip bypasses the quarantine
