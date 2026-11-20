@@ -186,7 +186,7 @@ the packaged `mesh-llm` binary, not SDK, XCFramework, or other native
 artifacts. `missing` is expected for unstamped local and dev builds, `valid`
 means the packaged binary matches a trusted release signer, and `invalid` means
 the bytes changed after packaging. Operators can verify stamped packaged
-binaries with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+binaries with `cargo run -p mesh-llm-release-attestation -- inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
 Bare `inspect --binary ...` is only sufficient for unstamped binaries that
 should classify as `missing`; stamped binaries require `--public-key-file` and
 otherwise report `invalid` with an explicit error.

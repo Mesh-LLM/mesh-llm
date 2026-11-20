@@ -492,7 +492,7 @@ Use this to inspect the embedded release attestation on the packaged `mesh-llm` 
 Usage:
 
 ```bash
-cargo run -p xtask -- release-attestation inspect --binary /path/to/mesh-bundle/mesh-llm --public-key-file /path/to/release-signing-public-key.json
+cargo run -p mesh-llm-release-attestation -- inspect --binary /path/to/mesh-bundle/mesh-llm --public-key-file /path/to/release-signing-public-key.json
 ```
 
 Switches:

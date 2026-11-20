@@ -67,7 +67,7 @@ attestation proves a peer's binary was published by a trusted release signer.
 It does not prove the remote process is actually running unmodified code, nor
 that the host OS or hardware has not been tampered with. The shipped
 `mesh-llm` executable uses embedded release attestation, and operators can
-verify a stamped packaged binary with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+verify a stamped packaged binary with `cargo run -p mesh-llm-release-attestation -- inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
 `valid` means a stamped package, `missing` is normal for unstamped local or dev
 builds, and `invalid` means the bytes changed after packaging. Bare
 `inspect --binary ...` is only sufficient for unstamped binaries that should

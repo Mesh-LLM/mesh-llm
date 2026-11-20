@@ -254,7 +254,7 @@ manifest, discovery, and compatibility contract.
 The shipped `mesh-llm` executable uses embedded release attestation for
 provenance and admission hardening only. It does not apply to SDK, XCFramework,
 or other native artifacts, and it is not a runtime integrity proof. Verify a
-stamped packaged executable with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+stamped packaged executable with `cargo run -p mesh-llm-release-attestation -- inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
 A packaged release binary reports `valid`, an unstamped local or dev build
 reports `missing`, and a binary that changed after packaging reports `invalid`.
 Bare `inspect --binary ...` is only enough to classify an unstamped binary as
