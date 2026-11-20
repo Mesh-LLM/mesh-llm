@@ -23,6 +23,56 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// Settings a developer or a CI job may have exported that would hand these
+/// tests another bundle, cache or catalog.
+const RUNTIME_OVERRIDES: [&str; 6] = [
+    "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+    "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
+    "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL",
+    "SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR",
+    "SKIPPY_NATIVE_RUNTIME_CACHE_DIR",
+    "SKIPPY_NATIVE_RUNTIME_MANIFEST_URL",
+];
+
+/// When any of [`RUNTIME_OVERRIDES`] is set, run `test` again in a child
+/// process without them and return `true`; the caller then returns. The
+/// environment of this process is left alone, since tests share it.
+fn reran_without_runtime_overrides(test: &str) -> bool {
+    if RUNTIME_OVERRIDES
+        .iter()
+        .all(|name| std::env::var_os(name).is_none())
+    {
+        return false;
+    }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", test, "--nocapture"]);
+    for name in RUNTIME_OVERRIDES {
+        child.env_remove(name);
+    }
+    let output = child.output().expect("run the test in a child process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "{test} failed without runtime overrides:\n{stdout}{stderr}"
+    );
+    // A name that matches no test would pass with nothing run.
+    assert!(
+        stdout.contains("test result: ok. 1 passed"),
+        "{test} did not run in the child:\n{stdout}"
+    );
+    true
+}
+
+/// First line of every test here.
+macro_rules! without_runtime_overrides {
+    ($test:ident) => {
+        if reran_without_runtime_overrides(stringify!($test)) {
+            return;
+        }
+    };
+}
+
 fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -216,12 +266,14 @@ fn refusal(release: Release) -> String {
 
 #[test]
 fn a_compatible_runtime_is_downloaded_verified_and_installed() {
+    without_runtime_overrides!(a_compatible_runtime_is_downloaded_verified_and_installed);
     let id = install(Release::of(compatible_artifact())).unwrap();
     assert_eq!(id, "fixture-runtime");
 }
 
 #[test]
 fn an_archive_that_does_not_match_its_checksum_is_refused() {
+    without_runtime_overrides!(an_archive_that_does_not_match_its_checksum_is_refused);
     let mut release = Release::of(compatible_artifact());
     release.claimed_archive_sha256 = Some("0".repeat(64));
     assert!(refusal(release).contains("native runtime checksum mismatch"));
@@ -229,6 +281,7 @@ fn an_archive_that_does_not_match_its_checksum_is_refused() {
 
 #[test]
 fn a_catalog_that_does_not_match_its_published_checksum_is_refused() {
+    without_runtime_overrides!(a_catalog_that_does_not_match_its_published_checksum_is_refused);
     let mut release = Release::of(compatible_artifact());
     release.published_catalog_sha256 = Some("0".repeat(64));
     assert!(refusal(release).contains("native runtime manifest checksum mismatch"));
@@ -236,6 +289,7 @@ fn a_catalog_that_does_not_match_its_published_checksum_is_refused() {
 
 #[test]
 fn a_runtime_built_for_another_skippy_abi_is_refused() {
+    without_runtime_overrides!(a_runtime_built_for_another_skippy_abi_is_refused);
     let mut artifact = compatible_artifact();
     artifact.skippy_abi = "0.0.0".to_string();
     assert!(refusal(Release::of(artifact)).contains("has skippy_abi 0.0.0, expected"));
@@ -243,6 +297,7 @@ fn a_runtime_built_for_another_skippy_abi_is_refused() {
 
 #[test]
 fn a_runtime_built_for_another_platform_is_refused() {
+    without_runtime_overrides!(a_runtime_built_for_another_platform_is_refused);
     let mut artifact = compatible_artifact();
     artifact.platform.os = "plan9".to_string();
     artifact.platform.target = Some("riscv64-unknown-plan9".to_string());
@@ -257,6 +312,9 @@ fn a_runtime_built_for_another_platform_is_refused() {
 #[test]
 #[ignore = "Skippy's installer does not compare the archive's manifest with the catalog entry"]
 fn an_archive_holding_a_different_runtime_than_its_catalog_entry_is_refused() {
+    without_runtime_overrides!(
+        an_archive_holding_a_different_runtime_than_its_catalog_entry_is_refused
+    );
     type Change = fn(&mut NativeRuntimeArtifact);
     let changes: [(&str, Change); 5] = [
         ("id", |runtime| runtime.id = "another-runtime".to_string()),
@@ -308,8 +366,9 @@ struct Machine {
 }
 
 impl Machine {
-    /// `offered` is what the release catalog lists; `None` is a release that
-    /// cannot be reached (every request is a 404).
+    /// `offered` is what the release catalog lists; `None` is a release host
+    /// that answers every request with HTTP 404. A refused connection or a
+    /// DNS failure is not simulated.
     fn new(bundled: &NativeRuntimeArtifact, offered: Option<&NativeRuntimeArtifact>) -> Self {
         let work = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -387,13 +446,15 @@ fn bundled_cpu() -> NativeRuntimeArtifact {
     artifact
 }
 
-/// A runtime this host ranks above the bundled CPU one. On macOS that is a
-/// real GPU backend (Metal). Elsewhere the test machine has no GPU, so a GPU
-/// runtime would be refused; a higher catalog rank stands in for it.
+/// A runtime this host ranks above the bundled CPU one. Where the host
+/// reports Metal that is a Metal runtime, a real backend difference. Anywhere
+/// else (Linux, Windows, a macOS VM without Metal) a GPU runtime would be
+/// refused, so a CPU runtime with a higher catalog rank stands in, and the
+/// test then shows only that the higher rank wins.
 fn better_than_bundled() -> NativeRuntimeArtifact {
     let mut artifact = compatible_artifact();
     artifact.id = "better-download".to_string();
-    if cfg!(target_os = "macos") {
+    if host_runtime_profile().supports_flavor(&NativeRuntimeBackendKind::Metal) {
         artifact.backend = NativeRuntimeBackend::metal();
     } else {
         artifact.rank = 500;
@@ -403,6 +464,7 @@ fn better_than_bundled() -> NativeRuntimeArtifact {
 
 #[test]
 fn real_host_downloads_a_better_runtime_over_the_bundled_cpu_runtime() {
+    without_runtime_overrides!(real_host_downloads_a_better_runtime_over_the_bundled_cpu_runtime);
     let machine = Machine::new(&bundled_cpu(), Some(&better_than_bundled()));
     let outcome = machine.install(machine.options()).unwrap();
     assert_eq!(outcome.runtime.native_runtime_id, "better-download");
@@ -416,6 +478,9 @@ fn real_host_downloads_a_better_runtime_over_the_bundled_cpu_runtime() {
 
 #[test]
 fn real_host_keeps_the_bundled_cpu_runtime_over_an_equally_ranked_download() {
+    without_runtime_overrides!(
+        real_host_keeps_the_bundled_cpu_runtime_over_an_equally_ranked_download
+    );
     let mut same_rank = compatible_artifact();
     same_rank.id = "another-cpu".to_string();
     let machine = Machine::new(&bundled_cpu(), Some(&same_rank));
@@ -425,7 +490,8 @@ fn real_host_keeps_the_bundled_cpu_runtime_over_an_equally_ranked_download() {
 }
 
 #[test]
-fn real_host_with_only_the_bundle_uses_it_when_the_release_cannot_be_reached() {
+fn real_host_with_only_the_bundle_uses_it_when_the_catalog_is_a_404() {
+    without_runtime_overrides!(real_host_with_only_the_bundle_uses_it_when_the_catalog_is_a_404);
     let machine = Machine::new(&bundled_cpu(), None);
     let outcome = machine.install(machine.options()).unwrap();
     assert_eq!(outcome.runtime.native_runtime_id, "bundled-cpu");
@@ -439,6 +505,7 @@ fn real_host_with_only_the_bundle_uses_it_when_the_release_cannot_be_reached() {
 
 #[test]
 fn real_host_with_only_the_bundle_uses_it_when_downloads_are_off() {
+    without_runtime_overrides!(real_host_with_only_the_bundle_uses_it_when_downloads_are_off);
     let machine = Machine::new(&bundled_cpu(), Some(&better_than_bundled()));
     let mut options = machine.options();
     options.allow_download = false;
@@ -451,6 +518,7 @@ fn real_host_with_only_the_bundle_uses_it_when_downloads_are_off() {
 
 #[test]
 fn real_host_refuses_an_explicit_gpu_request_it_cannot_meet() {
+    without_runtime_overrides!(real_host_refuses_an_explicit_gpu_request_it_cannot_meet);
     let machine = Machine::new(&bundled_cpu(), None);
     let mut options = machine.options();
     options.selection = RuntimeSelection::parse(Some("cuda")).unwrap();
@@ -463,7 +531,8 @@ fn real_host_refuses_an_explicit_gpu_request_it_cannot_meet() {
 
 #[test]
 fn real_host_uses_a_better_runtime_it_already_has_without_the_release() {
-    // Unreachable release.
+    without_runtime_overrides!(real_host_uses_a_better_runtime_it_already_has_without_the_release);
+    // The catalog is a 404.
     let machine = Machine::new(&bundled_cpu(), None);
     machine.already_installed(&better_than_bundled());
     let outcome = machine.install(machine.options()).unwrap();
@@ -537,6 +606,9 @@ fn choice_on(profile: HostRuntimeProfile, machine: &Machine) -> (String, NativeR
 
 #[test]
 fn synthetic_cuda_machine_chooses_the_cuda_runtime_over_the_bundled_cpu_runtime() {
+    without_runtime_overrides!(
+        synthetic_cuda_machine_chooses_the_cuda_runtime_over_the_bundled_cpu_runtime
+    );
     let machine = Machine::new(
         &linux_runtime("bundled-cpu", NativeRuntimeBackend::cpu()),
         Some(&linux_runtime(
@@ -563,8 +635,8 @@ fn synthetic_cuda_machine_chooses_the_cuda_runtime_over_the_bundled_cpu_runtime(
         ("bundled-cpu".to_string(), bundle)
     );
 
-    // The GPU machine keeps it too when the release cannot be reached and
-    // the bundle is all it has.
+    // The GPU machine keeps it too when the catalog is a 404 and the bundle
+    // is all it has.
     let offline = Machine::new(
         &linux_runtime("bundled-cpu", NativeRuntimeBackend::cpu()),
         None,
