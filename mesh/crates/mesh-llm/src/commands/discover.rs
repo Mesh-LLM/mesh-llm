@@ -51,7 +51,36 @@ async fn run_nostr_discover(
 
     let mut err = mesh_llm_events::console_err();
     writeln!(err, "🔍 Searching Nostr relays for mesh-llm meshes...")?;
-    let meshes = nostr::discover(&relays, &filter, None).await?;
+    let (meshes, health) = nostr::discover_with_health(&relays, &filter, None).await?;
+    if health.relays_answered < health.relays_queried {
+        // "No meshes found" reads very differently when the round never
+        // heard from most relays; say which state it was.
+        writeln!(
+            err,
+            "ℹ️  {} of {} Nostr relay(s) answered",
+            health.relays_answered, health.relays_queried
+        )?;
+    }
+
+    if !health.any_relay_answered() {
+        // A round where no relay spoke is not an observation about the
+        // mesh plane — it is an observation about reachability. Report
+        // it as a failure so scripts can tell a genuine "no meshes"
+        // (some relay answered) from an unreachable discovery plane.
+        anyhow::bail!(
+            "no Nostr relay answered (0 of {}); check network or relay URLs",
+            health.relays_queried
+        );
+    }
+
+    if meshes.is_empty() && !health.any_query_completed() {
+        // Relays spoke but none finished, so what they left out says nothing.
+        anyhow::bail!(
+            "Nostr search incomplete: no relay finished its query ({} of {} answered); try again",
+            health.relays_answered,
+            health.relays_queried
+        );
+    }
 
     let mut err = mesh_llm_events::console_err();
     if meshes.is_empty() {
@@ -72,9 +101,11 @@ async fn run_nostr_discover(
         .as_secs();
 
     let last_mesh_id = discovery::load_last_mesh_id();
-    writeln!(err, "Found {} mesh(es):\n", meshes.len())?;
-    for (i, mesh) in meshes.iter().enumerate() {
-        let score = nostr::score_mesh(mesh, now, last_mesh_id.as_deref());
+    let listings: Vec<&nostr::DiscoveredMesh> = meshes.iter().collect();
+    let ranked = nostr::rank_meshes(&listings, last_mesh_id.as_deref());
+    writeln!(err, "Found {} mesh(es):\n", ranked.len())?;
+    for (i, ranked_mesh) in ranked.iter().enumerate() {
+        let mesh = &ranked_mesh.listings[0];
         let age = now.saturating_sub(mesh.published_at);
         let freshness = if age < 120 {
             "fresh"
@@ -91,14 +122,19 @@ async fn run_nostr_discover(
         } else {
             format!("{} clients", mesh.listing.client_count)
         };
+        let publishers = match ranked_mesh.listings.len() {
+            1 => String::new(),
+            n => format!(", {n} publishers"),
+        };
         writeln!(
             err,
-            "  [{}] {} (score: {}, {}, {})",
+            "  [{}] {} (score: {}, {}, {}{})",
             i + 1,
             mesh,
-            score,
+            ranked_mesh.score,
             freshness,
-            capacity
+            capacity,
+            publishers
         )?;
         let token = &mesh.listing.invite_token;
         let display_token = if token.len() > 40 {
@@ -114,7 +150,7 @@ async fn run_nostr_discover(
     }
 
     if auto_join {
-        let best = &meshes[0];
+        let best = &ranked[0].listings[0];
         writeln!(err, "Auto-joining best match: {}", best)?;
         writeln!(err, "\nRun:")?;
         writeln!(err, "  mesh-llm serve --join {}", best.listing.invite_token)?;

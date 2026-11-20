@@ -94,6 +94,7 @@ mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.80.0" }
 ryu = "1"
 reqwest = { version = "0.13", features = ["stream", "json"] }
 futures-util = "0.3"
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 sha2 = "0.11"
 subtle = "2.6"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
