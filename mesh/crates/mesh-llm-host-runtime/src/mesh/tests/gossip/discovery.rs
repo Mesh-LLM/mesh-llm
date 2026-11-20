@@ -17,73 +17,79 @@ pub(crate) async fn future_demand_timestamps_are_active_without_underflow() {
     assert!(node.get_demand().contains_key("future-demand"));
 }
 
-/// Regression test for the `--auto` startup wedge: when a transitive
-/// gossip payload includes peers that would be rejected at ingest
-/// (version-floor or idle-transitive-client), `maybe_connect_discovered_peer`
-/// must skip the dial. Otherwise each unreachable ghost address triggers
-/// a 30 s `connect_to_peer` timeout sequentially in the dial loop,
-/// wedging the surrounding gossip exchange (and the `attempt_run_auto_join`
-/// that initiated it) for tens of minutes.
-///
-/// The function returns without panicking and without dialing within a
-/// generous time bound — a real dial to a fake address would block on
-/// the 30 s `PEER_CONNECT_AND_GOSSIP_TIMEOUT`. We assert the result is
-/// reached well under that bound and that no connection entry was created.
 #[tokio::test]
-pub(crate) async fn maybe_connect_discovered_peer_skips_filtered_announcements() {
-    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
-    let my_role = NodeRole::Worker;
+async fn join_returns_while_discovered_peer_is_still_handshaking() {
+    let joiner = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let seed = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let secondary_role = NodeRole::Host { http_port: 9337 };
+    let secondary = Node::new_for_tests(secondary_role.clone()).await.unwrap();
+    let model = "secondary-model";
+    secondary.set_serving_models(vec![model.into()]).await;
+    secondary.set_hosted_models(vec![model.into()]).await;
+    let secondary_addr = secondary.endpoint_addr_for_advertisement();
+    let mut announcement = test_announcement(None);
+    announcement.addr = secondary_addr.clone();
+    announcement.role = secondary_role;
+    announcement.serving_models = vec![model.into()];
+    seed.update_transitive_peer(secondary.id(), &secondary_addr, &announcement, seed.id())
+        .await;
 
-    // Below-floor version — must be skipped without dialing.
-    let old_addr = test_addr(0x57);
-    let old_id = old_addr.id;
-    let mut old_ann = test_announcement(None);
-    old_ann.addr = old_addr.clone();
-    old_ann.role = NodeRole::Client;
-    old_ann.version = Some("0.57.0".to_string());
+    let accepting = seed.clone();
+    let listener = tokio::spawn(async move { accepting.accept_loop().await });
+    seed.start_accepting();
+    let token = encode_endpoint_addr_token(&seed.endpoint_addr_for_advertisement());
 
-    // Idle transitive client (matching version, but no hostname / no
-    // direct measurement / no model interests) — must also be skipped.
-    let idle_addr = test_addr(0xC1);
-    let idle_id = idle_addr.id;
-    let mut idle_ann = test_announcement(None);
-    idle_ann.addr = idle_addr.clone();
-    idle_ann.role = NodeRole::Client;
-    idle_ann.version = Some("0.65.1".to_string());
+    // Accept the follow-on dial and keep its gossip stream open without replying.
+    let pending_handshake = async {
+        let conn = secondary.endpoint.accept().await.unwrap().await.unwrap();
+        let (send, mut recv) = conn.accept_bi().await.unwrap();
+        let mut stream_type = [0];
+        recv.read_exact(&mut stream_type).await.unwrap();
+        assert_eq!(stream_type, [STREAM_GOSSIP]);
+        (conn, send, recv)
+    };
+    let (result, (conn, send, recv)) =
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            tokio::join!(joiner.join(&token), pending_handshake)
+        })
+        .await
+        .expect("bootstrap join must finish while secondary gossip is pending");
+    result.unwrap();
 
-    // Both calls together must return well under the 30 s connect
-    // timeout. If the dial-loop skip is missing, each call will block
-    // on PEER_CONNECT_AND_GOSSIP_TIMEOUT (30 s) attempting to dial the
-    // fake test address.
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        node.maybe_connect_discovered_peer(&my_role, old_addr, &old_ann, true, false)
-            .await;
-        node.maybe_connect_discovered_peer(&my_role, idle_addr, &idle_ann, true, false)
-            .await;
+    {
+        let state = joiner.state.lock().await;
+        assert!(state.connections.contains_key(&seed.id()));
+        assert!(state.peers.get(&seed.id()).unwrap().is_admitted());
+        assert!(state.peers.contains_key(&secondary.id()));
+        assert!(!state.connections.contains_key(&secondary.id()));
+    }
+    assert!(joiner.hosts_for_model(model).await.is_empty());
+
+    let mesh_llm_membership::connection_reservation::PendingConnectionReservation::Waiter(waiter) =
+        joiner.reserve_pending_connection(secondary.id()).await
+    else {
+        panic!("secondary admission must still be in progress");
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        secondary
+            .handle_gossip_stream(
+                joiner.id(),
+                crate::protocol::connection_protocol(&conn),
+                send,
+                recv,
+            )
+            .await
+            .unwrap();
+        joiner.await_pending_connection(waiter).await.unwrap();
     })
     .await
-    .expect("filtered peers must be skipped quickly, not dialed");
+    .expect("secondary must finish admission after its gossip reply");
+    assert_eq!(joiner.hosts_for_model(model).await, vec![secondary.id()]);
 
-    // No connection was attempted (no entry in state.connections), and
-    // no peer was added (the filtered announcements never reach add_peer
-    // or update_transitive_peer through this path).
-    let state = node.state.lock().await;
-    assert!(
-        !state.connections.contains_key(&old_id),
-        "below-floor peer must not be dialed"
-    );
-    assert!(
-        !state.connections.contains_key(&idle_id),
-        "idle transitive client must not be dialed"
-    );
-    assert!(
-        !state.peers.contains_key(&old_id),
-        "below-floor peer must not be added (this path is dial-only)"
-    );
-    assert!(
-        !state.peers.contains_key(&idle_id),
-        "idle transitive client must not be added (this path is dial-only)"
-    );
+    joiner.close_endpoint().await;
+    seed.close_endpoint().await;
+    secondary.close_endpoint().await;
+    listener.await.unwrap();
 }
 
 #[tokio::test]

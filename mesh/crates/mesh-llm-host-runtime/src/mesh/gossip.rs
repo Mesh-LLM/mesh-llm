@@ -28,6 +28,7 @@ use mesh_llm_membership::transitions::{TransitiveMention, TransitivePeerUpdate};
 
 mod admission;
 mod discovery;
+pub(super) use discovery::{PendingDiscovery, ReservedDial};
 pub(super) mod reply_limit;
 
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
@@ -56,6 +57,7 @@ pub(crate) struct AnnouncedPeerContext {
     rtt_ms: Option<u32>,
     negotiated_protocol_generation: Option<u32>,
     direct_peer_requirements_validated: bool,
+    discover_peers: bool,
 }
 
 impl AnnouncedPeerContext {
@@ -65,6 +67,7 @@ impl AnnouncedPeerContext {
             rtt_ms: None,
             negotiated_protocol_generation,
             direct_peer_requirements_validated: true,
+            discover_peers: false,
         }
     }
 }
@@ -263,7 +266,8 @@ impl Node {
             );
             return Ok(());
         }
-        self.apply_transitive_peer(peer_id, addr, ann, remote).await;
+        self.apply_transitive_peer(peer_id, addr, ann, remote, context.discover_peers)
+            .await;
         Ok(())
     }
 
@@ -282,6 +286,7 @@ impl Node {
                 rtt_ms,
                 negotiated_protocol_generation,
                 direct_peer_requirements_validated,
+                discover_peers: false,
             },
         )
         .await
@@ -507,7 +512,9 @@ impl Node {
 
     /// Open a gossip stream on an existing connection to exchange peer info.
     pub(super) async fn initiate_gossip(&self, conn: Connection, remote: EndpointId) -> Result<()> {
-        self.exchange_and_apply_gossip(conn, remote).await
+        self.exchange_and_apply_gossip(conn, remote).await?;
+        self.start_peer_discovery().await;
+        Ok(())
     }
 
     pub(super) async fn exchange_and_apply_gossip(
@@ -726,7 +733,7 @@ impl Node {
         });
 
         if let Err(error) = self
-            .apply_gossip_announcements(peer_id, rtt_ms, &announcements, false)
+            .apply_gossip_announcements(peer_id, rtt_ms, &announcements, true)
             .await
         {
             // Drop the tracked entry AND close the QUIC connection. The
@@ -746,7 +753,7 @@ impl Node {
         // Match `connect_to_peer`: the probe gossip RTT above likely reflects
         // relay latency, so refresh the selected-path/RTT after holepunch.
         self.schedule_selected_path_recheck(peer_id);
-        self.spawn_discovered_peer_connects(announcements, true, false);
+        self.start_peer_discovery().await;
 
         tracing::info!(
             peer = %peer_id.fmt_short(),
@@ -779,6 +786,9 @@ impl Node {
         if !self.state.lock().await.connections.contains_key(&remote) {
             self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
                 .await;
+        }
+        if discover_peers {
+            self.start_peer_discovery().await;
         }
         Ok(())
     }
@@ -826,9 +836,7 @@ impl Node {
         Ok(((their_announcements, their_plugin_keys), rtt_ms))
     }
 
-    /// Apply peer announcements and refresh observed path latency before discovery.
-    /// Full-model attachments dial secondary peers in the background so stale peers
-    /// do not delay an already admitted attachment's join.
+    /// Apply peer announcements and refresh observed path latency.
     pub(crate) async fn apply_gossip_announcements(
         &self,
         remote: EndpointId,
@@ -843,6 +851,7 @@ impl Node {
                 rtt_ms: Some(rtt_ms),
                 negotiated_protocol_generation: Some(NODE_PROTOCOL_GENERATION),
                 direct_peer_requirements_validated: false,
+                discover_peers,
             },
         )
         .await?;
@@ -850,19 +859,6 @@ impl Node {
         // Also check the connection's actual path info — the gossip round-trip
         // time above may reflect relay latency even if a direct path is now active.
         self.refresh_gossip_path_rtt(remote, Some(rtt_ms)).await;
-
-        if discover_peers {
-            if self.full_model_only {
-                // The seed has already admitted this independent attachment.
-                // Stale secondary peers must not consume its bounded join
-                // deadline or roll back a usable full-model service. As in
-                // fast auto-join, discover them after primary admission.
-                self.spawn_discovered_peer_connects(their_announcements.to_vec(), true, false);
-            } else {
-                self.connect_discovered_peers(their_announcements, true, false)
-                    .await;
-            }
-        }
 
         Ok(())
     }
@@ -931,8 +927,7 @@ impl Node {
             .await;
         self.refresh_gossip_path_rtt(remote, None).await;
 
-        self.connect_discovered_peers(&their_announcements, false, true)
-            .await;
+        self.enqueue_inbound_discovery(&their_announcements).await;
 
         Ok(())
     }
@@ -1104,7 +1099,8 @@ impl Node {
         ann: &PeerAnnouncement,
         bridge_id: EndpointId,
     ) {
-        self.apply_transitive_peer(id, addr, ann, bridge_id).await;
+        self.apply_transitive_peer(id, addr, ann, bridge_id, false)
+            .await;
     }
 
     /// Update a peer learned transitively through gossip (not directly connected).
@@ -1120,6 +1116,7 @@ impl Node {
         addr: &EndpointAddr,
         ann: &PeerAnnouncement,
         bridge_id: EndpointId,
+        discover_peers: bool,
     ) {
         // Snapshot direct provenance before filters inspect relayed data; the
         // removal helper rechecks it under lock before deleting anything.
@@ -1167,17 +1164,38 @@ impl Node {
             }
             return;
         }
-        let update = self.state.lock().await.apply_accepted_transitive_peer(
-            self.endpoint.id(),
-            id,
-            addr,
-            ann,
-            TransitiveMention {
-                bridge_id,
-                owner_summary,
-                now_unix_ms: crate::mesh::current_time_unix_ms(),
-            },
-        );
+        let my_role = self.role.lock().await.clone();
+        let update = {
+            // Commit the queue update with the accepted announcement, before
+            // a plugin notification can let a later announcement overtake it.
+            let mut state = self.state.lock().await;
+            let mut pending = self.peer_discovery.lock().await;
+            let update = state.apply_accepted_transitive_peer(
+                self.endpoint.id(),
+                id,
+                addr,
+                ann,
+                TransitiveMention {
+                    bridge_id,
+                    owner_summary,
+                    now_unix_ms: crate::mesh::current_time_unix_ms(),
+                },
+            );
+            if !matches!(update, TransitivePeerUpdate::Ignored)
+                && let Some(peer) = state.peers.get(&id)
+            {
+                if self.should_skip_discovered_peer(&my_role, id, &peer.role) {
+                    pending.withdraw(id);
+                } else {
+                    pending.upsert(
+                        addr,
+                        discover_peers && !state.connections.contains_key(&id),
+                        None,
+                    );
+                }
+            }
+            update
+        };
         match update {
             TransitivePeerUpdate::Ignored => {}
             TransitivePeerUpdate::Added(peer) => {
@@ -1227,6 +1245,7 @@ impl Node {
         if state.has_fresh_direct_admission(&id) {
             return false;
         }
+        self.peer_discovery.lock().await.withdraw(id);
         self.plugin_keys.purge_peer(id);
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
