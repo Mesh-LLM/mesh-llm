@@ -16,6 +16,8 @@ mkdir "$work/bin"
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 path="$4"
+# A request that never answers.
+[[ ! -f "$FIX/stall" ]] || exec sleep 30
 case "$path" in
     */workflows/images-release.yml/runs)
         n=$(($(cat "$FIX/calls" 2>/dev/null || echo 0) + 1))
@@ -72,7 +74,7 @@ fail=0
 expect() { # <ok|message the error must contain> <what the case is>
     local out status=0
     out="$(env -i PATH="$work/bin:$PATH" FIX="$fix" GH_TOKEN=unused \
-        PACKAGING_RECEIPT_TIMEOUT_SECONDS=6 PACKAGING_RECEIPT_POLL_SECONDS=1 \
+        PACKAGING_RECEIPT_TIMEOUT_SECONDS=6 PACKAGING_RECEIPT_POLL_SECONDS=1 PACKAGING_RECEIPT_REQUEST_SECONDS=2 \
         "$wait_script" --tag "$tag" --sha "$sha" --assets "$assets" --skippy-release v0.80.0 \
         --skippy-catalog "$catalog" --correlation mesh-9-1 --since 2026-11-20T00:00:00Z 2>&1)" || status=$?
     if [[ "$1" == ok ]]; then
@@ -127,6 +129,34 @@ expect "timed out" "a run that never finishes"
 good
 edit runs '.workflow_runs += .workflow_runs'
 expect "more than one packaging run" "two runs with the same correlation id"
+
+# A small archive holding a huge receipt is refused before it is unpacked.
+good
+head -c 3000000 /dev/zero | tr '\0' ' ' >"$fix/receipt.json"
+pack
+(($(wc -c <"$fix/receipt.zip") < 100000)) || { echo "FAIL: the oversized fixture did not compress" >&2; fail=1; }
+expect "the receipt is too large" "a receipt that unpacks past the limit"
+
+good
+rm "$fix/z/packaging-readiness.json" "$fix/receipt.zip"
+# The link's target text is the valid receipt, so only the file type gives it away.
+ln -s "$(jq -c . "$fix/receipt.json")" "$fix/z/packaging-readiness.json"
+(cd "$fix/z" && zip -qy ../receipt.zip packaging-readiness.json)
+expect "must be a regular file" "a receipt that is a symlink"
+
+good
+touch "$fix/stall"
+began=$SECONDS
+expect "took longer than 2s" "a request that stalls"
+((SECONDS - began < 6)) || { echo "FAIL: a stalled request was not cut off at its own limit" >&2; fail=1; }
+
+good
+head -c 1100000 /dev/zero | tr '\0' ' ' >>"$fix/runs" # still valid JSON, only too long
+expect "larger than 1048576 bytes" "a response past the size limit"
+
+good
+head -c 1100000 /dev/zero >"$fix/receipt.zip"
+expect "larger than 1048576 bytes" "a receipt archive past the size limit"
 
 good
 rm "$fix/runs"

@@ -110,6 +110,13 @@ the dispatch.
 - It reads the receipt of the current attempt and requires every field above
   to match, all three publications to have been requested, and every result
   to be `success`. A `v1` receipt is refused.
+- The receipt archive must hold one regular file of at most 1 MiB unpacked.
+  An expired `packaging-readiness` artifact on the run, even from an earlier
+  attempt, is an error. That is deliberately conservative: the run is refused
+  instead of guessing which receipts still count.
+- Each GitHub request gets at most a minute, or what is left of the wait, and
+  at most 1 MiB of response. A stalled, failed or oversized request is an
+  error.
 - It re-reads the run afterwards and fails if it was re-run meanwhile.
 - It gives up after two hours.
 

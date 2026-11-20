@@ -19,6 +19,7 @@ mesh="${GITHUB_REPOSITORY:-Mesh-LLM/mesh-llm}"
 skippy="${SKIPPY_REPOSITORY:-Mesh-LLM/skippy}"
 timeout="${PACKAGING_RECEIPT_TIMEOUT_SECONDS:-7200}"
 poll="${PACKAGING_RECEIPT_POLL_SECONDS:-15}"
+request_seconds="${PACKAGING_RECEIPT_REQUEST_SECONDS:-60}"
 max_bytes=1048576
 
 fail() {
@@ -46,19 +47,46 @@ done
 [[ "$assets" =~ ^[0-9a-f]{64}$ && "$skippy_catalog" =~ ^[0-9a-f]{64}$ ]] || fail "--assets and --skippy-catalog must be SHA-256 digests"
 [[ "$correlation" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail "invalid correlation id"
 [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "--since must be a UTC timestamp"
-[[ "$timeout" =~ ^[0-9]+$ && "$poll" =~ ^[0-9]+$ ]] || fail "timeout and poll interval must be whole seconds"
+[[ "$timeout" =~ ^[0-9]+$ && "$poll" =~ ^[0-9]+$ && "$request_seconds" =~ ^[1-9][0-9]*$ ]] || fail "timeout and poll interval must be whole seconds"
 
 title="Packaging · $correlation"
 deadline=$((SECONDS + timeout))
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Each request gets at most a minute, or what is left of the wait, and at
+# most 1 MiB of response. A request that stalls, fails or answers with more is
+# an error; nothing truncated is ever parsed.
 get() { # get <output file> <api path> [field=value ...]
-    local out="$1" path="$2" args=()
+    local out="$1" path="$2" args=() limit pid status=0 watchdog sleeper
     shift 2
     for field in "$@"; do args+=(-f "$field"); done
-    ((SECONDS < deadline)) || fail "timed out waiting for packaging readiness"
-    gh api --method GET "$path" ${args[@]+"${args[@]}"} >"$out" || fail "GitHub request failed: $path"
+    limit=$((deadline - SECONDS))
+    ((limit > 0)) || fail "timed out waiting for packaging readiness"
+    ((limit <= request_seconds)) || limit="$request_seconds"
+    (
+        set -o pipefail
+        gh api --method GET "$path" ${args[@]+"${args[@]}"} | head -c $((max_bytes + 1)) >"$out"
+    ) &
+    pid=$!
+    # The watchdog ends the request at its limit and leaves a marker.
+    rm -f "$work/stalled"
+    (
+        sleep "$limit"
+        : >"$work/stalled"
+        pkill -P "$pid" 2>/dev/null
+        kill "$pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$pid" 2>/dev/null || status=$?
+    # Stop the watchdog before its sleep, so it cannot leave a late marker.
+    sleeper="$(pgrep -P "$watchdog" 2>/dev/null || true)"
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+    [[ -z "$sleeper" ]] || kill "$sleeper" 2>/dev/null || true
+    [[ ! -e "$work/stalled" ]] || fail "GitHub request took longer than ${limit}s: $path"
+    (($(wc -c <"$out") <= max_bytes)) || fail "GitHub response is larger than $max_bytes bytes: $path"
+    ((status == 0)) || fail "GitHub request failed: $path"
 }
 
 # query <file> [jq args ...] <jq filter>. A filter that errors, or yields null
@@ -137,17 +165,24 @@ check_receipt() {
 }
 
 verify() { # verify <run id> <attempt>
-    local run="$1" attempt="$2" ids id n=0 matched=0 members candidate
+    local run="$1" attempt="$2" ids id n=0 matched=0 members candidate kind
     ids="$(receipt_artifacts "$run")" || exit 1
     [[ -n "$ids" ]] || fail "the packaging run has no readiness receipt"
     while read -r id; do
         n=$((n + 1))
         ((n <= 16)) || fail "too many readiness receipts"
         get "$work/receipt.zip" "repos/$packaging/actions/artifacts/$id/zip"
-        (($(wc -c <"$work/receipt.zip") <= max_bytes)) || fail "the receipt archive is too large"
         members="$(unzip -Z1 "$work/receipt.zip")" || fail "the receipt archive is not a zip"
         [[ "$members" == packaging-readiness.json ]] || fail "the receipt archive must hold only packaging-readiness.json"
-        unzip -p "$work/receipt.zip" packaging-readiness.json >"$work/receipt.json" || fail "could not read the receipt"
+        kind="$(unzip -Z "$work/receipt.zip" packaging-readiness.json)" || fail "could not list the receipt archive"
+        [[ "$kind" == -* ]] || fail "the receipt must be a regular file"
+        # A small archive can hold a huge file, so at most one byte past the
+        # limit reaches the disk. A receipt cut short there is refused, not
+        # parsed, and the archive's own check catches a damaged one.
+        { unzip -p "$work/receipt.zip" packaging-readiness.json 2>/dev/null || true; } |
+            head -c $((max_bytes + 1)) >"$work/receipt.json" || fail "could not read the receipt"
+        (($(wc -c <"$work/receipt.json") <= max_bytes)) || fail "the receipt is too large"
+        unzip -tq "$work/receipt.zip" >/dev/null 2>&1 || fail "the receipt archive is damaged"
         candidate="$(query "$work/receipt.json" --argjson run "$run" \
             'if .packaging_run_id == $run and (.packaging_run_attempt | type) == "number" and .packaging_run_attempt > 0
              then .packaging_run_attempt else error("bad receipt") end')" || exit 1
