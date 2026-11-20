@@ -1,0 +1,23 @@
+[package]
+name = "mesh-llm-release-attestation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stamps and inspects the signed release attestation embedded in a MeshLLM binary"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+publish = false
+
+[dependencies]
+ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
+getrandom = "0.3"
+hex = "0.4.3"
+mesh-llm-release-footer = { path = "../mesh-llm-release-footer" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

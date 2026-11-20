@@ -219,7 +219,7 @@ function Test-HasValue {
 function Invoke-ReleaseAttestation {
     Push-Location $repoRoot
     try {
-        $output = & cargo run --locked --quiet -p mesh-llm-release-footer --bin mesh-llm-release-attestation -- @args
+        $output = & cargo run --locked --quiet -p mesh-llm-release-attestation -- @args
     } finally {
         Pop-Location
     }
@@ -247,7 +247,11 @@ function Invoke-ReleaseAttestationStamp {
             return
         }
     }
-    Invoke-ReleaseAttestation stamp --binary $BinaryPath --signing-key-file $attestationSigningKeyFile | Out-Null
+    # A signed stamp must name the commit it was built from. MESH_RELEASE_COMMIT
+    # overrides the checkout's HEAD; an unknown commit is refused, not invented.
+    $stampArgs = @("--binary", $BinaryPath, "--signing-key-file", $attestationSigningKeyFile, "--require-source-commit")
+    if (Test-HasValue $env:MESH_RELEASE_COMMIT) { $stampArgs += @("--commit", $env:MESH_RELEASE_COMMIT) }
+    Invoke-ReleaseAttestation stamp @stampArgs | Out-Null
     $inspectJson = Invoke-ReleaseAttestation inspect --binary $BinaryPath --public-key-file $attestationPublicKeyFile --json
     $status = (($inspectJson -join "`n") | ConvertFrom-Json).status
     if ($status -ne "valid") {

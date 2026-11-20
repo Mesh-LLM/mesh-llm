@@ -16,6 +16,7 @@ members = [
     "mesh/crates/mesh-llm-membership",
     "mesh/crates/mesh-llm-identity",
     "mesh/crates/mesh-llm-protocol",
+    "mesh/crates/mesh-llm-release-attestation",
     "mesh/crates/mesh-llm-release-footer",
     "mesh/crates/mesh-llm-routing",
     "mesh/crates/mesh-llm-runtime-event-contracts",
