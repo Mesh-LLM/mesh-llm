@@ -12,13 +12,21 @@ trap 'rm -rf "$work"' EXIT
 printf '#!/bin/sh\necho "NVIDIA-SMI 550.54 CUDA Version: 12.4"\n' > "$work/nvidia-smi"
 chmod +x "$work/nvidia-smi"
 
+# This test only asks for a name. If the installer ever ran, it would find no
+# network, a throwaway HOME and a throwaway install directory.
+for blocked in curl wget tar; do
+    printf '#!/bin/sh\necho "install-asset-test: %s is blocked" >&2\nexit 97\n' "$blocked" > "$work/$blocked"
+    chmod +x "$work/$blocked"
+done
+mkdir -p "$work/home"
+
 failures=0
 expect() { # expect <uname -s> <uname -m> <want-asset-or-FAIL>
     local got
     # `$0` must not be install.sh, or sourcing it would run the installer.
     # The install directory and release URL are pointed nowhere in case it does.
     got="$(PATH="$work:$PATH" MESH_LLM_TEST_UNAME_S="$1" MESH_LLM_TEST_UNAME_M="$2" \
-        MESH_LLM_INSTALL_DIR="$work/bin" MESH_LLM_INSTALL_URL_BASE="file://$work/none" \
+        HOME="$work/home" MESH_LLM_INSTALL_DIR="$work/bin" MESH_LLM_INSTALL_URL_BASE="file://$work/none" \
         bash -c 'source "$1" && asset_name' asset-test "$install" 2>/dev/null)" || got=FAIL
     if [[ "$got" != "$3" ]]; then
         echo "FAIL: $1/$2 asked for '$got', want '$3'" >&2
@@ -35,6 +43,11 @@ expect Darwin x86_64 FAIL
 
 if grep -Eq 'gnu-(cuda|rocm|vulkan)' "$install"; then
     echo "FAIL: install.sh still names a GPU archive" >&2
+    failures=$((failures + 1))
+fi
+
+if [[ -e "$work/bin" || -n "$(ls -A "$work/home")" ]]; then
+    echo "FAIL: the installer ran" >&2
     failures=$((failures + 1))
 fi
 

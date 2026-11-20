@@ -55,6 +55,7 @@ jobs:
             "Windows: the packaged host is not run against a model, only version-checked."
             "Host import policy: only the Linux glibc floor is checked; the per-platform allowed-imports report is gone."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
+            "Updating from 0.80.0: a CUDA, ROCm or Vulkan install looks for its own archive, which this release does not publish; no safe transition is established."
             "Swift, Kotlin and Node SDK artifacts are not built or published."
           )
           for item in "${missing[@]}"; do
