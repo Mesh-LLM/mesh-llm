@@ -332,8 +332,14 @@ impl SkippyModelHandle {
         openai_guardrails: Option<InferenceGuardrailsConfig>,
         model_open_events: Option<NativeModelOpenEvents>,
     ) -> Result<Self> {
-        request.open_events = model_open_observer::model_open_events(model_open_events);
-        Self::finish_load(request, openai_guardrails)
+        let (open_events, settlement) = model_open_observer::model_open_events(model_open_events);
+        request.open_events = open_events;
+        let loaded = Self::finish_load(request, openai_guardrails);
+        settlement.finish(match loaded {
+            Ok(_) => ModelOpenReturn::Succeeded,
+            Err(_) => ModelOpenReturn::Failed,
+        });
+        loaded
     }
 }
 

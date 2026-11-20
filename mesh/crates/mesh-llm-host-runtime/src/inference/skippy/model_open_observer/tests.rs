@@ -38,7 +38,7 @@ fn progress(sequence: u64) -> RuntimeEvent {
     }
 }
 
-type Reconciled = Arc<Mutex<Vec<(ModelOpenObservation, ModelOpenReturn)>>>;
+type Reconciled = Arc<Mutex<Vec<(Option<ModelOpenObservation>, ModelOpenReturn)>>>;
 
 fn recording_events(reporter: NativeModelOpenEventReporter) -> (NativeModelOpenEvents, Reconciled) {
     let reconciled: Reconciled = Arc::default();
@@ -48,13 +48,20 @@ fn recording_events(reporter: NativeModelOpenEventReporter) -> (NativeModelOpenE
         reconcile: Box::new(move |observation, returned| {
             slot.lock()
                 .expect("reconciled")
-                .push((*observation, returned));
+                .push((observation.copied(), returned));
         }),
     };
     (events, reconciled)
 }
 
-fn reconciled(reconciled: &Reconciled) -> Vec<(ModelOpenObservation, ModelOpenReturn)> {
+fn observer(events: NativeModelOpenEvents) -> ModelOpenObserver {
+    ModelOpenObserver {
+        reporter: events.reporter,
+        reconcile: Arc::new(Mutex::new(Some(events.reconcile))),
+    }
+}
+
+fn reconciled(reconciled: &Reconciled) -> Vec<(Option<ModelOpenObservation>, ModelOpenReturn)> {
     reconciled.lock().expect("reconciled").clone()
 }
 
@@ -104,7 +111,7 @@ fn every_event_reaches_the_reporter_in_order() {
     let (events, _) = recording_events(Box::new(move |event| {
         sink.lock().expect("sink").push(event.sequence)
     }));
-    let mut observer = ModelOpenObserver::new(events);
+    let mut observer = observer(events);
 
     (1..=5).for_each(|sequence| observer.event(progress(sequence)));
 
@@ -118,7 +125,7 @@ fn the_reporter_gets_the_native_record_unchanged() {
     let (events, _) = recording_events(Box::new(move |event| {
         sink.lock().expect("sink").push(event)
     }));
-    let mut observer = ModelOpenObserver::new(events);
+    let mut observer = observer(events);
     let record = RuntimeEvent {
         kind: RuntimeEventKind::ModelOpenFailedHandled,
         stage_id: 23,
@@ -146,7 +153,7 @@ fn a_panicking_reporter_loses_only_its_own_event() {
         assert_ne!(event.sequence, 2, "reporter fails on the second record");
         sink.lock().expect("sink").push(event.sequence);
     }));
-    let mut observer = ModelOpenObserver::new(events);
+    let mut observer = observer(events);
 
     (1..=3).for_each(|sequence| observer.event(progress(sequence)));
     observer.summary(
@@ -164,7 +171,7 @@ fn a_panicking_reporter_loses_only_its_own_event() {
 #[test]
 fn the_summary_is_reconciled_once_with_its_losses_and_return() {
     let (events, reconciled_slot) = recording_events(Box::new(|_| {}));
-    let mut observer = ModelOpenObserver::new(events);
+    let mut observer = observer(events);
     let observation = ModelOpenObservation {
         drained: 3,
         dropped: 2,
@@ -178,30 +185,55 @@ fn the_summary_is_reconciled_once_with_its_losses_and_return() {
 
     assert_eq!(
         reconciled(&reconciled_slot),
-        vec![(observation, ModelOpenReturn::Failed)]
+        vec![(Some(observation), ModelOpenReturn::Failed)]
     );
     assert_eq!(observation.lost(), 3);
 }
 
 #[test]
 fn no_events_means_no_observer() {
-    assert!(matches!(
-        model_open_events(None),
-        ModelOpenEvents::Enabled(None)
-    ));
+    let (open_events, settlement) = model_open_events(None);
+
+    assert!(matches!(open_events, ModelOpenEvents::Enabled(None)));
+    settlement.finish(ModelOpenReturn::Succeeded);
 }
 
 #[test]
-fn a_failed_load_keeps_its_error_and_reconciles_before_it_returns() {
+fn a_failed_load_keeps_its_error_and_reconciles_once_before_it_returns() {
     let (events, reconciled_slot) = recording_events(Box::new(|_| {}));
-    let request = rejected_load(model_open_events(Some(events)));
+    let (open_events, settlement) = model_open_events(Some(events));
 
-    let error = request.load().err().expect("worker stage must be rejected");
+    let error = rejected_load(open_events)
+        .load()
+        .err()
+        .expect("worker stage must be rejected");
+    let before_finish = reconciled(&reconciled_slot);
+    settlement.finish(ModelOpenReturn::Failed);
 
     assert!(error.to_string().contains("requires stage 0"), "{error:#}");
     assert_eq!(
+        before_finish,
+        vec![(
+            Some(ModelOpenObservation::default()),
+            ModelOpenReturn::Failed
+        )]
+    );
+    assert_eq!(reconciled(&reconciled_slot), before_finish);
+}
+
+/// Skippy drops the observer unused when it cannot start its drain thread:
+/// the load goes on without events and no summary is delivered.
+#[test]
+fn a_load_whose_observer_never_ran_is_reconciled_without_an_observation() {
+    let (events, reconciled_slot) = recording_events(Box::new(|_| {}));
+    let (open_events, settlement) = model_open_events(Some(events));
+
+    drop(open_events);
+    settlement.finish(ModelOpenReturn::Succeeded);
+
+    assert_eq!(
         reconciled(&reconciled_slot),
-        vec![(ModelOpenObservation::default(), ModelOpenReturn::Failed)]
+        vec![(None, ModelOpenReturn::Succeeded)]
     );
 }
 
