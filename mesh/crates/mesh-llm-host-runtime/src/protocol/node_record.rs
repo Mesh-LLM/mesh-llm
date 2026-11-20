@@ -10,6 +10,10 @@ use crate::mesh::PeerAnnouncement;
 use crate::proto::node as wire;
 use iroh::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
 
+// The signed header contains a 32-byte endpoint ID and two eight-byte counters.
+pub(crate) const MAX_NODE_RECORD_BODY_BYTES: usize =
+    mesh_llm_membership::signed_record::NODE_RECORD.max_signed_bytes - 48;
+
 /// Projects this node's outbound wire announcement onto the fields it signs.
 /// Hop measurements, derived fields, deprecated duplicates, short-lived data
 /// and per-connection proofs are left out.
@@ -18,6 +22,7 @@ pub(crate) fn node_record_from_wire_ann(
     addr: &EndpointAddr,
 ) -> wire::NodeRecord {
     wire::NodeRecord {
+        peer_evidence: Default::default(),
         role: ann.role,
         http_port: ann.http_port,
         version: ann.version.clone().unwrap_or_default(),

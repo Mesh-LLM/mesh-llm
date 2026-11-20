@@ -605,7 +605,7 @@ impl MeshApi {
         // (review defect D4). `node` was cloned out of the lock above, so
         // these calls run without holding `self.inner`.
         let plugin_models = external_inference_models(&plugin_manager).await;
-        let peers = node.peers().await;
+        let peers = node.eligible_peers().await;
         payload.capabilities = Some(derive_capability_flags(
             &node,
             is_client,
@@ -811,7 +811,7 @@ impl MeshApi {
         let target_lookup = self.model_target_lookup().await;
         let mut models = runtime_data::mesh_models(runtime_data_collector.build_model_view(
             runtime_data::ModelViewInput {
-                peers: node.peers().await,
+                peers: node.eligible_peers().await,
                 catalog: node.mesh_catalog_entries().await,
                 served_models: node.models_being_served().await,
                 active_demand: node.active_demand().await,
@@ -998,7 +998,7 @@ impl MeshApi {
         append_external_inference_models(&mut serving_models, &plugin_models);
         let mut hosted_models = node.hosted_models().await;
         append_external_inference_models(&mut hosted_models, &plugin_models);
-        let (peers, connected_peer_ids) = peer_reporting_snapshot(&node).await;
+        let (peers, eligible_peers, connected_peer_ids) = peer_reporting_snapshot(&node).await;
 
         decorate_runtime_payload(
             &mut runtime,
@@ -1007,7 +1007,7 @@ impl MeshApi {
             listeners_ready,
             &local_processes,
             &plugin_models,
-            &peers,
+            &eligible_peers,
         );
         runtime.runtime_events = status::current_runtime_events_summary();
 
@@ -1093,9 +1093,14 @@ async fn peer_reporting_snapshot(
     node: &mesh::Node,
 ) -> (
     Vec<mesh::PeerInfo>,
+    Vec<mesh::PeerInfo>,
     std::collections::HashSet<iroh::EndpointId>,
 ) {
-    (node.peers().await, node.connected_peer_ids().await)
+    (
+        node.peers().await,
+        node.eligible_peers().await,
+        node.connected_peer_ids().await,
+    )
 }
 
 fn decorate_runtime_payload(

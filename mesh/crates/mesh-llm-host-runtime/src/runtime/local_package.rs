@@ -554,7 +554,7 @@ pub(super) async fn collect_split_participant_membership(
     )];
     let mut excluded = Vec::new();
     let blocked_now_ms = crate::network::peer_blocks::now_ms();
-    for peer in node.peers().await {
+    for peer in node.eligible_peers().await {
         if node.peer_blocks.is_blocked(&peer.id, blocked_now_ms) {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
@@ -645,7 +645,7 @@ pub(super) async fn collect_split_participants(
     ];
     let mut excluded = Vec::new();
     let blocked_now_ms = crate::network::peer_blocks::now_ms();
-    for peer in node.peers().await {
+    for peer in node.eligible_peers().await {
         if node.peer_blocks.is_blocked(&peer.id, blocked_now_ms) {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,

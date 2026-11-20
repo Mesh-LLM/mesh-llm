@@ -1023,6 +1023,7 @@ mod tests {
             install_path,
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                peer_evidence_verifier: None,
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),

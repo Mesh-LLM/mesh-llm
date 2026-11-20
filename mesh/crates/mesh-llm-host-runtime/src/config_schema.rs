@@ -1010,6 +1010,7 @@ mod tests {
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
                 manifest: Some(InstalledPluginManifestMetadata {
+                    peer_evidence_verifier: None,
                     openai_exchange_hook: None,
                     config_schema: None,
                     web_ui: None,
@@ -1268,6 +1269,7 @@ mod tests {
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
                 manifest: Some(InstalledPluginManifestMetadata {
+                    peer_evidence_verifier: None,
                     openai_exchange_hook: None,
                     config_schema: Some(InstalledPluginConfigSchema {
                         plugin_name: "blackboard".into(),
@@ -1345,6 +1347,7 @@ mod tests {
             install_path: PathBuf::from(format!("/tmp/{plugin_name}")),
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                peer_evidence_verifier: None,
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: plugin_name.into(),

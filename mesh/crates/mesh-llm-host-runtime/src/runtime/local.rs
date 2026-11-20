@@ -119,6 +119,8 @@ pub(super) enum DedicatedModel {
 
 pub(super) struct LocalRuntimeModelHandle {
     pub(super) port: u16,
+    pub(super) provider_dependencies:
+        Option<Arc<mesh::runtime_admission::RuntimeProviderDependencies>>,
     pub(super) backend: String,
     pub(super) context_length: u32,
     pub(super) slots: usize,
@@ -1211,6 +1213,7 @@ async fn start_local_skippy_model(
         model_name,
         LocalRuntimeModelHandle {
             port: http.port(),
+            provider_dependencies: None,
             backend: "skippy".into(),
             context_length,
             slots: plan.slots,
@@ -1490,6 +1493,7 @@ async fn start_local_package_v2_model(
         model_name,
         LocalRuntimeModelHandle {
             port: http.port(),
+            provider_dependencies: None,
             backend: "skippy".into(),
             context_length,
             slots: plan.slots,

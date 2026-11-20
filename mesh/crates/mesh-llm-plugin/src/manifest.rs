@@ -8,6 +8,7 @@ mod control_behavior;
 mod exchange_tests;
 #[cfg(test)]
 mod exemplar_tests;
+mod packaged;
 mod web_ui;
 
 use self::control_behavior::PackagedPluginControlBehavior;
@@ -39,6 +40,7 @@ pub enum ManifestEntry {
     MeshEventSubscription(proto::MeshEventSubscriptionManifest),
     WebUi(proto::PluginWebUiManifest),
     OpenAiExchangeHook(proto::OpenAiExchangeHookManifest),
+    PeerEvidenceVerifier(proto::PeerEvidenceVerifierManifest),
     PluginStatus(proto::PluginStatusManifest),
     InferenceObservation(proto::InferenceObservationManifest),
 }
@@ -89,6 +91,9 @@ impl PluginManifestBuilder {
             ManifestEntry::WebUi(web_ui) => self.manifest.web_ui = Some(web_ui),
             ManifestEntry::OpenAiExchangeHook(hook) => {
                 self.manifest.openai_exchange_hook = Some(Box::new(hook))
+            }
+            ManifestEntry::PeerEvidenceVerifier(verifier) => {
+                self.manifest.peer_evidence_verifier = Some(verifier)
             }
             ManifestEntry::PluginStatus(status) => self.manifest.plugin_status = Some(status),
             ManifestEntry::InferenceObservation(observation) => {
@@ -377,8 +382,7 @@ where
 }
 
 pub fn package_manifest_json(manifest: &proto::PluginManifest) -> Result<String> {
-    let packaged = PackagedPluginManifest::try_from(manifest)?;
-    Ok(serde_json::to_string_pretty(&packaged)?)
+    packaged::render(manifest)
 }
 
 fn value_schema(kind: proto::PluginConfigValueKind) -> proto::PluginConfigValueSchema {
@@ -388,55 +392,6 @@ fn value_schema(kind: proto::PluginConfigValueKind) -> proto::PluginConfigValueS
         items: None,
         object_properties: Vec::new(),
         allow_additional_properties: false,
-    }
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-struct PackagedPluginManifest {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    config_schema: Option<PackagedPluginConfigSchema>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    openai_exchange_hook: Option<proto::OpenAiExchangeHookManifest>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    web_ui: Option<PackagedPluginWebUi>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    operation_bindings: Vec<proto::OperationBindingManifest>,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    peer_blocks: bool,
-}
-
-impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &proto::PluginManifest) -> Result<Self> {
-        let config_schema = value
-            .config_schema
-            .as_ref()
-            .map(PackagedPluginConfigSchema::try_from)
-            .transpose()?;
-        let web_ui = value
-            .web_ui
-            .as_ref()
-            .map(PackagedPluginWebUi::try_from)
-            .transpose()?;
-
-        if let Some(hook) = &value.openai_exchange_hook {
-            crate::openai_exchange::validate_openai_exchange_manifest(hook)?;
-        }
-        Ok(Self {
-            openai_exchange_hook: value.openai_exchange_hook.as_deref().cloned(),
-            operation_bindings: value
-                .grant_requests
-                .as_deref()
-                .map(|requests| requests.operation_bindings.clone())
-                .unwrap_or_default(),
-            peer_blocks: value
-                .grant_requests
-                .as_deref()
-                .is_some_and(|requests| requests.peer_blocks),
-            config_schema,
-            web_ui,
-        })
     }
 }
 
@@ -1746,7 +1701,7 @@ mod tests {
         ];
 
         let encoded = package_manifest_json(&manifest).expect("manifest json");
-        let decoded: PackagedPluginManifest =
+        let decoded: packaged::PackagedPluginManifest =
             serde_json::from_str(&encoded).expect("manifest should deserialize");
 
         let schema = decoded.config_schema.expect("config schema");
@@ -1834,7 +1789,7 @@ mod tests {
         ];
 
         let encoded = package_manifest_json(&manifest).expect("manifest json");
-        let decoded: PackagedPluginManifest =
+        let decoded: packaged::PackagedPluginManifest =
             serde_json::from_str(&encoded).expect("manifest should deserialize");
         let schema = decoded.config_schema.expect("config schema");
         let setting = &schema.settings[0];
@@ -1895,7 +1850,7 @@ mod tests {
         assert_eq!(web_ui.bundles[0].root_path, "dist");
 
         let encoded = package_manifest_json(&manifest).expect("manifest json");
-        let decoded: PackagedPluginManifest =
+        let decoded: packaged::PackagedPluginManifest =
             serde_json::from_str(&encoded).expect("manifest should deserialize");
         let packaged_web_ui = decoded.web_ui.expect("web_ui json should be present");
 

@@ -789,6 +789,7 @@ mod tests {
         let store = PluginStore::new(temp.path());
         let mut root = installed_plugin(&store, "root");
         root.manifest = Some(mesh_llm_plugin_manager::InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: Some(
                 mesh_llm_plugin_manager::store::InstalledOpenAiExchangeAccess {
                     contract_version: 1,

@@ -152,7 +152,7 @@ impl MeshApi {
         };
         let mut peers = Vec::new();
         let blocked_now_ms = crate::network::peer_blocks::now_ms();
-        for peer in node.peers().await {
+        for peer in node.eligible_peers().await {
             let blocked = node.peer_blocks.is_blocked(&peer.id, blocked_now_ms);
             let stage_path = node.split_stage_path_snapshot(peer.id).await;
             let supported = node

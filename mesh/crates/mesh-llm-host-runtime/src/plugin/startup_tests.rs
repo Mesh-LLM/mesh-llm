@@ -230,6 +230,60 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
 }
 
 #[tokio::test]
+async fn peer_evidence_live_declaration_cannot_fail_open_as_an_optional_plugin() {
+    let mut spec = config::in_process_builtin_spec("optional-verifier");
+    spec.startup.optional = true;
+    let runner: InProcessPluginRunner = Arc::new(|stream| {
+        let manifest = mesh_llm_plugin::plugin_manifest![
+            mesh_llm_plugin::peer_evidence::peer_evidence_verifier("test.proof", "verify"),
+            mesh_llm_plugin::operation::<serde_json::Value>("verify", "Verify")
+        ];
+        let plugin = mesh_llm_plugin::SimplePlugin::new(
+            mesh_llm_plugin::PluginMetadata::new(
+                "optional-verifier",
+                "1.0.0",
+                mesh_llm_plugin::plugin_server_info(
+                    "optional-verifier",
+                    "1.0.0",
+                    "Verifier",
+                    "Verifier",
+                    None::<String>,
+                ),
+            )
+            .with_manifest(manifest),
+        );
+        Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
+            plugin, stream,
+        ))
+    });
+    let (tx, _rx) = mpsc::channel(16);
+    let result = PluginManager::start_with_in_process(
+        &ResolvedPlugins {
+            externals: vec![spec],
+            inactive: vec![],
+        },
+        private_host_mode(),
+        tx,
+        InProcessPlugins::default().with("optional-verifier", runner),
+    )
+    .await;
+    match result {
+        Ok(manager) => {
+            manager.shutdown().await;
+            panic!("declared verifier must fail closed");
+        }
+        Err(error) => {
+            assert!(
+                error
+                    .downcast_ref::<peer_evidence::VerifierStartupFailure>()
+                    .is_some()
+            );
+            assert!(format!("{error:#}").contains("require eager, non-optional startup"));
+        }
+    }
+}
+
+#[tokio::test]
 async fn optional_plugin_load_failure_becomes_inactive_summary() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {

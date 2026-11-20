@@ -149,6 +149,7 @@ pub(super) async fn start_local_speech_model(
         model_name,
         LocalRuntimeModelHandle {
             port: http.port(),
+            provider_dependencies: None,
             backend: "skippy".into(),
             context_length: header.text_ctx,
             slots: lanes,

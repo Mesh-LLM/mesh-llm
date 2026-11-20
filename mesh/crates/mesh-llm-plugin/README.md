@@ -40,3 +40,9 @@ Callbacks already running may finish, but cannot keep a completed invocation ope
 for new callbacks. Legacy plugins retain per-plugin serialization. The new proto3
 fields are optional, and the protocol version and existing field numbers stay
 unchanged.
+
+## Peer evidence verification
+
+A plugin declares `peer_evidence::peer_evidence_verifier(namespace, handler)` alongside its operation handler. Mesh discovers and activates verifiers from running plugins' manifests, with no separate evidence grant. Contract version 1 receives `PeerEvidenceVerificationRequest` and returns `PeerEvidenceVerificationResult` over the existing operation transport. Hosts reject unsupported versions, empty or oversized namespaces/handlers, undeclared handlers and conflicting namespaces. Plugins without a verifier declaration retain their existing behavior.
+
+Obtain node identity from the existing identity API and mesh ID from subscribed mesh snapshots/events. `PublishPeerEvidence` publishes or withdraws the local reference under the manifest's namespace. Mesh supplies authenticated identity and optional signed evidence directly to the declared handler. Missing evidence is `None` (`null` on the wire), and the plugin decides whether that provider qualifies. Mesh caches both acceptance and rejection until `valid_until`, including decisions for missing evidence. Policy-only verdicts may explicitly set `cache_until_restart: true` to omit time expiry; bounded eviction and verifier restart still invalidate them. Mutable external-state checks and transient failures must use finite deadlines. Installing or starting a plugin never creates collateral. Plugins that require this contract must check the `peer_evidence.v1` host capability during initialization.

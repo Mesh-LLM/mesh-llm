@@ -60,7 +60,7 @@ async fn ensure_peer_supports_strict_local_load(
     target_node_id: iroh::EndpointId,
     stage_id: &str,
 ) -> Result<()> {
-    let peers = node.peers().await;
+    let peers = node.eligible_peers().await;
     anyhow::ensure!(
         peer_supports_strict_local_load(node.id(), target_node_id, &peers),
         "stage {stage_id} peer {} no longer advertises content-addressed local GGUF support",
@@ -515,6 +515,7 @@ pub(super) async fn load_split_runtime_generation_inner(
         loaded_name: spec.model_ref.to_string(),
         handle: LocalRuntimeModelHandle {
             port: http.port(),
+            provider_dependencies: Some(split_provider_dependencies(spec)),
             backend: "skippy".into(),
             context_length: spec.ctx_size,
             slots: spec.slots,
@@ -534,6 +535,26 @@ pub(super) async fn load_split_runtime_generation_inner(
         coordinator_rx: None,
         coordinator_task: None,
     })
+}
+
+fn split_provider_dependencies(
+    spec: &SplitGenerationLoadSpec<'_>,
+) -> std::sync::Arc<mesh::runtime_admission::RuntimeProviderDependencies> {
+    std::sync::Arc::new(mesh::runtime_admission::RuntimeProviderDependencies::new(
+        spec.node.clone(),
+        split_stage_peers(&spec.generation.stages, spec.node.id()),
+    ))
+}
+
+pub(super) fn split_stage_peers(
+    stages: &[RuntimeSliceStagePlan],
+    local: iroh::EndpointId,
+) -> Vec<iroh::EndpointId> {
+    stages
+        .iter()
+        .map(|stage| stage.node_id)
+        .filter(|id| *id != local)
+        .collect()
 }
 
 pub(super) async fn stage0_runtime_options(

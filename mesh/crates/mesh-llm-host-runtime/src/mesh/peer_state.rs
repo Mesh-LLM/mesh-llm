@@ -410,20 +410,19 @@ impl Node {
         let my_available = self.available_models.lock().await.clone();
         let my_requested = self.requested_models.lock().await.clone();
         let my_serving_models = self.serving_models.lock().await.clone();
-        let peer_data: Vec<_> = {
-            let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .map(|p| {
-                    (
-                        p.available_models.clone(),
-                        p.requested_models.clone(),
-                        p.serving_models.clone(),
-                    )
-                })
-                .collect()
-        };
+        let mut peers: Vec<_> = self.state.lock().await.peers.values().cloned().collect();
+        self.filter_current_peer_evidence(&mut peers).await;
+        let peer_data: Vec<_> = peers
+            .into_iter()
+            .map(|p| {
+                (
+                    p.models,
+                    p.available_models,
+                    p.requested_models,
+                    p.serving_models,
+                )
+            })
+            .collect();
         let mut all = std::collections::HashSet::new();
         for m in &my_available {
             all.insert(m.clone());
@@ -434,7 +433,8 @@ impl Node {
         for m in &my_serving_models {
             all.insert(m.clone());
         }
-        for (avail, req, serving_models) in &peer_data {
+        for (catalog, avail, req, serving_models) in &peer_data {
+            all.extend(catalog.iter().cloned());
             for m in avail {
                 all.insert(m.clone());
             }
@@ -454,14 +454,12 @@ impl Node {
         let names = self.mesh_catalog().await;
         let my_available = self.available_models.lock().await.clone();
         let my_served_descriptors = self.served_model_descriptors.lock().await.clone();
-        let peer_descriptors: Vec<_> = {
-            let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .map(|p| p.served_model_descriptors.clone())
-                .collect()
-        };
+        let mut peers: Vec<_> = self.state.lock().await.peers.values().cloned().collect();
+        self.filter_current_peer_evidence(&mut peers).await;
+        let peer_descriptors: Vec<_> = peers
+            .into_iter()
+            .map(|p| p.served_model_descriptors)
+            .collect();
 
         let mut by_name: HashMap<String, ServedModelDescriptor> = HashMap::new();
         for descriptor in infer_available_model_descriptors(&my_available)
@@ -496,6 +494,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect()
         };
+        self.filter_current_peer_evidence(&mut peer_data).await;
         retain_private_scoped(&mut peer_data);
         self.filter_model_requirements(&mut peer_data).await;
         let mut served = std::collections::HashSet::new();
@@ -589,15 +588,12 @@ impl Node {
     /// Peers that accept inference only as spillover capacity.
     pub(crate) async fn deprioritized_peer_ids(&self) -> std::collections::HashSet<EndpointId> {
         use crate::proto::node::InferenceAdmissionState;
-        self.state
-            .lock()
+        self.eligible_peers()
             .await
-            .peers
-            .values()
+            .into_iter()
             .filter(|peer| {
-                peer.is_admitted()
-                    && peer.inference_admission_state
-                        == Some(InferenceAdmissionState::AcceptingDeprioritized)
+                peer.inference_admission_state
+                    == Some(InferenceAdmissionState::AcceptingDeprioritized)
             })
             .map(|peer| peer.id)
             .collect()
@@ -671,16 +667,11 @@ impl Node {
     pub async fn routing_table(&self) -> RoutingTable {
         let my_hosted_models = self.hosted_models.lock().await.clone();
         let my_role = self.role.lock().await.clone();
-        let mut peer_data: Vec<_> = {
+        let mut peer_data = self.routable_peers().await;
+        {
             let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .filter(|peer| is_routing_eligible(peer, &state))
-                .cloned()
-                .collect()
-        };
-        self.filter_model_requirements(&mut peer_data).await;
+            peer_data.retain(|peer| is_routing_eligible(peer, &state));
+        }
         let mut hosts = Vec::new();
 
         // Include self if we're serving through the local API proxy
@@ -721,6 +712,7 @@ impl Node {
         self.local_runtime_capacity_bytes
     }
 
+    /// Admitted membership, independent of provider eligibility.
     pub async fn peers(&self) -> Vec<PeerInfo> {
         self.state
             .lock()
@@ -732,11 +724,32 @@ impl Node {
             .collect()
     }
 
-    /// Admitted peers minus the ones the operator stopped routing to. Every
-    /// path that picks a peer to send a request to reads this, not `peers()`.
+    pub(crate) async fn eligible_peers(&self) -> Vec<PeerInfo> {
+        let mut peers = self.peers().await;
+        self.filter_current_peer_evidence(&mut peers).await;
+        peers
+    }
+
+    pub(crate) async fn eligible_peer(&self, id: EndpointId) -> Option<PeerInfo> {
+        let mut peers = self
+            .state
+            .lock()
+            .await
+            .peers
+            .get(&id)
+            .filter(|peer| peer.is_admitted())
+            .cloned()
+            .into_iter()
+            .collect();
+        self.filter_current_peer_evidence(&mut peers).await;
+        peers.pop()
+    }
+
+    /// Eligible admitted peers after operator blocks, private scope and model
+    /// channel requirements have been applied.
     pub(crate) async fn routable_peers(&self) -> Vec<PeerInfo> {
         let now_ms = crate::network::peer_blocks::now_ms();
-        let mut peers = self.peers().await;
+        let mut peers = self.eligible_peers().await;
         peers.retain(|peer| !self.peer_blocks.is_blocked(&peer.id, now_ms));
         retain_private_scoped(&mut peers);
         self.filter_model_requirements(&mut peers).await;
@@ -744,6 +757,15 @@ impl Node {
     }
 
     pub(crate) async fn connection_to_peer(&self, peer_id: EndpointId) -> Result<Connection> {
+        let conn = Box::pin(self.admitted_connection_to_peer(peer_id)).await?;
+        self.require_current_peer_evidence(peer_id).await?;
+        Ok(conn)
+    }
+
+    pub(super) async fn admitted_connection_to_peer(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<Connection> {
         let state = self.state.lock().await;
         match state.connections.get(&peer_id).cloned() {
             Some(conn) if state.peers.get(&peer_id).is_some_and(PeerInfo::is_admitted) => Ok(conn),
@@ -900,10 +922,38 @@ impl Node {
         name: &str,
         major: u32,
     ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        self.open_mesh_subprotocol_stream_with_eligibility(peer_id, name, major, true)
+            .await
+    }
+
+    pub(super) async fn open_mesh_control_subprotocol_stream(
+        &self,
+        peer_id: EndpointId,
+        name: &str,
+        major: u32,
+    ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        self.open_mesh_subprotocol_stream_with_eligibility(peer_id, name, major, false)
+            .await
+    }
+
+    async fn open_mesh_subprotocol_stream_with_eligibility(
+        &self,
+        peer_id: EndpointId,
+        name: &str,
+        major: u32,
+        require_eligibility: bool,
+    ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
         use prost::Message as _;
 
-        let conn = self.connection_to_peer(peer_id).await?;
+        let conn = if require_eligibility {
+            self.connection_to_peer(peer_id).await?
+        } else {
+            self.admitted_connection_to_peer(peer_id).await?
+        };
         let (mut send, recv) = conn.open_bi().await?;
+        if require_eligibility {
+            self.require_current_peer_evidence(peer_id).await?;
+        }
         send.write_all(&[STREAM_SUBPROTOCOL]).await?;
         let open = crate::proto::node::MeshSubprotocolOpen {
             r#gen: NODE_PROTOCOL_GENERATION,
@@ -933,6 +983,22 @@ impl Node {
     }
 
     pub(crate) async fn stage_connection_to_peer(&self, peer_id: EndpointId) -> Result<Connection> {
+        let needs_gossip = self
+            .plugin_manager()
+            .await
+            .is_some_and(|manager| manager.peer_evidence().has_verifiers())
+            && self
+                .state
+                .lock()
+                .await
+                .peers
+                .get(&peer_id)
+                .is_some_and(|peer| !peer.is_admitted());
+        if needs_gossip {
+            // The dedicated stage ALPN carries no membership handshake.
+            Box::pin(self.admitted_connection_to_peer(peer_id)).await?;
+        }
+        self.require_current_peer_evidence(peer_id).await?;
         let addr = {
             let state = self.state.lock().await;
             state.peers.get(&peer_id).map(|p| p.addr.clone())
@@ -953,6 +1019,7 @@ impl Node {
                 peer_id.fmt_short()
             )
         })?;
+        self.require_current_peer_evidence(peer_id).await?;
         Ok(conn)
     }
 }

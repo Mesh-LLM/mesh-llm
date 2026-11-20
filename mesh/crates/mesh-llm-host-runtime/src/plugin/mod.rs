@@ -14,6 +14,7 @@ mod identity_registry;
 mod identity_transport;
 pub(crate) mod inference_routing;
 mod model_assets;
+pub(crate) mod peer_evidence;
 #[cfg(test)]
 pub(crate) mod selected_attempt_test_support;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
@@ -137,6 +138,7 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    peer_evidence: peer_evidence::EvidenceRegistry,
     operation_bindings: operation_bindings::BindingRegistry,
     capability_registration: capability_registration::CapabilityRegistration,
     pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
@@ -235,8 +237,18 @@ impl PluginManager {
             &in_process,
         )
         .await?;
+        let peer_evidence = match peer_evidence::EvidenceRegistry::from_plugins(&plugins).await {
+            Ok(registry) => registry,
+            Err(error) => {
+                for plugin in plugins.values() {
+                    plugin.shutdown().await;
+                }
+                return Err(error);
+            }
+        };
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                peer_evidence,
                 operation_bindings,
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
@@ -350,7 +362,11 @@ impl PluginManager {
                     plugins.insert(spec.name.clone(), plugin);
                 }
                 Err(error) => {
-                    if spec.startup.optional {
+                    if spec.startup.optional
+                        && error
+                            .downcast_ref::<peer_evidence::VerifierStartupFailure>()
+                            .is_none()
+                    {
                         failed.push(Self::plugin_load_failure_summary(spec, &error));
                     } else {
                         for plugin in plugins.values() {
@@ -469,6 +485,7 @@ impl PluginManager {
                 operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
+                peer_evidence: Default::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
                 exchange_health: Arc::default(),
@@ -498,6 +515,7 @@ impl PluginManager {
                 operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
+                peer_evidence: Default::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
                 exchange_health: Arc::default(),
@@ -727,6 +745,7 @@ impl PluginManager {
     pub async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         for plugin in self.inner.plugins.values() {
+            self.inner.peer_evidence.clear_plugin(plugin.name());
             plugin.shutdown().await;
         }
         self.inner.endpoint_health.lock().await.clear();
@@ -1337,6 +1356,10 @@ impl PluginManager {
                 Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
             )
             .await?;
+        anyhow::ensure!(
+            !response.is_error,
+            "Service '{service_name}' from plugin '{plugin_name}' returned an error"
+        );
         serde_json::from_str(&response.output_json).with_context(|| {
             format!(
                 "Decode service response '{}' from plugin '{}'",
@@ -1506,15 +1529,28 @@ impl PluginManager {
     /// does not keep it from the plugins after it; the first error is
     /// returned once all were tried.
     pub async fn broadcast_mesh_event(&self, event: proto::MeshEvent) -> Result<()> {
+        let sends = self.inner.plugins.iter().map(|(name, plugin)| {
+            let event = &event;
+            async move {
+                if !self.plugin_subscribes_mesh_event(name, event.kind).await {
+                    return Ok(());
+                }
+                plugin.send_mesh_event(event.clone()).await.inspect_err(|error| {
+                    tracing::debug!(plugin = %name, "Plugin did not take a mesh event: {error:#}");
+                })
+            }
+        });
+        if event.kind == proto::mesh_event::Kind::MeshIdUpdated as i32 {
+            // A delivery may be holding up a restart snapshot. Slow plugins
+            // should use their send deadlines concurrently.
+            return futures_util::future::join_all(sends)
+                .await
+                .into_iter()
+                .collect();
+        }
         let mut result = Ok(());
-        for (name, plugin) in &self.inner.plugins {
-            if !self.plugin_subscribes_mesh_event(name, event.kind).await {
-                continue;
-            }
-            if let Err(error) = plugin.send_mesh_event(event.clone()).await {
-                tracing::debug!(plugin = %name, "Plugin did not take a mesh event: {error:#}");
-                result = result.and(Err(error));
-            }
+        for send in sends {
+            result = result.and(send.await);
         }
         result
     }

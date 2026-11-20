@@ -120,6 +120,7 @@ impl MeshApi {
         let local_role = node.role().await;
         let local_vram_bytes = node.vram_bytes();
         let peers = node.peers().await;
+        let eligible_peers = node.eligible_peers().await;
         let catalog = node.mesh_catalog_entries().await;
         let active_demand = node.active_demand().await;
         let requested_models = node.requested_models().await;
@@ -131,6 +132,7 @@ impl MeshApi {
             local_display_names,
             node_explicit_model_interests,
             peers,
+            eligible_peers,
             catalog,
             active_demand,
             requested_models,
@@ -147,6 +149,7 @@ struct ModelTargetSource {
     local_display_names: HashMap<String, String>,
     node_explicit_model_interests: Vec<String>,
     peers: Vec<mesh::PeerInfo>,
+    eligible_peers: Vec<mesh::PeerInfo>,
     catalog: Vec<mesh::MeshCatalogEntry>,
     active_demand: HashMap<String, mesh::ModelDemand>,
     requested_models: Vec<String>,
@@ -160,7 +163,7 @@ fn build_model_target_lookup(source: ModelTargetSource) -> ModelTargetLookup {
     let mut index = build_catalog_target_index(&source.catalog);
     index.local_display_name_by_ref = source.local_display_names;
     let serving_count_by_ref =
-        collect_serving_counts(&source.my_hosted_models, &source.peers, &index);
+        collect_serving_counts(&source.my_hosted_models, &source.eligible_peers, &index);
     let mut targets = HashMap::<ModelTargetKey, ModelTargetAccumulator>::new();
 
     apply_explicit_interest_signals(
@@ -181,7 +184,7 @@ fn build_model_target_lookup(source: ModelTargetSource) -> ModelTargetLookup {
         targets,
         &source.local_role,
         source.local_vram_bytes,
-        &source.peers,
+        &source.eligible_peers,
         &size_lookup,
     );
     build_target_lookup(payloads)
@@ -597,6 +600,7 @@ mod tests {
             )]),
             node_explicit_model_interests: Vec::new(),
             peers: Vec::new(),
+            eligible_peers: Vec::new(),
             catalog: Vec::new(),
             active_demand: HashMap::new(),
             requested_models: Vec::new(),

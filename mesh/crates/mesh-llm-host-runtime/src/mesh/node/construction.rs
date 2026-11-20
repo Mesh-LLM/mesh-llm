@@ -160,6 +160,7 @@ impl Node {
             full_model_only: identity.is_some(),
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_id_changed: Arc::new(tokio::sync::watch::channel(()).0),
+            mesh_id_event_delivery: Arc::default(),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
             gossip_verification: Arc::default(),

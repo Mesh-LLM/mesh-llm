@@ -29,7 +29,11 @@ async fn install_replacement(
     authenticated: bool,
 ) -> mpsc::Receiver<proto::Envelope> {
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
+    plugin
+        .active_generation
+        .store(0, std::sync::atomic::Ordering::Release);
     *plugin.runtime.lock().await = Some(PluginRuntime {
+        active_generation: plugin.active_generation.clone(),
         managed_models: Vec::new(),
         generation: 8,
         started: true,
@@ -63,6 +67,49 @@ fn initialization(handler: &str, request_body: bool) -> proto::InitializeRespons
         }),
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn peer_evidence_authority_waits_for_current_generation_initialization() {
+    let plugin = observer();
+    *plugin.manifest.lock().await = initialization("old", true).manifest;
+    let _outbound = install_replacement(&plugin, true).await;
+    let init = initialization("new", false);
+    assert_eq!(
+        plugin
+            .active_generation
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert!(
+        plugin
+            .publish_initialized_state(7, &init, ServerConfig::default())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        plugin
+            .active_generation
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
+    plugin
+        .publish_initialized_state(8, &init, ServerConfig::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        plugin
+            .active_generation
+            .load(std::sync::atomic::Ordering::Acquire),
+        8
+    );
+    plugin.shutdown().await;
+    assert_eq!(
+        plugin
+            .active_generation
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
 }
 
 #[tokio::test]

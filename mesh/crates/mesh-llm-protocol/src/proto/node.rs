@@ -84,6 +84,12 @@ pub struct HopObservation {
 /// per-connection proofs) is not part of the record either.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NodeRecord {
+    /// Namespaced opaque references, authenticated by the origin's signature.
+    #[prost(btree_map = "string, bytes", tag = "27")]
+    pub peer_evidence: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::vec::Vec<u8>,
+    >,
     #[prost(enumeration = "NodeRole", tag = "1")]
     pub role: i32,
     #[prost(uint32, optional, tag = "2")]

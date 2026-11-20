@@ -571,6 +571,10 @@ pub(crate) enum InstanceLifecycleError {
 pub(crate) enum InstanceAdmissionError {
     #[error("runtime instance is not accepting work while {state:?}")]
     NotAccepting { state: InstanceLifecycleState },
+    #[error("runtime instance depends on a provider without current eligibility")]
+    ProviderIneligible,
+    #[error("runtime instance has been retired")]
+    Retired,
 }
 
 // ── Drain Coordinator ────────────────────────────────────────────────────────

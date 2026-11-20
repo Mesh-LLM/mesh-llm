@@ -23,6 +23,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         install_path: store_root.join("installs").join("capsules"),
         enabled,
         manifest: Some(InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: None,
             config_schema: None,
             web_ui: None,
@@ -69,6 +70,118 @@ fn builtin_off(name: &str) -> PluginConfigEntry {
         enabled: Some(false),
         ..capsules_entry(None)
     }
+}
+
+#[test]
+#[serial_test::serial]
+fn peer_evidence_packages_require_eager_startup_and_a_matching_live_contract() {
+    let store = tempfile::TempDir::new().unwrap();
+    with_plugin_dir(store.path(), || {
+        let mut metadata = installed_capsules(store.path(), true);
+        metadata.manifest.as_mut().unwrap().peer_evidence_verifier = Some(
+            mesh_llm_plugin_manager::store::InstalledPeerEvidenceVerifier {
+                contract_version: 1,
+                namespace: "test.proof".into(),
+                handler: "verify".into(),
+            },
+        );
+        PluginStore::new(store.path()).save(&metadata).unwrap();
+        let mut entry = capsules_entry(None);
+        entry.startup.optional = true;
+        entry.startup.lazy_start = true;
+        let ConfiguredExternalPlugin::Active(mut spec) =
+            configured_external_plugin_spec(&entry).unwrap()
+        else {
+            panic!("verifier must be enabled")
+        };
+        assert!(!spec.startup.optional && !spec.startup.lazy_start);
+        let manifest = mesh_llm_plugin::plugin_manifest![
+            mesh_llm_plugin::peer_evidence::peer_evidence_verifier("test.proof", "verify"),
+            mesh_llm_plugin::operation::<serde_json::Value>("verify", "Verify")
+        ];
+        crate::plugin::peer_evidence::validate_startup(&spec, Some(&manifest)).unwrap();
+        assert!(crate::plugin::peer_evidence::validate_startup(&spec, None).is_err());
+        let mut changed = manifest.clone();
+        changed.peer_evidence_verifier.as_mut().unwrap().namespace = "other.proof".into();
+        assert!(crate::plugin::peer_evidence::validate_startup(&spec, Some(&changed)).is_err());
+        spec.startup.optional = true;
+        assert!(crate::plugin::peer_evidence::validate_startup(&spec, Some(&manifest)).is_err());
+        spec.startup.optional = false;
+        spec.startup.lazy_start = true;
+        assert!(crate::plugin::peer_evidence::validate_startup(&spec, Some(&manifest)).is_err());
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn peer_evidence_auto_discovery_fails_closed_for_missing_or_unreadable_packages() {
+    let store = tempfile::TempDir::new().unwrap();
+    with_plugin_dir(store.path(), || {
+        let mut metadata = installed_capsules(store.path(), true);
+        metadata.manifest.as_mut().unwrap().peer_evidence_verifier = Some(
+            mesh_llm_plugin_manager::store::InstalledPeerEvidenceVerifier {
+                contract_version: 1,
+                namespace: "test.proof".into(),
+                handler: "verify".into(),
+            },
+        );
+        PluginStore::new(store.path()).save(&metadata).unwrap();
+        let config = MeshConfig {
+            plugins: vec![builtin_off(BLOBSTORE_PLUGIN_ID)],
+            ..MeshConfig::default()
+        };
+        let mode = PluginHostMode {
+            mesh_visibility: MeshVisibility::Private,
+        };
+        let resolved = resolve_plugins(&config, mode).unwrap();
+        let spec = resolved
+            .externals
+            .iter()
+            .find(|spec| spec.name == metadata.name)
+            .unwrap();
+        assert!(!spec.startup.optional && !spec.startup.lazy_start);
+        let manifest = mesh_llm_plugin::plugin_manifest![
+            mesh_llm_plugin::peer_evidence::peer_evidence_verifier("test.proof", "verify"),
+            mesh_llm_plugin::operation::<serde_json::Value>("verify", "Verify")
+        ];
+        crate::plugin::peer_evidence::validate_startup(spec, Some(&manifest)).unwrap();
+        std::fs::remove_file(metadata.executable_path()).unwrap();
+        let resolved = resolve_plugins(&config, mode).unwrap();
+        assert!(
+            resolved
+                .externals
+                .iter()
+                .any(|spec| spec.name == metadata.name && !spec.startup.optional)
+        );
+        assert!(
+            resolved
+                .inactive
+                .iter()
+                .all(|summary| summary.name != metadata.name)
+        );
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (tx, _rx) = mpsc::channel(1);
+                match PluginManager::start(&resolved, mode, tx).await {
+                    Ok(manager) => {
+                        manager.shutdown().await;
+                        panic!("missing verifier must fail startup");
+                    }
+                    Err(error) => assert!(
+                        format!("{error:#}").contains("Required plugin 'capsules' failed to start")
+                    ),
+                }
+            });
+        std::fs::write(metadata.executable_path(), b"").unwrap();
+        let unrelated = store.path().join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::write(unrelated.join("plugin-install.json"), b"{").unwrap();
+        let error = resolve_plugins(&config, mode).expect_err("incomplete store must fail closed");
+        assert!(format!("{error:#}").contains("parse plugin metadata"));
+    });
 }
 
 #[test]

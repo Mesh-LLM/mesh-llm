@@ -171,6 +171,7 @@ impl PluginIdentitySnapshot<'_> {
 
 pub(crate) fn is_identity_method(method: &str) -> bool {
     matches!(method, "ReadIdentityBundle" | "DelegatePluginSigningKey")
+        || super::peer_evidence::is_method(method)
 }
 
 /// This broker receives the connection's authenticated name, never the envelope

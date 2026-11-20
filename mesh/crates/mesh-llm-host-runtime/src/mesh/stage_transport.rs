@@ -1017,6 +1017,12 @@ impl Node {
         use prost::Message as _;
 
         let timeout = Self::stage_control_request_timeout(&request);
+        let requires_eligibility = !matches!(
+            &request,
+            crate::inference::skippy::StageControlRequest::Stop(_)
+                | crate::inference::skippy::StageControlRequest::Status(_)
+                | crate::inference::skippy::StageControlRequest::Inventory(_)
+        );
         if let crate::inference::skippy::StageControlRequest::Load(load)
         | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
         {
@@ -1025,9 +1031,21 @@ impl Node {
         let frame = stage_control_request_to_proto(self.endpoint.id(), request)?;
         let response = tokio::time::timeout(timeout, async {
             self.ensure_current_stage_control_peer(peer_id).await?;
-            let (mut send, mut recv) = self
-                .open_skippy_stage_mesh_stream(peer_id, skippy_protocol::STAGE_STREAM_CONTROL)
-                .await?;
+            let (mut send, mut recv) = if requires_eligibility {
+                self.open_skippy_stage_mesh_stream(peer_id, skippy_protocol::STAGE_STREAM_CONTROL)
+                    .await?
+            } else {
+                let (mut send, recv) = self
+                    .open_mesh_control_subprotocol_stream(
+                        peer_id,
+                        skippy_protocol::STAGE_SUBPROTOCOL_NAME,
+                        skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+                    )
+                    .await?;
+                send.write_all(&[skippy_protocol::STAGE_STREAM_CONTROL])
+                    .await?;
+                (send, recv)
+            };
             write_len_prefixed(&mut send, &frame.encode_to_vec()).await?;
             let buf = read_len_prefixed(&mut recv).await?;
             let response =
@@ -1098,6 +1116,7 @@ impl Node {
             .map_err(|e| anyhow::anyhow!("StageTransportOpen validation error: {e}"))?;
         let conn = self.stage_connection_to_peer(peer_id).await?;
         let (mut send, recv) = conn.open_bi().await?;
+        self.require_current_peer_evidence(peer_id).await?;
         send.write_all(&[skippy_protocol::STAGE_STREAM_TRANSPORT])
             .await?;
         write_len_prefixed(&mut send, &open.encode_to_vec()).await?;

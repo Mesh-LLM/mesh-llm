@@ -5,7 +5,7 @@ Plugin package management primitives for Mesh LLM.
 This crate owns install-reference parsing, platform target naming, native
 release asset selection, validation of packaged plugin manifest metadata
 (including local web UI bundle roots and entry scripts), and local
-installed-plugin metadata. Catalog/GitHub installs use `install_plugin`;
+installed-plugin metadata. Packaged peer-evidence verifier declarations are retained so the host can establish startup policy before launching plugins. Catalog/GitHub installs use `install_plugin`;
 authoring and release validation can pass a `.tar.gz` or `.zip` directly to
 `install_plugin_archive`, which uses the same extraction and package-validation
 boundary. It deliberately

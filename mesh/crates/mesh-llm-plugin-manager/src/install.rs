@@ -545,6 +545,7 @@ mod tests {
 
     fn packaged_manifest_fixture() -> Vec<u8> {
         serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: None,
             operation_bindings: Vec::new(),
             peer_blocks: false,

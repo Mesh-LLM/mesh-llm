@@ -324,8 +324,10 @@ pub(super) async fn shutdown_runtime_loaded_models(
                 let _ = record.transition_to_unloading();
             }
         }
-        node.unregister_runtime_instance_lifecycle(handle.port);
+        let port = handle.port;
+        let retired = node.retire_runtime_instance_lifecycle(port, &lifecycle);
         handle.shutdown().await;
+        node.unregister_retired_runtime_instance(port, retired.as_ref());
         let _ = lifecycle
             .lock()
             .await

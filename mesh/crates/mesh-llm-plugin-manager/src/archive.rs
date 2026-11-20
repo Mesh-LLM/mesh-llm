@@ -492,6 +492,28 @@ mod tests {
         InstalledPluginValueSchema, InstalledPluginVisibility,
     };
 
+    #[test]
+    fn peer_evidence_declaration_survives_packaged_and_installed_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let declaration =
+            serde_json::json!({"contract_version":1,"namespace":"test.proof","handler":"verify"});
+        fs::write(
+            root.path().join(PACKAGED_MANIFEST_FILE),
+            serde_json::to_vec(&serde_json::json!({"peer_evidence_verifier":declaration})).unwrap(),
+        )
+        .unwrap();
+        let manifest = load_packaged_manifest(root.path(), "fixture")
+            .unwrap()
+            .unwrap();
+        let stored = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(stored["peer_evidence_verifier"], declaration);
+        let restored: InstalledPluginManifestMetadata = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            restored.peer_evidence_verifier,
+            manifest.peer_evidence_verifier
+        );
+    }
+
     fn write_tar_gz(archive_path: &Path, plugin_name: &str, files: &[(&str, &[u8])]) -> Result<()> {
         let archive_file = fs::File::create(archive_path)?;
         let encoder = GzEncoder::new(archive_file, Compression::default());
@@ -669,6 +691,7 @@ mod tests {
         let archive_path = temp.path().join("demo.tar.gz");
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: None,
             operation_bindings: Vec::new(),
             peer_blocks: false,
@@ -731,6 +754,7 @@ mod tests {
         let archive_path = temp.path().join("demo.tar.gz");
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: None,
             operation_bindings: Vec::new(),
             peer_blocks: false,

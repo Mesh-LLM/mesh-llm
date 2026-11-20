@@ -467,10 +467,7 @@ pub(super) async fn startup_unregister_runtime_instance(
     ctx: &StartupLoopContext<'_>,
     model_name: &str,
 ) -> bool {
-    let port = ctx.lifecycle_port.swap(0, Ordering::AcqRel);
-    if port != 0 {
-        ctx.node.unregister_runtime_instance_lifecycle(port);
-    }
+    ctx.lifecycle_port.store(0, Ordering::Release);
     unregister_runtime_instance(
         ctx.runtime_instance_registry,
         ctx.node,
@@ -503,19 +500,18 @@ pub(super) async fn startup_register_loaded_runtime(
     loaded_name: &str,
     handle: &LocalRuntimeModelHandle,
 ) -> api::RuntimeProcessPayload {
-    let previous_port = ctx.lifecycle_port.swap(handle.port, Ordering::AcqRel);
-    if previous_port != 0 && previous_port != handle.port {
-        ctx.node
-            .unregister_runtime_instance_lifecycle(previous_port);
-    }
+    ctx.lifecycle_port.store(handle.port, Ordering::Release);
     {
         let mut lifecycle = ctx.lifecycle.lock().await;
         lifecycle
             .transition_to(InstanceLifecycleState::Serving)
             .expect("managed runtime lifecycle must reach serving from warming");
     }
-    ctx.node
-        .register_runtime_instance_lifecycle(handle.port, ctx.lifecycle.clone());
+    ctx.node.register_runtime_instance_admission(
+        handle.port,
+        ctx.lifecycle.clone(),
+        handle.provider_dependencies.as_ref(),
+    );
     // Publish Skippy's render-only reasoning-control observations for this model,
     // so `/mesh/v1/models` can attach them to the entry this node serves. The
     // on-demand lifecycle does this in `finish_runtime_model_load`; the startup
