@@ -9,6 +9,8 @@ fn main() {
         std::process::exit(code);
     }
 
+    // SAFETY: no other thread exists yet.
+    unsafe { mesh_llm_system::native_runtime_install::adopt_mesh_native_runtime_env() };
     mesh_llm_host_runtime::configure_hf_tls_provider();
     prepare_model_download_directories();
     configure_metal_pipeline_cache();

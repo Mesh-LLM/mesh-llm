@@ -13,32 +13,68 @@ pub fn current_runtime_release() -> &'static str {
     skippy_native_runtime::runtime_release_version()
 }
 
-/// Mesh release-channel policy supplied to the runtime installer.
-pub fn mesh_native_runtime_catalog() -> NativeRuntimeCatalog {
-    mesh_catalog_for(
-        mesh_llm_build_info::BUILD_VERSION,
-        CURRENT_MESH_VERSION,
-        current_runtime_release(),
-    )
-}
+/// Skippy release this build is pinned to. Skippy publishes the native
+/// runtimes; Mesh only downloads them. Must match the Skippy revision in
+/// `Cargo.lock` (checked by a test below).
+pub const SKIPPY_RELEASE: &str = "0.80.0";
 
-fn mesh_catalog_for(build: &str, product: &str, runtime: &str) -> NativeRuntimeCatalog {
-    publication_catalog(build, product, runtime)
-}
+/// Where Skippy publishes its releases.
+pub const SKIPPY_RELEASES_URL: &str = "https://github.com/Mesh-LLM/skippy/releases";
 
-pub fn default_release_manifest_url(mesh_version: &str) -> String {
-    format!(
-        "https://github.com/Mesh-LLM/mesh-llm/releases/download/v{mesh_version}/native-runtimes.json"
-    )
-}
+/// Mesh names for the runtime locations, kept for existing installs. Skippy
+/// reads its own `SKIPPY_NATIVE_RUNTIME_*` names.
+const MESH_RUNTIME_ENV_ALIASES: [(&str, &str); 3] = [
+    (
+        "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+        NATIVE_RUNTIME_BUNDLE_DIR_ENV,
+    ),
+    (
+        "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
+        NATIVE_RUNTIME_CACHE_DIR_ENV,
+    ),
+    (
+        "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL",
+        NATIVE_RUNTIME_MANIFEST_URL_ENV,
+    ),
+];
 
-pub fn default_manifest_url(build_version: &str, release_version: &str) -> String {
-    if mesh_llm_build_info::is_sha_build(build_version) {
-        "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
-            .to_string()
-    } else {
-        default_release_manifest_url(release_version)
+/// Pass the `MESH_LLM_NATIVE_RUNTIME_*` settings on to Skippy under its own
+/// names. A `SKIPPY_*` value that is already set wins.
+///
+/// # Safety
+/// Mutates the process environment: call before any other thread exists.
+pub unsafe fn adopt_mesh_native_runtime_env() {
+    for (mesh, skippy) in MESH_RUNTIME_ENV_ALIASES {
+        if std::env::var_os(skippy).is_none()
+            && let Some(value) = std::env::var_os(mesh)
+        {
+            // SAFETY: single-threaded per this function's contract.
+            unsafe { std::env::set_var(skippy, value) };
+        }
     }
+}
+
+/// Runtime download location supplied to the runtime installer: the pinned
+/// Skippy release, whatever the Mesh version or build.
+pub fn mesh_native_runtime_catalog() -> NativeRuntimeCatalog {
+    NativeRuntimeCatalog {
+        release_tags: [(
+            current_runtime_release().to_string(),
+            format!("v{SKIPPY_RELEASE}"),
+        )]
+        .into(),
+        releases_url: SKIPPY_RELEASES_URL.to_string(),
+        rolling_release: None,
+    }
+}
+
+pub fn default_release_manifest_url(skippy_release: &str) -> String {
+    format!("{SKIPPY_RELEASES_URL}/download/v{skippy_release}/native-runtimes.json")
+}
+
+/// The runtime manifest this build downloads from by default.
+pub fn default_manifest_url() -> String {
+    mesh_native_runtime_catalog().manifest_url(current_runtime_release())
 }
 
 /// Options for the required Skippy release and Mesh publication channel.
@@ -87,58 +123,42 @@ pub fn discover_local_native_runtimes_with_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn default_manifest_url_uses_release_download_for_release_builds() {
+    fn runtimes_download_from_the_pinned_skippy_release() {
         assert_eq!(
-            default_manifest_url("0.68.0", "0.68.0"),
-            "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.68.0/native-runtimes.json"
+            default_manifest_url(),
+            format!(
+                "https://github.com/Mesh-LLM/skippy/releases/download/v{SKIPPY_RELEASE}/native-runtimes.json"
+            )
+        );
+        assert_eq!(
+            default_manifest_url(),
+            default_release_manifest_url(SKIPPY_RELEASE)
         );
     }
 
     #[test]
-    fn default_manifest_url_uses_latest_download_for_sha_builds() {
+    fn another_runtime_release_uses_its_own_tag() {
         assert_eq!(
-            default_manifest_url("0.68.0+gAB131C", "0.68.0"),
-            "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
+            mesh_native_runtime_catalog().manifest_url("7.8.9"),
+            default_release_manifest_url("7.8.9")
         );
-        assert_eq!(
-            default_manifest_url("0.68.0+gAB131C.dirty", "0.68.0"),
-            "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
+    }
+
+    #[test]
+    fn pinned_skippy_release_matches_the_lockfile() {
+        let lock = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../Cargo.lock"));
+        let entry = format!("name = \"skippy-native-runtime\"\nversion = \"{SKIPPY_RELEASE}\"\n");
+        assert!(
+            lock.replace("\r\n", "\n").contains(&entry),
+            "SKIPPY_RELEASE must equal the Skippy version in Cargo.lock"
         );
     }
 
     #[test]
     fn current_mesh_version_uses_release_version() {
         assert_eq!(CURRENT_MESH_VERSION, mesh_llm_build_info::RELEASE_VERSION);
-    }
-
-    #[test]
-    fn runtime_release_maps_to_product_publication_without_identity_coupling() {
-        for (product, runtime) in [("0.76.1", "0.76.1"), ("99.0.0", "1.2.3")] {
-            let catalog = mesh_catalog_for(product, product, runtime);
-            assert_eq!(
-                catalog.manifest_url(runtime),
-                default_release_manifest_url(product)
-            );
-            assert_eq!(
-                catalog.manifest_url("7.8.9"),
-                default_release_manifest_url("7.8.9")
-            );
-            for build in [
-                format!("{product}+gabcdef"),
-                format!("{product}+gabcdef.dirty"),
-            ] {
-                let rolling = mesh_catalog_for(&build, product, runtime);
-                assert_eq!(
-                    rolling.manifest_url(runtime),
-                    default_manifest_url(&build, product)
-                );
-                assert_eq!(
-                    rolling.manifest_url("7.8.9"),
-                    default_release_manifest_url("7.8.9")
-                );
-            }
-        }
     }
 
     #[test]
