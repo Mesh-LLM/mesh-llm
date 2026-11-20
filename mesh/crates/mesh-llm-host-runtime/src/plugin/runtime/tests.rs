@@ -41,6 +41,7 @@ fn installed_metadata_with_web_ui(
         install_path,
         enabled: true,
         manifest: Some(InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: None,
             config_schema: None,
             web_ui: Some(InstalledPluginWebUiMetadata {

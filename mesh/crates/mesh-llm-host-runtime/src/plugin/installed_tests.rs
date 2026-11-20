@@ -23,6 +23,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         install_path: store_root.join("installs").join("capsules"),
         enabled,
         manifest: Some(InstalledPluginManifestMetadata {
+            peer_evidence_verifier: None,
             openai_exchange_hook: None,
             config_schema: None,
             web_ui: None,

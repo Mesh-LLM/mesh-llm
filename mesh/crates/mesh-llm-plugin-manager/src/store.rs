@@ -27,6 +27,8 @@ pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginManifestMetadata {
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub peer_evidence_verifier: Option<InstalledPeerEvidenceVerifier>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub openai_exchange_hook: Option<InstalledOpenAiExchangeAccess>,
     /// Provider connections the package asks for, by capability. Granted at
     /// install; an operator `operation_bindings` entry replaces them.
@@ -39,6 +41,14 @@ pub struct InstalledPluginManifestMetadata {
     pub config_schema: Option<InstalledPluginConfigSchema>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub web_ui: Option<InstalledPluginWebUiMetadata>,
+}
+
+/// The packaged verifier contract used to establish required startup policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPeerEvidenceVerifier {
+    pub contract_version: u32,
+    pub namespace: String,
+    pub handler: String,
 }
 
 /// A provider connection requested by capability (see `OperationBindingManifest`).
@@ -531,6 +541,7 @@ mod tests {
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                peer_evidence_verifier: None,
                 openai_exchange_hook: None,
                 operation_bindings: Vec::new(),
                 peer_blocks: false,
