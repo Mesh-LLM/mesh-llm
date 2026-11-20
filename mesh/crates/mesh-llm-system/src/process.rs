@@ -801,6 +801,7 @@ mod pid_identity_tests {
     #[test]
     fn sleeper() {
         if std::env::var_os(SLEEPER_ENV).is_some() {
+            println!("sleeper-ready");
             std::thread::sleep(std::time::Duration::from_secs(30));
         }
     }
@@ -822,7 +823,7 @@ mod pid_identity_tests {
                 "--nocapture",
             ])
             .env(SLEEPER_ENV, "1")
-            .stdout(std::process::Stdio::null());
+            .stdout(std::process::Stdio::piped());
         // A process another test forks while the copy is being written holds
         // its write descriptor until that process execs, and starting the
         // copy fails with "Text file busy" until then.
@@ -838,6 +839,13 @@ mod pid_identity_tests {
                 started => break started.expect("start the copy"),
             }
         };
+        // macOS kills a process whose executable is removed while it is still
+        // starting, so wait until the child says it is running.
+        let stdout = child.stdout.take().expect("child stdout");
+        let ready = std::io::BufRead::lines(std::io::BufReader::new(stdout))
+            .map_while(Result::ok)
+            .any(|line| line.contains("sleeper-ready"));
+        assert!(ready, "the child never started");
         let pid = child.id();
         let started = process_started_at_unix(pid)
             .expect("read the start time")
