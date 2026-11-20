@@ -202,6 +202,9 @@ impl Node {
                 return;
             }
             state.connections.insert(remote, conn.clone());
+            state
+                .redial_backoff
+                .connected(remote, std::time::Instant::now());
         }
         self.capture_connection_event(ConnectionCaptureEvent {
             event: "peer_connection_opened",
