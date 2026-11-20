@@ -249,7 +249,7 @@ function Invoke-ReleaseAttestationStamp {
     }
     # A signed stamp must name the commit it was built from. MESH_RELEASE_COMMIT
     # overrides the checkout's HEAD; an unknown commit is refused, not invented.
-    $stampArgs = @("--binary", $BinaryPath, "--signing-key-file", $attestationSigningKeyFile, "--require-source-commit")
+    $stampArgs = @("--binary", $BinaryPath, "--signing-key-file", $attestationSigningKeyFile, "--require-source-commit", "--target-triple", $targetTriple)
     if (Test-HasValue $env:MESH_RELEASE_COMMIT) { $stampArgs += @("--commit", $env:MESH_RELEASE_COMMIT) }
     Invoke-ReleaseAttestation stamp @stampArgs | Out-Null
     $inspectJson = Invoke-ReleaseAttestation inspect --binary $BinaryPath --public-key-file $attestationPublicKeyFile --json

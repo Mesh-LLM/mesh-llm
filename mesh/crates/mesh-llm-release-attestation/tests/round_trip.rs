@@ -15,7 +15,9 @@ fn tool(args: &[&str]) -> (bool, String) {
     (output.status.success(), text)
 }
 
-fn status(binary: &Path, public_key: Option<&Path>) -> String {
+const TARGET: &str = "aarch64-unknown-linux-gnu";
+
+fn inspect(binary: &Path, public_key: Option<&Path>) -> serde_json::Value {
     let binary = binary.to_str().unwrap();
     let mut args = vec!["inspect", "--json", "--binary", binary];
     if let Some(public_key) = public_key {
@@ -23,8 +25,14 @@ fn status(binary: &Path, public_key: Option<&Path>) -> String {
     }
     let (ok, text) = tool(&args);
     assert!(ok, "{text}");
-    let summary: serde_json::Value = serde_json::from_str(&text).expect("inspect prints JSON");
-    summary["status"].as_str().unwrap().to_string()
+    serde_json::from_str(&text).expect("inspect prints JSON")
+}
+
+fn status(binary: &Path, public_key: Option<&Path>) -> String {
+    inspect(binary, public_key)["status"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn keypair(dir: &Path, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -61,12 +69,17 @@ fn a_stamped_binary_is_valid_until_it_or_the_key_changes() {
         "--require-source-commit",
         "--commit",
         COMMIT,
+        "--target-triple",
+        TARGET,
     ]);
     assert!(ok, "{text}");
-    assert!(text.contains(COMMIT));
-    assert!(text.contains(env!("CARGO_PKG_VERSION")));
 
-    assert_eq!(status(&binary, Some(&public)), "valid");
+    // What a verifier reads back is what was signed, not what this machine is.
+    let signed = inspect(&binary, Some(&public));
+    assert_eq!(signed["status"], "valid");
+    assert_eq!(signed["commit"], COMMIT);
+    assert_eq!(signed["target_triple"], TARGET);
+    assert_eq!(signed["node_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(status(&binary, None), "invalid");
     assert_eq!(status(&binary, Some(&other_public)), "invalid");
 
@@ -79,7 +92,7 @@ fn a_stamped_binary_is_valid_until_it_or_the_key_changes() {
 }
 
 #[test]
-fn a_release_stamp_refuses_a_commit_that_is_not_a_full_object_name() {
+fn a_release_stamp_refuses_to_guess_its_commit_or_target() {
     let dir = std::env::temp_dir().join(format!("mesh-attestation-short-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let binary = dir.join("mesh-llm");
@@ -95,8 +108,25 @@ fn a_release_stamp_refuses_a_commit_that_is_not_a_full_object_name() {
         "--require-source-commit",
         "--commit",
         "a12b535",
+        "--target-triple",
+        TARGET,
     ]);
     assert!(!ok, "{text}");
+    assert_eq!(std::fs::read(&binary).unwrap(), b"not really an executable");
+
+    // Nor does it guess the target from the machine doing the signing.
+    let (ok, text) = tool(&[
+        "stamp",
+        "--binary",
+        binary.to_str().unwrap(),
+        "--signing-key-file",
+        private.to_str().unwrap(),
+        "--require-source-commit",
+        "--commit",
+        COMMIT,
+    ]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("--target-triple"), "{text}");
     assert_eq!(std::fs::read(&binary).unwrap(), b"not really an executable");
 
     std::fs::remove_dir_all(&dir).unwrap();

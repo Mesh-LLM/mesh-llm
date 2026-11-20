@@ -112,6 +112,9 @@ struct ReleaseAttestationInspectSummary {
     version: Option<u32>,
     signer_key_id: Option<String>,
     artifact_digest: Option<String>,
+    node_version: Option<String>,
+    commit: Option<String>,
+    target_triple: Option<String>,
     error: Option<String>,
 }
 
@@ -427,6 +430,15 @@ fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
     if parsed.require_source_commit {
         require_source_commit(&commit)?;
     }
+    // A release stamp names the Rust target the packaging script resolved.
+    // Guessing from this process's environment would sign a claim nobody made.
+    let target_triple = match parsed.target_triple {
+        Some(target_triple) => target_triple,
+        None if parsed.require_source_commit => {
+            return Err("--require-source-commit is set but --target-triple was not passed".into());
+        }
+        None => default_target_triple(),
+    };
 
     let claims = ReleaseBuildAttestationClaims {
         version: RELEASE_BUILD_ATTESTATION_VERSION,
@@ -435,7 +447,7 @@ fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
             .build_id
             .unwrap_or_else(|| default_build_id(&binary, &artifact_digest)),
         commit,
-        target_triple: parsed.target_triple.unwrap_or_else(default_target_triple),
+        target_triple,
         supported_protocol_generation_min: parsed.protocol_min,
         supported_protocol_generation_max: parsed.protocol_max,
         artifact_digest,
@@ -491,6 +503,12 @@ fn print_release_attestation_summary(summary: &ReleaseAttestationInspectSummary)
     if let Some(signer_key_id) = &summary.signer_key_id {
         println!("signer key: {signer_key_id}");
     }
+    if let Some(commit) = &summary.commit {
+        println!("commit: {commit}");
+    }
+    if let Some(target_triple) = &summary.target_triple {
+        println!("target: {target_triple}");
+    }
     if let Some(artifact_digest) = &summary.artifact_digest {
         println!("artifact digest: {artifact_digest}");
     }
@@ -513,6 +531,9 @@ fn inspect_release_attestation_summary(
                 version: None,
                 signer_key_id: None,
                 artifact_digest: None,
+                node_version: None,
+                commit: None,
+                target_triple: None,
                 error: Some(error.to_string()),
             });
         }
@@ -524,6 +545,9 @@ fn inspect_release_attestation_summary(
             version: None,
             signer_key_id: None,
             artifact_digest: None,
+            node_version: None,
+            commit: None,
+            target_triple: None,
             error: None,
         });
     };
@@ -537,6 +561,9 @@ fn inspect_release_attestation_summary(
                     version: None,
                     signer_key_id: None,
                     artifact_digest: None,
+                    node_version: None,
+                    commit: None,
+                    target_triple: None,
                     error: Some(format!(
                         "embedded release attestation payload is invalid JSON: {error}"
                     )),
@@ -551,6 +578,9 @@ fn inspect_release_attestation_summary(
         .or(Some(attestation.version));
     let signer_key_id = Some(attestation.signer_key_id.clone());
     let artifact_digest = claims.as_ref().map(|claims| claims.artifact_digest.clone());
+    let node_version = claims.as_ref().map(|claims| claims.node_version.clone());
+    let commit = claims.as_ref().map(|claims| claims.commit.clone());
+    let target_triple = claims.as_ref().map(|claims| claims.target_triple.clone());
 
     let public_key_file = match parsed.public_key_file.as_ref() {
         Some(path) => path,
@@ -560,6 +590,9 @@ fn inspect_release_attestation_summary(
                 version,
                 signer_key_id,
                 artifact_digest,
+                node_version,
+                commit,
+                target_triple,
                 error: Some(
                     "--public-key-file is required when an embedded release attestation is present"
                         .to_string(),
@@ -581,6 +614,9 @@ fn inspect_release_attestation_summary(
         version,
         signer_key_id,
         artifact_digest,
+        node_version,
+        commit,
+        target_triple,
         error: (verification.status == EmbeddedReleaseFooterStatus::Invalid)
             .then_some(verification.error)
             .flatten(),

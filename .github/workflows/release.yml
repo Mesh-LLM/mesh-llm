@@ -38,8 +38,33 @@ env:
   MESH_LLM_POSTHOG_KEY: ${{ secrets.MESH_LLM_POSTHOG_KEY }}
 
 jobs:
+  # Checks the old release ran that this one does not yet. A real release stops
+  # here, before anything is pushed. A canary only prints the list. Delete an
+  # entry in the same change that restores its check; there is no switch.
+  release_readiness:
+    name: Refuse a release with known missing checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CANARY: ${{ inputs.canary }}
+    steps:
+      - name: List the missing checks
+        run: |
+          set -euo pipefail
+          missing=(
+            "Windows: the packaged host is not run against a model, only version-checked."
+            "Host import policy: only the Linux glibc floor is checked; the per-platform allowed-imports report is gone."
+            "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
+            "Swift, Kotlin and Node SDK artifacts are not built or published."
+          )
+          for item in "${missing[@]}"; do
+            if [[ "$CANARY" == "true" ]]; then echo "::warning::Not release-ready: $item"; else echo "::error::Not release-ready: $item"; fi
+          done
+          [[ "$CANARY" == "true" || ${#missing[@]} -eq 0 ]]
+
   metadata:
     name: Prepare the release source
+    needs: release_readiness
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -272,18 +297,27 @@ jobs:
         env:
           HOST: ${{ steps.bundle.outputs.host }}
           CANARY: ${{ inputs.canary }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
+          args=(inspect --binary "$HOST" --json)
+          expected=missing
           if [[ -s "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
-            status="$(cargo run --locked --quiet -p mesh-llm-release-attestation -- inspect --binary "$HOST" --public-key-file "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE" --json | jq -r .status)"
+            args+=(--public-key-file "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE")
             expected=valid
-          else
-            status="$(cargo run --locked --quiet -p mesh-llm-release-attestation -- inspect --binary "$HOST" --json | jq -r .status)"
-            expected=missing
           fi
+          summary="$(cargo run --locked --quiet -p mesh-llm-release-attestation -- "${args[@]}")"
+          status="$(jq -r .status <<<"$summary")"
           echo "release attestation: $status"
           [[ "$status" == "$expected" ]] || { echo "expected $expected" >&2; exit 1; }
           [[ "$status" == valid || "$CANARY" == "true" ]] || { echo "a release host must be signed" >&2; exit 1; }
+          if [[ "$status" == valid ]]; then
+            # The signature only says the claims were not altered. Check that
+            # they are the claims this job meant to make.
+            jq -e --arg commit "$MESH_RELEASE_COMMIT" --arg target "$TARGET" --arg version "${RELEASE_TAG#v}" \
+              '.commit == $commit and .target_triple == $target and .node_version == $version' <<<"$summary" >/dev/null ||
+              { echo "signed claims do not match this build: $summary" >&2; exit 1; }
+          fi
 
       - name: Check the Linux glibc floor
         if: runner.os == 'Linux'
@@ -327,7 +361,7 @@ jobs:
 
   publish:
     name: Publish the GitHub release
-    needs: [metadata, runtime_download_gate, build]
+    needs: [release_readiness, metadata, runtime_download_gate, build]
     if: ${{ !inputs.canary }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -233,6 +233,7 @@ resolve_release_target() {
             ;;
     esac
 
+    HOST_TARGET_TRIPLE="$TARGET_TRIPLE"
     STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
     TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
@@ -267,7 +268,7 @@ stamp_bundle_binary() {
     fi
     # A signed stamp must name the commit it was built from. MESH_RELEASE_COMMIT
     # overrides the checkout's HEAD; an unknown commit is refused, not invented.
-    local stamp_args=(--binary "$binary_path" --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" --require-source-commit)
+    local stamp_args=(--binary "$binary_path" --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" --require-source-commit --target-triple "$HOST_TARGET_TRIPLE")
     [[ -z "${MESH_RELEASE_COMMIT:-}" ]] || stamp_args+=(--commit "$MESH_RELEASE_COMMIT")
     release_attestation stamp "${stamp_args[@]}" >/dev/null
     local status
