@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           missing=(
             "Windows: the packaged host is not run against a model, only version-checked."
-            "Host import policy: only the Linux glibc floor is checked; the per-platform allowed-imports report is gone."
+            "Host import check: its Linux and Windows branches have never run; only the macOS one has."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
             "NVIDIA and AMD machines: no run on real hardware shows the host downloading and loading a GPU runtime. Tests cover only the choice."
             "Updating from 0.80.0 on Windows: the step that swaps in the new runtime and manifest is a PowerShell script that no test runs. The Unix path is covered."
@@ -319,6 +319,11 @@ jobs:
               '.commit == $commit and .target_triple == $target and .node_version == $version' <<<"$summary" >/dev/null ||
               { echo "signed claims do not match this build: $summary" >&2; exit 1; }
           fi
+
+      - name: Check the packaged host links no inference backend
+        env:
+          HOST: ${{ steps.bundle.outputs.host }}
+        run: scripts/check-host-imports.sh "$HOST"
 
       - name: Check the Linux glibc floor
         if: runner.os == 'Linux'
