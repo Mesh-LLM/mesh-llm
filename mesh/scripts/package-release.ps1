@@ -216,6 +216,29 @@ function Test-HasValue {
     return -not [string]::IsNullOrWhiteSpace($Value)
 }
 
+# Git for Windows' bash, found from git itself. A bare `bash` can be WSL's,
+# which would inspect the host with Linux tools.
+function Get-GitBash {
+    $execPath = & git --exec-path
+    if ($LASTEXITCODE -ne 0 -or -not (Test-HasValue $execPath)) { throw "git --exec-path failed; Git for Windows is required" }
+    # <root>\mingw64\libexec\git-core
+    $root = [System.IO.Path]::GetFullPath((Join-Path $execPath "..\..\.."))
+    $bash = Join-Path $root "bin\bash.exe"
+    if (-not (Test-Path $bash)) { throw "Git Bash not found at $bash" }
+    $kernel = & $bash -c "uname -s"
+    if ($LASTEXITCODE -ne 0 -or "$kernel" -notmatch '^(MINGW|MSYS)') { throw "$bash is not Git Bash (uname -s: $kernel)" }
+    return $bash
+}
+
+function Write-HostImportReport {
+    param([string]$HostPath, [string]$ReportPath)
+
+    $check = (Join-Path $scriptDir "check-host-imports.sh").Replace("\", "/")
+    & (Get-GitBash) $check $HostPath.Replace("\", "/") --report $ReportPath.Replace("\", "/") | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "check-host-imports.sh failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path $ReportPath)) { throw "check-host-imports.sh wrote no host-imports.json" }
+}
+
 function Invoke-ReleaseAttestation {
     Push-Location $repoRoot
     try {
@@ -384,9 +407,7 @@ try {
     Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
     Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
     # After stamping, so the report names the host that ships.
-    & bash (Join-Path $scriptDir "check-host-imports.sh").Replace("\", "/") $bundleBinary.Replace("\", "/") --report (Join-Path $bundleDir "host-imports.json").Replace("\", "/") | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "check-host-imports.sh failed with exit code $LASTEXITCODE" }
-    if (-not (Test-Path (Join-Path $bundleDir "host-imports.json"))) { throw "check-host-imports.sh wrote no host-imports.json" }
+    Write-HostImportReport -HostPath $bundleBinary -ReportPath (Join-Path $bundleDir "host-imports.json")
 
     $runtimeRoot = Join-Path $bundleDir "native-runtimes"
     $bundledRuntime = Join-Path $runtimeRoot (Split-Path -Leaf ([System.IO.Path]::GetFullPath($nativeRuntimeDir).TrimEnd("\")))

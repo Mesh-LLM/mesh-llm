@@ -27,8 +27,9 @@ An entry is removed in the same change that closes it.
 - **Host import check.** `scripts/check-host-imports.sh` refuses a host that
   links CUDA, ROCm, Vulkan, Metal, ggml or llama, or that needs a newer glibc
   than the Linux floor, and writes `host-imports.json` into the archive with
-  the SHA-256 of the signed host. Only its macOS branch has run. The Linux and
-  Windows branches, and the call from `package-release.ps1`, have not.
+  the SHA-256 of the signed host. Its macOS branch has run on a real host. The
+  Linux branch has run only against stubbed tools. Nothing has run on Windows,
+  including the call from `package-release.ps1`.
 - **Docker images and npm.** The handoff to `Mesh-LLM/mesh-packaging` is off.
   That repository reads `native-runtimes.json` and the GPU archives from the
   MeshLLM release, which no longer has them. Its identity-bound dispatch and

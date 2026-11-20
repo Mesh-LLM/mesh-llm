@@ -59,5 +59,35 @@ PATH="$stub:$PATH" "$stub/check-host-imports.sh" "$stub/host" --report "$stub/re
 [[ -z "$(find "$stub" -name 'report.json*')" ]] ||
     { echo "FAIL: a failed check left a report behind" >&2; fail=1; }
 
+# A tool that prints plausible output and then fails must fail the check, and
+# take a report that was already there with it. The stubs stand in for Linux.
+linux="$stub/linux"
+mkdir "$linux"
+printf '#!/bin/sh\necho Linux\n' >"$linux/uname"
+refuses_when() { # <what fails> <objdump -p status> <objdump -T status>
+    cat >"$linux/objdump" <<STUB
+#!/bin/sh
+if [ "\$1" = -p ]; then echo "  NEEDED               libc.so.6"; exit $2; fi
+echo "0000 DF *UND* 0000 (GLIBC_2.17) malloc"; exit $3
+STUB
+    chmod +x "$linux/uname" "$linux/objdump"
+    echo '{}' >"$stub/report.json"
+    if PATH="$linux:$PATH" "$stub/check-host-imports.sh" "$stub/host" --report "$stub/report.json" >/dev/null 2>&1; then
+        [[ "$1" == nothing ]] || { echo "FAIL: accepted a host when $1 failed" >&2; fail=1; }
+    else
+        [[ "$1" != nothing ]] || { echo "FAIL: refused the stub Linux host" >&2; fail=1; }
+        [[ -z "$(find "$stub" -name 'report.json*')" ]] ||
+            { echo "FAIL: a report survived when $1 failed" >&2; fail=1; }
+    fi
+}
+refuses_when nothing 0 0
+grep -qF '"glibc_floor": "2.17"' "$stub/report.json" || { echo "FAIL: the stub Linux report lacks its glibc" >&2; fail=1; }
+refuses_when "objdump -T" 0 42
+refuses_when "objdump -p" 42 0
+echo 2.16 >"$stub/linux-glibc-floor.txt"
+refuses_when "the glibc floor" 0 0
+: >"$stub/linux-glibc-floor.txt"
+refuses_when "reading the floor file" 0 0
+
 ((fail == 0)) && echo "check-host-imports-test: ok"
 exit "$fail"

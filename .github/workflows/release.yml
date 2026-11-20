@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           missing=(
             "Windows: the packaged host is not run against a model, only version-checked."
-            "Host import check and report: the Linux and Windows branches, and the call from package-release.ps1, have never run; only macOS has."
+            "Host import check and report: on Linux only stubbed tools have run, and on Windows nothing has, including the call from package-release.ps1."
             "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
             "NVIDIA and AMD machines: no run on real hardware shows the host downloading and loading a GPU runtime. Tests cover only the choice."
             "Updating from 0.80.0 on Windows: the step that swaps in the new runtime and manifest is a PowerShell script that no test runs. The Unix path is covered."

@@ -30,15 +30,24 @@ case "$(uname -s)" in
     *) format=pe ;;
 esac
 
+# Each tool's output is captured before it is parsed, and a tool that exits
+# non-zero fails the check even if it printed something plausible first.
 imports_of() {
+    local raw rustc_host
     case "$format" in
-        macho) otool -L "$1" | tail -n +2 | awk '{print $1}' ;;
-        elf) objdump -p "$1" | awk '$1 == "NEEDED" {print $2}' ;;
+        macho)
+            raw="$(otool -L "$1")" || fail "otool failed on $1"
+            names="$(tail -n +2 <<<"$raw" | awk '{print $1}')" || fail "could not parse otool output"
+            ;;
+        elf)
+            raw="$(objdump -p "$1")" || fail "objdump -p failed on $1"
+            names="$(awk '$1 == "NEEDED" {print $2}' <<<"$raw")" || fail "could not parse objdump output"
+            ;;
         pe)
-            local rustc_host
-            rustc_host="$(rustc -vV | sed -n 's/^host: //p')"
-            "$(rustc --print sysroot)/lib/rustlib/$rustc_host/bin/llvm-objdump" -p "$1" |
-                tr -d '\r' | sed -n 's/^ *DLL Name: //p'
+            rustc_host="$(rustc -vV | sed -n 's/^host: //p')" || fail "rustc -vV failed"
+            raw="$("$(rustc --print sysroot)/lib/rustlib/$rustc_host/bin/llvm-objdump" -p "$1")" ||
+                fail "llvm-objdump failed on $1"
+            names="$(tr -d '\r' <<<"$raw" | sed -n 's/^ *DLL Name: //p')" || fail "could not parse llvm-objdump output"
             ;;
     esac
 }
@@ -47,15 +56,20 @@ sha256_of() {
     if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'
 }
 
-# The newest glibc symbol version the host needs. Refuses one above the floor.
+# Sets glibc to the newest glibc symbol version the host needs. Refuses one
+# above the floor.
 glibc_needed() {
-    local floor needed
-    floor="$(grep -v '^#' "$(dirname "$0")/linux-glibc-floor.txt" | tr -d '[:space:]')"
-    needed="$(objdump -T "$1" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1)"
-    [[ -n "$floor" && -n "$needed" ]] || fail "could not read the glibc floor of $1"
-    [[ "$(printf '%s\n%s\n' "$needed" "$floor" | sort -V | tail -n 1)" == "$floor" ]] ||
-        fail "$1 needs glibc $needed but scripts/linux-glibc-floor.txt allows $floor"
-    echo "$needed"
+    local floor raw needed newest
+    floor="$(grep -v '^#' "$(dirname "$0")/linux-glibc-floor.txt")" || fail "could not read linux-glibc-floor.txt"
+    floor="${floor//[[:space:]]/}"
+    [[ "$floor" =~ ^[0-9]+(\.[0-9]+)*$ ]] || fail "linux-glibc-floor.txt does not hold one version"
+    raw="$(objdump -T "$1")" || fail "objdump -T failed on $1"
+    needed="$(grep -o 'GLIBC_[0-9][0-9.]*' <<<"$raw" | sed 's/GLIBC_//' | sort -V | tail -n 1)" ||
+        fail "found no glibc symbol version in $1"
+    [[ -n "$needed" ]] || fail "found no glibc symbol version in $1"
+    newest="$(printf '%s\n%s\n' "$needed" "$floor" | sort -V | tail -n 1)" || fail "could not compare glibc versions"
+    [[ "$newest" == "$floor" ]] || fail "$1 needs glibc $needed but scripts/linux-glibc-floor.txt allows $floor"
+    glibc="\"$needed\""
 }
 
 usage() {
@@ -78,10 +92,11 @@ sha=""
 if [[ "$host" == "--names" ]]; then
     names="$(cat)"
 else
-    sha="$(sha256_of "$host")"
-    names="$(imports_of "$host")"
+    sha="$(sha256_of "$host")" || fail "could not hash $host"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash $host"
+    imports_of "$host"
 fi
-names="$(LC_ALL=C sort -u <<<"$names")"
+names="$(LC_ALL=C sort -u <<<"$names")" || fail "could not sort the import names"
 # A host that imports nothing means the listing failed, not that it is clean.
 [[ -n "$names" ]] || fail "found no imports in $host"
 
@@ -97,11 +112,12 @@ esac
 
 [[ "$host" != "--names" ]] || exit 0
 glibc=null
-[[ "$format" != elf ]] || glibc="\"$(glibc_needed "$host")\""
+[[ "$format" != elf ]] || glibc_needed "$host"
 [[ -n "$report" ]] || exit 0
 
 # Same fields as the report the removed xtask tool wrote, keys sorted.
-[[ "$(sha256_of "$host")" == "$sha" ]] || fail "$host changed while it was being checked"
+again="$(sha256_of "$host")" || fail "could not hash $host"
+[[ "$again" == "$sha" ]] || fail "$host changed while it was being checked"
 name="${host##*[/\\]}"
 {
     printf '{\n  "binary": "%s",\n  "binary_sha256": "%s",\n  "format": "%s",\n' "$name" "$sha" "$format"
