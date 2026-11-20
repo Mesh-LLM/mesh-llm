@@ -40,7 +40,17 @@ Clients must omit those parameters. Anthropic pagination is described below.
 The OpenAI response contains standard model fields:
 
 ```json
-{"object":"list","data":[{"id":"llm-model","object":"model","created":0,"owned_by":"mesh-llm"}]}
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "llm-model",
+      "object": "model",
+      "created": 0,
+      "owned_by": "mesh-llm"
+    }
+  ]
+}
 ```
 
 `created: 0` explicitly represents an unknown release timestamp. Get an exact
@@ -55,7 +65,15 @@ curl -s http://localhost:9337/v1/models -H 'anthropic-version: 2023-06-01'
 
 ```json
 {
-  "data": [{"id":"llm-model","type":"model","display_name":"llm-model","created_at":"1970-01-01T00:00:00Z","lifecycle":"active"}],
+  "data": [
+    {
+      "id": "llm-model",
+      "type": "model",
+      "display_name": "llm-model",
+      "created_at": "1970-01-01T00:00:00Z",
+      "lifecycle": "active"
+    }
+  ],
   "has_more": false,
   "first_id": "llm-model",
   "last_id": "llm-model"
@@ -97,6 +115,260 @@ System One models answer typed questions through
 [the Decisions API](/docs/pages/decisions-api/) at `POST /v1/decisions` or the
 [native System One API](/docs/pages/system-one-api/) at `POST /v1/systemone`.
 Chat completion methods do not call either route.
+
+## Responses API
+
+`POST /v1/responses` implements the HTTP and SSE portions of the Open
+Responses 2026-04-24 protocol. Mesh translates the request onto the selected
+model backend, but the localhost ingress owns the response ID, transcript, and
+stream lifecycle. A later request can send `previous_response_id` plus only its
+new input; Mesh restores the earlier structured input and output before it
+chooses a local or peer worker. Function calls and `function_call_output` items
+keep their `call_id` across that continuation. Effective tools, tool choice,
+structured-output/reasoning controls, sampling controls, and output limits are
+inherited when the follow-up omits them; explicit child values replace them.
+Instructions never inherit, matching the protocol's conversation-state rule.
+
+Streamed Responses add coarse payload padding by default. Omitted or `null`
+`stream_options`, and `{}`, enable it; set
+`stream_options.include_obfuscation: false` on an HTTP/SSE request to disable
+it. Mesh removes that recognized Responses-only member before forwarding the
+normalized Chat request, while preserving `include_usage` and unknown
+stream-option extensions. WebSocket `response.create` messages still forbid
+`stream_options`, so WebSocket streams always use the enabled default.
+
+The Mesh provider profile adds an `obfuscation` string only to output-text,
+reasoning-text, reasoning-summary-text, and function-call-argument delta event
+objects. It chooses 1–256 operating-system-random characters from the URL-safe
+Base64 alphabet so the compact JSON body of each eligible event is a multiple
+of 256 bytes; an already aligned placeholder gets 256 characters. Padding is
+applied after the final event type and sequence number are assigned and before
+bounded replay/quarantine admission or response storage. It never changes the
+model text, completed response resource, or stored continuation output.
+
+This 256-byte profile is a Mesh implementation choice, not a required Open
+Responses padding algorithm. The field is padding only: it does not redact or
+encrypt content and provides no privacy or traffic-analysis guarantee.
+
+Responses defaults to `truncation: "disabled"`. It disables the serving
+wrapper's automatic history compaction, including after request-transform
+plugins, so tool results and earlier input are not silently dropped to fit.
+If the resulting prompt exceeds the selected runtime's context window, that
+runtime returns `context_length_exceeded`. Automatic truncation is not yet
+supported; explicit `/v1/responses/compact` remains a separate opt-in operation.
+
+Mesh validates the Responses request shapes it consumes before continuation
+lookup, response capture, or backend routing. `instructions` is a string or
+`null`. `metadata` is `null` or an object with at most 16 string pairs; keys
+are limited to 64 Unicode characters and values to 512. `safety_identifier`
+and `prompt_cache_key` are `null` or strings limited to 64 Unicode characters.
+The safety identifier is opaque correlation metadata that Mesh echoes; setting
+it does not activate a monitoring or protection service.
+
+`max_output_tokens` accepts `null` or a JSON integer of at least 16. The Open
+Responses schema does not impose an upper bound, but Mesh's current Chat
+generation boundary represents token limits as `u32`; schema-valid values above
+`4294967295` therefore fail explicitly as unsupported and are never clamped.
+Responses also accepts the legacy aliases `max_tokens`,
+`max_completion_tokens`, and llama.cpp's `n_predict`. The canonical field wins
+by presence, including an explicit `null`; without it, precedence is
+`max_tokens`, then `max_completion_tokens`, then `n_predict`. Only the winning
+value is validated. All losing aliases are removed before the response
+configuration is captured or the request is forwarded, and the backend sees a
+single `max_tokens` field. This normalization is an ingress compatibility
+boundary for mixed-version meshes: a released peer never has to deserialize a
+malformed losing `n_predict`. The effective value is used for routing and
+context budgets, echoed as `max_output_tokens`, and inherited by follow-ups;
+an explicit `null` through any winning field clears an inherited limit.
+Ordinary Chat Completions handling of `n_predict` is unchanged.
+
+`top_logprobs` accepts `null` or an integer from 0 through 20. Any non-null
+value, including zero, enables backend log-probability generation without a
+separate `logprobs` field. Requesting
+`include: ["message.output_text.logprobs"]` also enables it, including when
+`top_logprobs` is null. Follow-ups inherit omitted values, while explicit null
+clears the inherited control; the response resource reports the effective
+configuration, so a cleared `top_logprobs` is reported as the default `0`.
+These bounds apply only to Responses requests and do not narrow ordinary Chat
+Completions controls.
+
+`text` and `reasoning` must each be `null` or objects. Non-null `text.verbosity`
+is unsupported. `text.format` supports explicit `text`, `json_object`, and a
+conservative `json_schema` subset on upgraded Skippy workers. Explicit formats
+suppress deployment grammar defaults; supplying both `text.format` and the Chat
+extension `response_format` is rejected.
+
+Omitted schema defaults to `{}` (unconstrained JSON), and omitted schema name
+uses `response`. Supplied names use 1–64 ASCII letters, digits, underscores or
+dashes. Empty or annotation-only schemas also allow any JSON value. Otherwise,
+the schema subset requires an explicit single type at every node. Objects need
+`properties` and `additionalProperties: false`; optional `required` entries must
+be unique declared property names. Arrays need one object-valued `items` schema.
+Scalar types are `string`, `number`, `integer`, `boolean`, and `null`; scalar
+`const` or nonempty `enum` values must match the declared type (integer literals
+must use JSON integer notation, not `7.0`). String `title`
+and `description` annotations are accepted. Other keywords, references,
+compositions, type unions, patterns, formats, and numeric/length/count bounds
+are rejected with a parameterized 400 rather than silently ignored, including
+when `strict` is false. Schemas are limited to 1 MiB serialized, 32 nesting
+levels, 4,096 schema nodes plus enum entries, and 8 KiB per string literal.
+`json_object` independently permits arbitrary JSON objects. Legacy native
+`json_schema` extensions retain their previous behavior and are not covered by
+this standard-format enforcement guarantee.
+`reasoning.effort` accepts `none`, `low`, `medium`, `high`, and `xhigh`, subject
+to support by the selected model. Non-null `reasoning.summary` is explicitly
+unsupported because Mesh does not honor summary requests; omit it or use
+`null`. This is bounded validation of known fields, not a claim that Mesh is
+fully conformant or that every unknown extension is rejected.
+
+```sh
+curl -s http://localhost:9337/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"mesh","input":"Remember that my code word is cobalt."}'
+```
+
+Completed responses are retained in bounded process memory for 30 minutes
+after their last use, up to 128 responses and 64 MiB of charged transcript per
+caller (and 256 MiB total). A restart, expiry, or eviction makes the ID unknown
+and returns `previous_response_not_found`; Mesh never treats an unknown ID as
+an empty conversation. `store: false` prevents HTTP retention. Set
+`MESH_RESPONSE_STORAGE=off` before startup to disable retention entirely.
+
+HTTP continuation is deliberately limited to direct loopback clients without
+`Forwarded`, `X-Forwarded-For`, or `X-Real-IP`. All local processes share that
+host-local trust scope. A reverse proxy or multi-user deployment must disable
+storage unless it supplies a separately authenticated ingress identity; a
+body field or caller-provided header cannot select another caller's scope.
+
+### Tool choice and allowed tools
+
+Responses function tools support `auto`, `none`, `required`, a specific
+function choice, and an `allowed_tools` subset:
+
+```json
+{
+  "tool_choice": {
+    "type": "allowed_tools",
+    "tools": [{ "type": "function", "name": "get_weather" }],
+    "mode": "auto"
+  }
+}
+```
+
+Declare every referenced function in the request's `tools` array. Mesh keeps
+that complete array visible to the selected backend; it does not remove
+schemas outside the executable subset. The original ingress checks every
+returned function call against the effective choice, even when a peer or
+plugin generated it. The default allowed-tools mode is `auto`; `none` forbids
+calls, and a completed `required` response must contain a permitted call.
+An incomplete response may end without a required call.
+
+`max_tool_calls` accepts a positive JSON integer through `u64::MAX`, or
+`null`. It counts every function call generated for the current response,
+including repeated names. Reaching the cap completes normally. If a backend,
+peer, virtual model, or plugin returns more calls, the original ingress fails
+the entire response with `tool_call_limit_exceeded`, empty output, and no
+stored continuation. Streamed calls remain quarantined, so no executable call
+events are emitted. Follow-ups inherit an omitted cap, explicit `null` clears
+it, and every response starts a fresh count.
+
+Enforcement is post-generation and the policy is neither sent over the Mesh
+wire nor forwarded to Chat Completions backends. Values above 128 are accepted
+and echoed without clamping, while Mesh retains a separate internal 128-call
+safety ceiling. Parsing is exact through `u64::MAX`; still-larger JSON integers
+are rejected. Mesh itself executes no developer-hosted tools, so rejection has
+no hidden execution side effects in this layer.
+
+`parallel_tool_calls: false` permits at most one function call generated for
+the current response. Calls already present in input history do not count, and
+the count resets for every response. Normalization keeps the raw `false` hint
+in the Chat backend request. The original ingress independently fails a
+backend, peer, virtual model, or plugin result containing two or more calls
+with `tool_call_limit_exceeded`, empty output, and no stored continuation, even
+if a later request transform changed the backend hint.
+Omitted and `true` values permit multiple calls. `null` resets the effective
+resource value to `true`; continuations inherit the prior raw configuration
+only when the child omits the field. The legacy mesh-client compatibility path,
+which has no ingress policy object, rejects `false` instead of silently
+claiming enforcement. This control does not change ordinary Chat Completions
+tool parsing or candidate truncation.
+
+For SSE and WebSocket turns, output from the first tool-call fragment onward
+is buffered within bounded limits until the full function names can be
+validated. This delays tool-call events until generation finishes. A forbidden
+or malformed call fails the turn without exposing executable call events or
+retaining that turn for continuation. Tool-generation quality still depends
+on the selected model; hard enforcement does not make an incapable model
+follow the requested choice.
+
+### WebSocket
+
+Upgrade `GET /v1/responses` (`ws://localhost:9337/v1/responses`) and send JSON
+`response.create` messages for persistent sequential turns. Streaming event
+objects are sent directly as WebSocket text messages, without SSE framing or
+`[DONE]`. The connection keeps its latest completed response even when that
+turn used `store: false`; a `store: true` turn may also use the same bounded
+caller-scoped process store as HTTP after reconnect.
+
+Mesh retains the session at the original ingress and independently applies
+request transforms, admission, private scope, target selection, routing, and
+retry to every turn. The pending-turn queue, frames, outbound queue, and
+retained transcript are bounded, and the absolute connection lifetime is 60
+minutes including active work. Disconnecting cancels the active downstream
+request. The startup bootstrap proxy does not support this upgrade, and a
+serving peer never receives the whole WebSocket; it receives an ordinary
+expanded HTTP request for a routed turn.
+
+### Compaction
+
+`POST /v1/responses/compact` summarizes a Responses transcript into an opaque
+compaction item. Send `model` plus `input`; the compact request may also name a
+stored `previous_response_id` to include that response's transcript. The
+endpoint is non-streaming and returns `object: "response.compaction"` with the
+original user messages followed by a `compaction` item. Feed that `output`
+array into a later `/v1/responses` request and append the new input:
+
+```sh
+curl -s http://localhost:9337/v1/responses/compact \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"mesh","input":[{"type":"message","role":"user","content":"Remember cobalt."}]}'
+```
+
+The item's `encrypted_content` authenticates the model-generated summary and
+metadata for unresolved function calls. On restore, Mesh inserts those calls
+immediately after the summary and before newly appended
+`function_call_output` items; completed parallel calls are not retained.
+
+Compaction encryption is deliberately process-local. An item can be restored
+only by the same ingress process and exact model ID that created it. A restart,
+another ingress instance, a changed model, tampering, or an oversized item
+fails closed. The encrypted item is opaque provider state, not portable
+end-to-end encryption for client data.
+
+A compaction resource is not stored and has no usable
+`previous_response_id`. Do not pass its `id` as `previous_response_id`; retain
+and resend its `output` items instead. A compact request may consume an earlier
+stored response ID, but the compact result does not create another stored
+Responses turn.
+
+The following standard behavior is available when the selected model supports
+it:
+
+- typed message history, images/files handled by the existing Mesh media path,
+  developer-hosted function tools with `max_tool_calls`, parallel calls, and
+  structured output via `text.format`;
+- text, function-call, reasoning, usage, incomplete, and failed lifecycle
+  events over SSE, with stable response/item IDs and one terminal response
+  event;
+- assistant input `phase` labels preserved through translation. Output phase
+  labels are emitted only when a backend actually provides them.
+
+Unsupported semantics fail explicitly. Mesh does not currently implement
+background responses, automatic truncation, non-default
+service tiers, text verbosity, hosted tools, or encrypted reasoning
+continuation. The existing `/v1/realtime` WebSocket is a separate transcription
+protocol. Compaction items are the one opaque provider-state item described
+above; Mesh does not create encrypted reasoning state.
 
 ## Streaming
 

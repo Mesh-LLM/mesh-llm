@@ -41,6 +41,7 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/chat/completions"
         | "/v1/completions"
         | "/v1/responses"
+        | "/v1/responses/compact"
         | "/v1/messages"
         | "/v1/audio/transcriptions"
         | "/v1/audio/translations" => Some(ModelWorkloadClass::CausalGeneration),
@@ -79,7 +80,7 @@ pub(super) fn unsupported_workload_message(path: &str, workload: ModelWorkloadCl
 pub(super) fn supports_generation_affinity(path: &str) -> bool {
     matches!(
         path.split('?').next().unwrap_or(path),
-        "/v1/chat/completions" | "/v1/completions" | "/v1/responses"
+        "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/responses/compact"
     )
 }
 

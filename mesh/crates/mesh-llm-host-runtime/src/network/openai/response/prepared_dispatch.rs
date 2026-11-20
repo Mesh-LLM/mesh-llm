@@ -32,6 +32,7 @@ pub(crate) async fn admit(
 fn prepared_event(dispatch: &PreparedSubdispatch<'_>) -> serde_json::Value {
     let endpoint = match dispatch.client_path.split('?').next() {
         Some("/v1/responses") => "responses",
+        Some("/v1/responses/compact") => "responses_compact",
         Some("/v1/completions") => "completions",
         _ => "chat_completions",
     };

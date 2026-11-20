@@ -217,7 +217,7 @@ impl ProgressPlan {
 
     async fn write_created(&self, stream: &mut ClientStream) -> std::io::Result<()> {
         let mut created =
-            skippy_inference_api::responses_stream_created_event(&self.model_id, self.created_at);
+            mesh_openresponses::responses_stream_created_event(&self.model_id, self.created_at);
         if let Some(response) = created.get_mut("response").and_then(Value::as_object_mut) {
             response.insert("id".into(), Value::String(self.completion_id.clone()));
         }

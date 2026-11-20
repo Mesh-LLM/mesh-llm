@@ -425,6 +425,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
                 request_id: request.request_id,
                 retry_policy,
                 response_adapter: request.response_adapter,
+                responses_turn: request.responses_turn.as_ref(),
                 route_observer,
                 served_by: served_by_header,
                 peer_capsule_id,

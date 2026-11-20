@@ -4943,6 +4943,7 @@ dependencies = [
  "mesh-llm-types",
  "mesh-llm-ui",
  "mesh-native-serving-plugin-host",
+ "mesh-openresponses",
  "nostr-sdk",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -4986,6 +4987,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.29.0",
  "toml 1.1.6+spec-1.1.0",
  "tower",
  "tracing",
@@ -5367,6 +5369,26 @@ dependencies = [
  "skippy-serving",
  "skippy-tokenizer",
  "tracing",
+]
+
+[[package]]
+name = "mesh-openresponses"
+version = "0.80.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chacha20poly1305 0.11.0",
+ "futures-core",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "skippy-guardrails",
+ "skippy-inference-api",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

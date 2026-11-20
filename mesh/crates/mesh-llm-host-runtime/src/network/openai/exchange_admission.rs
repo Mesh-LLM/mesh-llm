@@ -249,6 +249,7 @@ fn exchange_endpoint(path: &str) -> Option<&'static str> {
         Some("/v1/chat/completions") => Some("chat_completions"),
         Some("/v1/completions") => Some("completions"),
         Some("/v1/responses") => Some("responses"),
+        Some("/v1/responses/compact") => Some("responses_compact"),
         _ => None,
     }
 }

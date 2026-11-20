@@ -152,6 +152,15 @@ per-request routing for persistent HTTP/1.1 keep-alive or pipelined multi-
 request connections. Clients should open a fresh connection for each routed
 inference request.
 
+`GET /v1/responses` is the deliberate exception: the full local public ingress
+may upgrade one bounded WebSocket and treats every `response.create` as a new
+buffered request. The original ingress owns the shared Responses session and
+refreshes targets per turn; normal transforms, admission, private scope,
+routing, retry, and local/QUIC response paths still run for each turn. The
+socket is never looped through the main TCP port or tunnelled to a serving
+peer, and incoming peer QUIC HTTP streams cannot open it. The startup bootstrap
+proxy refuses the upgrade until the full ingress takes over.
+
 ## Mesh Identity
 
 Every mesh has a stable `mesh_id`:

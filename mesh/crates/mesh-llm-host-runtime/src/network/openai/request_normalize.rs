@@ -25,27 +25,40 @@ pub(super) fn normalize_openai_compat_request(
     path: &str,
     body: &mut serde_json::Value,
 ) -> Result<RequestNormalization> {
-    let normalized = skippy_inference_api::normalize_openai_compat_request(path, body)?;
+    let normalized = mesh_openresponses::normalize_openai_compat_request(path, body)?;
+    Ok(map_normalization(normalized))
+}
+
+pub(super) fn normalize_prepared_responses_request(
+    turn: &mesh_openresponses::ResponsesTurn,
+    path: &str,
+    body: &mut serde_json::Value,
+) -> Result<RequestNormalization> {
+    let normalized = turn.normalize_backend_request(path, body)?;
+    Ok(map_normalization(normalized))
+}
+
+fn map_normalization(normalized: mesh_openresponses::NormalizationOutcome) -> RequestNormalization {
     let response_adapter = match normalized.response_adapter {
-        skippy_inference_api::ResponseAdapterMode::AnthropicMessagesJson => {
+        mesh_openresponses::ResponseAdapterMode::AnthropicMessagesJson => {
             ResponseAdapter::AnthropicMessagesJson
         }
-        skippy_inference_api::ResponseAdapterMode::AnthropicMessagesStream => {
+        mesh_openresponses::ResponseAdapterMode::AnthropicMessagesStream => {
             ResponseAdapter::AnthropicMessagesStream
         }
-        skippy_inference_api::ResponseAdapterMode::None => ResponseAdapter::None,
-        skippy_inference_api::ResponseAdapterMode::OpenAiResponsesJson => {
+        mesh_openresponses::ResponseAdapterMode::None => ResponseAdapter::None,
+        mesh_openresponses::ResponseAdapterMode::OpenAiResponsesJson => {
             ResponseAdapter::OpenAiResponsesJson
         }
-        skippy_inference_api::ResponseAdapterMode::OpenAiResponsesStream => {
+        mesh_openresponses::ResponseAdapterMode::OpenAiResponsesStream => {
             ResponseAdapter::OpenAiResponsesStream
         }
     };
-    Ok(RequestNormalization {
+    RequestNormalization {
         changed: normalized.changed,
         rewritten_path: normalized.rewritten_path,
         response_adapter,
-    })
+    }
 }
 
 fn request_id_from_body(body: &serde_json::Value) -> Option<String> {

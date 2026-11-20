@@ -62,6 +62,7 @@ skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "
 skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.80.0"  }
 skippy-model-resolver = { path = "../../../skippy/crates/skippy-model-resolver", version = "0.80.0"  }
 skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.80.0"  }
+mesh-openresponses = { path = "../mesh-openresponses" }
 skippy-protocol = { path = "../../../skippy/crates/skippy-protocol", version = "0.80.0"  }
 skippy-cache = { path = "../../../skippy/crates/skippy-cache", version = "0.80.0"  }
 skippy-coordinator = { path = "../../../skippy/crates/skippy-coordinator", version = "0.80.0"  }
@@ -105,6 +106,7 @@ httparse = "1"
 http = "1"
 http-body-util = "0.1"
 tokio-stream = "0.1"
+tokio-tungstenite.workspace = true
 crossterm = "0.29"
 url = "2"
 urlencoding = "2"

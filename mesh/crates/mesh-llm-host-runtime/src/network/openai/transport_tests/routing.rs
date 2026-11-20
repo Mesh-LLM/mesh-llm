@@ -3,6 +3,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[path = "routing/cache_cost.rs"]
 mod cache_cost;
+#[path = "routing/responses.rs"]
+mod responses;
 
 type PromptShapeObservation = (Option<String>, Option<u64>, Option<u64>);
 
@@ -179,6 +181,7 @@ fn text_auto_request() -> BufferedHttpRequest {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -208,6 +211,7 @@ fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -229,6 +233,7 @@ fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -750,6 +755,7 @@ fn test_capture_path_for_request_uses_client_path() {
         model_name: Some("qwen".to_string()),
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::OpenAiResponsesStream,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -836,6 +842,7 @@ async fn routed_completion_http_boundary_preserves_configured_served_alias() -> 
         RouteTargetContext {
             request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
             response_adapter: ResponseAdapter::None,
+            responses_turn: None,
             route_observer: OpenAiRouteObserver::default(),
         },
     )

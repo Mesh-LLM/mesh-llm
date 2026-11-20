@@ -18,6 +18,8 @@ async fn duplicate_content_type_is_rejected_before_body_routing() {
             HTTP_READ_LIMITS,
             None,
             RequestTransforms::Skip,
+            None,
+            None,
         )
         .await
         .unwrap_err();
@@ -150,6 +152,8 @@ async fn oversized_multipart_model_is_rejected_before_audio_routing() {
                 HTTP_READ_LIMITS,
                 None,
                 RequestTransforms::Skip,
+                None,
+                None,
             )
             .await
             .unwrap_err();
@@ -190,6 +194,8 @@ async fn duplicate_multipart_model_is_rejected_before_audio_routing() {
             HTTP_READ_LIMITS,
             None,
             RequestTransforms::Skip,
+            None,
+            None,
         )
         .await
         .unwrap_err();

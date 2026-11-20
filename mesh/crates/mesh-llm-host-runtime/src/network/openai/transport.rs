@@ -439,6 +439,7 @@ pub async fn handle_mesh_request(
         &mut tcp_stream,
         plugin_manager.as_ref(),
         super::request_parse::RequestTransforms::Apply,
+        affinity.response_store(),
     )
     .await
     {
@@ -452,6 +453,14 @@ pub async fn handle_mesh_request(
     else {
         return;
     };
+    if super::ingress::responses_websocket::is_upgrade(&request) {
+        let _ = super::response::send_503(
+            tcp_stream,
+            "Responses WebSocket ingress is unavailable while the Mesh proxy is starting",
+        )
+        .await;
+        return;
+    }
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
     let mut lifecycle = attach_request_logging(&mut request, source_addr);
@@ -856,6 +865,7 @@ async fn route_mesh_request_attempts(
                 request_id: request.request_id,
                 retry_policy,
                 response_adapter: request.response_adapter,
+                responses_turn: request.responses_turn.as_ref(),
                 route_observer,
                 // This is the separate "mesh" auto-plan fan-out across many
                 // candidate hosts, not the `x-mesh-target` forced single-peer
@@ -1683,6 +1693,7 @@ fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
 pub(crate) struct RouteTargetContext<'a> {
     pub(crate) request_id: RequestId,
     pub(crate) response_adapter: ResponseAdapter,
+    pub(crate) responses_turn: Option<&'a std::sync::Arc<mesh_openresponses::ResponsesTurn>>,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
 }
 
@@ -1701,6 +1712,7 @@ pub async fn route_to_target(
     let RouteTargetContext {
         request_id,
         response_adapter,
+        responses_turn,
         route_observer,
     } = context;
     let route_started = Instant::now();
@@ -1719,6 +1731,7 @@ pub async fn route_to_target(
             request_id,
             retry_policy,
             response_adapter,
+            responses_turn,
             route_observer,
             served_by: None,
             peer_capsule_id: None,
@@ -1849,6 +1862,7 @@ pub async fn route_http_endpoint_request(
             request_id: request.request_id,
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,
+            responses_turn: request.responses_turn.as_ref(),
             route_observer,
             served_by: None,
             peer_capsule_id: None,

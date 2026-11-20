@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
+use tokio::sync::watch;
 
 #[path = "response_metadata.rs"]
 mod response_metadata;
@@ -61,11 +62,45 @@ pub(crate) enum ClientStream {
         anthropic: bool,
         prefix: std::io::Cursor<Vec<u8>>,
     },
+    /// Bounded in-process response capture used by persistent ingress
+    /// adapters. Dropping the reader signals the ordinary downstream
+    /// disconnect path so local and remote generation are cancelled.
+    Capture {
+        stream: tokio::io::DuplexStream,
+        disconnected: watch::Receiver<bool>,
+    },
+    /// Bytes consumed while parsing an upgraded HTTP head, replayed before
+    /// reads resume from the underlying stream.
+    Prefixed {
+        stream: Box<ClientStream>,
+        prefix: std::io::Cursor<Vec<u8>>,
+    },
     /// Discards every byte written and reports immediate EOF on read, with no
     /// real downstream socket behind it.
     ///
     /// Also used as a temporary placeholder when wrapping a stream.
     Null,
+}
+
+pub(crate) struct CapturedResponseStream {
+    stream: tokio::io::DuplexStream,
+    disconnected: watch::Sender<bool>,
+}
+
+impl Drop for CapturedResponseStream {
+    fn drop(&mut self) {
+        let _ = self.disconnected.send(true);
+    }
+}
+
+impl AsyncRead for CapturedResponseStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_read(cx, buf)
+    }
 }
 
 impl From<TcpStream> for ClientStream {
@@ -78,6 +113,31 @@ impl From<TcpStream> for ClientStream {
 }
 
 impl ClientStream {
+    pub(crate) fn capture_pair(capacity: usize) -> (Self, CapturedResponseStream) {
+        let (writer, reader) = tokio::io::duplex(capacity.max(1));
+        let (disconnect_tx, disconnect_rx) = watch::channel(false);
+        (
+            Self::Capture {
+                stream: writer,
+                disconnected: disconnect_rx,
+            },
+            CapturedResponseStream {
+                stream: reader,
+                disconnected: disconnect_tx,
+            },
+        )
+    }
+
+    pub(crate) fn with_read_prefix(self, prefix: Vec<u8>) -> Self {
+        if prefix.is_empty() {
+            return self;
+        }
+        Self::Prefixed {
+            stream: Box::new(self),
+            prefix: std::io::Cursor::new(prefix),
+        }
+    }
+
     pub(crate) fn add_response_metadata(
         &mut self,
         headers: Vec<(String, String)>,
@@ -113,14 +173,18 @@ impl ClientStream {
     pub(crate) fn finish_wire_bytes(&mut self, incomplete: WireBytesIncomplete) {
         match self {
             Self::Observed { tap, .. } => tap.finish(Some(incomplete)),
-            Self::Metadata { stream, .. } => stream.finish_wire_bytes(incomplete),
+            Self::Metadata { stream, .. } | Self::Prefixed { stream, .. } => {
+                stream.finish_wire_bytes(incomplete);
+            }
             _ => {}
         }
     }
     pub(crate) fn record_exchange_outcome(&self, outcome: &str) {
         match self {
             Self::Observed { tap, .. } => tap.execution_outcome(outcome),
-            Self::Metadata { stream, .. } => stream.record_exchange_outcome(outcome),
+            Self::Metadata { stream, .. } | Self::Prefixed { stream, .. } => {
+                stream.record_exchange_outcome(outcome);
+            }
             _ => {}
         }
     }
@@ -133,10 +197,11 @@ impl ClientStream {
         match self {
             Self::Metadata { stream, .. } => stream.set_client_path(path),
             Self::Observed { stream, .. } => stream.set_client_path(path),
+            Self::Prefixed { stream, .. } => stream.set_client_path(path),
             Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic = messages,
             // The discard sink answers no client, so it has no response
             // dialect to switch.
-            Self::Null => {}
+            Self::Capture { .. } | Self::Null => {}
         }
     }
 
@@ -144,8 +209,9 @@ impl ClientStream {
         match self {
             Self::Metadata { stream, .. } => stream.is_anthropic(),
             Self::Observed { stream, .. } => stream.is_anthropic(),
+            Self::Prefixed { stream, .. } => stream.is_anthropic(),
             Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic,
-            Self::Null => false,
+            Self::Capture { .. } | Self::Null => false,
         }
     }
 
@@ -155,8 +221,9 @@ impl ClientStream {
         match self {
             Self::Metadata { stream, .. } => stream.is_mesh_peer(),
             Self::Observed { stream, .. } => stream.is_mesh_peer(),
+            Self::Prefixed { stream, .. } => stream.is_mesh_peer(),
             Self::Quic { .. } => true,
-            Self::Tcp { .. } | Self::Null => false,
+            Self::Tcp { .. } | Self::Capture { .. } | Self::Null => false,
         }
     }
 
@@ -186,8 +253,9 @@ impl ClientStream {
         match self {
             Self::Metadata { stream, .. } => stream.set_nodelay(nodelay),
             Self::Observed { stream, .. } => stream.set_nodelay(nodelay),
+            Self::Prefixed { stream, .. } => stream.set_nodelay(nodelay),
             Self::Tcp { stream, .. } => stream.set_nodelay(nodelay),
-            Self::Quic { .. } => Ok(()),
+            Self::Quic { .. } | Self::Capture { .. } => Ok(()),
             Self::Null => Ok(()),
         }
     }
@@ -202,6 +270,7 @@ impl ClientStream {
         match self {
             Self::Metadata { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
             Self::Observed { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
+            Self::Prefixed { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
             Self::Tcp { stream, .. } => match wait_for_tcp_disconnect(stream).await {
                 TcpDisconnectWatch::Disconnected => true,
                 TcpDisconnectWatch::PipelinedBytes => std::future::pending::<bool>().await,
@@ -210,6 +279,16 @@ impl ClientStream {
                 Ok(Some(_)) | Err(_) => true,
                 Ok(None) => std::future::pending::<bool>().await,
             },
+            Self::Capture { disconnected, .. } => {
+                let mut disconnected = disconnected.clone();
+                if *disconnected.borrow() {
+                    return true;
+                }
+                match disconnected.changed().await {
+                    Ok(()) => *disconnected.borrow(),
+                    Err(_) => true,
+                }
+            }
             // No real client to disconnect -- never report one, so a relay
             // into the discard sink always runs to its own natural completion
             // instead of racing a phantom cancellation.
@@ -217,14 +296,36 @@ impl ClientStream {
         }
     }
 
+    /// A separately owned disconnect signal for response relays that already
+    /// hold `&mut self` while waiting on an upstream body.
+    ///
+    /// Socket transports discover disconnects through their own read/write
+    /// operations. In-process capture has an independent reader whose drop is
+    /// the downstream cancellation signal, so its receiver can be cloned and
+    /// raced against a blocked upstream read without borrowing this stream.
+    pub(crate) fn captured_response_disconnect(&self) -> Option<watch::Receiver<bool>> {
+        match self {
+            Self::Metadata { stream, .. }
+            | Self::Observed { stream, .. }
+            | Self::Prefixed { stream, .. } => stream.captured_response_disconnect(),
+            Self::Capture { disconnected, .. } => Some(disconnected.clone()),
+            Self::Tcp { .. } | Self::Quic { .. } | Self::Null => None,
+        }
+    }
+
     pub(crate) fn peer_addr(&self) -> std::io::Result<SocketAddr> {
         match self {
             Self::Metadata { stream, .. } => stream.peer_addr(),
             Self::Observed { stream, .. } => stream.peer_addr(),
+            Self::Prefixed { stream, .. } => stream.peer_addr(),
             Self::Tcp { stream, .. } => stream.peer_addr(),
             Self::Quic { .. } => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "QUIC ingress does not expose a socket address",
+            )),
+            Self::Capture { .. } => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "in-process response capture has no socket address",
             )),
             Self::Null => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -243,6 +344,18 @@ impl AsyncRead for ClientStream {
         match self.get_mut() {
             Self::Metadata { stream, .. } => Pin::new(stream.as_mut()).poll_read(cx, buf),
             Self::Observed { stream, .. } => Pin::new(stream.as_mut()).poll_read(cx, buf),
+            Self::Prefixed { stream, prefix } => {
+                let position = prefix.position() as usize;
+                let bytes = prefix.get_ref();
+                if position < bytes.len() {
+                    let count = buf.remaining().min(bytes.len() - position);
+                    buf.put_slice(&bytes[position..position + count]);
+                    prefix.set_position((position + count) as u64);
+                    Poll::Ready(Ok(()))
+                } else {
+                    Pin::new(stream.as_mut()).poll_read(cx, buf)
+                }
+            }
             Self::Tcp { stream, .. } => Pin::new(stream).poll_read(cx, buf),
             Self::Quic { stream, prefix, .. } => {
                 let position = prefix.position() as usize;
@@ -256,6 +369,7 @@ impl AsyncRead for ClientStream {
                     Pin::new(stream).poll_read(cx, buf)
                 }
             }
+            Self::Capture { stream, .. } => Pin::new(stream).poll_read(cx, buf),
             // Immediate EOF -- 0 bytes filled, buf untouched -- rather than
             // pending forever, so nothing that unexpectedly tries to read a
             // request body back off this sink can hang.
@@ -281,8 +395,10 @@ impl AsyncWrite for ClientStream {
                 }
                 result
             }
+            Self::Prefixed { stream, .. } => Pin::new(stream.as_mut()).poll_write(cx, buf),
             Self::Tcp { stream, .. } => Pin::new(stream).poll_write(cx, buf),
             Self::Quic { stream, .. } => Pin::new(stream).poll_write(cx, buf),
+            Self::Capture { stream, .. } => Pin::new(stream).poll_write(cx, buf),
             // Discard -- claim the whole buffer was written, same as writing
             // to `/dev/null`, so callers see no backpressure and no error.
             Self::Null => Poll::Ready(Ok(buf.len())),
@@ -302,8 +418,10 @@ impl AsyncWrite for ClientStream {
                 }
                 result
             }
+            Self::Prefixed { stream, .. } => Pin::new(stream.as_mut()).poll_flush(cx),
             Self::Tcp { stream, .. } => Pin::new(stream).poll_flush(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_flush(cx),
+            Self::Capture { stream, .. } => Pin::new(stream).poll_flush(cx),
             Self::Null => Poll::Ready(Ok(())),
         }
     }
@@ -320,8 +438,10 @@ impl AsyncWrite for ClientStream {
                 }
                 result
             }
+            Self::Prefixed { stream, .. } => Pin::new(stream.as_mut()).poll_shutdown(cx),
             Self::Tcp { stream, .. } => Pin::new(stream).poll_shutdown(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_shutdown(cx),
+            Self::Capture { stream, .. } => Pin::new(stream).poll_shutdown(cx),
             Self::Null => Poll::Ready(Ok(())),
         }
     }

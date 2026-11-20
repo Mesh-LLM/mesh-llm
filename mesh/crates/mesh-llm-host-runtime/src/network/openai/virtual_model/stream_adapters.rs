@@ -168,11 +168,12 @@ pub(super) async fn send_responses_sse(
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     continuation: Option<ProgressContinuation>,
+    turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> std::io::Result<()> {
     if continuation.is_none() {
         write_sse_headers(&mut stream, extra_headers).await?;
     }
-    for event in responses_stream_events(response, continuation) {
+    for event in responses_stream_events(response, continuation, turn) {
         write_named_sse_event(&mut stream, &event).await?;
     }
     finish_sse(&mut stream).await
@@ -216,23 +217,32 @@ pub(super) async fn send_anthropic_messages_sse(
 fn responses_stream_events(
     response: &serde_json::Value,
     continuation: Option<ProgressContinuation>,
+    turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Vec<Value> {
-    let responses = chat_completion_to_responses_json(response);
-    let mut events = skippy_inference_api::responses_stream_events_for_response(&responses);
-    let Some(continuation) = continuation else {
-        return events;
-    };
-    events.retain(|event| {
-        event.get("type").and_then(serde_json::Value::as_str) != Some("response.created")
-    });
-    let mut next = continuation.next_sequence_number;
-    for event in events.iter_mut() {
-        if let Some(object) = event.as_object_mut() {
-            object.insert("sequence_number".into(), json!(next));
+    match (turn, continuation) {
+        (Some(turn), Some(continuation)) => {
+            mesh_openresponses::responses_stream_events_for_chat_completion_after_progress(
+                turn,
+                response,
+                continuation.next_sequence_number as u64,
+            )
         }
-        next = next.saturating_add(1);
+        (Some(turn), None) => {
+            mesh_openresponses::responses_stream_events_for_chat_completion(turn, response)
+        }
+        (None, continuation) => {
+            let responses = chat_completion_to_responses_json(response);
+            match continuation {
+                Some(continuation) => {
+                    mesh_openresponses::responses_stream_events_for_response_after_progress(
+                        &responses,
+                        continuation.next_sequence_number as u64,
+                    )
+                }
+                None => mesh_openresponses::responses_stream_events_for_response(&responses),
+            }
+        }
     }
-    events
 }
 
 pub(super) fn chat_completion_to_responses_json(chat: &serde_json::Value) -> serde_json::Value {
@@ -330,7 +340,7 @@ mod tests {
 
     #[test]
     fn responses_stream_starts_with_created_without_a_continuation() {
-        let events = responses_stream_events(&chat_completion(), None);
+        let events = responses_stream_events(&chat_completion(), None, None);
 
         assert_eq!(events[0]["type"], "response.created");
         assert_eq!(events[0]["sequence_number"], 0);
@@ -343,6 +353,12 @@ mod tests {
                 .all(|pair| pair[1] > pair[0]),
             "sequence numbers must increase: {events:?}"
         );
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("buffered virtual response emits a text delta");
+        assert!(delta["obfuscation"].as_str().is_some());
+        assert_eq!(serde_json::to_vec(delta).unwrap().len() % 256, 0);
     }
 
     #[test]
@@ -353,6 +369,7 @@ mod tests {
                 created_at: 1_600_000_000,
                 next_sequence_number: 4,
             }),
+            None,
         );
 
         assert!(
@@ -371,6 +388,37 @@ mod tests {
             (4..4 + numbers.len() as i64).collect::<Vec<_>>(),
             "the replay must continue the progress sequence without gaps"
         );
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("continued buffered response emits a text delta");
+        assert_eq!(serde_json::to_vec(delta).unwrap().len() % 256, 0);
+    }
+
+    #[test]
+    fn buffered_virtual_response_honors_the_original_disabled_policy() {
+        let mut request = json!({
+            "model":"mesh",
+            "input":"hi",
+            "stream":true,
+            "stream_options":{"include_obfuscation":false},
+        });
+        let turn = mesh_openresponses::ResponsesTurn::prepare(
+            &mut request,
+            mesh_openresponses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        turn.normalize_backend_request("/v1/responses", &mut request)
+            .unwrap();
+        request["stream_options"]["include_obfuscation"] = json!(true);
+
+        let events = responses_stream_events(&chat_completion(), None, Some(&turn));
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("buffered virtual response emits a text delta");
+        assert_eq!(delta["delta"], "committee answer");
+        assert!(delta.get("obfuscation").is_none());
     }
 
     #[test]
@@ -387,6 +435,7 @@ mod tests {
                 created_at: 42,
                 next_sequence_number: 1,
             }),
+            None,
         );
 
         let item_id = events

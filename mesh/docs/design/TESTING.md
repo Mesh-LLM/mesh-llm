@@ -803,6 +803,24 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 - Verify the proxy closes the routed connection after the first response.
 - Verify the upstream-observed request includes `Connection: close`.
 
+### 24a. Responses WebSocket ingress contract
+
+- Upgrade `GET /v1/responses` on the full local Mesh API and run the seven
+  official cases: basic, sequential, same-socket `store:false` continuation,
+  reconnect recovery, missing previous response, failed-continuation eviction,
+  and a compacted new chain.
+- Send the first masked frame in the same write as the HTTP upgrade and verify
+  it is processed.
+- Change the target snapshot between two turns and verify the second turn uses
+  the refreshed route while the connection-local continuation remains at the
+  original ingress.
+- Close the client during active work and verify the existing downstream
+  disconnect path cancels local or remote generation.
+- Through a real authenticated peer QUIC HTTP tunnel, verify the same upgrade
+  is rejected rather than forwarded or re-routed.
+- The deterministic crate fixture uses loopback listeners and a fake model
+  backend; it requires no external network or model download.
+
 ### 25. OpenAI guardrail corpus smoke
 
 Enable the server-side guardrail mode first. Either start the runtime in that

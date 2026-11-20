@@ -1,6 +1,10 @@
 use super::*;
 #[path = "request_parse/audio_multipart_tests.rs"]
 mod audio_multipart_tests;
+#[path = "request_parse/responses_retention_tests.rs"]
+mod responses_retention_tests;
+#[path = "request_parse/responses_validation_tests.rs"]
+mod responses_validation_tests;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -151,6 +155,7 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
             &mut stream.into(),
             None,
             RequestTransforms::Apply,
+            None,
         )
         .await
         .unwrap_err()
@@ -174,6 +179,7 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
             &mut stream.into(),
             None,
             RequestTransforms::Apply,
+            None,
         )
         .await
         .unwrap_err()
@@ -185,6 +191,312 @@ async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
         .unwrap();
     client.shutdown().await.unwrap();
     assert!(server.await.unwrap().context().is_none());
+}
+
+async fn read_loopback_responses_request(
+    body: serde_json::Value,
+    extra_headers: &str,
+    store: std::sync::Arc<mesh_openresponses::ResponseStore>,
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    read_loopback_request("/v1/responses", body, extra_headers, store).await
+}
+
+async fn read_loopback_request(
+    path: &str,
+    body: serde_json::Value,
+    extra_headers: &str,
+    store: std::sync::Arc<mesh_openresponses::ResponseStore>,
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        read_http_request_with_plugin_manager_with_context(
+            &mut stream.into(),
+            None,
+            RequestTransforms::Apply,
+            Some(store),
+        )
+        .await
+    });
+    let body = body.to_string();
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
+                body.len(),
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    client.shutdown().await.unwrap();
+    server.await.unwrap()
+}
+
+#[tokio::test]
+async fn loopback_compaction_restores_into_a_new_responses_request() {
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::new(
+        mesh_openresponses::ResponseStoreLimits::default(),
+    ));
+    let compact_request = serde_json::json!({
+        "model": "qwen",
+        "input": [
+            {"type":"message","role":"user","content":"code word slate"},
+            {"type":"message","role":"assistant","content":"remembered"}
+        ]
+    });
+    let original_len = compact_request.to_string().len();
+    let compact =
+        read_loopback_request("/v1/responses/compact", compact_request, "", store.clone())
+            .await
+            .unwrap();
+    assert_eq!(compact.client_path, "/v1/responses/compact");
+    assert_eq!(compact.path, "/v1/chat/completions");
+    assert_eq!(
+        compact.response_adapter,
+        ResponseAdapter::OpenAiResponsesJson
+    );
+    let forwarded_body = compact
+        .raw
+        .split(|byte| *byte == b'\n')
+        .next_back()
+        .unwrap();
+    assert_eq!(compact.body_len_bytes, forwarded_body.len());
+    assert!(compact.body_len_bytes > original_len);
+    let compacted = compact
+        .responses_turn
+        .unwrap()
+        .finish_chat_completion(&serde_json::json!({
+            "choices":[{"message":{"content":"The code word is slate."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":11,"completion_tokens":6,"total_tokens":17}
+        }));
+    assert_eq!(compacted["object"], "response.compaction");
+    assert_eq!(compacted["usage"]["total_tokens"], 17);
+
+    let mut input = compacted["output"].as_array().unwrap().clone();
+    input.push(serde_json::json!({
+        "type":"message","role":"user","content":"What is the code word?"
+    }));
+    let next = read_loopback_responses_request(
+        serde_json::json!({"model":"qwen","input":input}),
+        "",
+        store,
+    )
+    .await
+    .unwrap();
+    let forwarded = next.body_json.unwrap();
+    assert!(
+        forwarded["messages"]
+            .to_string()
+            .contains("The code word is slate.")
+    );
+    assert!(
+        !forwarded["messages"]
+            .to_string()
+            .contains("encrypted_content")
+    );
+}
+
+#[tokio::test]
+async fn compact_expansion_over_body_limit_is_rejected_without_plugins() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "model":"qwen",
+        "input":[{"type":"message","role":"user","content":"\"".repeat(3 * 1024 * 1024)}]
+    }))
+    .unwrap();
+    assert!(body.len() < MAX_BODY_BYTES);
+    let error = match rewrite_request_body_for_forwarding(
+        "/v1/responses/compact",
+        &body,
+        None,
+        Transformer {
+            plugins: None,
+            private_hint: false,
+            node_limit: None,
+        },
+        true,
+        Some(mesh_openresponses::ResponseContinuation::disabled()),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("oversized rewritten compact request should be rejected"),
+    };
+    assert!(error.to_string().contains("rewritten request body exceeds"));
+}
+
+#[tokio::test]
+async fn responses_continuation_is_restored_at_ingress_before_worker_routing() {
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
+    let first = read_loopback_responses_request(
+        serde_json::json!({
+            "model": "m", "input": "use the weather tool",
+            "tools": [{"type":"function","name":"weather"}]
+        }),
+        "",
+        store.clone(),
+    )
+    .await
+    .unwrap();
+    let turn = first
+        .responses_turn
+        .expect("Responses ingress owns the turn");
+    let first_response = turn.finish_chat_completion(&serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": null, "tool_calls": [{
+                "id": "call_weather",
+                "type": "function",
+                "function": {"name": "weather", "arguments": "{\"city\":\"Oslo\"}"}
+            }]},
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    }));
+
+    let second = read_loopback_responses_request(
+        serde_json::json!({
+            "previous_response_id": first_response["id"],
+            "input": [{"type": "function_call_output", "call_id": "call_weather", "output": "sunny"}]
+        }),
+        "",
+        store.clone(),
+    )
+    .await
+    .unwrap();
+    let messages = second.body_json.unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["content"], "use the weather tool");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_weather");
+    assert_eq!(messages[2]["tool_call_id"], "call_weather");
+    assert_eq!(messages[2]["content"], "sunny");
+    assert!(
+        !String::from_utf8_lossy(&second.raw).contains("previous_response_id"),
+        "workers receive expanded history, not an ingress-local id"
+    );
+
+    let denied = read_loopback_responses_request(
+        serde_json::json!({
+            "previous_response_id": first_response["id"],
+            "input": "continue"
+        }),
+        "X-Forwarded-For: 127.0.0.1\r\n",
+        store,
+    )
+    .await
+    .unwrap_err();
+    let inference = denied.inference_error().expect("typed continuation error");
+    assert_eq!(inference.status(), http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        inference.body().error.code.as_deref(),
+        Some("previous_response_not_found")
+    );
+}
+
+#[tokio::test]
+async fn mesh_http_and_sse_reject_orphan_outputs_before_forwarding() {
+    let orphan = serde_json::json!({
+        "type":"function_call_output","call_id":"orphan","output":"x"
+    });
+    let mut bodies = Vec::new();
+    for stream in [false, true] {
+        bodies.extend([
+            serde_json::json!({"model":"m","stream":stream,"input":[orphan.clone()]}),
+            serde_json::json!({"model":"m","stream":stream,"messages":[orphan.clone()]}),
+            serde_json::json!({"model":"m","stream":stream,"input":orphan.clone()}),
+        ]);
+    }
+    for body in bodies {
+        let body = serde_json::to_vec(&body).unwrap();
+        let error = match rewrite_request_body_for_forwarding(
+            "/v1/responses",
+            &body,
+            None,
+            Transformer {
+                plugins: None,
+                private_hint: false,
+                node_limit: None,
+            },
+            true,
+            Some(mesh_openresponses::ResponseContinuation::disabled()),
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("orphan output should be rejected before forwarding"),
+        };
+        let inference = error
+            .downcast_ref::<skippy_inference_api::InferenceError>()
+            .expect("typed lineage error");
+        assert_eq!(inference.status(), http::StatusCode::BAD_REQUEST);
+        let body = inference.body().error;
+        assert_eq!(body.error_type, "invalid_request_error");
+        assert_eq!(body.code.as_deref(), Some("invalid_value"));
+        assert_eq!(body.param.as_deref(), Some("input"));
+    }
+}
+
+#[tokio::test]
+async fn mesh_ingress_keeps_full_tools_but_owns_allowed_output_policy() {
+    let store = std::sync::Arc::new(mesh_openresponses::ResponseStore::default());
+    let body = serde_json::to_vec(&serde_json::json!({
+        "model":"m", "input":"use safe",
+        "tools":[
+            {"type":"function","name":"safe","parameters":{"type":"object"}},
+            {"type":"function","name":"admin","description":"retained for backend"}
+        ],
+        "tool_choice":{"type":"allowed_tools","tools":[
+            {"type":"function","name":"safe"}
+        ]}
+    }))
+    .unwrap();
+    let request = rewrite_request_body_for_forwarding(
+        "/v1/responses",
+        &body,
+        None,
+        Transformer {
+            plugins: None,
+            private_hint: false,
+            node_limit: None,
+        },
+        true,
+        Some(mesh_openresponses::ResponseContinuation::new(
+            Some(store.clone()),
+            Some(mesh_openresponses::CallerScope::LocalHost),
+        )),
+    )
+    .await
+    .unwrap();
+    assert_eq!(request.body_json.as_ref().unwrap()["tool_choice"], "auto");
+    assert_eq!(
+        request.body_json.as_ref().unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        request.body_json.as_ref().unwrap()["tools"][1]["function"]["description"],
+        "retained for backend"
+    );
+    let turn = request.responses_turn.expect("Mesh ingress owns the turn");
+    let id = turn.id().to_string();
+    let response = turn.finish_chat_completion(&serde_json::json!({
+        "choices":[{"message":{"tool_calls":[{
+            "id":"c","type":"function","function":{"name":"admin","arguments":"{}"}
+        }]},"finish_reason":"tool_calls"}]
+    }));
+    assert_eq!(response["status"], "failed");
+    assert_eq!(response["error"]["code"], "tool_choice_violation");
+    assert!(
+        store
+            .get(&mesh_openresponses::CallerScope::LocalHost, &id)
+            .is_err()
+    );
 }
 
 fn catalog_model_ref_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
@@ -428,6 +740,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -933,6 +1246,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             stream: None,
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
+            responses_turn: None,
             correlation_id: None,
             exchange_observation_id: None,
             automatic_route: false,
@@ -981,6 +1295,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -1232,6 +1547,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         model_name: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
@@ -1313,12 +1629,18 @@ fn mesh_routing_header_values_rejects_non_utf8_x_mesh_exclude() {
 }
 
 #[tokio::test]
-async fn only_realtime_upgrades_keep_bytes_after_the_head() {
+async fn supported_websocket_upgrades_keep_bytes_after_the_head() {
     let realtime = read_request_from_parts(vec![
         b"GET /v1/realtime?model=m HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x05early".to_vec(),
     ])
     .await;
     assert!(realtime.raw.ends_with(b"\r\n\r\n\x81\x05early"));
+
+    let responses = read_request_from_parts(vec![
+        b"GET /v1/responses HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x05early".to_vec(),
+    ])
+    .await;
+    assert!(responses.raw.ends_with(b"\r\n\r\n\x81\x05early"));
 
     let other = read_request_from_parts(vec![
         b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nUpgrade: x\r\nConnection: upgrade\r\n\r\n{\"model\":\"m\"}".to_vec(),

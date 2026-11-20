@@ -93,6 +93,7 @@ pub struct AffinityRouter {
     prefix: Arc<shared_affinity::AffinityRouter>,
     target_health: TargetHealth,
     reservations: RoutingReservations,
+    responses: Option<Arc<mesh_openresponses::ResponseStore>>,
 }
 
 impl AffinityRouter {
@@ -102,6 +103,8 @@ impl AffinityRouter {
             prefix: Arc::new(shared_affinity::AffinityRouter::new()),
             target_health: TargetHealth::default(),
             reservations: RoutingReservations::default(),
+            responses: mesh_openresponses::configured_response_storage()
+                .then(|| Arc::new(mesh_openresponses::ResponseStore::default())),
         }
     }
 
@@ -123,7 +126,12 @@ impl AffinityRouter {
             )),
             target_health: TargetHealth::default(),
             reservations: RoutingReservations::default(),
+            responses: Some(Arc::new(mesh_openresponses::ResponseStore::default())),
         }
+    }
+
+    pub(crate) fn response_store(&self) -> Option<Arc<mesh_openresponses::ResponseStore>> {
+        self.responses.clone()
     }
 
     /// Learn how many prompt bytes `model` spends per token from a reply's

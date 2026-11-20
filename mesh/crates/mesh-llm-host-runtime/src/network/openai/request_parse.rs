@@ -4,11 +4,12 @@ use crate::plugin;
 use anyhow::{Context, Result, bail};
 use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
-    ResponseAdapter, normalize_openai_compat_request, release_request_objects_with,
-    resolve_request_object_references,
+    ResponseAdapter, normalize_openai_compat_request, normalize_prepared_responses_request,
+    release_request_objects_with, resolve_request_object_references,
 };
 use super::routing_rank::descriptor_for_model;
 
@@ -18,9 +19,11 @@ mod body_rewrite;
 mod chunked;
 mod effective_entity;
 mod plugin_transform;
+mod responses_websocket;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
 pub(crate) use plugin_transform::RequestTransforms;
+pub(super) use responses_websocket::buffer_prepared_responses_turn;
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
@@ -109,10 +112,9 @@ struct ParsedHeaders {
     content_type: Option<String>,
     is_chunked: bool,
     expects_continue: bool,
-    /// A live transcription handshake (`GET /v1/realtime` with an upgrade):
-    /// bytes after the head are its first websocket frames, not a body, and
-    /// are kept for the relay. Every other request drops them.
-    is_realtime_upgrade: bool,
+    /// A supported WebSocket handshake: bytes after the head are its first
+    /// frames, not an HTTP body, and are kept for the owning adapter.
+    is_websocket_upgrade: bool,
     correlation_id: Option<String>,
     /// The client used the `/private/v1` base URL; `path` has it removed.
     private_base: bool,
@@ -160,6 +162,10 @@ impl OpenAiRequestReadError {
         self.context.as_ref()
     }
 
+    pub(crate) fn inference_error(&self) -> Option<&skippy_inference_api::InferenceError> {
+        self.error.downcast_ref()
+    }
+
     fn into_error(self) -> anyhow::Error {
         self.error
     }
@@ -191,6 +197,10 @@ pub struct BufferedHttpRequest {
     pub model_name: Option<String>,
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
+    /// The caller-ingress Responses turn. It never crosses to a worker: its
+    /// expanded chat history does, while this state builds and stores the
+    /// client-facing terminal response after any worker returns.
+    pub responses_turn: Option<Arc<mesh_openresponses::ResponsesTurn>>,
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
@@ -303,7 +313,11 @@ impl BufferedHttpRequest {
             .unwrap_or(&self.client_path);
         matches!(
             path,
-            "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/messages"
+            "/v1/chat/completions"
+                | "/v1/completions"
+                | "/v1/responses"
+                | "/v1/responses/compact"
+                | "/v1/messages"
         )
         .then_some(())
         .filter(|()| {
@@ -378,6 +392,7 @@ struct RequestRewriteOutcome {
     request_object_request_ids: Vec<String>,
     request_path: String,
     response_adapter: ResponseAdapter,
+    responses_turn: Option<Arc<mesh_openresponses::ResponsesTurn>>,
     rewritten_body: Option<Vec<u8>>,
     /// A plugin request transform replaced the body.
     transformed: bool,
@@ -406,12 +421,16 @@ pub(crate) async fn read_http_request_with_plugin_manager_with_context(
     stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
     transforms: RequestTransforms,
+    response_store: Option<Arc<mesh_openresponses::ResponseStore>>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    let response_peer = stream.peer_addr().ok().map(|address| address.ip());
     let result = read_http_request_with_limits_with_context(
         stream,
         HTTP_READ_LIMITS,
         plugin_manager,
         transforms,
+        response_store,
+        response_peer,
     )
     .await;
     match &result {
@@ -438,6 +457,8 @@ where
         limits,
         plugin_manager,
         RequestTransforms::Skip,
+        None,
+        None,
     )
     .await
     .map_err(OpenAiRequestReadError::into_error)
@@ -448,6 +469,8 @@ async fn read_http_request_with_limits_with_context<S>(
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
     transforms: RequestTransforms,
+    response_store: Option<Arc<mesh_openresponses::ResponseStore>>,
+    response_peer: Option<std::net::IpAddr>,
 ) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -482,6 +505,15 @@ where
     let requires_json_transform =
         request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some())
             || (transformer.is_some() && plugin_transform::is_transformable_path(&parsed.path));
+    let forwarded = mesh_openresponses::FORWARDING_HEADERS.iter().any(|name| {
+        header_values_from_raw(&raw[..header_end], name).is_ok_and(|values| !values.is_empty())
+    });
+    let continuation = (transforms == RequestTransforms::Apply).then(|| {
+        mesh_openresponses::ResponseContinuation::new(
+            response_store,
+            mesh_openresponses::caller_scope_for_http_peer(response_peer, forwarded),
+        )
+    });
     let rewrite = rewrite_request_body_for_forwarding(
         &parsed.path,
         &body,
@@ -493,14 +525,41 @@ where
             node_limit: super::routing_scope::head_node_limit(&raw),
         },
         requires_json_transform,
+        continuation,
     )
     .await
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
+    // A Responses request crosses the mesh as normalized Chat JSON. Preserve
+    // ordinary Chat parsing, but if a losing extension made the typed metadata
+    // parse fail, recover routing fields from the documented Responses backend
+    // marker instead of discarding the already selected concrete model.
+    let fallback_routing_body = if metadata.is_none()
+        && rewrite.body_json.is_none()
+        && parsed.path.split('?').next() == Some("/v1/chat/completions")
+        && body
+            .windows(skippy_inference_api::MESH_COMPACT_FIELD.len())
+            .any(|window| window == skippy_inference_api::MESH_COMPACT_FIELD.as_bytes())
+    {
+        serde_json::from_slice(&body).ok()
+    } else {
+        None
+    };
+    let responses_routing = responses_routing_metadata(
+        &parsed.path,
+        rewrite
+            .body_json
+            .as_ref()
+            .or(fallback_routing_body.as_ref()),
+    );
+    let stream = responses_routing
+        .as_ref()
+        .map(|routing| routing.stream)
+        .unwrap_or_else(|| metadata.as_ref().and_then(|value| value.stream));
     let mut response_adapter = rewrite.response_adapter;
     if response_adapter == ResponseAdapter::None
         && parsed.path.split('?').next().unwrap_or(&parsed.path) == "/v1/chat/completions"
     {
-        response_adapter = if metadata.as_ref().and_then(|value| value.stream) == Some(true) {
+        response_adapter = if stream == Some(true) {
             ResponseAdapter::OpenAiChatCompletionsStream
         } else {
             ResponseAdapter::OpenAiChatCompletionsJson
@@ -523,30 +582,35 @@ where
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
             None => None,
         }
+    } else if let Some(routing) = responses_routing.as_ref() {
+        routing.model_name.clone()
     } else {
         metadata.as_ref().and_then(|value| value.model.clone())
     };
-    let completion_tokens = metadata.as_ref().and_then(|value| {
-        value
-            .max_completion_tokens
-            .or(value.max_tokens)
-            .or(value.max_output_tokens)
-            .or(value.n_predict)
-    });
+    let completion_tokens = responses_routing
+        .as_ref()
+        .map(|routing| routing.completion_tokens)
+        .unwrap_or_else(|| completion_tokens_from_metadata(metadata.as_ref()));
     let raw = finalize_forwarded_request(
         raw,
         header_end,
-        parsed.expects_continue,
-        Some(&rewrite.request_path),
-        rewrite.rewritten_body.as_deref(),
-        parsed.request_id,
-        parsed.private_base,
+        ForwardedRequestRewrite {
+            strip_expect: parsed.expects_continue,
+            rewritten_method: None,
+            rewritten_path: Some(&rewrite.request_path),
+            rewritten_body: rewrite.rewritten_body.as_deref(),
+            request_id: parsed.request_id,
+            private_base: parsed.private_base,
+            websocket_upgrade: parsed.is_websocket_upgrade,
+            strip_websocket_headers: false,
+            ensure_json_content_type: false,
+        },
     )
     .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     // Context budgets follow what reaches the model: a transform may replace
     // a large attachment with a little text, or the reverse.
     let body_len_bytes = match rewrite.rewritten_body.as_deref() {
-        Some(forwarded) if rewrite.transformed => forwarded.len(),
+        Some(forwarded) => forwarded.len(),
         _ => body.len(),
     };
     let body_bytes = if body.is_empty() { None } else { Some(body) };
@@ -561,14 +625,58 @@ where
         body_bytes,
         body_len_bytes,
         completion_tokens,
-        stream: metadata.as_ref().and_then(|value| value.stream),
+        stream,
         model_name,
         request_object_request_ids: rewrite.request_object_request_ids,
         response_adapter,
+        responses_turn: rewrite.responses_turn,
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
         automatic_route: false,
+    })
+}
+
+struct ResponsesRoutingMetadata {
+    model_name: Option<String>,
+    completion_tokens: Option<u32>,
+    stream: Option<bool>,
+}
+
+fn responses_routing_metadata(
+    client_path: &str,
+    normalized_body: Option<&serde_json::Value>,
+) -> Option<ResponsesRoutingMetadata> {
+    let path = client_path.split('?').next();
+    let normalized_responses = path == Some("/v1/chat/completions")
+        && normalized_body.and_then(|body| body.get(skippy_inference_api::MESH_COMPACT_FIELD))
+            == Some(&serde_json::Value::Bool(false));
+    if path != Some("/v1/responses") && !normalized_responses {
+        return None;
+    }
+
+    Some(ResponsesRoutingMetadata {
+        model_name: normalized_body
+            .and_then(|body| body.get("model"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        completion_tokens: normalized_body
+            .and_then(|body| body.get("max_tokens"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+        stream: normalized_body
+            .and_then(|body| body.get("stream"))
+            .and_then(serde_json::Value::as_bool),
+    })
+}
+
+fn completion_tokens_from_metadata(metadata: Option<&RequestMetadata>) -> Option<u32> {
+    metadata.and_then(|value| {
+        value
+            .max_completion_tokens
+            .or(value.max_tokens)
+            .or(value.max_output_tokens)
+            .or(value.n_predict)
     })
 }
 
@@ -601,7 +709,7 @@ where
     }
     // A client may send its first websocket frames together with the
     // handshake; they stay in `raw` behind the head for the relay.
-    if !parsed.is_realtime_upgrade {
+    if !parsed.is_websocket_upgrade {
         raw.truncate(header_end);
     }
     Ok(Vec::new())
@@ -696,12 +804,14 @@ async fn rewrite_request_body_for_forwarding(
     plugin_manager: Option<&plugin::PluginManager>,
     transformer: Transformer<'_>,
     requires_json_transform: bool,
+    response_continuation: Option<mesh_openresponses::ResponseContinuation>,
 ) -> Result<RequestRewriteOutcome> {
     let mut outcome = RequestRewriteOutcome {
         body_json: None,
         request_object_request_ids: Vec::new(),
         request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
+        responses_turn: None,
         rewritten_body: None,
         transformed: false,
     };
@@ -717,7 +827,24 @@ async fn rewrite_request_body_for_forwarding(
         return Ok(outcome);
     };
 
-    let normalization = normalize_openai_compat_request(path, body_json)?;
+    {
+        let continuation = response_continuation
+            .unwrap_or_else(mesh_openresponses::ResponseContinuation::disabled);
+        outcome.responses_turn = match path.split('?').next() {
+            Some("/v1/responses") => Some(Arc::new(mesh_openresponses::ResponsesTurn::prepare(
+                body_json,
+                continuation,
+            )?)),
+            Some("/v1/responses/compact") => Some(Arc::new(
+                mesh_openresponses::ResponsesTurn::prepare_compact(body_json, continuation)?,
+            )),
+            _ => None,
+        };
+    }
+    let normalization = match outcome.responses_turn.as_deref() {
+        Some(turn) => normalize_prepared_responses_request(turn, path, body_json)?,
+        None => normalize_openai_compat_request(path, body_json)?,
+    };
     let mut changed = normalization.changed;
     if let Some(rewritten_path) = normalization.rewritten_path {
         outcome.request_path = rewritten_path;
@@ -747,9 +874,14 @@ async fn rewrite_request_body_for_forwarding(
         }
         let rewritten = serde_json::to_vec(body_json)
             .context("serialize normalized OpenAI-compatible request body")?;
-        // A peer reading the forwarded request enforces the same limit.
-        if transformed && rewritten.len() > MAX_BODY_BYTES {
-            bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+        // A peer reading the forwarded request enforces the same limit. This
+        // applies to protocol normalization and continuation expansion too,
+        // not only bodies changed by a plugin.
+        if rewritten.len() > MAX_BODY_BYTES {
+            if transformed {
+                bail!("transformed request body exceeds {MAX_BODY_BYTES} bytes");
+            }
+            bail!("rewritten request body exceeds {MAX_BODY_BYTES} bytes");
         }
         Ok((transformed, Some(rewritten)))
     }
@@ -811,22 +943,41 @@ fn is_document_ocr_path(path: &str) -> bool {
     )
 }
 
+struct ForwardedRequestRewrite<'a> {
+    strip_expect: bool,
+    rewritten_method: Option<&'a str>,
+    rewritten_path: Option<&'a str>,
+    rewritten_body: Option<&'a [u8]>,
+    request_id: RequestId,
+    private_base: bool,
+    websocket_upgrade: bool,
+    strip_websocket_headers: bool,
+    ensure_json_content_type: bool,
+}
+
 fn finalize_forwarded_request(
     mut raw: Vec<u8>,
     header_end: usize,
-    strip_expect: bool,
-    rewritten_path: Option<&str>,
-    rewritten_body: Option<&[u8]>,
-    request_id: RequestId,
-    private_base: bool,
+    rewrite: ForwardedRequestRewrite<'_>,
 ) -> Result<Vec<u8>> {
+    let ForwardedRequestRewrite {
+        strip_expect,
+        rewritten_method,
+        rewritten_path,
+        rewritten_body,
+        request_id,
+        private_base,
+        websocket_upgrade,
+        strip_websocket_headers,
+        ensure_json_content_type,
+    } = rewrite;
     let original_body = raw.split_off(header_end);
     // Re-parse with httparse so we iterate over validated header structs.
     let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut req = httparse::Request::new(&mut headers_buf);
     let _ = req.parse(&raw).context("re-parse headers for forwarding")?;
 
-    let method = req.method.unwrap_or("GET");
+    let method = rewritten_method.unwrap_or_else(|| req.method.unwrap_or("GET"));
     let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
     let version = req.version.unwrap_or(1);
 
@@ -842,6 +993,15 @@ fn finalize_forwarded_request(
     for header in req.headers.iter() {
         let name = header.name;
         if name.eq_ignore_ascii_case("connection") {
+            continue;
+        }
+        if strip_websocket_headers
+            && (name.eq_ignore_ascii_case("upgrade")
+                || name.to_ascii_lowercase().starts_with("sec-websocket-"))
+        {
+            continue;
+        }
+        if ensure_json_content_type && name.eq_ignore_ascii_case("content-type") {
             continue;
         }
         if name.eq_ignore_ascii_case("x-request-id") {
@@ -881,6 +1041,9 @@ fn finalize_forwarded_request(
     if let Some(body) = rewritten_body {
         rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
+    if ensure_json_content_type {
+        rebuilt.push_str("Content-Type: application/json\r\n");
+    }
     rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
     if private_base {
         rebuilt.push_str(&super::routing_scope::private_scope_header_line());
@@ -899,7 +1062,11 @@ fn finalize_forwarded_request(
 
     // The proxy buffers exactly one request for routing, so force a single-request
     // connection contract upstream instead of reusing the client connection blindly.
-    rebuilt.push_str("Connection: close\r\n\r\n");
+    if websocket_upgrade {
+        rebuilt.push_str("Connection: Upgrade\r\n\r\n");
+    } else {
+        rebuilt.push_str("Connection: close\r\n\r\n");
+    }
 
     let mut forwarded = rebuilt.into_bytes();
     forwarded.extend_from_slice(rewritten_body.unwrap_or(&original_body));
@@ -984,10 +1151,13 @@ where
                     content_length = None;
                 }
 
-                let is_realtime_upgrade = upgrade_requested
+                let is_websocket_upgrade = upgrade_requested
                     && connection_upgrade
                     && method.eq_ignore_ascii_case("GET")
-                    && path.split('?').next() == Some("/v1/realtime");
+                    && matches!(
+                        path.split('?').next(),
+                        Some("/v1/realtime" | "/v1/responses")
+                    );
                 return Ok(ParsedHeaders {
                     header_end,
                     method,
@@ -997,7 +1167,7 @@ where
                     content_type,
                     is_chunked,
                     expects_continue,
-                    is_realtime_upgrade,
+                    is_websocket_upgrade,
                     correlation_id,
                     private_base,
                 });
@@ -1266,7 +1436,7 @@ async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> R
 }
 
 fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_present: bool) -> bool {
-    skippy_inference_api::request_body_requires_json_normalization(path, body)
+    mesh_openresponses::request_body_requires_json_normalization(path, body)
         || (plugin_manager_present
             && path.split('?').next().unwrap_or(path) == "/v1/chat/completions"
             && std::str::from_utf8(body).ok().is_some_and(|body_text| {

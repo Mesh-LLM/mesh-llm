@@ -12,7 +12,7 @@ use super::relay::relay_error_response;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_adapter;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::identifiers::RequestId;
 use skippy_inference_api::chat::identifiers::normalize_chat_completion_json_body;
 use std::time::Duration;
@@ -64,6 +64,9 @@ async fn read_whole_response_body<R: AsyncRead + Unpin>(
 }
 
 /// Relay a chat-completions upstream response translated into Responses-API JSON.
+// Keep this wrapper's transport arguments aligned with the sibling protocol
+// relays; the final argument is the ingress-owned Responses state.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::network::openai::response) async fn relay_translated_responses_json<
     R: AsyncRead + Unpin,
 >(
@@ -74,6 +77,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
+    responses_turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Result<RouteAttemptResult> {
     relay_translated_json(
         tcp_stream,
@@ -84,6 +88,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
         route_observer,
         request_id,
         false,
+        responses_turn,
     )
     .await
 }
@@ -108,6 +113,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_json
         route_observer,
         request_id,
         true,
+        None,
     )
     .await
 }
@@ -122,6 +128,7 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
     anthropic: bool,
+    responses_turn: Option<&mesh_openresponses::ResponsesTurn>,
 ) -> Result<RouteAttemptResult> {
     if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
         return Ok(result);
@@ -162,7 +169,14 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
             &value,
         )?)?
     } else {
-        response_adapter::translate_chat_completion_to_responses(body)?
+        match responses_turn {
+            Some(turn) => {
+                let chat: serde_json::Value = serde_json::from_slice(body)
+                    .context("parse chat completion for Responses translation")?;
+                serde_json::to_vec(&turn.try_finish_chat_completion(&chat)?)?
+            }
+            None => response_adapter::translate_chat_completion_to_responses(body)?,
+        }
     };
     let usage = parse_token_usage_from_json_body(body);
     let cache_cost = parse_cache_cost_from_json_body(body);
@@ -316,6 +330,115 @@ mod tests {
         assert_eq!(response["usage"]["input_tokens"], 5);
         assert_eq!(response["usage"]["output_tokens"], 3);
         assert_eq!(response["usage"]["total_tokens"], 8);
+    }
+
+    #[test]
+    fn shared_responses_adapter_emits_compaction_for_virtual_and_plugin_paths() {
+        let mut request = serde_json::json!({
+            "model":"qwen",
+            "input":[{"type":"message","role":"user","content":"remember slate"}]
+        });
+        let turn = mesh_openresponses::ResponsesTurn::prepare_compact(
+            &mut request,
+            mesh_openresponses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let chat = serde_json::json!({
+            "choices":[{"message":{"content":"The code word is slate."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":7,"completion_tokens":6,"total_tokens":13}
+        });
+        let response = crate::network::openai::virtual_model::translated_json_body(
+            &chat,
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap();
+        assert_eq!(response["object"], "response.compaction");
+        assert_eq!(response["usage"]["total_tokens"], 13);
+        assert_eq!(response["output"][1]["type"], "compaction");
+    }
+
+    #[test]
+    fn shared_responses_adapter_rejects_truncated_compaction() {
+        let mut request = serde_json::json!({"model":"qwen","input":"remember slate"});
+        let turn = mesh_openresponses::ResponsesTurn::prepare_compact(
+            &mut request,
+            mesh_openresponses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let error = crate::network::openai::virtual_model::translated_json_body(
+            &serde_json::json!({
+                "choices":[{"message":{"content":"partial"},"finish_reason":"length"}],
+                "usage":{"prompt_tokens":7,"completion_tokens":6,"total_tokens":13}
+            }),
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap_err();
+        assert_eq!(error.status().as_u16(), 502);
+    }
+
+    #[test]
+    fn shared_responses_adapter_enforces_ingress_max_tool_calls() {
+        let mut request = serde_json::json!({
+            "model":"qwen", "input":"one call only", "max_tool_calls":1,
+            "tools":[{"type":"function","name":"same"}]
+        });
+        let turn = mesh_openresponses::ResponsesTurn::prepare(
+            &mut request,
+            mesh_openresponses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let chat = serde_json::json!({
+            "choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"call_a","type":"function","function":{"name":"same","arguments":"{}"}},
+                {"id":"call_b","type":"function","function":{"name":"same","arguments":"{}"}}
+            ]},"finish_reason":"tool_calls"}]
+        });
+        let response = crate::network::openai::virtual_model::translated_json_body(
+            &chat,
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap();
+        assert_eq!(response["status"], "failed");
+        assert_eq!(response["error"]["code"], "tool_call_limit_exceeded");
+        assert_eq!(response["output"], serde_json::json!([]));
+        assert_eq!(response["store"], false);
+    }
+
+    #[test]
+    fn shared_responses_adapter_enforces_ingress_parallel_tool_calls() {
+        let mut request = serde_json::json!({
+            "model":"qwen", "input":"one call only", "parallel_tool_calls":false,
+            "tools":[{"type":"function","name":"same"}]
+        });
+        let turn = mesh_openresponses::ResponsesTurn::prepare(
+            &mut request,
+            mesh_openresponses::ResponseContinuation::disabled(),
+        )
+        .unwrap();
+        let chat = serde_json::json!({
+            "choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"call_a","type":"function","function":{"name":"same","arguments":"{}"}},
+                {"id":"call_b","type":"function","function":{"name":"same","arguments":"{}"}}
+            ]},"finish_reason":"tool_calls"}]
+        });
+        let response = crate::network::openai::virtual_model::translated_json_body(
+            &chat,
+            crate::network::openai::request_normalize::ResponseAdapter::OpenAiResponsesJson,
+            200,
+            Some(&turn),
+        )
+        .unwrap();
+        assert_eq!(response["status"], "failed");
+        assert_eq!(response["error"]["code"], "tool_call_limit_exceeded");
+        assert_eq!(response["output"], serde_json::json!([]));
+        assert_eq!(response["store"], false);
+        assert_eq!(response["parallel_tool_calls"], false);
     }
 
     #[tokio::test]
@@ -587,6 +710,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 RequestId::new(),
+                None,
             )
             .await
             .expect("relay")
@@ -684,6 +808,7 @@ mod tests {
                         observer,
                         RequestId::new(),
                         matches!(relay, Relay::Anthropic),
+                        None,
                     )
                     .await
                 }
@@ -764,6 +889,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 request_id,
+                None,
             )
             .await
             .expect("relay")
