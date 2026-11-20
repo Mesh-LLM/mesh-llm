@@ -1,4 +1,4 @@
-From 45535949e6a2493bf66107ac3e1d8ae2e7043e69 Mon Sep 17 00:00:00 2001
+From f1b7fd6e06d38c305f214533e7c59587a67e922d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -6,7 +6,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
 Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cdc64c836b@buzz.gdk.so>
 ---
  src/CMakeLists.txt                            |    9 +
- src/skippy/tests/async_state.cpp              |  210 +++
+ src/skippy/tests/async_state.cpp              |  245 +++
  .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
  src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
@@ -45,7 +45,7 @@ Co-authored-by: Melkor <b36010fa5b9ec1747270cff036f6b47ff5dce56f179564e169fcb6cd
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 40 files changed, 10491 insertions(+), 30 deletions(-)
+ 40 files changed, 10526 insertions(+), 30 deletions(-)
  create mode 100644 src/skippy/tests/async_state.cpp
  create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
@@ -102,10 +102,10 @@ index 2bc7d6f6e..dc8465589 100644
      target_include_directories(skippy-noalloc-graph-planning PRIVATE .)
 diff --git a/src/skippy/tests/async_state.cpp b/src/skippy/tests/async_state.cpp
 new file mode 100644
-index 000000000..0a0709d6a
+index 000000000..efe8d28ba
 --- /dev/null
 +++ b/src/skippy/tests/async_state.cpp
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,245 @@
 +#include "../runtime_support.h"
 +#include "../runtime_types.h"
 +#include "../selected_logits.h"
@@ -237,6 +237,38 @@ index 000000000..0a0709d6a
 +    llama_batch_free(batch);
 +}
 +
++void test_pooled_embedding_accounting(const skippy_model * model) {
++    auto params            = llama_context_default_params();
++    params.n_ctx           = 64;
++    params.n_batch         = 64;
++    params.n_ubatch        = 64;
++    params.n_threads       = 1;
++    params.n_threads_batch = 1;
++    params.embeddings      = true;
++    params.pooling_type    = LLAMA_POOLING_TYPE_MEAN;
++    params.no_perf         = false;
++    llama_context * ctx    = llama_init_from_model(model->model, params);
++    CHECK(ctx != nullptr);
++
++    llama_token tokens[] = { 0, 1, 2 };
++    const auto first     = llama_batch_get_one(tokens, 2);
++    const auto second    = llama_batch_get_one(tokens, 3);
++
++    // Size the output buffer before measuring the embedding cleanup fence.
++    CHECK(llama_decode(ctx, second) == 0);
++    CHECK(llama_get_embeddings_seq(ctx, 0) != nullptr);
++    llama_perf_context_reset(ctx);
++
++    CHECK(llama_decode(ctx, first) == 0);
++    // Starting the second batch fences the first batch's pooled outputs.
++    CHECK(llama_decode(ctx, second) == 0);
++    CHECK(llama_perf_context(ctx).n_p_eval == first.n_tokens);
++    llama_synchronize(ctx);
++    CHECK(llama_get_embeddings_seq(ctx, 0) != nullptr);
++    CHECK(llama_perf_context(ctx).n_p_eval == first.n_tokens + second.n_tokens);
++    llama_free(ctx);
++}
++
 +void test_sampler_reservations(skippy_session * first, skippy_session * second) {
 +    skippy_sampling_config sampling{};
 +    sampling.version                 = 1;
@@ -313,6 +345,9 @@ index 000000000..0a0709d6a
 +    }
 +    CHECK(skippy_session_free(first, &error) == SKIPPY_STATUS_OK);
 +    CHECK(skippy_session_free(second, &error) == SKIPPY_STATUS_OK);
++    if (std::strcmp(mode, "all") == 0) {
++        test_pooled_embedding_accounting(model);
++    }
 +    CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
 +    return 0;
 +}
