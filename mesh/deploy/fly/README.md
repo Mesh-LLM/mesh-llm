@@ -12,13 +12,18 @@ Also available at [public.meshllm.cloud](https://public.meshllm.cloud).
 
 ```
                               ┌─────────────────────────┐
-Browser/curl ──HTTPS──→ Fly   │  mesh-llm --client      │
+Browser ──────HTTPS──→ Fly    │  mesh-llm --client      │
                               │  discovers mesh via      │──QUIC──→ GPU nodes
                               │  Nostr, tunnels requests │
                               └─────────────────────────┘
 ```
 
-Exposes `:3131` (dashboard, chat, topology) and proxies inference to mesh GPU nodes.
+Exposes `:3131` for the dashboard, browser Chat, and topology. Browser Chat uses
+`/api/responses` (or `/api/chat`) to reach mesh GPU nodes. The Console does not
+expose the native inference routes (`/v1/*`, `/models*`, `/mesh/v1/*`).
+OpenAI-compatible clients should run their own `mesh-llm client --auto` and use
+`http://127.0.0.1:9337/v1`, or use a separately exposed native inference listener.
+The single-port Fly Console is not a public inference API.
 
 ## Deploy
 

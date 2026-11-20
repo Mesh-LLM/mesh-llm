@@ -188,7 +188,7 @@ pub(super) fn render_complete(
             bail!("model card size refused");
         }
     }
-    card.push_str("\n## Operator Checks\n\n```bash\ncurl -s http://localhost:3131/api/status\ncurl -s http://localhost:3131/v1/models\n```\n\nUse the returned model name with /v1/chat/completions and max_tokens 128. Artifact identities and successful publication are separate from runtime, ABI, split correctness and model qualification.\n");
+    card.push_str("\n## Operator Checks\n\n```bash\ncurl -s http://localhost:3131/api/status\ncurl -s http://localhost:9337/v1/models\n```\n\nUse the returned model name with /v1/chat/completions and max_tokens 128. Artifact identities and successful publication are separate from runtime, ABI, split correctness and model qualification.\n");
     if card.len() > 2 * 1024 * 1024 {
         bail!("model card size refused");
     }

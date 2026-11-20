@@ -8,12 +8,10 @@
 
 FROM node:24.20.0-alpine AS ui-builder
 ARG TARGETARCH
-ARG VITE_API_URL=https://public.meshllm.cloud
 ARG VITE_APP_VERSION=
 ARG VITE_STORAGE_NAMESPACE=mesh-llm-ui-production
 ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
-ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_STORAGE_NAMESPACE=$VITE_STORAGE_NAMESPACE
 WORKDIR /app
 COPY mesh/crates/mesh-llm-ui/package.json mesh/crates/mesh-llm-ui/pnpm-lock.yaml mesh/crates/mesh-llm-ui/pnpm-workspace.yaml ./

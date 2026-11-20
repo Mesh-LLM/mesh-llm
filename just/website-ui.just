@@ -3,7 +3,7 @@ ui-dev api="http://127.0.0.1:3131" port="5173":
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{ ui_dir }}"
-    MESH_UI_API_ORIGIN="{{ api }}" VITE_API_URL="{{ api }}" pnpm run dev -- --host 0.0.0.0 --port {{ port }}
+    MESH_UI_API_ORIGIN="{{ api }}" pnpm run dev -- --host 0.0.0.0 --port {{ port }}
 
 # Run the UI dev server proxying to the public meshllm.cloud API
 ui-dev-public: (ui-dev "https://public.meshllm.cloud")

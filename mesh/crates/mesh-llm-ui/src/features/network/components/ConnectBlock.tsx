@@ -91,8 +91,9 @@ export function ConnectBlock({
             </button>
           </div>
           <p className="type-caption mt-2 text-fg-faint">
-            Previews the command that will auto-select a model, join the mesh, and serve an OpenAI-compatible API at{' '}
-            <span className="font-mono text-fg-dim">{apiUrl}</span> once the system backend is connected.
+            Run the command locally to join the mesh. Use a native inference listener at{' '}
+            <span className="font-mono text-fg-dim">{apiUrl}</span> for OpenAI-compatible clients. The Console URL
+            serves browser Chat, not the inference API.
           </p>
         </div>
       </div>

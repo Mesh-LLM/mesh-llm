@@ -18,31 +18,13 @@ function normalizeOpenAIBaseUrl(value: string) {
   return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`
 }
 
-function isLocalApiUrl(value: string) {
-  try {
-    return LOCAL_API_HOSTS.has(new URL(value).hostname)
-  } catch {
-    return false
-  }
-}
-
-function browserOrigin() {
-  if (typeof window === 'undefined') return null
-  return window.location.origin
+export function isLocalConsole() {
+  return typeof window !== 'undefined' && LOCAL_API_HOSTS.has(window.location.hostname)
 }
 
 export function resolveOpenAIBaseUrl(status?: StatusPayload) {
-  if (typeof window !== 'undefined' && LOCAL_API_HOSTS.has(window.location.hostname)) {
+  if (isLocalConsole()) {
     return normalizeOpenAIBaseUrl(`http://127.0.0.1:${status?.api_port ?? 9337}`)
-  }
-
-  if (env.isDevelopment) {
-    return normalizeOpenAIBaseUrl(env.apiUrl)
-  }
-
-  const origin = browserOrigin()
-  if (origin && isLocalApiUrl(env.apiUrl)) {
-    return normalizeOpenAIBaseUrl(origin)
   }
 
   return normalizeOpenAIBaseUrl(env.apiUrl)

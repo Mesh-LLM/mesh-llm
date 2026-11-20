@@ -1,7 +1,7 @@
 import { HeadContent, Outlet, useRouter, useRouterState } from '@tanstack/react-router'
 import { useCallback, useMemo, useState } from 'react'
 import { LiveStatusConnector } from '@/app/layout/LiveStatusConnector'
-import { resolveHarnessTopNavData, resolveLiveTopNavData } from '@/app/layout/shell-adapter'
+import { isLocalConsole, resolveHarnessTopNavData, resolveLiveTopNavData } from '@/app/layout/shell-adapter'
 import { isClientOnlyNode } from '@/features/app-shell/lib/status-helpers'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { Footer } from '@/features/shell/components/Footer'
@@ -64,6 +64,7 @@ type RootLayoutProps = { data?: ShellHarnessData }
 
 function resolveApiTargetLiveness(statusQuery: ReturnType<typeof useStatusQuery>, liveMode: boolean) {
   if (!liveMode) return undefined
+  if (!isLocalConsole()) return 'configured'
   if (statusQuery.isError) return 'unavailable'
   if (statusQuery.data) return 'live'
   return 'checking'
