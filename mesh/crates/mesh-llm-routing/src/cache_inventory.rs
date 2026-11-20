@@ -27,9 +27,18 @@ pub struct CacheAffinityEntry {
     pub model: String,
     pub prefix_digest: [u8; CACHE_AFFINITY_DIGEST_BYTES],
     pub matched_tokens: u32,
+    /// Still populated for peers running v0.79 and earlier, whose
+    /// `cache_aware` selector costs a hit from it. Current routing does not
+    /// read it: `request_cost` works out the suffix from the request itself.
+    /// Retire it once v0.79 no longer needs to interoperate.
     pub suffix_prefill_tokens: u32,
     pub tier: CacheTier,
     pub restore_micros: u64,
+    /// Still populated for peers running v0.79 and earlier, whose
+    /// `cache_aware` selector adds it to a hit's cost; sending zero would make
+    /// a busy node look free to them. Current routing does not read it
+    /// (`request_cost` leaves queueing unmodeled). Retire it once v0.79 no
+    /// longer needs to interoperate.
     pub queue_delay_micros: u64,
     /// Measured node/model prefill service cost. Zero means the producer has
     /// not collected a usable sample yet and receivers must use their bounded

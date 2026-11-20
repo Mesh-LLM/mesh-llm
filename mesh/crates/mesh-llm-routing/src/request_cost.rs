@@ -171,6 +171,9 @@ pub fn candidate_cost_input(
     }
 }
 
+/// Minimum evidence required before cache locality may change routing.
+pub const DEFAULT_MIN_SAVED_TOKENS: u32 = 256;
+
 /// Whether this request shares enough with any cached prefix for a hit to be
 /// credited at all. A shorter or unknown shared prefix cannot earn the minimum
 /// credit, so neither a cache lease nor cache evidence applies to it.
@@ -352,7 +355,7 @@ mod tests {
     use super::*;
     use iroh::SecretKey;
 
-    const MIN_SAVED: u32 = 256;
+    const MIN_SAVED: u32 = DEFAULT_MIN_SAVED_TOKENS;
 
     fn remote(seed: u8) -> InferenceTarget {
         let mut bytes = [0u8; 32];
@@ -672,18 +675,21 @@ mod tests {
 
     #[test]
     fn only_a_request_sharing_the_minimum_can_earn_credit() {
-        assert!(can_earn_cache_credit(request(4_096, 256), 256));
-        assert!(!can_earn_cache_credit(request(4_096, 255), 256));
+        assert!(can_earn_cache_credit(request(4_096, MIN_SAVED), MIN_SAVED));
+        assert!(!can_earn_cache_credit(
+            request(4_096, MIN_SAVED - 1),
+            MIN_SAVED
+        ));
         let unknown = RequestCostInput {
             prompt_tokens: None,
             reusable_prefix_tokens: Some(1_024),
         };
-        assert!(!can_earn_cache_credit(unknown, 256));
+        assert!(!can_earn_cache_credit(unknown, MIN_SAVED));
         let unsized_prefix = RequestCostInput {
             reusable_prefix_tokens: None,
             ..request(4_096, 0)
         };
-        assert!(!can_earn_cache_credit(unsized_prefix, 256));
+        assert!(!can_earn_cache_credit(unsized_prefix, MIN_SAVED));
     }
 
     #[test]
