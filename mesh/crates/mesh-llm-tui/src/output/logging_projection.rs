@@ -1,4 +1,4 @@
-mod privacy;
+pub(super) mod privacy;
 
 use super::OutputEvent;
 use super::formatting::OutputEventPresentation;
