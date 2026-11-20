@@ -70,7 +70,6 @@ mesh-llm serve --auto
 
 ```bash
 mesh-llm models search gemma --gguf
-mesh-llm models search smoll --mlx
 ```
 
 5. Inspect a model before downloading:
@@ -434,20 +433,19 @@ The default is a preview and active or pinned stage artifacts are preserved.
 
 ### `models search`
 
-Use this to find something you can actually download and run (GGUF or MLX).
+Use this to find something you can actually download and run. Search returns GGUF models only.
 
 Usage:
 
 ```bash
 mesh-llm models search gemma --gguf
-mesh-llm models search smoll --mlx --limit 5
+mesh-llm models search smoll --limit 5
 mesh-llm models search qwen --catalog
 ```
 
 Switches:
 
-- `--gguf`: GGUF-only search (default).
-- `--mlx`: MLX-only search.
+- `--gguf`: GGUF search. This is the only artifact type, so the flag is optional.
 - `--catalog`: search only built-in catalog.
 - `--limit <LIMIT>`: max results (default `20`).
 - `--json`: machine-readable output.
@@ -460,7 +458,6 @@ Usage:
 
 ```bash
 mesh-llm models show unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
-mesh-llm models show mlx-community/SmolLM-135M-8bit
 ```
 
 Switches:
@@ -475,7 +472,6 @@ Usage:
 
 ```bash
 mesh-llm models download unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
-mesh-llm models download mlx-community/SmolLM-135M-8bit
 ```
 
 Switches:
@@ -1100,15 +1096,7 @@ mesh-llm models show https://huggingface.co/unsloth/gemma-4-31B-it-GGUF
 ```bash
 mesh-llm models show unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL@main
 mesh-llm models show unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL@<commit-sha>
-mesh-llm models show mlx-community/SmolLM-135M-8bit@<commit-sha>
 mesh-llm models show https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/tree/main
-```
-
-For MLX, use repo shorthand (not `/model`):
-
-```bash
-mesh-llm models show mlx-community/SmolLM-135M-8bit
-mesh-llm models download mlx-community/SmolLM-135M-8bit
 ```
 
 ## Model resolution behavior
@@ -1124,16 +1112,28 @@ GGUF behavior:
 
 1. GGUF search uses Hub `gguf` pre-filter.
 2. Excludes sidecars like `mmproj*.gguf`.
-3. Split GGUF uses first shard (`-00001-of-...`) for selection/display.
+3. Split GGUF uses first shard (`-00001-of-...`) for selection/display, and is selected only when every shard is listed in the repository.
 4. `repo` with no selector uses fit-aware ranking against local VRAM.
 5. `repo:SELECTOR` resolves exact quant/variant.
 
-MLX behavior:
+SafeTensors and MLX repositories are not served; see
+[Migrating from SafeTensors and MLX serving](#migrating-from-safetensors-and-mlx-serving).
 
-1. MLX search uses Hub `mlx` pre-filter.
-2. Model must include weight files (`model.safetensors` or split first shard).
-3. `model.safetensors.index.json` by itself is not treated as a model artifact.
-4. Display reference stays repo shorthand.
+## Migrating from SafeTensors and MLX serving
+
+MeshLLM serves GGUF models only.
+
+- `mesh-llm serve --quant`, `--checkpoint-quantization` and
+  `--checkpoint-imatrix` are removed. Convert the checkpoint to GGUF ahead of
+  time, or pick a published GGUF such as `org/repo:Q4_K_M`.
+- A SafeTensors or MLX ref (`org/repo/model.safetensors`, an MLX repo with no
+  GGUF) is refused with a message asking for a GGUF.
+- A repository that holds both formats resolves to its GGUF.
+- `mesh-llm models search --mlx` and the `artifact=mlx` search filter are
+  removed.
+- `hardware.checkpoint_quantization` and `hardware.checkpoint_imatrix` do
+  nothing; `mesh-llm config validate` rejects them. Remove them from
+  `config.toml`.
 
 ## Machine-readable output (`--json`)
 
@@ -1142,8 +1142,8 @@ All `models` subcommands support `--json`.
 Examples:
 
 ```bash
-mesh-llm models search smoll --mlx --limit 1 --json | jq .
-mesh-llm models show mlx-community/SmolLM-135M-8bit --json | jq .
+mesh-llm models search smoll --limit 1 --json | jq .
+mesh-llm models show unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL --json | jq .
 mesh-llm models download Qwen3-0.6B-Q4_K_M --json | jq .
 mesh-llm models installed --json | jq .
 mesh-llm models recommended --json | jq .

@@ -575,13 +575,15 @@ fn hardware_settings(
             &format!("{prefix}.check_tensors"),
             ConfigValueSchema::Boolean,
         ),
-        unsupported_setting(
+        rejected_setting(
             &format!("{prefix}.checkpoint_quantization"),
             ConfigValueSchema::String,
+            "Skippy serves GGUF only; convert SafeTensors checkpoints to GGUF.",
         ),
-        unsupported_setting(
+        rejected_setting(
             &format!("{prefix}.checkpoint_imatrix"),
             ConfigValueSchema::String,
+            "Skippy serves GGUF only; convert SafeTensors checkpoints to GGUF.",
         ),
         basic_setting(&format!("{prefix}.mmap"), bool_or_auto_schema()),
         unsupported_setting(
