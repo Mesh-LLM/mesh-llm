@@ -62,8 +62,8 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  src/skippy/state_memory.cpp                   |  21 +-
  src/skippy/tests/resident_checkpoint_gpu.cpp  | 287 ++++++++++++
  .../tests/resident_checkpoint_writer.cpp      | 126 +++++
- src/skippy/tests/sampling_history.cpp         | 387 ++++++++++++++-
- 15 files changed, 1326 insertions(+), 487 deletions(-)
+ src/skippy/tests/sampling_history.cpp         | 437 +++++++++++++++--
+ 15 files changed, 1337 insertions(+), 526 deletions(-)
  create mode 100644 src/skippy/resident_prefix.cpp
  create mode 100644 src/skippy/tests/resident_checkpoint_gpu.cpp
  create mode 100644 src/skippy/tests/resident_checkpoint_writer.cpp
@@ -1766,7 +1766,7 @@ index 000000000..d08029062
 +    return 0;
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
-index 0c81c9d47..4c7c891e1 100644
+index 0c81c9d47..16582f6b2 100644
 --- a/src/skippy/tests/sampling_history.cpp
 +++ b/src/skippy/tests/sampling_history.cpp
 @@ -5,26 +5,115 @@
@@ -1917,7 +1917,87 @@ index 0c81c9d47..4c7c891e1 100644
  void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
      size_t bytes = 0;
      skippy_error * error = nullptr;
-@@ -570,6 +684,174 @@ void state_round_trip(skippy_model * model) {
+@@ -465,33 +579,6 @@ std::vector<uint8_t> export_page(skippy_session * session, size_t token_count) {
+     return payload;
+ }
+ 
+-std::vector<uint8_t> export_recurrent(skippy_session * session) {
+-    skippy_error * error = nullptr;
+-    size_t bytes = 0;
+-    auto status = skippy_export_recurrent_state(session, nullptr, 0, &bytes, &error);
+-    CHECK(status == SKIPPY_STATUS_BUFFER_TOO_SMALL || status == SKIPPY_STATUS_OK);
+-    skippy_error_free(error);
+-    error = nullptr;
+-    std::vector<uint8_t> payload(bytes);
+-    status = skippy_export_recurrent_state(session, payload.data(), payload.size(), &bytes, &error);
+-    ok(status, error);
+-    payload.resize(bytes);
+-    return payload;
+-}
+-
+-void restore_recurrent(skippy_session * session, const std::vector<uint8_t> & payload,
+-        const std::vector<llama_token> & prefix) {
+-    skippy_error * error = nullptr;
+-    auto status = skippy_import_recurrent_state(session, payload.data(), payload.size(), &error);
+-    ok(status, error);
+-    error = nullptr;
+-    status = skippy_session_set_position(session, prefix.size(), &error);
+-    ok(status, error);
+-    error = nullptr;
+-    status = skippy_session_restore_token_history(session, prefix.data(), prefix.size(), &error);
+-    ok(status, error);
+-}
+-
+ skippy_sampling_config greedy_config() {
+     skippy_sampling_config config{};
+     config.version = 1;
+@@ -519,26 +606,25 @@ std::vector<float> decode_logits(skippy_session * session, llama_token token) {
+ }
+ 
+ // A declared-exact stage checkpoint must be reconstructible from its export
+-// alone. LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY is an alias of
+-// LLAMA_STATE_SEQ_FLAGS_SWA_ONLY: it writes the recurrent and sliding-window
+-// half of a hybrid memory and nothing from a full-attention KV cache, so a
+-// session restored from that half carries no full-attention cells and decodes a
+-// different continuation from an uninterrupted prefill. Compare the attention
+-// page the restored session exposes with the source's page, and the next-token
+-// logits of a restored prefix with those of the same prefix prefilled from
+-// scratch.
++// alone. A hybrid stage's checkpoint is the pair the resident cache keeps: the
++// attention page and the recurrent state. The recurrent state holds nothing
++// from a full-attention KV cache, so a session restored from it alone carries
++// no full-attention cells and decodes a different continuation from an
++// uninterrupted prefill. Compare the attention page the restored session
++// exposes with the source's page, and the next-token logits of a restored
++// prefix with those of the same prefix prefilled from scratch.
+ void state_round_trip(skippy_model * model) {
+     const std::vector<llama_token> prefix(128, 1);
+     auto * source = create(model);
+     prefill(source, prefix);
+     const auto source_page = export_page(source, prefix.size());
+     CHECK(!source_page.empty());
+-    const auto recurrent = export_recurrent(source);
+-    CHECK(!recurrent.empty());
++    const snapshot checkpoint(source, false);
++    CHECK(!checkpoint.recurrent.empty());
+     release(source);
+ 
+     auto * restored = create(model);
+-    restore_recurrent(restored, recurrent, prefix);
++    checkpoint.restore(restored, prefix);
+     const auto restored_page = export_page(restored, prefix.size());
+     CHECK(restored_page.size() == source_page.size());
+     CHECK(std::memcmp(restored_page.data(), source_page.data(), source_page.size()) == 0);
+@@ -551,7 +637,7 @@ void state_round_trip(skippy_model * model) {
+     const auto cold_logits = decode_logits(cold, suffix.back());
+     release(cold);
+     auto * warm = create(model);
+-    restore_recurrent(warm, recurrent, prefix);
++    checkpoint.restore(warm, prefix);
+     prefill(warm, suffix);
+     const auto warm_logits = decode_logits(warm, suffix.back());
+     release(warm);
+@@ -570,6 +656,174 @@ void state_round_trip(skippy_model * model) {
      CHECK(max_delta == 0.0f);
  }
  
@@ -2092,7 +2172,7 @@ index 0c81c9d47..4c7c891e1 100644
  void adapter_contracts(skippy_model * model) {
      auto * session = create(model);
      prefill(session, {1, 2});
-@@ -626,24 +908,118 @@ void adapter_contracts(skippy_model * model) {
+@@ -626,24 +880,118 @@ void adapter_contracts(skippy_model * model) {
      release(session);
  }
  
@@ -2215,7 +2295,7 @@ index 0c81c9d47..4c7c891e1 100644
          // A dense stage's page already carries its whole checkpoint, so the
          // partial side payload is intentionally empty there.
          CHECK(require_recurrent);
-@@ -673,5 +1049,8 @@ int main(int argc, char ** argv) {
+@@ -673,5 +1021,8 @@ int main(int argc, char ** argv) {
      error = nullptr;
      const auto freed = skippy_model_free(model, &error);
      ok(freed, error);

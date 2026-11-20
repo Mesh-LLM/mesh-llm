@@ -11797,7 +11797,6 @@ name = "xtask"
 version = "0.80.0"
 dependencies = [
  "authority-automation",
- "base64 0.22.1",
  "caseless",
  "ci-controller",
  "ed25519-dalek",

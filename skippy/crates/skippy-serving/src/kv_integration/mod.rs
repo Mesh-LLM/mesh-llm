@@ -157,6 +157,9 @@ pub enum StageKvMode {
 pub(crate) struct ExactStateByteLimits {
     pub(crate) soft_bytes: u64,
     pub(crate) hard_bytes: u64,
+    /// The hard limit came from an operator budget rather than the
+    /// attention-derived estimate, so it is a strict ceiling.
+    pub(crate) hard_is_explicit: bool,
 }
 
 #[derive(Clone)]

@@ -197,26 +197,3 @@ an explicit nonzero exit, another signal, or forced cleanup fails the campaign.
 
 The ordinary CI/GPU suite and registered JY templates are unchanged. This
 benchmark owner does not mark the long-prefix/cancellation/L3 TODO complete.
-
-## Prefix-reuse probe
-
-The fleet smoke (`fleet-worker.sh`, via `xtask automation agentx fleet`)
-reproduces the exact-state retention regression: interleaved multi-turn
-conversations with append-only histories against one `skippy serve`. Any
-`cached_tokens` miss after a conversation's first turn is a retention defect,
-not prompt churn.
-
-Two distinct prefix-cache budgets matter for retention experiments, and A/B
-runs must move the intended one:
-
-- `--prefix-cache-budget` (`kv_cache.max_bytes`) bounds the exact-state
-  catalog; its auto default is estimated from attention KV metadata and can
-  undercount hybrid recurrent state. The retention floor keeps concurrent
-  sessions' entries alive past this cap.
-- `--prefix-cache-ram` (`kv_cache.l2_max_bytes`) bounds resident-checkpoint
-  RAM and is independent of the exact-state catalog.
-
-The AgentX comparison harness exposes both for its skippy arm through
-`AGENTX_SKIPPY_PREFIX_CACHE_BUDGET` and `AGENTX_SKIPPY_PREFIX_CACHE_RAM`, so
-fleet campaigns can encode and reproduce retention experiments without
-editing the harness.

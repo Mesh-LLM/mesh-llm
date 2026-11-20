@@ -816,46 +816,47 @@ fn store_exact_radix_record_with_codec(
     // Exact snapshots are indivisible, and the soft cap is estimated from
     // attention KV metadata that cannot include architecture-specific
     // recurrent state, so one snapshot can legitimately exceed it. Hold a
-    // working set past the soft cap (never more than the configured entry
-    // limit) so concurrent sessions on a stage stop evicting each other, then
-    // apply the hard limit so that allowance stays bounded.
-    //
-    // Both passes retain the same floor. A hard pass that fell to a single
-    // entry defeated the working-set guarantee whenever hybrid snapshots
-    // (whose recurrent state the attention-derived estimate cannot see)
-    // pushed the retained set past the hard cap: the catalog collapsed to a
-    // single entry and concurrent sessions evicted each other on every
-    // request, which is the regression this policy exists to prevent. The
-    // retention floor may exceed either byte limit by design; operators who
-    // need a tighter bound set an explicit exact-state budget.
+    // working set of conversations past the soft cap (never more than the
+    // configured entry limit) so concurrent sessions on a stage stop evicting
+    // each other. The floor counts each conversation's latest continuation:
+    // a checkpoint that a longer retained checkpoint extends is evicted first.
     let retention_floor = EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries);
     evict_exact_entries_over(radix, blobs, limits.soft_bytes, retention_floor)?;
-    // The hard cap must be able to hold the retention floor's working set.
-    // With the attention-derived estimate alone, a hybrid snapshot can exceed
-    // the configured hard cap by itself; the eviction passes then share the
-    // same floor and the hard pass can never evict — the cap is dead code and
-    // the blob store accumulates retained copies past it without bound. The
-    // effective backstop adapts to the largest snapshot actually stored, so
-    // it trims growth above the working set instead of against the floor.
-    let floor_bytes = logical_bytes
-        .max(1)
-        .saturating_mul(u64::try_from(retention_floor).unwrap_or(u64::MAX));
-    let effective_hard = limits.hard_bytes.max(floor_bytes);
-    if evict_exact_entries_over(radix, blobs, effective_hard, retention_floor)? > 0 {
-        // Observable signal that the attention-derived estimate undercounts
-        // this stage's snapshots: the exact-state catalog held more than the
-        // hard limit even with the retention floor binding. Set an explicit
-        // exact-state budget when this repeats and memory must stay bounded.
-        let _ = skippy_events::diagnostics::emit(
-            skippy_events::diagnostics::ServingDiagnostic::Warning {
-                message: "exact-state catalog exceeded its hard byte limit at the retention floor"
-                    .to_string(),
-                context: Some(format!(
-                    "soft_bytes={} hard_bytes={} effective_hard={effective_hard} floor_entries={retention_floor}",
-                    limits.soft_bytes, limits.hard_bytes
-                )),
-            },
-        );
+    // Zero means unbounded: no hard pass at all.
+    if limits.hard_bytes > 0 {
+        // An explicit operator budget is a strict ceiling: only one
+        // indivisible snapshot may exceed it. The attention-derived default
+        // stretches to hold the working set, since it cannot see hybrid
+        // recurrent state and would otherwise collapse the catalog.
+        let (hard_limit, hard_floor) = if limits.hard_is_explicit {
+            (limits.hard_bytes, 1)
+        } else {
+            let floor_bytes = logical_bytes
+                .max(1)
+                .saturating_mul(u64::try_from(retention_floor).unwrap_or(u64::MAX));
+            (limits.hard_bytes.max(floor_bytes), retention_floor)
+        };
+        evict_exact_entries_over(radix, blobs, hard_limit, hard_floor)?;
+        let retained = blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .physical_bytes();
+        if retained > limits.hard_bytes && exact_state_over_limit_warning_due() {
+            // Observable signal that the retained working set sits above the
+            // hard limit, e.g. the attention-derived estimate undercounts this
+            // stage's snapshots. Set an explicit exact-state budget when this
+            // repeats and memory must stay bounded.
+            let _ = skippy_events::diagnostics::emit(
+                skippy_events::diagnostics::ServingDiagnostic::Warning {
+                    message: "exact-state catalog retained more than its hard byte limit"
+                        .to_string(),
+                    context: Some(format!(
+                        "retained_bytes={retained} soft_bytes={} hard_bytes={} explicit={} floor_entries={retention_floor}",
+                        limits.soft_bytes, limits.hard_bytes, limits.hard_is_explicit
+                    )),
+                },
+            );
+        }
     }
     #[cfg(test)]
     crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
@@ -932,9 +933,25 @@ fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
     )
 }
 
-/// Evicts least-recently-used exact entries while the catalog holds more than
-/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
-/// means the catalog has no byte ceiling and nothing is evicted.
+/// At most one over-limit warning per minute per process.
+fn exact_state_over_limit_warning_due() -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_WARNED_SECS: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let last = LAST_WARNED_SECS.load(Ordering::Relaxed);
+    (last == 0 || now.saturating_sub(last) >= 60)
+        && LAST_WARNED_SECS
+            .compare_exchange(last, now.max(1), Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+}
+
+/// Evicts exact entries while the catalog holds more than `limit_bytes`.
+/// Superseded checkpoints (a strict prefix of another retained checkpoint)
+/// go first; then least-recently-used conversations go while more than
+/// `min_retained_entries` conversations remain. A zero limit means the
+/// catalog has no byte ceiling and nothing is evicted.
 fn evict_exact_entries_over(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
@@ -952,19 +969,19 @@ fn evict_exact_entries_over(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .physical_bytes()
             > limit_bytes;
-        let above_floor = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .stats()
-            .recurrent_entries
-            > floor;
-        if !over_bytes || !above_floor {
+        if !over_bytes {
             break;
         }
-        let evicted = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_lru_recurrent();
+        let evicted = {
+            let mut radix = radix
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            radix.evict_lru_superseded_recurrent().or_else(|| {
+                (radix.recurrent_leaf_entries() > floor)
+                    .then(|| radix.evict_lru_recurrent())
+                    .flatten()
+            })
+        };
         let Some(evicted) = evicted else {
             break;
         };
@@ -1065,6 +1082,7 @@ mod tests {
         ExactStateByteLimits {
             soft_bytes,
             hard_bytes,
+            hard_is_explicit: false,
         }
     }
 
@@ -1329,18 +1347,122 @@ mod tests {
                 pending(
                     &format!("session-{index}"),
                     &[1, index + 2],
-                    &[index as u8 + 1; 32],
+                    &distinct_payload(index as u8, 32),
                     &budget,
                 ),
             )
             .unwrap();
         }
+        // Distinct blocks, so the retained set really is past the hard cap and
+        // the pre-floor policy would have evicted down to one entry.
+        assert!(blobs.lock().unwrap().physical_bytes() > 80);
         let mut radix = radix.lock().unwrap();
         assert_eq!(radix.stats().recurrent_entries, 4);
         for index in 0..4 {
             assert!(
                 radix.lookup_recurrent("model", &[1, index + 2]).is_some(),
                 "session {index} must retain its exact-state entry"
+            );
+        }
+    }
+
+    /// Payload bytes that dedupe into distinct 4-byte blocks per `seed`.
+    fn distinct_payload(seed: u8, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|offset| seed.wrapping_mul(64).wrapping_add(offset as u8))
+            .collect()
+    }
+
+    fn store_sessions(
+        radix: &Mutex<UnifiedRadixCache<super::super::RadixResidentEntry, RadixExactEntry>>,
+        blobs: &Mutex<CacheBlobStore>,
+        limits: ExactStateByteLimits,
+        sessions: &[(&str, &[i32], u8)],
+    ) {
+        let budget = StorageBudget::new();
+        for (page, tokens, seed) in sessions {
+            store_exact_radix_record(
+                radix,
+                blobs,
+                512,
+                limits,
+                None,
+                None,
+                pending(page, tokens, &distinct_payload(*seed, 32), &budget),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn explicit_exact_budget_stays_a_strict_ceiling_past_the_retention_floor() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let explicit_ceiling = ExactStateByteLimits {
+            soft_bytes: 10,
+            hard_bytes: 40,
+            hard_is_explicit: true,
+        };
+        store_sessions(
+            &radix,
+            &blobs,
+            explicit_ceiling,
+            &[
+                ("a", &[1, 2], 0),
+                ("b", &[1, 3], 1),
+                ("c", &[1, 4], 2),
+                ("d", &[1, 5], 3),
+            ],
+        );
+        // One indivisible 32-byte snapshot fits the ceiling; a second does not.
+        assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 1);
+        assert!(blobs.lock().unwrap().physical_bytes() <= 40);
+    }
+
+    #[test]
+    fn unbounded_byte_limits_keep_every_entry_the_entry_limit_allows() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        store_sessions(
+            &radix,
+            &blobs,
+            limits(0, 0),
+            &[
+                ("a", &[1, 2], 0),
+                ("b", &[1, 3], 1),
+                ("c", &[1, 4], 2),
+                ("d", &[1, 5], 3),
+                ("e", &[1, 6], 4),
+            ],
+        );
+        assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 5);
+    }
+
+    #[test]
+    fn retention_floor_keeps_each_sessions_latest_continuation() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        // Session A stores a prefill and a post-decode checkpoint between the
+        // other sessions' prefills. Five snapshots exceed the derived hard
+        // cap; the superseded prefill must go, not another session's only one.
+        store_sessions(
+            &radix,
+            &blobs,
+            limits(10, 80),
+            &[
+                ("a-prefill", &[1, 2], 0),
+                ("b", &[1, 3], 1),
+                ("a-decode", &[1, 2, 9, 9], 2),
+                ("c", &[1, 4], 3),
+                ("d", &[1, 5], 4),
+            ],
+        );
+        let mut radix = radix.lock().unwrap();
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
+        for tokens in [&[1, 2, 9, 9][..], &[1, 3], &[1, 4], &[1, 5]] {
+            assert!(
+                radix.lookup_recurrent("model", tokens).is_some(),
+                "latest continuation {tokens:?} must survive"
             );
         }
     }
