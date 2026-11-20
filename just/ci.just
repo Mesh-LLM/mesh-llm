@@ -10,6 +10,7 @@ lint:
     scripts/tests/ci-skippy-runtime-test.sh
     scripts/tests/install-asset-test.sh
     scripts/tests/check-host-imports-test.sh
+    scripts/tests/wait-packaging-receipt-test.sh
 
 # Rust tests for the whole workspace.
 test-rust *ARGS:

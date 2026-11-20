@@ -33,8 +33,10 @@ An entry is removed in the same change that closes it.
   including the call from `package-release.ps1`.
 - **Docker images and npm.** The handoff to `Mesh-LLM/mesh-packaging` is off.
   That repository reads `native-runtimes.json` and the GPU archives from the
-  MeshLLM release, which no longer has them. Its identity-bound dispatch and
-  the wait for its receipt are not restored either.
+  MeshLLM release, which no longer has them. A replacement contract is
+  drafted in `mesh/docs/design/PACKAGING_HANDOFF.md`, and the receipt wait is
+  back as `scripts/wait-packaging-receipt.sh`, tested against a stub. The
+  dispatch itself is not wired, and mesh-packaging has not adopted the draft.
 - **NVIDIA and AMD machines.** No run on real hardware shows the host
   downloading and loading a GPU runtime. Tests cover the choice only: a better
   runtime in the catalog, or one already installed, is used over the CPU

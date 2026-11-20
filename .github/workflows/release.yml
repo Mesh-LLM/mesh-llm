@@ -54,7 +54,7 @@ jobs:
           missing=(
             "Windows: the packaged host is not run against a model, only version-checked."
             "Host import check and report: on Linux only stubbed tools have run, and on Windows nothing has, including the call from package-release.ps1."
-            "Docker images and npm: the mesh-packaging handoff is off, and its identity-bound dispatch and receipt wait are not restored."
+            "Docker images and npm: the mesh-packaging handoff is off. Its new contract is only a draft that mesh-packaging has not adopted, and the dispatch is not wired."
             "NVIDIA and AMD machines: no run on real hardware shows the host downloading and loading a GPU runtime. Tests cover only the choice."
             "Updating from 0.80.0 on Windows: the step that swaps in the new runtime and manifest is a PowerShell script that no test runs. The Unix path is covered."
           )
@@ -649,38 +649,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Dispatch the release to mesh-packaging
-        env:
-          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
-          TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
-          RELEASE_TAG_COMMIT: ${{ needs.publish.outputs.tag_commit }}
+      # The old payload named MeshLLM's own runtime catalog, which no longer
+      # exists. Sending it without that identity would publish packages that
+      # nothing ties to this release, so turning the variable on is an error
+      # until the contract in mesh/docs/design/PACKAGING_HANDOFF.md is in
+      # force on both sides and this job sends it and waits with
+      # scripts/wait-packaging-receipt.sh.
+      - name: Refuse to dispatch without the new contract
         run: |
-          set -euo pipefail
-          [[ -n "${GH_TOKEN:-}" ]] || {
-            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to $TARGET_REPOSITORY" >&2
-            exit 1
-          }
-          [[ "$RELEASE_TAG_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "Missing published tag commit" >&2; exit 1; }
-          jq -n \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg ref "$RELEASE_TAG" \
-            --arg version "$RELEASE_VERSION" \
-            --arg expected_mesh_sha "$RELEASE_TAG_COMMIT" \
-            --arg correlation_id "mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            '{
-              event_type: "mesh-llm-release",
-              client_payload: {
-                repository: $repository,
-                ref: $ref,
-                version: $version,
-                expected_mesh_sha: $expected_mesh_sha,
-                correlation_id: $correlation_id,
-                dry_run: false,
-                publish_images: true,
-                publish_release_assets: true,
-                publish_npm: true
-              }
-            }' |
-            gh api --method POST "repos/${TARGET_REPOSITORY}/dispatches" --input -
+          echo "The mesh-packaging handoff is not wired. See mesh/docs/design/PACKAGING_HANDOFF.md." >&2
+          exit 1
