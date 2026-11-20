@@ -26,7 +26,8 @@ WHISPER_WORKDIR_PARENT="$(cd "$(dirname "$WHISPER_WORKDIR")" && pwd -P)" || {
 }
 export GIT_CEILING_DIRECTORIES="$WHISPER_WORKDIR_PARENT"
 
-if [[ -d "$WHISPER_WORKDIR/.git" ]] &&
+# `.git` is a file in a linked worktree, which is reused like a clone.
+if [[ -e "$WHISPER_WORKDIR/.git" ]] &&
    [[ "$(git -C "$WHISPER_WORKDIR" rev-parse HEAD 2>/dev/null)" == "$TARGET_SHA" ]] &&
    git -C "$WHISPER_WORKDIR" diff-index --quiet HEAD --; then
   echo "whisper.cpp already at $TARGET_SHA"
@@ -51,7 +52,7 @@ fetch_pin() {
   done
 }
 
-if [[ ! -d "$WHISPER_WORKDIR/.git" ]]; then
+if [[ ! -e "$WHISPER_WORKDIR/.git" ]]; then
   rm -rf "$WHISPER_WORKDIR"
   git init -q "$WHISPER_WORKDIR"
   git -C "$WHISPER_WORKDIR" remote add origin "$WHISPER_UPSTREAM_URL"

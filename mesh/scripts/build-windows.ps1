@@ -63,7 +63,9 @@ function Resolve-StageBuildDir {
 function ConvertTo-BashRepoPath {
     param(
         [string]$Path,
-        [switch]$Wsl
+        [switch]$Wsl,
+        # The variable the path came from, named when it cannot be converted.
+        [string]$Setting = "MESH_LLM_LLAMA_DIR"
     )
 
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -72,7 +74,7 @@ function ConvertTo-BashRepoPath {
         return $full.Substring($root.Length).Replace("\", "/")
     }
     if ($full -notmatch '^[A-Za-z]:\\') {
-        throw "MESH_LLM_LLAMA_DIR must be inside the repository or on a drive-letter path: $Path"
+        throw "$Setting must be inside the repository or on a drive-letter path: $Path"
     }
     if ($Wsl) {
         return "/mnt/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
@@ -137,6 +139,30 @@ function Prepare-Llama {
             Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue
         } else {
             $env:LLAMA_WORKDIR = $previousWorkdir
+        }
+    }
+}
+
+# Prepare the pinned whisper.cpp in $whisperDir through the same script
+# build-llama.sh uses, so bash prepares the tree CMake builds. Like
+# Prepare-Llama, only an override is passed, in the form bash reads: relative to
+# the repository root when it lies inside it, since WSL bash reads a
+# drive-letter path as a relative one. prepare-whisper.sh keeps a clean checkout
+# at the pin without fetching.
+function Prepare-Whisper {
+    $previousWorkdir = $env:WHISPER_WORKDIR
+    if ($previousWorkdir) {
+        $insideRepo = $whisperDir.StartsWith(
+            [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\",
+            [System.StringComparison]::OrdinalIgnoreCase)
+        $wsl = if ($insideRepo) { $false } else { Test-BashIsWsl }
+        $env:WHISPER_WORKDIR = ConvertTo-BashRepoPath $whisperDir -Wsl:$wsl -Setting "WHISPER_WORKDIR"
+    }
+    try {
+        Invoke-NativeCommand "bash" @("skippy/scripts/prepare-whisper.sh")
+    } finally {
+        if ($null -ne $previousWorkdir) {
+            $env:WHISPER_WORKDIR = $previousWorkdir
         }
     }
 }
@@ -1074,10 +1100,34 @@ switch ($backendName) {
     }
 }
 
+# Speech recognition folds the pinned whisper.cpp into llama.dll, as
+# skippy/scripts/build-llama.sh does for Linux, macOS and CI runtimes.
+# SKIPPY_SPEECH_RECOGNITION=OFF builds a runtime whose skippy_asr_* calls
+# report UNSUPPORTED. Read only here, below the -HostOnly return: the
+# backend-neutral host never builds a runtime.
+$speechRecognition = if ($env:SKIPPY_SPEECH_RECOGNITION) { $env:SKIPPY_SPEECH_RECOGNITION.ToUpperInvariant() } else { "ON" }
+if ($speechRecognition -notin @("ON", "OFF")) {
+    throw "Unsupported SKIPPY_SPEECH_RECOGNITION '$($env:SKIPPY_SPEECH_RECOGNITION)'. Expected ON or OFF."
+}
+# The whisper.cpp tree speech recognition builds from: WHISPER_WORKDIR when set,
+# as skippy/scripts/build-llama.sh reads it, so an offline build can supply a
+# pre-staged checkout; otherwise .deps/whisper.cpp. Resolved only for a build
+# that compiles it, so an override elsewhere is never read.
+$whisperDir = if ($speechRecognition -ne "ON") {
+    $null
+} elseif ($env:WHISPER_WORKDIR) {
+    [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:WHISPER_WORKDIR))
+} else {
+    Join-Path $repoRoot ".deps\whisper.cpp"
+}
+
 $packagingBash = Resolve-PackagingBash
 
 Invoke-InRepo {
     Prepare-Llama
+    if ($speechRecognition -eq "ON") {
+        Prepare-Whisper
+    }
     # Resolve after preparing, so a pin switch builds into the new pin's
     # directory rather than the one the previous stamp named.
     $script:buildDir = Resolve-StageBuildDir $backendName
@@ -1121,6 +1171,11 @@ Invoke-InRepo {
         # that mesh-llm does not use; keep it off to match build-llama.sh.
         "-DMTMD_VIDEO=OFF"
     )
+
+    # SKIPPY_WHISPER_SOURCE_DIR is a CMake cache entry, so OFF passes it empty
+    # rather than leaving a previous configuration's tree in place.
+    $whisperSource = if ($speechRecognition -eq "ON") { ConvertTo-CmakePath $whisperDir } else { "" }
+    $cmakeArgs += "-DSKIPPY_WHISPER_SOURCE_DIR=$whisperSource"
 
     $rcPath = Resolve-CommandPath "rc"
     $mtPath = Resolve-CommandPath "mt"
