@@ -55,7 +55,7 @@ pub async fn search_huggingface<F>(
     context: ModelCommandContext,
 ) -> Result<Vec<SearchHit>>
 where
-    F: FnMut(SearchProgress),
+    F: FnMut(SearchProgress) + Send,
 {
     lifecycle::search_huggingface(query, limit, filter, sort, progress, context).await
 }
