@@ -16,7 +16,22 @@ fn discovery_preserves_startup_precedence_and_search_response_fields() {
                 .set_read_timeout(Some(std::time::Duration::from_secs(30)))
                 .unwrap();
             let mut request = [0; 8192];
-            let length = connection.read(&mut request).unwrap();
+            let mut length = 0;
+            while !request[..length]
+                .windows(4)
+                .any(|bytes| bytes == b"\r\n\r\n")
+            {
+                assert!(
+                    length < request.len(),
+                    "fixture request headers exceed 8192 bytes"
+                );
+                let read = connection.read(&mut request[length..]).unwrap();
+                if read == 0 {
+                    assert_eq!(length, 0, "EOF before complete fixture request headers");
+                    break;
+                }
+                length += read;
+            }
             if length == 0 {
                 break;
             }
@@ -41,15 +56,19 @@ fn discovery_preserves_startup_precedence_and_search_response_fields() {
         }
     });
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "discovery_child", "--nocapture"])
+        .args(["--ignored", "--exact", "discovery_child", "--nocapture"])
         .env("SKIPPY_DISCOVERY_FIXTURE", root.path())
         .env("HOME", root.path())
         .env("HF_HOME", root.path().join("hf"))
+        .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
         .env("HF_HUB_CACHE", root.path().join("hub"))
         .env("HF_XET_CACHE", root.path().join("xet"))
         .env("HF_ENDPOINT", format!("http://{address}"))
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
         .env("XDG_CACHE_HOME", root.path().join("cache"))
         .env_remove("HF_TOKEN")
+        .env_remove("HF_TOKEN_PATH")
         .env_remove("HUGGING_FACE_HUB_TOKEN")
         .env_remove("HF_HUB_OFFLINE")
         .env_remove("HUGGINGFACE_HUB_CACHE")
@@ -68,6 +87,7 @@ fn discovery_preserves_startup_precedence_and_search_response_fields() {
 }
 
 #[test]
+#[ignore = "run only as the discovery fixture subprocess"]
 fn discovery_child() {
     let Ok(root) = std::env::var("SKIPPY_DISCOVERY_FIXTURE") else {
         return;

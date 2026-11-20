@@ -16,8 +16,23 @@ fn host_declares_its_raw_json_dependency_feature() {
 
 #[test]
 fn host_normal_dependencies_exclude_cli_model_commands_and_packaging() {
+    let rustc = std::process::Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .expect("read rustc host target");
+    assert!(
+        rustc.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rustc.stderr)
+    );
+    let version = String::from_utf8(rustc.stdout).unwrap();
+    let host = version
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .expect("rustc reports its host target");
     let output = std::process::Command::new(env!("CARGO"))
         .args(["metadata", "--locked", "--offline", "--format-version", "1"])
+        .args(["--filter-platform", host])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("read resolved Cargo graph");
