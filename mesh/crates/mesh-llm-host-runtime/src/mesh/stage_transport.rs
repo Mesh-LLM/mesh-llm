@@ -952,6 +952,7 @@ impl Node {
         self.resolve_stage_control_request(
             control_tx.as_ref(),
             &mut request,
+            crate::mesh::stage_source::StageLoadOrigin::Local,
             crate::inference::skippy::StageSourceFetch::Allowed,
         )
         .await?;

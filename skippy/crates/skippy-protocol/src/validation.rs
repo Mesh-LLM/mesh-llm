@@ -10,13 +10,13 @@ pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";
 pub const STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER: &str = "persistent-lane-marker";
-pub const STAGE_PROTOCOL_GENERATION: u32 = 17;
+pub const STAGE_PROTOCOL_GENERATION: u32 = 18;
 /// Generation-scoped stage capability. A peer can advertise `stage-control`
 /// while still rejecting current-generation frames, so split planning gates on
 /// this exact token before sending current-generation control requests.
-pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17: &str = "stage-generation-17";
+pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18: &str = "stage-generation-18";
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17;
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
 pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf-content-id-v1";
@@ -51,7 +51,6 @@ pub enum StageFrameError {
     MissingRequiredSourceDigest,
     LocalSourcePolicyRequired,
     LocalSourceCommandRequired,
-    LocalSourceProjectorPathForbidden,
     InvalidLocalSourceLoadMode { got: i32 },
     InvalidLocalSourceReference,
     InvalidSourceResolutionPolicy { got: i32 },
@@ -102,9 +101,6 @@ impl std::fmt::Display for StageFrameError {
                     f,
                     "local-required source resolution requires the fail-closed local command"
                 )
-            }
-            StageFrameError::LocalSourceProjectorPathForbidden => {
-                write!(f, "strict local load cannot carry a projector path")
             }
             StageFrameError::InvalidLocalSourceLoadMode { got } => write!(
                 f,
@@ -231,9 +227,6 @@ fn validate_local_source_load(load: &proto::stage::LoadStage) -> Result<(), Stag
     if load.source_model_sha256.as_deref() != Some(reference_digest) {
         return Err(StageFrameError::InvalidLocalSourceReference);
     }
-    if load.projector_path.is_some() {
-        return Err(StageFrameError::LocalSourceProjectorPathForbidden);
-    }
     Ok(())
 }
 
@@ -303,9 +296,9 @@ fn validate_topology_stages(load: &proto::stage::LoadStage) -> Result<(), StageF
                 "stage indexes must be ordered and contiguous from zero",
             ));
         }
-        if stage.stage_id.is_empty() || stage.bind_addr.is_empty() {
+        if stage.stage_id.is_empty() {
             return Err(StageFrameError::InvalidTopologyStages(
-                "stage id and bind address are required",
+                "stage id is required",
             ));
         }
         if load.topology_stages[..position]
@@ -341,7 +334,6 @@ fn validate_topology_stages(load: &proto::stage::LoadStage) -> Result<(), StageF
             if stage.stage_index != load.stage_index
                 || stage.layer_start != load.layer_start
                 || stage.layer_end != load.layer_end
-                || stage.bind_addr != load.bind_addr
             {
                 return Err(StageFrameError::InvalidTopologyStages(
                     "current stage entry does not match load assignment",

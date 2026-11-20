@@ -217,19 +217,55 @@ pub(crate) fn split_dflash_draft_source(
     }
 }
 
-/// Points a split stage's default draft at this node's own copy.
+/// The pinned source of a configured split draft, so the final stage fetches
+/// and verifies its own copy as it does for a default draft.
 ///
-/// The planner's draft path is on the planner's node. A plan that names a
-/// pinned draft (from the package, the pairing index or the bootstrap table)
-/// is fetched here by that repo, revision and file into this node's Hugging
-/// Face cache, and must match its SHA-256 and size. As on one node, the load
-/// never waits for the draft: a missing draft downloads in the background,
-/// this load serves without speculation, and the next load of the model picks
-/// the draft up. A draft that fails its checks also serves without
-/// speculation. A plan without a source (a configured draft, or an older
-/// planner) loads its path as sent. A source that does not pin an immutable
-/// commit, digest and size serves without speculation: the planner's path
-/// names a file on the planner's node, which this node cannot check.
+/// A path never crosses the stage protocol, so only a draft in this node's
+/// Hugging Face cache can reach another node: its snapshot names the repo,
+/// commit and file, its blob name is the SHA-256 of an LFS file, and the file
+/// gives the size. `None` for a draft outside the cache, or one that this
+/// does not pin; the final stage then serves without speculation.
+pub(crate) fn configured_split_dflash_draft_source(
+    path: &Path,
+) -> Option<skippy_serving::split_dflash::SplitDFlashDraftSource> {
+    let Some(draft) = cached_draft_identity(path).filter(DFlashDraft::is_pinned) else {
+        tracing::warn!(
+            draft = %path.display(),
+            "split DFlash: the configured draft is not a pinned Hugging Face download, so the final stage serves without speculation"
+        );
+        return None;
+    };
+    Some(skippy_serving::split_dflash::SplitDFlashDraftSource {
+        repo: draft.repo,
+        revision: draft.revision,
+        file: draft.file,
+        sha256: draft.sha256,
+        bytes: draft.bytes,
+    })
+}
+
+fn cached_draft_identity(path: &Path) -> Option<DFlashDraft> {
+    let identity = crate::models::huggingface_identity_for_path(path)?;
+    let blob = path.canonicalize().ok()?;
+    Some(DFlashDraft {
+        repo: identity.repo_id,
+        revision: identity.revision,
+        file: identity.file,
+        sha256: blob.file_name()?.to_str()?.to_string(),
+        bytes: std::fs::metadata(&blob).ok()?.len(),
+    })
+}
+
+/// Points a split stage's draft at this node's own copy.
+///
+/// A plan that names a pinned draft is fetched here by that repo, revision
+/// and file into this node's Hugging Face cache, and must match its SHA-256
+/// and size. As on one node, the load never waits for the draft: a missing
+/// draft downloads in the background, this load serves without speculation,
+/// and the next load of the model picks the draft up. A draft that fails its
+/// checks also serves without speculation. A plan without a source keeps the
+/// path it has, which is none for a load from a peer. A source that does not
+/// pin an immutable commit, digest and size serves without speculation.
 ///
 /// A peer's load under `runtime.peer_model_downloads = false` uses a pinned
 /// draft only when it is already cached, and never starts its download.
@@ -580,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_without_a_source_loads_the_path_as_sent_and_an_unpinned_one_nothing() {
+    fn a_plan_without_a_source_keeps_its_path_and_an_unpinned_one_loads_nothing() {
         let sent = final_stage_plan(None).draft_model_path;
         let mut plan = final_stage_plan(None);
         resolve_split_dflash_draft(&mut plan, |_, _| unreachable!(), |_, _, _| unreachable!());
@@ -610,6 +646,45 @@ mod tests {
             resolve_split_dflash_draft(&mut plan, |_, _| unreachable!(), |_, _, _| unreachable!());
             assert_eq!(plan.draft_model_path, None);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_configured_draft_in_the_hugging_face_cache_travels_by_its_pin() {
+        let cache = tempfile::tempdir().unwrap();
+        let repo = cache.path().join("models--owner--draft");
+        let sha256 = "ab".repeat(32);
+        let revision = "12".repeat(20);
+        std::fs::create_dir_all(repo.join("blobs")).unwrap();
+        std::fs::write(repo.join("blobs").join(&sha256), b"draft bytes").unwrap();
+        let snapshot = repo.join("snapshots").join(&revision).join("gguf");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let draft = snapshot.join("draft.gguf");
+        std::os::unix::fs::symlink(format!("../../../blobs/{sha256}"), &draft).unwrap();
+
+        assert_eq!(
+            configured_split_dflash_draft_source(&draft),
+            Some(skippy_serving::split_dflash::SplitDFlashDraftSource {
+                repo: "owner/draft".into(),
+                revision,
+                file: "gguf/draft.gguf".into(),
+                sha256,
+                bytes: 11,
+            })
+        );
+
+        // A copy outside the cache, or a snapshot entry that is not an LFS
+        // blob, names nothing another node can fetch and check.
+        let loose = cache.path().join("draft.gguf");
+        std::fs::write(&loose, b"draft bytes").unwrap();
+        assert_eq!(configured_split_dflash_draft_source(&loose), None);
+        let unpinned = repo.join("snapshots").join("main");
+        std::fs::create_dir_all(&unpinned).unwrap();
+        std::fs::write(unpinned.join("draft.gguf"), b"draft bytes").unwrap();
+        assert_eq!(
+            configured_split_dflash_draft_source(&unpinned.join("draft.gguf")),
+            None
+        );
     }
 
     #[test]

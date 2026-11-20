@@ -1212,13 +1212,17 @@ measured verify cost and acceptance of each request, up to the cap;
 `SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap.
 
 A split serves DFlash too. Each stage forwards the target features the draft
-reads, the final stage holds the draft (a default draft is fetched into that
-node's own cache), and each block is verified in one pass through every
-stage. The split plan charges the final stage for the draft, its context and
-the target tensors it borrows. Until the final stage has its copy of a
-default draft, the split serves the native MTP the draft replaces, if the
-model has it. Split blocks are capped at four draft tokens unless `draft_max_tokens`
-is set, because every drafted token is a verify row on every stage.
+reads, the final stage holds the draft, and each block is verified in one
+pass through every stage. The final stage fetches the draft into its own
+cache by its Hugging Face repo, commit and file, and checks its SHA-256 and
+size. This applies to a default draft and to a configured draft in the
+planner's Hugging Face cache. A configured draft outside that cache cannot
+reach another node, so the split serves without it. The split plan charges
+the final stage for the draft, its context and the target tensors it
+borrows. Until the final stage has its copy of the draft, the split serves
+the native MTP the draft replaces, if the model has it. Split blocks are
+capped at four draft tokens unless `draft_max_tokens` is set, because every
+drafted token is a verify row on every stage.
 
 Three split optimisations are on by default, and each has an
 environment-variable off switch for diagnosis. The final stage answers a

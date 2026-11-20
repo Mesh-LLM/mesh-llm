@@ -30,7 +30,8 @@ fn assert_decoded_stage_load(decoded: &crate::inference::skippy::StageLoadReques
         Some("certified")
     );
     assert!(!decoded.continuous_batching);
-    assert_eq!(decoded.model_path.as_deref(), Some("/models/demo.gguf"));
+    // The receiver resolves its own copy of the model; no path crosses the wire.
+    assert_eq!(decoded.model_path, None);
     assert_eq!(decoded.mmap, Some(false));
     assert!(decoded.mlock);
     assert_eq!(decoded.projector_use_gpu, Some(false));
@@ -383,7 +384,14 @@ fn stage_load_proto_carries_a_split_dflash_plan() {
 
     let decoded = stage_load_from_proto(stage_load_to_proto(load)).unwrap();
 
-    assert_eq!(decoded.dflash, Some(plan));
+    // The final stage fetches its own copy of the draft from the source.
+    assert_eq!(
+        decoded.dflash,
+        Some(skippy_serving::split_dflash::SplitDFlashStage {
+            draft_model_path: None,
+            ..plan
+        })
+    );
 }
 
 #[test]
@@ -457,26 +465,6 @@ fn a_stage_load_from_a_peer_without_split_dflash_has_no_plan() {
 }
 
 #[test]
-fn a_split_dflash_plan_from_an_older_planner_keeps_its_draft_path() {
-    let mut load = stage_load_request();
-    load.dflash = Some(skippy_serving::split_dflash::SplitDFlashStage {
-        target_layers: vec![2, 62],
-        draft_model_path: Some("/models/draft-dflash.gguf".into()),
-        ..Default::default()
-    });
-    let mut proto = stage_load_to_proto(load);
-    proto.dflash.as_mut().unwrap().draft_source = None;
-
-    let plan = stage_load_from_proto(proto).unwrap().dflash.unwrap();
-
-    assert_eq!(plan.draft_source, None);
-    assert_eq!(
-        plan.draft_model_path.as_deref(),
-        Some(std::path::Path::new("/models/draft-dflash.gguf"))
-    );
-}
-
-#[test]
 fn stage_load_proto_roundtrip_preserves_every_split_activation_codec() {
     use skippy_protocol::{StageActivationCodec as Codec, StageActivationCodecPolicy as Policy};
     for (codec, policy) in [
@@ -501,3 +489,4 @@ fn stage_load_proto_roundtrip_preserves_every_split_activation_codec() {
         );
     }
 }
+

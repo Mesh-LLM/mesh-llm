@@ -243,9 +243,6 @@ pub(super) fn stage_control_request_to_proto(
 pub(super) fn stage_load_to_proto(
     load: crate::inference::skippy::StageLoadRequest,
 ) -> skippy_stage_proto::LoadStage {
-    let projector_path = (!load.local_source_required)
-        .then(|| load.projector_path.clone())
-        .flatten();
     skippy_stage_proto::LoadStage {
         topology_id: load.topology_id,
         run_id: load.run_id,
@@ -258,13 +255,11 @@ pub(super) fn stage_load_to_proto(
         stage_index: load.stage_index,
         layer_start: load.layer_start,
         layer_end: load.layer_end,
-        model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         source_model_sha256: load.source_model_sha256,
         split_certification: load.split_certification,
         source_resolution_policy: source_resolution_policy_to_proto(load.local_source_required)
             as i32,
-        projector_path,
         projector_use_gpu: load.projector_use_gpu,
         media_marker: load.media_marker,
         image_min_tokens: load.image_min_tokens,
@@ -273,7 +268,6 @@ pub(super) fn stage_load_to_proto(
         glm_dsa_policy: stage_glm_dsa_policy_to_proto(load.glm_dsa_policy) as i32,
         generation_signal_window: load.generation_signal_window,
         selected_device: load.selected_device.map(stage_device_to_proto),
-        bind_addr: load.bind_addr,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
         continuous_batching: load.continuous_batching,
@@ -330,7 +324,6 @@ fn stage_topology_stage_to_proto(
         node_id: stage.node_id.as_bytes().to_vec(),
         layer_start: stage.layer_start,
         layer_end: stage.layer_end,
-        bind_addr: stage.bind_addr,
     }
 }
 
@@ -386,7 +379,6 @@ pub(super) fn stage_peer_to_proto(
     skippy_stage_proto::StagePeer {
         stage_id: peer.stage_id,
         stage_index: peer.stage_index,
-        endpoint: peer.endpoint,
         node_id: peer.node_id.map(|id| id.as_bytes().to_vec()),
     }
 }
@@ -496,13 +488,15 @@ fn stage_load_requester_matches(
     Ok(())
 }
 
+/// Address every stage server that a peer asks this node to load listens on.
+/// The stage server socket is unauthenticated, and peers reach it only through
+/// the stage transport, so it listens on loopback at an ephemeral port.
+const REMOTE_STAGE_BIND_ADDR: &str = "127.0.0.1:0";
+
 pub(super) fn stage_load_from_proto(
     load: skippy_stage_proto::LoadStage,
 ) -> anyhow::Result<crate::inference::skippy::StageLoadRequest> {
     let local_source_required = source_resolution_policy_from_proto(load.source_resolution_policy)?;
-    let projector_path = (!local_source_required)
-        .then(|| load.projector_path.clone())
-        .flatten();
     let admission = load
         .admission
         .clone()
@@ -533,12 +527,12 @@ pub(super) fn stage_load_from_proto(
             .into_iter()
             .map(stage_topology_stage_from_proto)
             .collect::<anyhow::Result<Vec<_>>>()?,
-        model_path: load.model_path,
+        model_path: None,
         source_model_bytes: load.source_model_bytes,
         source_model_sha256: load.source_model_sha256,
         split_certification: load.split_certification,
         local_source_required,
-        projector_path,
+        projector_path: None,
         projector_use_gpu: load.projector_use_gpu,
         media_marker: load.media_marker,
         image_min_tokens: load.image_min_tokens,
@@ -550,7 +544,7 @@ pub(super) fn stage_load_from_proto(
             .selected_device
             .map(stage_device_from_proto)
             .transpose()?,
-        bind_addr: load.bind_addr,
+        bind_addr: REMOTE_STAGE_BIND_ADDR.to_string(),
         ctx_size: load.ctx_size,
         lane_count: if load.lane_count == 0 {
             4
@@ -594,7 +588,7 @@ fn stage_topology_stage_from_proto(
         node_id: endpoint_id_from_bytes(stage.node_id).context("invalid topology stage node_id")?,
         layer_start: stage.layer_start,
         layer_end: stage.layer_end,
-        bind_addr: stage.bind_addr,
+        bind_addr: String::new(),
     })
 }
 
@@ -671,7 +665,9 @@ pub(super) fn stage_peer_from_proto(
         persistent_lane_marker: false,
         stage_id: peer.stage_id,
         stage_index: peer.stage_index,
-        endpoint: peer.endpoint,
+        // The receiver reaches its neighbour through the stage transport to
+        // the neighbour's node and sets the endpoint once that is open.
+        endpoint: String::new(),
         node_id: peer
             .node_id
             .map(endpoint_id_from_bytes)
@@ -1049,7 +1045,6 @@ pub(super) fn layer_inventory_to_proto(
             .into_iter()
             .map(layer_range_to_proto)
             .collect(),
-        source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
         source_model_kind: source_model_kind_to_proto(inventory.source_model_kind) as i32,
         source_model_sha256: inventory.source_model_sha256,
@@ -1080,7 +1075,7 @@ pub(super) fn layer_inventory_from_proto(
             .into_iter()
             .map(layer_range_from_proto)
             .collect(),
-        source_model_path: inventory.source_model_path,
+        source_model_path: None,
         source_model_bytes: inventory.source_model_bytes,
         source_model_sha256: inventory.source_model_sha256,
         content_addressed_local_source: inventory.content_addressed_local_source,
@@ -1170,8 +1165,6 @@ pub(super) fn stage_status_to_proto(
     status: crate::inference::skippy::StageStatusSnapshot,
 ) -> skippy_stage_proto::StageStatus {
     use skippy_stage_proto::stage_status::AdmissionState;
-    let projector_path =
-        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     let admission_state = Some(match status.admission {
         Some(descriptor) => AdmissionState::Admitted(skippy_stage_proto::StageAdmissionAdmitted {
             descriptor: Some(descriptor.into()),
@@ -1204,13 +1197,10 @@ pub(super) fn stage_status_to_proto(
         n_ubatch: status.n_ubatch,
         package_ref: status.package_ref,
         manifest_sha256: status.manifest_sha256,
-        source_model_path: status.source_model_path,
         source_model_sha256: status.source_model_sha256,
         split_certification: status.split_certification,
         source_model_bytes: status.source_model_bytes,
-        materialized_path: status.materialized_path,
         materialized_pinned: Some(status.materialized_pinned),
-        projector_path,
         flash_attn_type: stage_flash_attn_type_to_proto(status.flash_attn_type) as i32,
         coordinator_term: status.coordinator_term,
         coordinator_id: status.coordinator_id.map(|id| id.to_string()),
@@ -1238,8 +1228,6 @@ pub(super) fn stage_status_from_proto(
     status: skippy_stage_proto::StageStatus,
 ) -> anyhow::Result<crate::inference::skippy::StageStatusSnapshot> {
     use skippy_stage_proto::stage_status::AdmissionState;
-    let projector_path =
-        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     let admission = match status.admission_state {
         Some(AdmissionState::Idle(_)) => None,
         Some(AdmissionState::Admitted(admitted)) => Some(
@@ -1291,13 +1279,13 @@ pub(super) fn stage_status_from_proto(
         n_ubatch: status.n_ubatch,
         package_ref: status.package_ref,
         manifest_sha256: status.manifest_sha256,
-        source_model_path: status.source_model_path,
+        source_model_path: None,
         source_model_sha256: status.source_model_sha256,
         split_certification: status.split_certification,
         source_model_bytes: status.source_model_bytes,
-        materialized_path: status.materialized_path,
+        materialized_path: None,
         materialized_pinned: status.materialized_pinned.unwrap_or(false),
-        projector_path,
+        projector_path: None,
         flash_attn_type: stage_flash_attn_type_from_proto(status.flash_attn_type),
         error: status.error,
         shutdown_generation: status.shutdown_generation,
@@ -1511,10 +1499,6 @@ fn stage_dflash_to_proto(
 ) -> skippy_stage_proto::StageDFlashPlan {
     skippy_stage_proto::StageDFlashPlan {
         target_layers: plan.target_layers.clone(),
-        draft_model_path: plan
-            .draft_model_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
         max_draft_tokens: plan
             .max_draft_tokens
             .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
@@ -1540,7 +1524,8 @@ fn stage_dflash_from_proto(
 ) -> skippy_serving::split_dflash::SplitDFlashStage {
     skippy_serving::split_dflash::SplitDFlashStage {
         target_layers: plan.target_layers,
-        draft_model_path: plan.draft_model_path.map(std::path::PathBuf::from),
+        // The final stage fetches its own copy from draft_source.
+        draft_model_path: None,
         max_draft_tokens: plan.max_draft_tokens.map(|tokens| tokens as usize),
         draft_n_gpu_layers: plan.draft_n_gpu_layers,
         draft_device: plan.draft_device,

@@ -8,6 +8,9 @@ use crate::mesh::stage_proto::{
     stage_control_request_from_proto, stage_control_response_to_proto,
     stage_control_unavailable_response, stage_status_from_load,
 };
+use crate::mesh::stage_source::{
+    StageLoadOrigin, ensure_peer_package_ref, resolve_stage_source_by_name,
+};
 use crate::mesh::stage_transport::{
     ARTIFACT_TRANSFER_BUFFER_BYTES, ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR,
     ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
@@ -267,7 +270,12 @@ impl Node {
         let control_tx = control_tx_guard.clone();
         let source_fetch = self.peer_stage_source_fetch;
         let response = match self
-            .resolve_stage_control_request(control_tx.as_ref(), &mut request, source_fetch)
+            .resolve_stage_control_request(
+                control_tx.as_ref(),
+                &mut request,
+                StageLoadOrigin::Peer,
+                source_fetch,
+            )
             .await
         {
             Ok(()) => {
@@ -420,6 +428,7 @@ impl Node {
             &tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,
         >,
         request: &mut crate::inference::skippy::StageControlRequest,
+        origin: StageLoadOrigin,
         source_fetch: crate::inference::skippy::StageSourceFetch,
     ) -> anyhow::Result<()> {
         if let crate::inference::skippy::StageControlRequest::LoadLocal(load) = request {
@@ -435,7 +444,8 @@ impl Node {
                 let control_tx =
                     control_tx.context("stage control is unavailable before load authorization")?;
                 Self::authorize_stage_load(control_tx, load).await?;
-                self.resolve_stage_load_request(load, source_fetch).await?;
+                self.resolve_stage_load_request(load, origin, source_fetch)
+                    .await?;
             }
             // The stop's stage-to-stage transport bridge is aborted only
             // after the stage-control loop accepts the stop for the
@@ -475,8 +485,10 @@ impl Node {
     async fn resolve_stage_load_request(
         &self,
         load: &mut crate::inference::skippy::StageLoadRequest,
+        origin: StageLoadOrigin,
         source_fetch: crate::inference::skippy::StageSourceFetch,
     ) -> anyhow::Result<()> {
+        ensure_peer_package_ref(load, origin)?;
         if source_fetch.allows_fetch()
             && let Err(error) = self.prefetch_stage_package_from_coordinator(load).await
         {
@@ -496,25 +508,8 @@ impl Node {
         .await
         .context("join verify local-required stage load source task")??;
         *load = verified.0;
-        if !verified.1
-            && load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
-            && load
-                .model_path
-                .as_deref()
-                .is_none_or(|path| !std::path::Path::new(path).exists())
-        {
-            for candidate in [
-                load.model_id.as_str(),
-                load.package_ref.strip_prefix("gguf://").unwrap_or_default(),
-            ]
-            .into_iter()
-            .filter(|candidate| !candidate.is_empty())
-            {
-                if let Some(path) = source_fetch.resolve_model_candidate(candidate).await {
-                    load.model_path = Some(path.to_string_lossy().to_string());
-                    break;
-                }
-            }
+        if !verified.1 {
+            resolve_stage_source_by_name(load, origin, source_fetch).await;
         }
         source_fetch.ensure_local_source(load)?;
         let topology_id = load.topology_id.clone();
@@ -539,12 +534,16 @@ impl Node {
         peer.persistent_lane_marker = self
             .stage_peer_supports_persistent_lane_marker(peer.node_id)
             .await;
-        let Some(peer_node) = peer.node_id else {
+        // A neighbour on this node keeps the loopback endpoint its local
+        // planner set; a load from a peer names neighbours by node only.
+        let Some(peer_node) = peer.node_id.filter(|node| *node != self.endpoint.id()) else {
+            anyhow::ensure!(
+                !peer.endpoint.is_empty(),
+                "stage {} names a neighbour with neither a remote node nor an endpoint",
+                peer.stage_id
+            );
             return Ok(());
         };
-        if peer_node == self.endpoint.id() {
-            return Ok(());
-        }
         let bridge_addr = self
             .ensure_stage_transport_bridge(peer_node, topology_id, run_id, peer.stage_id.clone())
             .await?;

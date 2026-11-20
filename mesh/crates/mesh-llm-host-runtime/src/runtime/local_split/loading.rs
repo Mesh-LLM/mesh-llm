@@ -1324,7 +1324,13 @@ fn split_dflash_plan(
     };
     match plan {
         Ok(mut plan) => {
-            plan.draft_source = chosen.map(crate::inference::skippy::split_dflash_draft_source);
+            plan.draft_source = chosen
+                .map(crate::inference::skippy::split_dflash_draft_source)
+                .or_else(|| {
+                    crate::inference::skippy::configured_split_dflash_draft_source(
+                        &dflash.draft_model_path,
+                    )
+                });
             plan.draft_device = decode.draft_device.clone();
             dflash.target_layers = plan.target_layers.clone();
             tracing::info!(

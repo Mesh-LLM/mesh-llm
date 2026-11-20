@@ -1,4 +1,5 @@
-//! Whether a stage request may fetch model bytes this node does not have.
+//! Whether a stage request may fetch model bytes this node does not have, and
+//! which of a peer's names it may resolve.
 //!
 //! A split coordinator on another node can ask this node to inventory, then
 //! load, a stage of any model. By default the stage fetches what it lacks:
@@ -8,6 +9,8 @@
 //! local disk. The node's own loads and split coordination always fetch.
 
 use std::path::{Path, PathBuf};
+
+use mesh_llm_skippy_adapter::package::acquisition::StagePackageRef;
 
 use super::{StageLoadRequest, is_layer_package_ref};
 
@@ -72,6 +75,44 @@ impl StageSourceFetch {
     }
 }
 
+/// A peer names a layer package by its `hf://` ref, or by a package directory
+/// on this node whose `model-package.json` has the SHA-256 the request names.
+/// The package resolver opens a directory ref as given, so an unverified
+/// directory is refused: a peer must already know the exact manifest of a
+/// package here to use it.
+pub(crate) fn peer_may_name_package(package_ref: &str, manifest_sha256: &str) -> bool {
+    match StagePackageRef::parse(package_ref) {
+        Ok(StagePackageRef::LocalPackage(dir)) => {
+            local_package_manifest_matches(&dir, manifest_sha256)
+        }
+        _ => true,
+    }
+}
+
+fn local_package_manifest_matches(dir: &Path, manifest_sha256: &str) -> bool {
+    if manifest_sha256.len() != 64 || !manifest_sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    std::fs::File::open(dir.join("model-package.json"))
+        .and_then(sha256_hex)
+        .is_ok_and(|actual| actual.eq_ignore_ascii_case(manifest_sha256))
+}
+
+fn sha256_hex(mut file: std::fs::File) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(hex::encode(hasher.finalize()));
+        }
+        hasher.update(&buffer[..read]);
+    }
+}
+
 /// Resolve a model id or path to a GGUF already on local disk, without
 /// consulting the catalog or Hugging Face.
 fn local_model_source(candidate: &str) -> Option<PathBuf> {
@@ -96,6 +137,38 @@ mod tests {
         );
         assert!(StageSourceFetch::default().allows_fetch());
         assert!(!StageSourceFetch::LocalOnly.allows_fetch());
+    }
+
+    #[test]
+    fn a_peer_names_a_package_directory_only_by_its_manifest() {
+        use sha2::{Digest, Sha256};
+
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = br#"{"schema_version":2}"#;
+        std::fs::write(dir.path().join("model-package.json"), manifest).unwrap();
+        let package_dir = dir.path().to_string_lossy().into_owned();
+        let manifest_sha256 = hex::encode(Sha256::digest(manifest));
+
+        assert!(peer_may_name_package(&package_dir, &manifest_sha256));
+        assert!(peer_may_name_package(
+            &package_dir,
+            &manifest_sha256.to_uppercase()
+        ));
+        for wrong in [
+            String::new(),
+            "f".repeat(64),
+            "direct-gguf:1:model.gguf".to_string(),
+            manifest_sha256[..63].to_string(),
+        ] {
+            assert!(!peer_may_name_package(&package_dir, &wrong), "{wrong}");
+        }
+        for package_ref in [
+            "hf://meshllm/demo@main",
+            "gguf://org/repo:Q4_K_M",
+            "/no/such/package",
+        ] {
+            assert!(peer_may_name_package(package_ref, ""), "{package_ref}");
+        }
     }
 
     #[test]

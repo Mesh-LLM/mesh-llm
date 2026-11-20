@@ -111,6 +111,7 @@ pub mod requirements;
 mod signed_records;
 mod stage_artifacts;
 mod stage_proto;
+mod stage_source;
 mod stage_transport;
 mod stage_transport_bridge;
 mod stun;

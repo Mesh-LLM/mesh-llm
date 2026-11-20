@@ -127,8 +127,8 @@ The last stage sends its predictions back to the coordinator's stage 0, and
 only that stage's owner may open a stage connection to it. Stage 0 serves
 stage messages no higher than the tier the coordinator gives that node.
 
-This is stage protocol generation 17. All stages of a split must run it;
-older stages fail stage negotiation.
+Tiers arrived in stage protocol generation 17. All stages of a split must
+run the same generation; older stages fail stage negotiation.
 
 ## Limits
 
