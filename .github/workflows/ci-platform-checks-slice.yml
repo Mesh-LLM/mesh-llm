@@ -400,9 +400,13 @@ jobs:
           # against it exactly once and feed the filtered lists to the test
           # command. An empty filtered list runs no test command rather than an
           # invalid one.
+          # The runner's jq.exe ends every line with CRLF. mapfile keeps the CR
+          # on each name while grep drops it from the member file, so no name
+          # would ever match and every owner would be skipped: strip it from
+          # both reads.
           metadata_ok=0
           if cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/workspace-metadata.json"; then
-            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" > "$RUNNER_TEMP/workspace-members.txt"
+            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" | tr -d '\r' > "$RUNNER_TEMP/workspace-members.txt"
             metadata_ok=1
           else
             echo "::warning::cargo metadata failed; running the planned owners unchanged"
@@ -414,7 +418,7 @@ jobs:
               return
             fi
             local -a requested=()
-            mapfile -t requested < <(jq -r '.[]' <<<"$input")
+            mapfile -t requested < <(jq -r '.[]' <<<"$input" | tr -d '\r')
             local -a kept=()
             local crate
             for crate in "${requested[@]}"; do
