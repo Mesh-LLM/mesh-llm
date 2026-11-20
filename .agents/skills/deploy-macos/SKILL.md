@@ -220,4 +220,4 @@ A clean stop removes the instance runtime dir under `~/.mesh-llm/runtime/`.
 | `mesh-llm: command not found` over SSH | `~/.local/bin` not on non-interactive PATH | Full path or `bash -lc` |
 | Empty `/v1/models` | Model still downloading/loading | Wait; watch skippy-native.log |
 | "No inference server available" | Election in progress or load failed | Check stderr + skippy-native.log |
-| Stale runtime dir after crash | Unclean exit | `rm -rf ~/.mesh-llm/runtime/<stale_pid>/` (auto-GC'd after 1h too) |
+| Stale runtime dir after crash | Unclean exit | `rm -rf ~/.mesh-llm/runtime/<stale_pid>/` (a node that starts later tries to remove it in the background once seven days have passed since its last write) |

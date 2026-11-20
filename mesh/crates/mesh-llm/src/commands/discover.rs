@@ -263,11 +263,14 @@ fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) ->
             &target.expected_comm,
             target.expected_start_time,
         );
-        writeln!(err, "{}", tally.record(target.pid, &target.label, outcome))?;
+        writeln_some(err, tally.record(target.pid, &target.label, outcome))?;
     }
-    if let Some(line) = tally.finish()? {
-        writeln!(err, "{line}")?;
-    }
+    let (lines, stopped) = tally.finish();
+    let written = lines.iter().try_for_each(|line| writeln!(err, "{line}"));
+    // A process that would not stop is the failure to report, even when the
+    // summary could not be written.
+    stopped?;
+    written?;
     // A plain client never registers a runtime instance, so this command
     // cannot see it; say so in the closing output, since a bare
     // "Nothing running." would be false while a client still serves
@@ -283,16 +286,27 @@ fn writeln_some(err: &mut impl Write, line: Option<String>) -> std::io::Result<(
     }
 }
 
-/// What `mesh-llm stop` says about each owner, counted for the closing line.
+/// What `mesh-llm stop` says about each owner, counted for the closing lines.
 #[derive(Default)]
 struct StopTally {
     stopped: u32,
     failed: u32,
+    /// Records of nodes that were not running when checked, said once at the
+    /// end (stale before the command, or a service child the service's stop
+    /// ended first):
+    /// a machine that ran many nodes keeps one per run, and a line for each
+    /// buried the one that mattered.
+    already_stopped: u32,
 }
 
 impl StopTally {
-    fn record(&mut self, pid: u32, label: &str, outcome: backend::TerminationOutcome) -> String {
-        match outcome {
+    fn record(
+        &mut self,
+        pid: u32,
+        label: &str,
+        outcome: backend::TerminationOutcome,
+    ) -> Option<String> {
+        Some(match outcome {
             backend::TerminationOutcome::Graceful => {
                 self.stopped += 1;
                 format!("  Terminated owner pid={pid} gracefully ({label})")
@@ -302,8 +316,8 @@ impl StopTally {
                 format!("  Force-killed owner pid={pid} ({label})")
             }
             backend::TerminationOutcome::NotRunning => {
-                self.stopped += 1;
-                format!("  Owner pid={pid} was already stopped ({label})")
+                self.already_stopped += 1;
+                return None;
             }
             // A stale record whose id another process now holds: nothing of
             // ours runs there, but say so, since a node whose start time
@@ -315,7 +329,7 @@ impl StopTally {
                 self.failed += 1;
                 format!("  Could not stop owner pid={pid} ({label})")
             }
-        }
+        })
     }
 
     /// The line for the Windows background service, when there was one.
@@ -349,13 +363,28 @@ impl StopTally {
         }
     }
 
-    /// The closing line, or an error while an owner that would not stop is
-    /// still running: "Nothing running." would be false then.
-    fn finish(self) -> Result<Option<&'static str>> {
-        if self.failed > 0 {
-            anyhow::bail!("{} mesh-llm process(es) could not be stopped", self.failed);
+    /// The closing lines, and an error while an owner that would not stop is
+    /// still running. The count of records left by stopped nodes is printed
+    /// either way; "Nothing running." only when nothing failed, since it would
+    /// be false then.
+    fn finish(self) -> (Vec<String>, Result<()>) {
+        let mut lines = Vec::new();
+        match self.already_stopped {
+            0 => {}
+            1 => lines.push("  1 record of a node that was not running when checked".to_string()),
+            count => lines.push(format!(
+                "  {count} records of nodes that were not running when checked"
+            )),
         }
-        Ok((self.stopped == 0).then_some("Nothing running."))
+        if self.failed > 0 {
+            let error =
+                anyhow::anyhow!("{} mesh-llm process(es) could not be stopped", self.failed);
+            return (lines, Err(error));
+        }
+        if self.stopped == 0 {
+            lines.push("Nothing running.".to_string());
+        }
+        (lines, Ok(()))
     }
 }
 
@@ -363,6 +392,13 @@ impl StopTally {
 mod stop_tests {
     use super::*;
     use backend::TerminationOutcome;
+
+    /// The closing lines of a stop where every owner stopped.
+    fn finished(tally: StopTally) -> Vec<String> {
+        let (lines, stopped) = tally.finish();
+        stopped.expect("exit 0");
+        lines
+    }
 
     #[test]
     fn unavailable_runtime_root_has_the_same_coverage_as_an_empty_root() {
@@ -381,17 +417,29 @@ mod stop_tests {
         let mut tally = StopTally::default();
 
         assert_eq!(
-            tally.record(7, "mesh-llm", TerminationOutcome::Failed),
-            "  Could not stop owner pid=7 (mesh-llm)"
+            tally
+                .record(7, "mesh-llm", TerminationOutcome::Failed)
+                .as_deref(),
+            Some("  Could not stop owner pid=7 (mesh-llm)")
         );
         assert_eq!(
-            tally.record(8, "mesh-llm", TerminationOutcome::Killed),
-            "  Force-killed owner pid=8 (mesh-llm)"
+            tally
+                .record(8, "mesh-llm", TerminationOutcome::Killed)
+                .as_deref(),
+            Some("  Force-killed owner pid=8 (mesh-llm)")
         );
-        let error = tally.finish().expect_err("an owner is still running");
+        tally.record(9, "mesh-llm", TerminationOutcome::NotRunning);
+        let (lines, stopped) = tally.finish();
+        let error = stopped.expect_err("an owner is still running");
         assert_eq!(
             error.to_string(),
             "1 mesh-llm process(es) could not be stopped"
+        );
+        // The records of stopped nodes are still counted, but nothing claims
+        // that nothing runs.
+        assert_eq!(
+            lines,
+            ["  1 record of a node that was not running when checked"]
         );
     }
 
@@ -400,10 +448,12 @@ mod stop_tests {
         let mut tally = StopTally::default();
 
         assert_eq!(
-            tally.record(7, "mesh-llm", TerminationOutcome::NotOurs),
-            "  pid=7 now belongs to another process, left alone (mesh-llm)"
+            tally
+                .record(7, "mesh-llm", TerminationOutcome::NotOurs)
+                .as_deref(),
+            Some("  pid=7 now belongs to another process, left alone (mesh-llm)")
         );
-        assert_eq!(tally.finish().expect("exit 0"), Some("Nothing running."));
+        assert_eq!(finished(tally), ["Nothing running."]);
     }
 
     #[test]
@@ -411,12 +461,34 @@ mod stop_tests {
         let mut tally = StopTally::default();
 
         tally.record(7, "mesh-llm", TerminationOutcome::Graceful);
-        tally.record(8, "mesh-llm", TerminationOutcome::NotRunning);
 
-        assert_eq!(tally.finish().expect("exit 0"), None);
+        assert!(finished(tally).is_empty());
+        assert_eq!(finished(StopTally::default()), ["Nothing running."]);
+    }
+
+    #[test]
+    fn records_of_already_stopped_nodes_are_counted_in_one_line() {
+        let mut tally = StopTally::default();
+        for pid in [7, 8, 9] {
+            assert_eq!(
+                tally.record(pid, "mesh-llm", TerminationOutcome::NotRunning),
+                None
+            );
+        }
         assert_eq!(
-            StopTally::default().finish().expect("exit 0"),
-            Some("Nothing running.")
+            finished(tally),
+            [
+                "  3 records of nodes that were not running when checked",
+                "Nothing running."
+            ]
+        );
+
+        let mut tally = StopTally::default();
+        tally.record(7, "mesh-llm", TerminationOutcome::NotRunning);
+        tally.record(8, "mesh-llm", TerminationOutcome::Graceful);
+        assert_eq!(
+            finished(tally),
+            ["  1 record of a node that was not running when checked"]
         );
     }
 
@@ -429,14 +501,14 @@ mod stop_tests {
             tally.record_service(BackgroundServiceStop::NotRunning),
             None
         );
-        assert_eq!(tally.finish().expect("exit 0"), Some("Nothing running."));
+        assert_eq!(finished(tally), ["Nothing running."]);
 
         let mut tally = StopTally::default();
         let ended = tally
             .record_service(BackgroundServiceStop::Ended)
             .expect("an ended service is reported");
         assert!(ended.contains("Ended the background service"));
-        assert_eq!(tally.finish().expect("exit 0"), None);
+        assert!(finished(tally).is_empty());
 
         let mut tally = StopTally::default();
         let still = tally
@@ -446,6 +518,6 @@ mod stop_tests {
             .expect("a service still running is reported");
         assert!(still.contains("(access denied)"));
         assert!(still.contains("schtasks -End -TN mesh-llm"));
-        tally.finish().expect_err("the service is still running");
+        tally.finish().1.expect_err("the service is still running");
     }
 }
