@@ -3,6 +3,9 @@ param(
     [string]$CudaArch = "",
     [string]$RocmArch = "",
     [string]$BuildProfile = "",
+    # x64 (default) or arm64. arm64 cross-compiles from an x64 machine, or
+    # builds natively on a Windows ARM64 machine.
+    [string]$TargetArch = "",
     [switch]$DynamicHost,
     [switch]$HostOnly,
     [switch]$SkippyOnly
@@ -12,6 +15,18 @@ $ErrorActionPreference = "Stop"
 if ($HostOnly -and $SkippyOnly) {
     throw "-HostOnly and -SkippyOnly are mutually exclusive."
 }
+
+# A build changes the environment it runs in: the MSVC environment of its
+# target architecture, LLAMA_STAGE_BUILD_DIR, the compiler cache. Started with
+# `&` from a PowerShell session, the script shares that session's
+# environment, so it puts it back when it ends, however it ends: a later build
+# in the same session, for another architecture, starts from the session's
+# own environment instead of this build's.
+$callerEnvironment = @{}
+foreach ($variable in Get-ChildItem env:) {
+    $callerEnvironment[$variable.Name] = $variable.Value
+}
+try {
 
 $scriptDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../scripts"))
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
@@ -78,6 +93,45 @@ function ConvertTo-BashRepoPath {
         return "/mnt/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
     }
     return $full.Replace("\", "/")
+}
+
+# Cargo's output directory as cargo resolves it: CARGO_TARGET_DIR or a
+# build.target-dir setting can put it outside the checkout, even on another
+# drive, and the host looks for native-runtimes next to its own executable.
+function Resolve-CargoTargetDir {
+    # Windows PowerShell turns a native command's stderr into errors, which
+    # "Stop" would throw on; the exit code is checked instead.
+    $ErrorActionPreference = "Continue"
+    Push-Location $repoRoot
+    try {
+        $metadata = (& cargo metadata --format-version 1 --no-deps 2>$null) -join ""
+        if ($LASTEXITCODE -ne 0 -or -not $metadata) {
+            throw "cargo metadata failed, so Cargo's target directory is unknown."
+        }
+        return [System.IO.Path]::GetFullPath(($metadata | ConvertFrom-Json).target_directory)
+    } finally {
+        Pop-Location
+    }
+}
+
+# A path the packaging bash (Git Bash, MSYS2 or Cygwin, never WSL) reads from
+# the repository root: relative inside the repository, and its own drive form
+# outside it (`/d/...`, or `/cygdrive/d/...` in Cygwin), since GNU tar reads a
+# `D:` prefix as a remote host.
+function ConvertTo-MsysPath {
+    param([string]$Path)
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\"
+    if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $full.Substring($root.Length).Replace("\", "/")
+    }
+    if ($full -notmatch '^[A-Za-z]:\\') {
+        throw "Cargo's target directory must be on a drive-letter path: $Path"
+    }
+    $kernel = (& $packagingBash -c "uname -s" | Select-Object -First 1)
+    $drivePrefix = if ($kernel -match '^CYGWIN') { "/cygdrive/" } else { "/" }
+    return $drivePrefix + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
 }
 
 # WSL bash reports a Linux kernel; Git Bash and Cygwin report their own.
@@ -455,7 +509,9 @@ function Import-CmdEnvironment {
     }
 
     foreach ($line in $output) {
-        if ($line -match '^(?<name>[^=]+)=(?<value>.*)$') {
+        # `set` also lists variables set to an empty string; writing one back
+        # would remove it, since Windows cannot set an empty value.
+        if ($line -match '^(?<name>[^=]+)=(?<value>.+)$') {
             Set-Item -Path "env:$($Matches.name)" -Value $Matches.value
         }
     }
@@ -664,38 +720,35 @@ function Get-MissingCommands {
     return $missing
 }
 
+function Test-HostIsArm64 {
+    # PROCESSOR_ARCHITEW6432 names the machine when a 32-bit shell runs under WOW64.
+    $hostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    return $hostArch -eq "ARM64"
+}
+
 function Ensure-MsvcToolchain {
     $requiredTools = @("cl", "link", "lib", "rc", "mt")
+    if ($windowsArch -eq "arm64") {
+        Ensure-MsvcArm64Toolchain $requiredTools
+        return
+    }
     $missingTools = @(Get-MissingCommands -Commands $requiredTools)
-    if ($missingTools.Count -eq 0) {
+    # A shell initialized for ARM64 has cl, link and lib on PATH too, but
+    # they target ARM64: import the x64 environment over it.
+    $targetsOtherArch = $env:VSCMD_ARG_TGT_ARCH -and $env:VSCMD_ARG_TGT_ARCH -ne "x64"
+    if ($missingTools.Count -eq 0 -and -not $targetsOtherArch) {
         return
     }
 
     Write-Host "MSVC/Windows SDK tools missing before vcvars64 import: $($missingTools -join ', ')"
 
     $programFilesX86 = ${env:ProgramFiles(x86)}
-    $vswhereCandidates = @()
-    if ($programFilesX86) {
-        $vswhereCandidates += (Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe")
-    }
-    if ($env:ProgramFiles) {
-        $vswhereCandidates += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
-    }
-    $vswhereFromPath = Resolve-CommandPath "vswhere"
-    if ($vswhereFromPath) {
-        $vswhereCandidates += $vswhereFromPath
-    }
-
     $vcvars64 = $null
-    $vswhere = $vswhereCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique -First 1
-    if ($vswhere) {
-        $installationPathOutput = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
-        $installationPath = if ($installationPathOutput) { $installationPathOutput.Trim() } else { "" }
-        if ($installationPath) {
-            $candidate = Join-Path $installationPath "VC\Auxiliary\Build\vcvars64.bat"
-            if (Test-Path $candidate) {
-                $vcvars64 = $candidate
-            }
+    $installationPath = Resolve-VsInstallationPath "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+    if ($installationPath) {
+        $candidate = Join-Path $installationPath "VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path $candidate) {
+            $vcvars64 = $candidate
         }
     }
 
@@ -722,6 +775,74 @@ function Ensure-MsvcToolchain {
     if ($missingTools.Count -gt 0) {
         throw "MSVC toolchain initialization completed, but required Visual Studio/Windows SDK tools are still unavailable in PATH: $($missingTools -join ', '). Install the Windows SDK and Visual Studio Build Tools on this runner."
     }
+}
+
+# The installation path of the latest Visual Studio that has $Component, or
+# $null when vswhere is missing or no installation has it.
+function Resolve-VsInstallationPath {
+    param([string]$Component)
+
+    $vswhereCandidates = @()
+    if (${env:ProgramFiles(x86)}) {
+        $vswhereCandidates += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe")
+    }
+    if ($env:ProgramFiles) {
+        $vswhereCandidates += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+    }
+    $vswhereFromPath = Resolve-CommandPath "vswhere"
+    if ($vswhereFromPath) {
+        $vswhereCandidates += $vswhereFromPath
+    }
+    $vswhere = $vswhereCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique -First 1
+    if (-not $vswhere) {
+        return $null
+    }
+    $output = & $vswhere -latest -products * -requires $Component -property installationPath | Select-Object -First 1
+    if ($output) {
+        return $output.Trim()
+    }
+    return $null
+}
+
+# An ARM64 build needs the MSVC environment that targets ARM64: its link, lib
+# and rc, and the ARM64 import libraries and UCRT that clang links against. A
+# shell already initialized for another target is initialized again.
+function Ensure-MsvcArm64Toolchain {
+    param([string[]]$RequiredTools)
+
+    if ($env:VSCMD_ARG_TGT_ARCH -eq "arm64" -and @(Get-MissingCommands -Commands $RequiredTools).Count -eq 0) {
+        return
+    }
+    $installationPath = Resolve-VsInstallationPath "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+    if (-not $installationPath) {
+        throw "Visual Studio Build Tools with the ARM64 MSVC tools (component Microsoft.VisualStudio.Component.VC.Tools.ARM64) were not found. Install them to build -TargetArch arm64."
+    }
+    $vcvarsall = Join-Path $installationPath "VC\Auxiliary\Build\vcvarsall.bat"
+    $vcvarsArch = if (Test-HostIsArm64) { "arm64" } else { "amd64_arm64" }
+    Write-Host "Importing the MSVC environment for ARM64: vcvarsall $vcvarsArch"
+    Import-CmdEnvironment "`"$vcvarsall`" $vcvarsArch >nul"
+
+    $missingTools = @(Get-MissingCommands -Commands $RequiredTools)
+    if ($missingTools.Count -gt 0 -or $env:VSCMD_ARG_TGT_ARCH -ne "arm64") {
+        throw "vcvarsall $vcvarsArch did not provide an ARM64 MSVC environment (target '$($env:VSCMD_ARG_TGT_ARCH)', missing: $($missingTools -join ', '))."
+    }
+}
+
+# clang compiles llama.cpp for ARM64, because ggml's CPU backend refuses MSVC
+# on ARM unless GGML_NATIVE=ON. The ring crate needs it for aarch64 as well.
+function Ensure-ClangForArm64 {
+    if (Resolve-CommandPath "clang") {
+        Write-Host "Using clang: $(Resolve-CommandPath 'clang')"
+        return
+    }
+    $installationPath = Resolve-VsInstallationPath "Microsoft.VisualStudio.Component.VC.Llvm.Clang"
+    $llvmHost = if (Test-HostIsArm64) { "ARM64" } else { "x64" }
+    $llvmBin = if ($installationPath) { Join-Path $installationPath "VC\Tools\Llvm\$llvmHost\bin" } else { $null }
+    if (-not $llvmBin -or -not (Test-Path (Join-Path $llvmBin "clang.exe"))) {
+        throw "clang was not found. Install the Visual Studio component Microsoft.VisualStudio.Component.VC.Llvm.Clang (C++ Clang compiler for Windows), or put clang on PATH, to build -TargetArch arm64."
+    }
+    $env:Path = "$llvmBin;$env:Path"
+    Write-Host "Using clang: $(Join-Path $llvmBin 'clang.exe')"
 }
 
 function Resolve-HipPackageRoot {
@@ -1002,12 +1123,53 @@ function Invoke-InRepo {
 $Backend = Normalize-RecipeArgument $Backend @("backend")
 $CudaArch = Normalize-RecipeArgument $CudaArch @("cuda_arch", "cudaarch")
 $RocmArch = Normalize-RecipeArgument $RocmArch @("rocm_arch", "rocmarch", "amd_arch", "amdarch")
+$TargetArch = Normalize-RecipeArgument $TargetArch @("target_arch", "targetarch", "arch")
 
-$backendName = Resolve-Backend $Backend
-$buildDir = Resolve-StageBuildDir $backendName
-Write-Host "Using Windows backend: $backendName"
+# PowerShell variable names ignore case, so the resolved value cannot be named
+# $targetArch: that is the $TargetArch parameter itself.
+$hostIsArm64 = Test-HostIsArm64
+$windowsArch = switch ($TargetArch.ToLowerInvariant()) {
+    # The machine's own architecture by default: an ARM64 machine's Rust
+    # toolchain builds ARM64, so x64 there would mix the two.
+    "" { if ($hostIsArm64) { "arm64" } else { "x64" } }
+    "x64" { "x64" }
+    "amd64" { "x64" }
+    "x86_64" { "x64" }
+    "arm64" { "arm64" }
+    "aarch64" { "arm64" }
+    default { throw "Unsupported -TargetArch '$TargetArch'. Use x64 or arm64." }
+}
+if ($hostIsArm64 -and $windowsArch -eq "x64") {
+    throw "Building x64 on an ARM64 machine is not supported. Omit -TargetArch or pass -TargetArch arm64."
+}
+$rustTarget = if ($windowsArch -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+# x64 keeps cargo's default output directory, <target-dir>\<profile>; an
+# explicit target writes to <target-dir>\<triple>\<profile>.
+$cargoTargetArgs = @(if ($windowsArch -eq "arm64") { "--target", $rustTarget })
+$cargoTargetDir = Resolve-CargoTargetDir
+$cargoOutputRoot = if ($windowsArch -eq "arm64") { Join-Path $cargoTargetDir $rustTarget } else { $cargoTargetDir }
+
+# Only a runtime build probes this machine's GPU tools. The backend-neutral
+# host needs no backend, and ARM64 builds the CPU runtime only, so an ARM64
+# machine with the Vulkan SDK installed would otherwise pick Vulkan and stop.
+$backendName = if ($HostOnly -or ($windowsArch -eq "arm64" -and -not $Backend)) { "cpu" } else { Resolve-Backend $Backend }
+# The x64 stage directory keeps its name; another architecture gets its own,
+# so the two builds never mix objects or DLLs.
+$stageKey = if ($windowsArch -eq "x64") { $backendName } else { "$backendName-$windowsArch" }
+$buildDir = Resolve-StageBuildDir $stageKey
+if ($HostOnly) {
+    Write-Host "Building the backend-neutral host ($windowsArch)"
+} else {
+    Write-Host "Using Windows backend: $backendName ($windowsArch)"
+}
+if ($windowsArch -eq "arm64" -and $backendName -ne "cpu") {
+    throw "-TargetArch arm64 supports the cpu backend only; '$backendName' was requested."
+}
 
 Ensure-MsvcToolchain
+if ($windowsArch -eq "arm64") {
+    Ensure-ClangForArm64
+}
 Configure-LldLinker
 Configure-CompilerCache
 if ((Test-Sccache) -and -not $env:RUSTC_WRAPPER) {
@@ -1041,9 +1203,9 @@ if ($HostOnly) {
             $hostArgs += "--release"
             $hostOutputProfile = "release"
         }
-        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime") + $cargoTargetArgs
         Invoke-NativeCommand "cargo" $hostArgs
-        Write-Host "Mesh backend-neutral host: target\\$hostOutputProfile\\mesh-llm.exe"
+        Write-Host "Mesh backend-neutral host: $cargoOutputRoot\$hostOutputProfile\mesh-llm.exe"
     }
     return
 }
@@ -1080,10 +1242,47 @@ Invoke-InRepo {
     Prepare-Llama
     # Resolve after preparing, so a pin switch builds into the new pin's
     # directory rather than the one the previous stamp named.
-    $script:buildDir = Resolve-StageBuildDir $backendName
+    $script:buildDir = Resolve-StageBuildDir $stageKey
 
-    $pathMaxDefine = if ($backendName -eq "rocm") { "-DPATH_MAX=4096" } else { "/DPATH_MAX=4096" }
+    # clang's GNU-style driver (rocm, arm64) reads /D as a file path.
+    $pathMaxDefine = if ($backendName -eq "rocm" -or $windowsArch -eq "arm64") { "-DPATH_MAX=4096" } else { "/DPATH_MAX=4096" }
     Reset-SccacheStats
+
+    # Do not optimize for the build runner's CPU. Windows CI runners can
+    # expose ISA extensions that consumer desktops (e.g. Alder Lake i5/i7)
+    # lack; a GGML_NATIVE build then crashes with
+    # STATUS_ILLEGAL_INSTRUCTION (0xC000001D) on those machines the moment a
+    # ggml compute kernel runs. Pin GGML_NATIVE=OFF (matching the Linux and
+    # macOS builds in scripts/build-llama.sh) and select a portable baseline.
+    if ($windowsArch -eq "arm64") {
+        # clang targets the MSVC ABI, so the DLLs import the same runtime as
+        # the x64 build. armv8.2-a is the floor of every Windows on ARM laptop
+        # since the Snapdragon 8cx. OpenMP is off: ggml then uses its own
+        # thread pool, and no OpenMP runtime has to ship with the DLLs.
+        $isaArgs = @(
+            "-DCMAKE_SYSTEM_NAME=Windows",
+            "-DCMAKE_SYSTEM_PROCESSOR=ARM64",
+            "-DCMAKE_C_COMPILER=clang",
+            "-DCMAKE_CXX_COMPILER=clang++",
+            "-DCMAKE_C_COMPILER_TARGET=arm64-pc-windows-msvc",
+            "-DCMAKE_CXX_COMPILER_TARGET=arm64-pc-windows-msvc",
+            "-DCMAKE_ASM_COMPILER_TARGET=arm64-pc-windows-msvc",
+            "-DGGML_OPENMP=OFF",
+            "-DGGML_NATIVE=OFF",
+            "-DGGML_CPU_ARM_ARCH=armv8.2-a"
+        )
+    } else {
+        # AVX2 is supported by every x86-64 CPU since ~2013. On MSVC, F16C
+        # and FMA are implied by AVX2.
+        $isaArgs = @(
+            "-DGGML_OPENMP=ON",
+            "-DGGML_NATIVE=OFF",
+            "-DGGML_AVX=ON",
+            "-DGGML_AVX2=ON",
+            "-DGGML_AVX512=OFF",
+            "-DGGML_BMI2=OFF"
+        )
+    }
 
     $cmakeArgs = @(
         "-B", $buildDir,
@@ -1093,21 +1292,8 @@ Invoke-InRepo {
         "-DGGML_METAL=OFF",
         "-DGGML_CUDA=OFF",
         "-DGGML_HIP=OFF",
-        "-DGGML_VULKAN=OFF",
-        "-DGGML_OPENMP=ON",
-        # Do not optimize for the build runner's CPU. Windows CI runners can
-        # expose ISA extensions that consumer desktops (e.g. Alder Lake i5/i7)
-        # lack; a GGML_NATIVE build then crashes with
-        # STATUS_ILLEGAL_INSTRUCTION (0xC000001D) on those machines the moment a
-        # ggml compute kernel runs. Pin GGML_NATIVE=OFF (matching the Linux and
-        # macOS builds in scripts/build-llama.sh) and select a portable AVX2
-        # baseline, which every x86-64 CPU since ~2013 supports. On MSVC, F16C
-        # and FMA are implied by AVX2.
-        "-DGGML_NATIVE=OFF",
-        "-DGGML_AVX=ON",
-        "-DGGML_AVX2=ON",
-        "-DGGML_AVX512=OFF",
-        "-DGGML_BMI2=OFF",
+        "-DGGML_VULKAN=OFF"
+    ) + $isaArgs + @(
         "-DBUILD_SHARED_LIBS=ON",
         "-DLLAMA_CURL=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
@@ -1133,6 +1319,10 @@ Invoke-InRepo {
 
     if (Resolve-CommandPath "ninja") {
         $cmakeArgs = @("-G", "Ninja") + $cmakeArgs
+    } elseif ($windowsArch -eq "arm64") {
+        # The Visual Studio generator ignores the clang and ARM64 settings above
+        # and would build for the host with MSVC.
+        throw "-TargetArch arm64 needs Ninja on PATH. Install the Visual Studio component Microsoft.VisualStudio.Component.VC.CMake.Project (C++ CMake tools for Windows) or put ninja on PATH."
     }
 
     switch ($backendName) {
@@ -1200,21 +1390,23 @@ Invoke-InRepo {
     # Invoke-InRepo makes these shell-relative paths resolve from the repository
     # root. Passing a native `D:\...` path to GNU tar makes it parse `D:` as a
     # remote host and fail after the expensive ABI build has already completed.
-    $runtimeOut = "target/$profileDir/native-runtimes"
+    # The host looks for native-runtimes next to its own executable, so the
+    # runtime goes into the same cargo output directory as mesh-llm.exe.
+    $runtimeOut = "$(ConvertTo-MsysPath $cargoOutputRoot)/$profileDir/native-runtimes"
     Invoke-NativeCommand $packagingBash @(
         "scripts/package-native-runtime.sh",
         "--backend", $backendName,
-        "--target", "x86_64-pc-windows-msvc",
+        "--target", $rustTarget,
         "--out", $runtimeOut
     )
 
     # Complete the standalone Skippy product before building MeshLLM.
-    $skippyArgs = @("build", "--locked", "-p", "skippy-cli", "--bin", "skippy", "--features", "dynamic-native-runtime")
+    $skippyArgs = @("build", "--locked", "-p", "skippy-cli", "--bin", "skippy", "--features", "dynamic-native-runtime") + $cargoTargetArgs
     if ($buildProfile -eq "release") {
         $skippyArgs += "--release"
     }
     Invoke-NativeCommand "cargo" $skippyArgs
-    Write-Host "Skippy standalone CLI: target\$profileDir\skippy.exe"
+    Write-Host "Skippy standalone CLI: $cargoOutputRoot\$profileDir\skippy.exe"
 
     if ($SkippyOnly) {
         return
@@ -1242,23 +1434,48 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime") + $cargoTargetArgs
     Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {
             Invoke-NativeCommand "cargo" (@("build", "-p", "mesh-llm", "--bin", "mesh-llm") + $cargoFeatureArgs)
-            Write-Host "Mesh binary: target\debug\mesh-llm.exe"
+            Write-Host "Mesh binary: $cargoOutputRoot\debug\mesh-llm.exe"
         }
         "debug" {
             Invoke-NativeCommand "cargo" (@("build", "-p", "mesh-llm", "--bin", "mesh-llm") + $cargoFeatureArgs)
-            Write-Host "Mesh binary: target\debug\mesh-llm.exe"
+            Write-Host "Mesh binary: $cargoOutputRoot\debug\mesh-llm.exe"
         }
         "release" {
             Invoke-NativeCommand "cargo" (@("build", "--release", "--locked", "-p", "mesh-llm") + $cargoFeatureArgs)
-            Write-Host "Mesh binary: target\release\mesh-llm.exe"
+            Write-Host "Mesh binary: $cargoOutputRoot\release\mesh-llm.exe"
         }
         default {
             throw "Unsupported MESH_LLM_BUILD_PROFILE/BuildProfile '$buildProfile'. Expected debug, dev, or release."
+        }
+    }
+}
+} finally {
+    # Only what the build changed is written back, compared against the
+    # environment as listed, which keeps variables set to an empty string
+    # (GitHub Actions runners have some): writing an empty value would
+    # remove them.
+    $buildEnvironment = @{}
+    foreach ($variable in Get-ChildItem env:) {
+        $buildEnvironment[$variable.Name] = $variable.Value
+    }
+    # Remove-Item, not SetEnvironmentVariable with $null: PowerShell passes
+    # $null to it as an empty string, which .NET 9 (PowerShell 7.5) keeps.
+    foreach ($name in $buildEnvironment.Keys) {
+        if (-not $callerEnvironment.ContainsKey($name)) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        }
+    }
+    # A changed variable the caller had empty is set back to empty, which
+    # PowerShell 7.5 keeps; Windows PowerShell can only remove it.
+    foreach ($entry in $callerEnvironment.GetEnumerator()) {
+        $unchanged = $buildEnvironment.ContainsKey($entry.Key) -and $buildEnvironment[$entry.Key] -ceq $entry.Value
+        if (-not $unchanged) {
+            [System.Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, "Process")
         }
     }
 }

@@ -35,6 +35,7 @@ mod windows_deps;
 mod windows_deps_pe;
 mod windows_deps_policy;
 mod windows_linker;
+mod windows_pe_machine;
 
 use crate::command::DynResult;
 use std::path::PathBuf;

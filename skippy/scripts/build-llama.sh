@@ -99,6 +99,33 @@ case "$LLAMA_LINK_MODE" in
     ;;
 esac
 
+# Rust target triple of the runtime when the build does not simply follow the
+# machine's own compiler. Only Windows ARM64 is handled: clang compiles it for
+# the MSVC ABI, natively or across from x64, inside an MSVC environment that
+# targets ARM64 (vcvarsall amd64_arm64 or arm64).
+LLAMA_STAGE_TARGET="${LLAMA_STAGE_TARGET:-}"
+case "$LLAMA_STAGE_TARGET" in
+  "") ;;
+  aarch64-pc-windows-msvc)
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*) ;;
+      *)
+        echo "LLAMA_STAGE_TARGET=$LLAMA_STAGE_TARGET builds only on Windows" >&2
+        exit 1
+        ;;
+    esac
+    if [[ "$LLAMA_BACKEND" != "cpu" ]]; then
+      echo "LLAMA_STAGE_TARGET=$LLAMA_STAGE_TARGET supports the cpu backend only, not $LLAMA_BACKEND" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "unsupported LLAMA_STAGE_TARGET: $LLAMA_STAGE_TARGET" >&2
+    echo "expected aarch64-pc-windows-msvc or empty" >&2
+    exit 1
+    ;;
+esac
+
 sanitize_build_component() {
   printf '%s' "$1" | tr ';, /:' '_____' | tr -cd 'A-Za-z0-9_.-'
 }
@@ -118,6 +145,9 @@ default_build_dir_for_backend() {
       suffix="rocm-$(sanitize_build_component "$amdgpu_targets")"
       ;;
   esac
+  if [[ -n "$LLAMA_STAGE_TARGET" ]]; then
+    suffix="$suffix-$(sanitize_build_component "$LLAMA_STAGE_TARGET")"
+  fi
   # Key the build directory by the patched llama sha. The directory is otherwise
   # keyed only by link mode and backend, so two different pins built on one machine
   # share it -- and package-native-runtime.sh globs every *.dylib under it, shipping
@@ -348,6 +378,33 @@ CMAKE_ARGS=(-G "$SELECTED_CMAKE_GENERATOR" "${CMAKE_ARGS[@]}")
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) CMAKE_ARGS+=(-DCMAKE_OBJECT_PATH_MAX=180) ;;
 esac
+
+if [[ "$LLAMA_STAGE_TARGET" == aarch64-pc-windows-msvc ]]; then
+  # ggml's CPU backend refuses MSVC on ARM unless GGML_NATIVE=ON, so clang
+  # compiles for the MSVC ABI and the DLLs import the same host runtime as the
+  # x64 build. armv8.2-a is the floor of Windows on ARM laptops. OpenMP is off,
+  # so ggml uses its own thread pool and no OpenMP runtime ships with the DLLs.
+  # Matches mesh/scripts/build-windows.ps1 -TargetArch arm64.
+  if ! command -v clang >/dev/null 2>&1; then
+    echo "clang is required for $LLAMA_STAGE_TARGET: add the Visual Studio component Microsoft.VisualStudio.Component.VC.Llvm.Clang to PATH" >&2
+    exit 1
+  fi
+  if [[ "${VSCMD_ARG_TGT_ARCH:-}" != arm64 ]]; then
+    echo "$LLAMA_STAGE_TARGET needs an MSVC environment that targets ARM64 (vcvarsall amd64_arm64 or arm64); VSCMD_ARG_TGT_ARCH is '${VSCMD_ARG_TGT_ARCH:-}'" >&2
+    exit 1
+  fi
+  CMAKE_ARGS+=(
+    -DCMAKE_SYSTEM_NAME=Windows
+    -DCMAKE_SYSTEM_PROCESSOR=ARM64
+    -DCMAKE_C_COMPILER=clang
+    -DCMAKE_CXX_COMPILER=clang++
+    -DCMAKE_C_COMPILER_TARGET=arm64-pc-windows-msvc
+    -DCMAKE_CXX_COMPILER_TARGET=arm64-pc-windows-msvc
+    -DCMAKE_ASM_COMPILER_TARGET=arm64-pc-windows-msvc
+    -DGGML_OPENMP=OFF
+    -DGGML_CPU_ARM_ARCH=armv8.2-a
+  )
+fi
 
 case "$LLAMA_BACKEND" in
   cuda)
