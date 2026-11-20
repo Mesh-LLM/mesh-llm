@@ -147,6 +147,22 @@ fn benchmark_tune_remote_only_target_reports_local_only_rejection() {
     );
 }
 
+/// An HTTP request is fully received once the header block is terminated
+/// and the Content-Length body it declares has arrived.
+fn stub_request_complete(request: &[u8]) -> bool {
+    let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = std::str::from_utf8(&request[..header_end]).expect("utf-8 request headers");
+    let content_length = headers
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    request.len() >= header_end + 4 + content_length
+}
+
 #[test]
 fn load_rejected_by_the_node_exits_one_with_a_single_banner() {
     // A stub node that rejects the load request: the command must exit
@@ -166,9 +182,23 @@ fn load_rejected_by_the_node_exits_one_with_a_single_banner() {
             let Ok((mut stream, _)) = listener.accept() else {
                 break;
             };
-            let mut sink = [0u8; 1024];
-            // Drain the request head so the client can read the response.
-            let _ = std::io::Read::read(&mut stream, &mut sink);
+            // Consume the complete request (headers plus Content-Length
+            // body) before responding: answering against unread bytes can
+            // reset the connection before the client reads the response.
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 512];
+            while !stub_request_complete(&request) {
+                let read = std::io::Read::read(&mut stream, &mut chunk)
+                    .expect("stub should read the request");
+                if read == 0 {
+                    // Client hung up mid-request; nothing to answer.
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            if !stub_request_complete(&request) {
+                continue;
+            }
             let body = r#"{"error":"stub: model not found"}"#;
             let response = format!(
                 "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
