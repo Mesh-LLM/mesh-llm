@@ -182,3 +182,55 @@ fn mesh_and_skippy_bundle_variables_are_both_read() {
         );
     }
 }
+
+fn write_fixture_runtime(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("lib/libllama.so"), b"runtime").unwrap();
+    let manifest = serde_json::json!({
+        "runtime": {
+            "id": "fixture-runtime",
+            "release_version": "0.0.1",
+            "skippy_abi": "0.0.1",
+            "platform": { "os": "linux", "arch": "x86_64" },
+            "backend": { "kind": "cpu" },
+            "libraries": ["lib/libllama.so"],
+        }
+    });
+    std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+}
+
+/// The bundle search is additive: a valid Mesh directory does not excuse a
+/// Skippy directory that does not exist.
+#[test]
+fn stale_skippy_bundle_directory_fails_beside_a_valid_mesh_one() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("isolated home should be created");
+    let bundle = temp.path().join("bundle");
+    write_fixture_runtime(&bundle);
+    let list = |skippy: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+            .args(["runtime", "list", "--installed", "--json"])
+            .env("HOME", &home)
+            .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", home.join("cache"))
+            .env("SKIPPY_NATIVE_RUNTIME_CACHE_DIR", "")
+            .env("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", &bundle)
+            .env("SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR", skippy)
+            .output()
+            .expect("mesh-llm command should run")
+    };
+
+    let valid = list(std::path::Path::new(""));
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+
+    let stale = list(&temp.path().join("stale"));
+    assert!(!stale.status.success());
+    assert!(
+        String::from_utf8_lossy(&stale.stderr)
+            .contains("native runtime bundle directory does not exist")
+    );
+}

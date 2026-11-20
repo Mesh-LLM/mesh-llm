@@ -613,6 +613,27 @@ runtime. Set `runtime.native_runtime.download = false` in `config.toml` (or
 installed runtimes, for example when a package manager ships them.
 `mesh-llm runtime install` is not affected.
 
+Native runtimes are built and published by Skippy. `mesh-llm` looks for them
+in this order:
+
+1. directories given on the command line;
+2. `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`;
+3. `SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR`;
+4. `native-runtimes/` beside the executable, and the install prefix;
+5. the runtime cache.
+
+Both variables are read and may hold several directories. When two places
+hold the same runtime, the earlier one is used. A directory you name, on the
+command line or in either variable, must exist and contain a runtime;
+otherwise the command fails. The places in 4 and 5 are optional. Empty values
+count as unset.
+
+The cache directory (`MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`, then
+`SKIPPY_NATIVE_RUNTIME_CACHE_DIR`) and the release catalog URL
+(`MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL`, then
+`SKIPPY_NATIVE_RUNTIME_MANIFEST_URL`) are single values: the first one set is
+used.
+
 Use `--json` for machine-readable output. Runtime selection is constrained by
 the running Mesh version, platform, backend, and Skippy ABI.
 
