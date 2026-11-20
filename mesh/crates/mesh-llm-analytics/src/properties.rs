@@ -123,6 +123,18 @@ pub(crate) fn is_internal(channel: BuildChannel, exec_env: &str, marked: bool) -
     marked || channel == BuildChannel::Development || exec_env == "ci"
 }
 
+/// Whether this process's events are the maintainers' own traffic, as
+/// [`base_properties`] labels them. Handed to embedded reporters, such as
+/// Skippy's, so both products label one run the same way.
+#[must_use]
+pub fn is_internal_run() -> bool {
+    is_internal(
+        BuildChannel::classify(BUILD_VERSION),
+        exec_env(),
+        internal_marker_set(),
+    )
+}
+
 fn internal_marker_set() -> bool {
     std::env::var(crate::ENV_ANALYTICS_INTERNAL)
         .ok()

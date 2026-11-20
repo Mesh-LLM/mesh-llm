@@ -27,6 +27,7 @@ json5 = "1.3.1"
 nix = { version = "0.31", default-features = false, features = ["fs", "signal"] }
 mesh-llm-build-info.workspace = true
 mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.80.0" }
+skippy-analytics = { path = "../../../skippy/crates/skippy-analytics", version = "0.80.0" }
 mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.80.0" }
 skippy-hardware-profile = { path = "../../../skippy/crates/skippy-hardware-profile", version = "0.80.0" }
 skippy-config = { path = "../../../skippy/crates/skippy-config", version = "0.80.0" }

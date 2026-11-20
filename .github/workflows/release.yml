@@ -53,6 +53,7 @@ env:
   # in local builds, which then report no usage data at all. See
   # website/src/docs/pages/analytics.md.
   MESH_LLM_POSTHOG_KEY: ${{ secrets.MESH_LLM_POSTHOG_KEY }}
+  SKIPPY_POSTHOG_KEY: ${{ secrets.SKIPPY_POSTHOG_KEY }}
   CACHE_NAMESPACE: mesh-llm
   SCCACHE_DIR: ${{ github.workspace }}/../.sccache
   SCCACHE_GHA_ENABLED: "true"
@@ -72,6 +73,7 @@ jobs:
     env:
       GIT_MASTER: '1'
       MESH_LLM_POSTHOG_KEY: ''
+      SKIPPY_POSTHOG_KEY: ''
     outputs:
       source_sha: ${{ steps.freeze.outputs.source_sha }}
     steps:

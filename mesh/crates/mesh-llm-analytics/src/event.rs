@@ -35,10 +35,6 @@ pub enum Event {
     ModelDownload,
     /// The shape of this machine, reported once per serving process.
     HardwareProfile,
-    /// One generation served by this node: prefill, decode, context length,
-    /// speculation, and lanes. Rate limited; `weight` says how many requests
-    /// the event stands for.
-    InferenceRequest,
     /// One routing attempt fronted by this node, local or across the mesh,
     /// with the link class and round-trip time to a remote target.
     InferenceRoute,
@@ -58,7 +54,6 @@ impl Event {
             Self::ModelLoaded => "model_loaded",
             Self::ModelDownload => "model_download",
             Self::HardwareProfile => "hardware_profile",
-            Self::InferenceRequest => "inference_request",
             Self::InferenceRoute => "inference_route",
             Self::MeshLinks => "mesh_links",
         }

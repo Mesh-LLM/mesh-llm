@@ -74,8 +74,27 @@ impl ModelIdentity {
     }
 }
 
-/// Remember how to describe `served_name` on serving events.
+impl ModelIdentity {
+    /// The same description in Skippy's vocabulary, for its `generation` and
+    /// `model_load` events. Every label passed this crate's grammar already.
+    pub(crate) fn to_skippy(&self) -> skippy_analytics::models::ModelIdentity {
+        let label = |label: &Label| skippy_analytics::Label::sanitize_or_redact(label.as_str());
+        skippy_analytics::models::ModelIdentity {
+            model: label(&self.model),
+            architecture: self.architecture.as_ref().map(label),
+            parameters: self.parameters,
+            moe: self.moe,
+            family: self.family.as_ref().map(label),
+            dflash_draft: self.dflash_draft.as_ref().map(label),
+            backend: self.backend,
+        }
+    }
+}
+
+/// Remember how to describe `served_name` on serving events, here and on
+/// Skippy's.
 pub(crate) fn register(served_name: &str, identity: ModelIdentity) {
+    skippy_analytics::models::register(served_name, identity.to_skippy());
     if let Ok(mut models) = LOADED_MODELS.lock() {
         models
             .get_or_insert_with(HashMap::new)
@@ -122,7 +141,7 @@ fn catalog_name_for_request(name: &str) -> Option<String> {
 /// `cpu`. A selected device no backend name covers (`SYCL0`) is `other`: a
 /// device was chosen, so the runtime's registered GPUs must not stand in.
 pub(crate) fn backend_of_selected_device(device: &str) -> &'static str {
-    mesh_llm_analytics::backend_of_device(device).unwrap_or_else(|| {
+    skippy_analytics::backend_of_device(device).unwrap_or_else(|| {
         if device.to_ascii_lowercase().starts_with("cpu") {
             "cpu"
         } else {

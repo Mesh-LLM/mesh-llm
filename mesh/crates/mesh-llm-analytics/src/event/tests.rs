@@ -76,7 +76,6 @@ fn event_names_are_unique_and_snake_case() {
         Event::ModelLoaded,
         Event::ModelDownload,
         Event::HardwareProfile,
-        Event::InferenceRequest,
         Event::InferenceRoute,
         Event::MeshLinks,
     ];

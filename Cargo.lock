@@ -4796,6 +4796,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test 4.0.1",
+ "skippy-analytics",
  "skippy-commands",
  "skippy-config",
  "skippy-coordinator",
@@ -4960,6 +4961,7 @@ dependencies = [
  "serde_json",
  "serial_test 4.0.1",
  "sha2 0.11.0",
+ "skippy-analytics",
  "skippy-api",
  "skippy-cache",
  "skippy-coordinator",
@@ -8653,6 +8655,26 @@ name = "siphasher"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
+name = "skippy-analytics"
+version = "0.80.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "skippy-hardware-profile",
+ "skippy-native-runtime",
+ "skippy-runtime",
+ "skippy-serving",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "skippy-api"

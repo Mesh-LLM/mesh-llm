@@ -1,18 +1,18 @@
 //! Anonymous serving analytics: what real inference looks like in the field.
 //!
-//! Three events, all through [`mesh_llm_analytics`] and so under its consent,
+//! Two events, all through [`mesh_llm_analytics`] and so under its consent,
 //! key, and closed-vocabulary rules:
 //!
-//! - `inference_request`: one generation this node served, from the skippy
-//!   frontend's own measurement — prefill, decode, context length, prompt
-//!   cache, speculation, lanes, and the split activation wire.
 //! - `inference_route`: one routing attempt this node fronted, with the link
 //!   class and round-trip time when the target was a peer.
 //! - `mesh_links`: an hourly summary of this node's peer links by class.
 //!
-//! Per-request events are rate limited per process. An event that goes out
-//! after others were dropped carries `weight`, the number of requests it
-//! stands for, so totals stay right when summed by weight.
+//! Route events are rate limited per process. An event that goes out after
+//! others were dropped carries `weight`, the number of attempts it stands
+//! for, so totals stay right when summed by weight.
+//!
+//! What each generation itself measured goes to Skippy's project as its
+//! `generation` event, through `skippy-analytics`, which [`install`] starts.
 //!
 //! Model names follow [`model_identity`]: a catalog name when the runtime
 //! holds one, otherwise `redacted` plus architecture and size.
@@ -20,80 +20,33 @@
 pub(crate) mod model_identity;
 
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use mesh_llm_analytics::{Event, Label, Properties};
+use mesh_llm_analytics::{Event, Properties};
 use mesh_llm_membership::selected_path::SelectedPathObservation;
-use skippy_serving::generation_stats::{GenerationStats, GenerationStatsObserver, RequestShape};
 
 use self::model_identity::ModelIdentity;
 
 use crate::network::metrics::{AttemptOutcome, AttemptTarget};
 
-/// Per-request events each of `inference_request` and `inference_route` may
-/// send per minute from one process. A busy shared node serves many requests
-/// a second; the distribution survives sampling, the bill does not.
+/// `inference_route` events one process may send per minute. A busy shared
+/// node routes many requests a second; the distribution survives sampling,
+/// the bill does not.
 const EVENTS_PER_MINUTE: u32 = 30;
 
 /// First `mesh_links` after start, once peers have had time to connect.
 const MESH_LINKS_FIRST_DELAY: Duration = Duration::from_secs(5 * 60);
 const MESH_LINKS_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-static REQUEST_LIMITER: RateLimiter = RateLimiter::new(EVENTS_PER_MINUTE);
 static ROUTE_LIMITER: RateLimiter = RateLimiter::new(EVENTS_PER_MINUTE);
 
-/// Start reporting `inference_request` for every generation in this process.
+/// Report Skippy's `generation` event for every generation in this process.
 ///
-/// Installing is cheap when analytics is off: `capture` drops the event, and
-/// the observer does no more than build a handful of properties first.
+/// Installing is cheap when analytics is off: Skippy's observer returns
+/// before building anything unless its embedded reporter started.
 pub(crate) fn install() {
-    let _ = skippy_serving::generation_stats::set_generation_stats_observer(Arc::new(
-        AnalyticsObserver,
-    ));
-}
-
-struct AnalyticsObserver;
-
-impl GenerationStatsObserver for AnalyticsObserver {
-    fn observe(&self, stats: &GenerationStats) {
-        let Some(weight) = REQUEST_LIMITER.admit(Instant::now()) else {
-            return;
-        };
-        let model = model_identity::lookup(&stats.model_id);
-        let mut properties = request_properties(stats, &model, weight);
-        if let Some(hardware) = mesh_llm_analytics::serving_hardware() {
-            properties = hardware.apply(properties, request_backend(&model, loaded_backend));
-        }
-        mesh_llm_analytics::capture(Event::InferenceRequest, properties);
-    }
-}
-
-/// The backend an `inference_request` reports. The device the model was
-/// loaded onto decides it; only a load that selected no device takes the
-/// runtime's, since the runtime then offloads to its own GPU devices.
-fn request_backend(
-    model: &ModelIdentity,
-    runtime_backend: impl FnOnce() -> Option<&'static str>,
-) -> Option<&'static str> {
-    model.backend.or_else(runtime_backend)
-}
-
-/// The backend a model loaded with no selected device runs on: the first GPU
-/// device the loaded runtime registers, which is where it offloads, or `cpu`
-/// when it registers none. Read once, on the first reported request, when a
-/// runtime is certainly loaded. `None` if the devices cannot be read.
-fn loaded_backend() -> Option<&'static str> {
-    static LOADED_BACKEND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-    *LOADED_BACKEND.get_or_init(|| {
-        let devices = skippy_runtime::backend_devices().ok()?;
-        Some(
-            devices
-                .iter()
-                .find_map(|device| mesh_llm_analytics::backend_of_device(&device.name))
-                .unwrap_or("cpu"),
-        )
-    })
+    let _ = skippy_analytics::generation::install();
 }
 
 /// Throughput in tokens per second, or `None` when it would be noise.
@@ -101,148 +54,8 @@ fn tokens_per_second(tokens: u64, ms: f64) -> Option<f64> {
     (tokens > 0 && ms > 0.0).then(|| round2(tokens as f64 * 1000.0 / ms))
 }
 
-fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
-    (denominator > 0).then(|| round4(numerator as f64 / denominator as f64))
-}
-
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
-}
-
-fn round4(value: f64) -> f64 {
-    (value * 10_000.0).round() / 10_000.0
-}
-
-/// The coarse kind of request: `agentic` when tools are in play (offered, or
-/// results in the history), `chat` for other message requests, `completion`
-/// for a raw prompt.
-fn request_kind(shape: &RequestShape) -> &'static str {
-    if shape.tools_offered || shape.tool_results {
-        "agentic"
-    } else if shape.chat {
-        "chat"
-    } else {
-        "completion"
-    }
-}
-
-/// Context length in coarse bands, so acceptance and speed can be compared
-/// at like context without an exact-length breakdown.
-fn context_band(tokens: u64) -> &'static str {
-    match tokens {
-        0..2_048 => "lt2k",
-        2_048..8_192 => "2k-8k",
-        8_192..32_768 => "8k-32k",
-        32_768..131_072 => "32k-128k",
-        _ => "128k+",
-    }
-}
-
-fn with_request_shape(properties: Properties, shape: &RequestShape) -> Properties {
-    properties
-        .with("request_kind", request_kind(shape))
-        .with("tools_offered", shape.tools_offered)
-        .with("tool_results", shape.tool_results)
-        .with("system_prompt", shape.system_prompt)
-        .with(
-            "user_turns",
-            mesh_llm_analytics::bucket_count(u64::from(shape.user_turns)),
-        )
-}
-
-/// The speculation plan a request ran under: why it stood down, and the caps
-/// that bound how much it could draft.
-fn with_speculation_plan(mut properties: Properties, stats: &GenerationStats) -> Properties {
-    if let Some(reason) = stats.speculation_stand_down {
-        properties = properties.with("spec_stand_down", reason.as_str());
-    }
-    if let Some(cap) = stats.draft_token_cap {
-        properties = properties.with("spec_draft_cap", cap);
-    }
-    properties
-        .with("spec_window_max", stats.verify_window_max_tokens)
-        .with("spec_runahead_tokens", stats.runahead_budget_tokens)
-}
-
-fn request_properties(stats: &GenerationStats, model: &ModelIdentity, weight: u64) -> Properties {
-    let prompt = u64::from(stats.prompt_tokens);
-    let completion = u64::from(stats.completion_tokens);
-    let context = prompt + completion;
-    let proposed = stats.draft_proposed_tokens + stats.mtp_proposed_tokens;
-    let accepted = stats.draft_accepted_tokens + stats.mtp_accepted_tokens;
-    let windows = stats.draft_windows + stats.mtp_verifications;
-
-    let mut properties = model
-        .apply(Properties::new())
-        .with("weight", weight)
-        .with("serving", if stats.split { "split" } else { "local" })
-        .with("concurrency_limit", stats.concurrency_limit)
-        .with("context_size", stats.context_size)
-        .with("prompt_tokens", prompt)
-        .with("completion_tokens", completion)
-        .with("context_tokens", context)
-        .with("context_band", context_band(context))
-        .with(
-            "cached_prompt_tokens",
-            u64::from(stats.cached_prompt_tokens),
-        )
-        .with("prefill_tokens", u64::from(stats.prefill_tokens))
-        .with("cache_hit_kind", stats.cache_hit_kind)
-        .with("queue_wait_ms", round2(stats.queue_wait_ms))
-        .with("restore_ms", round2(stats.restore_ms))
-        .with("prefill_ms", round2(stats.prefill_ms))
-        .with("decode_ms", round2(stats.decode_ms))
-        .with("total_ms", round2(stats.total_ms))
-        .with(
-            "ttft_ms",
-            round2(stats.queue_wait_ms + stats.restore_ms + stats.prefill_ms),
-        )
-        .with("finish_reason", stats.finish_reason)
-        .with(
-            "spec_strategy",
-            Label::sanitize_or_redact(&stats.speculative_strategy),
-        )
-        .with("spec_allowed", stats.speculation_allowed)
-        .with("spec_proposed_tokens", proposed)
-        .with("spec_accepted_tokens", accepted)
-        .with("spec_windows", windows)
-        .with("spec_draft_proposed_tokens", stats.draft_proposed_tokens)
-        .with("spec_draft_accepted_tokens", stats.draft_accepted_tokens)
-        .with("spec_mtp_proposed_tokens", stats.mtp_proposed_tokens)
-        .with("spec_mtp_accepted_tokens", stats.mtp_accepted_tokens);
-    properties = with_request_shape(properties, &stats.request_shape);
-    properties = with_speculation_plan(properties, stats);
-
-    if let Some(fill) = ratio(context, stats.context_size as u64) {
-        properties = properties.with("context_fill", fill);
-    }
-    if let Some(rate) = tokens_per_second(u64::from(stats.prefill_tokens), stats.prefill_ms) {
-        properties = properties.with("prefill_tps", rate);
-    }
-    if let Some(rate) = tokens_per_second(completion, stats.decode_ms) {
-        properties = properties.with("decode_tps", rate);
-    }
-    if let Some(rate) = ratio(accepted, proposed) {
-        properties = properties.with("spec_acceptance", rate);
-    }
-    if windows > 0 {
-        // Tokens committed per verify step: the figure speculation exists
-        // to raise above one.
-        properties = properties.with(
-            "spec_accepted_per_window",
-            round2(accepted as f64 / windows as f64),
-        );
-    }
-    if let Some(lanes) = stats.downstream_lanes {
-        properties = properties.with("downstream_lanes", lanes);
-    }
-    if let Some(codec) = stats.activation_codec {
-        properties = properties
-            .with("activation_codec", Label::sanitize_or_redact(codec))
-            .with("activation_prefill_bytes", stats.activation_prefill_bytes)
-            .with("activation_decode_bytes", stats.activation_decode_bytes);
-    }
-    properties
 }
 
 /// How a peer link is carried.

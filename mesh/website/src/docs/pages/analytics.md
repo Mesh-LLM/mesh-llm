@@ -64,7 +64,6 @@ And one of these events:
 | `model_loaded` | `model` (catalog name, or `redacted`; see [Model names](#model-names)), `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` (see [Model names](#model-names)), `source` (`direct_gguf`, `layer_package`, `whisper_file`, `split_layer_package` for stage 0 of a split from a Hugging Face package, `split_local_source` for stage 0 of a split from anything else, which is always `redacted`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
-| `inference_request` | see below | How fast real requests are served: prefill, decode, context length, prompt cache, speculative decoding, and lanes |
 | `inference_route` | see below | Where requests go (this node, a peer, an endpoint), whether they succeed, and the link to the peer |
 | `mesh_links` | see below | How this node's peers are connected and how far away they are |
 
@@ -114,36 +113,25 @@ header that say what kind of model it is without saying which one:
 A catalog model carries these too. The file name is never read for any of
 them.
 
-`inference_request` is sent for a generation this node served. At most 30
-are sent per minute per process; when some were skipped, the next one
-carries a `weight` saying how many requests it stands for. It carries:
+### Engine events go to Skippy
 
-| Property | Example | Notes |
-|---|---|---|
-| `model`, `model_arch`, `model_params`, `model_moe`, `model_family`, `dflash_draft` | `Qwen3-8B-Q4_K_M`, `redacted` | As `model_loaded` reported them; see [Model names](#model-names) |
-| `weight` | `1`, `12` | Requests this event represents |
-| `backend` | `cuda`, `metal`, `rocm`, `vulkan`, `cpu`, `other` | The backend that served: the device the model was loaded onto when the load selected one (a model on `CPU` is `cpu` even with a GPU present; a selected device of any other kind is `other`), otherwise the first GPU device the loaded runtime offloads to |
-| `gpu_family` | `apple-m4`, `rtx-4090`, `gb10`, `none` | `hardware_profile`'s `gpu_model` reduced to its family: vendor words, form factor (`laptop`) and Apple tiers (`pro`, `max`) dropped, so it has fewer values than `gpu_model` |
-| `vram_gb` | `24`, `128` | GPU memory in whole GiB. Unlike `hardware_profile`, it leaves out the system RAM that extends the budget on discrete-GPU hosts, and is absent with no GPU |
-| `request_kind` | `agentic`, `chat`, `completion` | `agentic` when tools were offered or the history carries tool results, `chat` for other message requests, `completion` for a raw prompt |
-| `tools_offered`, `tool_results`, `system_prompt` | `true` | Whether tools were offered (and not turned off by `tool_choice`), whether the history carries tool results, and whether a system or developer message was present. Never the tools, their names, or any message text |
-| `user_turns` | `1`, `3-4`, `33+` | User messages in the history, bucketed |
-| `serving` | `local`, `split` | Whole model on this node, or stage 0 of a split |
-| `downstream_lanes`, `concurrency_limit` | `4`, `2` | Persistent lanes to the next split stage, and generations admitted at once |
-| `context_size`, `prompt_tokens`, `completion_tokens`, `context_tokens`, `context_fill` | `32768`, `3000`, `200`, `3200`, `0.0977` | Token counts only, never tokens |
-| `context_band` | `lt2k`, `2k-8k`, `8k-32k`, `32k-128k`, `128k+` | `context_tokens` in bands that share no edges |
-| `cached_prompt_tokens`, `prefill_tokens`, `cache_hit_kind` | `2000`, `1000`, `prefix` | How much of the prompt the KV cache saved |
-| `queue_wait_ms`, `restore_ms`, `prefill_ms`, `decode_ms`, `ttft_ms`, `total_ms` | `512.4` | Timings |
-| `prefill_tps`, `decode_tps` | `2000`, `50` | Tokens per second |
-| `finish_reason` | `stop`, `length` | Why generation ended |
-| `spec_strategy`, `spec_allowed` | `dflash`, `ngram-suffix`, `disabled` | The speculative decoding strategy, and whether the speculation gate let this request use it |
-| `spec_stand_down` | `gate_trial`, `gate_measured_loss`, `logprobs` | Why a request whose plan speculates ran without it: the speculation gate is trialling plain decode, the gate measured speculation losing and kept it off, or the request asked for logprobs. Absent when it speculated or had nothing planned |
-| `spec_draft_cap`, `spec_window_max`, `spec_runahead_tokens` | `15`, `16`, `0` | The most draft tokens the proposer offers per verify window (absent for a DFlash draft using its trained block), the largest verify window, and the run-ahead token budget (`0` is fixed-depth) |
-| `spec_proposed_tokens`, `spec_accepted_tokens`, `spec_acceptance`, `spec_windows`, `spec_accepted_per_window` | `300`, `150`, `0.5`, `50`, `3` | Draft tokens proposed and accepted, overall and split into draft-model/N-gram (`spec_draft_*`) and native MTP/split DFlash (`spec_mtp_*`) |
-| `activation_codec`, `activation_prefill_bytes`, `activation_decode_bytes` | `f16` | Split only: bytes sent to the next stage |
+How fast each generation ran (prefill, decode, time to first token, context
+length, prompt cache, speculative decoding, lanes, and split wire bytes) is
+measured by Skippy, the inference engine inside mesh-llm, and reported as
+Skippy's own `generation` event to the Skippy maintainers' analytics project.
+So are Skippy's `model_load` and `host_profile` events. The complete list of
+what they carry is on [Skippy's analytics page](https://skippy.sh/configuration/analytics).
+
+They are sent only when mesh-llm's own reporting is on, under the same
+opt-outs on this page and with the same anonymous install identifier, and
+each is tagged `host: mesh-llm` with mesh-llm's version. `mesh-llm analytics
+disable` stops them too. Models are named by the rule in
+[Model names](#model-names) either way.
 
 `inference_route` is sent for each routing attempt this node fronted, under
-the same per-minute limit and `weight` rule. It carries `model` (as above),
+a limit of 30 per minute per process; when some were skipped, the next one
+carries a `weight` saying how many attempts it stands for. It carries
+`model` (as above),
 `target` (`local`, `remote`, `endpoint`), `outcome` (`success`, `timeout`,
 `unavailable`, `context_overflow`, `rejected`, `stream_failed` when the
 response had started and the upstream stream then broke,
@@ -179,9 +167,10 @@ commands and node starts.
   stem without its directories — a name you chose for a local file is yours,
   and `acme-merger-finetune` says as much as the path does. A model is named
   only when it matches a catalog entry, and then by the catalog's name.
-- **Request structure beyond a few flags.** `inference_request` says whether
-  tools were offered, whether a system prompt was present, and how many user
-  turns there were, bucketed. Never the tools, their schemas, or any message.
+- **Request structure beyond a few flags.** Skippy's `generation` says
+  whether tools were offered, whether a system prompt was present, and how
+  many user turns there were, bucketed. Never the tools, their schemas, or any
+  message.
 - **Your IP address or location.** Every event sets `$geoip_disable` and a
   null `$ip`, and the project discards client IP data at ingestion.
 - **Anything that identifies your mesh peers.** No peer IDs, addresses, mesh
